@@ -3,8 +3,9 @@
 An open-source desktop database client: fast and lightweight, with first-class SSH tunnels
 and a built-in MCP server for AI agents.
 
-> **Status:** v0.1 under construction. The drivers (PostgreSQL with TLS, SQLite), the
-> configuration, SSH tunnels, `spelunk mcp` and a first version of the desktop app work.
+> **Status:** v0.1 under construction. The drivers (PostgreSQL and MySQL/MariaDB with TLS,
+> SQLite), the configuration, SSH tunnels, `spelunk mcp` and a first version of the desktop
+> app work. `spelunk mcp` does not serve MySQL/MariaDB connections yet.
 
 ## Try the app
 
@@ -19,7 +20,7 @@ cd apps/desktop && npm install && npm run tauri dev -- -- ../../examples/demo
 ```
 
 `examples/demo` ships a local SQLite database and, if you start `testing/docker`, a direct
-PostgreSQL and another one behind two SSH bastions with TLS.
+PostgreSQL, MySQL and MariaDB, and a PostgreSQL behind two SSH bastions with TLS.
 
 ## Adding connections
 

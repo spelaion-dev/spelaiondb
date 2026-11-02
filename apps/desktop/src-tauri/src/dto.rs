@@ -444,6 +444,8 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
         let engine = match item.engine.as_str() {
             "postgres" => Engine::Postgres,
             "sqlite" => Engine::Sqlite,
+            "mysql" => Engine::Mysql,
+            "mariadb" => Engine::Mariadb,
             other => return Err(format!("unsupported engine: {other}")),
         };
         Ok(Self {

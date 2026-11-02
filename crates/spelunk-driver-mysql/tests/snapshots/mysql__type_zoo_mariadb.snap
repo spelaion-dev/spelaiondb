@@ -1,0 +1,33 @@
+---
+source: crates/spelunk-driver-mysql/tests/mysql.rs
+expression: snapshot
+---
+ti      int        tinyint              -5
+si      int        smallint             300
+mi      int        mediumint            70000
+i       int        int                  -123456
+bi      int        bigint               9007199254740993
+ubi     decimal    bigint unsigned      18446744073709551615
+ui      int        int unsigned         4000000000
+flag    int        tinyint              1
+yr      int        year                 2026
+f       float      float                1.1
+d       float      double               0.000025
+dec_    decimal    decimal              12345678.1234
+dt      date       date                 2026-01-31
+dtm     timestamp  datetime             2026-01-31 10:20:30
+dtm6    timestamp  datetime             2026-01-31 10:20:30.123456
+ts3     timestamp  timestamp            2026-01-31 10:20:30.12
+tm      interval   time                 -12:30:15
+tm_big  interval   time                 838:59:59
+ch      text       char                 ab
+vc      text       varchar              text ñ €
+tx      text       text                 long text
+bn      bytes      binary               \xdeadbeef
+vb      bytes      varbinary            \x0102
+bl      bytes      blob                 \x00ff
+en      text       enum                 b
+st      text       set                  x,y
+bits    bytes      bit                  \xa5
+js      text       text                 {"a": [1, 2]}
+nul     int        int                  NULL

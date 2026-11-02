@@ -306,6 +306,34 @@ try {
   await panel.locator(".statusline", { hasText: "1,000 rows" }).waitFor();
   await shot("07-postgres");
 
+  step("MySQL and MariaDB: password, TLS, types and the schema explorer");
+  // Only an encrypted session has a cipher: the row exists only if TLS is on.
+  for (const [connection, version, status] of [
+    ["MySQL (Docker)", /8\.4\./, "performance_schema.session_status"],
+    ["MariaDB (Docker)", /MariaDB/, "information_schema.session_status"],
+  ]) {
+    panel = await newQuery(
+      connection,
+      `select 42 as answer, 'text ñ €' as txt, cast('2026-01-31' as date) as day, variable_value as cipher
+from ${status}
+where variable_name = 'Ssl_cipher' and variable_value <> '';`,
+    );
+    await run(panel);
+    await page.getByRole("dialog").getByText(`Password for ${connection}`).waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelunk");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    assert.match(await panel.locator(".status-connected").innerText(), version);
+    if (connection.startsWith("MySQL")) await shot("07b-mysql");
+  }
+  // The explorer lists MySQL databases and their tables.
+  // Its own session ("ask every time"): the password is asked again.
+  await page.locator('.connection-row:has-text("MySQL (Docker)") .twisty').click();
+  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).waitFor();
+  assert.equal(await page.locator('.connection-row:has-text("MySQL (Docker)") .engine').innerText(), "MY");
+
   step("PostgreSQL behind two bastions with TLS verify-full");
   panel = await newQuery(
     "Postgres behind bastions",
@@ -332,8 +360,10 @@ try {
   let wizard = page.getByRole("dialog", { name: "Add connection" });
   await wizard.getByRole("heading", { name: "Relational" }).waitFor();
   await wizard.getByRole("heading", { name: "NoSQL" }).waitFor();
-  assert.ok(await wizard.locator(".engine-card", { hasText: "MySQL" }).isDisabled());
-  await wizard.locator(".engine-card", { hasText: "MySQL" }).getByText("Coming soon").waitFor();
+  assert.ok(!(await wizard.locator(".engine-card", { hasText: "MySQL" }).isDisabled()));
+  assert.ok(!(await wizard.locator(".engine-card", { hasText: "MariaDB" }).isDisabled()));
+  assert.ok(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled());
+  await wizard.locator(".engine-card", { hasText: "SQL Server" }).getByText("Coming soon").waitFor();
   await shot("12a-add-connection-catalog");
   await wizard.getByRole("searchbox").fill("lite");
   assert.equal(await wizard.locator(".engine-card").count(), 1);

@@ -1,0 +1,23 @@
+[package]
+name = "spelunk-driver-mysql"
+description = "MySQL and MariaDB driver for SpelunkDB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+spelunk-driver-api.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+# rustls with ring: aws-lc-rs (the default provider) needs CMake and NASM on Windows.
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "rustls-tls", "ring"] }
+tokio.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

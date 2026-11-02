@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { basicSetup } from "codemirror";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import { PostgreSQL, SQLite, sql } from "@codemirror/lang-sql";
+import { MariaSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@codemirror/lang-sql";
 import { closeLintPanel, openLintPanel, setDiagnostics } from "@codemirror/lint";
 import { closeSearchPanel, gotoLine, openSearchPanel, searchPanelOpen } from "@codemirror/search";
 import { closeCompletion, completionStatus, startCompletion } from "@codemirror/autocomplete";
@@ -43,7 +43,8 @@ const theme = EditorView.theme({
 });
 
 function language(engine: string | null, tables: Record<string, string[]>) {
-  return sql({ dialect: engine === "sqlite" ? SQLite : PostgreSQL, schema: tables, upperCaseKeywords: false });
+  const dialects: Record<string, SQLDialect> = { sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL };
+  return sql({ dialect: (engine && dialects[engine]) || PostgreSQL, schema: tables, upperCaseKeywords: false });
 }
 
 export function SqlEditor({ value, onChange, engine, tables, onRun, error }: Props) {

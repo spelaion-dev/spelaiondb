@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 spelunk-config.workspace = true
 spelunk-driver-api.workspace = true
+spelunk-driver-mysql.workspace = true
 spelunk-driver-postgres.workspace = true
 spelunk-driver-sqlite.workspace = true
 spelunk-ssh.workspace = true

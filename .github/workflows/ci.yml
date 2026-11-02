@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SPELUNK_TEST_PG: 127.0.0.1:15432
+      SPELUNK_TEST_MYSQL: 127.0.0.1:13306
+      SPELUNK_TEST_MARIADB: 127.0.0.1:13307
       SPELUNK_TEST_SSH: 127.0.0.1:2221
       SPELUNK_TEST_SSH_AGENT: "1"
     steps:

@@ -7,6 +7,7 @@ import { call, commands, type ConnectionItem, type ObjectItem, type SchemaItem, 
 import { openSession } from "../connect";
 import { SETTINGS_TAB, useApp, useDialogs } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
+import { engineBadge } from "../engines";
 import { quoteIdent } from "../text";
 
 function errorText(e: unknown): string {
@@ -184,7 +185,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
         <button className="twisty" onClick={() => void toggle()} aria-expanded={open} aria-label={t("toggleConnection", { connection: connection.name })}>
           {open ? "▾" : "▸"}
         </button>
-        <span className={`engine engine-${connection.engine}`}>{connection.engine === "postgres" ? "PG" : "SQ"}</span>
+        <span className={`engine engine-${connection.engine}`}>{engineBadge(connection.engine)}</span>
         <span className="label" onDoubleClick={() => addTab(connection.id)} title={connection.id}>
           {connection.name}
         </span>

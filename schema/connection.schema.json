@@ -3,7 +3,9 @@
     "Engine": {
       "enum": [
         "postgres",
-        "sqlite"
+        "sqlite",
+        "mysql",
+        "mariadb"
       ],
       "type": "string"
     },

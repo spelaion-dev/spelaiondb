@@ -15,6 +15,7 @@ import {
   type TunnelItem,
 } from "../api";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
+import { engineBadge } from "../engines";
 import { refreshConnections } from "./Sidebar";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
@@ -80,28 +81,10 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   );
 }
 
-// Two-letter badges, matching the sidebar (PG, SQ) and unique within the catalog.
-const BADGES: Record<string, string> = {
-  postgres: "PG",
-  sqlite: "SQ",
-  mysql: "MY",
-  mariadb: "MA",
-  sqlserver: "MS",
-  oracle: "OR",
-  cockroachdb: "CR",
-  duckdb: "DK",
-  clickhouse: "CH",
-  snowflake: "SF",
-  bigquery: "BQ",
-  mongodb: "MG",
-  redis: "RD",
-  cassandra: "CA",
-};
-
 function EngineBadge({ engine }: { engine: EngineItem }) {
   return (
     <span className={`engine engine-${engine.id}`} aria-hidden="true">
-      {BADGES[engine.id] ?? engine.name.slice(0, 2).toUpperCase()}
+      {engineBadge(engine.id, engine.name)}
     </span>
   );
 }

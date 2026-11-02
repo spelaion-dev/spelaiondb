@@ -56,6 +56,8 @@ fn is_false(b: &bool) -> bool {
 pub enum Engine {
     Postgres,
     Sqlite,
+    Mysql,
+    Mariadb,
 }
 
 impl Engine {
@@ -63,6 +65,8 @@ impl Engine {
         match self {
             Engine::Postgres => "postgres",
             Engine::Sqlite => "sqlite",
+            Engine::Mysql => "mysql",
+            Engine::Mariadb => "mariadb",
         }
     }
 
@@ -70,6 +74,7 @@ impl Engine {
         match self {
             Engine::Postgres => Some(5432),
             Engine::Sqlite => None,
+            Engine::Mysql | Engine::Mariadb => Some(3306),
         }
     }
 }

@@ -6,6 +6,7 @@
 #   keys/server.crt/.key  PostgreSQL TLS certificate, valid for "localhost" and for
 #                         "postgres" (its name behind the bastions), but not for
 #                         127.0.0.1: that way verify-full is tested against verify-ca
+#   keys/mysql.crt/.key   the same for MySQL and MariaDB ("localhost", "mysql", "mariadb")
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p keys
@@ -26,6 +27,19 @@ if [ ! -f keys/server.crt ]; then
   openssl x509 -req -in keys/server.csr -CA keys/ca.crt -CAkey keys/ca.key -CAcreateserial \
     -out keys/server.crt -days 3650 -extfile keys/server.ext 2>/dev/null
   rm -f keys/server.csr keys/server.ext keys/ca.srl
+fi
+
+# MySQL and MariaDB: their own certificate from the same authority, valid for "localhost" and
+# for their names behind the bastions. Generated separately so existing keys are kept.
+if [ ! -f keys/mysql.crt ]; then
+  openssl req -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1     -keyout keys/mysql.key -out keys/mysql.csr -subj "/CN=localhost" 2>/dev/null
+  printf 'subjectAltName=DNS:localhost,DNS:mysql,DNS:mariadb
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=serverAuth
+' > keys/mysql.ext
+  openssl x509 -req -in keys/mysql.csr -CA keys/ca.crt -CAkey keys/ca.key -CAcreateserial     -out keys/mysql.crt -days 3650 -extfile keys/mysql.ext 2>/dev/null
+  rm -f keys/mysql.csr keys/mysql.ext keys/ca.srl
 fi
 
 echo "Keys and certificates in $(pwd)/keys"

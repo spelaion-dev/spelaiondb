@@ -15,6 +15,7 @@ publish = false
 spelunk-driver-api = { path = "crates/spelunk-driver-api" }
 spelunk-driver-postgres = { path = "crates/spelunk-driver-postgres" }
 spelunk-driver-sqlite = { path = "crates/spelunk-driver-sqlite" }
+spelunk-driver-mysql = { path = "crates/spelunk-driver-mysql" }
 spelunk-core = { path = "crates/spelunk-core" }
 spelunk-config = { path = "crates/spelunk-config" }
 spelunk-ssh = { path = "crates/spelunk-ssh" }

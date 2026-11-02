@@ -1,15 +1,21 @@
 # Test environment
 
-PostgreSQL 17 behind two chained SSH bastions:
+PostgreSQL 17, MySQL 8.4 and MariaDB 11.4 behind two chained SSH bastions:
 
 ```
 host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion2 ──(data network)──► postgres:5432
+                                                                                  mysql:3306
+                                                                                  mariadb:3306
 ```
 
 - The bastions only allow port forwarding (`direct-tcpip`): they give no shell.
 - `bastion2` and `postgres` only resolve from inside the chain.
-- Postgres is also published on `127.0.0.1:15432` for tests without SSH.
-- SSH user: `spelunk`. Postgres: `spelunk` / `spelunk`, database `spelunk`.
+- Postgres is also published on `127.0.0.1:15432`, MySQL on `127.0.0.1:13306` and MariaDB
+  on `127.0.0.1:13307`, for tests without SSH.
+- SSH user: `spelunk`. Every database: user `spelunk`, password `spelunk`, database
+  `spelunk`.
+- MySQL and MariaDB accept TLS with `keys/mysql.crt` (valid for `localhost`, `mysql` and
+  `mariadb`).
 - The `big` table has 1 M rows with varied types.
 - PostgreSQL accepts TLS (without requiring it) with a certificate signed by `keys/ca.crt`,
   valid for `localhost` and `postgres` (not for `127.0.0.1`): that way `verify-full` and

@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use spelunk_core::{ReadError, ReadKind, ReadLimits, ResultStore, Session};
 use spelunk_driver_api::{ConnectParams, Driver, DriverError, Secret, Value};
+use spelunk_driver_mysql::MysqlDriver;
 use spelunk_driver_postgres::PostgresDriver;
 use spelunk_driver_sqlite::SqliteDriver;
 
@@ -236,4 +237,46 @@ async fn sqlite_read_only_mode() {
     ));
     drop(session);
     let _ = std::fs::remove_file(&path);
+}
+
+/// MySQL and MariaDB have no read-only mode yet (ADR-008): the MCP must refuse them, before
+/// running anything, so an exposed connection cannot be written through.
+#[tokio::test]
+async fn mysql_read_only_is_refused_until_implemented() {
+    for (var, driver) in [
+        ("SPELUNK_TEST_MYSQL", MysqlDriver::mysql()),
+        ("SPELUNK_TEST_MARIADB", MysqlDriver::mariadb()),
+    ] {
+        let Ok(addr) = std::env::var(var) else {
+            eprintln!("{var} not set: test skipped");
+            continue;
+        };
+        let (host, port) = addr.rsplit_once(':').unwrap();
+        let params = ConnectParams {
+            host: host.into(),
+            port: port.parse().unwrap(),
+            user: "spelunk".into(),
+            password: Some(Secret::new("spelunk")),
+            database: "spelunk".into(),
+            ..Default::default()
+        };
+        let session = Session::new(
+            driver.connect(&params).await.unwrap(),
+            driver.dialect(),
+            Arc::new(ResultStore::new()),
+        );
+        let marker = "readonly_refusal_marker";
+        let result = session
+            .run_read_only(&format!("select '{marker}'"), &limits(10))
+            .await;
+        assert!(
+            matches!(result, Err(ReadError::Unsupported(_))),
+            "{var}: {result:?}"
+        );
+        // Writes are rejected by the classifier even earlier.
+        assert!(matches!(
+            session.run_read_only("delete from t", &limits(10)).await,
+            Err(ReadError::Rejected(_))
+        ));
+    }
 }

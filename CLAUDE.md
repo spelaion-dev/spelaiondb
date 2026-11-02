@@ -7,8 +7,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 ## Before touching anything
 - Read `docs/architecture.md` and the ADRs in `docs/adr/`. ADRs rule: if a change
   contradicts them, do not make it; propose a new ADR that supersedes the old one.
-- Current state: **v0.1 under construction**. Done: PostgreSQL (with TLS) and SQLite
-  drivers, configuration, SSH tunnels, core, local store, read-only `spelunk mcp` and the
+- Current state: **v0.1 under construction**. Done: PostgreSQL (with TLS), MySQL/MariaDB
+  and SQLite drivers, configuration, SSH tunnels, core, local store, read-only `spelunk mcp` and the
   `spelunk` binary, and the first version of the desktop app (`apps/desktop`).
   `spikes/` is throwaway phase 0 code: it is never imported from `crates/`.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and
@@ -20,6 +20,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelunk-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
+- `crates/spelunk-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
+  per connection). Its type zoo (`tests/mysql.rs`) compares every type with the server's
+  text, on both servers.
 - `crates/spelunk-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
 - `crates/spelunk-config`: TOML files from `.spelunk/` and the personal directory,
@@ -75,7 +78,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - Tests with a real PostgreSQL (without the variable they are skipped, and that does
   **not** count as tested):
   `docker compose -f testing/docker/compose.yaml up -d --wait` and
-  `SPELUNK_TEST_PG=127.0.0.1:15432 SPELUNK_TEST_SSH=127.0.0.1:2221 cargo test --workspace`.
+  `SPELUNK_TEST_PG=127.0.0.1:15432 SPELUNK_TEST_MYSQL=127.0.0.1:13306
+  SPELUNK_TEST_MARIADB=127.0.0.1:13307 SPELUNK_TEST_SSH=127.0.0.1:2221 cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test `node e2e/smoke.mjs` (drives the real app over WebView2 CDP).

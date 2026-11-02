@@ -366,3 +366,46 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
         "testing writes nothing"
     );
 }
+
+/// MySQL behind the two bastions with verify-full: the driver connects to the tunnel's local
+/// end but checks the certificate against the server's real name ("mysql").
+#[tokio::test]
+async fn mysql_through_two_bastions_with_verify_full() {
+    let Ok(addr) = std::env::var("SPELUNK_TEST_SSH") else {
+        eprintln!("SPELUNK_TEST_SSH not set: test skipped");
+        return;
+    };
+    if std::env::var("SPELUNK_TEST_MYSQL").is_err() {
+        eprintln!("SPELUNK_TEST_MYSQL not set: test skipped");
+        return;
+    }
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let ws = Workspace::new("mysql-tunnel");
+    let identity = toml_path(&keys().join("id_ed25519"));
+    ws.write(
+        ".spelunk/tunnels/bastions.toml",
+        &format!(
+            "schema_version = 1\n\n[[hops]]\nhost = \"{host}\"\nport = {port}\nuser = \"spelunk\"\nauth = [\"key\"]\nidentity_file = {identity}\n\n[[hops]]\nhost = \"bastion2\"\nuser = \"spelunk\"\nauth = [\"key\"]\nidentity_file = {identity}\n"
+        ),
+    );
+    ws.write(
+        ".spelunk/connections/shop.toml",
+        &format!(
+            "schema_version = 1\nengine = \"mysql\"\nhost = \"mysql\"\ndatabase = \"spelunk\"\nuser = \"spelunk\"\npassword = {{ secret = \"prompt\" }}\ntunnel = \"bastions\"\n\n[tls]\nmode = \"verify-full\"\nca = {}\n",
+            toml_path(&keys().join("ca.crt"))
+        ),
+    );
+    let conn = ws
+        .open("shop", Some(Secret::new("spelunk")), Arc::new(AcceptHosts))
+        .await
+        .unwrap();
+    assert_eq!(
+        first_value(
+            &conn,
+            "select variable_value <> '' from performance_schema.session_status where variable_name = 'Ssl_cipher'"
+        )
+        .await,
+        "1"
+    );
+    conn.close().await;
+}

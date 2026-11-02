@@ -5,6 +5,7 @@ use std::sync::{Arc, Weak};
 
 use spelunk_config::{Engine, Password, ResolvedConnection, ResolvedHop, ResolvedTunnel, SshAuth};
 use spelunk_driver_api::{Driver, DriverError, Secret};
+use spelunk_driver_mysql::MysqlDriver;
 use spelunk_driver_postgres::PostgresDriver;
 use spelunk_driver_sqlite::SqliteDriver;
 use spelunk_ssh::{
@@ -22,8 +23,12 @@ pub struct Engines {
 impl Engines {
     /// The engines that ship with SpelunkDB.
     pub fn builtin() -> Self {
-        let drivers: [Arc<dyn Driver>; 2] =
-            [Arc::new(PostgresDriver), Arc::new(SqliteDriver::default())];
+        let drivers: [Arc<dyn Driver>; 4] = [
+            Arc::new(PostgresDriver),
+            Arc::new(SqliteDriver::default()),
+            Arc::new(MysqlDriver::mysql()),
+            Arc::new(MysqlDriver::mariadb()),
+        ];
         Self {
             drivers: drivers.into_iter().map(|d| (d.engine(), d)).collect(),
         }

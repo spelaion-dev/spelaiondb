@@ -1,0 +1,15 @@
+#:schema https://raw.githubusercontent.com/spelunkdb/spelunkdb/main/schema/connection.schema.json
+
+# MariaDB from testing/docker, direct and encrypted. The password (spelunk) is asked when connecting.
+schema_version = 1
+name = "MariaDB (Docker)"
+engine = "mariadb"
+env = "dev"
+host = "127.0.0.1"
+port = 13307
+database = "spelunk"
+user = "spelunk"
+password = { secret = "prompt" }
+
+[tls]
+mode = "require"

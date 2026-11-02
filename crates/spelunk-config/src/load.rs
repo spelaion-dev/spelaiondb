@@ -258,6 +258,13 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, missing)| missing.then_some(k))
         .collect(),
+        // A MySQL connection may have no default database: `USE` or qualified names work.
+        Engine::Mysql | Engine::Mariadb => {
+            [("host", file.host.is_none()), ("user", file.user.is_none())]
+                .into_iter()
+                .filter_map(|(k, m)| m.then_some(k))
+                .collect()
+        }
         Engine::Sqlite => [("database", file.database.is_none())]
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))

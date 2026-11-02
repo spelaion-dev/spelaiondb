@@ -72,8 +72,8 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
     vec![
         supported(Engine::Postgres, "PostgreSQL", Relational, Network),
         supported(Engine::Sqlite, "SQLite", Relational, File),
-        planned("mysql", "MySQL", Relational, Network, Some(3306)),
-        planned("mariadb", "MariaDB", Relational, Network, Some(3306)),
+        supported(Engine::Mysql, "MySQL", Relational, Network),
+        supported(Engine::Mariadb, "MariaDB", Relational, Network),
         planned("sqlserver", "SQL Server", Relational, Network, Some(1433)),
         planned("oracle", "Oracle", Relational, Network, Some(1521)),
         planned(
@@ -113,8 +113,13 @@ mod tests {
                 assert_eq!(info.access == EngineAccess::File, engine == Engine::Sqlite);
             }
         }
-        // Both engines of the configuration format appear exactly once.
-        for engine in [Engine::Postgres, Engine::Sqlite] {
+        // Every engine of the configuration format appears exactly once.
+        for engine in [
+            Engine::Postgres,
+            Engine::Sqlite,
+            Engine::Mysql,
+            Engine::Mariadb,
+        ] {
             assert_eq!(
                 catalog.iter().filter(|e| e.engine == Some(engine)).count(),
                 1
