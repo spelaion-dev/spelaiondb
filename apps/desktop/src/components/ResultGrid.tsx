@@ -7,6 +7,7 @@ import { call, commands, type CellRange, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT } from "../preferences";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta } from "../store";
+import { CellViewer } from "./CellViewer";
 
 const ROW_H = 26;
 const HEADER_H = 36;
@@ -85,6 +86,7 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const dragging = useRef(false);
+  const [viewer, setViewer] = useState(false);
 
   const redraw = useCallback(() => {
     if (frame.current !== null) return;
@@ -276,6 +278,7 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
     // New result: scroll to the top and clear the selection.
     setSelection(null);
     setMenu(null);
+    setViewer(false);
     scrollerRef.current?.scrollTo(0, 0);
   }, [result.id]);
 
@@ -365,6 +368,16 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
 
   function onKeyDown(e: React.KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
+    if (e.key === "Escape" && viewer) {
+      e.preventDefault();
+      setViewer(false);
+      return;
+    }
+    if (e.key === "Enter" && selection) {
+      e.preventDefault();
+      setViewer(true);
+      return;
+    }
     if (mod && e.key.toLowerCase() === "a" && result.rows > 0) {
       e.preventDefault();
       setSelection({ anchor: { row: 0, col: 0 }, focus: { row: result.rows - 1, col: widths.length - 1 } });
@@ -409,7 +422,9 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
     };
   });
 
+  const focusMeta = selection ? result.columns[selection.focus.col] : undefined;
   return (
+    <div className="grid-wrap">
     <div className="grid-host">
       <canvas ref={canvasRef} className="grid-canvas" style={{ width: size.w, height: size.h }} />
       <div
@@ -431,6 +446,13 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
           const host = e.currentTarget.getBoundingClientRect();
           setMenu({ x: e.clientX - host.left, y: e.clientY - host.top });
         }}
+        onDoubleClick={(e) => {
+          const cell = cellAt(e.clientX, e.clientY);
+          if (cell && !cell.gutter) {
+            setSelection({ anchor: cell, focus: cell });
+            setViewer(true);
+          }
+        }}
         onKeyDown={onKeyDown}
         aria-label={t("results.gridLabel", { count: result.rows, formattedCount: numbers.format(result.rows) })}
       >
@@ -438,6 +460,16 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
       </div>
       {menu && (
         <div className="grid-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              setViewer(true);
+            }}
+          >
+            {t("viewer.open")}
+          </button>
+          <hr />
           {COPY_ITEMS.map((item) => (
             <button key={item.key} role="menuitem" onClick={() => void copy(item.format, item.header)}>
               {t(`results.${item.key}`)}
@@ -450,6 +482,19 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
           {notice.text}
         </div>
       )}
+    </div>
+    {viewer && selection && focusMeta && (
+      <CellViewer
+        resultId={result.id}
+        row={selection.focus.row}
+        column={selection.focus.col}
+        meta={focusMeta}
+        onClose={() => {
+          setViewer(false);
+          scrollerRef.current?.focus();
+        }}
+      />
+    )}
     </div>
   );
 }

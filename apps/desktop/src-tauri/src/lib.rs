@@ -815,6 +815,41 @@ async fn export_result(
     Ok(rows as f64)
 }
 
+/// The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
+/// what fits, and the row may not be in its cache.
+#[tauri::command]
+#[specta::specta]
+async fn cell_value(
+    result: u32,
+    row: u32,
+    column: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let column = column as usize;
+    let meta = stored
+        .schema()
+        .columns
+        .get(column)
+        .ok_or("no such column")?
+        .clone();
+    let batch = stored
+        .window(row as usize, 1)
+        .into_iter()
+        .next()
+        .ok_or("no such row")?;
+    Ok(
+        match Value::from_array(batch.column(column).as_ref(), 0, meta.logical) {
+            Some(Value::Null) | None => None,
+            Some(value) => Some(value.to_string()),
+        },
+    )
+}
+
 /// Frees a result the UI no longer shows.
 #[tauri::command]
 #[specta::specta]
@@ -971,6 +1006,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             delete_tunnel,
             copy_rows,
             export_result,
+            cell_value,
             open_workspace,
             trust_workspace,
             list_connections,

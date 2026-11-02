@@ -59,6 +59,11 @@ export const commands = {
 	 *  rows). Returns how many rows were written.
 	 */
 	exportResult: (result: number, session: string, path: string, format: TextFormat) => typedError<number | null, string>(__TAURI_INVOKE("export_result", { result, session, path, format })),
+	/**
+	 *  The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
+	 *  what fits, and the row may not be in its cache.
+	 */
+	cellValue: (result: number, row: number, column: number) => typedError<string | null, string>(__TAURI_INVOKE("cell_value", { result, row, column })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),

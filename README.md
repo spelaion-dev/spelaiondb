@@ -71,6 +71,10 @@ typed data; up to 100,000 rows can be copied at once.
 accents, TSV, JSON or SQL `INSERT`). The core writes it in chunks to a temporary file that is
 renamed at the end, so it works with millions of rows and never leaves half-written files.
 
+**Enter** or a double-click opens the cell viewer beside the grid with the full value of the
+active cell: JSON pretty-printed, binary values as a hex dump and long text with its line
+breaks. The arrow keys move through cells while it stays open; **Esc** closes it.
+
 ## Query history
 
 Open **Query history** in the sidebar to search executed SQL or connection IDs and open a

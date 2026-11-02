@@ -113,5 +113,18 @@
     "on line": "en la línea",
     "Diagnostics": "Diagnósticos",
     "No diagnostics": "Sin diagnósticos"
+  },
+  "viewer": {
+    "title": "Valor de la celda",
+    "open": "Ver valor (Intro)",
+    "row": "fila {{number}}",
+    "copy": "Copiar valor",
+    "copied": "Copiado",
+    "close": "Cerrar el visor de celda (Esc)",
+    "loading": "Cargando…",
+    "characters_one": "{{formattedCount}} carácter",
+    "characters_other": "{{formattedCount}} caracteres",
+    "bytes_one": "{{formattedCount}} byte",
+    "bytes_other": "{{formattedCount}} bytes"
   }
 }

@@ -281,6 +281,29 @@ try {
   assert.equal(exported.length, 6);
   assert.equal(typeof exported[0].total, "number");
 
+  step("cell viewer: pretty JSON, hex dump of bytes, full text");
+  panel = await newQuery(
+    "Shop (SQLite)",
+    "select json_object('a', json_array(1, 2)) as doc, x'48656c6c6f00ff' as raw, 'line 1' || char(10) || 'line 2' as txt;",
+  );
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  const viewerGrid = await panel.locator(".grid-scroller").boundingBox();
+  await page.mouse.dblclick(viewerGrid.x + 80, viewerGrid.y + 36 + 13);
+  const viewer = panel.getByRole("complementary", { name: "Cell value" });
+  await viewer.locator(".cell-viewer-json").waitFor();
+  assert.equal(await viewer.locator(".cell-viewer-value").innerText(), '{\n  "a": [\n    1,\n    2\n  ]\n}');
+  await page.keyboard.press("ArrowRight");
+  await viewer.locator(".cell-viewer-hex", { hasText: "48 65 6c 6c 6f 00 ff" }).waitFor();
+  assert.match(await viewer.locator(".cell-viewer-value").innerText(), /^00000000 {2}48 65 6c 6c 6f 00 ff .* {2}Hello\.\.$/);
+  await viewer.getByText("7 bytes").waitFor();
+  await shot("03d-cell-viewer");
+  await page.keyboard.press("ArrowRight");
+  await viewer.locator(".cell-viewer-text").waitFor();
+  assert.equal(await viewer.locator(".cell-viewer-value").innerText(), "line 1\nline 2");
+  await page.keyboard.press("Escape");
+  await viewer.waitFor({ state: "detached" });
+
   step("SQLite: 50,000 rows and scrolling");
   panel = await newQuery("Shop (SQLite)", "select * from orders;");
   await run(panel);
@@ -303,7 +326,7 @@ try {
   step("history: successes, errors, search and reopening without execution");
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   let history = page.getByRole("complementary", { name: "Query history", exact: true });
-  await waitForHistoryCount(3);
+  await waitForHistoryCount(4);
   const errorEntry = history.locator(".history-entry").filter({ has: page.locator(".history-sql", { hasText: "from ordrs" }) });
   await errorEntry.locator(".history-error", { hasText: "ordrs" }).waitFor();
   await errorEntry.getByText("0 rows returned", { exact: true }).waitFor();
@@ -328,7 +351,7 @@ try {
   await panel.getByText("Write a query and press Ctrl+Enter.", { exact: true }).waitFor();
   assert.equal(await panel.locator(".grid-host").count(), 0);
   await page.getByRole("button", { name: "Query history", exact: true }).click();
-  await waitForHistoryCount(3);
+  await waitForHistoryCount(4);
   await page.getByRole("button", { name: "Close query history" }).click();
 
   step("history disabled: successful and failed SQL leave no entries");
@@ -343,7 +366,7 @@ try {
   await panel.locator(".messages", { hasText: "no_history_private_table" }).waitFor();
   await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
-  await waitForHistoryCount(3);
+  await waitForHistoryCount(4);
   await history.getByRole("textbox", { name: "Search query history" }).fill("private");
   await history.getByText("No matching queries.", { exact: true }).waitFor();
   await shot("05b-history-disabled");

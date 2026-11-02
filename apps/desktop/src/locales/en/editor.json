@@ -113,5 +113,18 @@
     "on line": "on line",
     "Diagnostics": "Diagnostics",
     "No diagnostics": "No diagnostics"
+  },
+  "viewer": {
+    "title": "Cell value",
+    "open": "View value (Enter)",
+    "row": "row {{number}}",
+    "copy": "Copy value",
+    "copied": "Copied",
+    "close": "Close the cell viewer (Esc)",
+    "loading": "Loading…",
+    "characters_one": "{{formattedCount}} character",
+    "characters_other": "{{formattedCount}} characters",
+    "bytes_one": "{{formattedCount}} byte",
+    "bytes_other": "{{formattedCount}} bytes"
   }
 }
