@@ -289,3 +289,8 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 .grid-menu button:hover { background: var(--accent-soft); }
 .grid-notice { position: absolute; right: 12px; bottom: 10px; z-index: 4; padding: 6px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); font-size: 12px; box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15); }
 .grid-notice.error { color: var(--danger); }
+.export-button { position: relative; margin-left: auto; display: flex; align-items: center; gap: 8px; padding-bottom: 3px; min-width: 0; }
+.export-button > span { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-tabs .export-button > button { border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; color: var(--fg); }
+.export-menu { position: fixed; z-index: 20; }
+.export-menu button { border-radius: 4px !important; color: var(--fg) !important; }

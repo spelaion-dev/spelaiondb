@@ -148,6 +148,39 @@ pub fn write_result(
     Ok(written)
 }
 
+/// Writes the export to `path` through a temporary file renamed at the end, so an error or
+/// a crash never leaves a half-written file under the final name. CSV starts with a UTF-8
+/// byte order mark so spreadsheets (Excel) read accents correctly.
+pub fn export_to_file(
+    result: &StoredResult,
+    options: &ExportOptions,
+    dialect: &dyn Dialect,
+    path: &std::path::Path,
+) -> io::Result<usize> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".part");
+    let temporary = std::path::PathBuf::from(temporary);
+    let written = (|| {
+        let mut out = io::BufWriter::new(std::fs::File::create(&temporary)?);
+        if options.format == ExportFormat::Csv {
+            out.write_all("\u{feff}".as_bytes())?;
+        }
+        let rows = write_result(result, options, dialect, &mut out)?;
+        out.flush()?;
+        Ok::<_, io::Error>(rows)
+    })();
+    match written {
+        Ok(rows) => {
+            std::fs::rename(&temporary, path)?;
+            Ok(rows)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&temporary);
+            Err(e)
+        }
+    }
+}
+
 /// Repeated column names (`id`, `id`) become `id`, `id_2` so JSON keys stay distinct.
 fn unique_names<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -472,6 +505,58 @@ mod tests {
             sqlite,
             "INSERT INTO \"items\" (\"raw\") VALUES (X'dead');\n"
         );
+    }
+
+    #[test]
+    fn files_are_written_whole_with_a_bom_for_csv() {
+        let dir = std::env::temp_dir().join(format!("spelunk-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = sample();
+        let result = result.read().unwrap();
+        let options = |format| ExportOptions {
+            format,
+            rows: 0..usize::MAX,
+            columns: 0..2,
+            header: true,
+        };
+        let csv = dir.join("out.csv");
+        let rows = export_to_file(
+            &result,
+            &options(ExportFormat::Csv),
+            &Quoted("postgres"),
+            &csv,
+        )
+        .unwrap();
+        assert_eq!(rows, 3);
+        let bytes = std::fs::read(&csv).unwrap();
+        assert!(bytes.starts_with("\u{feff}id,name\r\n1,plain".as_bytes()));
+        assert!(!dir.join("out.csv.part").exists());
+        let json = dir.join("out.json");
+        export_to_file(
+            &result,
+            &options(ExportFormat::Json),
+            &Quoted("postgres"),
+            &json,
+        )
+        .unwrap();
+        assert!(
+            std::fs::read_to_string(&json)
+                .unwrap()
+                .starts_with("[\n  {")
+        );
+        // A failure leaves neither the file nor the temporary one.
+        let missing = dir.join("no-such-dir").join("out.csv");
+        assert!(
+            export_to_file(
+                &result,
+                &options(ExportFormat::Csv),
+                &Quoted("postgres"),
+                &missing
+            )
+            .is_err()
+        );
+        assert!(!missing.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

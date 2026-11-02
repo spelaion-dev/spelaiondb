@@ -8,6 +8,7 @@ import { call, commands, type ScriptEvent } from "../api";
 import { openSession } from "../connect";
 import { useApp, type RunState, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
+import { ExportButton } from "./ExportButton";
 import { ResultGrid } from "./ResultGrid";
 import { SqlEditor, type RunRequest } from "./SqlEditor";
 
@@ -272,6 +273,7 @@ function Results({ run, session, onSelect }: { run: RunState | null; session: st
         <button className={showMessages ? "active" : ""} onClick={() => onSelect(null)}>
           {t("results.messages")}{run.messages.some((m) => m.kind === "error") ? " ⚠" : ""}
         </button>
+        {active && <ExportButton key={active.id} result={active} session={session} />}
       </div>
       <div className="result-body">
         {active ? (

@@ -261,6 +261,26 @@ try {
   assert.ok(json[0].country);
   await panel.getByRole("status").filter({ hasText: "Copied 3 rows × 2 columns" }).waitFor();
 
+  step("export: the whole result to CSV and JSON files written by the core");
+  // The native save dialog cannot be driven: src/dialogs.ts takes this path instead.
+  const exportPath = (name) => join(userDir, name);
+  const answerSaveDialog = (path) => page.evaluate((target) => (window.__spelunkSavePath = target), path);
+  await answerSaveDialog(exportPath("result.csv"));
+  await panel.getByRole("button", { name: "Export ▾" }).click();
+  await page.getByRole("menuitem", { name: "CSV (Excel)" }).click();
+  await panel.getByRole("status").filter({ hasText: "Exported 6 rows" }).waitFor();
+  const csv = readFileSync(exportPath("result.csv"), "utf8");
+  assert.ok(csv.startsWith("\ufeffcountry,orders,total\r\n"), csv.slice(0, 40));
+  assert.equal(csv.trimEnd().split("\r\n").length, 7);
+  await answerSaveDialog(exportPath("result.json"));
+  await panel.getByRole("button", { name: "Export ▾" }).click();
+  await shot("03c-export-menu");
+  await page.getByRole("menuitem", { name: "JSON" }).click();
+  await panel.getByRole("status").filter({ hasText: "result.json" }).waitFor();
+  const exported = JSON.parse(readFileSync(exportPath("result.json"), "utf8"));
+  assert.equal(exported.length, 6);
+  assert.equal(typeof exported[0].total, "number");
+
   step("SQLite: 50,000 rows and scrolling");
   panel = await newQuery("Shop (SQLite)", "select * from orders;");
   await run(panel);

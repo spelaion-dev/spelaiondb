@@ -67,6 +67,10 @@ right-click menu also copies as CSV, JSON (numbers stay numbers, JSON columns ar
 or SQL `INSERT` statements with the engine's quoting. The core formats the rows from the
 typed data; up to 100,000 rows can be copied at once.
 
+**Export ▾** writes the whole result to a file (CSV with a byte order mark so Excel reads
+accents, TSV, JSON or SQL `INSERT`). The core writes it in chunks to a temporary file that is
+renamed at the end, so it works with millions of rows and never leaves half-written files.
+
 ## Query history
 
 Open **Query history** in the sidebar to search executed SQL or connection IDs and open a

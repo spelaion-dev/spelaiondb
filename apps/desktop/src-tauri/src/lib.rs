@@ -5,7 +5,7 @@ mod dto;
 mod interaction;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -778,6 +778,43 @@ async fn copy_rows(
     String::from_utf8(out).map_err(|e| e.to_string())
 }
 
+/// Writes a whole result to a file the user chose (in a blocking task: it may be millions of
+/// rows). Returns how many rows were written.
+#[tauri::command]
+#[specta::specta]
+async fn export_result(
+    result: u32,
+    session: String,
+    path: String,
+    format: TextFormat,
+    state: State<'_, AppState>,
+) -> CmdResult<f64> {
+    let dialect = dialect_for(&state, &session).await;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let rows = tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        if !stored.is_complete() {
+            return Err("the result is still loading: export it when every row has arrived".into());
+        }
+        let options = ExportOptions {
+            format: export_format(format),
+            rows: 0..stored.rows(),
+            columns: 0..stored.schema().columns.len(),
+            header: true,
+        };
+        spelunk_core::export_to_file(&stored, &options, dialect.as_ref(), Path::new(&path))
+            .map_err(|e| format!("could not write {path}: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(rows as f64)
+}
+
 /// Frees a result the UI no longer shows.
 #[tauri::command]
 #[specta::specta]
@@ -933,6 +970,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update_tunnel,
             delete_tunnel,
             copy_rows,
+            export_result,
             open_workspace,
             trust_workspace,
             list_connections,

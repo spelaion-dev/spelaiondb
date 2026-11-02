@@ -31,7 +31,19 @@
     "copyWithHeaders": "Copy with headers (Ctrl+Shift+C)",
     "copyCsv": "Copy as CSV",
     "copyJson": "Copy as JSON",
-    "copyInsert": "Copy as SQL INSERT"
+    "copyInsert": "Copy as SQL INSERT",
+    "export": {
+      "button": "Export ▾",
+      "busy": "Exporting…",
+      "hint": "Write the whole result to a file",
+      "loading": "Available when every row has arrived",
+      "csv": "CSV (Excel)",
+      "tsv": "TSV (tab-separated)",
+      "json": "JSON",
+      "sqlInsert": "SQL INSERT statements",
+      "done_one": "Exported {{formattedCount}} row to {{path}}",
+      "done_other": "Exported {{formattedCount}} rows to {{path}}"
+    }
   },
   "messages": {
     "connectionFailed": "Could not connect: {{detail}}",

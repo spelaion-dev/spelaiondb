@@ -54,6 +54,11 @@ export const commands = {
 	 *  the typed data, for the clipboard.
 	 */
 	copyRows: (result: number, session: string, range: CellRange, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
+	/**
+	 *  Writes a whole result to a file the user chose (in a blocking task: it may be millions of
+	 *  rows). Returns how many rows were written.
+	 */
+	exportResult: (result: number, session: string, path: string, format: TextFormat) => typedError<number | null, string>(__TAURI_INVOKE("export_result", { result, session, path, format })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),

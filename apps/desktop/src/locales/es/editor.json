@@ -31,7 +31,19 @@
     "copyWithHeaders": "Copiar con cabeceras (Ctrl+Mayús+C)",
     "copyCsv": "Copiar como CSV",
     "copyJson": "Copiar como JSON",
-    "copyInsert": "Copiar como INSERT de SQL"
+    "copyInsert": "Copiar como INSERT de SQL",
+    "export": {
+      "button": "Exportar ▾",
+      "busy": "Exportando…",
+      "hint": "Escribir el resultado completo en un fichero",
+      "loading": "Disponible cuando hayan llegado todas las filas",
+      "csv": "CSV (Excel)",
+      "tsv": "TSV (separado por tabuladores)",
+      "json": "JSON",
+      "sqlInsert": "Sentencias INSERT de SQL",
+      "done_one": "Exportada {{formattedCount}} fila a {{path}}",
+      "done_other": "Exportadas {{formattedCount}} filas a {{path}}"
+    }
   },
   "messages": {
     "connectionFailed": "No se pudo conectar: {{detail}}",
