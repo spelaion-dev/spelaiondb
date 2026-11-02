@@ -70,6 +70,8 @@ pub trait SecretBackend: Send + Sync {
     /// `Ok(None)` if the entry does not exist.
     fn keychain_get(&self, account: &str) -> Result<Option<String>, String>;
     fn keychain_set(&self, account: &str, secret: &str) -> Result<(), String>;
+    /// Deletes an entry; does not fail if it does not exist.
+    fn keychain_delete(&self, account: &str) -> Result<(), String>;
     fn env(&self, name: &str) -> Option<String>;
     /// Runs a program and returns its standard output.
     fn run(&self, program: &str, args: &[&str]) -> Result<String, String>;
@@ -79,16 +81,6 @@ pub trait SecretBackend: Send + Sync {
 
 /// The system's real keychain, environment and commands.
 pub struct SystemBackend;
-
-impl SystemBackend {
-    /// Deletes a keychain entry (does not fail if it does not exist).
-    pub fn keychain_delete(&self, account: &str) -> Result<(), String> {
-        match keychain_entry(account)?.delete_credential() {
-            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-}
 
 /// Picks the platform's keychain store (once per process).
 fn keychain_entry(account: &str) -> Result<keyring_core::Entry, String> {
@@ -122,6 +114,13 @@ impl SecretBackend for SystemBackend {
         keychain_entry(account)?
             .set_password(secret)
             .map_err(|e| e.to_string())
+    }
+
+    fn keychain_delete(&self, account: &str) -> Result<(), String> {
+        match keychain_entry(account)?.delete_credential() {
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     fn env(&self, name: &str) -> Option<String> {

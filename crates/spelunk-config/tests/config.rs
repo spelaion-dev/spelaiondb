@@ -79,6 +79,14 @@ impl SecretBackend for FakeBackend {
         Ok(())
     }
 
+    fn keychain_delete(&self, account: &str) -> Result<(), String> {
+        if self.fail_keychain {
+            return Err("keychain locked".into());
+        }
+        self.keychain.lock().unwrap().remove(account);
+        Ok(())
+    }
+
     fn env(&self, name: &str) -> Option<String> {
         self.env.get(name).cloned()
     }
@@ -792,4 +800,236 @@ fn drafts_resolve_for_testing_with_the_same_trust_rules() {
         .resolve_draft(&personal)
         .unwrap();
     assert_eq!(resolved.id.to_string(), "~/prod/eu/orders-prod");
+}
+
+const HAND_WRITTEN: &str = "# Orders database: owned by the data team\nschema_version = 1\nname = \"Orders\"\nengine = \"postgres\"\nhost = \"db.internal\" # primary\ndatabase = \"orders\"\nuser = \"app\"\npassword = { secret = \"keychain\" }\n\n[mcp]\nexposed = true\nmax_rows = 50 # agents get few rows\nwrites = \"deny\"\n";
+
+#[test]
+fn drafts_round_trip_existing_connections() {
+    let fx = Fixture::new("draft-roundtrip");
+    fx.write("repo/.spelunk/connections/team/orders.toml", HAND_WRITTEN);
+    fx.write(
+        "repo/.spelunk/connections/vault.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\npassword = { secret = \"op://Infra/db/password\" }\n",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft::from_entry(config.connection(&ws("team/orders")).unwrap());
+    assert_eq!(draft.folder, "team");
+    assert_eq!(draft.name, "Orders");
+    assert_eq!(draft.password, PasswordChoice::Keychain);
+    assert!(draft.mcp_exposed);
+    // A reference the form cannot build is shown and kept as is.
+    let vault = ConnectionDraft::from_entry(config.connection(&ws("vault")).unwrap());
+    assert_eq!(
+        vault.password,
+        PasswordChoice::Other("op://Infra/db/password".into())
+    );
+    assert_eq!(vault.name, "vault");
+}
+
+#[test]
+fn editing_keeps_comments_and_settings_the_form_does_not_show() {
+    let fx = Fixture::new("draft-edit");
+    let path = fx.write("repo/.spelunk/connections/team/orders.toml", HAND_WRITTEN);
+    let config = load(Some(&fx.repo()), &fx.user());
+    let id = ws("team/orders");
+    let backend = FakeBackend::default();
+    backend.keychain_set("team/orders/password", "old").unwrap();
+    let draft = ConnectionDraft {
+        name: "Orders (EU)".into(),
+        host: "db-eu.internal".into(),
+        port: Some(6543),
+        tls_mode: TlsModeConfig::Require,
+        // Folder and layer cannot move a connection: the file stays where it is.
+        folder: "elsewhere".into(),
+        source: Source::User,
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelunk_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.starts_with("# Orders database: owned by the data team\n"),
+        "{content}"
+    );
+    assert!(
+        content.contains("host = \"db-eu.internal\" # primary"),
+        "{content}"
+    );
+    assert!(
+        content.contains("max_rows = 50 # agents get few rows"),
+        "{content}"
+    );
+    assert!(content.contains("writes = \"deny\""), "{content}");
+    assert!(content.contains("port = 6543"), "{content}");
+    assert!(content.contains("[tls]\nmode = \"require\""), "{content}");
+    assert!(!fx.user().join("connections/elsewhere").exists());
+    // An empty password keeps the stored one.
+    assert_eq!(
+        backend
+            .keychain
+            .lock()
+            .unwrap()
+            .get("team/orders/password")
+            .map(String::as_str),
+        Some("old")
+    );
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    assert_eq!(config.connection(&id).unwrap().name(), "Orders (EU)");
+    assert_eq!(config.connection(&id).unwrap().file.mcp.max_rows, Some(50));
+}
+
+#[test]
+fn editing_the_password_updates_or_forgets_the_keychain_entry() {
+    let fx = Fixture::new("draft-edit-password");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
+    let id = ws("orders");
+    let backend = FakeBackend::default();
+    backend.keychain_set("orders/password", "old").unwrap();
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft::from_entry(config.connection(&id).unwrap());
+    spelunk_config::update_connection(&config, &id, &draft, Some(&Secret::new("new")), &backend)
+        .unwrap();
+    assert_eq!(
+        backend
+            .keychain
+            .lock()
+            .unwrap()
+            .get("orders/password")
+            .map(String::as_str),
+        Some("new")
+    );
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("new\""));
+
+    let prompt = ConnectionDraft {
+        password: PasswordChoice::Prompt,
+        ..draft.clone()
+    };
+    spelunk_config::update_connection(&config, &id, &prompt, None, &backend).unwrap();
+    assert!(
+        backend
+            .keychain
+            .lock()
+            .unwrap()
+            .get("orders/password")
+            .is_none()
+    );
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("secret = \"prompt\"")
+    );
+
+    // If the keychain fails, the file goes back to what it was.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let before = std::fs::read_to_string(&path).unwrap();
+    let locked = FakeBackend {
+        fail_keychain: true,
+        ..FakeBackend::default()
+    };
+    let back_to_keychain = ConnectionDraft {
+        password: PasswordChoice::Keychain,
+        ..draft
+    };
+    assert!(
+        spelunk_config::update_connection(
+            &config,
+            &id,
+            &back_to_keychain,
+            Some(&Secret::new("x")),
+            &locked
+        )
+        .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
+#[test]
+fn invalid_edits_leave_the_file_untouched() {
+    let fx = Fixture::new("draft-edit-invalid");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
+    let config = load(Some(&fx.repo()), &fx.user());
+    let id = ws("orders");
+    let draft = ConnectionDraft::from_entry(config.connection(&id).unwrap());
+    let backend = FakeBackend::default();
+    for broken in [
+        ConnectionDraft {
+            host: String::new(),
+            ..draft.clone()
+        },
+        ConnectionDraft {
+            name: "  ".into(),
+            ..draft.clone()
+        },
+        ConnectionDraft {
+            tunnel: "missing".into(),
+            ..draft.clone()
+        },
+    ] {
+        assert!(spelunk_config::update_connection(&config, &id, &broken, None, &backend).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), HAND_WRITTEN);
+    }
+    assert!(
+        spelunk_config::update_connection(&config, &ws("missing"), &draft, None, &backend).is_err()
+    );
+}
+
+#[test]
+fn deleting_removes_the_file_its_password_and_empty_folders() {
+    let fx = Fixture::new("draft-delete");
+    let path = fx.write(
+        "repo/.spelunk/connections/prod/eu/orders.toml",
+        HAND_WRITTEN,
+    );
+    let keep = fx.write(
+        "repo/.spelunk/connections/prod/other.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"a.db\"\n",
+    );
+    let backend = FakeBackend::default();
+    backend
+        .keychain_set("prod/eu/orders/password", "secret")
+        .unwrap();
+    backend
+        .keychain_set("prod/other/password", "unrelated")
+        .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+
+    spelunk_config::delete_connection(&config, &ws("prod/eu/orders"), &backend).unwrap();
+    assert!(!path.exists());
+    assert!(!fx.repo().join(".spelunk/connections/prod/eu").exists());
+    assert!(keep.exists(), "folders still in use are kept");
+    assert!(fx.repo().join(".spelunk/connections").exists());
+    let keychain = backend.keychain.lock().unwrap();
+    assert!(keychain.get("prod/eu/orders/password").is_none());
+    assert_eq!(
+        keychain.get("prod/other/password").map(String::as_str),
+        Some("unrelated")
+    );
+    drop(keychain);
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.connection(&ws("prod/eu/orders")).is_none());
+    assert!(spelunk_config::delete_connection(&config, &ws("prod/eu/orders"), &backend).is_err());
+}
+
+#[test]
+fn testing_an_edit_finds_the_stored_password_even_after_renaming() {
+    let fx = Fixture::new("draft-edit-resolve");
+    fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+    backend.keychain_set("orders/password", "stored").unwrap();
+    let id = ws("orders");
+    let draft = ConnectionDraft {
+        name: "Renamed".into(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve_edit(&id, &draft)
+        .unwrap();
+    assert_eq!(resolved.password, Password::Value(Secret::new("stored")));
+    assert_eq!(resolved.name, "Renamed");
 }

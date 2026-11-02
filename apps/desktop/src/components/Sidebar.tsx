@@ -83,7 +83,7 @@ export function Sidebar() {
         </button>
         <button
           className="ghost add-connection"
-          onClick={() => useApp.getState().setAddConnectionOpen(true)}
+          onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
           aria-label={t("connections:add")}
           title={t("connections:add")}
         >
@@ -115,7 +115,7 @@ export function Sidebar() {
         {connections.length === 0 && (
           <div className="empty small">
             <Trans t={t} i18nKey="noConnections" components={{ code: <code /> }} />
-            <button onClick={() => useApp.getState().setAddConnectionOpen(true)}>{t("connections:add")}</button>
+            <button onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}>{t("connections:add")}</button>
           </div>
         )}
         {[...groups.entries()].map(([group, items]) => {

@@ -13,7 +13,7 @@ use crate::model::ConnectionFile;
 pub const CONNECTION_SCHEMA_URL: &str =
     "https://raw.githubusercontent.com/spelunkdb/spelunkdb/main/schema/connection.schema.json";
 
-fn read_doc(path: &Path) -> Result<(String, DocumentMut), ConfigError> {
+pub(crate) fn read_doc(path: &Path) -> Result<(String, DocumentMut), ConfigError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| ConfigError::new(path, format!("could not read: {e}")))?;
     let doc = content.parse::<DocumentMut>().map_err(|e| match e.span() {
@@ -23,7 +23,7 @@ fn read_doc(path: &Path) -> Result<(String, DocumentMut), ConfigError> {
     Ok((content, doc))
 }
 
-fn write_doc(path: &Path, doc: &DocumentMut) -> Result<(), ConfigError> {
+pub(crate) fn write_doc(path: &Path, doc: &DocumentMut) -> Result<(), ConfigError> {
     // Write to a temporary file first and then rename: an interruption never leaves a broken file.
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, doc.to_string()).map_err(|e| ConfigError::new(&tmp, e.to_string()))?;

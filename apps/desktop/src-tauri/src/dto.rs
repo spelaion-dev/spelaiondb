@@ -390,16 +390,18 @@ pub struct TunnelItem {
     pub personal: bool,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum PasswordMode {
     None,
     Keychain,
     Prompt,
     Env,
+    /// A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is.
+    Other,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum TlsModeItem {
     Disable,
@@ -411,7 +413,7 @@ pub enum TlsModeItem {
 
 /// What the "add connection" form sends. The password travels apart and is never stored in
 /// the connection file.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionDraftItem {
     pub personal: bool,
@@ -426,6 +428,7 @@ pub struct ConnectionDraftItem {
     pub user: String,
     pub password_mode: PasswordMode,
     pub password_env: String,
+    pub password_other: String,
     pub tls_mode: TlsModeItem,
     pub tls_ca: String,
     pub tunnel: String,
@@ -462,6 +465,7 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
                 PasswordMode::Keychain => PasswordChoice::Keychain,
                 PasswordMode::Prompt => PasswordChoice::Prompt,
                 PasswordMode::Env => PasswordChoice::Env(item.password_env),
+                PasswordMode::Other => PasswordChoice::Other(item.password_other),
             },
             tls_mode: match item.tls_mode {
                 TlsModeItem::Disable => TlsModeConfig::Disable,
@@ -475,5 +479,46 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
             read_only: item.read_only,
             mcp_exposed: item.mcp_exposed,
         })
+    }
+}
+
+impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
+    fn from(draft: spelunk_config::ConnectionDraft) -> Self {
+        use spelunk_config::{PasswordChoice, Source, TlsModeConfig};
+        let (password_mode, password_env, password_other) = match draft.password {
+            PasswordChoice::None => (PasswordMode::None, String::new(), String::new()),
+            PasswordChoice::Keychain => (PasswordMode::Keychain, String::new(), String::new()),
+            PasswordChoice::Prompt => (PasswordMode::Prompt, String::new(), String::new()),
+            PasswordChoice::Env(var) => (PasswordMode::Env, var, String::new()),
+            PasswordChoice::Other(reference) => (PasswordMode::Other, String::new(), reference),
+        };
+        Self {
+            personal: match draft.source {
+                Source::User => true,
+                Source::Workspace => false,
+            },
+            folder: draft.folder,
+            name: draft.name,
+            engine: draft.engine.as_str().into(),
+            env: draft.env,
+            host: draft.host,
+            port: draft.port,
+            database: draft.database,
+            user: draft.user,
+            password_mode,
+            password_env,
+            password_other,
+            tls_mode: match draft.tls_mode {
+                TlsModeConfig::Disable => TlsModeItem::Disable,
+                TlsModeConfig::Prefer => TlsModeItem::Prefer,
+                TlsModeConfig::Require => TlsModeItem::Require,
+                TlsModeConfig::VerifyCa => TlsModeItem::VerifyCa,
+                TlsModeConfig::VerifyFull => TlsModeItem::VerifyFull,
+            },
+            tls_ca: draft.tls_ca,
+            tunnel: draft.tunnel,
+            read_only: draft.read_only,
+            mcp_exposed: draft.mcp_exposed,
+        }
     }
 }

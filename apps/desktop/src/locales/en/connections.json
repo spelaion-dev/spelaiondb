@@ -54,7 +54,9 @@
     "savePassword": "Save password",
     "tlsHint": "With “Verify”, an empty certificate field uses the system’s trusted certificates.",
     "useTunnel": "Connect through an SSH tunnel",
-    "tunnelHint": "The database is reached through the tunnel’s last hop."
+    "tunnelHint": "The database is reached through the tunnel’s last hop.",
+    "passwordOther": "Password reference",
+    "fixedLocationHint": "When editing, the connection stays in the same file and folder."
   },
   "tls": {
     "disable": "Disabled",
@@ -87,7 +89,21 @@
     "none": "No password",
     "savedHint": "The password goes to the system keychain (Credential Manager, Keychain or Secret Service), never to the connection file.",
     "askHint": "Not saved: it will be asked each time you connect. The password typed here is only used to test.",
-    "envHint": "Read from this variable when connecting; the file only stores its name."
+    "envHint": "Read from this variable when connecting; the file only stores its name.",
+    "other": "Defined in the file",
+    "otherHint": "This password comes from a reference the form cannot edit (1Password, a command or a named keychain entry). It is kept as is; edit the file to change it.",
+    "keepPlaceholder": "Leave empty to keep the saved password"
   },
-  "cancel": "Cancel"
+  "cancel": "Cancel",
+  "edit": "Edit…",
+  "delete": "Delete…",
+  "editTitle": "Edit {{name}}",
+  "saveChanges": "Save changes",
+  "deleteTitle": "Delete connection?",
+  "deleteConfirm": "Delete",
+  "deleting": "Deleting…",
+  "deleteExplanation": "<strong>{{name}}</strong> will be removed: its file <code>{{file}}</code> is deleted, along with its password in the system keychain if one was saved.",
+  "deleteProjectHint": "It is a project connection, shared through git: your team will lose it too when you commit the change.",
+  "deletePersonalHint": "It is a personal connection: only this computer is affected.",
+  "deleteBusy": "A query is running or connecting on it. Stop it first."
 }

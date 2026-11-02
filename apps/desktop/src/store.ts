@@ -59,6 +59,8 @@ export interface Tab {
 
 let tabCounter = 0;
 
+export type ConnectionDialog = { kind: "add" } | { kind: "edit"; id: string };
+
 /** `activeTab` value of the settings tab, which lives beside the query tabs. */
 export const SETTINGS_TAB = "settings";
 
@@ -69,7 +71,10 @@ interface AppStore {
   activeTab: string | null;
   historyOpen: boolean;
   settingsOpen: boolean;
-  addConnectionOpen: boolean;
+  /** The add/edit connection wizard, if open. */
+  connectionDialog: ConnectionDialog | null;
+  /** Connection waiting for the user to confirm its deletion. */
+  deletingConnection: ConnectionItem | null;
   historyRevision: number;
   historySaving: string[];
   workspaceChanging: boolean;
@@ -83,7 +88,8 @@ interface AppStore {
   setHistoryOpen(open: boolean): void;
   openSettings(): void;
   closeSettings(): void;
-  setAddConnectionOpen(open: boolean): void;
+  setConnectionDialog(dialog: ConnectionDialog | null): void;
+  setDeletingConnection(connection: ConnectionItem | null): void;
   refreshHistory(): void;
   setHistorySaving(connection: string, saving: boolean): void;
   setWorkspaceChanging(changing: boolean): void;
@@ -97,7 +103,8 @@ export const useApp = create<AppStore>((set) => ({
   activeTab: null,
   historyOpen: false,
   settingsOpen: false,
-  addConnectionOpen: false,
+  connectionDialog: null,
+  deletingConnection: null,
   historyRevision: 0,
   historySaving: [],
   workspaceChanging: false,
@@ -129,7 +136,8 @@ export const useApp = create<AppStore>((set) => ({
   updateRun: (id, update) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id && t.run ? { ...t, run: update(t.run) } : t)) })),
   setHistoryOpen: (historyOpen) => set({ historyOpen }),
-  setAddConnectionOpen: (addConnectionOpen) => set({ addConnectionOpen }),
+  setConnectionDialog: (connectionDialog) => set({ connectionDialog }),
+  setDeletingConnection: (deletingConnection) => set({ deletingConnection }),
   openSettings: () => set({ settingsOpen: true, activeTab: SETTINGS_TAB }),
   closeSettings: () =>
     set((s) => ({

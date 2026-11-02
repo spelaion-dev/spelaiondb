@@ -314,12 +314,14 @@ async fn list_tunnels(state: State<'_, AppState>) -> CmdResult<Vec<TunnelItem>> 
 }
 
 /// Opens and closes a connection that has not been saved yet. Nothing is written: neither
-/// the file nor the keychain.
+/// the file nor the keychain. `editing` is the connection being edited, if any: its stored
+/// password is used when none is typed.
 #[tauri::command]
 #[specta::specta]
 async fn test_connection(
     draft: ConnectionDraftItem,
     password: Option<String>,
+    editing: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectOutcome> {
@@ -327,7 +329,12 @@ async fn test_connection(
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let resolved = {
         let config = state.config.read().await;
-        match Resolver::new(&config, &trust, &SystemBackend).resolve_draft(&draft) {
+        let resolver = Resolver::new(&config, &trust, &SystemBackend);
+        let resolved = match &editing {
+            Some(id) => resolver.resolve_edit(&parse_id(id), &draft),
+            None => resolver.resolve_draft(&draft),
+        };
+        match resolved {
             Ok(resolved) => resolved,
             Err(spelunk_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
@@ -386,6 +393,60 @@ async fn add_connection(
     };
     state.reload().await;
     Ok(id.to_string())
+}
+
+/// The form of an existing connection, to edit it.
+#[tauri::command]
+#[specta::specta]
+async fn connection_draft(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ConnectionDraftItem> {
+    let config = state.config.read().await;
+    let entry = config
+        .connection(&parse_id(&connection))
+        .ok_or_else(|| format!("connection {connection} does not exist"))?;
+    Ok(ConnectionDraft::from_entry(entry).into())
+}
+
+/// Saves an edited connection (same file; for `keychain`, a typed password replaces the
+/// stored one) and reloads the configuration.
+#[tauri::command]
+#[specta::specta]
+async fn update_connection(
+    connection: String,
+    draft: ConnectionDraftItem,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let password = password.map(Secret::new);
+    {
+        let config = state.config.read().await;
+        spelunk_config::update_connection(
+            &config,
+            &parse_id(&connection),
+            &draft,
+            password.as_ref(),
+            &SystemBackend,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    state.reload().await;
+    Ok(())
+}
+
+/// Deletes a connection file and its stored password. The UI closes its sessions first.
+#[tauri::command]
+#[specta::specta]
+async fn delete_connection(connection: String, state: State<'_, AppState>) -> CmdResult<()> {
+    {
+        let config = state.config.read().await;
+        spelunk_config::delete_connection(&config, &parse_id(&connection), &SystemBackend)
+            .map_err(|e| e.to_string())?;
+    }
+    state.reload().await;
+    Ok(())
 }
 
 /// Opens a session (`session` is chosen by the UI). If a password is needed, it says so
@@ -679,6 +740,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_tunnels,
             test_connection,
             add_connection,
+            connection_draft,
+            update_connection,
+            delete_connection,
             open_workspace,
             trust_workspace,
             list_connections,

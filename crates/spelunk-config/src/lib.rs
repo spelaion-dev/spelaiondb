@@ -19,7 +19,10 @@ mod secrets;
 mod trust;
 mod vars;
 
-pub use draft::{ConnectionDraft, PasswordChoice, add_connection, connections_dir, slug};
+pub use draft::{
+    ConnectionDraft, PasswordChoice, add_connection, connections_dir, delete_connection, slug,
+    update_connection,
+};
 pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_value};
 pub use error::{ConfigError, ResolveError};
 pub use load::{

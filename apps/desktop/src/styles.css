@@ -200,6 +200,11 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 .connection-menu-popup p { margin: 0; }
+.connection-menu-popup .menu-item { text-align: left; border: none; background: none; padding: 5px 6px; border-radius: 4px; }
+.connection-menu-popup .menu-item:hover { background: var(--accent-soft); }
+.connection-menu-popup hr { width: 100%; border: none; border-top: 1px solid var(--line); margin: 2px 0; }
+.danger-text { color: var(--danger); }
+.wizard-error { padding: 16px 18px; }
 
 /* ---------------------------------------------------------------- settings */
 .settings { display: flex; flex: 1; min-width: 0; height: 100%; background: var(--panel); }

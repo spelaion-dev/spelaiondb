@@ -14,7 +14,7 @@ import {
   type TlsModeItem,
   type TunnelItem,
 } from "../api";
-import { useApp, useDialogs } from "../store";
+import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { refreshConnections } from "./Sidebar";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
@@ -22,14 +22,28 @@ const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function AddConnection() {
+export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const { t } = useTranslation("connections");
-  const close = () => useApp.getState().setAddConnectionOpen(false);
+  const close = () => useApp.getState().setConnectionDialog(null);
+  const editing = dialog.kind === "edit" ? dialog.id : null;
   const [engines, setEngines] = useState<EngineItem[]>([]);
   const [engine, setEngine] = useState<EngineItem | null>(null);
+  const [initial, setInitial] = useState<ConnectionDraft | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    void commands.engineCatalog().then(setEngines);
+    void commands.engineCatalog().then(async (catalog) => {
+      setEngines(catalog);
+      if (!editing) return;
+      try {
+        // The "Serialize" variant only differs in optional markers: same fields.
+        const draft = (await call(commands.connectionDraft(editing))) as ConnectionDraft;
+        setInitial(draft);
+        setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
+      } catch (e) {
+        setLoadError(errorText(e));
+      }
+    });
     const onKey = (e: KeyboardEvent) => {
       // Dialogs opened on top (trust, SSH fingerprint…) handle their own Escape.
       const dialogs = useDialogs.getState();
@@ -45,13 +59,17 @@ export function AddConnection() {
         <div className="wizard-header">
           <h2>
             {engine && <EngineBadge engine={engine} />}
-            {engine ? t("formTitle", { engine: engine.name }) : t("title")}
+            {editing ? t("editTitle", { name: initial?.name ?? editing }) : engine ? t("formTitle", { engine: engine.name }) : t("title")}
           </h2>
           <button className="ghost" aria-label={t("close")} onClick={close}>
             ×
           </button>
         </div>
-        {engine ? (
+        {loadError ? (
+          <p className="error wizard-error" role="alert">{loadError}</p>
+        ) : editing ? (
+          engine && initial && <ConnectionForm engine={engine} editing={editing} initial={initial} onCancel={close} onSaved={close} />
+        ) : engine ? (
           <ConnectionForm engine={engine} onBack={() => setEngine(null)} onCancel={close} onSaved={close} />
         ) : (
           <EnginePicker engines={engines} onPick={setEngine} />
@@ -141,7 +159,7 @@ type TestState =
   | { kind: "error"; message: string };
 
 /** How the form asks for credentials, like DBeaver's "Authentication" selector. */
-type AuthMethod = "password" | "env" | "none";
+type AuthMethod = "password" | "env" | "none" | "other";
 type FormTab = "main" | "ssl" | "ssh" | "options";
 
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
@@ -153,7 +171,29 @@ function Field({ label, children, className }: { label: string; children: React.
   );
 }
 
-function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel(): void; onSaved(): void }) {
+function authFrom(mode: PasswordMode): AuthMethod {
+  switch (mode) {
+    case "keychain":
+    case "prompt":
+      return "password";
+    case "env":
+      return "env";
+    case "other":
+      return "other";
+    case "none":
+      return "none";
+  }
+}
+
+function ConnectionForm(props: {
+  engine: EngineItem;
+  /** Identifier of the connection being edited; absent when adding one. */
+  editing?: string;
+  initial?: ConnectionDraft;
+  onBack?(): void;
+  onCancel(): void;
+  onSaved(): void;
+}) {
   const { engine } = props;
   const { t } = useTranslation("connections");
   const workspace = useApp((s) => s.workspace);
@@ -161,14 +201,15 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
   const network = engine.access === "network";
   const [tab, setTab] = useState<FormTab>("main");
   const [tunnels, setTunnels] = useState<TunnelItem[]>([]);
-  const [auth, setAuth] = useState<AuthMethod>(network ? "password" : "none");
-  const [savePassword, setSavePassword] = useState(true);
-  const [useTunnel, setUseTunnel] = useState(false);
+  const { initial, editing } = props;
+  const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network ? "password" : "none");
+  const [savePassword, setSavePassword] = useState(initial ? initial.passwordMode !== "prompt" : true);
+  const [useTunnel, setUseTunnel] = useState(Boolean(initial?.tunnel));
   const [password, setPassword] = useState("");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Omit<ConnectionDraft, "passwordMode" | "tunnel">>({
+  const [draft, setDraft] = useState<Omit<ConnectionDraft, "passwordMode" | "tunnel">>(() => initial ?? {
     personal: !hasWorkspace,
     folder: "",
     name: "",
@@ -179,12 +220,13 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
     database: "",
     user: "",
     passwordEnv: "",
+    passwordOther: "",
     tlsMode: "prefer",
     tlsCa: "",
     readOnly: false,
     mcpExposed: false,
   });
-  const [tunnel, setTunnel] = useState("");
+  const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
 
   useEffect(() => {
     if (!network) return;
@@ -206,7 +248,8 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
   };
 
   // What the core receives: the form's choices mapped to the configuration format.
-  const passwordMode: PasswordMode = !network || auth === "none" ? "none" : auth === "env" ? "env" : savePassword ? "keychain" : "prompt";
+  const passwordMode: PasswordMode =
+    !network || auth === "none" ? "none" : auth === "env" ? "env" : auth === "other" ? "other" : savePassword ? "keychain" : "prompt";
   const request: ConnectionDraft = { ...draft, passwordMode, tunnel: network && useTunnel ? tunnel : "" };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.kind === "testing";
@@ -226,14 +269,14 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
   async function runTest() {
     setTest({ kind: "testing" });
     try {
-      let outcome = await call(commands.testConnection(request, typedPassword || null));
+      let outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
           setTest({ kind: "idle" });
           return;
         }
         useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
-        outcome = await call(commands.testConnection(request, typedPassword || null));
+        outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
       }
       switch (outcome.kind) {
         case "connected":
@@ -259,7 +302,8 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
     setSaveError(null);
     try {
       // Only a saved password reaches the keychain; otherwise it was just for the test.
-      await call(commands.addConnection(request, passwordMode === "keychain" && password ? password : null));
+      const stored = passwordMode === "keychain" && password ? password : null;
+      await call(editing ? commands.updateConnection(editing, request, stored) : commands.addConnection(request, stored));
       await refreshConnections();
       props.onSaved();
     } catch (e) {
@@ -324,6 +368,7 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
                     <option value="password">{t("auth.password")}</option>
                     <option value="env">{t("auth.env")}</option>
                     <option value="none">{t("auth.none")}</option>
+                    {initial?.passwordMode === "other" && <option value="other">{t("auth.other")}</option>}
                   </select>
                 </Field>
                 <Field label={t("fields.user")}>
@@ -332,13 +377,27 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
                 {auth === "password" && (
                   <>
                     <Field label={t("fields.password")}>
-                      <input type="password" value={password} autoComplete="off" onChange={(e) => { setPassword(e.target.value); changed(); }} />
+                      <input
+                        type="password"
+                        value={password}
+                        autoComplete="off"
+                        placeholder={editing && initial?.passwordMode === "keychain" && savePassword ? t("auth.keepPlaceholder") : ""}
+                        onChange={(e) => { setPassword(e.target.value); changed(); }}
+                      />
                     </Field>
                     <label className="check">
                       <input type="checkbox" checked={savePassword} onChange={(e) => { setSavePassword(e.target.checked); changed(); }} />
                       {t("fields.savePassword")}
                     </label>
                     <p className="muted small">{savePassword ? t("auth.savedHint") : t("auth.askHint")}</p>
+                  </>
+                )}
+                {auth === "other" && (
+                  <>
+                    <Field label={t("fields.passwordOther")}>
+                      <input type="text" value={draft.passwordOther} readOnly />
+                    </Field>
+                    <p className="muted small">{t("auth.otherHint")}</p>
                   </>
                 )}
                 {auth === "env" && (
@@ -428,18 +487,20 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
             <div className="form-row" role="radiogroup" aria-label={t("fields.saveIn")}>
               <span>{t("fields.saveIn")}</span>
               <label className="check">
-                <input type="radio" name="save-in" checked={!draft.personal} disabled={!hasWorkspace} onChange={() => update({ personal: false })} />
+                <input type="radio" name="save-in" checked={!draft.personal} disabled={!hasWorkspace || Boolean(editing)} onChange={() => update({ personal: false })} />
                 {t("fields.project")}
               </label>
               <label className="check">
-                <input type="radio" name="save-in" checked={draft.personal} onChange={() => update({ personal: true })} />
+                <input type="radio" name="save-in" checked={draft.personal} disabled={Boolean(editing)} onChange={() => update({ personal: true })} />
                 {t("fields.personal")}
               </label>
             </div>
-            <p className="muted small">{draft.personal ? t("fields.personalHint") : t("fields.projectHint")}</p>
+            <p className="muted small">
+              {editing ? t("fields.fixedLocationHint") : draft.personal ? t("fields.personalHint") : t("fields.projectHint")}
+            </p>
             <div className="form-pair">
               <Field label={t("fields.folder")} className="grow">
-                <input type="text" value={draft.folder} placeholder={t("fields.folderPlaceholder")} onChange={(e) => update({ folder: e.target.value })} />
+                <input type="text" value={draft.folder} disabled={Boolean(editing)} placeholder={t("fields.folderPlaceholder")} onChange={(e) => update({ folder: e.target.value })} />
               </Field>
               <Field label={t("fields.env")} className="grow">
                 <input type="text" list="env-labels" value={draft.env} placeholder="dev, staging, prod…" onChange={(e) => update({ env: e.target.value })} />
@@ -476,14 +537,16 @@ function ConnectionForm(props: { engine: EngineItem; onBack(): void; onCancel():
           {test.kind === "error" && <span className="error">{test.message}</span>}
           {saveError && <span className="error">{saveError}</span>}
         </div>
-        <button type="button" onClick={props.onBack} disabled={busy}>
-          {t("back")}
-        </button>
+        {props.onBack && (
+          <button type="button" onClick={props.onBack} disabled={busy}>
+            {t("back")}
+          </button>
+        )}
         <button type="button" onClick={props.onCancel} disabled={saving}>
           {t("cancel")}
         </button>
         <button type="submit" className="primary" disabled={busy}>
-          {saving ? t("saving") : t("save")}
+          {saving ? t("saving") : editing ? t("saveChanges") : t("save")}
         </button>
       </div>
     </form>

@@ -394,6 +394,41 @@ try {
   assert.doesNotMatch(saved, /wrong|password = "/);
   assert.ok(!existsSync(join(demo, ".spelunk", "connections", "shop-copy.toml")), "personal connections stay out of the repository");
 
+  step("edit a connection: same file, comments of the form kept, location fixed");
+  await (await connectionMenu("Docker PG (wizard)")).getByRole("button", { name: "Edit…" }).click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.getByRole("heading", { name: "Edit Docker PG (wizard)" }).waitFor();
+  assert.equal(await wizard.getByLabel("Host", { exact: true }).inputValue(), "127.0.0.1");
+  assert.equal(await wizard.getByRole("checkbox", { name: "Save password" }).isChecked(), false);
+  await wizard.getByLabel("Name", { exact: true }).fill("Docker PG (edited)");
+  await wizard.getByRole("tab", { name: "SSL" }).click();
+  assert.equal(await wizard.getByLabel("TLS", { exact: true }).inputValue(), "require");
+  await wizard.getByLabel("TLS", { exact: true }).selectOption("prefer");
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  assert.ok(await wizard.getByLabel("Folder", { exact: true }).isDisabled());
+  assert.ok(await wizard.getByRole("radio", { name: "Project", exact: true }).isDisabled());
+  await wizard.getByRole("tab", { name: "Main" }).click();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
+  await shot("13a-edit-connection");
+  await wizard.getByRole("button", { name: "Save changes" }).click();
+  await wizard.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "Docker PG (edited)" }).waitFor();
+  const edited = readFileSync(join(userDir, "connections", "wizard", "docker-pg-wizard.toml"), "utf8");
+  assert.match(edited, /name = "Docker PG \(edited\)"/);
+  assert.doesNotMatch(edited, /\[tls\]|spelunk"\s*\n\s*password = "/);
+
+  step("delete a connection: confirmation, its tab is left without a connection");
+  await (await connectionMenu("Shop copy")).getByRole("button", { name: "Delete…" }).click();
+  const confirm = page.getByRole("dialog", { name: "Delete connection?" });
+  await confirm.getByText("only this computer is affected").waitFor();
+  await shot("13b-delete-connection");
+  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+  await confirm.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor({ state: "detached" });
+  assert.ok(!existsSync(join(userDir, "connections", "shop-copy.toml")));
+
   step("history, theme and per-connection preference survive an app restart");
   await setLanguage("es");
   await setTheme("dark", "dark");
@@ -410,7 +445,8 @@ try {
   await setLanguage("en");
   await setTheme("system", systemTheme);
   await page.getByText("Shop (SQLite)", { exact: true }).waitFor();
-  await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor();
+  await page.locator(".connection-row", { hasText: "Docker PG (edited)" }).waitFor();
+  assert.equal(await page.locator(".connection-row", { hasText: "Shop copy" }).count(), 0);
   assert.equal(await historySaving("Shop (SQLite)"), false);
   panel = await newQuery("Shop (SQLite)", "select 'history_resumed_marker' as resumed;");
   await page.getByRole("button", { name: "Query history", exact: true }).click();

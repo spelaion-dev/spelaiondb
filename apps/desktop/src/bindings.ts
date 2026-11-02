@@ -18,14 +18,24 @@ export const commands = {
 	listTunnels: () => typedError<TunnelItem[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**
 	 *  Opens and closes a connection that has not been saved yet. Nothing is written: neither
-	 *  the file nor the keychain.
+	 *  the file nor the keychain. `editing` is the connection being edited, if any: its stored
+	 *  password is used when none is typed.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("test_connection", { draft, password })),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("test_connection", { draft, password, editing })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
 	 *  configuration. Returns the new connection's identifier.
 	 */
 	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<string, string>(__TAURI_INVOKE("add_connection", { draft, password })),
+	/**  The form of an existing connection, to edit it. */
+	connectionDraft: (connection: string) => typedError<ConnectionDraftItem_Serialize, string>(__TAURI_INVOKE("connection_draft", { connection })),
+	/**
+	 *  Saves an edited connection (same file; for `keychain`, a typed password replaces the
+	 *  stored one) and reloads the configuration.
+	 */
+	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password })),
+	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
+	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
@@ -112,6 +122,7 @@ export type ConnectionDraftItem_Deserialize = {
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
+	passwordOther: string,
 	tlsMode: TlsModeItem,
 	tlsCa: string,
 	tunnel: string,
@@ -136,6 +147,7 @@ export type ConnectionDraftItem_Serialize = {
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
+	passwordOther: string,
 	tlsMode: TlsModeItem,
 	tlsCa: string,
 	tunnel: string,
@@ -250,7 +262,9 @@ export type ObjectItem_Serialize = {
 	comment: string | null,
 };
 
-export type PasswordMode = "none" | "keychain" | "prompt" | "env";
+export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
+/**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */
+"other";
 
 export type SchemaItem = {
 	name: string,

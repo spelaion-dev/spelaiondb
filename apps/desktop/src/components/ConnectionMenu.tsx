@@ -4,10 +4,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ConnectionItem } from "../api";
+import { useApp } from "../store";
 import { HistoryPreference } from "./HistoryPreference";
 
 export function ConnectionMenu({ connection }: { connection: ConnectionItem }) {
-  const { t } = useTranslation("editor");
+  const { t } = useTranslation(["editor", "connections"]);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
@@ -41,6 +42,25 @@ export function ConnectionMenu({ connection }: { connection: ConnectionItem }) {
       </button>
       {open && (
         <div className="connection-menu-popup" role="group" aria-label={t("history.menu", { name: connection.name })}>
+          <button
+            className="menu-item"
+            onClick={() => {
+              setOpen(false);
+              useApp.getState().setConnectionDialog({ kind: "edit", id: connection.id });
+            }}
+          >
+            {t("connections:edit")}
+          </button>
+          <button
+            className="menu-item danger-text"
+            onClick={() => {
+              setOpen(false);
+              useApp.getState().setDeletingConnection(connection);
+            }}
+          >
+            {t("connections:delete")}
+          </button>
+          <hr />
           <HistoryPreference connection={connection} />
           <p className="muted small">{t("history.preferenceHint")}</p>
         </div>

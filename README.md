@@ -36,6 +36,11 @@ as *coming soon*), fill in its form, **Test connection** and **Save**.
 
 Testing a connection writes nothing. Saving never overwrites an existing connection.
 
+The **⋯** menu next to each connection has **Edit…** and **Delete…**. Editing keeps the same
+file: only the values you change are rewritten, so comments and settings the form does not
+show (such as `mcp.max_rows`) survive. Deleting asks for confirmation, removes the file and
+the password saved in the keychain, and leaves open tabs without a connection.
+
 ## Settings
 
 The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in its own tab:

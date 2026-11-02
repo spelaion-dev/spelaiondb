@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use spelunk_driver_api::Secret;
 
 use crate::edit::create_connection;
+use crate::edit::{read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{
     Config, ConnectionEntry, ConnectionId, Source, WORKSPACE_DIR, validate_connection,
@@ -14,7 +15,7 @@ use crate::load::{
 use crate::model::{
     ConnectionFile, Engine, McpConfig, SCHEMA_VERSION, SecretSpec, TlsConfig, TlsModeConfig,
 };
-use crate::secrets::SecretBackend;
+use crate::secrets::{SecretBackend, SecretRef};
 
 /// Where the password of a new connection comes from. It is never written to the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +28,9 @@ pub enum PasswordChoice {
     Prompt,
     /// Read from an environment variable when connecting.
     Env(String),
+    /// Any other reference already in the file (`keychain:<name>`, `op://…`, `cmd:…`): the
+    /// form shows it and editing keeps it as is.
+    Other(String),
 }
 
 /// What the user filled in to create a connection. Empty strings mean "not set".
@@ -158,6 +162,14 @@ impl ConnectionDraft {
     pub fn to_file(&self, config: &Config) -> Result<ConnectionFile, ConfigError> {
         let id = self.id()?;
         let path = connections_dir(config, self.source)?.join(format!("{}.toml", id.path));
+        self.build_file(config, &path)
+    }
+
+    /// Like [`Self::to_file`], for a file whose path is already decided (when editing).
+    fn build_file(&self, config: &Config, path: &Path) -> Result<ConnectionFile, ConfigError> {
+        if non_empty(&self.name).is_none() {
+            return Err(ConfigError::new(path, "the name cannot be empty"));
+        }
         let network = self.engine != Engine::Sqlite;
         let password = match &self.password {
             PasswordChoice::None => None,
@@ -167,11 +179,17 @@ impl ConnectionDraft {
                 let var = var.trim();
                 if !valid_env_var(var) {
                     return Err(ConfigError::new(
-                        &path,
+                        path,
                         format!("invalid environment variable name: {var:?}"),
                     ));
                 }
                 Some(format!("env:{var}"))
+            }
+            PasswordChoice::Other(reference) => {
+                reference
+                    .parse::<SecretRef>()
+                    .map_err(|message| ConfigError::new(path, message))?;
+                Some(reference.clone())
             }
         };
         let root = match self.source {
@@ -183,7 +201,7 @@ impl ConnectionDraft {
             && config.tunnel_for(self.source, name).is_none()
         {
             return Err(ConfigError::new(
-                &path,
+                path,
                 format!("tunnel {name:?} does not exist"),
             ));
         }
@@ -220,7 +238,7 @@ impl ConnectionDraft {
                 ..McpConfig::default()
             },
         };
-        validate_connection(&path, file)
+        validate_connection(path, file)
     }
 
     /// An in-memory entry, as if the draft had been saved (to resolve and test it).
@@ -262,4 +280,260 @@ pub fn add_connection(
         }
     }
     Ok(entry.id)
+}
+
+impl ConnectionDraft {
+    /// The form for an existing connection, to edit it.
+    pub fn from_entry(entry: &ConnectionEntry) -> Self {
+        let file = &entry.file;
+        let password = match file.password.as_ref().map(|p| p.secret.as_str()) {
+            None => PasswordChoice::None,
+            Some("keychain") => PasswordChoice::Keychain,
+            Some("prompt") => PasswordChoice::Prompt,
+            Some(other) => match other.strip_prefix("env:") {
+                Some(var) => PasswordChoice::Env(var.to_string()),
+                None => PasswordChoice::Other(other.to_string()),
+            },
+        };
+        let file_name = entry.id.path.rsplit('/').next().unwrap_or_default();
+        Self {
+            source: entry.id.source,
+            folder: entry.folders().join("/"),
+            name: file.name.clone().unwrap_or_else(|| file_name.to_string()),
+            engine: file.engine,
+            env: file.env.clone().unwrap_or_default(),
+            host: file.host.clone().unwrap_or_default(),
+            port: file.port,
+            database: file.database.clone().unwrap_or_default(),
+            user: file.user.clone().unwrap_or_default(),
+            password,
+            tls_mode: file.tls.mode,
+            tls_ca: file.tls.ca.clone().unwrap_or_default(),
+            tunnel: file.tunnel.clone().unwrap_or_default(),
+            read_only: file.read_only,
+            mcp_exposed: file.mcp.exposed,
+        }
+    }
+}
+
+impl ConnectionDraft {
+    /// The entry an edit would produce: same identifier, file and layer as `entry`.
+    pub(crate) fn edited_entry(
+        &self,
+        config: &Config,
+        entry: &ConnectionEntry,
+    ) -> Result<ConnectionEntry, ConfigError> {
+        let draft = ConnectionDraft {
+            source: entry.id.source,
+            engine: entry.file.engine,
+            ..self.clone()
+        };
+        Ok(ConnectionEntry {
+            id: entry.id.clone(),
+            file_path: entry.file_path.clone(),
+            file: draft.build_file(config, &entry.file_path)?,
+        })
+    }
+}
+
+/// Keychain entry used by `password = { secret = "keychain" }` (see the resolver).
+fn default_account(id: &ConnectionId) -> String {
+    format!("{id}/password")
+}
+
+fn uses_default_keychain(file: &ConnectionFile) -> bool {
+    file.password
+        .as_ref()
+        .is_some_and(|p| p.secret == "keychain")
+}
+
+/// Sets (or removes, with `None`) one key of the document, creating parent tables as needed
+/// and dropping tables left empty. The comment on an existing value is kept.
+fn put(doc: &mut toml_edit::DocumentMut, key: &[&str], value: Option<toml_edit::Value>) {
+    use toml_edit::{Item, Table};
+    let Some((last, parents)) = key.split_last() else {
+        return;
+    };
+    let mut table: &mut Table = doc.as_table_mut();
+    for part in parents {
+        if value.is_none() && table.get(part).and_then(Item::as_table).is_none() {
+            return;
+        }
+        table = table
+            .entry(part)
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_mut()
+            .expect("checked or just created as a table");
+    }
+    match value {
+        Some(value) => match table.get_mut(last).and_then(Item::as_value_mut) {
+            Some(existing) => {
+                let decor = existing.decor().clone();
+                *existing = value;
+                *existing.decor_mut() = decor;
+            }
+            None => {
+                table.insert(last, Item::Value(value));
+            }
+        },
+        None => {
+            table.remove(last);
+        }
+    }
+    if let Some(parent) = parents.first()
+        && doc
+            .get(parent)
+            .and_then(Item::as_table)
+            .is_some_and(Table::is_empty)
+    {
+        doc.remove(parent);
+    }
+}
+
+/// Saves the edited form over an existing connection. Only the keys the form manages are
+/// touched, and only those that changed: comments, order and settings the form does not
+/// show (such as `mcp.max_rows`) stay as they were. The identifier (the file) never changes.
+///
+/// For `keychain`, a typed password replaces the stored one (empty keeps it); leaving
+/// `keychain` deletes the stored password. If the keychain fails, the file is restored.
+pub fn update_connection(
+    config: &Config,
+    id: &ConnectionId,
+    draft: &ConnectionDraft,
+    password: Option<&Secret>,
+    backend: &dyn SecretBackend,
+) -> Result<(), ResolveError> {
+    use toml_edit::{InlineTable, Value};
+    let entry = config.connection(id).ok_or_else(|| {
+        ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
+    })?;
+    let path = &entry.file_path;
+    let new = draft.edited_entry(config, entry)?.file;
+    let old = &entry.file;
+
+    let (original, mut doc) = read_doc(path)?;
+    let text = |v: &Option<String>| v.clone().map(Value::from);
+    if old.name != new.name {
+        put(&mut doc, &["name"], text(&new.name));
+    }
+    if old.env != new.env {
+        put(&mut doc, &["env"], text(&new.env));
+    }
+    if old.host != new.host {
+        put(&mut doc, &["host"], text(&new.host));
+    }
+    // `None` and the engine's default port mean the same: only a real change is written.
+    let port = |p: Option<u16>| p.filter(|p| Some(*p) != new.engine.default_port());
+    if port(old.port) != port(new.port) {
+        put(
+            &mut doc,
+            &["port"],
+            new.port.map(|p| Value::from(i64::from(p))),
+        );
+    }
+    if old.database != new.database {
+        put(&mut doc, &["database"], text(&new.database));
+    }
+    if old.user != new.user {
+        put(&mut doc, &["user"], text(&new.user));
+    }
+    if old.password != new.password {
+        let value = new.password.as_ref().map(|p| {
+            let mut table = InlineTable::new();
+            table.insert("secret", Value::from(p.secret.as_str()));
+            Value::InlineTable(table)
+        });
+        put(&mut doc, &["password"], value);
+    }
+    if old.tunnel != new.tunnel {
+        put(&mut doc, &["tunnel"], text(&new.tunnel));
+    }
+    if old.read_only != new.read_only {
+        put(
+            &mut doc,
+            &["read_only"],
+            new.read_only.then(|| Value::from(true)),
+        );
+    }
+    if old.tls.mode != new.tls.mode {
+        let mode = (new.tls.mode != TlsModeConfig::default()).then(|| {
+            Value::from(match new.tls.mode {
+                TlsModeConfig::Disable => "disable",
+                TlsModeConfig::Prefer => "prefer",
+                TlsModeConfig::Require => "require",
+                TlsModeConfig::VerifyCa => "verify-ca",
+                TlsModeConfig::VerifyFull => "verify-full",
+            })
+        });
+        put(&mut doc, &["tls", "mode"], mode);
+    }
+    if old.tls.ca != new.tls.ca {
+        put(&mut doc, &["tls", "ca"], text(&new.tls.ca));
+    }
+    if old.mcp.exposed != new.mcp.exposed {
+        put(
+            &mut doc,
+            &["mcp", "exposed"],
+            new.mcp.exposed.then(|| Value::from(true)),
+        );
+    }
+
+    // The result must still be a valid connection before it replaces the file.
+    let edited = doc.to_string();
+    let parsed: ConnectionFile = toml::from_str(&edited)
+        .map_err(|e| ConfigError::new(path, format!("the edited file is not valid: {e}")))?;
+    validate_connection(path, parsed)?;
+    write_doc(path, &doc)?;
+
+    let account = default_account(&entry.id);
+    let keychain = if uses_default_keychain(&new) {
+        match password.filter(|s| !s.expose().is_empty()) {
+            Some(secret) => backend.keychain_set(&account, secret.expose()),
+            None => Ok(()),
+        }
+    } else if uses_default_keychain(old) {
+        backend.keychain_delete(&account)
+    } else {
+        Ok(())
+    };
+    if let Err(message) = keychain {
+        let _ = std::fs::write(path, original);
+        return Err(ResolveError::Secret {
+            reference: format!("keychain:{account}"),
+            message,
+        });
+    }
+    Ok(())
+}
+
+/// Deletes a connection file, its default keychain entry and the folders it leaves empty.
+pub fn delete_connection(
+    config: &Config,
+    id: &ConnectionId,
+    backend: &dyn SecretBackend,
+) -> Result<(), ResolveError> {
+    let entry = config.connection(id).ok_or_else(|| {
+        ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
+    })?;
+    std::fs::remove_file(&entry.file_path)
+        .map_err(|e| ConfigError::new(&entry.file_path, format!("could not delete: {e}")))?;
+    let root = connections_dir(config, id.source)?;
+    let mut dir = entry.file_path.parent();
+    while let Some(current) = dir {
+        // `remove_dir` only removes empty directories: it stops at the first one in use.
+        if current == root || !current.starts_with(&root) || std::fs::remove_dir(current).is_err() {
+            break;
+        }
+        dir = current.parent();
+    }
+    if uses_default_keychain(&entry.file) {
+        let account = default_account(&entry.id);
+        backend
+            .keychain_delete(&account)
+            .map_err(|message| ResolveError::Secret {
+                reference: format!("keychain:{account}"),
+                message,
+            })?;
+    }
+    Ok(())
 }

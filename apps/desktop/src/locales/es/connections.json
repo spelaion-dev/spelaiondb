@@ -54,7 +54,9 @@
     "savePassword": "Guardar contraseña",
     "tlsHint": "Con «Verificar», si el certificado está vacío se usan los certificados de confianza del sistema.",
     "useTunnel": "Conectar a través de un túnel SSH",
-    "tunnelHint": "Se llega a la base de datos desde el último salto del túnel."
+    "tunnelHint": "Se llega a la base de datos desde el último salto del túnel.",
+    "passwordOther": "Referencia de la contraseña",
+    "fixedLocationHint": "Al editarla, la conexión se queda en el mismo fichero y carpeta."
   },
   "tls": {
     "disable": "Desactivado",
@@ -87,7 +89,21 @@
     "none": "Sin contraseña",
     "savedHint": "La contraseña va al llavero del sistema (Administrador de credenciales, Llavero o Secret Service), nunca al fichero de la conexión.",
     "askHint": "No se guarda: se preguntará cada vez que conectes. La contraseña escrita aquí solo se usa para probar.",
-    "envHint": "Se lee de esta variable al conectar; el fichero solo guarda su nombre."
+    "envHint": "Se lee de esta variable al conectar; el fichero solo guarda su nombre.",
+    "other": "Definida en el fichero",
+    "otherHint": "Esta contraseña viene de una referencia que el formulario no puede editar (1Password, una orden o una entrada con nombre del llavero). Se conserva tal cual; edita el fichero para cambiarla.",
+    "keepPlaceholder": "Déjala vacía para conservar la contraseña guardada"
   },
-  "cancel": "Cancelar"
+  "cancel": "Cancelar",
+  "edit": "Editar…",
+  "delete": "Borrar…",
+  "editTitle": "Editar {{name}}",
+  "saveChanges": "Guardar cambios",
+  "deleteTitle": "¿Borrar la conexión?",
+  "deleteConfirm": "Borrar",
+  "deleting": "Borrando…",
+  "deleteExplanation": "Se eliminará <strong>{{name}}</strong>: se borra su fichero <code>{{file}}</code> y, si tenía una guardada, su contraseña del llavero del sistema.",
+  "deleteProjectHint": "Es una conexión del proyecto, compartida por git: tu equipo también la perderá cuando hagas commit del cambio.",
+  "deletePersonalHint": "Es una conexión personal: solo afecta a este equipo.",
+  "deleteBusy": "Hay una consulta ejecutándose o conectando con ella. Detenla primero."
 }

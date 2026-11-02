@@ -108,6 +108,19 @@ impl<'a> Resolver<'a> {
         self.resolve_entry(&draft.entry(self.config)?)
     }
 
+    /// Resolves the edited form of an existing connection (to test it before saving): same
+    /// identifier, so a password stored in the keychain is found even if the name changed.
+    pub fn resolve_edit(
+        &self,
+        id: &ConnectionId,
+        draft: &ConnectionDraft,
+    ) -> Result<ResolvedConnection, ResolveError> {
+        let entry = self.config.connection(id).ok_or_else(|| {
+            ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
+        })?;
+        self.resolve_entry(&draft.edited_entry(self.config, entry)?)
+    }
+
     fn resolve_entry(&self, entry: &ConnectionEntry) -> Result<ResolvedConnection, ResolveError> {
         let base = self.base_dir(entry.id.source)?;
         let file = &entry.file;
