@@ -1,0 +1,93 @@
+{
+  "add": "Add connection",
+  "title": "Add connection",
+  "formTitle": "New {{engine}} connection",
+  "close": "Close",
+  "pickHint": "Choose the type of database to connect to.",
+  "search": "Search databases",
+  "noMatches": "No database matches the search.",
+  "comingSoon": "Coming soon",
+  "comingSoonHint": "{{engine}} is not supported yet",
+  "categories": {
+    "relational": "Relational",
+    "analytical": "Analytical",
+    "nosql": "NoSQL"
+  },
+  "sections": {
+    "server": "Server",
+    "authentication": "Authentication",
+    "file": "Database file",
+    "ssl": "Encryption (SSL/TLS)",
+    "ssh": "SSH tunnel",
+    "organization": "Where to save it",
+    "safety": "Safety"
+  },
+  "fields": {
+    "name": "Name",
+    "folder": "Folder",
+    "folderPlaceholder": "Optional, e.g. prod/eu",
+    "saveIn": "Save in",
+    "project": "Project",
+    "personal": "Personal",
+    "projectHint": "Saved in the repository's .spelunk/ folder and shared through git. Passwords are never written to it.",
+    "personalHint": "Saved only on this computer, in your personal settings folder.",
+    "env": "Environment",
+    "host": "Host",
+    "port": "Port",
+    "database": "Database",
+    "user": "User",
+    "password": "Password",
+    "passwordEnv": "Environment variable",
+    "tlsMode": "TLS",
+    "tlsCa": "Certificate authority (PEM)",
+    "tlsCaPlaceholder": "Empty: the system's trusted certificates",
+    "tunnel": "SSH tunnel",
+    "noTunnel": "None",
+    "noTunnelsHint": "Tunnels are defined in .spelunk/tunnels/ or in your personal folder.",
+    "file": "File",
+    "fileHint": "The file must exist; inside the repository the path is stored relative to it.",
+    "readOnly": "Read-only",
+    "mcpExposed": "Expose to AI agents (read-only)",
+    "mcpHint": "Agents using spelunk mcp can only read, and every query is audited.",
+    "namePlaceholder": "My {{engine}} database",
+    "authentication": "Method",
+    "savePassword": "Save password",
+    "tlsHint": "With “Verify”, an empty certificate field uses the system’s trusted certificates.",
+    "useTunnel": "Connect through an SSH tunnel",
+    "tunnelHint": "The database is reached through the tunnel’s last hop."
+  },
+  "tls": {
+    "disable": "Disabled",
+    "prefer": "Prefer (encrypt if the server allows it)",
+    "require": "Require (encrypt, no verification)",
+    "verify-ca": "Verify the certificate authority",
+    "verify-full": "Verify the authority and the host name"
+  },
+  "test": {
+    "button": "Test connection",
+    "testing": "Testing…",
+    "ok": "Connected · {{version}}",
+    "passwordRequired": "Enter the password to test the connection."
+  },
+  "browse": "Browse…",
+  "allFiles": "All files",
+  "certificates": "Certificates",
+  "back": "Back",
+  "save": "Save",
+  "saving": "Saving…",
+  "tabs": {
+    "main": "Main",
+    "ssl": "SSL",
+    "ssh": "SSH",
+    "options": "Options"
+  },
+  "auth": {
+    "password": "User and password",
+    "env": "Password from an environment variable",
+    "none": "No password",
+    "savedHint": "The password goes to the system keychain (Credential Manager, Keychain or Secret Service), never to the connection file.",
+    "askHint": "Not saved: it will be asked each time you connect. The password typed here is only used to test.",
+    "envHint": "Read from this variable when connecting; the file only stores its name."
+  },
+  "cancel": "Cancel"
+}

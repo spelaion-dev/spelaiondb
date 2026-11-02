@@ -21,6 +21,21 @@ cd apps/desktop && npm install && npm run tauri dev -- -- ../../examples/demo
 `examples/demo` ships a local SQLite database and, if you start `testing/docker`, a direct
 PostgreSQL and another one behind two SSH bastions with TLS.
 
+## Adding connections
+
+The **+** button at the top of the sidebar opens **Add connection**: pick a database from the
+catalog (grouped as relational, analytical and NoSQL; engines without a driver yet are shown
+as *coming soon*), fill in its form, **Test connection** and **Save**.
+
+- **Save in:** *Project* writes `.spelunk/connections/<folder>/<name>.toml` in the
+  repository, shared through git; *Personal* keeps it in your personal directory.
+- **Password:** saved in the system keychain, asked every time, or read from an environment
+  variable. It is never written to the connection file.
+- **SSH:** choose one of the tunnels already defined in `.spelunk/tunnels/` (or your personal
+  folder).
+
+Testing a connection writes nothing. Saving never overwrites an existing connection.
+
 ## Settings
 
 The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in its own tab:

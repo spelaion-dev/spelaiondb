@@ -25,12 +25,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelunk-config`: TOML files from `.spelunk/` and the personal directory,
   variables, secret references and repository trust (ADR-009). If you change `model.rs`,
   regenerate the schema: `SPELUNK_UPDATE_SCHEMA=1 cargo test -p spelunk-config`.
+  `draft.rs` turns the "add connection" form into a validated file (secrets go to the
+  keychain, never to the file).
 - `crates/spelunk-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
   it receives a `TunnelSpec`. Dialogs go through the `Interaction` trait. Tests against the
   Docker bastions with `SPELUNK_TEST_SSH=127.0.0.1:2221`.
 - `crates/spelunk-core`: `open_connection` (resolved configuration → tunnel from the
   `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts, stops at
   the first error) and `ResultStore` (results in the core, served in Arrow IPC windows).
+  `catalog.rs` lists the engines of the "add connection" picker (planned ones included).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them.
 - `crates/spelunk-store`: local SQLite (audit, query history and personal history settings;

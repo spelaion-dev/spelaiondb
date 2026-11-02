@@ -14,7 +14,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::StreamWriter;
 use futures_util::StreamExt;
 use spelunk_config::{
-    Config, ConnectionId, Resolver, Source, SystemBackend, TrustStore, default_user_dir, load,
+    Config, ConnectionDraft, ConnectionId, Resolver, Source, SystemBackend, TrustStore,
+    default_user_dir, load,
 };
 use spelunk_core::{
     Engines, OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore,
@@ -285,6 +286,106 @@ async fn set_history_enabled(
         .set_enabled(workspace, connection, enabled)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Engines shown when adding a connection, including the ones not supported yet.
+#[tauri::command]
+#[specta::specta]
+fn engine_catalog() -> Vec<EngineItem> {
+    spelunk_core::engine_catalog()
+        .into_iter()
+        .map(EngineItem::from)
+        .collect()
+}
+
+/// Tunnels a new connection can use (from the repository and the personal directory).
+#[tauri::command]
+#[specta::specta]
+async fn list_tunnels(state: State<'_, AppState>) -> CmdResult<Vec<TunnelItem>> {
+    let config = state.config.read().await;
+    Ok(config
+        .tunnels
+        .iter()
+        .map(|t| TunnelItem {
+            name: t.name.clone(),
+            personal: t.source == Source::User,
+        })
+        .collect())
+}
+
+/// Opens and closes a connection that has not been saved yet. Nothing is written: neither
+/// the file nor the keychain.
+#[tauri::command]
+#[specta::specta]
+async fn test_connection(
+    draft: ConnectionDraftItem,
+    password: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<ConnectOutcome> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let resolved = {
+        let config = state.config.read().await;
+        match Resolver::new(&config, &trust, &SystemBackend).resolve_draft(&draft) {
+            Ok(resolved) => resolved,
+            Err(spelunk_config::ResolveError::Untrusted { .. }) => {
+                return Ok(ConnectOutcome::Untrusted);
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let options = OpenOptions {
+        tunnels: state.tunnels.clone(),
+        known_hosts: KnownHosts::for_user(&state.user_dir),
+        interaction: Arc::new(AppInteraction::new(app, state.pending.clone())),
+        password: password.filter(|p| !p.is_empty()).map(Secret::new),
+    };
+    let open = match open_connection(resolved, &state.engines, options, state.results.clone()).await
+    {
+        Ok(open) => open,
+        Err(OpenError::PasswordRequired { .. }) => {
+            return Ok(ConnectOutcome::PasswordRequired {
+                can_remember: false,
+            });
+        }
+        Err(OpenError::Driver(DriverError::Database {
+            code: Some(code),
+            message,
+            ..
+        })) if code.starts_with("28") => {
+            return Ok(ConnectOutcome::AuthFailed {
+                message,
+                can_remember: false,
+            });
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let version = open.session.connection().server_version().await;
+    open.close().await;
+    Ok(ConnectOutcome::Connected {
+        server_version: version.map_err(|e| e.to_string())?,
+    })
+}
+
+/// Saves a new connection file (and, for `keychain`, its password) and reloads the
+/// configuration. Returns the new connection's identifier.
+#[tauri::command]
+#[specta::specta]
+async fn add_connection(
+    draft: ConnectionDraftItem,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let password = password.map(Secret::new);
+    let id = {
+        let config = state.config.read().await;
+        spelunk_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
+            .map_err(|e| e.to_string())?
+    };
+    state.reload().await;
+    Ok(id.to_string())
 }
 
 /// Opens a session (`session` is chosen by the UI). If a password is needed, it says so
@@ -574,6 +675,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_language,
             get_theme,
             set_theme,
+            engine_catalog,
+            list_tunnels,
+            test_connection,
+            add_connection,
             open_workspace,
             trust_workspace,
             list_connections,

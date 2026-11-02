@@ -350,3 +350,130 @@ pub enum SecretLabel {
     Password { user: String, host: String },
     Challenge { host: String, instructions: String },
 }
+
+/// One engine in the "add connection" picker. `available`: it has a driver and can be used.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineItem {
+    pub id: String,
+    pub name: String,
+    /// `relational`, `analytical` or `nosql`.
+    pub category: String,
+    /// `network` or `file`.
+    pub access: String,
+    pub default_port: Option<u16>,
+    pub available: bool,
+}
+
+impl From<spelunk_core::EngineInfo> for EngineItem {
+    fn from(info: spelunk_core::EngineInfo) -> Self {
+        Self {
+            id: info.id.into(),
+            name: info.name.into(),
+            category: info.category.as_str().into(),
+            access: match info.access {
+                spelunk_core::EngineAccess::Network => "network",
+                spelunk_core::EngineAccess::File => "file",
+            }
+            .into(),
+            default_port: info.default_port,
+            available: info.engine.is_some(),
+        }
+    }
+}
+
+/// A tunnel that a new connection can use.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelItem {
+    pub name: String,
+    pub personal: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PasswordMode {
+    None,
+    Keychain,
+    Prompt,
+    Env,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum TlsModeItem {
+    Disable,
+    Prefer,
+    Require,
+    VerifyCa,
+    VerifyFull,
+}
+
+/// What the "add connection" form sends. The password travels apart and is never stored in
+/// the connection file.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionDraftItem {
+    pub personal: bool,
+    pub folder: String,
+    pub name: String,
+    /// An available engine id from the catalog (`postgres`, `sqlite`).
+    pub engine: String,
+    pub env: String,
+    pub host: String,
+    pub port: Option<u16>,
+    pub database: String,
+    pub user: String,
+    pub password_mode: PasswordMode,
+    pub password_env: String,
+    pub tls_mode: TlsModeItem,
+    pub tls_ca: String,
+    pub tunnel: String,
+    pub read_only: bool,
+    pub mcp_exposed: bool,
+}
+
+impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
+    type Error = String;
+
+    fn try_from(item: ConnectionDraftItem) -> Result<Self, String> {
+        use spelunk_config::{Engine, PasswordChoice, Source, TlsModeConfig};
+        let engine = match item.engine.as_str() {
+            "postgres" => Engine::Postgres,
+            "sqlite" => Engine::Sqlite,
+            other => return Err(format!("unsupported engine: {other}")),
+        };
+        Ok(Self {
+            source: if item.personal {
+                Source::User
+            } else {
+                Source::Workspace
+            },
+            folder: item.folder,
+            name: item.name,
+            engine,
+            env: item.env,
+            host: item.host,
+            port: item.port,
+            database: item.database,
+            user: item.user,
+            password: match item.password_mode {
+                PasswordMode::None => PasswordChoice::None,
+                PasswordMode::Keychain => PasswordChoice::Keychain,
+                PasswordMode::Prompt => PasswordChoice::Prompt,
+                PasswordMode::Env => PasswordChoice::Env(item.password_env),
+            },
+            tls_mode: match item.tls_mode {
+                TlsModeItem::Disable => TlsModeConfig::Disable,
+                TlsModeItem::Prefer => TlsModeConfig::Prefer,
+                TlsModeItem::Require => TlsModeConfig::Require,
+                TlsModeItem::VerifyCa => TlsModeConfig::VerifyCa,
+                TlsModeItem::VerifyFull => TlsModeConfig::VerifyFull,
+            },
+            tls_ca: item.tls_ca,
+            tunnel: item.tunnel,
+            read_only: item.read_only,
+            mcp_exposed: item.mcp_exposed,
+        })
+    }
+}

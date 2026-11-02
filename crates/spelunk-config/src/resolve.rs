@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use spelunk_driver_api::{ConnectParams, Secret, TlsMode};
 
+use crate::draft::ConnectionDraft;
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, ConnectionEntry, ConnectionId, Source};
 use crate::model::{Engine, McpConfig, SecretSpec, SshAuth, TlsModeConfig};
@@ -95,6 +96,19 @@ impl<'a> Resolver<'a> {
         let entry = self.config.connection(id).ok_or_else(|| {
             ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
         })?;
+        self.resolve_entry(entry)
+    }
+
+    /// Resolves a connection that has not been saved yet (to test it from the UI). The same
+    /// trust rules apply: a repository draft can use the repository's tunnels.
+    pub fn resolve_draft(
+        &self,
+        draft: &ConnectionDraft,
+    ) -> Result<ResolvedConnection, ResolveError> {
+        self.resolve_entry(&draft.entry(self.config)?)
+    }
+
+    fn resolve_entry(&self, entry: &ConnectionEntry) -> Result<ResolvedConnection, ResolveError> {
         let base = self.base_dir(entry.id.source)?;
         let file = &entry.file;
         let text = |value: &Option<String>| -> Result<Option<String>, ResolveError> {

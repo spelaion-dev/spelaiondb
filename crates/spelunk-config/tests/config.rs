@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use spelunk_config::{
-    ConnectionFile, ConnectionId, Engine, Password, ResolveError, Resolver, SecretBackend, Source,
-    SshAuth, SystemBackend, TrustStore, WritePolicy, create_connection, load, set_value,
+    ConnectionDraft, ConnectionFile, ConnectionId, Engine, Password, PasswordChoice, ResolveError,
+    Resolver, SecretBackend, Source, SshAuth, SystemBackend, TlsModeConfig, TrustStore,
+    WritePolicy, add_connection, create_connection, load, set_value, slug,
 };
 use spelunk_driver_api::{Secret, TlsMode};
 
@@ -59,6 +60,7 @@ struct FakeBackend {
     keychain: Mutex<BTreeMap<String, String>>,
     env: BTreeMap<String, String>,
     runs: Mutex<Vec<String>>,
+    fail_keychain: bool,
 }
 
 impl SecretBackend for FakeBackend {
@@ -67,6 +69,9 @@ impl SecretBackend for FakeBackend {
     }
 
     fn keychain_set(&self, account: &str, secret: &str) -> Result<(), String> {
+        if self.fail_keychain {
+            return Err("keychain locked".into());
+        }
         self.keychain
             .lock()
             .unwrap()
@@ -548,4 +553,243 @@ fn shell_commands_keep_their_quotes() {
     } else {
         assert_eq!(out, "a b");
     }
+}
+
+fn postgres_draft() -> ConnectionDraft {
+    ConnectionDraft {
+        source: Source::Workspace,
+        folder: "Prod/EU".into(),
+        name: "Orders (prod)".into(),
+        engine: Engine::Postgres,
+        env: "prod".into(),
+        host: " db.internal ".into(),
+        port: Some(5432),
+        database: "orders".into(),
+        user: "app".into(),
+        password: PasswordChoice::Keychain,
+        tls_mode: TlsModeConfig::VerifyFull,
+        tls_ca: String::new(),
+        tunnel: String::new(),
+        read_only: false,
+        mcp_exposed: true,
+    }
+}
+
+#[test]
+fn slugs_make_safe_file_names() {
+    assert_eq!(slug("Orders (prod)"), "orders-prod");
+    assert_eq!(slug("  Análisis  2026 "), "analisis-2026");
+    assert_eq!(slug("Año Ñandú"), "ano-nandu");
+    assert_eq!(slug("日本"), "");
+    assert_eq!(slug("a__b--c"), "a__b-c");
+    assert_eq!(slug("../.."), "");
+}
+
+#[test]
+fn new_connections_are_written_without_secrets_and_load_back() {
+    let fx = Fixture::new("draft-postgres");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+    let draft = postgres_draft();
+    let id = add_connection(
+        &config,
+        &draft,
+        Some(&Secret::new("s3cr3t-value")),
+        &backend,
+    )
+    .unwrap();
+    assert_eq!(id, ws("prod/eu/orders-prod"));
+
+    let path = fx
+        .repo()
+        .join(".spelunk/connections/prod/eu/orders-prod.toml");
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(!content.contains("s3cr3t-value"), "{content}");
+    assert!(content.contains("secret = \"keychain\""), "{content}");
+    // The default port is implied, so the file only says what differs.
+    assert!(!content.contains("port"), "{content}");
+    assert!(content.contains("host = \"db.internal\""), "{content}");
+    assert_eq!(
+        backend
+            .keychain
+            .lock()
+            .unwrap()
+            .get("prod/eu/orders-prod/password")
+            .map(String::as_str),
+        Some("s3cr3t-value")
+    );
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.connection(&id).unwrap();
+    assert_eq!(entry.name(), "Orders (prod)");
+    assert_eq!(entry.file.tls.mode, TlsModeConfig::VerifyFull);
+    assert!(entry.file.mcp.exposed);
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve(&id)
+        .unwrap();
+    assert_eq!(
+        resolved.password,
+        Password::Value(Secret::new("s3cr3t-value"))
+    );
+    assert_eq!(resolved.params.port, 5432);
+}
+
+#[test]
+fn sqlite_drafts_keep_repository_paths_portable_and_drop_network_fields() {
+    let fx = Fixture::new("draft-sqlite");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        engine: Engine::Sqlite,
+        folder: String::new(),
+        name: "Local shop".into(),
+        database: fx.repo().join("data").join("shop.db").display().to_string(),
+        host: "ignored".into(),
+        user: "ignored".into(),
+        tunnel: "ignored".into(),
+        password: PasswordChoice::Prompt,
+        mcp_exposed: false,
+        ..postgres_draft()
+    };
+    let file = draft.to_file(&config).unwrap();
+    assert_eq!(file.database.as_deref(), Some("data/shop.db"));
+    assert_eq!(
+        (file.host, file.user, file.password, file.tunnel),
+        (None, None, None, None)
+    );
+    assert_eq!(file.tls, Default::default());
+
+    // Outside the repository (or for personal connections) the path is kept as typed.
+    let outside = std::env::temp_dir()
+        .join("elsewhere.db")
+        .display()
+        .to_string();
+    let personal = ConnectionDraft {
+        source: Source::User,
+        database: outside.clone(),
+        ..draft
+    };
+    assert_eq!(personal.to_file(&config).unwrap().database, Some(outside));
+}
+
+#[test]
+fn drafts_never_overwrite_and_undo_the_file_if_the_keychain_fails() {
+    let fx = Fixture::new("draft-conflict");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+    let draft = postgres_draft();
+    add_connection(&config, &draft, Some(&Secret::new("first")), &backend).unwrap();
+    // Same identifier: refused, and the stored password of the existing one is untouched.
+    assert!(add_connection(&config, &draft, Some(&Secret::new("second")), &backend).is_err());
+    assert_eq!(
+        backend
+            .keychain
+            .lock()
+            .unwrap()
+            .get("prod/eu/orders-prod/password")
+            .map(String::as_str),
+        Some("first")
+    );
+
+    let locked = FakeBackend {
+        fail_keychain: true,
+        ..FakeBackend::default()
+    };
+    let other = ConnectionDraft {
+        name: "Billing".into(),
+        ..postgres_draft()
+    };
+    let err = add_connection(&config, &other, Some(&Secret::new("x")), &locked).unwrap_err();
+    assert!(matches!(err, ResolveError::Secret { .. }), "{err}");
+    assert!(
+        !fx.repo()
+            .join(".spelunk/connections/prod/eu/billing.toml")
+            .exists()
+    );
+}
+
+#[test]
+fn invalid_drafts_explain_what_is_wrong() {
+    let fx = Fixture::new("draft-invalid");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let error = |draft: ConnectionDraft| draft.to_file(&config).unwrap_err().message;
+    assert!(
+        error(ConnectionDraft {
+            host: " ".into(),
+            ..postgres_draft()
+        })
+        .contains("host")
+    );
+    assert!(
+        error(ConnectionDraft {
+            name: "!!".into(),
+            ..postgres_draft()
+        })
+        .contains("name")
+    );
+    assert!(
+        error(ConnectionDraft {
+            folder: "ok/!!".into(),
+            ..postgres_draft()
+        })
+        .contains("folder")
+    );
+    assert!(
+        error(ConnectionDraft {
+            tunnel: "nope".into(),
+            ..postgres_draft()
+        })
+        .contains("nope")
+    );
+    for var in ["", "1ABC", "A-B", "A B", "$X"] {
+        let draft = ConnectionDraft {
+            password: PasswordChoice::Env(var.into()),
+            ..postgres_draft()
+        };
+        assert!(error(draft).contains("environment variable"), "{var}");
+    }
+    let no_repo = load(None, &fx.user());
+    assert!(
+        postgres_draft()
+            .to_file(&no_repo)
+            .unwrap_err()
+            .message
+            .contains("repository")
+    );
+}
+
+#[test]
+fn drafts_resolve_for_testing_with_the_same_trust_rules() {
+    let fx = Fixture::new("draft-resolve");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+    let untrusted = TrustStore::load(&fx.user()).unwrap();
+    assert!(matches!(
+        Resolver::new(&config, &untrusted, &backend).resolve_draft(&postgres_draft()),
+        Err(ResolveError::Untrusted { .. })
+    ));
+    // Nothing is stored yet, so a keychain draft asks for the typed password.
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve_draft(&postgres_draft())
+        .unwrap();
+    assert_eq!(
+        resolved.password,
+        Password::Prompt {
+            save_to: Some("prod/eu/orders-prod/password".into())
+        }
+    );
+    assert_eq!(resolved.params.host, "db.internal");
+    assert!(
+        !fx.repo().join(".spelunk/connections/prod").exists(),
+        "testing writes nothing"
+    );
+
+    let personal = ConnectionDraft {
+        source: Source::User,
+        ..postgres_draft()
+    };
+    let resolved = Resolver::new(&config, &untrusted, &backend)
+        .resolve_draft(&personal)
+        .unwrap();
+    assert_eq!(resolved.id.to_string(), "~/prod/eu/orders-prod");
 }

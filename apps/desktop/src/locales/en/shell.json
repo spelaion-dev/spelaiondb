@@ -9,7 +9,7 @@
   "reviewAndTrust": "Review and trust",
   "configurationErrors_one": "{{displayCount}} configuration file with errors",
   "configurationErrors_other": "{{displayCount}} configuration files with errors",
-  "noConnections": "No connections. Create files in <code>.spelunk/connections/</code> or in your personal folder.",
+  "noConnections": "No connections yet. Add one, or create files in <code>.spelunk/connections/</code> or in your personal folder.",
   "queryHistory": "Query history",
   "toggleConnection": "Expand or collapse {{connection}}",
   "tunnel": "Tunnel {{name}}",

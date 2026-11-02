@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -298,11 +298,11 @@ try {
   await page.getByRole("dialog").getByText("Password for Postgres (Docker)").waitFor();
   // A wrong password first: it is asked again showing the reason.
   await page.getByLabel("Password", { exact: true }).fill("wrong");
-  await page.getByRole("button", { name: "Connect" }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.getByRole("dialog").getByText("password authentication failed").waitFor();
   await shot("06-wrong-password");
   await page.getByLabel("Password", { exact: true }).fill("spelunk");
-  await page.getByRole("button", { name: "Connect" }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
   await panel.locator(".statusline", { hasText: "1,000 rows" }).waitFor();
   await shot("07-postgres");
 
@@ -317,7 +317,7 @@ try {
   await page.getByRole("dialog").getByText("Password for Postgres behind bastions").waitFor();
   await page.getByText("Remember in the system keychain").waitFor();
   await page.getByLabel("Password", { exact: true }).fill("spelunk");
-  await page.getByRole("button", { name: "Connect" }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
   for (let hop = 1; hop <= 2; hop++) {
     await page.getByRole("dialog").getByText(`(hop ${hop})`).waitFor();
     if (hop === 1) await shot("08-ssh-fingerprint");
@@ -326,6 +326,73 @@ try {
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await panel.getByText("PRODUCTION").waitFor();
   await shot("09-bastions");
+
+  step("add connection: catalog by category, test and save (personal, nothing in the repo)");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  let wizard = page.getByRole("dialog", { name: "Add connection" });
+  await wizard.getByRole("heading", { name: "Relational" }).waitFor();
+  await wizard.getByRole("heading", { name: "NoSQL" }).waitFor();
+  assert.ok(await wizard.locator(".engine-card", { hasText: "MySQL" }).isDisabled());
+  await wizard.locator(".engine-card", { hasText: "MySQL" }).getByText("Coming soon").waitFor();
+  await shot("12a-add-connection-catalog");
+  await wizard.getByRole("searchbox").fill("lite");
+  assert.equal(await wizard.locator(".engine-card").count(), 1);
+  await wizard.locator(".engine-card", { hasText: "SQLite" }).click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.getByRole("heading", { name: "New SQLite connection" }).waitFor();
+  // SQLite has no SSL or SSH tabs.
+  assert.equal(await wizard.getByRole("tab").count(), 2);
+  await wizard.getByLabel("Name", { exact: true }).fill("Shop copy");
+  await wizard.getByLabel("File", { exact: true }).fill(join(demo, "data", "shop.db"));
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 3\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor();
+  panel = await newQuery("Shop copy", "select count(*) as n from product;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Options"]);
+  await wizard.getByLabel("Name", { exact: true }).fill("Docker PG (wizard)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("15432");
+  await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
+  await wizard.getByLabel("User", { exact: true }).fill("spelunk");
+  // Not saving the password means "ask every time": the typed one is only used for the test
+  // and never stored (not even in the keychain).
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: "Enter the password" }).waitFor();
+  await wizard.getByLabel("Password", { exact: true }).fill("wrong");
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: "password authentication failed" }).waitFor();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
+  await shot("12b-add-connection-main");
+  await wizard.getByRole("tab", { name: "SSL" }).click();
+  await wizard.getByLabel("TLS", { exact: true }).selectOption("require");
+  await wizard.getByRole("tab", { name: "SSH" }).click();
+  // The demo defines one tunnel; leaving the box unchecked connects directly.
+  assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), false);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByLabel("Folder", { exact: true }).fill("Wizard");
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
+  await shot("12c-add-connection-options");
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "Docker PG (wizard)" }).waitFor();
+  const saved = readFileSync(join(userDir, "connections", "wizard", "docker-pg-wizard.toml"), "utf8");
+  assert.match(saved, /secret = "prompt"/);
+  assert.match(saved, /mode = "require"/);
+  assert.doesNotMatch(saved, /wrong|password = "/);
+  assert.ok(!existsSync(join(demo, ".spelunk", "connections", "shop-copy.toml")), "personal connections stay out of the repository");
 
   step("history, theme and per-connection preference survive an app restart");
   await setLanguage("es");
@@ -343,6 +410,7 @@ try {
   await setLanguage("en");
   await setTheme("system", systemTheme);
   await page.getByText("Shop (SQLite)", { exact: true }).waitFor();
+  await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor();
   assert.equal(await historySaving("Shop (SQLite)"), false);
   panel = await newQuery("Shop (SQLite)", "select 'history_resumed_marker' as resumed;");
   await page.getByRole("button", { name: "Query history", exact: true }).click();

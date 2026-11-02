@@ -244,7 +244,10 @@ fn check_version(path: &Path, version: u32) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn validate_connection(path: &Path, file: ConnectionFile) -> Result<ConnectionFile, ConfigError> {
+pub(crate) fn validate_connection(
+    path: &Path,
+    file: ConnectionFile,
+) -> Result<ConnectionFile, ConfigError> {
     check_version(path, file.schema_version)?;
     let missing: Vec<&str> = match file.engine {
         Engine::Postgres => [

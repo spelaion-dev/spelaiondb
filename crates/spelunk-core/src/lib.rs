@@ -3,6 +3,7 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+mod catalog;
 mod classify;
 mod history;
 mod open;
@@ -10,6 +11,7 @@ mod readonly;
 mod results;
 mod session;
 
+pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
 pub use history::{HistoryError, QueryHistory};
 pub use open::{Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection};

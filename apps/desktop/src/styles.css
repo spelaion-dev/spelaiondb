@@ -72,7 +72,7 @@ button.ghost { background: transparent; border-color: transparent; }
 button.ghost:hover { border-color: var(--line); }
 button.link { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; }
 button.small { padding: 0 6px; }
-select, input[type="text"], input[type="password"] {
+select, input[type="text"], input[type="password"], input[type="number"], input[type="search"] {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -97,6 +97,19 @@ select, input[type="text"], input[type="password"] {
 .engine, .kind { font-size: 9.5px; font-weight: 700; border-radius: 4px; padding: 1px 4px; color: #fff; }
 .engine-postgres { background: #336791; }
 .engine-sqlite { background: #44a3d6; }
+/* Engines in the "add connection" catalog that have no driver yet. */
+.engine-mysql { background: #00758f; }
+.engine-mariadb { background: #a3693d; }
+.engine-sqlserver { background: #a91d22; }
+.engine-oracle { background: #c74634; }
+.engine-cockroachdb { background: #3a52a1; }
+.engine-duckdb { background: #b59a00; }
+.engine-clickhouse { background: #c9a400; }
+.engine-snowflake { background: #29b5e8; }
+.engine-bigquery { background: #4285f4; }
+.engine-mongodb { background: #3f9142; }
+.engine-redis { background: #d82c20; }
+.engine-cassandra { background: #1287b1; }
 .kind-table { background: #6b7a90; }
 .kind-view { background: #8a6bb8; }
 .tag { font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--muted); }
@@ -213,3 +226,47 @@ select, input[type="text"], input[type="password"] {
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
 .fingerprint { word-break: break-all; background: var(--grid-header); padding: 8px; border-radius: 6px; }
+
+/* ---------------------------------------------------------------- add connection */
+/* Below the other dialogs (z-index 10): trust and SSH questions open on top of it. */
+.wizard-backdrop { z-index: 9; }
+.modal.wizard { width: min(760px, 94vw); height: min(640px, 90vh); padding: 0; gap: 0; }
+.wizard-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 10px; border-bottom: 1px solid var(--line); }
+.wizard-header h2 { margin: 0; }
+.wizard-header .ghost { font-size: 18px; line-height: 1; padding: 2px 8px; }
+.engine-picker { display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; min-height: 0; flex: 1; }
+.engine-picker input[type="search"] { width: 100%; }
+.engine-groups { overflow: auto; min-height: 0; flex: 1; }
+.engine-groups h3 { margin: 12px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.engine-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.engine-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.engine-card:not(:disabled):hover { border-color: var(--accent); background: var(--accent-soft); }
+.engine-card:disabled { opacity: 0.55; cursor: not-allowed; }
+.engine-card .engine { font-size: 12px; padding: 3px 6px; }
+.engine-card-name { font-weight: 600; }
+.engine-card-soon { font-size: 11px; color: var(--muted); }
+.wizard-header h2 { display: flex; align-items: center; gap: 8px; }
+.connection-form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.form-top { display: flex; gap: 10px; padding: 12px 18px 4px; }
+.form-top .grow { flex: 1; }
+.form-tabs { display: flex; gap: 2px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+.form-tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 14px; color: var(--muted); }
+.form-tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+.form-scroll { flex: 1; overflow: auto; padding: 4px 18px 12px; }
+.connection-form fieldset { border: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.connection-form legend { font-weight: 600; padding: 0 0 6px; }
+.connection-form .field { display: flex; flex-direction: column; gap: 3px; }
+.connection-form .field > span { font-size: 12px; color: var(--muted); }
+.connection-form input[type="text"], .connection-form input[type="password"], .connection-form input[type="number"], .connection-form select { width: 100%; height: 30px; }
+.connection-form input:disabled, .connection-form select:disabled { opacity: 0.55; }
+.connection-form p { margin: 0; }
+.form-pair { display: flex; align-items: flex-end; gap: 10px; }
+.form-pair .grow { flex: 1; min-width: 0; }
+.form-pair .port { width: 110px; }
+.form-pair > button { height: 30px; }
+.form-row { display: flex; align-items: center; gap: 14px; font-size: 12.5px; }
+.form-row > span { color: var(--muted); font-size: 12px; }
+.wizard-footer { display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-top: 1px solid var(--line); }
+.test-result { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.test-result .ok { color: #2f9e44; }
+.sidebar .empty button { margin-top: 8px; }

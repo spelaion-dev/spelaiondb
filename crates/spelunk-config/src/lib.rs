@@ -9,6 +9,7 @@
 //! only resolved when connecting. A repository's connections require trusting it before
 //! anything is resolved ([`TrustStore`]).
 
+mod draft;
 mod edit;
 mod error;
 mod load;
@@ -18,6 +19,7 @@ mod secrets;
 mod trust;
 mod vars;
 
+pub use draft::{ConnectionDraft, PasswordChoice, add_connection, connections_dir, slug};
 pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_value};
 pub use error::{ConfigError, ResolveError};
 pub use load::{

@@ -12,6 +12,20 @@ export const commands = {
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
 	setTheme: (theme: string) => typedError<null, string>(__TAURI_INVOKE("set_theme", { theme })),
+	/**  Engines shown when adding a connection, including the ones not supported yet. */
+	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
+	/**  Tunnels a new connection can use (from the repository and the personal directory). */
+	listTunnels: () => typedError<TunnelItem[], string>(__TAURI_INVOKE("list_tunnels")),
+	/**
+	 *  Opens and closes a connection that has not been saved yet. Nothing is written: neither
+	 *  the file nor the keychain.
+	 */
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("test_connection", { draft, password })),
+	/**
+	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
+	 *  configuration. Returns the new connection's identifier.
+	 */
+	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<string, string>(__TAURI_INVOKE("add_connection", { draft, password })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
@@ -75,6 +89,60 @@ export type ConnectOutcome = { kind: "connected"; serverVersion: string } |
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
 
+/**
+ *  What the "add connection" form sends. The password travels apart and is never stored in
+ *  the connection file.
+ */
+export type ConnectionDraftItem = ConnectionDraftItem_Serialize | ConnectionDraftItem_Deserialize;
+
+/**
+ *  What the "add connection" form sends. The password travels apart and is never stored in
+ *  the connection file.
+ */
+export type ConnectionDraftItem_Deserialize = {
+	personal: boolean,
+	folder: string,
+	name: string,
+	/**  An available engine id from the catalog (`postgres`, `sqlite`). */
+	engine: string,
+	env: string,
+	host: string,
+	port?: number | null,
+	database: string,
+	user: string,
+	passwordMode: PasswordMode,
+	passwordEnv: string,
+	tlsMode: TlsModeItem,
+	tlsCa: string,
+	tunnel: string,
+	readOnly: boolean,
+	mcpExposed: boolean,
+};
+
+/**
+ *  What the "add connection" form sends. The password travels apart and is never stored in
+ *  the connection file.
+ */
+export type ConnectionDraftItem_Serialize = {
+	personal: boolean,
+	folder: string,
+	name: string,
+	/**  An available engine id from the catalog (`postgres`, `sqlite`). */
+	engine: string,
+	env: string,
+	host: string,
+	port: number | null,
+	database: string,
+	user: string,
+	passwordMode: PasswordMode,
+	passwordEnv: string,
+	tlsMode: TlsModeItem,
+	tlsCa: string,
+	tunnel: string,
+	readOnly: boolean,
+	mcpExposed: boolean,
+};
+
 export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deserialize;
 
 export type ConnectionItem_Deserialize = {
@@ -101,6 +169,33 @@ export type ConnectionItem_Serialize = {
 	tunnel: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
+};
+
+/**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
+export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;
+
+/**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
+export type EngineItem_Deserialize = {
+	id: string,
+	name: string,
+	/**  `relational`, `analytical` or `nosql`. */
+	category: string,
+	/**  `network` or `file`. */
+	access: string,
+	defaultPort?: number | null,
+	available: boolean,
+};
+
+/**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
+export type EngineItem_Serialize = {
+	id: string,
+	name: string,
+	/**  `relational`, `analytical` or `nosql`. */
+	category: string,
+	/**  `network` or `file`. */
+	access: string,
+	defaultPort: number | null,
+	available: boolean,
 };
 
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
@@ -155,6 +250,8 @@ export type ObjectItem_Serialize = {
 	comment: string | null,
 };
 
+export type PasswordMode = "none" | "keychain" | "prompt" | "env";
+
 export type SchemaItem = {
 	name: string,
 	system: boolean,
@@ -191,6 +288,14 @@ export type TableDetails_Serialize = {
 	primaryKey: string[],
 	indexes: string[],
 	foreignKeys: string[],
+};
+
+export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
+
+/**  A tunnel that a new connection can use. */
+export type TunnelItem = {
+	name: string,
+	personal: boolean,
 };
 
 export type WorkspaceInfo = WorkspaceInfo_Serialize | WorkspaceInfo_Deserialize;

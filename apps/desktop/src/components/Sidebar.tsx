@@ -81,6 +81,14 @@ export function Sidebar() {
         <button className="ghost" onClick={() => void openFolder()} title={t("openAnotherFolder")} disabled={cannotSwitch}>
           {t("openFolder")}
         </button>
+        <button
+          className="ghost add-connection"
+          onClick={() => useApp.getState().setAddConnectionOpen(true)}
+          aria-label={t("connections:add")}
+          title={t("connections:add")}
+        >
+          +
+        </button>
       </div>
       {folderError && <div className="banner" role="alert">{folderError}</div>}
       {workspace?.hasWorkspaceConnections && !workspace.trusted && (
@@ -107,6 +115,7 @@ export function Sidebar() {
         {connections.length === 0 && (
           <div className="empty small">
             <Trans t={t} i18nKey="noConnections" components={{ code: <code /> }} />
+            <button onClick={() => useApp.getState().setAddConnectionOpen(true)}>{t("connections:add")}</button>
           </div>
         )}
         {[...groups.entries()].map(([group, items]) => {

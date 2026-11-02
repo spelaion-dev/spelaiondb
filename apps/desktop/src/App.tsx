@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { events } from "./api";
+import { AddConnection } from "./components/AddConnection";
 import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
 import { HistoryPanel } from "./components/HistoryPanel";
@@ -19,6 +20,7 @@ export default function App() {
   const historyOpen = useApp((s) => s.historyOpen);
   const settingsOpen = useApp((s) => s.settingsOpen);
   const closeSettings = useApp((s) => s.closeSettings);
+  const addConnectionOpen = useApp((s) => s.addConnectionOpen);
   // Save errors are shown next to the setting; only startup load errors need a banner.
   const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -136,6 +138,7 @@ export default function App() {
           {historyOpen && <HistoryPanel />}
         </div>
       </main>
+      {addConnectionOpen && <AddConnection />}
       <Dialogs />
     </div>
   );

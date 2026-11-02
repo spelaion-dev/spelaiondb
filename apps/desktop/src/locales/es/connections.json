@@ -1,0 +1,93 @@
+{
+  "add": "Añadir conexión",
+  "title": "Añadir conexión",
+  "formTitle": "Nueva conexión de {{engine}}",
+  "close": "Cerrar",
+  "pickHint": "Elige el tipo de base de datos a la que conectar.",
+  "search": "Buscar bases de datos",
+  "noMatches": "Ninguna base de datos coincide con la búsqueda.",
+  "comingSoon": "Próximamente",
+  "comingSoonHint": "{{engine}} todavía no está soportado",
+  "categories": {
+    "relational": "Relacionales",
+    "analytical": "Analíticas",
+    "nosql": "NoSQL"
+  },
+  "sections": {
+    "server": "Servidor",
+    "authentication": "Autenticación",
+    "file": "Fichero de la base de datos",
+    "ssl": "Cifrado (SSL/TLS)",
+    "ssh": "Túnel SSH",
+    "organization": "Dónde guardarla",
+    "safety": "Seguridad"
+  },
+  "fields": {
+    "name": "Nombre",
+    "folder": "Carpeta",
+    "folderPlaceholder": "Opcional, p. ej. prod/eu",
+    "saveIn": "Guardar en",
+    "project": "Proyecto",
+    "personal": "Personal",
+    "projectHint": "Se guarda en la carpeta .spelunk/ del repositorio y se comparte por git. Las contraseñas nunca se escriben ahí.",
+    "personalHint": "Se guarda solo en este equipo, en tu carpeta de configuración personal.",
+    "env": "Entorno",
+    "host": "Servidor",
+    "port": "Puerto",
+    "database": "Base de datos",
+    "user": "Usuario",
+    "password": "Contraseña",
+    "passwordEnv": "Variable de entorno",
+    "tlsMode": "TLS",
+    "tlsCa": "Autoridad de certificación (PEM)",
+    "tlsCaPlaceholder": "Vacío: los certificados de confianza del sistema",
+    "tunnel": "Túnel SSH",
+    "noTunnel": "Ninguno",
+    "noTunnelsHint": "Los túneles se definen en .spelunk/tunnels/ o en tu carpeta personal.",
+    "file": "Fichero",
+    "fileHint": "El fichero tiene que existir; dentro del repositorio la ruta se guarda relativa a él.",
+    "readOnly": "Solo lectura",
+    "mcpExposed": "Exponer a agentes de IA (solo lectura)",
+    "mcpHint": "Los agentes que usan spelunk mcp solo pueden leer, y cada consulta queda auditada.",
+    "namePlaceholder": "Mi base de datos {{engine}}",
+    "authentication": "Método",
+    "savePassword": "Guardar contraseña",
+    "tlsHint": "Con «Verificar», si el certificado está vacío se usan los certificados de confianza del sistema.",
+    "useTunnel": "Conectar a través de un túnel SSH",
+    "tunnelHint": "Se llega a la base de datos desde el último salto del túnel."
+  },
+  "tls": {
+    "disable": "Desactivado",
+    "prefer": "Preferir (cifrar si el servidor lo permite)",
+    "require": "Exigir (cifrar, sin verificar)",
+    "verify-ca": "Verificar la autoridad de certificación",
+    "verify-full": "Verificar la autoridad y el nombre del servidor"
+  },
+  "test": {
+    "button": "Probar conexión",
+    "testing": "Probando…",
+    "ok": "Conectado · {{version}}",
+    "passwordRequired": "Escribe la contraseña para probar la conexión."
+  },
+  "browse": "Examinar…",
+  "allFiles": "Todos los ficheros",
+  "certificates": "Certificados",
+  "back": "Atrás",
+  "save": "Guardar",
+  "saving": "Guardando…",
+  "tabs": {
+    "main": "Principal",
+    "ssl": "SSL",
+    "ssh": "SSH",
+    "options": "Opciones"
+  },
+  "auth": {
+    "password": "Usuario y contraseña",
+    "env": "Contraseña desde una variable de entorno",
+    "none": "Sin contraseña",
+    "savedHint": "La contraseña va al llavero del sistema (Administrador de credenciales, Llavero o Secret Service), nunca al fichero de la conexión.",
+    "askHint": "No se guarda: se preguntará cada vez que conectes. La contraseña escrita aquí solo se usa para probar.",
+    "envHint": "Se lee de esta variable al conectar; el fichero solo guarda su nombre."
+  },
+  "cancel": "Cancelar"
+}

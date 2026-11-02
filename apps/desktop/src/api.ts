@@ -7,7 +7,9 @@ import {
   commands,
   events,
   type ColumnItem,
+  type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
+  type EngineItem_Serialize,
   type ConnectOutcome,
   type InteractionKind,
   type HistoryItem_Serialize,
@@ -15,11 +17,16 @@ import {
   type SchemaItem,
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
+  type TlsModeItem,
+  type TunnelItem,
+  type PasswordMode,
   type WorkspaceInfo_Serialize,
 } from "./bindings";
 
 export { commands, events };
-export type { ColumnItem, ConnectOutcome, InteractionKind, SchemaItem };
+export type { ColumnItem, ConnectOutcome, InteractionKind, PasswordMode, SchemaItem, TlsModeItem, TunnelItem };
+export type ConnectionDraft = ConnectionDraftItem_Deserialize;
+export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
 export type ObjectItem = ObjectItem_Serialize;
