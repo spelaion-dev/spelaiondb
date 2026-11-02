@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use spelunk_driver_api::Secret;
 use toml_edit::{Array, ArrayOfTables, InlineTable, Item, Table, Value};
 
+use crate::accounts::tunnel_account;
 use crate::draft::{PasswordChoice, portable_path, slug};
 use crate::edit::{read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
@@ -19,11 +20,6 @@ pub const TUNNEL_SCHEMA_URL: &str =
     "https://raw.githubusercontent.com/spelunkdb/spelunkdb/main/schema/tunnel.schema.json";
 
 const DEFAULT_SSH_PORT: u16 = 22;
-
-/// Keychain entry of a hop's password: `tunnel/<name>/<hop, from 1>/password`.
-pub(crate) fn hop_account(tunnel: &str, index: usize) -> String {
-    format!("tunnel/{tunnel}/{}/password", index + 1)
-}
 
 /// One hop as typed in the form. Empty strings mean "not set".
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +197,8 @@ fn find<'a>(
 
 /// Typed passwords to store: hops whose password is `keychain` and that got a non-empty one.
 fn store_passwords(
+    config: &Config,
+    source: Source,
     name: &str,
     file: &TunnelFile,
     passwords: &[Option<Secret>],
@@ -212,7 +210,7 @@ fn store_passwords(
             continue;
         };
         if uses_keychain(hop) && !secret.expose().is_empty() {
-            let account = hop_account(name, i);
+            let account = tunnel_account(config, source, name, i);
             backend
                 .keychain_set(&account, secret.expose())
                 .map_err(|message| ResolveError::Secret {
@@ -245,10 +243,10 @@ pub fn add_tunnel(
     }
     std::fs::write(&path, format!("#:schema {TUNNEL_SCHEMA_URL}\n\n{body}"))
         .map_err(|e| ConfigError::new(&path, e.to_string()))?;
-    if let Err(e) = store_passwords(&name, &file, passwords, backend) {
+    if let Err(e) = store_passwords(config, draft.source, &name, &file, passwords, backend) {
         let _ = std::fs::remove_file(&path);
         for i in 0..file.hops.len() {
-            let _ = backend.keychain_delete(&hop_account(&name, i));
+            let _ = backend.keychain_delete(&tunnel_account(config, draft.source, &name, i));
         }
         return Err(e);
     }
@@ -372,7 +370,7 @@ pub fn update_tunnel(
     validate_tunnel(path, parsed)?;
     write_doc(path, &doc)?;
 
-    let mut result = store_passwords(name, &new, passwords, backend).map(|_| ());
+    let mut result = store_passwords(config, source, name, &new, passwords, backend).map(|_| ());
     if result.is_ok() {
         for (i, old_hop) in old.hops.iter().enumerate() {
             if !uses_keychain(old_hop) {
@@ -391,7 +389,7 @@ pub fn update_tunnel(
                                 == old_hop.port.unwrap_or(DEFAULT_SSH_PORT)))
             });
             if !keep {
-                let account = hop_account(name, i);
+                let account = tunnel_account(config, source, name, i);
                 if let Err(message) = backend.keychain_delete(&account) {
                     result = Err(ResolveError::Secret {
                         reference: format!("keychain:{account}"),
@@ -438,7 +436,7 @@ pub fn delete_tunnel(
         .map_err(|e| ConfigError::new(&entry.file_path, format!("could not delete: {e}")))?;
     for (i, hop) in entry.file.hops.iter().enumerate() {
         if uses_keychain(hop) {
-            let account = hop_account(name, i);
+            let account = tunnel_account(config, source, name, i);
             backend
                 .keychain_delete(&account)
                 .map_err(|message| ResolveError::Secret {

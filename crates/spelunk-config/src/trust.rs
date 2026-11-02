@@ -65,6 +65,6 @@ impl TrustStore {
 }
 
 /// Canonical path, so that `C:\repo` and `c:/repo/./` are the same repository.
-fn canonical(path: &Path) -> PathBuf {
+pub(crate) fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

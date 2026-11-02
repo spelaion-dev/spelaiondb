@@ -5,13 +5,14 @@ use std::path::{Path, PathBuf};
 
 use spelunk_driver_api::{ConnectParams, Secret, TlsMode};
 
+use crate::accounts::{connection_account, tunnel_account};
 use crate::draft::ConnectionDraft;
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, ConnectionEntry, ConnectionId, Source};
 use crate::model::{Engine, McpConfig, SecretSpec, SshAuth, TlsModeConfig, TunnelFile};
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::trust::TrustStore;
-use crate::tunnel_draft::{TunnelDraft, hop_account};
+use crate::tunnel_draft::TunnelDraft;
 use crate::vars::{expand, resolve_path};
 
 /// State of a password after resolving.
@@ -159,7 +160,7 @@ impl<'a> Resolver<'a> {
         let password = self.password(
             &entry.file_path,
             file.password.as_ref(),
-            &format!("{}/password", entry.id),
+            &connection_account(self.config, &entry.id),
         )?;
 
         let tunnel = match &file.tunnel {
@@ -174,7 +175,13 @@ impl<'a> Resolver<'a> {
                             format!("tunnel {name:?} does not exist in .spelunk/tunnels/"),
                         )
                     })?;
-                Some(self.resolve_tunnel(name, &tunnel.file, &base, &entry.file_path)?)
+                Some(self.resolve_tunnel(
+                    name,
+                    tunnel.source,
+                    &tunnel.file,
+                    &base,
+                    &entry.file_path,
+                )?)
             }
         };
 
@@ -227,14 +234,15 @@ impl<'a> Resolver<'a> {
         let base = self.base_dir(draft.source)?;
         let path = draft.path(self.config)?;
         let file = draft.to_file(self.config)?;
-        self.resolve_tunnel(&draft.file_name()?, &file, &base, &path)
+        self.resolve_tunnel(&draft.file_name()?, draft.source, &file, &base, &path)
     }
 
     /// Hops ready to open: variables substituted, key paths resolved against `base` and
-    /// passwords read (keychain entries `tunnel/<name>/<hop>/password`).
+    /// passwords read (keychain entries named by [`tunnel_account`]).
     fn resolve_tunnel(
         &self,
         name: &str,
+        source: Source,
         file: &TunnelFile,
         base: &Path,
         errors_at: &Path,
@@ -251,7 +259,11 @@ impl<'a> Resolver<'a> {
                     .as_deref()
                     .map(|f| self.expand(errors_at, f).map(|f| resolve_path(&f, base)))
                     .transpose()?,
-                password: self.password(errors_at, hop.password.as_ref(), &hop_account(name, i))?,
+                password: self.password(
+                    errors_at,
+                    hop.password.as_ref(),
+                    &tunnel_account(self.config, source, name, i),
+                )?,
                 command: hop.command.clone(),
             });
         }

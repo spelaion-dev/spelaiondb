@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use spelunk_driver_api::Secret;
 
+use crate::accounts::connection_account;
 use crate::edit::create_connection;
 use crate::edit::{read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
@@ -23,7 +24,7 @@ use crate::vars::home_dir;
 pub enum PasswordChoice {
     /// The engine does not need one (SQLite) or the server does not ask for it.
     None,
-    /// Stored in the system keychain under `<id>/password`.
+    /// Stored in the system keychain (see [`connection_account`]).
     Keychain,
     /// Asked every time the connection opens.
     Prompt,
@@ -282,7 +283,7 @@ pub fn add_connection(
         && draft.engine != Engine::Sqlite
         && let Some(secret) = password.filter(|s| !s.expose().is_empty())
     {
-        let account = format!("{}/password", entry.id);
+        let account = connection_account(config, &entry.id);
         if let Err(message) = backend.keychain_set(&account, secret.expose()) {
             // Without its password the new file would ask for it on first use, which is
             // confusing right after typing it: undo the whole operation instead.
@@ -348,11 +349,6 @@ impl ConnectionDraft {
             file: draft.build_file(config, &entry.file_path)?,
         })
     }
-}
-
-/// Keychain entry used by `password = { secret = "keychain" }` (see the resolver).
-fn default_account(id: &ConnectionId) -> String {
-    format!("{id}/password")
 }
 
 fn uses_default_keychain(file: &ConnectionFile) -> bool {
@@ -499,7 +495,7 @@ pub fn update_connection(
     validate_connection(path, parsed)?;
     write_doc(path, &doc)?;
 
-    let account = default_account(&entry.id);
+    let account = connection_account(config, &entry.id);
     let keychain = if uses_default_keychain(&new) {
         match password.filter(|s| !s.expose().is_empty()) {
             Some(secret) => backend.keychain_set(&account, secret.expose()),
@@ -541,7 +537,7 @@ pub fn delete_connection(
         dir = current.parent();
     }
     if uses_default_keychain(&entry.file) {
-        let account = default_account(&entry.id);
+        let account = connection_account(config, &entry.id);
         backend
             .keychain_delete(&account)
             .map_err(|message| ResolveError::Secret {

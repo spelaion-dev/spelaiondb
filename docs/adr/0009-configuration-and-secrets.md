@@ -35,8 +35,15 @@ app rewrites the configuration when editing from the UI, so diffs must stay read
   `user.toml` (`[vars]`), personal `connections/` (ids with `~/`) and
   `trusted-workspaces.toml`.
 - Secret references: `keychain`, `keychain:<name>`, `env:<VAR>`, `op://…`, `cmd:<command>`
-  and `prompt`. `keychain` without a name uses the `<id>/password` entry; if it does not
-  exist, it is asked for and storing it is offered. Vault is left for later.
+  and `prompt`. `keychain` without a name uses an entry named after the connection; if it
+  does not exist, it is asked for and storing it is offered. Vault is left for later.
+- Keychain entry names (2026-11-02, fixed): repository entries include the repository's
+  canonical path (`repo:<root>/<id>/password`, `repo:<root>/tunnel/<name>/<hop>/password`)
+  and personal ones start with `~/`. Before, two projects with a connection or tunnel of the
+  same name shared one entry, so one project's password could be sent to the other's server.
+  The path cannot be chosen by a repository's files, unlike a name written in them. Moving a
+  repository only means its passwords are asked again; repository passwords saved with the
+  old names are not reused (they would carry the same risk).
 - Files with `deny_unknown_fields`: a typo (`databse`) is an error with line and column,
   not an ignored field. A broken file does not prevent loading the rest.
 - Relative paths (SQLite, `tls.ca`, keys) hang from the repository root; `~/` is the home

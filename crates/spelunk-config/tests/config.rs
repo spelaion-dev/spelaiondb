@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use spelunk_config::{
     ConnectionDraft, ConnectionFile, ConnectionId, Engine, HopDraft, Password, PasswordChoice,
     ResolveError, Resolver, SecretBackend, Source, SshAuth, SystemBackend, TlsModeConfig,
-    TrustStore, TunnelDraft, WritePolicy, add_connection, add_tunnel, create_connection,
-    delete_tunnel, load, set_value, slug, update_tunnel,
+    TrustStore, TunnelDraft, WritePolicy, add_connection, add_tunnel, connection_account,
+    create_connection, delete_tunnel, load, set_value, slug, tunnel_account, update_tunnel,
 };
 use spelunk_driver_api::{Secret, TlsMode};
 
@@ -104,6 +104,21 @@ impl SecretBackend for FakeBackend {
         self.runs.lock().unwrap().push(format!("shell {command}"));
         Ok("output-of-shell".into())
     }
+}
+
+/// Keychain entry of a repository connection of the fixture.
+fn repo_account(fx: &Fixture, path: &str) -> String {
+    connection_account(&load(Some(&fx.repo()), &fx.user()), &ws(path))
+}
+
+/// Keychain entry of a hop (from 0) of a repository tunnel of the fixture.
+fn repo_hop(fx: &Fixture, tunnel: &str, hop: usize) -> String {
+    tunnel_account(
+        &load(Some(&fx.repo()), &fx.user()),
+        Source::Workspace,
+        tunnel,
+        hop,
+    )
 }
 
 fn ws(path: &str) -> ConnectionId {
@@ -414,7 +429,7 @@ fn keychain_asks_the_first_time_and_remembers() {
     else {
         panic!("the first time it must ask: {:?}", first.password)
     };
-    assert_eq!(account, "db/password");
+    assert_eq!(account, &repo_account(&fx, "db"));
     // Without remembering, the typed password is only used for this connection.
     assert_eq!(
         first.connect_params(Some(Secret::new("typed"))).password,
@@ -623,7 +638,7 @@ fn new_connections_are_written_without_secrets_and_load_back() {
             .keychain
             .lock()
             .unwrap()
-            .get("prod/eu/orders-prod/password")
+            .get(&repo_account(&fx, "prod/eu/orders-prod"))
             .map(String::as_str),
         Some("s3cr3t-value")
     );
@@ -695,7 +710,7 @@ fn drafts_never_overwrite_and_undo_the_file_if_the_keychain_fails() {
             .keychain
             .lock()
             .unwrap()
-            .get("prod/eu/orders-prod/password")
+            .get(&repo_account(&fx, "prod/eu/orders-prod"))
             .map(String::as_str),
         Some("first")
     );
@@ -784,7 +799,7 @@ fn drafts_resolve_for_testing_with_the_same_trust_rules() {
     assert_eq!(
         resolved.password,
         Password::Prompt {
-            save_to: Some("prod/eu/orders-prod/password".into())
+            save_to: Some(repo_account(&fx, "prod/eu/orders-prod"))
         }
     );
     assert_eq!(resolved.params.host, "db.internal");
@@ -835,7 +850,9 @@ fn editing_keeps_comments_and_settings_the_form_does_not_show() {
     let config = load(Some(&fx.repo()), &fx.user());
     let id = ws("team/orders");
     let backend = FakeBackend::default();
-    backend.keychain_set("team/orders/password", "old").unwrap();
+    backend
+        .keychain_set(&repo_account(&fx, "team/orders"), "old")
+        .unwrap();
     let draft = ConnectionDraft {
         name: "Orders (EU)".into(),
         host: "db-eu.internal".into(),
@@ -871,7 +888,7 @@ fn editing_keeps_comments_and_settings_the_form_does_not_show() {
             .keychain
             .lock()
             .unwrap()
-            .get("team/orders/password")
+            .get(&repo_account(&fx, "team/orders"))
             .map(String::as_str),
         Some("old")
     );
@@ -888,7 +905,9 @@ fn editing_the_password_updates_or_forgets_the_keychain_entry() {
     let path = fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
     let id = ws("orders");
     let backend = FakeBackend::default();
-    backend.keychain_set("orders/password", "old").unwrap();
+    backend
+        .keychain_set(&repo_account(&fx, "orders"), "old")
+        .unwrap();
 
     let config = load(Some(&fx.repo()), &fx.user());
     let draft = ConnectionDraft::from_entry(config.connection(&id).unwrap());
@@ -899,7 +918,7 @@ fn editing_the_password_updates_or_forgets_the_keychain_entry() {
             .keychain
             .lock()
             .unwrap()
-            .get("orders/password")
+            .get(&repo_account(&fx, "orders"))
             .map(String::as_str),
         Some("new")
     );
@@ -915,7 +934,7 @@ fn editing_the_password_updates_or_forgets_the_keychain_entry() {
             .keychain
             .lock()
             .unwrap()
-            .get("orders/password")
+            .get(&repo_account(&fx, "orders"))
             .is_none()
     );
     assert!(
@@ -991,10 +1010,10 @@ fn deleting_removes_the_file_its_password_and_empty_folders() {
     );
     let backend = FakeBackend::default();
     backend
-        .keychain_set("prod/eu/orders/password", "secret")
+        .keychain_set(&repo_account(&fx, "prod/eu/orders"), "secret")
         .unwrap();
     backend
-        .keychain_set("prod/other/password", "unrelated")
+        .keychain_set(&repo_account(&fx, "prod/other"), "unrelated")
         .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
 
@@ -1004,9 +1023,11 @@ fn deleting_removes_the_file_its_password_and_empty_folders() {
     assert!(keep.exists(), "folders still in use are kept");
     assert!(fx.repo().join(".spelunk/connections").exists());
     let keychain = backend.keychain.lock().unwrap();
-    assert!(keychain.get("prod/eu/orders/password").is_none());
+    assert!(keychain.get(&repo_account(&fx, "prod/eu/orders")).is_none());
     assert_eq!(
-        keychain.get("prod/other/password").map(String::as_str),
+        keychain
+            .get(&repo_account(&fx, "prod/other"))
+            .map(String::as_str),
         Some("unrelated")
     );
     drop(keychain);
@@ -1022,7 +1043,9 @@ fn testing_an_edit_finds_the_stored_password_even_after_renaming() {
     fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
-    backend.keychain_set("orders/password", "stored").unwrap();
+    backend
+        .keychain_set(&repo_account(&fx, "orders"), "stored")
+        .unwrap();
     let id = ws("orders");
     let draft = ConnectionDraft {
         name: "Renamed".into(),
@@ -1097,7 +1120,7 @@ fn new_tunnels_are_written_without_secrets_and_load_back() {
             .keychain
             .lock()
             .unwrap()
-            .get("tunnel/bastion-eu/2/password")
+            .get(&repo_hop(&fx, "bastion-eu", 1))
             .map(String::as_str),
         Some("hop-secret")
     );
@@ -1169,7 +1192,7 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
     let path = fx.write("repo/.spelunk/tunnels/prod.toml", HAND_WRITTEN_TUNNEL);
     let backend = FakeBackend::default();
     backend
-        .keychain_set("tunnel/prod/2/password", "old")
+        .keychain_set(&repo_hop(&fx, "prod", 1), "old")
         .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
@@ -1194,7 +1217,7 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
             .keychain
             .lock()
             .unwrap()
-            .contains_key("tunnel/prod/2/password")
+            .contains_key(&repo_hop(&fx, "prod", 1))
     );
 
     // Hop 2 now points to another server without a new password: the old one is forgotten,
@@ -1209,7 +1232,7 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
             .keychain
             .lock()
             .unwrap()
-            .contains_key("tunnel/prod/2/password")
+            .contains_key(&repo_hop(&fx, "prod", 1))
     );
 
     // A third hop is appended; removing it again leaves two.
@@ -1259,7 +1282,7 @@ fn tunnels_in_use_cannot_be_deleted() {
     );
     let backend = FakeBackend::default();
     backend
-        .keychain_set("tunnel/prod/2/password", "old")
+        .keychain_set(&repo_hop(&fx, "prod", 1), "old")
         .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     let err = delete_tunnel(&config, Source::Workspace, "prod", &backend).unwrap_err();
@@ -1275,7 +1298,7 @@ fn tunnels_in_use_cannot_be_deleted() {
             .keychain
             .lock()
             .unwrap()
-            .contains_key("tunnel/prod/2/password")
+            .contains_key(&repo_hop(&fx, "prod", 1))
     );
 }
 
@@ -1304,5 +1327,98 @@ fn shared_key_paths_work_on_every_machine() {
     assert_eq!(
         personal.to_file(&config).unwrap().hops[0].identity_file,
         Some(draft.hops[0].identity_file.clone())
+    );
+}
+
+/// Two projects with a connection of the same name used to share its keychain entry, so the
+/// password of one project's server could be sent to the other's. Now each repository has
+/// its own entries, named after its path (which its files cannot choose).
+#[test]
+fn projects_never_share_keychain_passwords() {
+    let first = Fixture::new("keychain-project-a");
+    let second = Fixture::new("keychain-project-b");
+    let backend = FakeBackend::default();
+    let draft = ConnectionDraft {
+        folder: "prod".into(),
+        name: "orders".into(),
+        ..postgres_draft()
+    };
+    let first_config = load(Some(&first.repo()), &first.user());
+    add_connection(
+        &first_config,
+        &draft,
+        Some(&Secret::new("first-project")),
+        &backend,
+    )
+    .unwrap();
+    let second_config = load(Some(&second.repo()), &second.user());
+    add_connection(&second_config, &draft, None, &backend).unwrap();
+
+    let id = ws("prod/orders");
+    let first_config = load(Some(&first.repo()), &first.user());
+    let second_config = load(Some(&second.repo()), &second.user());
+    assert_ne!(
+        connection_account(&first_config, &id),
+        connection_account(&second_config, &id)
+    );
+    let resolved = Resolver::new(&second_config, &second.trusted(), &backend)
+        .resolve(&id)
+        .unwrap();
+    assert_eq!(
+        resolved.password,
+        Password::Prompt {
+            save_to: Some(connection_account(&second_config, &id))
+        },
+        "the other project's password must not be used"
+    );
+    let resolved = Resolver::new(&first_config, &first.trusted(), &backend)
+        .resolve(&id)
+        .unwrap();
+    assert_eq!(
+        resolved.password,
+        Password::Value(Secret::new("first-project"))
+    );
+}
+
+#[test]
+fn personal_and_repository_entries_are_separate() {
+    let fx = Fixture::new("keychain-layers");
+    let config = load(Some(&fx.repo()), &fx.user());
+    // Personal connections keep the names they always had.
+    let personal = ConnectionId {
+        source: Source::User,
+        path: "scratch".into(),
+    };
+    assert_eq!(connection_account(&config, &personal), "~/scratch/password");
+    assert!(connection_account(&config, &ws("scratch")).starts_with("repo:"));
+    // A personal tunnel and a repository tunnel with the same name never share a password.
+    assert_ne!(
+        tunnel_account(&config, Source::User, "bastion", 0),
+        tunnel_account(&config, Source::Workspace, "bastion", 0)
+    );
+    let backend = FakeBackend::default();
+    let tunnel = |source| TunnelDraft {
+        source,
+        ..two_hop_tunnel()
+    };
+    add_tunnel(
+        &config,
+        &tunnel(Source::User),
+        &[None, Some(Secret::new("personal"))],
+        &backend,
+    )
+    .unwrap();
+    add_tunnel(&config, &tunnel(Source::Workspace), &[], &backend).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve_tunnel_draft(&tunnel(Source::Workspace))
+        .unwrap();
+    assert!(matches!(resolved.hops[1].password, Password::Prompt { .. }));
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve_tunnel_draft(&tunnel(Source::User))
+        .unwrap();
+    assert_eq!(
+        resolved.hops[1].password,
+        Password::Value(Secret::new("personal"))
     );
 }
