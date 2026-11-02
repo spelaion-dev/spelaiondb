@@ -27,6 +27,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   regenerate the schema: `SPELUNK_UPDATE_SCHEMA=1 cargo test -p spelunk-config`.
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
+  `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
+  password is forgotten when that hop points to another server).
 - `crates/spelunk-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
   it receives a `TunnelSpec`. Dialogs go through the `Interaction` trait. Tests against the
   Docker bastions with `SPELUNK_TEST_SSH=127.0.0.1:2221`.

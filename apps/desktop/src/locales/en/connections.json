@@ -43,7 +43,7 @@
     "tlsCaPlaceholder": "Empty: the system's trusted certificates",
     "tunnel": "SSH tunnel",
     "noTunnel": "None",
-    "noTunnelsHint": "Tunnels are defined in .spelunk/tunnels/ or in your personal folder.",
+    "noTunnelsHint": "No tunnels yet: create one with “New tunnel…”.",
     "file": "File",
     "fileHint": "The file must exist; inside the repository the path is stored relative to it.",
     "readOnly": "Read-only",
@@ -105,5 +105,46 @@
   "deleteExplanation": "<strong>{{name}}</strong> will be removed: its file <code>{{file}}</code> is deleted, along with its password in the system keychain if one was saved.",
   "deleteProjectHint": "It is a project connection, shared through git: your team will lose it too when you commit the change.",
   "deletePersonalHint": "It is a personal connection: only this computer is affected.",
-  "deleteBusy": "A query is running or connecting on it. Stop it first."
+  "deleteBusy": "A query is running or connecting on it. Stop it first.",
+  "tunnel": {
+    "newButton": "New tunnel…",
+    "editButton": "Edit tunnel…",
+    "newTitle": "New SSH tunnel",
+    "editTitle": "Edit tunnel {{name}}",
+    "name": "Tunnel name",
+    "nameHint": "Connections refer to the tunnel by this name.",
+    "fixedHint": "When editing, the tunnel keeps its name and location: connections refer to it.",
+    "hop": "Hop {{number}}",
+    "first": "from this computer",
+    "middle": "intermediate",
+    "last": "reaches the database",
+    "moveUp": "Move {{hop}} up",
+    "moveDown": "Move {{hop}} down",
+    "removeHop": "Remove {{hop}}",
+    "method": "Authentication",
+    "methods": {
+      "agent": "SSH agent (Pageant / OpenSSH agent)",
+      "key": "Private key file",
+      "password": "Password",
+      "keyboard-interactive": "Keyboard-interactive (2FA codes)",
+      "custom": "Several methods from the file: {{methods}}"
+    },
+    "agentKey": "Only this key from the agent (optional)",
+    "agentKeyPlaceholder": "Empty: every key loaded in the agent",
+    "keyFile": "Private key file",
+    "keyFilePlaceholder": "Empty: ~/.ssh/id_ed25519, id_ecdsa, id_rsa",
+    "methodHints": {
+      "agent": "Uses the keys loaded in your SSH agent; choose one if the server limits authentication attempts.",
+      "key": "If the key has a passphrase, it is asked when connecting.",
+      "password": "Typed once to save it in the keychain, or asked each time.",
+      "keyboard-interactive": "For servers that ask questions such as a 2FA code: they are asked when connecting.",
+      "custom": "These methods are tried in order and kept as they are in the file."
+    },
+    "addHop": "+ Add hop",
+    "test": "Test tunnel",
+    "ok_one": "Tunnel OK · {{count}} hop",
+    "ok_other": "Tunnel OK · {{count}} hops",
+    "delete": "Delete tunnel",
+    "confirmDelete": "Click again to delete"
+  }
 }

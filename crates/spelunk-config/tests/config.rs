@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use spelunk_config::{
-    ConnectionDraft, ConnectionFile, ConnectionId, Engine, Password, PasswordChoice, ResolveError,
-    Resolver, SecretBackend, Source, SshAuth, SystemBackend, TlsModeConfig, TrustStore,
-    WritePolicy, add_connection, create_connection, load, set_value, slug,
+    ConnectionDraft, ConnectionFile, ConnectionId, Engine, HopDraft, Password, PasswordChoice,
+    ResolveError, Resolver, SecretBackend, Source, SshAuth, SystemBackend, TlsModeConfig,
+    TrustStore, TunnelDraft, WritePolicy, add_connection, add_tunnel, create_connection,
+    delete_tunnel, load, set_value, slug, update_tunnel,
 };
 use spelunk_driver_api::{Secret, TlsMode};
 
@@ -1032,4 +1033,276 @@ fn testing_an_edit_finds_the_stored_password_even_after_renaming() {
         .unwrap();
     assert_eq!(resolved.password, Password::Value(Secret::new("stored")));
     assert_eq!(resolved.name, "Renamed");
+}
+
+fn hop(host: &str, user: &str, auth: Vec<SshAuth>, password: PasswordChoice) -> HopDraft {
+    HopDraft {
+        host: host.into(),
+        port: None,
+        user: user.into(),
+        auth,
+        identity_file: String::new(),
+        password,
+    }
+}
+
+fn two_hop_tunnel() -> TunnelDraft {
+    TunnelDraft {
+        source: Source::Workspace,
+        name: "Bastion EU".into(),
+        hops: vec![
+            hop(
+                "jump.example.com",
+                "ana",
+                vec![SshAuth::Agent],
+                PasswordChoice::None,
+            ),
+            hop(
+                "10.0.0.5",
+                "deploy",
+                vec![SshAuth::Password],
+                PasswordChoice::Keychain,
+            ),
+        ],
+    }
+}
+
+#[test]
+fn new_tunnels_are_written_without_secrets_and_load_back() {
+    let fx = Fixture::new("tunnel-add");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+    let mut draft = two_hop_tunnel();
+    draft.hops[0].port = Some(22);
+    draft.hops[1].port = Some(2222);
+    let name = add_tunnel(
+        &config,
+        &draft,
+        &[None, Some(Secret::new("hop-secret"))],
+        &backend,
+    )
+    .unwrap();
+    assert_eq!(name, "bastion-eu");
+    let path = fx.repo().join(".spelunk/tunnels/bastion-eu.toml");
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.starts_with("#:schema "), "{content}");
+    assert!(!content.contains("hop-secret"), "{content}");
+    assert_eq!(
+        content.matches("port").count(),
+        1,
+        "the default SSH port is implied: {content}"
+    );
+    assert_eq!(
+        backend
+            .keychain
+            .lock()
+            .unwrap()
+            .get("tunnel/bastion-eu/2/password")
+            .map(String::as_str),
+        Some("hop-secret")
+    );
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.tunnel_for(Source::Workspace, "bastion-eu").unwrap();
+    assert_eq!(TunnelDraft::from_entry(entry).hops.len(), 2);
+    // Resolving finds the stored password for hop 2 and nothing for the agent hop.
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve_tunnel_draft(&TunnelDraft::from_entry(entry))
+        .unwrap();
+    assert_eq!(resolved.hops[0].password, Password::None);
+    assert_eq!(
+        resolved.hops[1].password,
+        Password::Value(Secret::new("hop-secret"))
+    );
+    assert_eq!(resolved.hops[1].port, 2222);
+
+    assert!(
+        add_tunnel(&config, &draft, &[], &backend).is_err(),
+        "never overwrites"
+    );
+}
+
+#[test]
+fn invalid_tunnels_explain_what_is_wrong() {
+    let fx = Fixture::new("tunnel-invalid");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let error = |draft: TunnelDraft| draft.to_file(&config).unwrap_err().message;
+    assert!(
+        error(TunnelDraft {
+            name: "??".into(),
+            ..two_hop_tunnel()
+        })
+        .contains("name")
+    );
+    assert!(
+        error(TunnelDraft {
+            hops: vec![],
+            ..two_hop_tunnel()
+        })
+        .contains("hop")
+    );
+    let mut no_host = two_hop_tunnel();
+    no_host.hops[1].host = " ".into();
+    assert!(error(no_host).contains("hop 2: the host"));
+    let mut no_auth = two_hop_tunnel();
+    no_auth.hops[0].auth.clear();
+    assert!(error(no_auth).contains("hop 1"));
+    // A password is only kept for methods that use it.
+    let mut agent = two_hop_tunnel();
+    agent.hops[0].password = PasswordChoice::Prompt;
+    assert_eq!(agent.to_file(&config).unwrap().hops[0].password, None);
+    // Untrusted repository: testing is refused, like for connections.
+    let untrusted = TrustStore::load(&fx.user()).unwrap();
+    assert!(matches!(
+        Resolver::new(&config, &untrusted, &FakeBackend::default())
+            .resolve_tunnel_draft(&two_hop_tunnel()),
+        Err(ResolveError::Untrusted { .. })
+    ));
+}
+
+const HAND_WRITTEN_TUNNEL: &str = "# Production bastions: ask the infra team before changing\nschema_version = 1\n\n[[hops]]\nhost = \"jump.example.com\" # public\nuser = \"ana\"\nauth = [\"agent\"]\ncommand = \"ssh -W %h:%p corp-gateway\"\n\n[[hops]]\nhost = \"10.0.0.5\"\nuser = \"deploy\"\nauth = [\"password\"]\npassword = { secret = \"keychain\" }\n";
+
+#[test]
+fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsewhere() {
+    let fx = Fixture::new("tunnel-edit");
+    let path = fx.write("repo/.spelunk/tunnels/prod.toml", HAND_WRITTEN_TUNNEL);
+    let backend = FakeBackend::default();
+    backend
+        .keychain_set("tunnel/prod/2/password", "old")
+        .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+
+    // Same servers, new port on hop 1: comments, `command` and the stored password stay.
+    let mut draft = TunnelDraft::from_entry(entry);
+    draft.hops[0].port = Some(2200);
+    update_tunnel(&config, Source::Workspace, "prod", &draft, &[], &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.starts_with("# Production bastions"), "{content}");
+    assert!(
+        content.contains("host = \"jump.example.com\" # public"),
+        "{content}"
+    );
+    assert!(
+        content.contains("command = \"ssh -W %h:%p corp-gateway\""),
+        "{content}"
+    );
+    assert!(content.contains("port = 2200"), "{content}");
+    assert!(
+        backend
+            .keychain
+            .lock()
+            .unwrap()
+            .contains_key("tunnel/prod/2/password")
+    );
+
+    // Hop 2 now points to another server without a new password: the old one is forgotten,
+    // so it is never sent to a host it was not meant for.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+    let mut moved = TunnelDraft::from_entry(entry);
+    moved.hops[1].host = "10.0.0.9".into();
+    update_tunnel(&config, Source::Workspace, "prod", &moved, &[], &backend).unwrap();
+    assert!(
+        !backend
+            .keychain
+            .lock()
+            .unwrap()
+            .contains_key("tunnel/prod/2/password")
+    );
+
+    // A third hop is appended; removing it again leaves two.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+    let mut longer = TunnelDraft::from_entry(entry);
+    longer.hops.push(hop(
+        "db-gw",
+        "ana",
+        vec![SshAuth::Key],
+        PasswordChoice::None,
+    ));
+    update_tunnel(&config, Source::Workspace, "prod", &longer, &[], &backend).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+    assert_eq!(entry.file.hops.len(), 3);
+    let mut shorter = TunnelDraft::from_entry(entry);
+    shorter.hops.truncate(2);
+    update_tunnel(&config, Source::Workspace, "prod", &shorter, &[], &backend).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert_eq!(
+        config
+            .tunnel_for(Source::Workspace, "prod")
+            .unwrap()
+            .file
+            .hops
+            .len(),
+        2
+    );
+
+    // Invalid edits leave the file as it was.
+    let before = std::fs::read_to_string(&path).unwrap();
+    let mut broken = shorter.clone();
+    broken.hops[0].user = String::new();
+    assert!(update_tunnel(&config, Source::Workspace, "prod", &broken, &[], &backend).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
+#[test]
+fn tunnels_in_use_cannot_be_deleted() {
+    let fx = Fixture::new("tunnel-delete");
+    let path = fx.write("repo/.spelunk/tunnels/prod.toml", HAND_WRITTEN_TUNNEL);
+    fx.write(
+        "repo/.spelunk/connections/orders.toml",
+        "schema_version = 1\nname = \"Orders\"\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ntunnel = \"prod\"\n",
+    );
+    let backend = FakeBackend::default();
+    backend
+        .keychain_set("tunnel/prod/2/password", "old")
+        .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let err = delete_tunnel(&config, Source::Workspace, "prod", &backend).unwrap_err();
+    assert!(err.to_string().contains("Orders"), "{err}");
+    assert!(path.exists());
+
+    std::fs::remove_file(fx.repo().join(".spelunk/connections/orders.toml")).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    delete_tunnel(&config, Source::Workspace, "prod", &backend).unwrap();
+    assert!(!path.exists());
+    assert!(
+        !backend
+            .keychain
+            .lock()
+            .unwrap()
+            .contains_key("tunnel/prod/2/password")
+    );
+}
+
+#[test]
+fn shared_key_paths_work_on_every_machine() {
+    let fx = Fixture::new("tunnel-paths");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let home =
+        PathBuf::from(std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap());
+    let mut draft = two_hop_tunnel();
+    draft.hops[0].auth = vec![SshAuth::Key];
+    draft.hops[0].identity_file = home.join(".ssh").join("id_ed25519").display().to_string();
+    draft.hops[1].auth = vec![SshAuth::Key];
+    draft.hops[1].identity_file = fx.repo().join("keys").join("deploy").display().to_string();
+    let file = draft.to_file(&config).unwrap();
+    assert_eq!(
+        file.hops[0].identity_file.as_deref(),
+        Some("~/.ssh/id_ed25519")
+    );
+    assert_eq!(file.hops[1].identity_file.as_deref(), Some("keys/deploy"));
+    // Personal tunnels never leave this computer: paths are kept as typed.
+    let personal = TunnelDraft {
+        source: Source::User,
+        ..draft.clone()
+    };
+    assert_eq!(
+        personal.to_file(&config).unwrap().hops[0].identity_file,
+        Some(draft.hops[0].identity_file.clone())
+    );
 }

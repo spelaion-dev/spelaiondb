@@ -14,7 +14,9 @@ mod session;
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
 pub use history::{HistoryError, QueryHistory};
-pub use open::{Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection};
+pub use open::{
+    Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,
+};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{CoreEvent, Session, StatementError};

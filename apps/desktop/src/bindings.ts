@@ -36,6 +36,19 @@ export const commands = {
 	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password })),
 	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
 	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
+	/**  The form of an existing tunnel, to edit it. */
+	tunnelDraft: (name: string, personal: boolean) => typedError<TunnelDraftItem_Serialize, string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
+	/**
+	 *  Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
+	 *  password typed for hop `i`; stored ones are used when none is typed.
+	 */
+	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[]) => typedError<TunnelTestOutcome, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords })),
+	/**  Saves a new tunnel (and its `keychain` passwords) and reloads the configuration. */
+	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[]) => typedError<TunnelItem, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords })),
+	/**  Saves an edited tunnel (same file and name) and reloads the configuration. */
+	updateTunnel: (name: string, personal: boolean, draft: TunnelDraftItem_Deserialize, passwords: (string | null)[]) => typedError<null, string>(__TAURI_INVOKE("update_tunnel", { name, personal, draft, passwords })),
+	/**  Deletes a tunnel that no connection uses, with its stored passwords. */
+	deleteTunnel: (name: string, personal: boolean) => typedError<null, string>(__TAURI_INVOKE("delete_tunnel", { name, personal })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
@@ -234,6 +247,35 @@ export type HistoryItem_Serialize = {
 	cancelled: boolean,
 };
 
+/**  One hop of the tunnel editor. The password travels apart and never reaches the file. */
+export type HopDraftItem = HopDraftItem_Serialize | HopDraftItem_Deserialize;
+
+/**  One hop of the tunnel editor. The password travels apart and never reaches the file. */
+export type HopDraftItem_Deserialize = {
+	host: string,
+	port?: number | null,
+	user: string,
+	/**  Methods to try, in order. */
+	auth: SshAuthItem[],
+	identityFile: string,
+	passwordMode: PasswordMode,
+	passwordEnv: string,
+	passwordOther: string,
+};
+
+/**  One hop of the tunnel editor. The password travels apart and never reaches the file. */
+export type HopDraftItem_Serialize = {
+	host: string,
+	port: number | null,
+	user: string,
+	/**  Methods to try, in order. */
+	auth: SshAuthItem[],
+	identityFile: string,
+	passwordMode: PasswordMode,
+	passwordEnv: string,
+	passwordOther: string,
+};
+
 export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; port: number; algorithm: string; fingerprint: string } | { kind: "secret"; title: string; prompt: string; echo: boolean; label: SecretLabel };
 
 /**  Dialog the tunnel needs to show. The UI answers with `answer_interaction`. */
@@ -288,6 +330,8 @@ scriptOffset: number | null; cancelled: boolean } | { kind: "scriptFinished"; ex
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
 
+export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
+
 export type TableDetails = TableDetails_Serialize | TableDetails_Deserialize;
 
 export type TableDetails_Deserialize = {
@@ -306,11 +350,30 @@ export type TableDetails_Serialize = {
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 
+export type TunnelDraftItem = TunnelDraftItem_Serialize | TunnelDraftItem_Deserialize;
+
+export type TunnelDraftItem_Deserialize = {
+	personal: boolean,
+	name: string,
+	hops: HopDraftItem_Deserialize[],
+};
+
+export type TunnelDraftItem_Serialize = {
+	personal: boolean,
+	name: string,
+	hops: HopDraftItem_Serialize[],
+};
+
 /**  A tunnel that a new connection can use. */
 export type TunnelItem = {
 	name: string,
 	personal: boolean,
 };
+
+/**  Result of testing a tunnel from the editor. */
+export type TunnelTestOutcome = { kind: "connected" } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" };
 
 export type WorkspaceInfo = WorkspaceInfo_Serialize | WorkspaceInfo_Deserialize;
 

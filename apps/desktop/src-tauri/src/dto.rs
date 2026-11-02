@@ -522,3 +522,152 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SshAuthItem {
+    Agent,
+    Key,
+    Password,
+    KeyboardInteractive,
+}
+
+/// One hop of the tunnel editor. The password travels apart and never reaches the file.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HopDraftItem {
+    pub host: String,
+    pub port: Option<u16>,
+    pub user: String,
+    /// Methods to try, in order.
+    pub auth: Vec<SshAuthItem>,
+    pub identity_file: String,
+    pub password_mode: PasswordMode,
+    pub password_env: String,
+    pub password_other: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelDraftItem {
+    pub personal: bool,
+    pub name: String,
+    pub hops: Vec<HopDraftItem>,
+}
+
+/// Result of testing a tunnel from the editor.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TunnelTestOutcome {
+    Connected,
+    /// The repository is not trusted: ask before resolving anything.
+    Untrusted,
+}
+
+impl From<SshAuthItem> for spelunk_config::SshAuth {
+    fn from(item: SshAuthItem) -> Self {
+        match item {
+            SshAuthItem::Agent => Self::Agent,
+            SshAuthItem::Key => Self::Key,
+            SshAuthItem::Password => Self::Password,
+            SshAuthItem::KeyboardInteractive => Self::KeyboardInteractive,
+        }
+    }
+}
+
+impl From<spelunk_config::SshAuth> for SshAuthItem {
+    fn from(auth: spelunk_config::SshAuth) -> Self {
+        match auth {
+            spelunk_config::SshAuth::Agent => Self::Agent,
+            spelunk_config::SshAuth::Key => Self::Key,
+            spelunk_config::SshAuth::Password => Self::Password,
+            spelunk_config::SshAuth::KeyboardInteractive => Self::KeyboardInteractive,
+        }
+    }
+}
+
+fn password_choice(
+    mode: PasswordMode,
+    env: String,
+    other: String,
+) -> spelunk_config::PasswordChoice {
+    use spelunk_config::PasswordChoice;
+    match mode {
+        PasswordMode::None => PasswordChoice::None,
+        PasswordMode::Keychain => PasswordChoice::Keychain,
+        PasswordMode::Prompt => PasswordChoice::Prompt,
+        PasswordMode::Env => PasswordChoice::Env(env),
+        PasswordMode::Other => PasswordChoice::Other(other),
+    }
+}
+
+fn password_fields(choice: spelunk_config::PasswordChoice) -> (PasswordMode, String, String) {
+    use spelunk_config::PasswordChoice;
+    match choice {
+        PasswordChoice::None => (PasswordMode::None, String::new(), String::new()),
+        PasswordChoice::Keychain => (PasswordMode::Keychain, String::new(), String::new()),
+        PasswordChoice::Prompt => (PasswordMode::Prompt, String::new(), String::new()),
+        PasswordChoice::Env(var) => (PasswordMode::Env, var, String::new()),
+        PasswordChoice::Other(reference) => (PasswordMode::Other, String::new(), reference),
+    }
+}
+
+impl From<TunnelDraftItem> for spelunk_config::TunnelDraft {
+    fn from(item: TunnelDraftItem) -> Self {
+        use spelunk_config::{HopDraft, Source};
+        Self {
+            source: if item.personal {
+                Source::User
+            } else {
+                Source::Workspace
+            },
+            name: item.name,
+            hops: item
+                .hops
+                .into_iter()
+                .map(|hop| HopDraft {
+                    host: hop.host,
+                    port: hop.port,
+                    user: hop.user,
+                    auth: hop.auth.into_iter().map(Into::into).collect(),
+                    identity_file: hop.identity_file,
+                    password: password_choice(
+                        hop.password_mode,
+                        hop.password_env,
+                        hop.password_other,
+                    ),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<spelunk_config::TunnelDraft> for TunnelDraftItem {
+    fn from(draft: spelunk_config::TunnelDraft) -> Self {
+        Self {
+            personal: match draft.source {
+                spelunk_config::Source::User => true,
+                spelunk_config::Source::Workspace => false,
+            },
+            name: draft.name,
+            hops: draft
+                .hops
+                .into_iter()
+                .map(|hop| {
+                    let (password_mode, password_env, password_other) =
+                        password_fields(hop.password);
+                    HopDraftItem {
+                        host: hop.host,
+                        port: hop.port,
+                        user: hop.user,
+                        auth: hop.auth.into_iter().map(Into::into).collect(),
+                        identity_file: hop.identity_file,
+                        password_mode,
+                        password_env,
+                        password_other,
+                    }
+                })
+                .collect(),
+        }
+    }
+}

@@ -8,10 +8,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use spelunk_config::{ConnectionId, Resolver, Source, SystemBackend, TrustStore, load};
+use spelunk_config::{
+    ConnectionId, HopDraft, PasswordChoice, Resolver, Source, SshAuth, SystemBackend, TrustStore,
+    TunnelDraft, load,
+};
 use spelunk_core::{
     CoreEvent, Engines, OpenConnection, OpenError, OpenOptions, ResultStore, TunnelPool,
-    open_connection,
+    open_connection, test_tunnel,
 };
 use spelunk_driver_api::{Secret, Value};
 use spelunk_ssh::{HostInfo, Interaction, KnownHosts, NonInteractive, SecretRequest, TunnelState};
@@ -308,4 +311,58 @@ async fn connections_share_one_tunnel() {
     tab2.close().await;
     assert!(matches!(&*state.borrow(), TunnelState::Down { .. }));
     assert_eq!(ws.tunnels.active().await, 0);
+}
+
+/// A tunnel typed in the editor (not saved) is tested by opening and closing its hops. A
+/// wrong user fails at the hop that rejects it, and nothing is written to disk.
+#[tokio::test]
+async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
+    let Ok(addr) = std::env::var("SPELUNK_TEST_SSH") else {
+        eprintln!("SPELUNK_TEST_SSH not set: test skipped");
+        return;
+    };
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let ws = Workspace::new("tunnel-draft");
+    let config = load(Some(&ws.base.join("repo")), &ws.base.join("user"));
+    let trust = TrustStore::load(&ws.base.join("user")).unwrap();
+    let identity = keys().join("id_ed25519").display().to_string();
+    let hop = |host: &str, port: Option<u16>, user: &str| HopDraft {
+        host: host.into(),
+        port,
+        user: user.into(),
+        auth: vec![SshAuth::Key],
+        identity_file: identity.clone(),
+        password: PasswordChoice::None,
+    };
+    let mut draft = TunnelDraft {
+        source: Source::Workspace,
+        name: "Bastions".into(),
+        hops: vec![
+            hop(host, Some(port.parse().unwrap()), "spelunk"),
+            hop("bastion2", None, "spelunk"),
+        ],
+    };
+    let known_hosts = KnownHosts {
+        user_file: None,
+        app_file: ws.base.join("user/known_hosts"),
+    };
+    let resolved = Resolver::new(&config, &trust, &SystemBackend)
+        .resolve_tunnel_draft(&draft)
+        .unwrap();
+    test_tunnel(&resolved, vec![], &known_hosts, Arc::new(AcceptHosts))
+        .await
+        .unwrap();
+
+    draft.hops[1].user = "nobody".into();
+    let resolved = Resolver::new(&config, &trust, &SystemBackend)
+        .resolve_tunnel_draft(&draft)
+        .unwrap();
+    match test_tunnel(&resolved, vec![], &known_hosts, Arc::new(AcceptHosts)).await {
+        Err(spelunk_ssh::SshError::Auth { hop: 1, .. }) => {}
+        other => panic!("expected an authentication error at hop 2: {other:?}"),
+    }
+    assert!(
+        !ws.base.join("repo/.spelunk/tunnels").exists(),
+        "testing writes nothing"
+    );
 }

@@ -10,6 +10,9 @@ import {
   type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
   type EngineItem_Serialize,
+  type HopDraftItem_Deserialize,
+  type SshAuthItem,
+  type TunnelDraftItem_Deserialize,
   type ConnectOutcome,
   type InteractionKind,
   type HistoryItem_Serialize,
@@ -24,7 +27,9 @@ import {
 } from "./bindings";
 
 export { commands, events };
-export type { ColumnItem, ConnectOutcome, InteractionKind, PasswordMode, SchemaItem, TlsModeItem, TunnelItem };
+export type { ColumnItem, ConnectOutcome, InteractionKind, PasswordMode, SchemaItem, SshAuthItem, TlsModeItem, TunnelItem };
+export type HopDraft = HopDraftItem_Deserialize;
+export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;

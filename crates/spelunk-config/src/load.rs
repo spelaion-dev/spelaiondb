@@ -282,7 +282,7 @@ pub(crate) fn validate_connection(
     Ok(file)
 }
 
-fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFile, ConfigError> {
+pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFile, ConfigError> {
     check_version(path, file.schema_version)?;
     if file.hops.is_empty() {
         return Err(ConfigError::new(

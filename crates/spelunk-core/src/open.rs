@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use spelunk_config::{Engine, Password, ResolvedConnection, ResolvedHop, SshAuth};
+use spelunk_config::{Engine, Password, ResolvedConnection, ResolvedHop, ResolvedTunnel, SshAuth};
 use spelunk_driver_api::{Driver, DriverError, Secret};
 use spelunk_driver_postgres::PostgresDriver;
 use spelunk_driver_sqlite::SqliteDriver;
@@ -186,6 +186,35 @@ pub async fn open_connection(
         resolved,
         tunnel,
     })
+}
+
+/// Opens a tunnel and closes it again, to check it from the UI before saving. A typed
+/// `passwords[i]` is used for hop `i` when its password would otherwise be asked; unknown
+/// hosts and other questions go through `interaction` as usual. Nothing is reused or kept.
+pub async fn test_tunnel(
+    tunnel: &ResolvedTunnel,
+    passwords: Vec<Option<Secret>>,
+    known_hosts: &KnownHosts,
+    interaction: Arc<dyn Interaction>,
+) -> Result<(), SshError> {
+    let mut typed = passwords.into_iter();
+    let spec = TunnelSpec {
+        hops: tunnel
+            .hops
+            .iter()
+            .map(|hop| {
+                let mut spec = hop_spec(hop);
+                let typed = typed.next().flatten();
+                if spec.password.is_none() {
+                    spec.password = typed;
+                }
+                spec
+            })
+            .collect(),
+    };
+    let opened = Tunnel::connect(&spec, known_hosts, interaction).await?;
+    opened.close().await;
+    Ok(())
 }
 
 fn hop_spec(hop: &ResolvedHop) -> HopSpec {

@@ -31,8 +31,13 @@ as *coming soon*), fill in its form, **Test connection** and **Save**.
   repository, shared through git; *Personal* keeps it in your personal directory.
 - **Password:** saved in the system keychain, asked every time, or read from an environment
   variable. It is never written to the connection file.
-- **SSH:** choose one of the tunnels already defined in `.spelunk/tunnels/` (or your personal
-  folder).
+- **SSH:** choose a tunnel, or create and edit one with **New tunnel…** / **Edit tunnel…**:
+  the hops in order (the last one reaches the database), each with its host, user and
+  authentication (SSH agent, including Pageant, a private key file, a password or
+  keyboard-interactive 2FA). **Test tunnel** opens every hop. Hop passwords go to the
+  keychain or are asked when connecting; key paths in project tunnels are stored relative
+  to the repository or as `~/…`, so they work for the whole team. A tunnel in use by a
+  connection cannot be deleted.
 
 Testing a connection writes nothing. Saving never overwrites an existing connection.
 

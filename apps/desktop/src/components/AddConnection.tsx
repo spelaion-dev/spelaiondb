@@ -16,6 +16,7 @@ import {
 } from "../api";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { refreshConnections } from "./Sidebar";
+import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -228,15 +229,20 @@ function ConnectionForm(props: {
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
 
+  const [tunnelEditor, setTunnelEditor] = useState<TunnelEditorMode | null>(null);
+  async function loadTunnels(select?: string) {
+    try {
+      const list = await call(commands.listTunnels());
+      setTunnels(list);
+      setTunnel((current) => select ?? (list.some((item) => item.name === current) ? current : (list[0]?.name ?? "")));
+    } catch {
+      setTunnels([]);
+    }
+  }
   useEffect(() => {
-    if (!network) return;
-    void call(commands.listTunnels())
-      .then((list) => {
-        setTunnels(list);
-        setTunnel((current) => current || (list[0]?.name ?? ""));
-      })
-      .catch(() => setTunnels([]));
+    if (network) void loadTunnels();
   }, [network]);
+  const selectedTunnel = tunnels.find((item) => item.name === tunnel);
 
   const changed = () => {
     setTest({ kind: "idle" });
@@ -315,6 +321,7 @@ function ConnectionForm(props: {
 
   const tabs: FormTab[] = network ? ["main", "ssl", "ssh", "options"] : ["main", "options"];
   return (
+    <>
     <form
       className="connection-form"
       noValidate
@@ -466,16 +473,24 @@ function ConnectionForm(props: {
                 <input type="checkbox" checked={useTunnel} disabled={tunnels.length === 0} onChange={(e) => { setUseTunnel(e.target.checked); changed(); }} />
                 {t("fields.useTunnel")}
               </label>
-              <Field label={t("fields.tunnel")}>
-                <select aria-label={t("fields.tunnel")} value={tunnel} disabled={!useTunnel} onChange={(e) => { setTunnel(e.target.value); changed(); }}>
-                  {tunnels.map((item) => (
-                    <option key={`${item.personal}:${item.name}`} value={item.name}>
-                      {item.name}
-                      {item.personal ? ` (${t("fields.personal")})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              <div className="form-pair">
+                <Field label={t("fields.tunnel")} className="grow">
+                  <select aria-label={t("fields.tunnel")} value={tunnel} disabled={!useTunnel} onChange={(e) => { setTunnel(e.target.value); changed(); }}>
+                    {tunnels.map((item) => (
+                      <option key={`${item.personal}:${item.name}`} value={item.name}>
+                        {item.name}
+                        {item.personal ? ` (${t("fields.personal")})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <button type="button" disabled={!useTunnel || !selectedTunnel} onClick={() => selectedTunnel && setTunnelEditor({ kind: "edit", name: selectedTunnel.name, personal: selectedTunnel.personal })}>
+                  {t("tunnel.editButton")}
+                </button>
+                <button type="button" onClick={() => setTunnelEditor({ kind: "add", personal: draft.personal })}>
+                  {t("tunnel.newButton")}
+                </button>
+              </div>
               <p className="muted small">{tunnels.length === 0 ? t("fields.noTunnelsHint") : t("fields.tunnelHint")}</p>
             </fieldset>
           </div>
@@ -550,5 +565,24 @@ function ConnectionForm(props: {
         </button>
       </div>
     </form>
+    {tunnelEditor && (
+      <TunnelEditor
+        mode={tunnelEditor}
+        onClose={() => setTunnelEditor(null)}
+        onSaved={(saved) => {
+          setTunnelEditor(null);
+          setUseTunnel(true);
+          changed();
+          void loadTunnels(saved.name);
+        }}
+        onDeleted={() => {
+          setTunnelEditor(null);
+          setUseTunnel(false);
+          changed();
+          void loadTunnels();
+        }}
+      />
+    )}
+    </>
   );
 }

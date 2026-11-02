@@ -449,6 +449,130 @@ async fn delete_connection(connection: String, state: State<'_, AppState>) -> Cm
     Ok(())
 }
 
+fn source_of(personal: bool) -> Source {
+    if personal {
+        Source::User
+    } else {
+        Source::Workspace
+    }
+}
+
+fn secrets(passwords: Vec<Option<String>>) -> Vec<Option<Secret>> {
+    passwords
+        .into_iter()
+        .map(|p| p.filter(|p| !p.is_empty()).map(Secret::new))
+        .collect()
+}
+
+/// The form of an existing tunnel, to edit it.
+#[tauri::command]
+#[specta::specta]
+async fn tunnel_draft(
+    name: String,
+    personal: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<TunnelDraftItem> {
+    let config = state.config.read().await;
+    let entry = config
+        .tunnels
+        .iter()
+        .find(|t| t.source == source_of(personal) && t.name == name)
+        .ok_or_else(|| format!("tunnel {name} does not exist"))?;
+    Ok(spelunk_config::TunnelDraft::from_entry(entry).into())
+}
+
+/// Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
+/// password typed for hop `i`; stored ones are used when none is typed.
+#[tauri::command]
+#[specta::specta]
+async fn test_tunnel(
+    draft: TunnelDraftItem,
+    passwords: Vec<Option<String>>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<TunnelTestOutcome> {
+    let draft = spelunk_config::TunnelDraft::from(draft);
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let resolved = {
+        let config = state.config.read().await;
+        match Resolver::new(&config, &trust, &SystemBackend).resolve_tunnel_draft(&draft) {
+            Ok(resolved) => resolved,
+            Err(spelunk_config::ResolveError::Untrusted { .. }) => {
+                return Ok(TunnelTestOutcome::Untrusted);
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    spelunk_core::test_tunnel(
+        &resolved,
+        secrets(passwords),
+        &KnownHosts::for_user(&state.user_dir),
+        Arc::new(AppInteraction::new(app, state.pending.clone())),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(TunnelTestOutcome::Connected)
+}
+
+/// Saves a new tunnel (and its `keychain` passwords) and reloads the configuration.
+#[tauri::command]
+#[specta::specta]
+async fn add_tunnel(
+    draft: TunnelDraftItem,
+    passwords: Vec<Option<String>>,
+    state: State<'_, AppState>,
+) -> CmdResult<TunnelItem> {
+    let personal = draft.personal;
+    let draft = spelunk_config::TunnelDraft::from(draft);
+    let name = {
+        let config = state.config.read().await;
+        spelunk_config::add_tunnel(&config, &draft, &secrets(passwords), &SystemBackend)
+            .map_err(|e| e.to_string())?
+    };
+    state.reload().await;
+    Ok(TunnelItem { name, personal })
+}
+
+/// Saves an edited tunnel (same file and name) and reloads the configuration.
+#[tauri::command]
+#[specta::specta]
+async fn update_tunnel(
+    name: String,
+    personal: bool,
+    draft: TunnelDraftItem,
+    passwords: Vec<Option<String>>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let draft = spelunk_config::TunnelDraft::from(draft);
+    {
+        let config = state.config.read().await;
+        spelunk_config::update_tunnel(
+            &config,
+            source_of(personal),
+            &name,
+            &draft,
+            &secrets(passwords),
+            &SystemBackend,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    state.reload().await;
+    Ok(())
+}
+
+/// Deletes a tunnel that no connection uses, with its stored passwords.
+#[tauri::command]
+#[specta::specta]
+async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>) -> CmdResult<()> {
+    {
+        let config = state.config.read().await;
+        spelunk_config::delete_tunnel(&config, source_of(personal), &name, &SystemBackend)
+            .map_err(|e| e.to_string())?;
+    }
+    state.reload().await;
+    Ok(())
+}
+
 /// Opens a session (`session` is chosen by the UI). If a password is needed, it says so
 /// instead of failing, so the UI can ask for it.
 #[tauri::command]
@@ -743,6 +867,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connection_draft,
             update_connection,
             delete_connection,
+            tunnel_draft,
+            test_tunnel,
+            add_tunnel,
+            update_tunnel,
+            delete_tunnel,
             open_workspace,
             trust_workspace,
             list_connections,

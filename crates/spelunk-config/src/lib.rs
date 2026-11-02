@@ -17,6 +17,7 @@ mod model;
 mod resolve;
 mod secrets;
 mod trust;
+mod tunnel_draft;
 mod vars;
 
 pub use draft::{
@@ -36,6 +37,9 @@ pub use model::{
 pub use resolve::{Password, ResolvedConnection, ResolvedHop, ResolvedTunnel, Resolver};
 pub use secrets::{KEYCHAIN_SERVICE, SecretBackend, SecretRef, SystemBackend};
 pub use trust::TrustStore;
+pub use tunnel_draft::{
+    HopDraft, TUNNEL_SCHEMA_URL, TunnelDraft, add_tunnel, delete_tunnel, tunnels_dir, update_tunnel,
+};
 
 /// JSON Schema of each file type, for validation and autocompletion in the editor.
 /// They are stored in `schema/` and a test checks they are up to date.

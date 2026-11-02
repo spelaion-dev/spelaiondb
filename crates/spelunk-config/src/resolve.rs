@@ -8,9 +8,10 @@ use spelunk_driver_api::{ConnectParams, Secret, TlsMode};
 use crate::draft::ConnectionDraft;
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, ConnectionEntry, ConnectionId, Source};
-use crate::model::{Engine, McpConfig, SecretSpec, SshAuth, TlsModeConfig};
+use crate::model::{Engine, McpConfig, SecretSpec, SshAuth, TlsModeConfig, TunnelFile};
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::trust::TrustStore;
+use crate::tunnel_draft::{TunnelDraft, hop_account};
 use crate::vars::{expand, resolve_path};
 
 /// State of a password after resolving.
@@ -125,7 +126,10 @@ impl<'a> Resolver<'a> {
         let base = self.base_dir(entry.id.source)?;
         let file = &entry.file;
         let text = |value: &Option<String>| -> Result<Option<String>, ResolveError> {
-            value.as_deref().map(|v| self.expand(entry, v)).transpose()
+            value
+                .as_deref()
+                .map(|v| self.expand(&entry.file_path, v))
+                .transpose()
         };
 
         let database = text(&file.database)?.unwrap_or_default();
@@ -153,7 +157,7 @@ impl<'a> Resolver<'a> {
             connect_addr: None,
         };
         let password = self.password(
-            entry,
+            &entry.file_path,
             file.password.as_ref(),
             &format!("{}/password", entry.id),
         )?;
@@ -170,30 +174,7 @@ impl<'a> Resolver<'a> {
                             format!("tunnel {name:?} does not exist in .spelunk/tunnels/"),
                         )
                     })?;
-                let mut hops = Vec::with_capacity(tunnel.file.hops.len());
-                for (i, hop) in tunnel.file.hops.iter().enumerate() {
-                    hops.push(ResolvedHop {
-                        host: self.expand(entry, &hop.host)?,
-                        port: hop.port.unwrap_or(22),
-                        user: self.expand(entry, &hop.user)?,
-                        auth: hop.auth.clone(),
-                        identity_file: hop
-                            .identity_file
-                            .as_deref()
-                            .map(|f| self.expand(entry, f).map(|f| resolve_path(&f, &base)))
-                            .transpose()?,
-                        password: self.password(
-                            entry,
-                            hop.password.as_ref(),
-                            &format!("tunnel/{name}/{}/password", i + 1),
-                        )?,
-                        command: hop.command.clone(),
-                    });
-                }
-                Some(ResolvedTunnel {
-                    name: name.clone(),
-                    hops,
-                })
+                Some(self.resolve_tunnel(name, &tunnel.file, &base, &entry.file_path)?)
             }
         };
 
@@ -237,16 +218,60 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn expand(&self, entry: &ConnectionEntry, value: &str) -> Result<String, ResolveError> {
+    /// Resolves a tunnel that has not been saved yet (to test it from the UI). Repository
+    /// tunnels require trusting the repository, like their connections.
+    pub fn resolve_tunnel_draft(
+        &self,
+        draft: &TunnelDraft,
+    ) -> Result<ResolvedTunnel, ResolveError> {
+        let base = self.base_dir(draft.source)?;
+        let path = draft.path(self.config)?;
+        let file = draft.to_file(self.config)?;
+        self.resolve_tunnel(&draft.file_name()?, &file, &base, &path)
+    }
+
+    /// Hops ready to open: variables substituted, key paths resolved against `base` and
+    /// passwords read (keychain entries `tunnel/<name>/<hop>/password`).
+    fn resolve_tunnel(
+        &self,
+        name: &str,
+        file: &TunnelFile,
+        base: &Path,
+        errors_at: &Path,
+    ) -> Result<ResolvedTunnel, ResolveError> {
+        let mut hops = Vec::with_capacity(file.hops.len());
+        for (i, hop) in file.hops.iter().enumerate() {
+            hops.push(ResolvedHop {
+                host: self.expand(errors_at, &hop.host)?,
+                port: hop.port.unwrap_or(22),
+                user: self.expand(errors_at, &hop.user)?,
+                auth: hop.auth.clone(),
+                identity_file: hop
+                    .identity_file
+                    .as_deref()
+                    .map(|f| self.expand(errors_at, f).map(|f| resolve_path(&f, base)))
+                    .transpose()?,
+                password: self.password(errors_at, hop.password.as_ref(), &hop_account(name, i))?,
+                command: hop.command.clone(),
+            });
+        }
+        Ok(ResolvedTunnel {
+            name: name.to_string(),
+            hops,
+        })
+    }
+
+    /// Substitutes variables; errors point at `file`.
+    fn expand(&self, file: &Path, value: &str) -> Result<String, ResolveError> {
         expand(value, &self.config.user.vars, &|name| {
             self.backend.env(name)
         })
-        .map_err(|message| ConfigError::new(&entry.file_path, message).into())
+        .map_err(|message| ConfigError::new(file, message).into())
     }
 
     fn password(
         &self,
-        entry: &ConnectionEntry,
+        file: &Path,
         spec: Option<&SecretSpec>,
         default_account: &str,
     ) -> Result<Password, ResolveError> {
@@ -256,7 +281,7 @@ impl<'a> Resolver<'a> {
         let reference: SecretRef = spec
             .secret
             .parse()
-            .map_err(|message: String| ConfigError::new(&entry.file_path, message))?;
+            .map_err(|message: String| ConfigError::new(file, message))?;
         let fail = |message: String| ResolveError::Secret {
             reference: reference.to_string(),
             message,

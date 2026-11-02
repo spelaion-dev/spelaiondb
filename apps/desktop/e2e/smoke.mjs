@@ -419,6 +419,77 @@ try {
   assert.match(edited, /name = "Docker PG \(edited\)"/);
   assert.doesNotMatch(edited, /\[tls\]|spelunk"\s*\n\s*password = "/);
 
+  step("SSH tunnel editor: two hops with keys, tested, used by a new connection");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard").first();
+  await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("PG through wizard tunnel");
+  await wizard.getByLabel("Host", { exact: true }).fill("postgres");
+  await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
+  await wizard.getByLabel("User", { exact: true }).fill("spelunk");
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("tab", { name: "SSH" }).click();
+  await wizard.getByRole("button", { name: "New tunnel…" }).click();
+  const editor = page.getByRole("dialog", { name: "New SSH tunnel" });
+  const key = join(root, "testing", "docker", "keys", "id_ed25519");
+  await editor.getByLabel("Tunnel name").fill("Wizard bastions");
+  await editor.getByRole("radio", { name: "Personal", exact: true }).check();
+  await editor.getByLabel("Hop 1 Host").fill("127.0.0.1");
+  await editor.getByLabel("Hop 1 Port").fill("2221");
+  await editor.getByLabel("Hop 1 User").fill("spelunk");
+  await editor.getByLabel("Hop 1 Authentication").selectOption("key");
+  await editor.getByLabel("Hop 1 Private key file").fill(key);
+  await editor.getByRole("button", { name: "+ Add hop" }).click();
+  await editor.getByLabel("Hop 2 Host").fill("bastion2");
+  await editor.getByLabel("Hop 2 User").fill("spelunk");
+  await editor.getByLabel("Hop 2 Authentication").selectOption("key");
+  await editor.getByLabel("Hop 2 Private key file").fill(key);
+  await editor.getByRole("button", { name: "Test tunnel" }).click();
+  // The bastions' fingerprints may already be known from the earlier step; accept any new one.
+  await Promise.race([
+    editor.locator(".test-result", { hasText: "Tunnel OK · 2 hops" }).waitFor(),
+    (async () => {
+      for (let i = 0; i < 2; i++) {
+        await page.getByRole("button", { name: "Trust and remember" }).click({ timeout: 10_000 }).catch(() => {});
+      }
+      await editor.locator(".test-result", { hasText: "Tunnel OK · 2 hops" }).waitFor();
+    })(),
+  ]);
+  await shot("14a-tunnel-editor");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await editor.waitFor({ state: "detached" });
+  assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), true);
+  assert.equal(await wizard.getByLabel("SSH tunnel", { exact: true }).inputValue(), "wizard-bastions");
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "PG through wizard tunnel" }).waitFor();
+  const tunnelFile = readFileSync(join(userDir, "tunnels", "wizard-bastions.toml"), "utf8");
+  assert.equal(tunnelFile.match(/\[\[hops\]\]/g)?.length, 2, tunnelFile);
+  assert.match(tunnelFile, /port = 2221/);
+  assert.doesNotMatch(tunnelFile, /password/);
+
+  // While a connection uses it, the tunnel cannot be deleted.
+  await (await connectionMenu("PG through wizard tunnel")).getByRole("button", { name: "Edit…" }).click();
+  wizard = page.locator(".modal.wizard").first();
+  await wizard.getByRole("tab", { name: "SSH" }).click();
+  await wizard.getByRole("button", { name: "Edit tunnel…" }).click();
+  const editTunnel = page.getByRole("dialog", { name: "Edit tunnel wizard-bastions" });
+  assert.ok(await editTunnel.getByLabel("Tunnel name").isDisabled());
+  assert.equal(await editTunnel.getByLabel("Hop 2 Host").inputValue(), "bastion2");
+  await editTunnel.getByRole("button", { name: "Delete tunnel" }).click();
+  await editTunnel.getByRole("button", { name: "Click again to delete" }).click();
+  await editTunnel.locator(".test-result", { hasText: "PG through wizard tunnel" }).waitFor();
+  await editTunnel.getByRole("button", { name: "Cancel" }).click();
+  await editTunnel.waitFor({ state: "detached" });
+  await wizard.getByRole("button", { name: "Cancel" }).click();
+  await wizard.waitFor({ state: "detached" });
+  assert.ok(existsSync(join(userDir, "tunnels", "wizard-bastions.toml")));
+
   step("delete a connection: confirmation, its tab is left without a connection");
   await (await connectionMenu("Shop copy")).getByRole("button", { name: "Delete…" }).click();
   const confirm = page.getByRole("dialog", { name: "Delete connection?" });

@@ -16,6 +16,7 @@ use crate::model::{
     ConnectionFile, Engine, McpConfig, SCHEMA_VERSION, SecretSpec, TlsConfig, TlsModeConfig,
 };
 use crate::secrets::{SecretBackend, SecretRef};
+use crate::vars::home_dir;
 
 /// Where the password of a new connection comes from. It is never written to the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,20 +114,33 @@ pub fn connections_dir(config: &Config, source: Source) -> Result<PathBuf, Confi
     }
 }
 
-/// A path inside the repository is stored relative to its root (with `/`), so the same file
-/// works on every machine; anything else is kept as typed.
-fn portable_path(path: &str, root: Option<&Path>) -> String {
+/// Paths shared through git must work on every machine: a path inside the repository is
+/// stored relative to its root and one inside the home directory as `~/…` (both with `/`).
+/// Anything else, and every personal path (`root` is `None`), is kept as typed.
+pub(crate) fn portable_path(path: &str, root: Option<&Path>) -> String {
     let Some(root) = root else {
         return path.to_string();
     };
-    match Path::new(path).strip_prefix(root) {
-        Ok(relative) if Path::new(path).is_absolute() => relative
+    let absolute = Path::new(path);
+    if !absolute.is_absolute() {
+        return path.to_string();
+    }
+    let joined = |relative: &Path| {
+        relative
             .components()
             .map(|c| c.as_os_str().to_string_lossy())
             .collect::<Vec<_>>()
-            .join("/"),
-        _ => path.to_string(),
+            .join("/")
+    };
+    if let Ok(relative) = absolute.strip_prefix(root) {
+        return joined(relative);
     }
+    if let Some(home) = home_dir()
+        && let Ok(relative) = absolute.strip_prefix(&home)
+    {
+        return format!("~/{}", joined(relative));
+    }
+    path.to_string()
 }
 
 impl ConnectionDraft {

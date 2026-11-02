@@ -275,3 +275,10 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 .test-result { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .test-result .ok { color: #2f9e44; }
 .sidebar .empty button { margin-top: 8px; }
+
+/* ---------------------------------------------------------------- tunnel editor */
+.modal.wizard.tunnel-editor { width: min(720px, 92vw); height: min(620px, 86vh); }
+.connection-form fieldset.hop { position: relative; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 12px; margin-top: 14px; }
+.connection-form fieldset.hop legend { padding: 0 4px; }
+.hop-actions { position: absolute; top: -12px; right: 10px; display: flex; gap: 2px; background: var(--panel); padding: 0 4px; }
+.add-hop { margin-top: 12px; }

@@ -43,7 +43,7 @@
     "tlsCaPlaceholder": "Vacío: los certificados de confianza del sistema",
     "tunnel": "Túnel SSH",
     "noTunnel": "Ninguno",
-    "noTunnelsHint": "Los túneles se definen en .spelunk/tunnels/ o en tu carpeta personal.",
+    "noTunnelsHint": "Todavía no hay túneles: crea uno con «Nuevo túnel…».",
     "file": "Fichero",
     "fileHint": "El fichero tiene que existir; dentro del repositorio la ruta se guarda relativa a él.",
     "readOnly": "Solo lectura",
@@ -105,5 +105,46 @@
   "deleteExplanation": "Se eliminará <strong>{{name}}</strong>: se borra su fichero <code>{{file}}</code> y, si tenía una guardada, su contraseña del llavero del sistema.",
   "deleteProjectHint": "Es una conexión del proyecto, compartida por git: tu equipo también la perderá cuando hagas commit del cambio.",
   "deletePersonalHint": "Es una conexión personal: solo afecta a este equipo.",
-  "deleteBusy": "Hay una consulta ejecutándose o conectando con ella. Detenla primero."
+  "deleteBusy": "Hay una consulta ejecutándose o conectando con ella. Detenla primero.",
+  "tunnel": {
+    "newButton": "Nuevo túnel…",
+    "editButton": "Editar túnel…",
+    "newTitle": "Nuevo túnel SSH",
+    "editTitle": "Editar el túnel {{name}}",
+    "name": "Nombre del túnel",
+    "nameHint": "Las conexiones se refieren al túnel por este nombre.",
+    "fixedHint": "Al editarlo, el túnel conserva su nombre y ubicación: las conexiones se refieren a él.",
+    "hop": "Salto {{number}}",
+    "first": "desde este equipo",
+    "middle": "intermedio",
+    "last": "llega a la base de datos",
+    "moveUp": "Subir {{hop}}",
+    "moveDown": "Bajar {{hop}}",
+    "removeHop": "Quitar {{hop}}",
+    "method": "Autenticación",
+    "methods": {
+      "agent": "Agente SSH (Pageant / agente de OpenSSH)",
+      "key": "Fichero de clave privada",
+      "password": "Contraseña",
+      "keyboard-interactive": "Teclado interactivo (códigos 2FA)",
+      "custom": "Varios métodos del fichero: {{methods}}"
+    },
+    "agentKey": "Solo esta clave del agente (opcional)",
+    "agentKeyPlaceholder": "Vacío: todas las claves cargadas en el agente",
+    "keyFile": "Fichero de clave privada",
+    "keyFilePlaceholder": "Vacío: ~/.ssh/id_ed25519, id_ecdsa, id_rsa",
+    "methodHints": {
+      "agent": "Usa las claves cargadas en tu agente SSH; elige una si el servidor limita los intentos de autenticación.",
+      "key": "Si la clave tiene passphrase, se pregunta al conectar.",
+      "password": "Se escribe una vez para guardarla en el llavero, o se pregunta cada vez.",
+      "keyboard-interactive": "Para servidores que hacen preguntas, como un código 2FA: se preguntan al conectar.",
+      "custom": "Estos métodos se prueban en orden y se conservan tal como están en el fichero."
+    },
+    "addHop": "+ Añadir salto",
+    "test": "Probar túnel",
+    "ok_one": "Túnel correcto · {{count}} salto",
+    "ok_other": "Túnel correcto · {{count}} saltos",
+    "delete": "Borrar túnel",
+    "confirmDelete": "Pulsa otra vez para borrar"
+  }
 }
