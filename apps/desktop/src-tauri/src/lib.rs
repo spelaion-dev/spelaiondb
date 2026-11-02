@@ -18,10 +18,10 @@ use spelunk_config::{
     default_user_dir, load,
 };
 use spelunk_core::{
-    Engines, OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore,
-    TunnelPool, open_connection,
+    Engines, ExportFormat, ExportOptions, GenericDialect, OpenConnection, OpenError, OpenOptions,
+    QueryHistory, ResultId, ResultStore, TunnelPool, open_connection, write_result,
 };
-use spelunk_driver_api::{DriverError, Secret, Value};
+use spelunk_driver_api::{Dialect, DriverError, Secret, Value};
 use spelunk_ssh::KnownHosts;
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State};
@@ -718,6 +718,66 @@ async fn cancel(session: String, state: State<'_, AppState>) -> CmdResult<()> {
     open.session.cancel().await.map_err(|e| e.to_string())
 }
 
+/// Most rows copied to the clipboard at once; bigger selections are exported to a file.
+const MAX_COPY_ROWS: u32 = 100_000;
+
+/// Name used in `INSERT` statements when the source table is unknown.
+const INSERT_TABLE: &str = "table_name";
+
+fn export_format(format: TextFormat) -> ExportFormat {
+    match format {
+        TextFormat::Tsv => ExportFormat::Tsv,
+        TextFormat::Csv => ExportFormat::Csv,
+        TextFormat::Json => ExportFormat::Json,
+        TextFormat::SqlInsert => ExportFormat::SqlInsert {
+            table: INSERT_TABLE.into(),
+        },
+    }
+}
+
+/// The dialect of the session that produced a result, for SQL literals and quoting.
+async fn dialect_for(state: &AppState, session: &str) -> Arc<dyn Dialect> {
+    match state.sessions.lock().await.get(session) {
+        Some(open) => open.open.session.dialect().clone(),
+        None => Arc::new(GenericDialect),
+    }
+}
+
+/// A selection of a result as text (TSV, CSV, JSON or INSERT), formatted by the core from
+/// the typed data, for the clipboard.
+#[tauri::command]
+#[specta::specta]
+async fn copy_rows(
+    result: u32,
+    session: String,
+    range: CellRange,
+    format: TextFormat,
+    header: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    if range.rows > MAX_COPY_ROWS {
+        return Err(format!(
+            "{} rows are too many to copy (at most {MAX_COPY_ROWS}): export them to a file",
+            range.rows
+        ));
+    }
+    let dialect = dialect_for(&state, &session).await;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let options = ExportOptions {
+        format: export_format(format),
+        rows: range.first_row as usize..(range.first_row + range.rows) as usize,
+        columns: range.first_column as usize..(range.first_column + range.columns) as usize,
+        header,
+    };
+    let mut out = Vec::new();
+    write_result(&stored, &options, dialect.as_ref(), &mut out).map_err(|e| e.to_string())?;
+    String::from_utf8(out).map_err(|e| e.to_string())
+}
+
 /// Frees a result the UI no longer shows.
 #[tauri::command]
 #[specta::specta]
@@ -872,6 +932,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             add_tunnel,
             update_tunnel,
             delete_tunnel,
+            copy_rows,
             open_workspace,
             trust_workspace,
             list_connections,

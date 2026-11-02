@@ -49,6 +49,11 @@ export const commands = {
 	updateTunnel: (name: string, personal: boolean, draft: TunnelDraftItem_Deserialize, passwords: (string | null)[]) => typedError<null, string>(__TAURI_INVOKE("update_tunnel", { name, personal, draft, passwords })),
 	/**  Deletes a tunnel that no connection uses, with its stored passwords. */
 	deleteTunnel: (name: string, personal: boolean) => typedError<null, string>(__TAURI_INVOKE("delete_tunnel", { name, personal })),
+	/**
+	 *  A selection of a result as text (TSV, CSV, JSON or INSERT), formatted by the core from
+	 *  the typed data, for the clipboard.
+	 */
+	copyRows: (result: number, session: string, range: CellRange, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
@@ -79,6 +84,14 @@ export const events = {
 };
 
 /* Types */
+/**  A rectangle of a result: rows and columns by position. */
+export type CellRange = {
+	firstRow: number,
+	rows: number,
+	firstColumn: number,
+	columns: number,
+};
+
 export type ColumnDetails = ColumnDetails_Serialize | ColumnDetails_Deserialize;
 
 export type ColumnDetails_Deserialize = {
@@ -347,6 +360,9 @@ export type TableDetails_Serialize = {
 	indexes: string[],
 	foreignKeys: string[],
 };
+
+/**  Text format to copy or export rows in. */
+export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert";
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 

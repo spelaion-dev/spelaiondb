@@ -221,6 +221,46 @@ try {
   await panel.locator(".cm-goto-line .cm-dialog-close").click();
   await shot("03-sqlite");
 
+  step("copy: selection as TSV, with headers and as JSON (formatted by the core)");
+  // Capture what goes to the clipboard instead of touching the system one.
+  await page.evaluate(() => {
+    window.__copied = [];
+    navigator.clipboard.writeText = (text) => {
+      window.__copied.push(text);
+      return Promise.resolve();
+    };
+  });
+  const copied = async (count) => {
+    await page.waitForFunction((n) => window.__copied.length === n, count);
+    return page.evaluate(() => window.__copied[window.__copied.length - 1]);
+  };
+  const grid = panel.locator(".grid-scroller");
+  const gridBox = await grid.boundingBox();
+  // First data cell: below the 36 px header, right of the row numbers.
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.press("Control+c");
+  const all = (await copied(1)).trimEnd().split("\n");
+  assert.equal(all.length, 6);
+  assert.equal(all[0].split("\t").length, 3);
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("Control+Shift+c");
+  const withHeaders = (await copied(2)).trimEnd().split("\n");
+  assert.deepEqual(withHeaders[0].split("\t"), ["country", "orders"]);
+  assert.equal(withHeaders.length, 4);
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Copy as JSON" }).waitFor();
+  await shot("03b-copy-menu");
+  await panel.getByRole("menuitem", { name: "Copy as JSON" }).click();
+  const json = JSON.parse(await copied(3));
+  assert.equal(json.length, 3);
+  assert.equal(typeof json[0].orders, "number");
+  assert.ok(json[0].country);
+  await panel.getByRole("status").filter({ hasText: "Copied 3 rows × 2 columns" }).waitFor();
+
   step("SQLite: 50,000 rows and scrolling");
   panel = await newQuery("Shop (SQLite)", "select * from orders;");
   await run(panel);

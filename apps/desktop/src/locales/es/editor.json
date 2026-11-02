@@ -24,7 +24,14 @@
     "duration": "{{duration}} ms",
     "error": "Error: {{message}}",
     "gridLabel_one": "Resultado con {{formattedCount}} fila",
-    "gridLabel_other": "Resultado con {{formattedCount}} filas"
+    "gridLabel_other": "Resultado con {{formattedCount}} filas",
+    "copied_one": "Copiada {{formattedCount}} fila × {{columns}} columnas",
+    "copied_other": "Copiadas {{formattedCount}} filas × {{columns}} columnas",
+    "copy": "Copiar (Ctrl+C)",
+    "copyWithHeaders": "Copiar con cabeceras (Ctrl+Mayús+C)",
+    "copyCsv": "Copiar como CSV",
+    "copyJson": "Copiar como JSON",
+    "copyInsert": "Copiar como INSERT de SQL"
   },
   "messages": {
     "connectionFailed": "No se pudo conectar: {{detail}}",

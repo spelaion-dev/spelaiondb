@@ -235,7 +235,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         </div>
         <div className="divider" onPointerDown={startDrag} role="separator" aria-orientation="horizontal" aria-label={t("resizeEditor")} />
         <div style={{ flex: `${1 - editorShare} 1 0` }} className="results-pane">
-          <Results run={tab.run} onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))} />
+          <Results run={tab.run} session={tab.id} onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))} />
         </div>
       </div>
     </div>
@@ -254,7 +254,7 @@ function errorRun(text: string, translation?: Translation): RunState {
   };
 }
 
-function Results({ run, onSelect }: { run: RunState | null; onSelect(id: number | null): void }) {
+function Results({ run, session, onSelect }: { run: RunState | null; session: string; onSelect(id: number | null): void }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   if (!run) return <div className="empty">{t("results.empty")}</div>;
@@ -275,7 +275,7 @@ function Results({ run, onSelect }: { run: RunState | null; onSelect(id: number 
       </div>
       <div className="result-body">
         {active ? (
-          <ResultGrid result={active} />
+          <ResultGrid result={active} session={session} />
         ) : (
           <div className="messages">
             {error && <pre className="error-box">{error}</pre>}

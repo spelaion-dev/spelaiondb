@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { call, commands, type CellRange, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT } from "../preferences";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta } from "../store";
@@ -22,6 +23,39 @@ interface Cell {
   col: number;
 }
 
+/** A rectangle from the cell where the selection started (`anchor`) to the active one. */
+interface Selection {
+  anchor: Cell;
+  focus: Cell;
+}
+
+interface Bounds {
+  r0: number;
+  r1: number;
+  c0: number;
+  c1: number;
+}
+
+function bounds(selection: Selection): Bounds {
+  return {
+    r0: Math.min(selection.anchor.row, selection.focus.row),
+    r1: Math.max(selection.anchor.row, selection.focus.row),
+    c0: Math.min(selection.anchor.col, selection.focus.col),
+    c1: Math.max(selection.anchor.col, selection.focus.col),
+  };
+}
+
+const inside = (b: Bounds, row: number, col: number) => row >= b.r0 && row <= b.r1 && col >= b.c0 && col <= b.c1;
+
+/** Copy menu entries: format and whether the column names go first. */
+const COPY_ITEMS: { key: string; format: TextFormat; header: boolean }[] = [
+  { key: "copy", format: "tsv", header: false },
+  { key: "copyWithHeaders", format: "tsv", header: true },
+  { key: "copyCsv", format: "csv", header: true },
+  { key: "copyJson", format: "json", header: false },
+  { key: "copyInsert", format: "sqlInsert", header: false },
+];
+
 /** Truncates a text to the available width with "…". */
 function fit(ctx: CanvasRenderingContext2D, text: string, max: number): string {
   const sample = text.length > 300 ? text.slice(0, 300) : text;
@@ -40,14 +74,17 @@ function cssVar(style: CSSStyleDeclaration, name: string): string {
   return style.getPropertyValue(name).trim() || "#888";
 }
 
-export function ResultGrid({ result }: { result: ResultMeta }) {
+export function ResultGrid({ result, session }: { result: ResultMeta; session: string }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frame = useRef<number | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
-  const [selected, setSelected] = useState<Cell | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const dragging = useRef(false);
 
   const redraw = useCallback(() => {
     if (frame.current !== null) return;
@@ -84,14 +121,15 @@ export function ResultGrid({ result }: { result: ResultMeta }) {
   const totalH = HEADER_H + result.rows * ROW_H;
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selected, size, numbers });
-  live.current = { result, cache, widths, offsets, rowNumW, selected, size, numbers };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers };
 
   function draw() {
     const canvas = canvasRef.current;
     const scroller = scrollerRef.current;
     if (!canvas || !scroller) return;
-    const { result, cache, widths, offsets, rowNumW, selected, size, numbers } = live.current;
+    const { result, cache, widths, offsets, rowNumW, selection, size, numbers } = live.current;
+    const range = selection ? bounds(selection) : null;
     const dpr = window.devicePixelRatio || 1;
     if (canvas.width !== size.w * dpr || canvas.height !== size.h * dpr) {
       canvas.width = size.w * dpr;
@@ -135,9 +173,11 @@ export function ResultGrid({ result }: { result: ResultMeta }) {
         const x = rowNumW + (offsets[col] ?? 0) - left;
         if (x > size.w) break;
         const w = widths[col] ?? 0;
-        if (selected && selected.row === row && selected.col === col) {
+        if (range && inside(range, row, col)) {
           ctx.fillStyle = c.select;
           ctx.fillRect(x, y, w, ROW_H);
+        }
+        if (selection && selection.focus.row === row && selection.focus.col === col) {
           ctx.strokeStyle = c.accent;
           ctx.strokeRect(x + 0.5, y + 0.5, w - 1, ROW_H - 1);
         }
@@ -177,10 +217,15 @@ export function ResultGrid({ result }: { result: ResultMeta }) {
     // Row number column (fixed on the left).
     ctx.fillStyle = c.header;
     ctx.fillRect(0, HEADER_H, rowNumW, size.h);
-    ctx.fillStyle = c.muted;
     ctx.textAlign = "right";
     for (let row = first; row < last; row++) {
-      ctx.fillText(numbers.format(row + 1), rowNumW - PAD, HEADER_H + row * ROW_H - top + ROW_H / 2);
+      const y = HEADER_H + row * ROW_H - top;
+      if (range && row >= range.r0 && row <= range.r1) {
+        ctx.fillStyle = c.select;
+        ctx.fillRect(0, y, rowNumW, ROW_H);
+      }
+      ctx.fillStyle = c.muted;
+      ctx.fillText(numbers.format(row + 1), rowNumW - PAD, y + ROW_H / 2);
     }
     ctx.textAlign = "left";
     ctx.fillStyle = c.line;
@@ -229,30 +274,106 @@ export function ResultGrid({ result }: { result: ResultMeta }) {
 
   useEffect(() => {
     // New result: scroll to the top and clear the selection.
-    setSelected(null);
+    setSelection(null);
+    setMenu(null);
     scrollerRef.current?.scrollTo(0, 0);
   }, [result.id]);
 
-  function cellAt(clientX: number, clientY: number): Cell | null {
+  /** The cell under the pointer; `"row"` as column for the row-number gutter. With `clamp`,
+   *  positions outside the data snap to the nearest cell (while dragging). */
+  function cellAt(clientX: number, clientY: number, clamp = false): (Cell & { gutter: boolean }) | null {
     const scroller = scrollerRef.current;
-    if (!scroller) return null;
+    if (!scroller || result.rows === 0 || widths.length === 0) return null;
     const rect = scroller.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-    if (x < rowNumW || y < HEADER_H || x > scroller.clientWidth || y > scroller.clientHeight) return null;
-    const row = Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H);
+    if (!clamp && (y < HEADER_H || x > scroller.clientWidth || y > scroller.clientHeight)) return null;
+    const row = Math.min(result.rows - 1, Math.max(0, Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H)));
+    if (!clamp && Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H) >= result.rows) return null;
+    const gutter = x < rowNumW;
     const dataX = x - rowNumW + scroller.scrollLeft;
-    const col = offsets.findIndex((o, i) => i < widths.length && dataX >= o && dataX < (offsets[i + 1] ?? 0));
-    if (row >= result.rows || col < 0) return null;
-    return { row, col };
+    let col = offsets.findIndex((o, i) => i < widths.length && dataX >= o && dataX < (offsets[i + 1] ?? 0));
+    if (col < 0) col = dataX < 0 ? 0 : widths.length - 1;
+    return { row, col, gutter };
   }
 
+  function scrollIntoView(cell: Cell) {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const y = cell.row * ROW_H;
+    if (y < scroller.scrollTop) scroller.scrollTop = y;
+    else if (y + ROW_H > scroller.scrollTop + scroller.clientHeight - HEADER_H)
+      scroller.scrollTop = y + ROW_H - scroller.clientHeight + HEADER_H;
+    const x = offsets[cell.col] ?? 0;
+    const w = widths[cell.col] ?? 0;
+    if (x < scroller.scrollLeft) scroller.scrollLeft = x;
+    else if (x + w > scroller.scrollLeft + scroller.clientWidth - rowNumW)
+      scroller.scrollLeft = x + w - scroller.clientWidth + rowNumW;
+  }
+
+  function selectAt(e: React.MouseEvent | MouseEvent, extend: boolean) {
+    const cell = cellAt(e.clientX, e.clientY, extend);
+    if (!cell) return;
+    const last = widths.length - 1;
+    setSelection((current) => {
+      if (cell.gutter) {
+        // The row-number gutter selects whole rows.
+        const anchor = extend && current ? { row: current.anchor.row, col: 0 } : { row: cell.row, col: 0 };
+        return { anchor, focus: { row: cell.row, col: last } };
+      }
+      return extend && current ? { anchor: current.anchor, focus: cell } : { anchor: cell, focus: cell };
+    });
+  }
+
+  async function copy(format: TextFormat, header: boolean) {
+    setMenu(null);
+    if (!selection) return;
+    const b = bounds(selection);
+    const range: CellRange = { firstRow: b.r0, rows: b.r1 - b.r0 + 1, firstColumn: b.c0, columns: b.c1 - b.c0 + 1 };
+    try {
+      const text = await call(commands.copyRows(result.id, session, range, format, header));
+      await navigator.clipboard.writeText(text);
+      setNotice({
+        text: t("results.copied", { count: range.rows, formattedCount: numbers.format(range.rows), columns: range.columns }),
+        error: false,
+      });
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), notice.error ? 6000 : 2000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (e instanceof MouseEvent && (e.target as Element | null)?.closest(".grid-menu")) return;
+      setMenu(null);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [menu]);
+
   function onKeyDown(e: React.KeyboardEvent) {
-    if (!selected) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
-      const value = cache.get(selected.row, selected.col);
-      void navigator.clipboard.writeText(value ?? "NULL");
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "a" && result.rows > 0) {
       e.preventDefault();
+      setSelection({ anchor: { row: 0, col: 0 }, focus: { row: result.rows - 1, col: widths.length - 1 } });
+      return;
+    }
+    if (!selection) return;
+    if (mod && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      void copy("tsv", e.shiftKey);
       return;
     }
     const moves: Record<string, [number, number]> = {
@@ -265,22 +386,28 @@ export function ResultGrid({ result }: { result: ResultMeta }) {
     if (!move) return;
     e.preventDefault();
     const next = {
-      row: Math.min(result.rows - 1, Math.max(0, selected.row + move[0])),
-      col: Math.min(widths.length - 1, Math.max(0, selected.col + move[1])),
+      row: Math.min(result.rows - 1, Math.max(0, selection.focus.row + move[0])),
+      col: Math.min(widths.length - 1, Math.max(0, selection.focus.col + move[1])),
     };
-    setSelected(next);
-    const scroller = scrollerRef.current;
-    if (!scroller) return;
-    const y = next.row * ROW_H;
-    if (y < scroller.scrollTop) scroller.scrollTop = y;
-    else if (y + ROW_H > scroller.scrollTop + scroller.clientHeight - HEADER_H)
-      scroller.scrollTop = y + ROW_H - scroller.clientHeight + HEADER_H;
-    const x = offsets[next.col] ?? 0;
-    const w = widths[next.col] ?? 0;
-    if (x < scroller.scrollLeft) scroller.scrollLeft = x;
-    else if (x + w > scroller.scrollLeft + scroller.clientWidth - rowNumW)
-      scroller.scrollLeft = x + w - scroller.clientWidth + rowNumW;
+    // Shift extends the selection; plain arrows move a single cell.
+    setSelection(e.shiftKey ? { anchor: selection.anchor, focus: next } : { anchor: next, focus: next });
+    scrollIntoView(next);
   }
+
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      if (dragging.current && e.buttons === 1) selectAt(e, true);
+    };
+    const up = () => {
+      dragging.current = false;
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+  });
 
   return (
     <div className="grid-host">
@@ -291,14 +418,38 @@ export function ResultGrid({ result }: { result: ResultMeta }) {
         tabIndex={0}
         onScroll={redraw}
         onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          dragging.current = true;
+          selectAt(e, e.shiftKey);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
           const cell = cellAt(e.clientX, e.clientY);
-          if (cell) setSelected(cell);
+          if (!cell) return;
+          // Right-click outside the selection selects that cell first.
+          if (!selection || (!cell.gutter && !inside(bounds(selection), cell.row, cell.col))) selectAt(e, false);
+          const host = e.currentTarget.getBoundingClientRect();
+          setMenu({ x: e.clientX - host.left, y: e.clientY - host.top });
         }}
         onKeyDown={onKeyDown}
         aria-label={t("results.gridLabel", { count: result.rows, formattedCount: numbers.format(result.rows) })}
       >
         <div style={{ width: totalW, height: totalH }} />
       </div>
+      {menu && (
+        <div className="grid-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+          {COPY_ITEMS.map((item) => (
+            <button key={item.key} role="menuitem" onClick={() => void copy(item.format, item.header)}>
+              {t(`results.${item.key}`)}
+            </button>
+          ))}
+        </div>
+      )}
+      {notice && (
+        <div className={`grid-notice ${notice.error ? "error" : ""}`} role="status">
+          {notice.text}
+        </div>
+      )}
     </div>
   );
 }

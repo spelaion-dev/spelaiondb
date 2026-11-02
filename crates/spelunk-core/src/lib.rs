@@ -5,6 +5,7 @@
 
 mod catalog;
 mod classify;
+mod export;
 mod history;
 mod open;
 mod readonly;
@@ -13,6 +14,7 @@ mod session;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
+pub use export::{ExportFormat, ExportOptions, GenericDialect, write_result};
 pub use history::{HistoryError, QueryHistory};
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,

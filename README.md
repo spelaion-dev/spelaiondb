@@ -58,6 +58,15 @@ The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in
 
 Preferences are stored in the personal `state.db` and apply to every workspace.
 
+## Working with results
+
+Select cells in the result grid by clicking and dragging, with Shift and the arrow keys, by
+clicking row numbers (whole rows) or with Ctrl+A. **Ctrl+C** copies the selection as
+tab-separated text for spreadsheets and **Ctrl+Shift+C** adds the column names. The
+right-click menu also copies as CSV, JSON (numbers stay numbers, JSON columns are embedded)
+or SQL `INSERT` statements with the engine's quoting. The core formats the rows from the
+typed data; up to 100,000 rows can be copied at once.
+
 ## Query history
 
 Open **Query history** in the sidebar to search executed SQL or connection IDs and open a

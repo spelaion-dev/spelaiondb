@@ -282,3 +282,10 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 .connection-form fieldset.hop legend { padding: 0 4px; }
 .hop-actions { position: absolute; top: -12px; right: 10px; display: flex; gap: 2px; background: var(--panel); padding: 0 4px; }
 .add-hop { margin-top: 12px; }
+
+/* ---------------------------------------------------------------- grid menu */
+.grid-menu { position: absolute; z-index: 5; min-width: 220px; padding: 4px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); }
+.grid-menu button { text-align: left; border: none; background: none; padding: 6px 10px; border-radius: 4px; }
+.grid-menu button:hover { background: var(--accent-soft); }
+.grid-notice { position: absolute; right: 12px; bottom: 10px; z-index: 4; padding: 6px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); font-size: 12px; box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15); }
+.grid-notice.error { color: var(--danger); }

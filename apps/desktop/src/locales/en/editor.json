@@ -24,7 +24,14 @@
     "duration": "{{duration}} ms",
     "error": "Error: {{message}}",
     "gridLabel_one": "Result with {{formattedCount}} row",
-    "gridLabel_other": "Result with {{formattedCount}} rows"
+    "gridLabel_other": "Result with {{formattedCount}} rows",
+    "copied_one": "Copied {{formattedCount}} row × {{columns}} columns",
+    "copied_other": "Copied {{formattedCount}} rows × {{columns}} columns",
+    "copy": "Copy (Ctrl+C)",
+    "copyWithHeaders": "Copy with headers (Ctrl+Shift+C)",
+    "copyCsv": "Copy as CSV",
+    "copyJson": "Copy as JSON",
+    "copyInsert": "Copy as SQL INSERT"
   },
   "messages": {
     "connectionFailed": "Could not connect: {{detail}}",

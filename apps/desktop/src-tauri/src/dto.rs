@@ -673,3 +673,23 @@ impl From<spelunk_config::TunnelDraft> for TunnelDraftItem {
         }
     }
 }
+
+/// Text format to copy or export rows in.
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TextFormat {
+    Tsv,
+    Csv,
+    Json,
+    SqlInsert,
+}
+
+/// A rectangle of a result: rows and columns by position.
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CellRange {
+    pub first_row: u32,
+    pub rows: u32,
+    pub first_column: u32,
+    pub columns: u32,
+}

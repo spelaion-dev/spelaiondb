@@ -6,6 +6,7 @@ import { tableFromIPC, type Table } from "apache-arrow";
 import {
   commands,
   events,
+  type CellRange,
   type ColumnItem,
   type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
@@ -20,6 +21,7 @@ import {
   type SchemaItem,
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
+  type TextFormat,
   type TlsModeItem,
   type TunnelItem,
   type PasswordMode,
@@ -27,7 +29,7 @@ import {
 } from "./bindings";
 
 export { commands, events };
-export type { ColumnItem, ConnectOutcome, InteractionKind, PasswordMode, SchemaItem, SshAuthItem, TlsModeItem, TunnelItem };
+export type { CellRange, ColumnItem, ConnectOutcome, InteractionKind, PasswordMode, SchemaItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
