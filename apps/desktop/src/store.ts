@@ -59,12 +59,16 @@ export interface Tab {
 
 let tabCounter = 0;
 
+/** `activeTab` value of the settings tab, which lives beside the query tabs. */
+export const SETTINGS_TAB = "settings";
+
 interface AppStore {
   workspace: WorkspaceInfo | null;
   connections: ConnectionItem[];
   tabs: Tab[];
   activeTab: string | null;
   historyOpen: boolean;
+  settingsOpen: boolean;
   historyRevision: number;
   historySaving: string[];
   workspaceChanging: boolean;
@@ -76,6 +80,8 @@ interface AppStore {
   updateTab(id: string, patch: Partial<Tab>): void;
   updateRun(id: string, update: (run: RunState) => RunState): void;
   setHistoryOpen(open: boolean): void;
+  openSettings(): void;
+  closeSettings(): void;
   refreshHistory(): void;
   setHistorySaving(connection: string, saving: boolean): void;
   setWorkspaceChanging(changing: boolean): void;
@@ -88,6 +94,7 @@ export const useApp = create<AppStore>((set) => ({
   tabs: [],
   activeTab: null,
   historyOpen: false,
+  settingsOpen: false,
   historyRevision: 0,
   historySaving: [],
   workspaceChanging: false,
@@ -111,14 +118,20 @@ export const useApp = create<AppStore>((set) => ({
   closeTab: (id) =>
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id !== id);
-      const activeTab = s.activeTab === id ? (tabs[tabs.length - 1]?.id ?? null) : s.activeTab;
-      return { tabs, activeTab };
+      const fallback = tabs[tabs.length - 1]?.id ?? (s.settingsOpen ? SETTINGS_TAB : null);
+      return { tabs, activeTab: s.activeTab === id ? fallback : s.activeTab };
     }),
   setActiveTab: (activeTab) => set({ activeTab }),
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   updateRun: (id, update) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id && t.run ? { ...t, run: update(t.run) } : t)) })),
   setHistoryOpen: (historyOpen) => set({ historyOpen }),
+  openSettings: () => set({ settingsOpen: true, activeTab: SETTINGS_TAB }),
+  closeSettings: () =>
+    set((s) => ({
+      settingsOpen: false,
+      activeTab: s.activeTab === SETTINGS_TAB ? (s.tabs[s.tabs.length - 1]?.id ?? null) : s.activeTab,
+    })),
   refreshHistory: () => set((s) => ({ historyRevision: s.historyRevision + 1 })),
   setHistorySaving: (connection, saving) => set((s) => ({
     historySaving: saving ? [...new Set([...s.historySaving, connection])] : s.historySaving.filter((id) => id !== connection),

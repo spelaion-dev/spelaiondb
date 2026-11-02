@@ -1,0 +1,28 @@
+{
+  "title": "Configuración",
+  "open": "Configuración (Ctrl+,)",
+  "categories": "Categorías de la configuración",
+  "loadError": "No se pudo cargar este ajuste:",
+  "saveError": "No se pudo guardar este ajuste:",
+  "appearance": {
+    "title": "Apariencia",
+    "theme": "Tema",
+    "system": "Igual que el sistema",
+    "light": "Claro",
+    "dark": "Oscuro",
+    "hint": "Se aplica a todos los espacios de trabajo y se guarda en tu configuración personal."
+  },
+  "language": {
+    "title": "Idioma",
+    "label": "Idioma de la interfaz",
+    "system": "Igual que el sistema",
+    "hint": "Los mensajes de las bases de datos y de los servidores SSH se muestran tal como llegan."
+  },
+  "history": {
+    "title": "Historial",
+    "stored": "Cada consulta que ejecutas desde la app se guarda en este equipo con su conexión, hora, duración, número de filas y error. Abrir una consulta guardada nunca la ejecuta.",
+    "perConnection": "El guardado se configura por conexión: abre el menú «⋯» junto a la conexión en la barra lateral. Desactívalo antes de ejecutar SQL con contraseñas u otros secretos. Al desactivarlo se conservan las consultas ya guardadas.",
+    "audit": "Este historial es de la app de escritorio. Las consultas de los agentes de IA (spelunk mcp) van a un registro de auditoría aparte.",
+    "open": "Abrir el historial de consultas"
+  }
+}

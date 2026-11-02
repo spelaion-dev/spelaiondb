@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { THEME_CHANGE_EVENT } from "../preferences";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta } from "../store";
 
@@ -215,11 +216,10 @@ export function ResultGrid({ result }: { result: ResultMeta }) {
     if (!scroller) return;
     const observer = new ResizeObserver(() => setSize({ w: scroller.clientWidth, h: scroller.clientHeight }));
     observer.observe(scroller);
-    const scheme = window.matchMedia("(prefers-color-scheme: dark)");
-    scheme.addEventListener("change", redraw);
+    window.addEventListener(THEME_CHANGE_EVENT, redraw);
     return () => {
       observer.disconnect();
-      scheme.removeEventListener("change", redraw);
+      window.removeEventListener(THEME_CHANGE_EVENT, redraw);
     };
   }, [redraw]);
 

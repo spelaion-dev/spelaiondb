@@ -1,25 +1,27 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, events } from "./api";
+import { events } from "./api";
 import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { SettingsTab } from "./components/SettingsTab";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
-import { useApp, useDialogs } from "./store";
-import { applyLanguage, type LanguagePreference } from "./i18n";
+import { usePreferences } from "./preferences";
+import { SETTINGS_TAB, useApp, useDialogs } from "./store";
 
 export default function App() {
-  const { t } = useTranslation(["app", "shell"]);
+  const { t } = useTranslation(["app", "shell", "settings"]);
   const tabs = useApp((s) => s.tabs);
   const activeTab = useApp((s) => s.activeTab);
   const addTab = useApp((s) => s.addTab);
   const closeTab = useApp((s) => s.closeTab);
   const setActiveTab = useApp((s) => s.setActiveTab);
   const historyOpen = useApp((s) => s.historyOpen);
+  const settingsOpen = useApp((s) => s.settingsOpen);
+  const closeSettings = useApp((s) => s.closeSettings);
+  // Save errors are shown next to the setting; only startup load errors need a banner.
+  const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [language, setLanguage] = useState<LanguagePreference>("system");
-  const [languageBusy, setLanguageBusy] = useState(true);
-  const [languageError, setLanguageError] = useState<{ phase: "load" | "save"; detail: string } | null>(null);
 
   async function loadConnections() {
     try {
@@ -39,6 +41,9 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "t") {
         e.preventDefault();
         useApp.getState().addTab(null);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        useApp.getState().openSettings();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -48,45 +53,12 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    void call(commands.getLanguage()).then(async (saved) => {
-      if (!active) return;
-      const selected: LanguagePreference = saved === "en" || saved === "es" ? saved : "system";
-      setLanguage(selected);
-      await applyLanguage(selected);
-    }).catch((e: unknown) => {
-      if (active) setLanguageError({ phase: "load", detail: e instanceof Error ? e.message : String(e) });
-    }).finally(() => { if (active) setLanguageBusy(false); });
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
-    const update = () => { if (language === "system") void applyLanguage("system"); };
-    window.addEventListener("languagechange", update);
-    return () => window.removeEventListener("languagechange", update);
-  }, [language]);
-
-  async function changeLanguage(next: LanguagePreference) {
-    setLanguageBusy(true);
-    setLanguageError(null);
-    try {
-      await call(commands.setLanguage(next));
-      setLanguage(next);
-      await applyLanguage(next);
-    } catch (e) {
-      setLanguageError({ phase: "save", detail: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setLanguageBusy(false);
-    }
-  }
-
   return (
     <div className="app">
       <Sidebar />
       <main className="main">
         {loadError && <div className="banner" role="alert">{loadError}<button onClick={() => void loadConnections()}>{t("retryConnections")}</button></div>}
-        {languageError && <div className="banner" role="alert">{t(languageError.phase === "load" ? "loadLanguageError" : "saveLanguageError")} {languageError.detail}</div>}
+        {preferenceError && <div className="banner" role="alert">{t("preferenceLoadError")} {preferenceError.detail}</div>}
         <div className="tab-strip">
         <div className="tabbar" role="tablist">
           {tabs.map((tab) => (
@@ -111,22 +83,40 @@ export default function App() {
               </button>
             </div>
           ))}
+          {settingsOpen && (
+            <div
+              role="tab"
+              aria-selected={activeTab === SETTINGS_TAB}
+              className={`tab settings-tab ${activeTab === SETTINGS_TAB ? "active" : ""}`}
+              onClick={() => setActiveTab(SETTINGS_TAB)}
+            >
+              <span aria-hidden="true">⚙</span>
+              <span>{t("settings:title")}</span>
+              <button
+                className="close"
+                aria-label={t("closeTab", { name: t("settings:title") })}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeSettings();
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
           <button className="new-tab" onClick={() => addTab(null)} title={t("newQueryShortcut")}>
             +
           </button>
         </div>
-        <label className="language-setting">
-          <span>{t("language")}</span>
-          <select aria-label={t("language")} value={language} disabled={languageBusy} onChange={(e) => void changeLanguage(e.target.value as LanguagePreference)}>
-            <option value="system">{t("system")}</option>
-            <option value="en">English</option>
-            <option value="es">Español</option>
-          </select>
-        </label>
         </div>
         <div className="workspace-content">
           <div className="editor-workspace">
-            {tabs.length === 0 ? (
+            {settingsOpen && (
+              <div className="tab-panel" hidden={activeTab !== SETTINGS_TAB}>
+                <SettingsTab />
+              </div>
+            )}
+            {tabs.length === 0 && !settingsOpen ? (
               <div className="welcome">
                 <h1>SpelunkDB</h1>
                 <p>{t("welcome")}</p>

@@ -1,11 +1,8 @@
 {
-  "language": "Language",
-  "system": "System language",
-  "loadLanguageError": "Could not load the saved language:",
-  "saveLanguageError": "Could not save the language:",
   "retryConnections": "Retry loading connections",
   "closeTab": "Close {{name}}",
   "newQueryShortcut": "New query (Ctrl+T)",
   "welcome": "Pick a connection on the left or open a new query.",
-  "newQuery": "New query"
+  "newQuery": "New query",
+  "preferenceLoadError": "Could not load your preferences:"
 }

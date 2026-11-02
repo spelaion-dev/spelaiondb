@@ -5,7 +5,8 @@ import { Trans, useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { call, commands, type ConnectionItem, type ObjectItem, type SchemaItem, type TableDetails } from "../api";
 import { openSession } from "../connect";
-import { useApp, useDialogs } from "../store";
+import { SETTINGS_TAB, useApp, useDialogs } from "../store";
+import { ConnectionMenu } from "./ConnectionMenu";
 import { quoteIdent } from "../text";
 
 function errorText(e: unknown): string {
@@ -23,6 +24,8 @@ export function Sidebar() {
   const workspace = useApp((s) => s.workspace);
   const connections = useApp((s) => s.connections);
   const historyOpen = useApp((s) => s.historyOpen);
+  const settingsActive = useApp((s) => s.settingsOpen && s.activeTab === SETTINGS_TAB);
+  const openSettings = useApp((s) => s.openSettings);
   const setHistoryOpen = useApp((s) => s.setHistoryOpen);
   const cannotSwitch = useApp((s) => s.workspaceChanging || s.historySaving.length > 0 || s.tabs.some((t) => t.status === "connecting" || t.run?.running));
   const [showProblems, setShowProblems] = useState(false);
@@ -123,6 +126,15 @@ export function Sidebar() {
         <button aria-pressed={historyOpen} aria-controls="query-history" onClick={() => setHistoryOpen(!historyOpen)}>
           {t("queryHistory")}
         </button>
+        <button
+          className="settings-button"
+          aria-pressed={settingsActive}
+          aria-label={t("settings:title")}
+          title={t("settings:open")}
+          onClick={openSettings}
+        >
+          ⚙
+        </button>
       </div>
     </aside>
   );
@@ -172,6 +184,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
         <button className="ghost small" onClick={() => addTab(connection.id)} title={t("newQuery")}>
           +
         </button>
+        <ConnectionMenu connection={connection} />
       </div>
       {open && (
         <div className="children">

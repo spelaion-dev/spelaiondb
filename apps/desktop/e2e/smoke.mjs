@@ -81,26 +81,77 @@ try {
   async function waitForHistoryCount(count) {
     await page.waitForFunction((expected) => document.querySelectorAll(".history-entry").length === expected && document.querySelector(".history-entries")?.getAttribute("aria-busy") === "false", count);
   }
-  async function setHistorySaving(panel, enabled) {
-    const checkbox = panel.getByRole("checkbox", { name: "Save query history for Shop (SQLite)", exact: true });
+  // The history preference lives in the connection's "⋯" menu in the sidebar.
+  async function connectionMenu(connection) {
+    await page.locator(`.connection-row:has-text("${connection}") .connection-menu > button`).click();
+    return page.locator(".connection-menu-popup");
+  }
+  async function historySaving(connection) {
+    const menu = await connectionMenu(connection);
+    const checked = await menu.getByRole("checkbox", { name: `Save query history for ${connection}`, exact: true }).isChecked();
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+    return checked;
+  }
+  async function setHistorySaving(connection, enabled, screenshot) {
+    const menu = await connectionMenu(connection);
+    const checkbox = menu.getByRole("checkbox", { name: `Save query history for ${connection}`, exact: true });
     if (await checkbox.isChecked() !== enabled) await checkbox.click();
     await page.waitForFunction((expected) => {
-      const input = document.querySelector('.tab-panel:not([hidden]) input[type="checkbox"]');
+      const input = document.querySelector('.connection-menu-popup input[type="checkbox"]');
       return input?.checked === expected && !input.disabled;
     }, enabled);
+    if (screenshot) await shot(screenshot);
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+  }
+  // Opens a settings category in its own tab, runs `action` and goes back to the tab that
+  // was active, closing the settings tab, so the rest of the test sees the same layout.
+  const CATEGORY = { appearance: 1, language: 2, history: 3 };
+  async function withSettings(category, action) {
+    const tabs = page.locator(".tabbar [role=tab]");
+    let selected = -1;
+    for (let i = 0; i < (await tabs.count()); i++) {
+      if ((await tabs.nth(i).getAttribute("aria-selected")) === "true") selected = i;
+    }
+    await page.locator(".sidebar-footer .settings-button").click();
+    await page.locator(`.settings-nav button:nth-child(${CATEGORY[category]})`).click();
+    await action(page.locator(".settings"));
+    if (selected >= 0) await tabs.nth(selected).click();
+    await page.locator(".settings-tab .close").click();
+    await page.locator(".settings-tab").waitFor({ state: "detached" });
   }
   async function setLanguage(value) {
-    const select = page.locator(".language-setting select");
-    await select.selectOption(value);
-    await page.waitForFunction((expected) => {
-      const input = document.querySelector(".language-setting select");
-      return input?.value === expected && !input.disabled && document.documentElement.lang === expected;
-    }, value);
+    await withSettings("language", async (settings) => {
+      await settings.locator(`input[name="language"][value="${value}"]`).click();
+      await page.waitForFunction((expected) => {
+        const input = document.querySelector(`input[name="language"][value="${expected}"]`);
+        return input?.checked && !input.matches(":disabled") && document.documentElement.lang === expected;
+      }, value);
+    });
+  }
+  async function setTheme(value, expected) {
+    await withSettings("appearance", async (settings) => {
+      await settings.locator(`input[name="theme"][value="${value}"]`).click();
+      await page.waitForFunction(([v, theme]) => {
+        const input = document.querySelector(`input[name="theme"][value="${v}"]`);
+        return input?.checked && !input.matches(":disabled") && document.documentElement.dataset.theme === theme;
+      }, [value, expected]);
+    });
+  }
+  async function savedLanguage() {
+    let value = null;
+    await withSettings("language", async (settings) => {
+      await settings.locator('input[name="language"]:checked:not(:disabled)').waitFor();
+      value = await settings.locator('input[name="language"]:checked').getAttribute("value");
+    });
+    return value;
   }
 
   step("startup and untrusted repository");
-  await page.locator(".language-setting select:not([disabled])").waitFor();
-  assert.equal(await page.locator(".language-setting select").inputValue(), "system");
+  await page.locator(".sidebar-footer .settings-button").waitFor();
+  assert.equal(await page.locator(".language-setting").count(), 0, "the language selector left the tab bar");
+  assert.equal(await savedLanguage(), "system");
   await page.evaluate(() => {
     Object.defineProperty(navigator, "languages", { configurable: true, value: ["es-ES"] });
     window.dispatchEvent(new Event("languagechange"));
@@ -113,11 +164,24 @@ try {
   await page.waitForFunction(() => document.documentElement.lang === "en");
   await setLanguage("es");
   await page.getByText("Selecciona una conexión a la izquierda o abre una consulta nueva.").waitFor();
-  await page.getByRole("combobox", { name: "Idioma" }).waitFor();
+  await page.getByRole("button", { name: "Configuración", exact: true }).waitFor();
   await setLanguage("en");
   await page.getByText("Shop (SQLite)").waitFor();
   await page.getByText("is not trusted").waitFor();
   await shot("01-start");
+
+  step("settings: theme in its own tab, Ctrl+, shortcut");
+  await page.keyboard.press("Control+,");
+  await page.locator(".settings-tab[aria-selected=true]").waitFor();
+  await page.getByRole("heading", { name: "Appearance" }).waitFor();
+  await page.locator(".settings-tab .close").click();
+  const systemTheme = await page.evaluate(() => (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  assert.equal(await page.locator("html").getAttribute("data-theme"), systemTheme);
+  await setTheme("dark", "dark");
+  await withSettings("appearance", async () => {
+    await shot("01a-settings-dark");
+  });
+  await setTheme("light", "light");
 
   step("trust the repository");
   await page.getByRole("button", { name: "Review and trust" }).click();
@@ -208,7 +272,8 @@ try {
   await page.getByRole("button", { name: "Close query history" }).click();
 
   step("history disabled: successful and failed SQL leave no entries");
-  await setHistorySaving(panel, false);
+  await setHistorySaving("Shop (SQLite)", false, "05b0-connection-menu");
+  assert.equal(await panel.getByRole("checkbox").count(), 0, "the editor toolbar no longer has the history checkbox");
   await replaceQuery(panel, "select 'private_history_marker' as secret;");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
@@ -262,23 +327,24 @@ try {
   await panel.getByText("PRODUCTION").waitFor();
   await shot("09-bastions");
 
-  step("history and per-connection preference survive an app restart");
+  step("history, theme and per-connection preference survive an app restart");
   await setLanguage("es");
+  await setTheme("dark", "dark");
   await browser.close();
   await stopApp();
   app = startApp();
   browser = await connect();
   page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(30_000);
-  await page.getByRole("combobox", { name: "Idioma" }).waitFor();
-  await page.locator(".language-setting select:not([disabled])").waitFor();
-  assert.equal(await page.locator(".language-setting select").inputValue(), "es");
+  await page.getByRole("button", { name: "Configuración", exact: true }).waitFor();
   assert.equal(await page.locator("html").getAttribute("lang"), "es");
+  assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
+  assert.equal(await savedLanguage(), "es");
   await setLanguage("en");
+  await setTheme("system", systemTheme);
   await page.getByText("Shop (SQLite)", { exact: true }).waitFor();
+  assert.equal(await historySaving("Shop (SQLite)"), false);
   panel = await newQuery("Shop (SQLite)", "select 'history_resumed_marker' as resumed;");
-  const persistedCheckbox = panel.getByRole("checkbox", { name: "Save query history for Shop (SQLite)", exact: true });
-  assert.equal(await persistedCheckbox.isChecked(), false);
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   history = page.getByRole("complementary", { name: "Query history", exact: true });
   await history.getByRole("textbox", { name: "Search query history" }).fill("round");
@@ -287,7 +353,7 @@ try {
   await history.getByRole("textbox", { name: "Search query history" }).fill("private");
   await history.getByText("No matching queries.", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Close query history" }).click();
-  await setHistorySaving(panel, true);
+  await setHistorySaving("Shop (SQLite)", true);
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();

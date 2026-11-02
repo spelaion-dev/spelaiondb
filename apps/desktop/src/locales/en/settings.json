@@ -1,0 +1,28 @@
+{
+  "title": "Settings",
+  "open": "Settings (Ctrl+,)",
+  "categories": "Settings categories",
+  "loadError": "Could not load this setting:",
+  "saveError": "Could not save this setting:",
+  "appearance": {
+    "title": "Appearance",
+    "theme": "Theme",
+    "system": "Same as the system",
+    "light": "Light",
+    "dark": "Dark",
+    "hint": "Applies to every workspace and is saved in your personal settings."
+  },
+  "language": {
+    "title": "Language",
+    "label": "Interface language",
+    "system": "Same as the system",
+    "hint": "Messages from databases and SSH servers are shown as they arrive."
+  },
+  "history": {
+    "title": "History",
+    "stored": "Every query you run from the app is saved on this computer with its connection, time, duration, row count and error. Opening a saved query never runs it.",
+    "perConnection": "Saving is set per connection: open the “⋯” menu next to a connection in the sidebar. Turn it off before running SQL with passwords or other secrets. Turning it off keeps the queries already saved.",
+    "audit": "This history belongs to the desktop app. Queries from AI agents (spelunk mcp) go to a separate audit log.",
+    "open": "Open query history"
+  }
+}

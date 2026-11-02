@@ -27,10 +27,7 @@ export function HistoryPreference({ connection }: { connection: ConnectionItem }
 
   return (
     <div className="history-preference">
-      <label
-        className="check"
-        title={t("history.preferenceHint")}
-      >
+      <label className="check">
         <input
           type="checkbox"
           checked={connection.historyEnabled}

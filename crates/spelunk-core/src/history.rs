@@ -22,6 +22,8 @@ pub enum HistoryError {
     Start(#[source] std::io::Error),
     #[error("unsupported language; expected system, en or es")]
     UnsupportedLanguage,
+    #[error("unsupported theme; expected system, light or dark")]
+    UnsupportedTheme,
 }
 
 type Reply<T> = oneshot::Sender<Result<T, StoreError>>;
@@ -32,6 +34,13 @@ enum Request {
     },
     SetLanguage {
         language: String,
+        reply: Reply<()>,
+    },
+    GetTheme {
+        reply: Reply<String>,
+    },
+    SetTheme {
+        theme: String,
         reply: Reply<()>,
     },
     List {
@@ -79,6 +88,12 @@ impl QueryHistory {
                         }
                         Request::SetLanguage { language, reply } => {
                             let _ = reply.send(store.set_language(&language));
+                        }
+                        Request::GetTheme { reply } => {
+                            let _ = reply.send(store.get_theme());
+                        }
+                        Request::SetTheme { theme, reply } => {
+                            let _ = reply.send(store.set_theme(&theme));
                         }
                         Request::List {
                             workspace,
@@ -141,6 +156,20 @@ impl QueryHistory {
             return Err(HistoryError::UnsupportedLanguage);
         }
         self.request(|reply| Request::SetLanguage { language, reply })
+            .await
+    }
+
+    /// Personal interface theme for this user directory, defaulting to `system`.
+    pub async fn theme(&self) -> Result<String, HistoryError> {
+        self.request(|reply| Request::GetTheme { reply }).await
+    }
+
+    /// Validates external input before it reaches the store actor.
+    pub async fn set_theme(&self, theme: String) -> Result<(), HistoryError> {
+        if !matches!(theme.as_str(), "system" | "light" | "dark") {
+            return Err(HistoryError::UnsupportedTheme);
+        }
+        self.request(|reply| Request::SetTheme { theme, reply })
             .await
     }
 
@@ -386,6 +415,43 @@ mod tests {
         ));
         assert!(matches!(
             history.set_language("es".into()).await,
+            Err(HistoryError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn theme_setting_is_personal_and_persistent() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "spelunk-core-theme-{}-{nonce}/state.db",
+            std::process::id()
+        ));
+        let history = QueryHistory::open(path.clone()).unwrap();
+        assert_eq!(history.theme().await.unwrap(), "system");
+        history.set_theme("dark".into()).await.unwrap();
+        history.set_language("es".into()).await.unwrap();
+        drop(history);
+        let reopened = QueryHistory::open(path).unwrap();
+        assert_eq!(reopened.theme().await.unwrap(), "dark");
+        assert_eq!(reopened.language().await.unwrap(), "es");
+    }
+
+    #[tokio::test]
+    async fn invalid_theme_is_rejected_before_reaching_the_store_actor() {
+        let (requests, receiver) = mpsc::channel(1);
+        drop(receiver);
+        let history = QueryHistory { requests };
+        for invalid in ["", "Dark", "blue", "light "] {
+            assert!(matches!(
+                history.set_theme(invalid.into()).await,
+                Err(HistoryError::UnsupportedTheme)
+            ));
+        }
+        assert!(matches!(
+            history.set_theme("dark".into()).await,
             Err(HistoryError::Closed)
         ));
     }

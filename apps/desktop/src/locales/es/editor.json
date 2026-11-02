@@ -46,7 +46,7 @@
     "close": "Cerrar historial de consultas",
     "searchPlaceholder": "Buscar SQL o conexión…",
     "searchLabel": "Buscar en el historial de consultas",
-    "privacyHelp": "El SQL se guarda localmente. Desactiva «Guardar historial» para una conexión antes de ejecutar SQL con secretos. Se conservan las entradas anteriores.",
+    "privacyHelp": "El SQL se guarda localmente. Desactiva el guardado de una conexión en su menú «⋯» antes de ejecutar SQL con secretos. Se conservan las entradas anteriores.",
     "noMatches": "No hay consultas que coincidan.",
     "empty": "Todavía no hay consultas guardadas.",
     "error": "Error",
@@ -61,7 +61,8 @@
     "loadMore": "Cargar más",
     "preferenceHint": "Guarda el SQL localmente para esta conexión. Desactívalo antes de ejecutar SQL con contraseñas u otros secretos. Se conserva el historial anterior.",
     "preferenceLabel": "Guardar historial de consultas para {{name}}",
-    "save": "Guardar historial"
+    "save": "Guardar historial de consultas",
+    "menu": "Opciones de {{name}}"
   },
   "codeMirror": {
     "Completions": "Sugerencias",

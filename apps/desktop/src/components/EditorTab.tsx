@@ -10,7 +10,6 @@ import { useApp, type RunState, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ResultGrid } from "./ResultGrid";
 import { SqlEditor, type RunRequest } from "./SqlEditor";
-import { HistoryPreference } from "./HistoryPreference";
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -207,7 +206,6 @@ export function EditorTab({ tab }: { tab: Tab }) {
           {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
         </span>
         {connection?.env?.toLowerCase().startsWith("prod") && <span className="badge badge-prod">{t("production")}</span>}
-        {connection && <HistoryPreference key={connection.id} connection={connection} />}
         <div className="spacer" />
         {running ? (
           <button className="danger" onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>

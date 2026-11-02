@@ -1,4 +1,5 @@
-/* Theme: CSS variables; dark follows the system. The grid reads the same variables. */
+/* Theme: CSS variables. preferences.ts sets data-theme on <html> (light or dark, resolving
+   "system"). The grid reads the same variables. */
 :root {
   --bg: #f6f7f9;
   --panel: #ffffff;
@@ -25,28 +26,26 @@
   background: var(--bg);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17191d;
-    --panel: #1e2126;
-    --sidebar: #1a1d21;
-    --fg: #e4e6ea;
-    --muted: #8b929c;
-    --line: #2d3138;
-    --accent: #6c9cff;
-    --accent-soft: rgba(108, 156, 255, 0.2);
-    --danger: #ff6b61;
-    --warn-bg: #3a3120;
-    --warn-fg: #f3d58c;
-    --editor-bg: #1e2126;
-    --editor-active: rgba(108, 156, 255, 0.06);
-    --grid-bg: #1e2126;
-    --grid-stripe: #22252b;
-    --grid-line: #2a2e35;
-    --grid-header: #25292f;
-    --prod: #ff6b61;
-    color-scheme: dark;
-  }
+:root[data-theme="dark"] {
+  --bg: #17191d;
+  --panel: #1e2126;
+  --sidebar: #1a1d21;
+  --fg: #e4e6ea;
+  --muted: #8b929c;
+  --line: #2d3138;
+  --accent: #6c9cff;
+  --accent-soft: rgba(108, 156, 255, 0.2);
+  --danger: #ff6b61;
+  --warn-bg: #3a3120;
+  --warn-fg: #f3d58c;
+  --editor-bg: #1e2126;
+  --editor-active: rgba(108, 156, 255, 0.06);
+  --grid-bg: #1e2126;
+  --grid-stripe: #22252b;
+  --grid-line: #2a2e35;
+  --grid-header: #25292f;
+  --prod: #ff6b61;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -105,8 +104,9 @@ select, input[type="text"], input[type="password"] {
 .column-row { padding-left: 34px; }
 .empty { color: var(--muted); padding: 24px; }
 .empty.small { padding: 14px; font-size: 12px; }
-.sidebar-footer { padding: 10px; border-top: 1px solid var(--line); }
-.sidebar-footer button { width: 100%; }
+.sidebar-footer { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--line); }
+.sidebar-footer button { flex: 1; }
+.sidebar-footer .settings-button { flex: 0 0 auto; width: 34px; }
 .sidebar-footer button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
 
 /* ---------------------------------------------------------------- tabs */
@@ -115,8 +115,6 @@ select, input[type="text"], input[type="password"] {
 .editor-workspace { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .tab-strip { display: flex; min-width: 0; background: var(--sidebar); border-bottom: 1px solid var(--line); }
 .tabbar { display: flex; align-items: stretch; flex: 1; min-width: 0; overflow-x: auto; min-height: 36px; }
-.language-setting { display: flex; align-items: center; gap: 6px; padding: 3px 8px; white-space: nowrap; font-size: 12px; }
-.language-setting select { max-width: 160px; }
 .tab { display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; border-right: 1px solid var(--line); cursor: default; white-space: nowrap; }
 .tab.active { background: var(--panel); box-shadow: inset 0 -2px var(--accent); }
 .tab .close { border: none; background: none; padding: 0 4px; color: var(--muted); }
@@ -181,7 +179,26 @@ select, input[type="text"], input[type="password"] {
 .history-more { text-align: center; }
 .history-preference { display: flex; flex-direction: column; gap: 3px; }
 .history-preference .check { white-space: nowrap; }
-.history-preference .error { max-width: 300px; }
+.connection-menu { position: relative; }
+.connection-menu-popup {
+  position: absolute; right: 0; top: 100%; z-index: 20; width: 250px; padding: 10px 12px; white-space: normal;
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.connection-menu-popup p { margin: 0; }
+
+/* ---------------------------------------------------------------- settings */
+.settings { display: flex; flex: 1; min-width: 0; height: 100%; background: var(--panel); }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; width: 190px; padding: 16px 10px; border-right: 1px solid var(--line); background: var(--bg); }
+.settings-nav button { text-align: left; border: none; background: none; padding: 7px 10px; border-radius: 5px; }
+.settings-nav button:hover { background: var(--accent-soft); }
+.settings-nav button[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.settings-page { flex: 1; max-width: 640px; padding: 20px 28px; overflow: auto; }
+.settings-page h2 { margin: 0 0 16px; font-size: 18px; font-weight: 600; }
+.settings-page p { line-height: 1.5; }
+.settings-choice { display: flex; flex-direction: column; gap: 8px; margin: 0 0 8px; padding: 0; border: none; }
+.settings-choice legend { margin-bottom: 8px; font-weight: 600; }
 
 @media (max-width: 1000px) {
   .history-panel { position: absolute; inset: 0 0 0 auto; width: min(420px, 100%); z-index: 2; box-shadow: -8px 0 20px rgba(0, 0, 0, 0.12); }

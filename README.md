@@ -21,10 +21,16 @@ cd apps/desktop && npm install && npm run tauri dev -- -- ../../examples/demo
 `examples/demo` ships a local SQLite database and, if you start `testing/docker`, a direct
 PostgreSQL and another one behind two SSH bastions with TLS.
 
-The language selector in the tab bar offers English, Spanish and the system language.
-Translations are bundled with the application and work offline; the choice is stored in the
-personal `state.db` and applies to every workspace. Database and SSH server messages are
-shown as received.
+## Settings
+
+The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in its own tab:
+
+- **Appearance:** light, dark or the system theme.
+- **Language:** English, Spanish or the system language. Translations are bundled with the
+  application and work offline. Database and SSH server messages are shown as received.
+- **History:** what query history stores and where to turn it off.
+
+Preferences are stored in the personal `state.db` and apply to every workspace.
 
 ## Query history
 
@@ -33,7 +39,8 @@ statement in a new, disconnected editor tab. Opening it never runs it. History r
 executed statement with its connection, start time, duration, returned row count and error
 (including cancellations), and survives app restarts.
 
-**Save history** in the editor toolbar controls recording for that connection. Disable it
+**Save query history**, in the "⋯" menu next to each connection in the sidebar, controls
+recording for that connection. Disable it
 before running SQL containing passwords or other secrets: SQL text and database errors are
 stored as written. The preference is personal, takes effect across tabs and survives app
 restarts. Disabling it keeps existing entries; it does not erase previously saved SQL.

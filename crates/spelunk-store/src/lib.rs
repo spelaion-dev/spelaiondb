@@ -73,7 +73,14 @@ const MIGRATIONS: &[&str] = &["create table audit (
         value         text not null,
         check (key <> 'language' or value in ('system', 'en', 'es'))
     );
-    alter table history add column cancelled integer not null default 0 check (cancelled in (0, 1));"
+    alter table history add column cancelled integer not null default 0 check (cancelled in (0, 1));",
+    // SQLite cannot add a check constraint to an existing table: triggers enforce it.
+    "create trigger personal_settings_theme_insert before insert on personal_settings
+        when new.key = 'theme' and new.value not in ('system', 'light', 'dark')
+        begin select raise(abort, 'unsupported theme'); end;
+    create trigger personal_settings_theme_update before update on personal_settings
+        when new.key = 'theme' and new.value not in ('system', 'light', 'dark')
+        begin select raise(abort, 'unsupported theme'); end;"
 ];
 
 /// One execution from the desktop app, scoped to its workspace and connection identifier.
@@ -317,10 +324,35 @@ impl Store {
 
     pub fn set_language(&self, language: &str) -> Result<(), StoreError> {
         validate_language(language)?;
+        self.set_personal_setting("language", language)
+    }
+
+    /// Personal interface theme, shared by every workspace in this user directory.
+    /// `system` follows the operating system; `light` and `dark` are explicit overrides.
+    pub fn get_theme(&self) -> Result<String, StoreError> {
+        let theme = self
+            .conn
+            .query_row(
+                "select value from personal_settings where key = 'theme'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "system".into());
+        validate_theme(&theme)?;
+        Ok(theme)
+    }
+
+    pub fn set_theme(&self, theme: &str) -> Result<(), StoreError> {
+        validate_theme(theme)?;
+        self.set_personal_setting("theme", theme)
+    }
+
+    fn set_personal_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
         self.conn.execute(
-            "insert into personal_settings (key, value) values ('language', ?1)
+            "insert into personal_settings (key, value) values (?1, ?2)
              on conflict (key) do update set value = excluded.value",
-            [language],
+            [key, value],
         )?;
         Ok(())
     }
@@ -380,6 +412,16 @@ fn validate_language(language: &str) -> Result<(), StoreError> {
     } else {
         Err(StoreError(
             "unsupported language; expected system, en or es".into(),
+        ))
+    }
+}
+
+fn validate_theme(theme: &str) -> Result<(), StoreError> {
+    if matches!(theme, "system" | "light" | "dark") {
+        Ok(())
+    } else {
+        Err(StoreError(
+            "unsupported theme; expected system, light or dark".into(),
         ))
     }
 }
@@ -826,5 +868,52 @@ mod tests {
             Store::open(&second_path).unwrap().get_language().unwrap(),
             "en"
         );
+    }
+
+    #[test]
+    fn theme_is_validated_persistent_and_independent_of_language() {
+        let path = temp("theme");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_theme().unwrap(), "system");
+        store.set_language("es").unwrap();
+        store.set_theme("dark").unwrap();
+        for invalid in ["", "Dark", "blue", " light", "dark' OR 1=1 --"] {
+            assert!(store.set_theme(invalid).is_err(), "{invalid}");
+            assert_eq!(store.get_theme().unwrap(), "dark");
+        }
+        // The database rejects invalid values even if they bypass the Rust validation.
+        for sql in [
+            "update personal_settings set value = 'blue' where key = 'theme'",
+            "insert or replace into personal_settings (key, value) values ('theme', 'blue')",
+        ] {
+            assert!(store.conn.execute(sql, []).is_err(), "{sql}");
+        }
+        store.set_theme("light").unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.get_theme().unwrap(), "light");
+        assert_eq!(reopened.get_language().unwrap(), "es");
+    }
+
+    #[test]
+    fn theme_migration_preserves_existing_settings() {
+        let path = temp("theme-upgrade");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for migration in &MIGRATIONS[..3] {
+                tx.execute_batch(migration).unwrap();
+            }
+            tx.pragma_update(None, "user_version", 3).unwrap();
+            tx.execute(
+                "insert into personal_settings (key, value) values ('language', 'es')",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_language().unwrap(), "es");
+        assert_eq!(store.get_theme().unwrap(), "system");
     }
 }

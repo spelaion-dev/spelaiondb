@@ -154,6 +154,22 @@ async fn set_language(language: String, state: State<'_, AppState>) -> CmdResult
 
 #[tauri::command]
 #[specta::specta]
+async fn get_theme(state: State<'_, AppState>) -> CmdResult<String> {
+    state.history.theme().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .history
+        .set_theme(theme)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
     let version = state.workspace_version.load(Ordering::Acquire);
     if !version.is_multiple_of(2)
@@ -556,6 +572,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             workspace_info,
             get_language,
             set_language,
+            get_theme,
+            set_theme,
             open_workspace,
             trust_workspace,
             list_connections,
