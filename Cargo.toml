@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
+# The phase 0 spikes are a separate, throwaway workspace.
+exclude = ["spikes"]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/spelunkdb/spelunkdb"
+publish = false
+
+[workspace.dependencies]
+spelunk-driver-api = { path = "crates/spelunk-driver-api" }
+spelunk-driver-postgres = { path = "crates/spelunk-driver-postgres" }
+spelunk-driver-sqlite = { path = "crates/spelunk-driver-sqlite" }
+spelunk-core = { path = "crates/spelunk-core" }
+spelunk-config = { path = "crates/spelunk-config" }
+spelunk-ssh = { path = "crates/spelunk-ssh" }
+spelunk-store = { path = "crates/spelunk-store" }
+spelunk-mcp = { path = "crates/spelunk-mcp" }
+
+anyhow = "1"
+arrow = { version = "60", default-features = false, features = ["ipc"] }
+async-trait = "0.1"
+futures-util = "0.3"
+insta = "1"
+postgres-protocol = "0.6"
+postgres-types = "0.2"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-postgres = "0.7"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

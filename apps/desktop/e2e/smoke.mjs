@@ -1,0 +1,341 @@
+// Smoke test of the real app: starts it with the WebView2 debugging port open and drives it
+// with Playwright (CDP). It uses examples/demo and a temporary personal directory, so it does
+// not touch the user's configuration or keychain.
+//
+// Requirements: the app built (npx tauri build --no-bundle), examples/demo/make-shop-db.py
+// run and, for the PostgreSQL steps, testing/docker up.
+//   node e2e/smoke.mjs [screenshots-dir]
+
+import { spawn } from "node:child_process";
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { chromium } from "playwright-core";
+
+const root = resolve(import.meta.dirname, "../../..");
+const exe = join(root, "target/release/spelunk-desktop" + (process.platform === "win32" ? ".exe" : ""));
+const demo = join(root, "examples/demo");
+const shots = resolve(process.argv[2] ?? join(import.meta.dirname, "screenshots"));
+const userDir = mkdtempSync(join(tmpdir(), "spelunk-e2e-"));
+const port = 9333;
+mkdirSync(shots, { recursive: true });
+
+function startApp() {
+  return spawn(exe, [demo], {
+    env: {
+      ...process.env,
+      SPELUNK_USER_DIR: userDir,
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
+    },
+    stdio: "inherit",
+  });
+}
+
+let app = startApp();
+
+async function stopApp() {
+  if (app.exitCode !== null || app.signalCode !== null) return;
+  const exited = once(app, "exit");
+  app.kill();
+  await exited;
+}
+
+async function connect() {
+  for (let i = 0; i < 60; i++) {
+    try {
+      return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    } catch {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  throw new Error("the app did not open the debugging port");
+}
+
+let failed = false;
+let browser = await connect();
+try {
+  let page = browser.contexts()[0].pages()[0];
+  page.setDefaultTimeout(30_000);
+  const shot = (name) => page.screenshot({ path: join(shots, `${name}.png`) });
+  const step = (text) => console.log(`· ${text}`);
+
+  async function newQuery(connection, sql) {
+    await page.locator(`.connection-row:has-text("${connection}") button[title="New query"]`).click();
+    const panel = page.locator(".tab-panel:not([hidden])");
+    await panel.locator(".cm-content").click();
+    // insertText does not trigger autocompletion (Enter would accept a suggestion).
+    await page.keyboard.insertText(sql);
+    return panel;
+  }
+  async function run(panel) {
+    await panel.locator(".cm-content").click();
+    await page.keyboard.press("Control+Enter");
+  }
+  async function replaceQuery(panel, sql) {
+    await panel.locator(".cm-content").click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.insertText(sql);
+  }
+  async function waitForHistoryCount(count) {
+    await page.waitForFunction((expected) => document.querySelectorAll(".history-entry").length === expected && document.querySelector(".history-entries")?.getAttribute("aria-busy") === "false", count);
+  }
+  async function setHistorySaving(panel, enabled) {
+    const checkbox = panel.getByRole("checkbox", { name: "Save query history for Shop (SQLite)", exact: true });
+    if (await checkbox.isChecked() !== enabled) await checkbox.click();
+    await page.waitForFunction((expected) => {
+      const input = document.querySelector('.tab-panel:not([hidden]) input[type="checkbox"]');
+      return input?.checked === expected && !input.disabled;
+    }, enabled);
+  }
+  async function setLanguage(value) {
+    const select = page.locator(".language-setting select");
+    await select.selectOption(value);
+    await page.waitForFunction((expected) => {
+      const input = document.querySelector(".language-setting select");
+      return input?.value === expected && !input.disabled && document.documentElement.lang === expected;
+    }, value);
+  }
+
+  step("startup and untrusted repository");
+  await page.locator(".language-setting select:not([disabled])").waitFor();
+  assert.equal(await page.locator(".language-setting select").inputValue(), "system");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["es-ES"] });
+    window.dispatchEvent(new Event("languagechange"));
+  });
+  await page.waitForFunction(() => document.documentElement.lang === "es-ES");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["fr-FR"] });
+    window.dispatchEvent(new Event("languagechange"));
+  });
+  await page.waitForFunction(() => document.documentElement.lang === "en");
+  await setLanguage("es");
+  await page.getByText("Selecciona una conexión a la izquierda o abre una consulta nueva.").waitFor();
+  await page.getByRole("combobox", { name: "Idioma" }).waitFor();
+  await setLanguage("en");
+  await page.getByText("Shop (SQLite)").waitFor();
+  await page.getByText("is not trusted").waitFor();
+  await shot("01-start");
+
+  step("trust the repository");
+  await page.getByRole("button", { name: "Review and trust" }).click();
+  await page.getByRole("dialog").getByText("Trust this repository?").waitFor();
+  await shot("02-trust");
+  await page.getByRole("button", { name: "Trust", exact: true }).click();
+
+  step("SQLite: aggregation");
+  let panel = await newQuery(
+    "Shop (SQLite)",
+    "select c.country, count(*) as orders, round(sum(o.total), 2) as total\nfrom orders o\njoin customer c on c.id = o.customer_id\ngroup by c.country\norder by total desc;",
+  );
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "6 rows" }).waitFor();
+  await panel.locator(".cm-content").click();
+  await page.keyboard.press("Control+f");
+  const searchInput = panel.locator('.cm-search input[name="search"]');
+  await searchInput.fill("country");
+  await setLanguage("es");
+  assert.equal(await searchInput.inputValue(), "country");
+  assert.equal(await searchInput.getAttribute("aria-label"), "Buscar");
+  await panel.locator('.cm-search button[name="next"]', { hasText: "siguiente" }).waitFor();
+  await panel.getByRole("textbox", { name: "Editor SQL" }).waitFor();
+  await panel.locator(".statusline", { hasText: "6 filas" }).waitFor();
+  await page.getByRole("tab", { name: /Consulta 1/ }).waitFor();
+  await shot("03-espanol");
+  await setLanguage("en");
+  await panel.locator('.cm-search button[name="close"]').click();
+  await panel.locator(".cm-content").click();
+  await page.keyboard.press("Control+Alt+g");
+  const gotoInput = panel.locator('.cm-goto-line input[name="line"]');
+  await gotoInput.fill("3");
+  await setLanguage("es");
+  await panel.locator(".cm-goto-line label", { hasText: "Ir a la línea" }).waitFor();
+  assert.equal(await gotoInput.inputValue(), "3");
+  await setLanguage("en");
+  await panel.locator(".cm-goto-line .cm-dialog-close").click();
+  await shot("03-sqlite");
+
+  step("SQLite: 50,000 rows and scrolling");
+  panel = await newQuery("Shop (SQLite)", "select * from orders;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "50,000 rows" }).waitFor();
+  await panel.locator(".grid-scroller").evaluate((el) => (el.scrollTop = 26 * 25_000));
+  await page.waitForTimeout(500);
+  await shot("04-grid-scroll");
+
+  step("error with its position underlined");
+  panel = await newQuery("Shop (SQLite)", "select id, total\nfrom ordrs\nwhere total > 100;");
+  await run(panel);
+  await panel.locator(".messages", { hasText: "ordrs" }).waitFor();
+  await panel.locator(".cm-lintRange-error").waitFor();
+  await setLanguage("es");
+  await panel.locator(".error-box", { hasText: "no such table: ordrs" }).waitFor();
+  await page.getByRole("button", { name: "Historial de consultas", exact: true }).waitFor();
+  await setLanguage("en");
+  await shot("05-error");
+
+  step("history: successes, errors, search and reopening without execution");
+  await page.getByRole("button", { name: "Query history", exact: true }).click();
+  let history = page.getByRole("complementary", { name: "Query history", exact: true });
+  await waitForHistoryCount(3);
+  const errorEntry = history.locator(".history-entry").filter({ has: page.locator(".history-sql", { hasText: "from ordrs" }) });
+  await errorEntry.locator(".history-error", { hasText: "ordrs" }).waitFor();
+  await errorEntry.getByText("0 rows returned", { exact: true }).waitFor();
+  const aggregateEntry = history.locator(".history-entry").filter({ has: page.locator(".history-sql", { hasText: "group by c.country" }) });
+  await aggregateEntry.getByText("6 rows returned", { exact: true }).waitFor();
+  assert.match(await aggregateEntry.locator(".history-meta").innerText(), /\d+ ms/);
+  assert.ok(await aggregateEntry.locator("time").getAttribute("datetime"));
+  await history.getByRole("textbox", { name: "Search query history" }).fill("ORDRS");
+  await waitForHistoryCount(1);
+  await history.locator(".history-error", { hasText: "ordrs" }).waitFor();
+  await history.getByRole("textbox", { name: "Search query history" }).fill("round");
+  await waitForHistoryCount(1);
+  await history.locator(".history-sql", { hasText: "group by c.country" }).waitFor();
+  const reopenedSql = await history.locator(".history-sql").innerText();
+  const tabsBefore = await page.getByRole("tab").count();
+  await shot("05a-history");
+  await history.getByRole("button", { name: "Open in new tab" }).click();
+  panel = page.locator(".tab-panel:not([hidden])");
+  assert.equal(await page.getByRole("tab").count(), tabsBefore + 1);
+  assert.equal(await panel.locator(".cm-content").innerText(), reopenedSql);
+  await panel.getByText("Disconnected", { exact: true }).waitFor();
+  await panel.getByText("Write a query and press Ctrl+Enter.", { exact: true }).waitFor();
+  assert.equal(await panel.locator(".grid-host").count(), 0);
+  await page.getByRole("button", { name: "Query history", exact: true }).click();
+  await waitForHistoryCount(3);
+  await page.getByRole("button", { name: "Close query history" }).click();
+
+  step("history disabled: successful and failed SQL leave no entries");
+  await setHistorySaving(panel, false);
+  await replaceQuery(panel, "select 'private_history_marker' as secret;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await replaceQuery(panel, "select private_error_marker from no_history_private_table;");
+  await run(panel);
+  await panel.locator(".messages", { hasText: "no_history_private_table" }).waitFor();
+  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Query history", exact: true }).click();
+  await waitForHistoryCount(3);
+  await history.getByRole("textbox", { name: "Search query history" }).fill("private");
+  await history.getByText("No matching queries.", { exact: true }).waitFor();
+  await shot("05b-history-disabled");
+  await page.getByRole("button", { name: "Close query history" }).click();
+
+  step("direct PostgreSQL: password asked in a dialog");
+  panel = await newQuery(
+    "Postgres (Docker)",
+    "select id, txt, ts, amount, flag, maybe_null, uid, doc\nfrom big\norder by id\nlimit 1000;",
+  );
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for Postgres (Docker)").waitFor();
+  // A wrong password first: it is asked again showing the reason.
+  await page.getByLabel("Password", { exact: true }).fill("wrong");
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.getByRole("dialog").getByText("password authentication failed").waitFor();
+  await shot("06-wrong-password");
+  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByRole("button", { name: "Connect" }).click();
+  await panel.locator(".statusline", { hasText: "1,000 rows" }).waitFor();
+  await shot("07-postgres");
+
+  step("PostgreSQL behind two bastions with TLS verify-full");
+  panel = await newQuery(
+    "Postgres behind bastions",
+    "select inet_server_addr()::text as server, ssl, version, cipher\nfrom pg_stat_ssl\nwhere pid = pg_backend_pid();",
+  );
+  await run(panel);
+  // First the password (the keychain does not have it yet, so it offers to remember it); then,
+  // when the tunnel opens, the fingerprint of each bastion.
+  await page.getByRole("dialog").getByText("Password for Postgres behind bastions").waitFor();
+  await page.getByText("Remember in the system keychain").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByRole("button", { name: "Connect" }).click();
+  for (let hop = 1; hop <= 2; hop++) {
+    await page.getByRole("dialog").getByText(`(hop ${hop})`).waitFor();
+    if (hop === 1) await shot("08-ssh-fingerprint");
+    await page.getByRole("button", { name: "Trust and remember" }).click();
+  }
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await panel.getByText("PRODUCTION").waitFor();
+  await shot("09-bastions");
+
+  step("history and per-connection preference survive an app restart");
+  await setLanguage("es");
+  await browser.close();
+  await stopApp();
+  app = startApp();
+  browser = await connect();
+  page = browser.contexts()[0].pages()[0];
+  page.setDefaultTimeout(30_000);
+  await page.getByRole("combobox", { name: "Idioma" }).waitFor();
+  await page.locator(".language-setting select:not([disabled])").waitFor();
+  assert.equal(await page.locator(".language-setting select").inputValue(), "es");
+  assert.equal(await page.locator("html").getAttribute("lang"), "es");
+  await setLanguage("en");
+  await page.getByText("Shop (SQLite)", { exact: true }).waitFor();
+  panel = await newQuery("Shop (SQLite)", "select 'history_resumed_marker' as resumed;");
+  const persistedCheckbox = panel.getByRole("checkbox", { name: "Save query history for Shop (SQLite)", exact: true });
+  assert.equal(await persistedCheckbox.isChecked(), false);
+  await page.getByRole("button", { name: "Query history", exact: true }).click();
+  history = page.getByRole("complementary", { name: "Query history", exact: true });
+  await history.getByRole("textbox", { name: "Search query history" }).fill("round");
+  await waitForHistoryCount(1);
+  await history.locator(".history-sql", { hasText: "group by c.country" }).waitFor();
+  await history.getByRole("textbox", { name: "Search query history" }).fill("private");
+  await history.getByText("No matching queries.", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close query history" }).click();
+  await setHistorySaving(panel, true);
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  await page.getByRole("button", { name: "Query history", exact: true }).click();
+  await history.getByRole("textbox", { name: "Search query history" }).fill("history_resumed_marker");
+  await waitForHistoryCount(1);
+  await history.locator(".history-sql", { hasText: "history_resumed_marker" }).waitFor();
+  await shot("10-history-persisted");
+
+  step("history: cancelled queries translate without changing database errors");
+  await page.getByRole("button", { name: "Close query history" }).click();
+  panel = await newQuery("Shop (SQLite)", "with recursive cancel_history_marker(x) as (select 1 union all select x + 1 from cancel_history_marker where x < 100000000) select x from cancel_history_marker;");
+  await run(panel);
+  await panel.locator(".grid-host").waitFor();
+  await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Query history", exact: true }).click();
+  await history.getByRole("textbox", { name: "Search query history" }).fill("cancel_history_marker");
+  await waitForHistoryCount(1);
+  await history.locator(".history-error", { hasText: "Query cancelled" }).waitFor();
+  await setLanguage("es");
+  await page.locator("#query-history .history-error", { hasText: "Consulta cancelada" }).waitFor();
+  await setLanguage("en");
+
+  step("history: load older queries in bounded pages");
+  await page.getByRole("button", { name: "Close query history" }).click();
+  await replaceQuery(panel, Array.from({ length: 105 }, (_, i) => `select ${i} as history_page_marker;`).join("\n"));
+  await run(panel);
+  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Query history", exact: true }).click();
+  await history.getByRole("textbox", { name: "Search query history" }).fill("history_page_marker");
+  await waitForHistoryCount(100);
+  await history.getByRole("button", { name: "Load more", exact: true }).click();
+  await waitForHistoryCount(105);
+  const pageStatements = await history.locator(".history-sql").allTextContents();
+  assert.equal(new Set(pageStatements).size, 105);
+  assert.equal(await history.getByRole("button", { name: "Load more", exact: true }).count(), 0);
+  await shot("11-history-pages");
+
+  console.log(`\nOK. Screenshots in ${shots}`);
+} catch (e) {
+  failed = true;
+  console.error("\nFAILED:", e);
+  try {
+    await browser.contexts()[0].pages()[0].screenshot({ path: join(shots, "failure.png") });
+  } catch {}
+} finally {
+  await browser.close().catch(() => {});
+  await stopApp();
+  rmSync(userDir, { recursive: true, force: true });
+  process.exit(failed ? 1 : 0);
+}

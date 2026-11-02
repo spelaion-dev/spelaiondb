@@ -1,0 +1,176 @@
+{
+  "$defs": {
+    "Engine": {
+      "enum": [
+        "postgres",
+        "sqlite"
+      ],
+      "type": "string"
+    },
+    "McpConfig": {
+      "additionalProperties": false,
+      "description": "What an agent can do with this connection (ADR-008).",
+      "properties": {
+        "exposed": {
+          "default": false,
+          "description": "Visible to agents. Off by default.",
+          "type": "boolean"
+        },
+        "max_rows": {
+          "description": "Maximum rows per response.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "writes": {
+          "$ref": "#/$defs/WritePolicy",
+          "default": "deny",
+          "description": "Write policy. On `env = \"prod\"` connections it is always `deny`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretSpec": {
+      "additionalProperties": false,
+      "description": "Reference to a secret. Accepted forms:\n`keychain`, `keychain:<name>`, `env:<VARIABLE>`, `op://<vault>/<item>/<field>`,\n`cmd:<command>` and `prompt` (asked when connecting).",
+      "properties": {
+        "secret": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "secret"
+      ],
+      "type": "object"
+    },
+    "TlsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "ca": {
+          "description": "Certificate (PEM) of the authority, relative to the repository root or with `~/`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/TlsModeConfig",
+          "default": "prefer"
+        }
+      },
+      "type": "object"
+    },
+    "TlsModeConfig": {
+      "description": "Same names as libpq's `sslmode`.",
+      "enum": [
+        "disable",
+        "prefer",
+        "require",
+        "verify-ca",
+        "verify-full"
+      ],
+      "type": "string"
+    },
+    "WritePolicy": {
+      "enum": [
+        "deny",
+        "confirm",
+        "allow"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A connection: `.spelunk/connections/<folders>/<id>.toml`.",
+  "properties": {
+    "database": {
+      "description": "Database; for SQLite, the file path (relative to the repository root).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "engine": {
+      "$ref": "#/$defs/Engine"
+    },
+    "env": {
+      "description": "Environment label (`dev`, `staging`, `prod`…). `prod` tightens the MCP permissions.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "host": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mcp": {
+      "$ref": "#/$defs/McpConfig"
+    },
+    "name": {
+      "description": "Display name. If missing, the identifier (the file path) is used.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "password": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SecretSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Reference to the secret, never the value: `{ secret = \"keychain\" }`."
+    },
+    "port": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "read_only": {
+      "description": "Open read-only (native in SQLite).",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "description": "Format version of this file.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tls": {
+      "$ref": "#/$defs/TlsConfig"
+    },
+    "tunnel": {
+      "description": "Name of a tunnel in `.spelunk/tunnels/`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "user": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "engine"
+  ],
+  "title": "ConnectionFile",
+  "type": "object"
+}

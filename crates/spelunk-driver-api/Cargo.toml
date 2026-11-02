@@ -1,0 +1,16 @@
+[package]
+name = "spelunk-driver-api"
+description = "Common driver contract for SpelunkDB (ADR-005)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+arrow.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

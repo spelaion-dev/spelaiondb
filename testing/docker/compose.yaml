@@ -1,0 +1,58 @@
+# SpelunkDB test environment: PostgreSQL behind two SSH hops.
+#
+#   host ──2221──► bastion1 ──(mid network)──► bastion2 ──(data network)──► postgres:5432
+#
+# Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
+# Postgres is also published on 127.0.0.1:15432 for tests without SSH (experiment 3).
+name: spelunk-test
+
+services:
+  bastion1:
+    build: ./bastion
+    ports:
+      - "127.0.0.1:2221:22"
+    volumes:
+      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelunk:ro
+    networks: [public, mid]
+
+  bastion2:
+    build: ./bastion
+    volumes:
+      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelunk:ro
+    networks: [mid, data]
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: spelunk
+      POSTGRES_PASSWORD: spelunk
+      POSTGRES_DB: spelunk
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+      - ./keys/server.crt:/certs/server.crt:ro
+      - ./keys/server.key:/certs/server.key:ro
+    # TLS enabled (without requiring it): PostgreSQL rejects keys mounted from Windows because
+    # of their permissions, so they are copied inside with the owner and permissions it wants.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        install -o postgres -g postgres -m 600 /certs/server.key /var/lib/postgresql/server.key
+        install -o postgres -g postgres -m 644 /certs/server.crt /var/lib/postgresql/server.crt
+        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spelunk -d spelunk"]
+      interval: 2s
+      retries: 30
+    # "direct" only exists to publish the port: Docker does not publish ports of containers
+    # that are only on internal networks. No bastion is on it.
+    networks: [data, direct]
+
+networks:
+  public: {}
+  direct: {}
+  mid:
+    internal: true
+  data:
+    internal: true

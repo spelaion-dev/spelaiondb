@@ -1,0 +1,23 @@
+[package]
+name = "spelunk-driver-sqlite"
+description = "SQLite driver for SpelunkDB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+spelunk-driver-api.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+# bundled: SQLite compiled in, same version on all three platforms.
+rusqlite = { version = "0.41", features = ["bundled", "column_decltype"] }
+tokio.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

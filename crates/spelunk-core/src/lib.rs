@@ -1,0 +1,19 @@
+//! SpelunkDB core (ADR-002).
+//!
+//! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
+//! adapters over this crate. Everything that has to be the same for all of them lives here.
+
+mod classify;
+mod history;
+mod open;
+mod readonly;
+mod results;
+mod session;
+
+pub use classify::{ReadKind, classify_read_only};
+pub use history::{HistoryError, QueryHistory};
+pub use open::{Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection};
+pub use readonly::{ReadError, ReadLimits, ReadResult};
+pub use results::{ResultId, ResultStore, StoredResult};
+pub use session::{CoreEvent, Session, StatementError};
+pub use spelunk_store::HistoryEntry;

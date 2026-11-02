@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Personal configuration: `<user config>/spelunkdb/user.toml`. Never goes to git.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "vars": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Values for `${user.<name>}` in the repository's connections.",
+      "type": "object"
+    }
+  },
+  "title": "UserFile",
+  "type": "object"
+}

@@ -1,0 +1,108 @@
+{
+  "$defs": {
+    "HopConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "auth": {
+          "default": [
+            "agent"
+          ],
+          "description": "Methods to try, in order. Defaults to `[\"agent\"]`.",
+          "items": {
+            "$ref": "#/$defs/SshAuth"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "External command used as the transport, like `ProxyCommand` (`%h` and `%p`).\nRequires trusting the repository.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "type": "string"
+        },
+        "identity_file": {
+          "description": "A specific private key (it also filters the agent's keys).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "password": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "user": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "user"
+      ],
+      "type": "object"
+    },
+    "SecretSpec": {
+      "additionalProperties": false,
+      "description": "Reference to a secret. Accepted forms:\n`keychain`, `keychain:<name>`, `env:<VARIABLE>`, `op://<vault>/<item>/<field>`,\n`cmd:<command>` and `prompt` (asked when connecting).",
+      "properties": {
+        "secret": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "secret"
+      ],
+      "type": "object"
+    },
+    "SshAuth": {
+      "enum": [
+        "agent",
+        "key",
+        "password",
+        "keyboard-interactive"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "An SSH tunnel: `.spelunk/tunnels/<name>.toml`.",
+  "properties": {
+    "hops": {
+      "description": "Hops in order; the last one is the one that reaches the database.",
+      "items": {
+        "$ref": "#/$defs/HopConfig"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "hops"
+  ],
+  "title": "TunnelFile",
+  "type": "object"
+}

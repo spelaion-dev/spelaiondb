@@ -1,0 +1,5 @@
+# LF everywhere: scripts and configs are used inside containers and WSL.
+* text=auto eol=lf
+*.ico binary
+*.png binary
+*.icns binary

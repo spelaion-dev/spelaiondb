@@ -1,0 +1,81 @@
+# CI is the code reviewer (ADR-012): nothing gets into main without passing through here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  linux:
+    name: Linux · fmt, clippy, tests with PostgreSQL (TLS), SQLite and SSH tunnels
+    runs-on: ubuntu-latest
+    env:
+      SPELUNK_TEST_PG: 127.0.0.1:15432
+      SPELUNK_TEST_SSH: 127.0.0.1:2221
+      SPELUNK_TEST_SSH_AGENT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # libdbus: Linux keychain (Secret Service). WebKitGTK and friends: the Tauri app.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      # The same environment as locally: PostgreSQL with TLS and test certificates.
+      - run: bash testing/docker/gen-keys.sh
+      - run: docker compose -f testing/docker/compose.yaml up -d --build --wait
+      # A real SSH agent with the test key, for the agent authentication test.
+      - run: |
+          ssh-agent -a /tmp/ssh-agent.sock > /dev/null
+          echo "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" >> "$GITHUB_ENV"
+          SSH_AUTH_SOCK=/tmp/ssh-agent.sock ssh-add testing/docker/keys/id_ed25519
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      # The app's TS types are generated from Rust: the file in the repo must be up to date.
+      - run: cargo run -q -p spelunk-desktop --bin export-bindings
+      - run: git diff --exit-code apps/desktop/src/bindings.ts
+
+  frontend:
+    name: App · strict TypeScript and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  windows:
+    # Windows runners do not run Linux containers: there is no PostgreSQL here and its
+    # tests are skipped (ADR-012). The SQLite ones do run.
+    name: Windows · clippy and tests (SQLite)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  deny:
+    name: Licenses and vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

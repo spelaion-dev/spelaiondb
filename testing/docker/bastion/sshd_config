@@ -1,0 +1,20 @@
+Port 22
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+
+# Keys are mounted from the host (Windows), whose permissions do not pass StrictModes.
+StrictModes no
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+
+# Tunnels only: the client must never request a shell. ForceCommand affects sessions,
+# not direct-tcpip channels, so forwarding keeps working.
+AllowTcpForwarding local
+PermitTTY no
+X11Forwarding no
+ForceCommand /bin/echo "This bastion gives no shell"
+
+ClientAliveInterval 15
+ClientAliveCountMax 3
+LogLevel VERBOSE

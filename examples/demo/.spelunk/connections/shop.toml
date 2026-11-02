@@ -1,0 +1,11 @@
+#:schema https://raw.githubusercontent.com/spelunkdb/spelunkdb/main/schema/connection.schema.json
+
+# Local SQLite: no server needed. Generate the file with make-shop-db.py.
+schema_version = 1
+name = "Shop (SQLite)"
+engine = "sqlite"
+database = "data/shop.db"
+
+[mcp]
+exposed = true
+max_rows = 100

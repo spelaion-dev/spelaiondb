@@ -1,0 +1,15 @@
+#:schema https://raw.githubusercontent.com/spelunkdb/spelunkdb/main/schema/connection.schema.json
+
+# PostgreSQL from testing/docker, direct. The password (spelunk) is asked when connecting.
+schema_version = 1
+name = "Postgres (Docker)"
+engine = "postgres"
+env = "dev"
+host = "127.0.0.1"
+port = 15432
+database = "spelunk"
+user = "spelunk"
+password = { secret = "prompt" }
+
+[tls]
+mode = "require"

@@ -1,0 +1,66 @@
+{
+  "memoryIdle": {
+    "backendMb": 183,
+    "jsHeapMb": null,
+    "processTreeMb": 35000,
+    "processes": 168
+  },
+  "postgres": {
+    "backendFirstBatchMs": 38,
+    "backendTotalMs": 1954,
+    "firstFetchDoneUiMs": 64,
+    "firstProgressUiMs": 39,
+    "firstRowUiMs": 64,
+    "memory": {
+      "backendMb": 433,
+      "jsHeapMb": null,
+      "processTreeMb": 71140,
+      "processes": 173
+    },
+    "rows": 1000000,
+    "scroll": {
+      "avgFps": 54.8,
+      "blankCellPct": 11.2,
+      "durationMs": 8007,
+      "fetchP50Ms": 3,
+      "fetchP95Ms": 10,
+      "frames": 439,
+      "maxFrameMs": 43,
+      "p50FrameMs": 18,
+      "p95FrameMs": 21,
+      "p99FrameMs": 22,
+      "slowFramePct": 0.7
+    }
+  },
+  "startedAt": "2026-11-02T09:34:34.092Z",
+  "synthetic": {
+    "backendBuildMs": 142,
+    "firstRowUiMs": 668,
+    "memory": {
+      "backendMb": 302,
+      "jsHeapMb": null,
+      "processTreeMb": 59883,
+      "processes": 176
+    },
+    "rows": 1000000,
+    "scroll": {
+      "avgFps": 50.5,
+      "blankCellPct": 11.2,
+      "durationMs": 8016,
+      "fetchP50Ms": 3,
+      "fetchP95Ms": 10,
+      "frames": 405,
+      "maxFrameMs": 673,
+      "p50FrameMs": 18,
+      "p95FrameMs": 21,
+      "p99FrameMs": 23,
+      "slowFramePct": 0.5
+    }
+  },
+  "system": {
+    "arch": "x86_64",
+    "os": "linux",
+    "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+    "webview": "2.52.6"
+  }
+}

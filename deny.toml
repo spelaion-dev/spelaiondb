@@ -1,0 +1,44 @@
+# cargo-deny (ADR-012): licenses compatible with Apache-2.0 and no known vulnerabilities.
+
+[advisories]
+yanked = "deny"
+ignore = [
+  # Marvin (timing side channel in RSA private-key operations), through russh.
+  # In an SSH client the private key signs once per connection and whoever could measure it
+  # is the server itself; with an agent the signature does not even happen in this process.
+  # No fixed version; removing RSA would break very common user keys. Revisit with a stable
+  # rsa >= 0.10 (ADR-007).
+  { id = "RUSTSEC-2023-0071", reason = "SSH client: few signatures per connection; see ADR-007" },
+  # Unmaintained (not vulnerable): macros that only run at compile time and never reach the
+  # binary. paste comes from specta (the app's TS types); proc-macro-error, from Tauri's GTK
+  # stack on Linux. Revisit when those dependencies migrate.
+  { id = "RUSTSEC-2024-0436", reason = "paste: compile-time macro through specta" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: compile-time macro through GTK/Tauri" },
+]
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  # Weak per-file copyleft, compatible when using the crates unmodified. It comes through Tauri
+  # (cssparser, selectors, dtoa-short, option-ext): unavoidable with the chosen shell (ADR-003).
+  "MPL-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# Internal path dependencies carry no version.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
