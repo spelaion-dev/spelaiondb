@@ -5,10 +5,13 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use arrow::array::RecordBatch;
+use arrow::array::{Array, RecordBatch};
+use arrow::compute::{concat, interleave_record_batch};
 use arrow::error::ArrowError;
 use arrow::ipc::writer::StreamWriter;
 use spelunk_driver_api::ResultSchema;
+
+use crate::sort::{SortError, SortKey, sorted_rows};
 
 /// Identifier of a result within a [`ResultStore`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -23,6 +26,8 @@ pub struct StoredResult {
     starts: Vec<usize>,
     rows: usize,
     complete: bool,
+    /// When sorted, the original row number shown at each position.
+    order: Option<(SortKey, Vec<u32>)>,
 }
 
 impl StoredResult {
@@ -33,6 +38,7 @@ impl StoredResult {
             starts: Vec::new(),
             rows: 0,
             complete: false,
+            order: None,
         }
     }
 
@@ -49,11 +55,64 @@ impl StoredResult {
         self.complete
     }
 
-    /// Rows `[start, start + len)` (clipped at the end) as batches without copying data.
+    /// The column the rows are sorted by, if any.
+    pub fn sort_key(&self) -> Option<SortKey> {
+        self.order.as_ref().map(|(key, _)| *key)
+    }
+
+    /// Sorts the rows by one column (`None` goes back to the order the server sent). Every
+    /// later window, copy and export sees the new order.
+    pub fn sort(&mut self, key: Option<SortKey>) -> Result<(), SortError> {
+        let Some(key) = key else {
+            self.order = None;
+            return Ok(());
+        };
+        if !self.complete {
+            return Err(SortError::Incomplete);
+        }
+        let meta = self
+            .schema
+            .columns
+            .get(key.column)
+            .ok_or(SortError::NoSuchColumn(key.column))?;
+        if u32::try_from(self.rows).is_err() {
+            return Err(SortError::TooManyRows);
+        }
+        let parts: Vec<&dyn Array> = self
+            .batches
+            .iter()
+            .map(|b| b.column(key.column).as_ref())
+            .collect();
+        let rows = if parts.is_empty() {
+            Vec::new()
+        } else {
+            let values = concat(&parts).map_err(|_| SortError::UnexpectedArray(key.column))?;
+            sorted_rows(values.as_ref(), meta.logical, key)?
+        };
+        self.order = Some((key, rows));
+        Ok(())
+    }
+
+    /// Rows `[start, start + len)` (clipped at the end), in the current order. Unsorted, the
+    /// batches are slices without copying data; sorted, the window's rows are gathered.
     pub fn window(&self, start: usize, len: usize) -> Vec<RecordBatch> {
         let end = start.saturating_add(len).min(self.rows);
         if start >= end {
             return Vec::new();
+        }
+        if let Some((_, order)) = &self.order {
+            let picks: Vec<(usize, usize)> = order[start..end]
+                .iter()
+                .map(|&row| {
+                    let row = row as usize;
+                    let batch = self.starts.partition_point(|&s| s <= row) - 1;
+                    (batch, row - self.starts[batch])
+                })
+                .collect();
+            let batches: Vec<&RecordBatch> = self.batches.iter().collect();
+            let gathered = interleave_record_batch(&batches, &picks)
+                .expect("the batches of one result share its schema");
+            return vec![gathered];
         }
         let first = self.starts.partition_point(|&s| s <= start) - 1;
         let mut out = Vec::new();
@@ -216,6 +275,57 @@ mod tests {
                 .map(String::as_str),
             Some("int8")
         );
+    }
+
+    #[test]
+    fn sorting_reorders_windows_across_batches_and_can_be_undone() {
+        let store = ResultStore::new();
+        let s = schema();
+        let id = store.create(s.clone());
+        for (from, to) in [(0, 10), (10, 15), (15, 30)] {
+            store.append(id, batch(&s, from, to));
+        }
+        let r = store.get(id).unwrap();
+        let mut r = r.write().unwrap();
+        let down = SortKey {
+            column: 0,
+            descending: true,
+        };
+        assert_eq!(r.sort(Some(down)), Err(SortError::Incomplete));
+        drop(r);
+        store.complete(id);
+        let r = store.get(id).unwrap();
+        let mut r = r.write().unwrap();
+        assert_eq!(
+            r.sort(Some(SortKey {
+                column: 1,
+                descending: false
+            })),
+            Err(SortError::NoSuchColumn(1))
+        );
+        r.sort(Some(down)).unwrap();
+        assert_eq!(r.sort_key(), Some(down));
+        assert_eq!(values(&r.window(8, 9)), (13..=21).rev().collect::<Vec<_>>());
+        assert_eq!(values(&r.window(25, 100)), [4, 3, 2, 1, 0]);
+        assert!(r.window(30, 5).is_empty());
+        r.sort(None).unwrap();
+        assert_eq!(r.sort_key(), None);
+        assert_eq!(values(&r.window(8, 3)), [8, 9, 10]);
+    }
+
+    #[test]
+    fn an_empty_result_sorts() {
+        let store = ResultStore::new();
+        let id = store.create(schema());
+        store.complete(id);
+        let r = store.get(id).unwrap();
+        let mut r = r.write().unwrap();
+        r.sort(Some(SortKey {
+            column: 0,
+            descending: false,
+        }))
+        .unwrap();
+        assert!(r.window(0, 10).is_empty());
     }
 
     #[test]

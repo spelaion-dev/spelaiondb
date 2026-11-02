@@ -10,6 +10,13 @@ export interface ResultMeta {
   columns: ColumnItem[];
   rows: number;
   complete: boolean;
+  /** Column the core sorted the rows by (`undefined`: the server's order). */
+  sort?: SortState;
+}
+
+export interface SortState {
+  column: number;
+  descending: boolean;
 }
 
 export interface Translation {

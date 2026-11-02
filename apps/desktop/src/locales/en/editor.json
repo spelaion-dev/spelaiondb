@@ -43,7 +43,14 @@
       "sqlInsert": "SQL INSERT statements",
       "done_one": "Exported {{formattedCount}} row to {{path}}",
       "done_other": "Exported {{formattedCount}} rows to {{path}}"
-    }
+    },
+    "sortAsc": "Sort ascending",
+    "sortDesc": "Sort descending",
+    "sortClear": "Original order",
+    "sortWhenComplete": "The result can be sorted once every row has arrived",
+    "gridSorted": "sorted by {{column}}, {{direction}}",
+    "ascending": "ascending",
+    "descending": "descending"
   },
   "messages": {
     "connectionFailed": "Could not connect: {{detail}}",

@@ -64,6 +64,11 @@ export const commands = {
 	 *  what fits, and the row may not be in its cache.
 	 */
 	cellValue: (result: number, row: number, column: number) => typedError<string | null, string>(__TAURI_INVOKE("cell_value", { result, row, column })),
+	/**
+	 *  Sorts a result by one column in the core (`None` restores the server's order). The
+	 *  grid then asks for its windows again.
+	 */
+	sortResult: (result: number, column: number | null, descending: boolean) => typedError<null, string>(__TAURI_INVOKE("sort_result", { result, column, descending })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),

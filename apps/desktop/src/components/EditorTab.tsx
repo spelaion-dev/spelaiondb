@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type ScriptEvent } from "../api";
 import { openSession } from "../connect";
-import { useApp, type RunState, type Tab, type Translation } from "../store";
+import { useApp, type RunState, type SortState, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultGrid } from "./ResultGrid";
@@ -236,7 +236,14 @@ export function EditorTab({ tab }: { tab: Tab }) {
         </div>
         <div className="divider" onPointerDown={startDrag} role="separator" aria-orientation="horizontal" aria-label={t("resizeEditor")} />
         <div style={{ flex: `${1 - editorShare} 1 0` }} className="results-pane">
-          <Results run={tab.run} session={tab.id} onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))} />
+          <Results
+            run={tab.run}
+            session={tab.id}
+            onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))}
+            onSorted={(result, sort) =>
+              updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
+            }
+          />
         </div>
       </div>
     </div>
@@ -255,7 +262,17 @@ function errorRun(text: string, translation?: Translation): RunState {
   };
 }
 
-function Results({ run, session, onSelect }: { run: RunState | null; session: string; onSelect(id: number | null): void }) {
+function Results({
+  run,
+  session,
+  onSelect,
+  onSorted,
+}: {
+  run: RunState | null;
+  session: string;
+  onSelect(id: number | null): void;
+  onSorted(result: number, sort: SortState | undefined): void;
+}) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   if (!run) return <div className="empty">{t("results.empty")}</div>;
@@ -277,7 +294,7 @@ function Results({ run, session, onSelect }: { run: RunState | null; session: st
       </div>
       <div className="result-body">
         {active ? (
-          <ResultGrid result={active} session={session} />
+          <ResultGrid result={active} session={session} onSorted={(sort) => onSorted(active.id, sort)} />
         ) : (
           <div className="messages">
             {error && <pre className="error-box">{error}</pre>}

@@ -312,6 +312,47 @@ try {
   await page.waitForTimeout(500);
   await shot("04-grid-scroll");
 
+  step("sort: header clicks sort the 50,000 rows in the core and undo it");
+  const sortGrid = panel.locator(".grid-scroller");
+  await sortGrid.evaluate((el) => {
+    el.scrollTop = 0;
+    el.scrollLeft = 0;
+  });
+  const sortBox = await sortGrid.boundingBox();
+  // Row numbers take 64 px with 50,000 rows; then id 110, customer_id 110, created 160.
+  const ID_X = 64 + 20;
+  const TOTAL_X = 64 + 110 + 110 + 160 + 20;
+  const sortedAs = (label) => panel.locator(`.grid-scroller[aria-label="Result with 50,000 rows${label}"]`).waitFor();
+  const clickHeader = (x) => page.mouse.click(sortBox.x + x, sortBox.y + 18);
+  const copyFirstRows = async (column, rows) => {
+    const before = await page.evaluate(() => window.__copied.length);
+    await sortGrid.evaluate((el) => {
+      el.scrollTop = 0;
+      el.scrollLeft = 0;
+    });
+    await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+    for (let i = 0; i < column; i++) await page.keyboard.press("ArrowRight");
+    for (let i = 1; i < rows; i++) await page.keyboard.press("Shift+ArrowDown");
+    await page.keyboard.press("Control+c");
+    return (await copied(before + 1)).trimEnd().split("\n");
+  };
+  await clickHeader(ID_X);
+  await sortedAs(", sorted by id, ascending");
+  await clickHeader(ID_X);
+  await sortedAs(", sorted by id, descending");
+  assert.deepEqual(await copyFirstRows(0, 2), ["50000", "49999"]);
+  await clickHeader(TOTAL_X);
+  await sortedAs(", sorted by total, ascending");
+  await clickHeader(TOTAL_X);
+  await sortedAs(", sorted by total, descending");
+  const totals = (await copyFirstRows(3, 20)).map(Number);
+  assert.equal(totals.length, 20);
+  for (let i = 1; i < totals.length; i++) assert.ok(totals[i - 1] >= totals[i], `${totals[i - 1]} >= ${totals[i]}`);
+  await shot("04b-grid-sorted");
+  await clickHeader(TOTAL_X);
+  await sortedAs("");
+  assert.deepEqual(await copyFirstRows(0, 2), ["1", "2"]);
+
   step("error with its position underlined");
   panel = await newQuery("Shop (SQLite)", "select id, total\nfrom ordrs\nwhere total > 100;");
   await run(panel);

@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type CellRange, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT } from "../preferences";
 import { RowCache } from "../grid/rowCache";
-import type { ResultMeta } from "../store";
+import type { ResultMeta, SortState } from "../store";
 import { CellViewer } from "./CellViewer";
 
 const ROW_H = 26;
@@ -75,7 +75,15 @@ function cssVar(style: CSSStyleDeclaration, name: string): string {
   return style.getPropertyValue(name).trim() || "#888";
 }
 
-export function ResultGrid({ result, session }: { result: ResultMeta; session: string }) {
+export function ResultGrid({
+  result,
+  session,
+  onSorted,
+}: {
+  result: ResultMeta;
+  session: string;
+  onSorted(sort: SortState | undefined): void;
+}) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -87,6 +95,8 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const dragging = useRef(false);
   const [viewer, setViewer] = useState(false);
+  /** Changes with every sort, so the cell viewer asks for its (moved) cell again. */
+  const [order, setOrder] = useState(0);
 
   const redraw = useCallback(() => {
     if (frame.current !== null) return;
@@ -244,7 +254,14 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
       if (!meta) continue;
       ctx.font = HEADER_FONT;
       ctx.fillStyle = c.text;
-      ctx.fillText(fit(ctx, meta.name, w - PAD * 2), x + PAD, 13);
+      const sorted = result.sort?.column === col;
+      ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - (sorted ? 14 : 0)), x + PAD, 13);
+      if (sorted) {
+        ctx.fillStyle = c.accent;
+        ctx.textAlign = "right";
+        ctx.fillText(result.sort?.descending ? "▼" : "▲", x + w - PAD, 13);
+        ctx.textAlign = "left";
+      }
       ctx.font = TYPE_FONT;
       ctx.fillStyle = c.muted;
       ctx.fillText(fit(ctx, meta.nativeType, w - PAD * 2), x + PAD, 27);
@@ -298,6 +315,44 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
     let col = offsets.findIndex((o, i) => i < widths.length && dataX >= o && dataX < (offsets[i + 1] ?? 0));
     if (col < 0) col = dataX < 0 ? 0 : widths.length - 1;
     return { row, col, gutter };
+  }
+
+  /** The column whose header is under the pointer, if any. */
+  function headerAt(clientX: number, clientY: number): number | null {
+    const scroller = scrollerRef.current;
+    if (!scroller || widths.length === 0) return null;
+    const rect = scroller.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    if (y < 0 || y >= HEADER_H || x < rowNumW || x > scroller.clientWidth) return null;
+    const dataX = x - rowNumW + scroller.scrollLeft;
+    const col = offsets.findIndex((o, i) => i < widths.length && dataX >= o && dataX < (offsets[i + 1] ?? 0));
+    return col < 0 ? null : col;
+  }
+
+  /** Sorts in the core and asks for the rows again; `undefined` restores the server order. */
+  async function sortBy(sort: SortState | undefined) {
+    setMenu(null);
+    if (!result.complete) {
+      setNotice({ text: t("results.sortWhenComplete"), error: true });
+      return;
+    }
+    try {
+      await call(commands.sortResult(result.id, sort?.column ?? null, sort?.descending ?? false));
+      onSorted(sort);
+      setOrder((n) => n + 1);
+      cache.reset();
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  /** Header clicks cycle: ascending, descending, server order. */
+  function cycleSort(col: number) {
+    const current = result.sort;
+    if (current?.column !== col) void sortBy({ column: col, descending: false });
+    else if (!current.descending) void sortBy({ column: col, descending: true });
+    else void sortBy(undefined);
   }
 
   function scrollIntoView(cell: Cell) {
@@ -434,6 +489,12 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
         onScroll={redraw}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
+          const header = headerAt(e.clientX, e.clientY);
+          if (header !== null) {
+            e.preventDefault();
+            cycleSort(header);
+            return;
+          }
           dragging.current = true;
           selectAt(e, e.shiftKey);
         }}
@@ -446,6 +507,9 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
           const host = e.currentTarget.getBoundingClientRect();
           setMenu({ x: e.clientX - host.left, y: e.clientY - host.top });
         }}
+        onMouseMove={(e) => {
+          e.currentTarget.style.cursor = headerAt(e.clientX, e.clientY) === null ? "" : "pointer";
+        }}
         onDoubleClick={(e) => {
           const cell = cellAt(e.clientX, e.clientY);
           if (cell && !cell.gutter) {
@@ -454,7 +518,15 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
           }
         }}
         onKeyDown={onKeyDown}
-        aria-label={t("results.gridLabel", { count: result.rows, formattedCount: numbers.format(result.rows) })}
+        aria-label={
+          t("results.gridLabel", { count: result.rows, formattedCount: numbers.format(result.rows) }) +
+          (result.sort
+            ? `, ${t("results.gridSorted", {
+                column: result.columns[result.sort.column]?.name ?? "",
+                direction: t(result.sort.descending ? "results.descending" : "results.ascending"),
+              })}`
+            : "")
+        }
       >
         <div style={{ width: totalW, height: totalH }} />
       </div>
@@ -475,6 +547,22 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
               {t(`results.${item.key}`)}
             </button>
           ))}
+          {selection && (
+            <>
+              <hr />
+              <button role="menuitem" onClick={() => void sortBy({ column: selection.focus.col, descending: false })}>
+                {t("results.sortAsc")}
+              </button>
+              <button role="menuitem" onClick={() => void sortBy({ column: selection.focus.col, descending: true })}>
+                {t("results.sortDesc")}
+              </button>
+              {result.sort && (
+                <button role="menuitem" onClick={() => void sortBy(undefined)}>
+                  {t("results.sortClear")}
+                </button>
+              )}
+            </>
+          )}
         </div>
       )}
       {notice && (
@@ -485,6 +573,7 @@ export function ResultGrid({ result, session }: { result: ResultMeta; session: s
     </div>
     {viewer && selection && focusMeta && (
       <CellViewer
+        key={order}
         resultId={result.id}
         row={selection.focus.row}
         column={selection.focus.col}

@@ -71,6 +71,10 @@ typed data; up to 100,000 rows can be copied at once.
 accents, TSV, JSON or SQL `INSERT`). The core writes it in chunks to a temporary file that is
 renamed at the end, so it works with millions of rows and never leaves half-written files.
 
+Clicking a column header sorts the loaded rows ascending, then descending, then back to the
+server's order (also in the right-click menu). The core sorts by the typed values (numbers and
+decimals by value, dates by date) with NULLs last, and copies and exports follow that order.
+
 **Enter** or a double-click opens the cell viewer beside the grid with the full value of the
 active cell: JSON pretty-printed, binary values as a hex dump and long text with its line
 breaks. The arrow keys move through cells while it stays open; **Esc** closes it.

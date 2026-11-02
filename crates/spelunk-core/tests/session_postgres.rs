@@ -139,3 +139,66 @@ async fn large_results_arrive_in_batches() {
     assert_eq!(progress.len(), 10);
     assert_eq!(progress.last(), Some(&100_000));
 }
+
+#[tokio::test]
+async fn results_sort_by_typed_values_across_batches() {
+    let Some(session) = session().await else {
+        return;
+    };
+    // Ten batches of 10,000 rows; `n` as numeric sorts by value, not as text.
+    let script = "select g, (g % 7 - 3)::numeric * 1.5 as n,
+                         case when g % 1000 = 0 then null else g % 3 = 0 end as b,
+                         timestamptz '2024-01-01 00:00+00' + g * interval '1 minute' as ts
+                  from generate_series(1, 100000) g";
+    let events: Vec<CoreEvent> = session.run_script(script).collect().await;
+    let id = events
+        .iter()
+        .find_map(|e| match e {
+            CoreEvent::ResultStarted { result, .. } => Some(*result),
+            _ => None,
+        })
+        .unwrap();
+    let stored = session.results().get(id).unwrap();
+    let mut stored = stored.write().unwrap();
+    let tsv = |r: &spelunk_core::StoredResult, rows: std::ops::Range<usize>, column: usize| {
+        let mut out = Vec::new();
+        spelunk_core::write_result(
+            r,
+            &spelunk_core::ExportOptions {
+                format: spelunk_core::ExportFormat::Tsv,
+                rows,
+                columns: column..column + 1,
+                header: false,
+            },
+            &spelunk_core::GenericDialect,
+            &mut out,
+        )
+        .unwrap();
+        String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    };
+    let key = |column, descending| Some(spelunk_core::SortKey { column, descending });
+
+    stored.sort(key(1, false)).unwrap();
+    assert_eq!(tsv(&stored, 0..2, 1), ["-4.5", "-4.5"]);
+    assert_eq!(tsv(&stored, 99_998..100_000, 1), ["4.5", "4.5"]);
+    // Stable: equal values keep the server order.
+    assert_eq!(tsv(&stored, 0..3, 0), ["7", "14", "21"]);
+
+    stored.sort(key(3, true)).unwrap();
+    assert_eq!(tsv(&stored, 0..1, 0), ["100000"]);
+
+    // NULLs last whichever the direction.
+    stored.sort(key(2, true)).unwrap();
+    assert_eq!(tsv(&stored, 0..1, 2), ["true"]);
+    assert_eq!(tsv(&stored, 99_900..100_000, 2), vec![String::new(); 100]);
+    stored.sort(key(2, false)).unwrap();
+    assert_eq!(tsv(&stored, 0..1, 2), ["false"]);
+    assert_eq!(tsv(&stored, 99_999..100_000, 0), ["100000"]);
+
+    stored.sort(None).unwrap();
+    assert_eq!(tsv(&stored, 0..2, 0), ["1", "2"]);
+}

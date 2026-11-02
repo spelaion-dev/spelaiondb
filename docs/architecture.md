@@ -40,6 +40,8 @@ A summary of how the pieces fit together. The reasons behind each decision are i
 3. Rows arrive streamed, are converted to Arrow batches and stored in the core's result
    store (in memory up to a budget; then on disk).
 4. The UI requests windows of rows while scrolling and receives them as binary Arrow IPC.
+   Sorting by a column keeps a row permutation in the core, so windows, copies and exports
+   all see the same order.
 
 **A query from an agent (v0.1)**
 1. The agent launches `spelunk mcp --profile <profile>`.

@@ -43,7 +43,14 @@
       "sqlInsert": "Sentencias INSERT de SQL",
       "done_one": "Exportada {{formattedCount}} fila a {{path}}",
       "done_other": "Exportadas {{formattedCount}} filas a {{path}}"
-    }
+    },
+    "sortAsc": "Ordenar ascendente",
+    "sortDesc": "Ordenar descendente",
+    "sortClear": "Orden original",
+    "sortWhenComplete": "El resultado se puede ordenar cuando hayan llegado todas las filas",
+    "gridSorted": "ordenado por {{column}}, {{direction}}",
+    "ascending": "ascendente",
+    "descending": "descendente"
   },
   "messages": {
     "connectionFailed": "No se pudo conectar: {{detail}}",

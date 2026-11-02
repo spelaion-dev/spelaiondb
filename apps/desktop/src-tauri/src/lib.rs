@@ -19,7 +19,7 @@ use spelunk_config::{
 };
 use spelunk_core::{
     Engines, ExportFormat, ExportOptions, GenericDialect, OpenConnection, OpenError, OpenOptions,
-    QueryHistory, ResultId, ResultStore, TunnelPool, open_connection, write_result,
+    QueryHistory, ResultId, ResultStore, SortKey, TunnelPool, open_connection, write_result,
 };
 use spelunk_driver_api::{Dialect, DriverError, Secret, Value};
 use spelunk_ssh::KnownHosts;
@@ -815,6 +815,35 @@ async fn export_result(
     Ok(rows as f64)
 }
 
+/// Sorts a result by one column in the core (`None` restores the server's order). The
+/// grid then asks for its windows again.
+#[tauri::command]
+#[specta::specta]
+async fn sort_result(
+    result: u32,
+    column: Option<u32>,
+    descending: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let key = column.map(|column| SortKey {
+        column: column as usize,
+        descending,
+    });
+    tokio::task::spawn_blocking(move || {
+        stored
+            .write()
+            .map_err(|_| "result lock poisoned".to_string())?
+            .sort(key)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
 /// what fits, and the row may not be in its cache.
 #[tauri::command]
@@ -1007,6 +1036,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             copy_rows,
             export_result,
             cell_value,
+            sort_result,
             open_workspace,
             trust_workspace,
             list_connections,

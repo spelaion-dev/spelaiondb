@@ -11,6 +11,7 @@ mod open;
 mod readonly;
 mod results;
 mod session;
+mod sort;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
@@ -22,4 +23,5 @@ pub use open::{
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{CoreEvent, Session, StatementError};
+pub use sort::{SortError, SortKey};
 pub use spelunk_store::HistoryEntry;
