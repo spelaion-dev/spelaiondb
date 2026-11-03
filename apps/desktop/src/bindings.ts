@@ -94,6 +94,13 @@ export const commands = {
 	 *  without WHERE, DROP, TRUNCATE, or any write on a production connection.
 	 */
 	scriptRisks: (session: string, sql: string) => typedError<RiskyItem[], string>(__TAURI_INVOKE("script_risks", { session, sql })),
+	/**  The `:name` placeholders of a script, in order, so the UI can ask for their values. */
+	scriptParams: (session: string, sql: string) => typedError<string[], string>(__TAURI_INVOKE("script_params", { session, sql })),
+	/**
+	 *  The script with its placeholders replaced by the values as literals, written by the core
+	 *  with the engine's quoting.
+	 */
+	bindParams: (session: string, sql: string, values: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("bind_params", { session, sql, values })),
 	/**  Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form. */
 	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),

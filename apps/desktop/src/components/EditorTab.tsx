@@ -49,6 +49,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   const lastRequest = useRef<RunRequest | null>(null);
+  /** Values given to `:name` placeholders in this tab, offered again next time. */
+  const paramValues = useRef<Record<string, string>>({});
   const editor = useRef<SqlEditorHandle>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
   useEffect(() => {
@@ -109,12 +111,30 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (!request.text.trim() || tab.run?.running || useApp.getState().workspaceChanging ||
         (tab.connectionId && useApp.getState().historySaving.includes(tab.connectionId))) return;
     if (!(await ensureConnected())) return;
+    // `:name` placeholders: the core lists them and writes the values in as literals.
+    let text = request.text;
+    const names = await call(commands.scriptParams(tab.id, text)).catch(() => [] as string[]);
+    if (names.length > 0) {
+      const values = await useDialogs.getState().askParams(names, paramValues.current);
+      if (!values) return;
+      paramValues.current = { ...paramValues.current, ...values };
+      try {
+        text = await call(commands.bindParams(tab.id, text, values));
+      } catch (e) {
+        const detail = message(e);
+        updateTab(tab.id, { run: errorRun(detail, { key: "messages.runFailed", values: { detail } }) });
+        return;
+      }
+    }
+    // Positions in an error refer to the text that ran; with values written in, they no
+    // longer match the editor, so nothing is underlined.
+    const sent: RunRequest & { bound: boolean } = { text, from: request.from, bound: text !== request.text };
     // The core says which statements need a confirmation; without it, it refuses the run.
-    const risky = await call(commands.scriptRisks(tab.id, request.text)).catch(() => []);
+    const risky = await call(commands.scriptRisks(tab.id, sent.text)).catch(() => []);
     let confirmed = false;
     if (risky.length > 0) {
       const statements = risky.map((r) => ({
-        sql: request.text.slice(byteToIndex(request.text, r.start), byteToIndex(request.text, r.end)),
+        sql: sent.text.slice(byteToIndex(sent.text, r.start), byteToIndex(sent.text, r.end)),
         risk: r.risk,
       }));
       if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
@@ -127,16 +147,16 @@ export function EditorTab({ tab }: { tab: Tab }) {
       run: { running: true, results: [], activeResult: null, messages: [], error: null, startedAt, elapsedMs: null },
     });
     const channel = new Channel<ScriptEvent>();
-    channel.onmessage = (event) => handle(event, request, startedAt);
+    channel.onmessage = (event) => handle(event, sent, startedAt);
     try {
-      await call(commands.runScript(tab.id, request.text, confirmed, channel));
+      await call(commands.runScript(tab.id, sent.text, confirmed, channel));
     } catch (e) {
       const detail = message(e);
       updateRun(tab.id, (r) => ({ ...r, running: false, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));
     }
   }
 
-  function handle(event: ScriptEvent, request: RunRequest, startedAt: number) {
+  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number) {
     switch (event.kind) {
       case "statementStarted":
         break;
@@ -173,7 +193,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       }
       case "statementFailed": {
         const offset =
-          event.scriptOffset == null ? null : request.from + byteToIndex(request.text, event.scriptOffset);
+          event.scriptOffset == null || request.bound ? null : request.from + byteToIndex(request.text, event.scriptOffset);
         const diagnostic = { message: event.message, detail: event.detail, hint: event.hint, code: event.code, cancelled: event.cancelled };
         updateRun(tab.id, (r) => ({
           ...r,

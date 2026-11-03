@@ -321,3 +321,8 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 /* ---------------------------------------------------------------- result filter */
 .result-filter { margin-left: auto; width: 200px; min-width: 120px; font-size: 12.5px; padding: 3px 8px; }
 .result-filter.invalid { border-color: var(--danger, #c0392b); }
+
+/* ---------------------------------------------------------------- query parameters */
+.params-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; max-height: 50vh; overflow: auto; }
+.params-list .field { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; align-items: center; gap: 10px; }
+.params-list .field input { width: 100%; box-sizing: border-box; }

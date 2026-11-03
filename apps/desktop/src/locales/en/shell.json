@@ -55,5 +55,11 @@
     "insert": "Generate INSERT",
     "update": "Generate UPDATE",
     "delete": "Generate DELETE"
+  },
+  "params": {
+    "title": "Query parameters",
+    "explanation": "Numbers, NULL, TRUE and FALSE are written as they are; anything else as text, quoted for this database.",
+    "cancel": "Cancel",
+    "run": "Run"
   }
 }

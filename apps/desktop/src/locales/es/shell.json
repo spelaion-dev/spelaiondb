@@ -55,5 +55,11 @@
     "insert": "Generar INSERT",
     "update": "Generar UPDATE",
     "delete": "Generar DELETE"
+  },
+  "params": {
+    "title": "Parámetros de la consulta",
+    "explanation": "Los números, NULL, TRUE y FALSE se escriben tal cual; lo demás como texto, entrecomillado para esta base de datos.",
+    "cancel": "Cancelar",
+    "run": "Ejecutar"
   }
 }

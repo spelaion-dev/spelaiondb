@@ -564,6 +564,32 @@ try {
   assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE" }).count(), 0);
   await page.keyboard.press("Escape");
 
+  step("query parameters: :name values asked once, written in by the core");
+  await replaceQuery(panel, "select :name as who, :n + 1 as next, :name || '!' as again;");
+  await run(panel);
+  const paramsDialog = page.getByRole("dialog", { name: "Query parameters" });
+  await paramsDialog.locator(".field .mono").nth(1).waitFor();
+  assert.deepEqual(await paramsDialog.locator(".field .mono").allInnerTexts(), [":name", ":n"]);
+  await page.keyboard.insertText("O'Brien");
+  await paramsDialog.locator("input").nth(1).fill("41");
+  await shot("05g-query-parameters");
+  await page.keyboard.press("Enter");
+  await paramsDialog.waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  {
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.mouse.click(box.x + 80, box.y + 36 + 13);
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Control+c");
+    assert.equal((await copied(before + 1)).trimEnd(), "O'Brien\t42\tO'Brien!");
+  }
+  // The values are offered again; Escape cancels without running.
+  await run(panel);
+  assert.equal(await page.getByRole("dialog", { name: "Query parameters" }).locator("input").first().inputValue(), "O'Brien");
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog", { name: "Query parameters" }).waitFor({ state: "detached" });
+
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
     "Postgres (Docker)",

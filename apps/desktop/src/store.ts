@@ -197,6 +197,14 @@ export interface TrustRequest {
   resolve(accept: boolean): void;
 }
 
+/** Values for the `:name` placeholders of a script. */
+export interface ParamsRequest {
+  names: string[];
+  /** Values used last time in this tab, to start from. */
+  previous: Record<string, string>;
+  resolve(values: Record<string, string> | null): void;
+}
+
 /** Statements the core wants confirmed before they run. */
 export interface RiskRequest {
   connection: string;
@@ -213,7 +221,9 @@ interface DialogStore {
   password: PasswordRequest | null;
   trust: TrustRequest | null;
   risk: RiskRequest | null;
+  params: ParamsRequest | null;
   interactions: InteractionItem[];
+  askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
   askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
   askTrust(workspace: string | null): Promise<boolean>;
@@ -225,7 +235,21 @@ export const useDialogs = create<DialogStore>((set) => ({
   password: null,
   trust: null,
   risk: null,
+  params: null,
   interactions: [],
+  askParams: (names, previous) =>
+    new Promise((resolve) =>
+      set({
+        params: {
+          names,
+          previous,
+          resolve: (values) => {
+            set({ params: null });
+            resolve(values);
+          },
+        },
+      }),
+    ),
   askRisks: (connection, statements) =>
     new Promise((resolve) =>
       set({

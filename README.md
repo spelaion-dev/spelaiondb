@@ -81,6 +81,12 @@ highlighted is exactly what runs. **Ctrl+Shift+Enter** or **Run** runs the whole
 statement by statement, stopping at the first error. **Shift+Alt+F** or **Format** formats
 the selection or the whole script in the connection's dialect (one undo step).
 
+`:name` placeholders (like those in generated SQL) ask for their values before running; the
+same name gets the same value everywhere, and the tab remembers them for the next run. The
+core writes them in as literals with the engine's quoting: numbers, `NULL`, `TRUE` and
+`FALSE` as they are, anything else as text. Strings, comments and PostgreSQL `::casts` are
+never mistaken for placeholders.
+
 Before anything runs, the core looks for statements that are easy to regret: `DELETE` or
 `UPDATE` without `WHERE` (also inside a `WITH`), `DROP` and `TRUNCATE`, and, on connections
 whose environment is `prod`/`production`, every statement that is not a read. They are listed

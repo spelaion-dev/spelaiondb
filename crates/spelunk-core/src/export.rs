@@ -344,7 +344,7 @@ fn json_is_valid(text: &str) -> bool {
 }
 
 /// A literal for `INSERT`, following the engine (`dialect` is the [`Dialect::name`]).
-fn sql_literal(value: &Value, dialect: &str) -> String {
+pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
     let quoted = |text: &str| {
         let text = text.replace('\'', "''");
         // MySQL treats `\` as an escape inside strings (default `sql_mode`).

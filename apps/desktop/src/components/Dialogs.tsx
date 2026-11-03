@@ -1,4 +1,5 @@
-// Modal dialogs: password, repository trust, risky statements and SSH tunnel questions.
+// Modal dialogs: password, repository trust, query parameters, risky statements and SSH
+// tunnel questions.
 
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -9,9 +10,11 @@ export function Dialogs() {
   const password = useDialogs((s) => s.password);
   const trust = useDialogs((s) => s.trust);
   const risk = useDialogs((s) => s.risk);
+  const params = useDialogs((s) => s.params);
   const interaction = useDialogs((s) => s.interactions[0]);
   if (interaction) return <InteractionDialog key={interaction.id} />;
   if (trust) return <TrustDialog />;
+  if (params) return <ParamsDialog />;
   if (risk) return <RiskDialog />;
   if (password) return <PasswordDialog key={password.connectionName + (password.error ?? "")} />;
   return null;
@@ -83,6 +86,47 @@ function TrustDialog() {
         <button onClick={() => request.resolve(false)}>{t("dontTrust")}</button>
         <button className="primary" onClick={() => request.resolve(true)}>
           {t("trust")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function ParamsDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.params);
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries((request?.names ?? []).map((n) => [n, request?.previous[n] ?? ""])),
+  );
+  if (!request) return null;
+  const submit = () => request.resolve(values);
+  return (
+    <Modal title={t("params.title")}>
+      <p className="muted small">{t("params.explanation")}</p>
+      <div
+        className="params-list"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+          if (e.key === "Escape") request.resolve(null);
+        }}
+      >
+        {request.names.map((name, i) => (
+          <label key={name} className="field">
+            <span className="mono">:{name}</span>
+            <input
+              autoFocus={i === 0}
+              value={values[name] ?? ""}
+              onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </label>
+        ))}
+      </div>
+      <div className="modal-actions">
+        <button onClick={() => request.resolve(null)}>{t("params.cancel")}</button>
+        <button className="primary" onClick={submit}>
+          {t("params.run")}
         </button>
       </div>
     </Modal>

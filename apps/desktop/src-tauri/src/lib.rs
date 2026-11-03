@@ -717,6 +717,36 @@ async fn run_script(
     Ok(())
 }
 
+/// The `:name` placeholders of a script, in order, so the UI can ask for their values.
+#[tauri::command]
+#[specta::specta]
+async fn script_params(
+    session: String,
+    sql: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let open = state.session(&session).await?;
+    Ok(spelunk_core::script_params(
+        open.session.dialect().as_ref(),
+        &sql,
+    ))
+}
+
+/// The script with its placeholders replaced by the values as literals, written by the core
+/// with the engine's quoting.
+#[tauri::command]
+#[specta::specta]
+async fn bind_params(
+    session: String,
+    sql: String,
+    values: HashMap<String, String>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    spelunk_core::bind_params(open.session.dialect().as_ref(), &sql, &values)
+        .map_err(|e| e.to_string())
+}
+
 fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelunk_core::RiskyStatement> {
     spelunk_core::script_risks(
         open.session.dialect().as_ref(),
@@ -1171,6 +1201,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             statement_at,
             create_sqlite_database,
             script_risks,
+            script_params,
+            bind_params,
             parse_connection_url,
             open_workspace,
             trust_workspace,

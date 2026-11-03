@@ -11,6 +11,7 @@ mod generate;
 mod guard;
 mod history;
 mod open;
+mod params;
 mod readonly;
 mod results;
 mod session;
@@ -26,6 +27,7 @@ pub use history::{HistoryError, QueryHistory};
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,
 };
+pub use params::{ParamError, bind_params, script_params};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{CoreEvent, Session, StatementError};
