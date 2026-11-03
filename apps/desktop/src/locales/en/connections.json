@@ -68,7 +68,13 @@
     "serverFileHint": "Its path on the tunnel's last hop. SpelunkDB runs that server's sqlite3 (3.37 or later, in its safe mode): the file is never copied.",
     "useTunnelForFile": "The file is on a server: open it there through an SSH tunnel",
     "tunnelForFileHint": "The last hop must allow running commands (not only port forwarding) and have sqlite3 installed.",
-    "sqlite3": "sqlite3 program on the server"
+    "sqlite3": "sqlite3 program on the server",
+    "tlsCert": "Client certificate (PEM)",
+    "tlsCertPlaceholder": "Empty: log in with the authentication method",
+    "tlsKey": "Client key (PEM)",
+    "tlsKeyPlaceholder": "~/.ssl/me.key",
+    "clientCertHint": "Logs in with a certificate instead of a password (the server must accept it for this user). The key stays on your computer: keep it in your personal folder, never in the repository.",
+    "cloudToken": "Provider"
   },
   "tls": {
     "disable": "Disabled",
@@ -105,7 +111,8 @@
     "envHint": "Read from this variable when connecting; the file only stores its name.",
     "other": "Defined in the file",
     "otherHint": "This password comes from a reference the form cannot edit (1Password, a command or a named keychain entry). It is kept as is; edit the file to change it.",
-    "keepPlaceholder": "Leave empty to keep the saved password"
+    "keepPlaceholder": "Leave empty to keep the saved password",
+    "token": "Cloud token (IAM)"
   },
   "cancel": "Cancel",
   "edit": "Edit…",
@@ -213,5 +220,13 @@
     "hint": "SpelunkDB runs kubectl port-forward with your kubeconfig. The connection’s port is the port of this resource; the host in the Main tab is only used for TLS.",
     "exclusive": "A connection goes through Kubernetes or an SSH tunnel, not both.",
     "mainHint": "Through Kubernetes: the port is the resource’s, chosen in the Kubernetes tab."
+  },
+  "cloudToken": {
+    "awsRds": "AWS RDS (IAM authentication)",
+    "azureAd": "Azure Database (Microsoft Entra ID)",
+    "googleCloudSql": "Google Cloud SQL (IAM authentication)",
+    "awsRdsHint": "Runs “aws rds generate-db-auth-token” on every connection: the AWS CLI must be signed in on this computer. Tokens last 15 minutes and need TLS.",
+    "azureAdHint": "Runs “az account get-access-token” on every connection: the Azure CLI must be signed in on this computer. Use your Entra ID user as the user.",
+    "googleCloudSqlHint": "Runs “gcloud sql generate-login-token” on every connection: the gcloud CLI must be signed in on this computer. Use your IAM user as the user."
   }
 }

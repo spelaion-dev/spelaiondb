@@ -17,7 +17,7 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Opts, OptsBuilder, SslOpts};
+use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelunk_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, LogicalType, ObjectInfo, Result,
@@ -85,24 +85,29 @@ fn opts(params: &ConnectParams, tls: Option<SslOpts>) -> Opts {
 
 /// libpq-style modes mapped to MySQL TLS options. `Prefer` is handled by the caller (it
 /// retries without TLS only if the server does not support it).
-fn tls_opts(mode: TlsMode, ca: Option<&std::path::Path>) -> Option<SslOpts> {
-    let roots = |opts: SslOpts| match ca {
+fn tls_opts(params: &ConnectParams) -> Option<SslOpts> {
+    let roots = |opts: SslOpts| match params.ca_certificate.as_deref() {
         Some(ca) => opts
             .with_root_certs(vec![ca.to_path_buf().into()])
             .with_disable_built_in_roots(true),
         None => opts,
     };
-    match mode {
+    // The certificate a client presents to log in without a password (ADR-022).
+    let identity = match (&params.client_certificate, &params.client_key) {
+        (Some(cert), Some(key)) => {
+            Some(ClientIdentity::new(cert.clone().into(), key.clone().into()))
+        }
+        _ => None,
+    };
+    let base = SslOpts::default().with_client_identity(identity);
+    match params.tls {
         TlsMode::Disable => None,
         TlsMode::Prefer | TlsMode::Require => Some(
-            SslOpts::default()
-                .with_danger_accept_invalid_certs(true)
+            base.with_danger_accept_invalid_certs(true)
                 .with_danger_skip_domain_validation(true),
         ),
-        TlsMode::VerifyCa => {
-            Some(roots(SslOpts::default()).with_danger_skip_domain_validation(true))
-        }
-        TlsMode::VerifyFull => Some(roots(SslOpts::default())),
+        TlsMode::VerifyCa => Some(roots(base).with_danger_skip_domain_validation(true)),
+        TlsMode::VerifyFull => Some(roots(base)),
     }
 }
 
@@ -135,8 +140,7 @@ impl Driver for MysqlDriver {
         // mysql_async builds its TLS with the process's rustls provider: ring, like the other
         // drivers (with more than one compiled in, rustls would not choose).
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let ca = params.ca_certificate.as_deref();
-        let mut opts = opts(params, tls_opts(params.tls, ca));
+        let mut opts = opts(params, tls_opts(params));
         let conn = match open(opts.clone()).await {
             // `prefer`: without TLS only if the server does not offer it.
             Err(mysql_async::Error::Driver(

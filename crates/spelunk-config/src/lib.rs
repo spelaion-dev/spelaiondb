@@ -30,7 +30,7 @@ pub use dbeaver::{
     read_dbeaver,
 };
 pub use draft::{
-    ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection, connections_dir,
+    CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection, connections_dir,
     delete_connection, slug, update_connection,
 };
 pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_value};

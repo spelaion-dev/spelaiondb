@@ -102,6 +102,20 @@
             "null"
           ]
         },
+        "cert": {
+          "description": "Client certificate (PEM) to log in without a password (ADR-022): PostgreSQL, MySQL and\nMariaDB. Relative to the repository root or with `~/`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Private key (PEM) of the client certificate. Never inside the repository: `~/…`, an\nabsolute path or a `${user.…}` variable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/TlsModeConfig",
           "default": "prefer"

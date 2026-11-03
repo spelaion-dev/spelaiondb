@@ -332,6 +332,8 @@ pub fn import_plan(
             },
             tls_mode: TlsModeConfig::default(),
             tls_ca: String::new(),
+            tls_cert: String::new(),
+            tls_key: String::new(),
             tunnel: if tunnel.is_some() {
                 tunnel_name.to_string()
             } else {

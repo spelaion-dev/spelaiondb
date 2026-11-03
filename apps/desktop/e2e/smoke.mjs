@@ -1268,6 +1268,13 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("Port", { exact: true }).fill("15432");
   await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
   await wizard.getByLabel("User", { exact: true }).fill("spelunk");
+  // Passwordless logins (ADR-022): a cloud provider's token here, a client certificate in SSL.
+  const authMethod = wizard.getByLabel("Method", { exact: true });
+  await authMethod.selectOption("token");
+  await wizard.getByLabel("Provider", { exact: true }).selectOption("googleCloudSql");
+  await wizard.getByText("gcloud sql generate-login-token", { exact: false }).waitFor();
+  assert.equal(await wizard.getByLabel("Password", { exact: true }).count(), 0);
+  await authMethod.selectOption("password");
   // Not saving the password means "ask every time": the typed one is only used for the test
   // and never stored (not even in the keychain).
   await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
@@ -1280,6 +1287,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await shot("12b-add-connection-main");
   await wizard.getByRole("tab", { name: "SSL" }).click();
   await wizard.getByLabel("TLS", { exact: true }).selectOption("require");
+  await wizard.getByLabel("Client certificate (PEM)", { exact: true }).waitFor();
+  await wizard.getByLabel("Client key (PEM)", { exact: true }).waitFor();
   await wizard.getByRole("tab", { name: "SSH" }).click();
   // The demo defines one tunnel; leaving the box unchecked connects directly.
   assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), false);

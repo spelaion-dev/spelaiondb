@@ -522,3 +522,71 @@ async fn introspection_lists_tables_columns_keys_and_indexes() {
         }
     }
 }
+
+/// ADR-022: a user that requires a client certificate from the test authority logs in with
+/// it and no password.
+#[tokio::test]
+async fn client_certificates_log_in_without_a_password() {
+    let key = |name: &str| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testing/docker/keys")
+            .join(name)
+    };
+    for server in servers() {
+        // Only an administrator can create the user.
+        let root = ConnectParams {
+            user: "root".into(),
+            password: Some(Secret::new("spelunk-root")),
+            ..server.params()
+        };
+        let admin = server
+            .driver
+            .connect(&root)
+            .await
+            .unwrap_or_else(|e| panic!("{} as root: {e}", server.label));
+        for sql in [
+            "create user if not exists 'spelunk_cert'@'%' require subject '/CN=spelunk_cert'",
+            "grant select on spelunk.* to 'spelunk_cert'@'%'",
+        ] {
+            run(&*admin, sql)
+                .await
+                .unwrap_or_else(|e| panic!("{}: {sql}: {e}", server.label));
+        }
+        // verify-full against the certificate's name, connecting to the address.
+        let addr: SocketAddr = format!("{}:{}", server.host, server.port).parse().unwrap();
+        let params = ConnectParams {
+            user: "spelunk_cert".into(),
+            password: None,
+            host: "localhost".into(),
+            connect_addr: Some(addr),
+            tls: TlsMode::VerifyFull,
+            ca_certificate: Some(ca()),
+            client_certificate: Some(key("client.crt")),
+            client_key: Some(key("client.key")),
+            ..server.params()
+        };
+        let conn = server
+            .driver
+            .connect(&params)
+            .await
+            .unwrap_or_else(|e| panic!("{} with the certificate: {e}", server.label));
+        let (_, rows) = table(&run(&*conn, "select current_user()").await.unwrap());
+        assert_eq!(
+            rows[0][0].as_deref(),
+            Some("spelunk_cert@%"),
+            "{}",
+            server.label
+        );
+        // Without it, the same user is refused.
+        let without = ConnectParams {
+            client_certificate: None,
+            client_key: None,
+            ..params.clone()
+        };
+        assert!(
+            server.driver.connect(&without).await.is_err(),
+            "{}",
+            server.label
+        );
+    }
+}

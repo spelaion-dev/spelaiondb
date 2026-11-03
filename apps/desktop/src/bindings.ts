@@ -320,6 +320,9 @@ export type ConnectionDraftItem_Deserialize = {
 	passwordOther: string,
 	tlsMode: TlsModeItem,
 	tlsCa: string,
+	/**  Client certificate and its private key (ADR-022); empty for none. */
+	tlsCert: string,
+	tlsKey: string,
 	tunnel: string,
 	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
 	kubernetes?: KubernetesDraftItem | null,
@@ -351,6 +354,9 @@ export type ConnectionDraftItem_Serialize = {
 	passwordOther: string,
 	tlsMode: TlsModeItem,
 	tlsCa: string,
+	/**  Client certificate and its private key (ADR-022); empty for none. */
+	tlsCert: string,
+	tlsKey: string,
 	tunnel: string,
 	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
 	kubernetes: KubernetesDraftItem | null,
@@ -640,7 +646,9 @@ export type ObjectItem_Serialize = {
 
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */
-"other";
+"other" | 
+/**  Short-lived tokens from a cloud provider's CLI (ADR-022). */
+"awsRds" | "azureAd" | "googleCloudSql";
 
 /**  Why a statement asks for confirmation before running (see `spelunk_core::Risk`). */
 export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";

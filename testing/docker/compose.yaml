@@ -39,14 +39,20 @@ services:
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
       - ./keys/server.crt:/certs/server.crt:ro
       - ./keys/server.key:/certs/server.key:ro
+      - ./keys/ca.crt:/certs/ca.crt:ro
+      - ./postgres/pg_hba.conf:/certs/pg_hba.conf:ro
     # TLS enabled (without requiring it): PostgreSQL rejects keys mounted from Windows because
     # of their permissions, so they are copied inside with the owner and permissions it wants.
+    # The user "spelunk_cert" logs in only with a client certificate from the test authority
+    # (ADR-022; see postgres/pg_hba.conf).
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         install -o postgres -g postgres -m 600 /certs/server.key /var/lib/postgresql/server.key
         install -o postgres -g postgres -m 644 /certs/server.crt /var/lib/postgresql/server.crt
-        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+        install -o postgres -g postgres -m 644 /certs/ca.crt /var/lib/postgresql/ca.crt
+        install -o postgres -g postgres -m 644 /certs/pg_hba.conf /var/lib/postgresql/pg_hba.conf
+        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key -c ssl_ca_file=/var/lib/postgresql/ca.crt -c hba_file=/var/lib/postgresql/pg_hba.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U spelunk -d spelunk"]
       interval: 2s

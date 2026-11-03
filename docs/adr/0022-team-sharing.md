@@ -1,6 +1,6 @@
 # ADR-022: Sharing connections with a team, safely and without passwords
 
-- **Status:** Accepted (parts 1 and 2 implemented; parts 3 to 5 planned)
+- **Status:** Accepted (parts 1 to 3 implemented; parts 4 and 5 planned)
 - **Date:** 2026-11-03
 - **Amends:** ADR-009 (repository trust)
 
@@ -46,6 +46,17 @@ trusts it. Teams of system administrators need more than that:
 3. **Logins without passwords:** TLS client certificates (`tls.cert`, `tls.key`; the key
    from the user's directory, never the repository) and documented presets for short-lived
    tokens through `cmd:` (AWS RDS IAM, Azure AD, GCP). SSH certificates from a team CA later.
+   - Client certificates for PostgreSQL, MySQL and MariaDB. SQL Server does not log SQL
+     users in with one, so the file is refused for it. A repository connection whose key
+     resolves inside the repository is refused before connecting; the form writes a key in
+     the home directory as `~/…`.
+   - Cloud tokens are a choice of the form (`PasswordChoice::CloudToken`) that writes a
+     `cmd:` reference: `aws rds generate-db-auth-token` (with the region read from an RDS
+     host name), `az account get-access-token --resource-type oss-rdbms` and
+     `gcloud sql generate-login-token`. Only letters, digits, `.`, `-`, `_` and `@` from the
+     host and user reach the command, so nothing can be injected into the shell. Reading the
+     file back, a command that matches one of them shows as that token again. They are for
+     PostgreSQL, MySQL and MariaDB; SQL Server takes Entra ID tokens differently (later).
 4. **Onboarding:** missing `${user.*}` variables are asked for once, in a dialog, and saved
    to `user.toml`.
 5. **`spelunk check`** for the team repository's CI and pre-commit: schema validation and

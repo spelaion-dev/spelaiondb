@@ -62,6 +62,10 @@ pub struct ConnectParams {
     /// PEM certificate of the authority that signs the server's certificate, when it is not
     /// in the system store.
     pub ca_certificate: Option<PathBuf>,
+    /// PEM certificate (chain) the client presents to log in without a password (ADR-022),
+    /// with its private key. Both or neither.
+    pub client_certificate: Option<PathBuf>,
+    pub client_key: Option<PathBuf>,
     /// Open read-only when the engine supports it natively (SQLite).
     pub read_only: bool,
     /// Actual address to connect to, if it is not `host:port` (for example, the local end

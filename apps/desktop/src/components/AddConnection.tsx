@@ -233,7 +233,12 @@ type TestState =
   | { kind: "error"; message: string };
 
 /** How the form asks for credentials, like DBeaver's "Authentication" selector. */
-type AuthMethod = "password" | "env" | "none" | "other";
+type AuthMethod = "password" | "env" | "none" | "other" | "token";
+/** Short-lived tokens from a cloud provider's CLI (ADR-022): the core writes the command. */
+type CloudToken = "awsRds" | "azureAd" | "googleCloudSql";
+const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
+/** Engines that log in with a client certificate or a cloud token. */
+const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
 type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "options";
 
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
@@ -256,6 +261,10 @@ function authFrom(mode: PasswordMode): AuthMethod {
       return "other";
     case "none":
       return "none";
+    case "awsRds":
+    case "azureAd":
+    case "googleCloudSql":
+      return "token";
   }
 }
 
@@ -282,6 +291,10 @@ function ConnectionForm(props: {
   const [tunnels, setTunnels] = useState<TunnelItem[]>([]);
   const { initial, editing, prefill } = props;
   const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network ? "password" : "none");
+  const [cloudToken, setCloudToken] = useState<CloudToken>(
+    initial && (CLOUD_TOKENS as string[]).includes(initial.passwordMode) ? (initial.passwordMode as CloudToken) : "awsRds",
+  );
+  const passwordless = PASSWORDLESS_ENGINES.includes(engine.id);
   const [savePassword, setSavePassword] = useState(initial ? initial.passwordMode !== "prompt" : true);
   const [useTunnel, setUseTunnel] = useState(Boolean(initial?.tunnel));
   // Kubernetes and an SSH tunnel exclude each other (the core rejects both).
@@ -306,6 +319,8 @@ function ConnectionForm(props: {
     passwordOther: "",
     tlsMode: prefill?.tlsMode ?? "prefer",
     tlsCa: "",
+    tlsCert: "",
+    tlsKey: "",
     readOnly: false,
     mcpExposed: false,
     mcpWrites: false,
@@ -346,7 +361,17 @@ function ConnectionForm(props: {
   const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly;
   // What the core receives: the form's choices mapped to the configuration format.
   const passwordMode: PasswordMode =
-    !network || auth === "none" ? "none" : auth === "env" ? "env" : auth === "other" ? "other" : savePassword ? "keychain" : "prompt";
+    !network || auth === "none"
+      ? "none"
+      : auth === "env"
+        ? "env"
+        : auth === "other"
+          ? "other"
+          : auth === "token"
+            ? cloudToken
+            : savePassword
+              ? "keychain"
+              : "prompt";
   const request: ConnectionDraft = {
     ...draft,
     mcpWrites: agentsWrite,
@@ -358,14 +383,14 @@ function ConnectionForm(props: {
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.kind === "testing";
 
-  async function browse(field: "database" | "tlsCa") {
+  async function browse(field: "database" | "tlsCa" | "tlsCert" | "tlsKey") {
     const path = await open({
       multiple: false,
       directory: false,
       filters:
         field === "database"
           ? [...databaseFilters(), { name: t("allFiles"), extensions: ["*"] }]
-          : [{ name: t("certificates"), extensions: ["pem", "crt", "cer"] }, { name: t("allFiles"), extensions: ["*"] }],
+          : [{ name: t("certificates"), extensions: ["pem", "crt", "cer", "key"] }, { name: t("allFiles"), extensions: ["*"] }],
     });
     if (typeof path === "string") update({ [field]: path });
   }
@@ -511,9 +536,24 @@ function ConnectionForm(props: {
                     <option value="password">{t("auth.password")}</option>
                     <option value="env">{t("auth.env")}</option>
                     <option value="none">{t("auth.none")}</option>
+                    {passwordless && <option value="token">{t("auth.token")}</option>}
                     {initial?.passwordMode === "other" && <option value="other">{t("auth.other")}</option>}
                   </select>
                 </Field>
+                {auth === "token" && (
+                  <>
+                    <Field label={t("fields.cloudToken")}>
+                      <select aria-label={t("fields.cloudToken")} value={cloudToken} onChange={(e) => { setCloudToken(e.target.value as CloudToken); changed(); }}>
+                        {CLOUD_TOKENS.map((token) => (
+                          <option key={token} value={token}>
+                            {t(`cloudToken.${token}`)}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <p className="muted small">{t(`cloudToken.${cloudToken}Hint`)}</p>
+                  </>
+                )}
                 <Field label={t("fields.user")}>
                   <input type="text" value={draft.user} autoComplete="off" onChange={(e) => update({ user: e.target.value })} />
                 </Field>
@@ -609,6 +649,27 @@ function ConnectionForm(props: {
                 </button>
               </div>
               <p className="muted small">{t("fields.tlsHint")}</p>
+              {passwordless && (
+                <>
+                  <div className="form-pair">
+                    <Field label={t("fields.tlsCert")} className="grow">
+                      <input type="text" value={draft.tlsCert} placeholder={t("fields.tlsCertPlaceholder")} onChange={(e) => update({ tlsCert: e.target.value })} />
+                    </Field>
+                    <button type="button" onClick={() => void browse("tlsCert")}>
+                      {t("browse")}
+                    </button>
+                  </div>
+                  <div className="form-pair">
+                    <Field label={t("fields.tlsKey")} className="grow">
+                      <input type="text" value={draft.tlsKey} placeholder={t("fields.tlsKeyPlaceholder")} onChange={(e) => update({ tlsKey: e.target.value })} />
+                    </Field>
+                    <button type="button" onClick={() => void browse("tlsKey")}>
+                      {t("browse")}
+                    </button>
+                  </div>
+                  <p className="muted small">{t("fields.clientCertHint")}</p>
+                </>
+              )}
             </fieldset>
           </div>
         )}

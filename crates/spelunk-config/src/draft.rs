@@ -34,6 +34,68 @@ pub enum PasswordChoice {
     /// Any other reference already in the file (`keychain:<name>`, `op://…`, `cmd:…`): the
     /// form shows it and editing keeps it as is.
     Other(String),
+    /// A short-lived token from a cloud provider's CLI, run on every connection (ADR-022).
+    CloudToken(CloudToken),
+}
+
+/// Cloud providers whose databases take a short-lived token instead of a password (ADR-022).
+/// The token comes from the provider's CLI, signed in on the user's computer, through a
+/// `cmd:` reference the form writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudToken {
+    /// `aws rds generate-db-auth-token` (IAM database authentication).
+    AwsRds,
+    /// `az account get-access-token` for Azure Database for PostgreSQL and MySQL.
+    AzureAd,
+    /// `gcloud sql generate-login-token` (Cloud SQL IAM database authentication).
+    GoogleCloudSql,
+}
+
+impl CloudToken {
+    pub const ALL: [CloudToken; 3] = [
+        CloudToken::AwsRds,
+        CloudToken::AzureAd,
+        CloudToken::GoogleCloudSql,
+    ];
+
+    /// The `cmd:` reference that gets a token for `user` on `host:port`. Only letters,
+    /// digits, `.`, `-`, `_` and `@` reach the command, so nothing can be injected into the
+    /// shell that runs it.
+    pub fn reference(self, host: &str, port: u16, user: &str) -> Result<String, String> {
+        let safe = |what: &str, value: &str| {
+            if !value.is_empty()
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '@'))
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the {what} of a connection with a cloud token can only contain letters, digits, '.', '-', '_' and '@'"
+                ))
+            }
+        };
+        match self {
+            CloudToken::AwsRds => {
+                safe("host", host)?;
+                safe("user", user)?;
+                // `<name>.<id>.<region>.rds.amazonaws.com`: the region the token is for.
+                let labels: Vec<&str> = host.split('.').collect();
+                let region = match labels.as_slice() {
+                    [.., region, "rds", "amazonaws", "com"] => format!(" --region {region}"),
+                    _ => String::new(),
+                };
+                Ok(format!(
+                    "cmd:aws rds generate-db-auth-token --hostname {host} --port {port} --username {user}{region}"
+                ))
+            }
+            CloudToken::AzureAd => Ok(
+                "cmd:az account get-access-token --resource-type oss-rdbms --query accessToken --output tsv"
+                    .into(),
+            ),
+            CloudToken::GoogleCloudSql => Ok("cmd:gcloud sql generate-login-token".into()),
+        }
+    }
 }
 
 /// What the user filled in to create a connection. Empty strings mean "not set".
@@ -55,6 +117,9 @@ pub struct ConnectionDraft {
     pub password: PasswordChoice,
     pub tls_mode: TlsModeConfig,
     pub tls_ca: String,
+    /// Client certificate and its private key (ADR-022); empty for none.
+    pub tls_cert: String,
+    pub tls_key: String,
     pub tunnel: String,
     /// Through `kubectl port-forward` instead of a tunnel (ADR-015).
     pub kubernetes: Option<KubernetesDraft>,
@@ -223,6 +288,26 @@ impl ConnectionDraft {
                     .map_err(|message| ConfigError::new(path, message))?;
                 Some(reference.clone())
             }
+            PasswordChoice::CloudToken(token) => {
+                match self.engine {
+                    Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
+                    Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb => {
+                        return Err(ConfigError::new(
+                            path,
+                            format!(
+                                "cloud tokens are for PostgreSQL, MySQL and MariaDB, not {}",
+                                self.engine.as_str()
+                            ),
+                        ));
+                    }
+                }
+                let port = self.port.or(self.engine.default_port()).unwrap_or_default();
+                Some(
+                    token
+                        .reference(self.host.trim(), port, self.user.trim())
+                        .map_err(|message| ConfigError::new(path, message))?,
+                )
+            }
         };
         let root = match self.source {
             Source::Workspace => config.workspace_root.as_deref(),
@@ -283,6 +368,17 @@ impl ConnectionDraft {
                 TlsConfig {
                     mode: self.tls_mode,
                     ca: non_empty(&self.tls_ca).map(|ca| portable_path(&ca, root)),
+                    cert: non_empty(&self.tls_cert).map(|cert| portable_path(&cert, root)),
+                    // `~/…` like other paths, but a key inside the repository stays absolute,
+                    // so resolving refuses it instead of sharing it as a relative path.
+                    key: non_empty(&self.tls_key).map(|key| {
+                        let portable = portable_path(&key, root);
+                        if Path::new(&portable).is_relative() && !portable.starts_with("~/") {
+                            key
+                        } else {
+                            portable
+                        }
+                    }),
                 }
             } else {
                 TlsConfig::default()
@@ -351,7 +447,17 @@ impl ConnectionDraft {
             Some("prompt") => PasswordChoice::Prompt,
             Some(other) => match other.strip_prefix("env:") {
                 Some(var) => PasswordChoice::Env(var.to_string()),
-                None => PasswordChoice::Other(other.to_string()),
+                // A command the form wrote for a cloud token is shown as that token again.
+                None => {
+                    let port = file.port.or(file.engine.default_port()).unwrap_or_default();
+                    let host = file.host.clone().unwrap_or_default();
+                    let user = file.user.clone().unwrap_or_default();
+                    CloudToken::ALL
+                        .into_iter()
+                        .find(|token| token.reference(&host, port, &user).as_deref() == Ok(other))
+                        .map(PasswordChoice::CloudToken)
+                        .unwrap_or_else(|| PasswordChoice::Other(other.to_string()))
+                }
             },
         };
         let file_name = entry.id.path.rsplit('/').next().unwrap_or_default();
@@ -368,6 +474,8 @@ impl ConnectionDraft {
             password,
             tls_mode: file.tls.mode,
             tls_ca: file.tls.ca.clone().unwrap_or_default(),
+            tls_cert: file.tls.cert.clone().unwrap_or_default(),
+            tls_key: file.tls.key.clone().unwrap_or_default(),
             tunnel: file.tunnel.clone().unwrap_or_default(),
             sqlite3: file.sqlite3.clone().unwrap_or_default(),
             kubernetes: file.kubernetes.as_ref().map(|k| KubernetesDraft {
@@ -553,6 +661,12 @@ pub fn update_connection(
     }
     if old.tls.ca != new.tls.ca {
         put(&mut doc, &["tls", "ca"], text(&new.tls.ca));
+    }
+    if old.tls.cert != new.tls.cert {
+        put(&mut doc, &["tls", "cert"], text(&new.tls.cert));
+    }
+    if old.tls.key != new.tls.key {
+        put(&mut doc, &["tls", "key"], text(&new.tls.key));
     }
     if old.mcp.exposed != new.mcp.exposed {
         put(

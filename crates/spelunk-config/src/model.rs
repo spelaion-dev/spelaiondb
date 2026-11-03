@@ -117,6 +117,14 @@ pub struct TlsConfig {
     /// Certificate (PEM) of the authority, relative to the repository root or with `~/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca: Option<String>,
+    /// Client certificate (PEM) to log in without a password (ADR-022): PostgreSQL, MySQL and
+    /// MariaDB. Relative to the repository root or with `~/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert: Option<String>,
+    /// Private key (PEM) of the client certificate. Never inside the repository: `~/…`, an
+    /// absolute path or a `${user.…}` variable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 impl TlsConfig {

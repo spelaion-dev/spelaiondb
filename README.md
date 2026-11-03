@@ -129,6 +129,17 @@ through a bastion is already verified instead of asking them to accept a fingerp
 server that shows another key is refused. A change to that file is reviewed like a change to
 a connection before it is used.
 
+To log in without any password:
+
+- **Client certificates** (PostgreSQL, MySQL, MariaDB): in the SSL tab, the certificate and
+  its private key. The certificate may live in the repository; the key never does (SpelunkDB
+  refuses a key inside the repository): keep it in your personal folder (`~/…`) or name it
+  with a `${user.…}` variable, so each administrator uses their own.
+- **Cloud tokens** (AWS RDS IAM, Azure Database with Microsoft Entra ID, Google Cloud SQL
+  IAM): choose *Cloud token* as the authentication method and the provider. SpelunkDB writes
+  the command that asks the provider's CLI (`aws`, `az`, `gcloud`, signed in on your
+  computer) for a short-lived token, and runs it on every connection.
+
 ## Settings
 
 The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in its own tab:

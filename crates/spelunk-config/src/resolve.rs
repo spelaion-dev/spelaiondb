@@ -205,6 +205,11 @@ impl<'a> Resolver<'a> {
                 TlsModeConfig::VerifyFull => TlsMode::VerifyFull,
             },
             ca_certificate: text(&file.tls.ca)?.map(|ca| resolve_path(&ca, &base)),
+            client_certificate: text(&file.tls.cert)?.map(|cert| resolve_path(&cert, &base)),
+            client_key: match text(&file.tls.key)? {
+                None => None,
+                Some(key) => Some(self.private_key(entry, &key, &base)?),
+            },
             read_only: file.read_only,
             connect_addr: None,
         };
@@ -271,6 +276,37 @@ impl<'a> Resolver<'a> {
                 reference: format!("keychain:{account}"),
                 message,
             })
+    }
+
+    /// A client certificate's private key: a repository connection may not keep it inside the
+    /// repository, where it would be committed and shared (ADR-022).
+    fn private_key(
+        &self,
+        entry: &ConnectionEntry,
+        key: &str,
+        base: &Path,
+    ) -> Result<PathBuf, ResolveError> {
+        let path = resolve_path(key, base);
+        if entry.id.source == Source::Workspace {
+            // As written, and canonical when the file exists (another spelling of the same
+            // place). A key that does not exist yet is still refused by the first check.
+            let inside = |p: &Path| {
+                let canonical = |p: &Path| std::fs::canonicalize(p).ok();
+                p.starts_with(base)
+                    || matches!(
+                        (canonical(p), canonical(base)),
+                        (Some(p), Some(root)) if p.starts_with(&root)
+                    )
+            };
+            if inside(&path) {
+                return Err(ConfigError::new(
+                    &entry.file_path,
+                    "tls.key is inside the repository, where it would be shared: keep private keys in your personal folder (~/…) or name them with a ${user.…} variable",
+                )
+                .into());
+            }
+        }
+        Ok(path)
     }
 
     /// Directory relative paths are resolved against; checks trust.

@@ -18,7 +18,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelunk-driver-api`: driver contract (ADR-005). Results in Arrow with
   `spelunk.logical` / `spelunk.native_type` metadata per column; `Value` for single cells.
 - `crates/spelunk-driver-postgres`: extended protocol + our own binary decoding
-  (`decode.rs`). Each type's text must be identical to `psql`'s: the type zoo
+  (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
 - `crates/spelunk-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
   per connection). Its type zoo (`tests/mysql.rs`) compares every type with the server's

@@ -304,6 +304,29 @@ pub(crate) fn validate_connection(
             ),
         ));
     }
+    if file.tls.cert.is_some() != file.tls.key.is_some() {
+        return Err(ConfigError::new(
+            path,
+            "tls.cert and tls.key go together: the client certificate and its private key",
+        ));
+    }
+    if file.tls.cert.is_some() {
+        match file.engine {
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
+            Engine::Sqlserver => {
+                return Err(ConfigError::new(
+                    path,
+                    "SQL Server does not log SQL users in with a client certificate: use a password or a token",
+                ));
+            }
+            Engine::Sqlite | Engine::Duckdb => {
+                return Err(ConfigError::new(
+                    path,
+                    "a local file has no client certificate",
+                ));
+            }
+        }
+    }
     if file.sqlite3.is_some() && !remote_sqlite {
         return Err(ConfigError::new(
             path,

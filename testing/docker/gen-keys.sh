@@ -7,6 +7,8 @@
 #                         "postgres" (its name behind the bastions), but not for
 #                         127.0.0.1: that way verify-full is tested against verify-ca
 #   keys/mysql.crt/.key   the same for MySQL and MariaDB ("localhost", "mysql", "mariadb")
+#   keys/client.crt/.key  client certificate for the user "spelunk_cert", who logs in
+#                         without a password (ADR-022)
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p keys
@@ -40,6 +42,17 @@ extendedKeyUsage=serverAuth
 ' > keys/mysql.ext
   openssl x509 -req -in keys/mysql.csr -CA keys/ca.crt -CAkey keys/ca.key -CAcreateserial     -out keys/mysql.crt -days 3650 -extfile keys/mysql.ext 2>/dev/null
   rm -f keys/mysql.csr keys/mysql.ext keys/ca.srl
+fi
+
+# A client certificate from the same authority: PostgreSQL, MySQL and MariaDB let the user
+# "spelunk_cert" in with it instead of a password.
+if [ ! -f keys/client.crt ]; then
+  openssl req -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -keyout keys/client.key -out keys/client.csr -subj "/CN=spelunk_cert" 2>/dev/null
+  printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n' > keys/client.ext
+  openssl x509 -req -in keys/client.csr -CA keys/ca.crt -CAkey keys/ca.key -CAcreateserial \
+    -out keys/client.crt -days 3650 -extfile keys/client.ext 2>/dev/null
+  rm -f keys/client.csr keys/client.ext keys/ca.srl
 fi
 
 echo "Keys and certificates in $(pwd)/keys"

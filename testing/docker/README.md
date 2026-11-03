@@ -26,6 +26,9 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
 - PostgreSQL accepts TLS (without requiring it) with a certificate signed by `keys/ca.crt`,
   valid for `localhost` and `postgres` (not for `127.0.0.1`): that way `verify-full` and
   `verify-ca` are tested, also through the bastions.
+- The user `spelunk_cert` logs in with the client certificate `keys/client.crt` and no
+  password (ADR-022): PostgreSQL through `postgres/pg_hba.conf`, MySQL and MariaDB through
+  `REQUIRE SUBJECT` (the driver tests create the user).
 
 ## Usage
 
@@ -38,6 +41,7 @@ Generated keys (test values, outside git):
 - `keys/id_ed25519`: no passphrase.
 - `keys/id_ed25519_pass`: passphrase `spelunk-test`.
 - `keys/ca.crt`, `keys/server.crt`, `keys/server.key`: PostgreSQL TLS.
+- `keys/client.crt`, `keys/client.key`: client certificate for `spelunk_cert`.
 
 Manual check with OpenSSH:
 

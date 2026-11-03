@@ -58,7 +58,12 @@ impl Driver for PostgresDriver {
             config.hostaddr(addr.ip());
         }
 
-        let (ssl_mode, tls) = tls::configure(params.tls, params.ca_certificate.as_deref())?;
+        let identity = match (&params.client_certificate, &params.client_key) {
+            (Some(cert), Some(key)) => Some(tls::ClientIdentity { cert, key }),
+            _ => None,
+        };
+        let (ssl_mode, tls) =
+            tls::configure(params.tls, params.ca_certificate.as_deref(), identity)?;
         config.ssl_mode(ssl_mode);
 
         // The connection is driven in its own task; server notices (NOTICE, WARNING…) are

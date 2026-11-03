@@ -463,6 +463,35 @@ pub enum PasswordMode {
     Env,
     /// A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is.
     Other,
+    /// Short-lived tokens from a cloud provider's CLI (ADR-022).
+    AwsRds,
+    AzureAd,
+    GoogleCloudSql,
+}
+
+impl PasswordMode {
+    fn cloud_token(self) -> Option<spelunk_config::CloudToken> {
+        use spelunk_config::CloudToken;
+        match self {
+            PasswordMode::AwsRds => Some(CloudToken::AwsRds),
+            PasswordMode::AzureAd => Some(CloudToken::AzureAd),
+            PasswordMode::GoogleCloudSql => Some(CloudToken::GoogleCloudSql),
+            PasswordMode::None
+            | PasswordMode::Keychain
+            | PasswordMode::Prompt
+            | PasswordMode::Env
+            | PasswordMode::Other => None,
+        }
+    }
+
+    fn from_cloud_token(token: spelunk_config::CloudToken) -> Self {
+        use spelunk_config::CloudToken;
+        match token {
+            CloudToken::AwsRds => PasswordMode::AwsRds,
+            CloudToken::AzureAd => PasswordMode::AzureAd,
+            CloudToken::GoogleCloudSql => PasswordMode::GoogleCloudSql,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -536,6 +565,9 @@ pub struct ConnectionDraftItem {
     pub password_other: String,
     pub tls_mode: TlsModeItem,
     pub tls_ca: String,
+    /// Client certificate and its private key (ADR-022); empty for none.
+    pub tls_cert: String,
+    pub tls_key: String,
     pub tunnel: String,
     /// Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's.
     pub kubernetes: Option<KubernetesDraftItem>,
@@ -573,6 +605,11 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
                 PasswordMode::Prompt => PasswordChoice::Prompt,
                 PasswordMode::Env => PasswordChoice::Env(item.password_env),
                 PasswordMode::Other => PasswordChoice::Other(item.password_other),
+                mode @ (PasswordMode::AwsRds
+                | PasswordMode::AzureAd
+                | PasswordMode::GoogleCloudSql) => {
+                    PasswordChoice::CloudToken(mode.cloud_token().expect("a cloud token mode"))
+                }
             },
             tls_mode: match item.tls_mode {
                 TlsModeItem::Disable => TlsModeConfig::Disable,
@@ -582,6 +619,8 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
                 TlsModeItem::VerifyFull => TlsModeConfig::VerifyFull,
             },
             tls_ca: item.tls_ca,
+            tls_cert: item.tls_cert,
+            tls_key: item.tls_key,
             tunnel: item.tunnel,
             kubernetes: item.kubernetes.map(Into::into),
             sqlite3: item.sqlite3,
@@ -601,6 +640,11 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
             PasswordChoice::Prompt => (PasswordMode::Prompt, String::new(), String::new()),
             PasswordChoice::Env(var) => (PasswordMode::Env, var, String::new()),
             PasswordChoice::Other(reference) => (PasswordMode::Other, String::new(), reference),
+            PasswordChoice::CloudToken(token) => (
+                PasswordMode::from_cloud_token(token),
+                String::new(),
+                String::new(),
+            ),
         };
         Self {
             personal: match draft.source {
@@ -620,6 +664,8 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
             password_other,
             tls_mode: draft.tls_mode.into(),
             tls_ca: draft.tls_ca,
+            tls_cert: draft.tls_cert,
+            tls_key: draft.tls_key,
             tunnel: draft.tunnel,
             kubernetes: draft.kubernetes.map(Into::into),
             sqlite3: draft.sqlite3,
@@ -759,6 +805,10 @@ fn password_choice(
         PasswordMode::Prompt => PasswordChoice::Prompt,
         PasswordMode::Env => PasswordChoice::Env(env),
         PasswordMode::Other => PasswordChoice::Other(other),
+        // Not offered for SSH hops: the core refuses it with a message.
+        mode @ (PasswordMode::AwsRds | PasswordMode::AzureAd | PasswordMode::GoogleCloudSql) => {
+            PasswordChoice::CloudToken(mode.cloud_token().expect("a cloud token mode"))
+        }
     }
 }
 
@@ -770,6 +820,11 @@ fn password_fields(choice: spelunk_config::PasswordChoice) -> (PasswordMode, Str
         PasswordChoice::Prompt => (PasswordMode::Prompt, String::new(), String::new()),
         PasswordChoice::Env(var) => (PasswordMode::Env, var, String::new()),
         PasswordChoice::Other(reference) => (PasswordMode::Other, String::new(), reference),
+        PasswordChoice::CloudToken(token) => (
+            PasswordMode::from_cloud_token(token),
+            String::new(),
+            String::new(),
+        ),
     }
 }
 
