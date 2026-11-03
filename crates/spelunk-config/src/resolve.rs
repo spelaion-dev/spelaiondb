@@ -114,6 +114,14 @@ impl<'a> Resolver<'a> {
         let entry = self.config.connection(id).ok_or_else(|| {
             ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
         })?;
+        // A saved repository connection must be as the user trusted it (ADR-022). Drafts are
+        // what the user is typing: theirs.
+        if entry.id.source == Source::Workspace {
+            let root = self.base_dir(Source::Workspace)?;
+            self.trust
+                .check_connection(&root, entry)
+                .map_err(|change| ResolveError::Changed { root, change })?;
+        }
         self.resolve_entry(entry)
     }
 
@@ -215,6 +223,13 @@ impl<'a> Resolver<'a> {
                             format!("tunnel {name:?} does not exist in .spelunk/tunnels/"),
                         )
                     })?;
+                // A repository tunnel, even under a draft, must be as the user trusted it.
+                if tunnel.source == Source::Workspace {
+                    let root = self.base_dir(Source::Workspace)?;
+                    self.trust
+                        .check_tunnel(&root, tunnel)
+                        .map_err(|change| ResolveError::Changed { root, change })?;
+                }
                 Some(self.resolve_tunnel(
                     name,
                     tunnel.source,

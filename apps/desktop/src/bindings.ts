@@ -29,7 +29,7 @@ export const commands = {
 	 *  the file nor the keychain. `editing` is the connection being edited, if any: its stored
 	 *  password is used when none is typed.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("test_connection", { draft, password, editing })),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
 	 *  configuration. Returns the new connection's identifier.
@@ -166,6 +166,11 @@ export const commands = {
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
+	/**
+	 *  Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
+	 *  as it is now, and connecting can go on.
+	 */
+	acceptChange: (item: string) => typedError<null, string>(__TAURI_INVOKE("accept_change", { item })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	setHistoryEnabled: (connection: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
@@ -173,7 +178,7 @@ export const commands = {
 	 *  Opens a session (`session` is chosen by the UI). If a password is needed, it says so
 	 *  instead of failing, so the UI can ask for it.
 	 */
-	connect: (session: string, connection: string, password: string | null, remember: boolean) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("connect", { session, connection, password, remember })),
+	connect: (session: string, connection: string, password: string | null, remember: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember })),
 	/**
 	 *  Open an independent tab from an existing explorer session, reusing its in-memory
 	 *  credentials and exact resolved connection. Passwords never cross back into the UI.
@@ -257,13 +262,37 @@ export type ColumnItem = {
 	nativeType: string,
 };
 
-export type ConnectOutcome = { kind: "connected"; serverVersion: string } | 
+export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
+
+export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string } | 
 /**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
 { kind: "authFailed"; message: string; canRemember: boolean } | 
 /**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" };
+{ kind: "untrusted" } | 
+/**
+ *  A repository connection or tunnel is new or changed since the repository was trusted
+ *  (ADR-022): show the change and ask before resolving anything.
+ */
+{ kind: "changed"; 
+/**  `connection:<id>` or `tunnel:<name>`, for `accept_change`. */
+item: string; new: boolean; fields: FieldChangeItem_Deserialize[] };
+
+export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string } | 
+/**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
+{ kind: "passwordRequired"; canRemember: boolean } | 
+/**  The server rejected the password (or the user): it must be asked for again. */
+{ kind: "authFailed"; message: string; canRemember: boolean } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" } | 
+/**
+ *  A repository connection or tunnel is new or changed since the repository was trusted
+ *  (ADR-022): show the change and ask before resolving anything.
+ */
+{ kind: "changed"; 
+/**  `connection:<id>` or `tunnel:<name>`, for `accept_change`. */
+item: string; new: boolean; fields: FieldChangeItem_Serialize[] };
 
 /**
  *  What the "add connection" form sends. The password travels apart and is never stored in
@@ -449,6 +478,32 @@ export type EngineItem_Serialize = {
 	access: string,
 	defaultPort: number | null,
 	available: boolean,
+};
+
+/**
+ *  One field of a changed repository item. Repository files hold secret references, never
+ *  secrets.
+ */
+export type FieldChangeItem = FieldChangeItem_Serialize | FieldChangeItem_Deserialize;
+
+/**
+ *  One field of a changed repository item. Repository files hold secret references, never
+ *  secrets.
+ */
+export type FieldChangeItem_Deserialize = {
+	field: string,
+	before?: string | null,
+	after?: string | null,
+};
+
+/**
+ *  One field of a changed repository item. Repository files hold secret references, never
+ *  secrets.
+ */
+export type FieldChangeItem_Serialize = {
+	field: string,
+	before: string | null,
+	after: string | null,
 };
 
 /**  A column filter operator (see `spelunk_core::FilterOp`). */

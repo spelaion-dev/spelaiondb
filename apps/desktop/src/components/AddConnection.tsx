@@ -19,6 +19,7 @@ import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { engineBadge } from "../engines";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath } from "../dialogs";
+import { reviewChanges } from "../connect";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
@@ -403,6 +404,15 @@ function ConnectionForm(props: {
         useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
         outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
       }
+      // The tunnel this connection uses may have changed in the repository.
+      const reviewed = await reviewChanges(outcome, () =>
+        call(commands.testConnection(request, typedPassword || null, editing ?? null)),
+      );
+      if (!reviewed) {
+        setTest({ kind: "idle" });
+        return;
+      }
+      outcome = reviewed;
       switch (outcome.kind) {
         case "connected":
           setTest({ kind: "ok", version: outcome.serverVersion });
@@ -414,6 +424,7 @@ function ConnectionForm(props: {
           setTest({ kind: "error", message: outcome.message });
           break;
         case "untrusted":
+        case "changed":
           setTest({ kind: "idle" });
           break;
       }

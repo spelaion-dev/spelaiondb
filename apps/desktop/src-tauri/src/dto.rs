@@ -114,6 +114,42 @@ pub enum ConnectOutcome {
     },
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
+    /// A repository connection or tunnel is new or changed since the repository was trusted
+    /// (ADR-022): show the change and ask before resolving anything.
+    Changed {
+        /// `connection:<id>` or `tunnel:<name>`, for `accept_change`.
+        item: String,
+        new: bool,
+        fields: Vec<FieldChangeItem>,
+    },
+}
+
+/// One field of a changed repository item. Repository files hold secret references, never
+/// secrets.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldChangeItem {
+    pub field: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+impl From<spelunk_config::ItemChange> for ConnectOutcome {
+    fn from(change: spelunk_config::ItemChange) -> Self {
+        ConnectOutcome::Changed {
+            item: change.item,
+            new: change.new,
+            fields: change
+                .fields
+                .into_iter()
+                .map(|f| FieldChangeItem {
+                    field: f.field,
+                    before: f.before,
+                    after: f.after,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Type)]

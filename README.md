@@ -108,6 +108,20 @@ file: only the values you change are rewritten, so comments and settings the for
 show (such as `mcp.max_rows`) survive. Deleting asks for confirmation, removes the file and
 the password saved in the keychain, and leaves open tabs without a connection.
 
+### Sharing connections with a team
+
+Project connections and tunnels are plain files in `.spelunk/`: commit them, review them in
+pull requests, and every colleague gets them with `git pull`. They never hold a password,
+only where to find one (the keychain, an environment variable, 1Password, any command), and
+personal values such as each person's database user go in `${user.…}` variables.
+
+A repository's connections are not used until you trust it, and trusting is not forever
+(ADR-022): SpelunkDB remembers each connection and tunnel as you trusted it. If a pull
+changes one (another server, secret, tunnel or command) or adds a new one, it is not used
+until you have seen what changed, field by field, and accepted it. Changes you make through
+the app's forms are yours and need no review. `spelunk trust <folder>` does the same from a
+terminal and lists the changes it accepts.
+
 ## Settings
 
 The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in its own tab:

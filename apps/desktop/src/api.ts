@@ -15,6 +15,8 @@ import {
   type SshAuthItem,
   type TunnelDraftItem_Deserialize,
   type ConnectOutcome,
+  type ConnectOutcome_Serialize,
+  type FieldChangeItem,
   type InteractionKind,
   type HistoryItem_Serialize,
   type ObjectItem_Serialize,
@@ -44,7 +46,7 @@ import {
 
 export { commands, events };
 export type { ImportReport, KubernetesDraftItem };
-export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutcome, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
+export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
@@ -63,6 +65,8 @@ export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
 export type UpdateStatus = UpdateStatus_Serialize;
+/** What `connect` and `testConnection` return. */
+export type ConnectResult = ConnectOutcome_Serialize;
 
 type Typed<T> = { status: "ok"; data: T } | { status: "error"; error: string };
 

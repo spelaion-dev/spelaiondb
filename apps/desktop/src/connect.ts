@@ -1,8 +1,25 @@
-// Opens a session with whatever dialogs are needed: repository trust (ADR-009) and the
-// password. Passwords go straight to the backend; they are never kept in the state.
+// Opens a session with whatever dialogs are needed: repository trust (ADR-009), changes to
+// trusted repository items (ADR-022) and the password. Passwords go straight to the
+// backend; they are never kept in the state.
 
-import { call, commands } from "./api";
+import { call, commands, type ConnectResult } from "./api";
 import { useApp, useDialogs } from "./store";
+
+/** While a repository connection or tunnel is new or changed, shows the change and, if the
+ *  user accepts it, records it and tries again. Returns null if the user refused. */
+export async function reviewChanges(
+  outcome: ConnectResult,
+  retry: () => Promise<ConnectResult>,
+): Promise<ConnectResult | null> {
+  // A connection and its tunnel may both have changed: one dialog each.
+  for (let i = 0; outcome.kind === "changed" && i < 10; i++) {
+    const accepted = await useDialogs.getState().askChange({ item: outcome.item, isNew: outcome.new, fields: outcome.fields });
+    if (!accepted) return null;
+    await call(commands.acceptChange(outcome.item));
+    outcome = await retry();
+  }
+  return outcome;
+}
 
 /** Returns the server version, or null if the user cancelled. Throws if it fails. */
 export async function openSession(session: string, connectionId: string): Promise<string | null> {
@@ -10,13 +27,17 @@ export async function openSession(session: string, connectionId: string): Promis
   const dialogs = useDialogs.getState();
   const name = app.connections.find((c) => c.id === connectionId)?.name ?? connectionId;
 
-  let outcome = await call(commands.connect(session, connectionId, null, false));
+  const connect = () => call(commands.connect(session, connectionId, null, false));
+  let outcome = await connect();
   if (outcome.kind === "untrusted") {
     const workspace = app.workspace?.workspace ?? null;
     if (!(await dialogs.askTrust(workspace))) return null;
     useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
-    outcome = await call(commands.connect(session, connectionId, null, false));
+    outcome = await connect();
   }
+  const reviewed = await reviewChanges(outcome, connect);
+  if (!reviewed) return null;
+  outcome = reviewed;
   // Only ask again if the server rejected the password; any other failure (server down,
   // tunnel, TLS…) arrives as an exception and is shown as is.
   let error: string | null = null;
@@ -26,7 +47,7 @@ export async function openSession(session: string, connectionId: string): Promis
     if (!answer) return null;
     outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember));
   }
-  if (outcome.kind === "untrusted") return null;
+  if (outcome.kind === "untrusted" || outcome.kind === "changed") return null;
   return outcome.serverVersion;
 }
 

@@ -40,7 +40,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   written as DuckDB's text in `format.rs`. Its type zoo (`tests/duckdb.rs`) compares every
   type with `CAST(… AS VARCHAR)`; it needs nothing external.
 - `crates/spelunk-config`: TOML files from `.spelunk/` and the personal directory,
-  variables, secret references and repository trust (ADR-009). If you change `model.rs`,
+  variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
+  connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
+  change there needs tests that try to get around it). If you change `model.rs`,
   regenerate the schema: `SPELUNK_UPDATE_SCHEMA=1 cargo test -p spelunk-config`.
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.

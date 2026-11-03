@@ -518,3 +518,44 @@ fn duckdb_connections_serve_agents_without_files() {
         ["lamp,table,chair,desk"]
     );
 }
+
+#[test]
+fn a_connection_changed_after_trusting_is_refused_until_reviewed() {
+    let fx = Fixture::new("mcp-pinned");
+    create_db(&fx.repo().join("shop.db"));
+    create_db(&fx.repo().join("other.db"));
+    let file = fx.repo().join(".spelunk/connections/shop.toml");
+    let content = "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\n";
+    std::fs::write(&file, content).unwrap();
+    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    let query = json!({ "connection": "shop", "sql": "select count(*) as n from products" });
+
+    let mut agent = Agent::start(&fx);
+    let (text, is_error) = agent.call("run_query", query.clone());
+    assert!(!is_error, "{text}");
+    agent.stop();
+
+    // A pull points the connection somewhere else: the agent cannot use it.
+    std::fs::write(&file, content.replace("shop.db", "other.db")).unwrap();
+    let mut agent = Agent::start(&fx);
+    let (text, is_error) = agent.call("run_query", query.clone());
+    assert!(
+        is_error
+            && text.contains("changed in the repository since you trusted it")
+            && text.contains("database shop.db → other.db"),
+        "{text}"
+    );
+    agent.stop();
+
+    // `spelunk trust` says what it accepts; then it works again.
+    let out = fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    assert!(
+        out.contains("Accepted: the connection shop changed")
+            && out.contains("database shop.db → other.db"),
+        "{out}"
+    );
+    let mut agent = Agent::start(&fx);
+    let (text, is_error) = agent.call("run_query", query);
+    assert!(!is_error && text.contains("| 3 |"), "{text}");
+    agent.stop();
+}

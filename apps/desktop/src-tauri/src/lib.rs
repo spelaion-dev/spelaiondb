@@ -61,11 +61,29 @@ impl AppState {
         let version = self.workspace_version.load(Ordering::Acquire);
         let workspace = self.workspace.read().await.clone();
         let loaded = load(workspace.as_deref(), &self.user_dir);
+        if let Ok(mut trust) = TrustStore::load(&self.user_dir) {
+            let _ = trust.adopt(&loaded);
+        }
         let mut config = self.config.write().await;
         // A reload started in the previous folder must not overwrite the new one.
         if version == self.workspace_version.load(Ordering::Acquire) {
             *config = loaded;
         }
+    }
+
+    /// Records a repository item the user just wrote through the app as trusted: their own
+    /// change is not one to review (ADR-022). Personal items and untrusted repositories have
+    /// nothing to record.
+    async fn accept_own(&self, item: String) -> CmdResult<()> {
+        let config = self.config.read().await;
+        let Some(root) = config.workspace_root.as_deref() else {
+            return Ok(());
+        };
+        let mut trust = TrustStore::load(&self.user_dir).map_err(|e| e.to_string())?;
+        if !trust.is_trusted(root) {
+            return Ok(());
+        }
+        trust.accept(&config, &item).map_err(|e| e.to_string())
     }
 
     async fn info(&self) -> CmdResult<WorkspaceInfo> {
@@ -235,8 +253,24 @@ async fn trust_workspace(state: State<'_, AppState>) -> CmdResult<WorkspaceInfo>
         .clone()
         .ok_or("no repository is open")?;
     let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    trust.trust(&root).map_err(|e| e.to_string())?;
+    let config = state.config.read().await;
+    if config.workspace_root.as_deref() != Some(root.as_path()) {
+        return Err("the folder changed; trust it again".into());
+    }
+    trust.trust(&config).map_err(|e| e.to_string())?;
+    drop(config);
     state.info().await
+}
+
+/// Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
+/// as it is now, and connecting can go on.
+#[tauri::command]
+#[specta::specta]
+async fn accept_change(item: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state.reload().await;
+    let config = state.config.read().await;
+    let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    trust.accept(&config, &item).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -404,6 +438,9 @@ async fn test_connection(
             Err(spelunk_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
             }
+            Err(spelunk_config::ResolveError::Changed { change, .. }) => {
+                return Ok(change.into());
+            }
             Err(e) => return Err(e.to_string()),
         }
     };
@@ -457,6 +494,11 @@ async fn add_connection(
             .map_err(|e| e.to_string())?
     };
     state.reload().await;
+    if id.source == Source::Workspace {
+        state
+            .accept_own(spelunk_config::connection_item(&id))
+            .await?;
+    }
     Ok(id.to_string())
 }
 
@@ -498,6 +540,12 @@ async fn update_connection(
         .map_err(|e| e.to_string())?;
     }
     state.reload().await;
+    let id = parse_id(&connection);
+    if id.source == Source::Workspace {
+        state
+            .accept_own(spelunk_config::connection_item(&id))
+            .await?;
+    }
     Ok(())
 }
 
@@ -511,6 +559,12 @@ async fn delete_connection(connection: String, state: State<'_, AppState>) -> Cm
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
+    let id = parse_id(&connection);
+    if id.source == Source::Workspace {
+        state
+            .accept_own(spelunk_config::connection_item(&id))
+            .await?;
+    }
     Ok(())
 }
 
@@ -644,6 +698,9 @@ async fn add_tunnel(
             .map_err(|e| e.to_string())?
     };
     state.reload().await;
+    if !personal {
+        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+    }
     Ok(TunnelItem { name, personal })
 }
 
@@ -671,6 +728,9 @@ async fn update_tunnel(
         .map_err(|e| e.to_string())?;
     }
     state.reload().await;
+    if !personal {
+        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+    }
     Ok(())
 }
 
@@ -684,6 +744,9 @@ async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>)
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
+    if !personal {
+        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+    }
     Ok(())
 }
 
@@ -711,6 +774,9 @@ async fn connect(
             Ok(resolved) => resolved,
             Err(spelunk_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
+            }
+            Err(spelunk_config::ResolveError::Changed { change, .. }) => {
+                return Ok(change.into());
             }
             Err(e) => return Err(e.to_string()),
         };
@@ -1203,6 +1269,11 @@ async fn import_one(
             created_tunnel = true;
         }
         state.reload().await;
+        if created_tunnel && source == Source::Workspace {
+            state
+                .accept_own(spelunk_config::tunnel_item(tunnel_name))
+                .await?;
+        }
     }
     let mut draft = plan.connection;
     let base = draft.name.clone();
@@ -1217,8 +1288,13 @@ async fn import_one(
             spelunk_config::add_connection(&config, &draft, plan.password.as_ref(), &SystemBackend)
         };
         match added {
-            Ok(_) => {
+            Ok(id) => {
                 state.reload().await;
+                if id.source == Source::Workspace {
+                    state
+                        .accept_own(spelunk_config::connection_item(&id))
+                        .await?;
+                }
                 return Ok((draft.name, created_tunnel));
             }
             Err(e) if e.to_string().contains("already exists") => continue,
@@ -1796,6 +1872,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             import_dbeaver,
             open_workspace,
             trust_workspace,
+            accept_change,
             list_connections,
             list_history,
             set_history_enabled,

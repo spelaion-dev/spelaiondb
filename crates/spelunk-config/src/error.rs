@@ -57,6 +57,14 @@ pub enum ResolveError {
     #[error("you must trust the repository {} before its secrets or commands can be used", root.display())]
     Untrusted { root: PathBuf },
 
+    /// A repository connection or tunnel is new or changed since the user trusted the
+    /// repository (ADR-022): nothing was resolved.
+    #[error("{change}. Review the change in SpelunkDB or with `spelunk trust` before using it")]
+    Changed {
+        root: PathBuf,
+        change: crate::trust::ItemChange,
+    },
+
     #[error("{0}")]
     Config(#[from] ConfigError),
 

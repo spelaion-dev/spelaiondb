@@ -31,10 +31,6 @@ impl Workspace {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("repo/.spelunk")).unwrap();
         std::fs::create_dir_all(base.join("user")).unwrap();
-        TrustStore::load(&base.join("user"))
-            .unwrap()
-            .trust(&base.join("repo"))
-            .unwrap();
         Self {
             base,
             tunnels: Arc::new(TunnelPool::new()),
@@ -55,7 +51,9 @@ impl Workspace {
     ) -> Result<OpenConnection, OpenError> {
         let config = load(Some(&self.base.join("repo")), &self.base.join("user"));
         assert!(config.problems.is_empty(), "{:?}", config.problems);
-        let trust = TrustStore::load(&self.base.join("user")).unwrap();
+        // The repository is trusted as the test wrote it (ADR-022 pins its content).
+        let mut trust = TrustStore::load(&self.base.join("user")).unwrap();
+        trust.trust(&config).unwrap();
         let id = ConnectionId {
             source: Source::Workspace,
             path: id.into(),
@@ -358,7 +356,8 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
     let (host, port) = addr.rsplit_once(':').unwrap();
     let ws = Workspace::new("tunnel-draft");
     let config = load(Some(&ws.base.join("repo")), &ws.base.join("user"));
-    let trust = TrustStore::load(&ws.base.join("user")).unwrap();
+    let mut trust = TrustStore::load(&ws.base.join("user")).unwrap();
+    trust.trust(&config).unwrap();
     let identity = keys().join("id_ed25519").display().to_string();
     let hop = |host: &str, port: Option<u16>, user: &str| HopDraft {
         host: host.into(),

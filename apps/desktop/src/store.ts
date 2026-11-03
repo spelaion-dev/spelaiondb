@@ -2,7 +2,7 @@
 // requested from the core in windows.
 
 import { create } from "zustand";
-import type { ColumnFilterItem, ColumnItem, ConnectionItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
+import type { ColumnFilterItem, ColumnItem, ConnectionItem, FieldChangeItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
 
 export interface ResultMeta {
   id: number;
@@ -237,6 +237,14 @@ export interface TrustRequest {
   resolve(accept: boolean): void;
 }
 
+/** A repository connection or tunnel changed since the repository was trusted (ADR-022). */
+export interface ChangeRequest {
+  item: string;
+  isNew: boolean;
+  fields: FieldChangeItem[];
+  resolve(accept: boolean): void;
+}
+
 /** A line of text, such as the name to save a query under. */
 export interface TextRequest {
   title: string;
@@ -269,6 +277,7 @@ export interface InteractionItem {
 interface DialogStore {
   password: PasswordRequest | null;
   trust: TrustRequest | null;
+  change: ChangeRequest | null;
   risk: RiskRequest | null;
   params: ParamsRequest | null;
   text: TextRequest | null;
@@ -278,6 +287,7 @@ interface DialogStore {
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
   askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
   askTrust(workspace: string | null): Promise<boolean>;
+  askChange(change: Omit<ChangeRequest, "resolve">): Promise<boolean>;
   pushInteraction(item: InteractionItem): void;
   popInteraction(id: number): void;
 }
@@ -285,6 +295,7 @@ interface DialogStore {
 export const useDialogs = create<DialogStore>((set) => ({
   password: null,
   trust: null,
+  change: null,
   risk: null,
   params: null,
   text: null,
@@ -348,6 +359,18 @@ export const useDialogs = create<DialogStore>((set) => ({
           workspace,
           resolve: (accept) => {
             set({ trust: null });
+            resolve(accept);
+          },
+        },
+      }),
+    ),
+  askChange: (change) =>
+    new Promise((resolve) =>
+      set({
+        change: {
+          ...change,
+          resolve: (accept) => {
+            set({ change: null });
             resolve(accept);
           },
         },

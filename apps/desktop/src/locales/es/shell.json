@@ -69,5 +69,21 @@
     "cancel": "Cancelar",
     "run": "Ejecutar"
   },
-  "savedQueries": "Consultas guardadas"
+  "savedQueries": "Consultas guardadas",
+  "change": {
+    "title": "Esto ha cambiado desde que confiaste en el repositorio",
+    "newTitle": "Nuevo en el repositorio",
+    "connection": "la conexión {{name}}",
+    "tunnel": "el túnel SSH {{name}}",
+    "explanation": "Alguien ha cambiado {{what}} en el repositorio (por ejemplo, en un git pull). Hasta que aceptes el cambio, no lee ningún secreto ni ejecuta ningún comando.",
+    "newExplanation": "Alguien ha añadido {{what}} al repositorio después de que confiaras en él. Hasta que lo aceptes, no lee ningún secreto ni ejecuta ningún comando.",
+    "field": "Campo",
+    "before": "Antes",
+    "after": "Ahora",
+    "value": "Valor",
+    "none": "(nada)",
+    "advice": "Comprueba quién hizo el cambio y por qué (git log) antes de aceptarlo, sobre todo si es un servidor, un secreto o un comando nuevo.",
+    "reject": "No usarla",
+    "accept": "Aceptar el cambio"
+  }
 }

@@ -69,5 +69,21 @@
     "cancel": "Cancel",
     "run": "Run"
   },
-  "savedQueries": "Saved queries"
+  "savedQueries": "Saved queries",
+  "change": {
+    "title": "This changed since you trusted the repository",
+    "newTitle": "New in the repository",
+    "connection": "the connection {{name}}",
+    "tunnel": "the SSH tunnel {{name}}",
+    "explanation": "Someone changed {{what}} in the repository (for example in a git pull). Until you accept the change, it reads no secret and runs no command.",
+    "newExplanation": "Someone added {{what}} to the repository after you trusted it. Until you accept it, it reads no secret and runs no command.",
+    "field": "Field",
+    "before": "Before",
+    "after": "Now",
+    "value": "Value",
+    "none": "(none)",
+    "advice": "Check who made the change and why (git log) before accepting, above all a new server, secret or command.",
+    "reject": "Don't use it",
+    "accept": "Accept the change"
+  }
 }

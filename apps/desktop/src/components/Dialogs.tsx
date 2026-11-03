@@ -1,5 +1,5 @@
-// Modal dialogs: password, repository trust, query parameters, risky statements and SSH
-// tunnel questions.
+// Modal dialogs: password, repository trust, changes to trusted repository items, query
+// parameters, risky statements and SSH tunnel questions.
 
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -9,12 +9,14 @@ import { useDialogs } from "../store";
 export function Dialogs() {
   const password = useDialogs((s) => s.password);
   const trust = useDialogs((s) => s.trust);
+  const change = useDialogs((s) => s.change);
   const risk = useDialogs((s) => s.risk);
   const params = useDialogs((s) => s.params);
   const text = useDialogs((s) => s.text);
   const interaction = useDialogs((s) => s.interactions[0]);
   if (interaction) return <InteractionDialog key={interaction.id} />;
   if (trust) return <TrustDialog />;
+  if (change) return <ChangeDialog key={change.item} />;
   if (params) return <ParamsDialog />;
   if (text) return <TextDialog />;
   if (risk) return <RiskDialog />;
@@ -88,6 +90,48 @@ function TrustDialog() {
         <button onClick={() => request.resolve(false)}>{t("dontTrust")}</button>
         <button className="primary" onClick={() => request.resolve(true)}>
           {t("trust")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** What changed in a repository connection or tunnel since the user trusted it: nothing of
+ *  it is used (no secret read, no command run) until they accept (ADR-022). */
+function ChangeDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.change);
+  if (!request) return null;
+  const [kind, name] = request.item.includes(":") ? request.item.split(/:(.*)/s) : ["connection", request.item];
+  const what = kind === "tunnel" ? t("change.tunnel", { name }) : t("change.connection", { name });
+  return (
+    <Modal title={request.isNew ? t("change.newTitle") : t("change.title")}>
+      <p>{request.isNew ? t("change.newExplanation", { what }) : t("change.explanation", { what })}</p>
+      <div className="change-table-wrap">
+        <table className="change-table">
+          <thead>
+            <tr>
+              <th>{t("change.field")}</th>
+              {!request.isNew && <th>{t("change.before")}</th>}
+              <th>{request.isNew ? t("change.value") : t("change.after")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {request.fields.map((f) => (
+              <tr key={f.field}>
+                <td className="mono">{f.field}</td>
+                {!request.isNew && <td className="mono">{f.before ?? t("change.none")}</td>}
+                <td className="mono">{f.after ?? t("change.none")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted small">{t("change.advice")}</p>
+      <div className="modal-actions">
+        <button onClick={() => request.resolve(false)}>{t("change.reject")}</button>
+        <button className="primary" onClick={() => request.resolve(true)}>
+          {t("change.accept")}
         </button>
       </div>
     </Modal>

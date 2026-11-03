@@ -47,7 +47,7 @@ pub use resolve::{
     Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedTunnel, Resolver,
 };
 pub use secrets::{KEYCHAIN_SERVICE, SecretBackend, SecretRef, SystemBackend};
-pub use trust::TrustStore;
+pub use trust::{FieldChange, ItemChange, TrustStore, connection_item, tunnel_item};
 pub use tunnel_draft::{
     HopDraft, TUNNEL_SCHEMA_URL, TunnelDraft, add_tunnel, delete_tunnel, tunnels_dir, update_tunnel,
 };

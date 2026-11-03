@@ -129,9 +129,13 @@ async fn main() -> Result<()> {
                 trust.revoke(&root)?;
                 println!("Trust revoked for {}", root.display());
             } else {
-                trust.trust(&root)?;
+                let config = load(Some(&root), &user_dir);
+                let changes = trust.trust(&config)?;
+                for change in &changes {
+                    println!("Accepted: {change}");
+                }
                 println!(
-                    "{} is now trusted: its connections can resolve secrets and run the commands in its configuration.",
+                    "{} is now trusted as it is: its connections can resolve secrets and run the commands in its configuration. A later change to one of them is asked about again.",
                     root.display()
                 );
             }
