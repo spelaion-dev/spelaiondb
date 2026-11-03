@@ -353,6 +353,23 @@ try {
   await sortedAs("");
   assert.deepEqual(await copyFirstRows(0, 2), ["1", "2"]);
 
+  step("columns: drag a header edge to resize, double-click it to fit the content");
+  const widthsNow = async () => (await sortGrid.getAttribute("data-column-widths")).split(",").map(Number);
+  const [idWidth, customerWidth, createdWidth] = await widthsNow();
+  const createdEdge = sortBox.x + 64 + idWidth + customerWidth + createdWidth;
+  await page.mouse.move(createdEdge - 1, sortBox.y + 18);
+  await page.mouse.down();
+  await page.mouse.move(createdEdge + 60, sortBox.y + 18, { steps: 5 });
+  await page.mouse.up();
+  assert.equal((await widthsNow())[2], createdWidth + 61);
+  await sortedAs("");
+  // "created" holds 10-character dates: fitting makes it narrower than 160 px.
+  await page.mouse.dblclick(sortBox.x + 64 + idWidth + customerWidth + createdWidth + 61, sortBox.y + 18);
+  for (let i = 0; i < 20 && (await widthsNow())[2] >= createdWidth; i++) await page.waitForTimeout(100);
+  const fitted = (await widthsNow())[2];
+  assert.ok(fitted < createdWidth && fitted > 60, `fitted width ${fitted}`);
+  await sortedAs("");
+
   step("filter: the core keeps the rows with the text, sorting and copy follow");
   const filterBox = panel.getByRole("searchbox", { name: "Filter rows" });
   await filterBox.fill("4999");

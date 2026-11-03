@@ -14,6 +14,11 @@ const HEADER_H = 36;
 const PAD = 8;
 const MIN_COL = 72;
 const MAX_COL = 420;
+/** Limits when the user resizes a column (wider than the automatic maximum). */
+const MIN_RESIZE = 48;
+const MAX_RESIZE = 2000;
+/** Pixels on each side of a header edge that grab it. */
+const EDGE = 4;
 const DATA_FONT = '12.5px ui-monospace, "Cascadia Mono", Consolas, monospace';
 const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
 const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
@@ -112,7 +117,10 @@ export function ResultGrid({
   cache.grewTo(result.rows);
 
   // Widths: header and type, bounded. (Fitting to content: next iteration.)
-  const widths = useMemo(() => {
+  // Widths the user set by dragging (or fitted with a double-click), per column.
+  const [resized, setResized] = useState<Record<number, number>>({});
+  const resizing = useRef<{ col: number; startX: number; startWidth: number } | null>(null);
+  const automatic = useMemo(() => {
     const ctx = document.createElement("canvas").getContext("2d");
     if (!ctx) return result.columns.map(() => 140);
     return result.columns.map((c) => {
@@ -124,6 +132,7 @@ export function ResultGrid({
       return Math.round(Math.min(MAX_COL, Math.max(MIN_COL, name + PAD * 2 + 8, type + PAD * 2, base)));
     });
   }, [result.columns]);
+  const widths = useMemo(() => automatic.map((w, i) => resized[i] ?? w), [automatic, resized]);
   const offsets = useMemo(() => {
     const out = [0];
     for (const w of widths) out.push((out[out.length - 1] ?? 0) + w);
@@ -300,6 +309,7 @@ export function ResultGrid({
 
   useEffect(() => {
     // New result: scroll to the top and clear the selection.
+    setResized({});
     setSelection(null);
     setMenu(null);
     setViewer(false);
@@ -322,6 +332,42 @@ export function ResultGrid({
     let col = offsets.findIndex((o, i) => i < widths.length && dataX >= o && dataX < (offsets[i + 1] ?? 0));
     if (col < 0) col = dataX < 0 ? 0 : widths.length - 1;
     return { row, col, gutter };
+  }
+
+  /** The column whose right header edge is under the pointer, if any (to resize it). */
+  function edgeAt(clientX: number, clientY: number): number | null {
+    const scroller = scrollerRef.current;
+    if (!scroller) return null;
+    const rect = scroller.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    if (y < 0 || y >= HEADER_H || x < rowNumW) return null;
+    const dataX = x - rowNumW + scroller.scrollLeft;
+    for (let col = 0; col < widths.length; col++) {
+      if (Math.abs((offsets[col + 1] ?? 0) - dataX) <= EDGE) return col;
+    }
+    return null;
+  }
+
+  /** Width that shows the header and the loaded cells of a column in full (bounded). */
+  function fitWidth(col: number): number {
+    const ctx = canvasRef.current?.getContext("2d");
+    const meta = result.columns[col];
+    if (!ctx || !meta) return widths[col] ?? MIN_RESIZE;
+    ctx.font = HEADER_FONT;
+    let widest = ctx.measureText(meta.name).width + 14;
+    ctx.font = TYPE_FONT;
+    widest = Math.max(widest, ctx.measureText(meta.nativeType).width);
+    ctx.font = DATA_FONT;
+    const scroller = scrollerRef.current;
+    const first = scroller ? Math.floor(scroller.scrollTop / ROW_H) : 0;
+    const last = Math.min(result.rows, first + Math.ceil((size.h || 600) / ROW_H) + 1);
+    for (let row = first; row < last; row++) {
+      const value = cache.get(row, col);
+      const text = value === null ? "NULL" : value === undefined ? "" : value.replace(/[\r\n\t]+/g, " ").slice(0, 300);
+      widest = Math.max(widest, ctx.measureText(text).width);
+    }
+    return Math.round(Math.min(MAX_RESIZE, Math.max(MIN_RESIZE, widest + PAD * 2 + 2)));
   }
 
   /** The column whose header is under the pointer, if any. */
@@ -484,10 +530,17 @@ export function ResultGrid({
 
   useEffect(() => {
     const move = (e: MouseEvent) => {
+      const resize = resizing.current;
+      if (resize && e.buttons === 1) {
+        const width = Math.round(Math.min(MAX_RESIZE, Math.max(MIN_RESIZE, resize.startWidth + e.clientX - resize.startX)));
+        setResized((r) => (r[resize.col] === width ? r : { ...r, [resize.col]: width }));
+        return;
+      }
       if (dragging.current && e.buttons === 1) selectAt(e, true);
     };
     const up = () => {
       dragging.current = false;
+      resizing.current = null;
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -509,6 +562,12 @@ export function ResultGrid({
         onScroll={redraw}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
+          const edge = edgeAt(e.clientX, e.clientY);
+          if (edge !== null) {
+            e.preventDefault();
+            resizing.current = { col: edge, startX: e.clientX, startWidth: widths[edge] ?? MIN_RESIZE };
+            return;
+          }
           const header = headerAt(e.clientX, e.clientY);
           if (header !== null) {
             e.preventDefault();
@@ -528,9 +587,20 @@ export function ResultGrid({
           setMenu({ x: e.clientX - host.left, y: e.clientY - host.top });
         }}
         onMouseMove={(e) => {
-          e.currentTarget.style.cursor = headerAt(e.clientX, e.clientY) === null ? "" : "pointer";
+          e.currentTarget.style.cursor =
+            resizing.current || edgeAt(e.clientX, e.clientY) !== null
+              ? "col-resize"
+              : headerAt(e.clientX, e.clientY) === null
+                ? ""
+                : "pointer";
         }}
         onDoubleClick={(e) => {
+          const edge = edgeAt(e.clientX, e.clientY);
+          if (edge !== null) {
+            // The two clicks were a sort pair or a resize; the double-click fits the column.
+            setResized((r) => ({ ...r, [edge]: fitWidth(edge) }));
+            return;
+          }
           const cell = cellAt(e.clientX, e.clientY);
           if (cell && !cell.gutter) {
             setSelection({ anchor: cell, focus: cell });
@@ -538,6 +608,7 @@ export function ResultGrid({
           }
         }}
         onKeyDown={onKeyDown}
+        data-column-widths={widths.join(",")}
         aria-label={
           t("results.gridLabel", { count: result.rows, formattedCount: numbers.format(result.rows) }) +
           (result.sort
