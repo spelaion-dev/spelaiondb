@@ -1,6 +1,6 @@
 # ADR-022: Sharing connections with a team, safely and without passwords
 
-- **Status:** Accepted (parts 1 to 4 implemented; part 5 planned)
+- **Status:** Accepted (implemented)
 - **Date:** 2026-11-03
 - **Amends:** ADR-009 (repository trust)
 
@@ -70,6 +70,17 @@ trusts it. Teams of system administrators need more than that:
 5. **`spelunk check`** for the team repository's CI and pre-commit: schema validation and
    refusal of risky patterns (a secret written inside a `cmd:`, a production connection that
    lets agents write).
+   - It reads only the repository (`spelunk-config::check`), never the user's directory,
+     secrets or keychain, and needs no trust: it runs anywhere.
+   - Errors fail it (exit code 1): files that do not load, a tunnel that does not exist,
+     malformed `${…}` variables, an invalid secret reference, a password written inside a
+     `cmd:`, a `tls.key` inside the repository and any file under `.spelunk/` holding a
+     private key. Warnings fail it only with `--strict`: a production connection that lets
+     agents write (allowed by ADR-019, but worth a second look in review) or does not verify
+     the server's certificate, an SSH key inside the repository, `mcp.writes = "confirm"`
+     and broken `known_hosts` lines.
+   - Spotting a password in a command is a heuristic (`--password`, `PGPASSWORD=`,
+     `user:pass@` in a URL…): it catches the usual slips, not a determined one.
 
 ## Alternatives
 - **Trusting by path, as before:** simple, but it is the hole described above.

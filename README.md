@@ -146,6 +146,26 @@ To log in without any password:
   the command that asks the provider's CLI (`aws`, `az`, `gcloud`, signed in on your
   computer) for a short-lived token, and runs it on every connection.
 
+Check the team repository before a change is merged with `spelunk check` (it reads only the
+repository, nothing personal, so it runs in CI). It fails on files that do not load,
+references to tunnels that do not exist, malformed `${…}` variables, passwords written
+inside a `cmd:` (`--password`, `PGPASSWORD=`, `user:pass@` in a URL…) and private keys in
+the repository; it warns about production connections that let agents write or do not
+verify the server's certificate, SSH keys inside the repository and broken
+`.spelunk/known_hosts` lines (`--strict` fails on warnings too). In GitHub Actions, with the
+`spelunk` binary from a release archive on the `PATH`:
+
+```yaml
+- run: spelunk check --strict
+```
+
+And as a git hook, in `.git/hooks/pre-commit`:
+
+```sh
+#!/bin/sh
+exec spelunk check
+```
+
 ## Settings
 
 The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in its own tab:

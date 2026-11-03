@@ -80,7 +80,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   later the schema cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelunk-mcp` + `apps/cli`: `spelunk mcp` and utilities (`connections`, `trust`,
-  `audit`). In `spelunk mcp`, stdout is the protocol: no `println!`. Reads and writes
+  `audit`, `check`: the team repository's CI check, from `spelunk-config::check`, ADR-022). In `spelunk mcp`, stdout is the protocol: no `println!`. Reads and writes
   (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions.
 - `apps/desktop`: Tauri 2 + React app. `src-tauri` is a thin adapter over the core; the
   command types are generated into `src/bindings.ts`

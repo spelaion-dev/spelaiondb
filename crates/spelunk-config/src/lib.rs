@@ -10,6 +10,7 @@
 //! anything is resolved ([`TrustStore`]).
 
 mod accounts;
+mod check;
 mod conn_url;
 mod dbeaver;
 mod draft;
@@ -24,6 +25,7 @@ mod tunnel_draft;
 mod vars;
 
 pub use accounts::{connection_account, tunnel_account};
+pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
 pub use dbeaver::{
     DbeaverConnection, DbeaverError, DbeaverSsh, ImportPlan, dbeaver_workspace, import_plan,
