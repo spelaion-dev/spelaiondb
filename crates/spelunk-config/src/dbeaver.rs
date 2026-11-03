@@ -338,6 +338,7 @@ pub fn import_plan(
                 String::new()
             },
             kubernetes: None,
+            sqlite3: String::new(),
             read_only: false,
             mcp_exposed: false,
         },

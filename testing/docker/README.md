@@ -18,6 +18,8 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
   database. It encrypts with its own self-signed certificate.
 - SSH user: `spelunk`. Every database: user `spelunk`, password `spelunk`, database
   `spelunk`.
+- `sqlitehost` (reached through bastion1) holds `/home/spelunk/shop.db` and `other.db`, and
+  lets the client run commands (its `sqlite3`), for SQLite on a server (ADR-018).
 - MySQL and MariaDB accept TLS with `keys/mysql.crt` (valid for `localhost`, `mysql` and
   `mariadb`).
 - The `big` table has 1 M rows with varied types.

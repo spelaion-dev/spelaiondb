@@ -58,6 +58,8 @@ pub struct ConnectionDraft {
     pub tunnel: String,
     /// Through `kubectl port-forward` instead of a tunnel (ADR-015).
     pub kubernetes: Option<KubernetesDraft>,
+    /// SQLite on a server: the program that opens the file there; empty for `sqlite3`.
+    pub sqlite3: String,
     pub read_only: bool,
     pub mcp_exposed: bool,
 }
@@ -239,7 +241,10 @@ impl ConnectionDraft {
                 })
             })
             .transpose()?;
-        let tunnel = non_empty(&self.tunnel).filter(|_| network && kubernetes.is_none());
+        // SQLite through a tunnel: the file is on the server (ADR-018).
+        let remote_sqlite = self.engine == Engine::Sqlite && non_empty(&self.tunnel).is_some();
+        let tunnel =
+            non_empty(&self.tunnel).filter(|_| (network || remote_sqlite) && kubernetes.is_none());
         if let Some(name) = &tunnel
             && config.tunnel_for(self.source, name).is_none()
         {
@@ -259,6 +264,8 @@ impl ConnectionDraft {
                 .port
                 .filter(|p| network && Some(*p) != self.engine.default_port()),
             database: non_empty(&self.database).map(|d| match self.engine {
+                // A path on the server is the server's: as typed.
+                Engine::Sqlite if remote_sqlite => d,
                 Engine::Sqlite | Engine::Duckdb => portable_path(&d, root),
                 Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => d,
             }),
@@ -268,6 +275,7 @@ impl ConnectionDraft {
                 .map(|secret| SecretSpec { secret }),
             tunnel,
             kubernetes,
+            sqlite3: non_empty(&self.sqlite3).filter(|_| remote_sqlite),
             read_only: self.read_only,
             tls: if network {
                 TlsConfig {
@@ -354,6 +362,7 @@ impl ConnectionDraft {
             tls_mode: file.tls.mode,
             tls_ca: file.tls.ca.clone().unwrap_or_default(),
             tunnel: file.tunnel.clone().unwrap_or_default(),
+            sqlite3: file.sqlite3.clone().unwrap_or_default(),
             kubernetes: file.kubernetes.as_ref().map(|k| KubernetesDraft {
                 context: k.context.clone().unwrap_or_default(),
                 namespace: k.namespace.clone().unwrap_or_default(),
@@ -493,6 +502,9 @@ pub fn update_connection(
     }
     if old.tunnel != new.tunnel {
         put(&mut doc, &["tunnel"], text(&new.tunnel));
+    }
+    if old.sqlite3 != new.sqlite3 {
+        put(&mut doc, &["sqlite3"], text(&new.sqlite3));
     }
     if old.kubernetes != new.kubernetes {
         match &new.kubernetes {

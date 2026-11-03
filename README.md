@@ -65,6 +65,13 @@ port, database, user, SSL mode and the password field (which is saved like a typ
   connection cannot be deleted.
 - **SQLite and DuckDB:** pick an existing file with **Browse…**, or create an empty
   database with **New database…** (it never replaces an existing file).
+- **A SQLite file on a server:** in the SSH tab, choose a tunnel whose last hop holds the
+  file, and write its path on that server. SpelunkDB runs that server's `sqlite3` (3.37 or
+  later, in its safe mode, which refuses commands that touch the server's files) through
+  the tunnel: the file is never copied, and the server's own locks keep it safe while its
+  application writes. The last hop must allow running commands, not only port forwarding.
+  Cancelling a query ends that session (`sqlite3` stops when interrupted); reconnect to go
+  on.
 
 **Import from DBeaver…** (in the same window) reads DBeaver's workspace, or a folder you
 choose, and lists its connections: PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB

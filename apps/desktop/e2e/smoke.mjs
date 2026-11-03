@@ -1147,8 +1147,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.locator(".engine-card", { hasText: "SQLite" }).click();
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("heading", { name: "New SQLite connection" }).waitFor();
-  // SQLite has no SSL or SSH tabs.
-  assert.equal(await wizard.getByRole("tab").count(), 2);
+  // SQLite has no SSL tab; SSH is for a file on a server (ADR-018).
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSH", "Options"]);
   await wizard.getByLabel("Name", { exact: true }).fill("Shop copy");
   await wizard.getByLabel("File", { exact: true }).fill(join(demo, "data", "shop.db"));
   await wizard.getByRole("tab", { name: "Options" }).click();
@@ -1384,6 +1384,59 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("button", { name: "Cancel" }).click();
   await wizard.waitFor({ state: "detached" });
   assert.ok(existsSync(join(userDir, "tunnels", "wizard-bastions.toml")));
+
+  step("SQLite on a server: the server's sqlite3 through two hops, nothing copied");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard").first();
+  await wizard.locator(".engine-card", { hasText: "SQLite" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("Shop on a server");
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSH", "Options"]);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("tab", { name: "SSH" }).click();
+  await wizard.getByRole("button", { name: "New tunnel…" }).click();
+  const serverTunnel = page.getByRole("dialog", { name: "New SSH tunnel" });
+  await serverTunnel.getByLabel("Tunnel name").fill("File server");
+  await serverTunnel.getByRole("radio", { name: "Personal", exact: true }).check();
+  await serverTunnel.getByLabel("Hop 1 Host").fill("127.0.0.1");
+  await serverTunnel.getByLabel("Hop 1 Port").fill("2221");
+  await serverTunnel.getByLabel("Hop 1 User").fill("spelunk");
+  await serverTunnel.getByLabel("Hop 1 Authentication").selectOption("key");
+  await serverTunnel.getByLabel("Hop 1 Private key file").fill(key);
+  await serverTunnel.getByRole("button", { name: "+ Add hop" }).click();
+  await serverTunnel.getByLabel("Hop 2 Host").fill("sqlitehost");
+  await serverTunnel.getByLabel("Hop 2 User").fill("spelunk");
+  await serverTunnel.getByLabel("Hop 2 Authentication").selectOption("key");
+  await serverTunnel.getByLabel("Hop 2 Private key file").fill(key);
+  await serverTunnel.getByRole("button", { name: "Test tunnel" }).click();
+  // bastion1 is known from earlier steps; the file server is new.
+  await Promise.race([
+    serverTunnel.locator(".test-result", { hasText: "Tunnel OK · 2 hops" }).waitFor(),
+    (async () => {
+      for (let i = 0; i < 2; i++) {
+        await page.getByRole("button", { name: "Trust and remember" }).click({ timeout: 10_000 }).catch(() => {});
+      }
+      await serverTunnel.locator(".test-result", { hasText: "Tunnel OK · 2 hops" }).waitFor();
+    })(),
+  ]);
+  await serverTunnel.getByRole("button", { name: "Save", exact: true }).click();
+  await serverTunnel.waitFor({ state: "detached" });
+  assert.equal(await wizard.getByRole("checkbox", { name: "The file is on a server: open it there through an SSH tunnel" }).isChecked(), true);
+  await wizard.getByRole("tab", { name: "Main" }).click();
+  // On a server, the field is the server's path and the local buttons are gone.
+  assert.equal(await wizard.getByRole("button", { name: "Browse…" }).count(), 0);
+  await wizard.getByLabel("File on the server", { exact: true }).fill("/home/spelunk/shop.db");
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 3\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  const remoteFile = readFileSync(join(userDir, "connections", "shop-on-a-server.toml"), "utf8");
+  assert.match(remoteFile, /database = "\/home\/spelunk\/shop\.db"/);
+  assert.match(remoteFile, /tunnel = "file-server"/);
+  panel = await newQuery("Shop on a server", "select id, name, price from product order by id;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+  await shot("14c-sqlite-on-a-server");
 
   // Only with the test cluster (testing/k8s): SPELUNK_TEST_K8S is its kubeconfig.
   if (process.env.SPELUNK_TEST_K8S) {

@@ -286,6 +286,8 @@ export type ConnectionDraftItem_Deserialize = {
 	tunnel: string,
 	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
 	kubernetes?: KubernetesDraftItem | null,
+	/**  SQLite on a server (with a tunnel): the program there; empty for `sqlite3`. */
+	sqlite3: string,
 	readOnly: boolean,
 	mcpExposed: boolean,
 };
@@ -313,6 +315,8 @@ export type ConnectionDraftItem_Serialize = {
 	tunnel: string,
 	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
 	kubernetes: KubernetesDraftItem | null,
+	/**  SQLite on a server (with a tunnel): the program there; empty for `sqlite3`. */
+	sqlite3: string,
 	readOnly: boolean,
 	mcpExposed: boolean,
 };

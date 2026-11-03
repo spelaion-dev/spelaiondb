@@ -1,6 +1,6 @@
 # ADR-018: SQLite files on a server, through SSH
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-03
 
 ## Context
@@ -15,7 +15,7 @@ Three ways exist:
 2. Mount the remote folder (SSHFS, SFTP) and open the file locally.
 3. Put a server in front of the file (libSQL's `sqld`, rqlite) and tunnel to its port.
 
-## Decision (proposed)
+## Decision
 **Option 1: the server's own `sqlite3`, through an exec channel on the tunnel's last hop.**
 
 - **Configuration:** `engine = "sqlite"` with `tunnel = "…"` means *the file is on the last
@@ -31,31 +31,40 @@ Three ways exist:
   returns its byte streams). The core builds it from the tunnel; the driver only sees streams.
   Kubernetes (ADR-015) can provide the same trait later with `kubectl exec -i` into a pod.
 - **The process:** one per connection, started as
-  `sqlite3 -safe -batch -bail off -header -cmd '.mode quote' -cmd '.changes on' -- '<path>'`
-  (with `-readonly` for read-only connections). Every argument is quoted for the remote
-  shell; the path is data, never shell syntax. It lives as long as the connection, so
-  transactions and temporary tables work as with the local driver.
+  `[ -f '<path>' ] || …; exec sqlite3 -safe -batch -header -cmd '.mode quote'
+  -cmd '.changes on' -cmd '.timeout 5000' '<path>' 2>&1` (with `-readonly` for read-only
+  connections). Every argument is quoted for the remote POSIX shell; the path is data, never
+  shell syntax. A missing file is refused (`sqlite3` would create it, and a mistyped path
+  must not leave an empty database). `.timeout 5000` waits for another writer's lock, like
+  the local driver. It lives as long as the connection, so transactions and temporary
+  tables work as with the local driver. Servers whose SSH shell is not POSIX (Windows) are
+  not supported.
 - **Reading results:** `quote` mode writes every value as an SQL literal (`1`, `1.5`,
   `'text'`, `X'00ff'`, `NULL`), which keeps SQLite's storage classes, unlike JSON. Types per
   column follow the local driver's rules for dynamic typing (ADR-006), from the first batch.
   `.changes on` gives the rows affected, which editing needs (ADR-014). After each statement
-  the driver prints a sentinel with a random value it chose, so it knows where a statement's
-  output ends; stderr carries the errors.
+  the driver prints a marker with a random value it chose, so it knows where a statement's
+  output ends; errors come in the same stream (`2>&1`), told from values by their first
+  characters, and a text value with line breaks is read while its quote is open. The shell
+  flushes after each statement. A query that returns no rows prints no header: its columns
+  are not known, and it shows as "0 rows" without a result.
 - **Safety, the important part:** the `sqlite3` shell is more than SQL: its dot-commands run
   shell commands (`.shell`, `.system`), write files (`.output`, `.once`) and load extensions,
   and functions such as `writefile()` and `edit()` reach the server's filesystem. So:
-  - `-safe` is required (it refuses those commands and functions). It exists since SQLite
-    3.37 (2021): an older `sqlite3` is refused with a clear message, never used without it.
+  - `-safe` is required (it refuses those commands and functions, and ends `sqlite3` when
+    one is tried: the session says so). It exists since SQLite 3.37 (2021): an older
+    `sqlite3` is refused with a clear message, never used without it.
   - The driver sends only statements from the core's splitter, each ending with `;`, and
     refuses one that starts with `.`: user text never reaches the shell as a dot-command.
   - Repository connections need a trusted repository (ADR-009): they run a program on a
     server, a stronger permission than forwarding a port.
   - Not served by `spelunk mcp`, like the other engines without a read-only barrier of
     their own.
-- **Cancel:** an SSH `signal` request (`INT`) on the channel, which `sqlite3` turns into an
-  interrupt; servers that ignore signals get the channel closed instead, which ends the
-  process (SQLite rolls back what was open) and the connection reports it. Nothing is run
-  again on its own after reconnecting.
+- **Cancel:** an SSH `signal` request (`INT`) on the channel. In batch mode `sqlite3`
+  interrupts the statement and then **ends** (it only carries on in its interactive mode,
+  which echoes its input and cannot be read reliably): the statement is reported as
+  cancelled and the session as ended (SQLite rolls back what was open); the user
+  reconnects. Nothing is started or run again on its own.
 - **Explorer:** the same catalog queries as the local driver (`sqlite_schema`,
   `pragma table_info`…), sent through the channel.
 
@@ -70,14 +79,14 @@ Three ways exist:
 - **A separate engine name (`sqlite-ssh`):** clearer in the file, but the local and remote
   cases share everything except the transport; the tunnel already says "remote".
 
-## Risks and open questions (for the prototype)
-- Parsing `quote` mode with multi-line text values and column names that need quoting.
-- Telling output from errors reliably, and statements whose output is huge (back-pressure
-  over the channel: SSH has flow control, the driver must read in batches).
-- Servers whose SSH account allows forwarding but not commands (like our test bastions): a
-  clear error, and a test bastion that allows it with `sqlite3` installed.
-- `-safe` blocks `ATTACH` of other files: acceptable (it is also what keeps the file
-  boundary), to be documented.
+## Known limits
+- Cancelling ends the session (see above).
+- A query with no rows shows no columns.
+- A huge result is read as it arrives; while the app does not take it, the channel waits,
+  and so may other forwards on the same SSH session.
+- `-safe` blocks `ATTACH` of other files, which is also what keeps the file boundary.
+- Tested against `testing/docker/sqlitehost` (Alpine, SQLite 3.45) through two hops; a last
+  hop that only forwards ports says so.
 
 ## Revisit if
 `sqlite3` older than 3.37 turns out to be common on users' servers, or a libSQL/`sqld`

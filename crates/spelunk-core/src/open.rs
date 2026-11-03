@@ -4,14 +4,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use spelunk_config::{Engine, Password, ResolvedConnection, ResolvedHop, ResolvedTunnel, SshAuth};
-use spelunk_driver_api::{Driver, DriverError, Secret};
+use spelunk_driver_api::{
+    Driver, DriverError, Remote, RemoteCommand, RemoteControl, RemoteProcess, Secret,
+};
 use spelunk_driver_duckdb::DuckdbDriver;
 use spelunk_driver_mysql::MysqlDriver;
 use spelunk_driver_postgres::PostgresDriver;
 use spelunk_driver_sqlite::SqliteDriver;
 use spelunk_driver_sqlserver::SqlServerDriver;
 use spelunk_ssh::{
-    AuthMethod, HopSpec, Interaction, KnownHosts, SshError, Target, Tunnel, TunnelSpec, TunnelState,
+    AuthMethod, HopSpec, Interaction, KnownHosts, RemoteSignals, SshError, Target, Tunnel,
+    TunnelSpec, TunnelState,
 };
 use tokio::sync::watch;
 
@@ -155,6 +158,38 @@ impl TunnelPool {
     }
 }
 
+/// Programs run on a tunnel's last hop, for drivers that talk to a program there (SQLite
+/// on a server, ADR-018). The tunnel stays open while the program runs.
+struct TunnelCommand(Arc<Tunnel>);
+
+#[async_trait::async_trait]
+impl RemoteCommand for TunnelCommand {
+    async fn start(&self, command: &str) -> Result<RemoteProcess, DriverError> {
+        let exec = self
+            .0
+            .exec(command)
+            .await
+            .map_err(|e| DriverError::Connection(e.to_string()))?;
+        Ok(RemoteProcess {
+            stdin: exec.stdin,
+            stdout: exec.stdout,
+            control: Arc::new(TunnelSignals(exec.control)),
+        })
+    }
+}
+
+struct TunnelSignals(RemoteSignals);
+
+#[async_trait::async_trait]
+impl RemoteControl for TunnelSignals {
+    async fn interrupt(&self) -> Result<(), DriverError> {
+        self.0
+            .interrupt()
+            .await
+            .map_err(|e| DriverError::Connection(e.to_string()))
+    }
+}
+
 /// What is needed besides the resolved configuration.
 pub struct OpenOptions {
     /// Shared tunnels (one per process: the app, the MCP…).
@@ -251,11 +286,19 @@ pub async fn open_connection(
                 .tunnels
                 .get_or_connect(key, &spec, &options.known_hosts, options.interaction)
                 .await?;
-            let target = Target {
-                host: params.host.clone(),
-                port: params.port,
-            };
-            params.connect_addr = Some(tunnel.forward(target).await?);
+            if resolved.engine == Engine::Sqlite {
+                // The file is on the last hop: its sqlite3 is run there (ADR-018).
+                params.remote = Some(Remote {
+                    command: Arc::new(TunnelCommand(tunnel.clone())),
+                    program: resolved.sqlite3.clone(),
+                });
+            } else {
+                let target = Target {
+                    host: params.host.clone(),
+                    port: params.port,
+                };
+                params.connect_addr = Some(tunnel.forward(target).await?);
+            }
             Some(ActiveTunnel::Ssh(tunnel))
         }
     };

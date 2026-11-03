@@ -4,9 +4,11 @@
 //! of the program talks to it through channels. That way a long query never blocks the async
 //! runtime.
 
+mod catalog;
 mod dialect;
 mod exec;
 mod introspect;
+mod remote;
 
 use std::sync::Arc;
 
@@ -72,6 +74,10 @@ impl Driver for SqliteDriver {
     }
 
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
+        // A file on a server: the server's sqlite3, through the tunnel (ADR-018).
+        if let Some(remote) = &params.remote {
+            return remote::connect(remote, &params.database, params.read_only).await;
+        }
         let mut flags = OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         if params.read_only {
             flags |= OpenFlags::SQLITE_OPEN_READ_ONLY;

@@ -9,6 +9,7 @@ mod column;
 mod dialect;
 mod error;
 mod introspect;
+mod remote;
 mod secret;
 mod value;
 
@@ -26,6 +27,7 @@ pub use error::DriverError;
 pub use introspect::{
     ColumnInfo, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, SchemaInfo, TableInfo,
 };
+pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use secret::Secret;
 pub use value::{LogicalType, Value};
 
@@ -65,6 +67,9 @@ pub struct ConnectParams {
     /// Actual address to connect to, if it is not `host:port` (for example, the local end
     /// of an SSH tunnel). `host` is still used to verify the TLS certificate.
     pub connect_addr: Option<SocketAddr>,
+    /// The database is on another machine and is reached by running a program there
+    /// (SQLite on a server, ADR-018); `database` is its path on that machine.
+    pub remote: Option<Remote>,
 }
 
 /// Connection encryption. Same names and meaning as libpq's `sslmode`.

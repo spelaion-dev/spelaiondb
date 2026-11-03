@@ -207,6 +207,13 @@
       "minimum": 0,
       "type": "integer"
     },
+    "sqlite3": {
+      "description": "SQLite with a tunnel: the file is on the tunnel's last hop, opened by its `sqlite3`\n(ADR-018); this names that program when it is not `sqlite3` on the PATH.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "tls": {
       "$ref": "#/$defs/TlsConfig"
     },

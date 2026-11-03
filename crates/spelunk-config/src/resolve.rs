@@ -39,6 +39,9 @@ pub struct ResolvedConnection {
     pub tunnel: Option<ResolvedTunnel>,
     /// `kubectl port-forward` to this resource (ADR-015); `params.port` is its port.
     pub kubernetes: Option<ResolvedKubernetes>,
+    /// A SQLite file on the tunnel's last hop (ADR-018): the program that opens it there.
+    /// `params.database` is then its path on that machine.
+    pub sqlite3: Option<String>,
     pub mcp: McpConfig,
 }
 
@@ -169,12 +172,15 @@ impl<'a> Resolver<'a> {
             None => String::new(),
         };
         let params = ConnectParams {
+            // Set by the core from the tunnel (ADR-018).
+            remote: None,
             host,
             port: file.port.or(file.engine.default_port()).unwrap_or(0),
             user: text(&file.user)?.unwrap_or_default(),
             password: None,
             database: match file.engine {
-                engine if engine.is_file() && database != ":memory:" => {
+                // On a server (with a tunnel), the path is the server's: kept as written.
+                engine if engine.is_file() && database != ":memory:" && file.tunnel.is_none() => {
                     resolve_path(&database, &base).display().to_string()
                 }
                 _ => database,
@@ -228,6 +234,10 @@ impl<'a> Resolver<'a> {
             password,
             tunnel,
             kubernetes,
+            sqlite3: match &file.sqlite3 {
+                Some(program) => Some(self.expand(&entry.file_path, program)?),
+                None => None,
+            },
             mcp: file.mcp.clone(),
         })
     }

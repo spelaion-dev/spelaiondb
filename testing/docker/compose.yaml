@@ -5,6 +5,8 @@
 #                                                                          mariadb:3306
 #                                                                          sqlserver:1433
 #
+#   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
+#
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307 and SQL
 # Server on 11433, for tests without SSH.
@@ -108,6 +110,14 @@ services:
       interval: 2s
       retries: 60
     networks: [data, direct]
+
+  # A server holding a SQLite file (ADR-018): it lets the client run commands and has
+  # sqlite3, unlike the bastions. Only bastion1 reaches it: tests go through two hops.
+  sqlitehost:
+    build: ./sqlitehost
+    volumes:
+      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelunk:ro
+    networks: [mid]
 
   # SQL Server 2022 (Developer edition, free for development and testing). It encrypts with a
   # self-signed certificate of its own. Tests log in as `sa` and create the `spelunk` database.

@@ -58,7 +58,12 @@
     "useTunnel": "Connect through an SSH tunnel",
     "tunnelHint": "The database is reached through the tunnel’s last hop.",
     "passwordOther": "Password reference",
-    "fixedLocationHint": "When editing, the connection stays in the same file and folder."
+    "fixedLocationHint": "When editing, the connection stays in the same file and folder.",
+    "serverFile": "File on the server",
+    "serverFileHint": "Its path on the tunnel's last hop. SpelunkDB runs that server's sqlite3 (3.37 or later, in its safe mode): the file is never copied.",
+    "useTunnelForFile": "The file is on a server: open it there through an SSH tunnel",
+    "tunnelForFileHint": "The last hop must allow running commands (not only port forwarding) and have sqlite3 installed.",
+    "sqlite3": "sqlite3 program on the server"
   },
   "tls": {
     "disable": "Disabled",

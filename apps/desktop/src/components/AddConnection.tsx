@@ -274,6 +274,9 @@ function ConnectionForm(props: {
   const workspace = useApp((s) => s.workspace);
   const hasWorkspace = Boolean(workspace?.workspace);
   const network = engine.access === "network";
+  // A SQLite file may be on a server, opened there through an SSH tunnel (ADR-018).
+  const remoteFile = engine.id === "sqlite";
+  const tunnelsAllowed = network || remoteFile;
   const [tab, setTab] = useState<FormTab>("main");
   const [tunnels, setTunnels] = useState<TunnelItem[]>([]);
   const { initial, editing, prefill } = props;
@@ -304,6 +307,7 @@ function ConnectionForm(props: {
     tlsCa: "",
     readOnly: false,
     mcpExposed: false,
+    sqlite3: "",
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
 
@@ -318,7 +322,7 @@ function ConnectionForm(props: {
     }
   }
   useEffect(() => {
-    if (network) void loadTunnels();
+    if (tunnelsAllowed) void loadTunnels();
   }, [network]);
   const selectedTunnel = tunnels.find((item) => item.name === tunnel);
 
@@ -342,7 +346,8 @@ function ConnectionForm(props: {
   const request: ConnectionDraft = {
     ...draft,
     passwordMode,
-    tunnel: network && useTunnel && !useKubernetes ? tunnel : "",
+    tunnel: tunnelsAllowed && useTunnel && !useKubernetes ? tunnel : "",
+    sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
     kubernetes: network && useKubernetes ? kubernetes : null,
   };
   const typedPassword = auth === "password" ? password : "";
@@ -429,7 +434,12 @@ function ConnectionForm(props: {
     }
   }
 
-  const tabs: FormTab[] = network ? ["main", "ssl", "ssh", "kubernetes", "options"] : ["main", "options"];
+  const onServer = remoteFile && useTunnel;
+  const tabs: FormTab[] = network
+    ? ["main", "ssl", "ssh", "kubernetes", "options"]
+    : remoteFile
+      ? ["main", "ssh", "options"]
+      : ["main", "options"];
   return (
     <>
     <form
@@ -532,22 +542,26 @@ function ConnectionForm(props: {
             <fieldset>
               <legend>{t("sections.file")}</legend>
               <div className="form-pair">
-                <Field label={t("fields.file")} className="grow">
-                  <input type="text" value={draft.database} onChange={(e) => update({ database: e.target.value })} />
+                <Field label={onServer ? t("fields.serverFile") : t("fields.file")} className="grow">
+                  <input type="text" value={draft.database} placeholder={onServer ? "/srv/app/data.db" : ""} onChange={(e) => update({ database: e.target.value })} />
                 </Field>
-                <button type="button" onClick={() => void browse("database")}>
-                  {t("browse")}
-                </button>
-                <button type="button" onClick={() => void createDatabase()}>
-                  {t("newDatabase")}
-                </button>
+                {!onServer && (
+                  <>
+                    <button type="button" onClick={() => void browse("database")}>
+                      {t("browse")}
+                    </button>
+                    <button type="button" onClick={() => void createDatabase()}>
+                      {t("newDatabase")}
+                    </button>
+                  </>
+                )}
               </div>
               {fileError && (
                 <p className="error small" role="alert">
                   {fileError}
                 </p>
               )}
-              <p className="muted small">{t("fields.fileHint")}</p>
+              <p className="muted small">{onServer ? t("fields.serverFileHint") : t("fields.fileHint")}</p>
             </fieldset>
           )}
         </div>
@@ -584,7 +598,7 @@ function ConnectionForm(props: {
           </div>
         )}
 
-        {network && (
+        {tunnelsAllowed && (
           <div id="connection-tab-ssh" role="tabpanel" hidden={tab !== "ssh"}>
             <fieldset>
               <legend>{t("sections.ssh")}</legend>
@@ -599,7 +613,7 @@ function ConnectionForm(props: {
                     changed();
                   }}
                 />
-                {t("fields.useTunnel")}
+                {remoteFile ? t("fields.useTunnelForFile") : t("fields.useTunnel")}
               </label>
               <div className="form-pair">
                 <Field label={t("fields.tunnel")} className="grow">
@@ -619,7 +633,14 @@ function ConnectionForm(props: {
                   {t("tunnel.newButton")}
                 </button>
               </div>
-              <p className="muted small">{tunnels.length === 0 ? t("fields.noTunnelsHint") : t("fields.tunnelHint")}</p>
+              <p className="muted small">
+                {tunnels.length === 0 ? t("fields.noTunnelsHint") : remoteFile ? t("fields.tunnelForFileHint") : t("fields.tunnelHint")}
+              </p>
+              {remoteFile && (
+                <Field label={t("fields.sqlite3")}>
+                  <input type="text" value={draft.sqlite3} disabled={!useTunnel} placeholder="sqlite3" onChange={(e) => update({ sqlite3: e.target.value })} />
+                </Field>
+              )}
             </fieldset>
           </div>
         )}

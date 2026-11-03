@@ -499,6 +499,7 @@ fn creates_new_connection_files() {
         password: None,
         tunnel: None,
         kubernetes: None,
+        sqlite3: None,
         read_only: true,
         tls: Default::default(),
         mcp: Default::default(),
@@ -597,6 +598,7 @@ fn postgres_draft() -> ConnectionDraft {
         tls_ca: String::new(),
         tunnel: String::new(),
         kubernetes: None,
+        sqlite3: String::new(),
         read_only: false,
         mcp_exposed: true,
     }
@@ -673,7 +675,8 @@ fn sqlite_drafts_keep_repository_paths_portable_and_drop_network_fields() {
         database: fx.repo().join("data").join("shop.db").display().to_string(),
         host: "ignored".into(),
         user: "ignored".into(),
-        tunnel: "ignored".into(),
+        // A tunnel would mean a file on a server (ADR-018): none here.
+        tunnel: String::new(),
         password: PasswordChoice::Prompt,
         mcp_exposed: false,
         ..postgres_draft()
@@ -1108,6 +1111,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         tls_mode: TlsModeConfig::Disable,
         tls_ca: String::new(),
         tunnel: String::new(),
+        sqlite3: String::new(),
         kubernetes: Some(KubernetesDraft {
             context: "kind-orders".into(),
             namespace: "shop".into(),
@@ -1550,4 +1554,51 @@ fn personal_and_repository_entries_are_separate() {
         resolved.hops[1].password,
         Password::Value(Secret::new("personal"))
     );
+}
+
+/// SQLite with a tunnel is a file on the server (ADR-018): its path is the server's, kept as
+/// written. DuckDB may not have a tunnel, and `sqlite3` only goes with one.
+#[test]
+fn sqlite_files_on_a_server_go_through_a_tunnel() {
+    let fx = Fixture::new("conn-sqlite-remote");
+    std::fs::create_dir_all(fx.repo().join(".spelunk/connections")).unwrap();
+    std::fs::create_dir_all(fx.repo().join(".spelunk/tunnels")).unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/tunnels/jump.toml"),
+        "schema_version = 1\n[[hops]]\nhost = \"files.internal\"\nuser = \"deploy\"\nauth = [\"agent\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/remote.toml"),
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"data/app.db\"\ntunnel = \"jump\"\nsqlite3 = \"/opt/sqlite/bin/sqlite3\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/duck.toml"),
+        "schema_version = 1\nengine = \"duckdb\"\ndatabase = \"x.duckdb\"\ntunnel = \"jump\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/local.toml"),
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"x.db\"\nsqlite3 = \"sqlite3\"\n",
+    )
+    .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let problems = format!("{:?}", config.problems);
+    assert!(problems.contains("DuckDB is a local file"), "{problems}");
+    assert!(problems.contains("sqlite3 only applies"), "{problems}");
+    assert!(!problems.contains("remote.toml"), "{problems}");
+
+    let backend = FakeBackend::default();
+    let id = ConnectionId {
+        source: Source::Workspace,
+        path: "remote".into(),
+    };
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve(&id)
+        .unwrap();
+    // Not resolved against the repository: it is a path on the server.
+    assert_eq!(resolved.params.database, "data/app.db");
+    assert_eq!(resolved.sqlite3.as_deref(), Some("/opt/sqlite/bin/sqlite3"));
+    assert_eq!(resolved.tunnel.unwrap().hops[0].host, "files.internal");
 }

@@ -503,6 +503,8 @@ pub struct ConnectionDraftItem {
     pub tunnel: String,
     /// Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's.
     pub kubernetes: Option<KubernetesDraftItem>,
+    /// SQLite on a server (with a tunnel): the program there; empty for `sqlite3`.
+    pub sqlite3: String,
     pub read_only: bool,
     pub mcp_exposed: bool,
 }
@@ -544,6 +546,7 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
             tls_ca: item.tls_ca,
             tunnel: item.tunnel,
             kubernetes: item.kubernetes.map(Into::into),
+            sqlite3: item.sqlite3,
             read_only: item.read_only,
             mcp_exposed: item.mcp_exposed,
         })
@@ -580,6 +583,7 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
             tls_ca: draft.tls_ca,
             tunnel: draft.tunnel,
             kubernetes: draft.kubernetes.map(Into::into),
+            sqlite3: draft.sqlite3,
             read_only: draft.read_only,
             mcp_exposed: draft.mcp_exposed,
         }

@@ -282,17 +282,32 @@ pub(crate) fn validate_connection(
             ),
         ));
     }
-    if file.engine.is_file() && (file.tunnel.is_some() || file.kubernetes.is_some()) {
+    // A SQLite file may be on a server, reached through a tunnel (ADR-018); DuckDB may not.
+    let remote_sqlite = file.engine == Engine::Sqlite && file.tunnel.is_some();
+    if file.engine.is_file()
+        && (file.kubernetes.is_some() || file.tunnel.is_some() && !remote_sqlite)
+    {
         return Err(ConfigError::new(
             path,
             format!(
-                "{} is a local file: it does not support a tunnel",
+                "{} is a local file: it does not support {}",
                 if file.engine == Engine::Sqlite {
                     "SQLite"
                 } else {
                     "DuckDB"
+                },
+                if file.kubernetes.is_some() {
+                    "Kubernetes"
+                } else {
+                    "a tunnel"
                 }
             ),
+        ));
+    }
+    if file.sqlite3.is_some() && !remote_sqlite {
+        return Err(ConfigError::new(
+            path,
+            "sqlite3 only applies to a SQLite file on a server (a connection with a tunnel)",
         ));
     }
     if let Some(kubernetes) = &file.kubernetes {

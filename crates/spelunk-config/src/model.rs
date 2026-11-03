@@ -42,6 +42,10 @@ pub struct ConnectionFile {
     /// `port` is then the resource's port and `host` is only the name TLS checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kubernetes: Option<KubernetesConfig>,
+    /// SQLite with a tunnel: the file is on the tunnel's last hop, opened by its `sqlite3`
+    /// (ADR-018); this names that program when it is not `sqlite3` on the PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite3: Option<String>,
     /// Open read-only (native in SQLite).
     #[serde(default, skip_serializing_if = "is_false")]
     pub read_only: bool,

@@ -25,6 +25,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   text, on both servers.
 - `crates/spelunk-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
+  `remote.rs` opens a file on a server (ADR-018) by running that server's `sqlite3 -safe`
+  through `ConnectParams::remote` (an SSH exec channel on the tunnel's last hop,
+  `spelunk-ssh::Tunnel::exec`): it must never let a dot-command or an incomplete statement
+  reach the shell. Catalog queries are shared in `catalog.rs`. Tests against
+  `testing/docker/sqlitehost` with `SPELUNK_TEST_SSH`.
 - `crates/spelunk-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
   (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a batch may return
   several result sets. Cancel is a TDS Attention through a patched tiberius in

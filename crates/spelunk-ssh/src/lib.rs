@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use spelunk_driver_api::Secret;
 
 pub use hostkeys::KnownHosts;
-pub use tunnel::{Tunnel, TunnelState};
+pub use tunnel::{RemoteExec, RemoteSignals, Tunnel, TunnelState};
 
 /// A tunnel: hops in order. The last one is the one that reaches the target.
 #[derive(Debug, Clone)]
