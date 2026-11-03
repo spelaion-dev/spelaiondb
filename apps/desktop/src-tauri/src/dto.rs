@@ -122,6 +122,11 @@ pub enum ConnectOutcome {
         new: bool,
         fields: Vec<FieldChangeItem>,
     },
+    /// The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
+    /// their values, save them with `set_user_vars` and try again.
+    MissingVariables {
+        names: Vec<String>,
+    },
 }
 
 /// One field of a changed repository item. Repository files hold secret references, never

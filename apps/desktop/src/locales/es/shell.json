@@ -86,5 +86,11 @@
     "advice": "Comprueba quién hizo el cambio y por qué (git log) antes de aceptarlo, sobre todo si es un servidor, un secreto o un comando nuevo.",
     "reject": "No usarla",
     "accept": "Aceptar el cambio"
+  },
+  "variables": {
+    "title": "Esta conexión necesita algunos valores personales",
+    "explanation": "Usa variables que cada persona rellena con lo suyo, como su propio usuario de la base de datos. Se piden una vez y se guardan en tu user.toml, en este ordenador y fuera del repositorio.",
+    "advice": "No son para contraseñas: esas van al llavero o se piden al conectar.",
+    "save": "Guardar y conectar"
   }
 }

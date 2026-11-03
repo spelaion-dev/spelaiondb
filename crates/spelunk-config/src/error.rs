@@ -65,6 +65,16 @@ pub enum ResolveError {
         change: crate::trust::ItemChange,
     },
 
+    /// The connection (or its tunnel) uses `${user.…}` variables the user has not defined:
+    /// all of them, so they can be asked for at once (ADR-022). Nothing was resolved.
+    #[error(
+        "this connection needs {}: add {} to the [vars] section of your user.toml, or open SpelunkDB to fill {} in",
+        names.iter().map(|n| format!("${{user.{n}}}")).collect::<Vec<_>>().join(", "),
+        if names.len() == 1 { "it" } else { "them" },
+        if names.len() == 1 { "it" } else { "them" }
+    )]
+    MissingVariables { names: Vec<String> },
+
     #[error("{0}")]
     Config(#[from] ConfigError),
 

@@ -262,6 +262,20 @@ async fn trust_workspace(state: State<'_, AppState>) -> CmdResult<WorkspaceInfo>
     state.info().await
 }
 
+/// Saves values for `${user.…}` variables in the user's `user.toml` (ADR-022) and reloads
+/// the configuration. Only those entries change; the rest of the file stays as it was.
+#[tauri::command]
+#[specta::specta]
+async fn set_user_vars(
+    values: HashMap<String, String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let values = values.into_iter().collect();
+    spelunk_config::set_user_vars(&state.user_dir, &values).map_err(|e| e.to_string())?;
+    state.reload().await;
+    Ok(())
+}
+
 /// Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
 /// as it is now, and connecting can go on.
 #[tauri::command]
@@ -440,6 +454,9 @@ async fn test_connection(
             }
             Err(spelunk_config::ResolveError::Changed { change, .. }) => {
                 return Ok(change.into());
+            }
+            Err(spelunk_config::ResolveError::MissingVariables { names }) => {
+                return Ok(ConnectOutcome::MissingVariables { names });
             }
             Err(e) => return Err(e.to_string()),
         }
@@ -777,6 +794,9 @@ async fn connect(
             }
             Err(spelunk_config::ResolveError::Changed { change, .. }) => {
                 return Ok(change.into());
+            }
+            Err(spelunk_config::ResolveError::MissingVariables { names }) => {
+                return Ok(ConnectOutcome::MissingVariables { names });
             }
             Err(e) => return Err(e.to_string()),
         };
@@ -1873,6 +1893,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             open_workspace,
             trust_workspace,
             accept_change,
+            set_user_vars,
             list_connections,
             list_history,
             set_history_enabled,

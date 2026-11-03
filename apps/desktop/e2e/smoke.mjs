@@ -1629,6 +1629,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   }
   // While the app is closed, the repository changes as a `git pull` would (ADR-022).
   writeFileSync(shopFile, shopOriginal.replace("max_rows = 100", "max_rows = 50"));
+  // And a personal connection whose file is a variable each person fills in (ADR-022).
+  mkdirSync(join(userDir, "connections"), { recursive: true });
+  writeFileSync(
+    join(userDir, "connections", "vars-demo.toml"),
+    'schema_version = 1\nname = "Personal vars"\nengine = "sqlite"\ndatabase = "${user.demo_db}"\n',
+  );
   app = startApp();
   browser = await connect();
   page = browser.contexts()[0].pages()[0];
@@ -1700,6 +1706,19 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(new Set(pageStatements).size, 105);
   assert.equal(await history.getByRole("button", { name: "Load more", exact: true }).count(), 0);
   await shot("11-history-pages");
+
+  step("personal variables a connection needs are asked once and saved in user.toml");
+  await page.getByRole("button", { name: "Close query history" }).click();
+  const varsPanel = await newQuery("Personal vars", "select count(*) as n from product;");
+  await run(varsPanel);
+  const variables = page.getByRole("dialog", { name: "This connection needs some personal values" });
+  await variables.getByText("${user.demo_db}", { exact: true }).waitFor();
+  await shot("11a-personal-variables");
+  await variables.getByLabel("demo_db", { exact: true }).fill(join(demo, "data", "shop.db").replaceAll("\\", "/"));
+  await variables.getByRole("button", { name: "Save and connect" }).click();
+  await variables.waitFor({ state: "detached" });
+  await varsPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.match(readFileSync(join(userDir, "user.toml"), "utf8"), /demo_db = ".*shop\.db"/);
 
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {

@@ -122,6 +122,12 @@ until you have seen what changed, field by field, and accepted it. Changes you m
 the app's forms are yours and need no review. `spelunk trust <folder>` does the same from a
 terminal and lists the changes it accepts.
 
+What differs from one administrator to another (their database user, their SSH user, the
+name of their key) goes in `${user.…}` variables, such as `user = "${user.db_user}"`. The
+first time a connection needs one you have not defined, SpelunkDB asks for every missing
+value at once and saves it in the `[vars]` section of your `user.toml`, outside the
+repository; `spelunk mcp` says which ones to add instead.
+
 Commit the team's SSH server keys as `.spelunk/known_hosts` (the usual `known_hosts`
 format; copy the lines from your own `~/.ssh/known_hosts` or SpelunkDB's after checking each
 server once). They are checked before anyone's own files, so a newcomer's first connection

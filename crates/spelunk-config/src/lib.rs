@@ -33,7 +33,7 @@ pub use draft::{
     CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection, connections_dir,
     delete_connection, slug, update_connection,
 };
-pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_value};
+pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_user_vars, set_value};
 pub use error::{ConfigError, ResolveError};
 pub use load::{
     Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, WORKSPACE_DIR, default_user_dir,

@@ -44,6 +44,54 @@ pub fn expand(
     Ok(out)
 }
 
+/// The `${user.<name>}` variables in `value` that `vars` does not define, in order.
+pub(crate) fn missing_user_vars(value: &str, vars: &BTreeMap<String, String>) -> Vec<String> {
+    let mut missing = Vec::new();
+    let mut rest = value;
+    while let Some(pos) = rest.find('$') {
+        rest = &rest[pos..];
+        if let Some(after) = rest.strip_prefix("$$") {
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("${") {
+            let Some(end) = after.find('}') else { break };
+            if let Some(key) = after[..end].strip_prefix("user.")
+                && !vars.contains_key(key)
+            {
+                missing.push(key.to_string());
+            }
+            rest = &after[end + 1..];
+        } else {
+            rest = &rest[1..];
+        }
+    }
+    missing
+}
+
+/// Every text value of a configuration file (to look for variables in all its fields).
+pub(crate) fn text_values(file: &impl serde::Serialize) -> Vec<String> {
+    fn walk(value: toml::Value, out: &mut Vec<String>) {
+        match value {
+            toml::Value::String(text) => out.push(text),
+            toml::Value::Array(items) => items.into_iter().for_each(|v| walk(v, out)),
+            toml::Value::Table(table) => table.into_iter().for_each(|(_, v)| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(value) = toml::Value::try_from(file) {
+        walk(value, &mut out);
+    }
+    out
+}
+
+/// A name `${user.<name>}` may use: letters, digits, `_`, `-` and `.`.
+pub fn valid_var_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
 /// Configuration path: `~/` is the home directory and relative paths hang from `base`
 /// (the repository root), so the same config works on any machine.
 pub fn resolve_path(value: &str, base: &Path) -> PathBuf {

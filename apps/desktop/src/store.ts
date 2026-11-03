@@ -237,6 +237,12 @@ export interface TrustRequest {
   resolve(accept: boolean): void;
 }
 
+/** Values for the user's personal `${user.…}` variables (ADR-022). */
+export interface VariablesRequest {
+  names: string[];
+  resolve(values: Record<string, string> | null): void;
+}
+
 /** A repository connection or tunnel changed since the repository was trusted (ADR-022). */
 export interface ChangeRequest {
   item: string;
@@ -278,6 +284,7 @@ interface DialogStore {
   password: PasswordRequest | null;
   trust: TrustRequest | null;
   change: ChangeRequest | null;
+  variables: VariablesRequest | null;
   risk: RiskRequest | null;
   params: ParamsRequest | null;
   text: TextRequest | null;
@@ -288,6 +295,7 @@ interface DialogStore {
   askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
   askTrust(workspace: string | null): Promise<boolean>;
   askChange(change: Omit<ChangeRequest, "resolve">): Promise<boolean>;
+  askVariables(names: string[]): Promise<Record<string, string> | null>;
   pushInteraction(item: InteractionItem): void;
   popInteraction(id: number): void;
 }
@@ -296,6 +304,7 @@ export const useDialogs = create<DialogStore>((set) => ({
   password: null,
   trust: null,
   change: null,
+  variables: null,
   risk: null,
   params: null,
   text: null,
@@ -372,6 +381,18 @@ export const useDialogs = create<DialogStore>((set) => ({
           resolve: (accept) => {
             set({ change: null });
             resolve(accept);
+          },
+        },
+      }),
+    ),
+  askVariables: (names) =>
+    new Promise((resolve) =>
+      set({
+        variables: {
+          names,
+          resolve: (values) => {
+            set({ variables: null });
+            resolve(values);
           },
         },
       }),

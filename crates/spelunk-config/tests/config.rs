@@ -343,9 +343,9 @@ fn resolves_variables_paths_tls_and_tunnels() {
 }
 
 #[test]
-fn missing_variables_point_at_the_file() {
+fn missing_variables_say_what_to_add() {
     let fx = Fixture::new("missing-var");
-    let file = fx.write("repo/.spelunk/connections/prod/orders.toml", ORDERS);
+    fx.write("repo/.spelunk/connections/prod/orders.toml", ORDERS);
     fx.write("repo/.spelunk/tunnels/bastion.toml", BASTION);
     let config = load(Some(&fx.repo()), &fx.user());
     let trust = fx.trusted();
@@ -354,11 +354,11 @@ fn missing_variables_point_at_the_file() {
         ..Default::default()
     };
     match Resolver::new(&config, &trust, &backend).resolve(&ws("prod/orders")) {
-        Err(ResolveError::Config(e)) => {
-            assert_eq!(e.file, file);
+        Err(e @ ResolveError::MissingVariables { .. }) => {
+            let message = e.to_string();
             assert!(
-                e.message.contains("db_user") && e.message.contains("[vars]"),
-                "{e}"
+                message.contains("${user.db_user}") && message.contains("[vars]"),
+                "{message}"
             );
         }
         other => panic!("expected a variable error: {other:?}"),
@@ -2132,4 +2132,96 @@ fn cloud_tokens_write_a_safe_command_and_come_back_to_the_form() {
         ConnectionDraft::from_entry(config.connection(&id).unwrap()).password,
         PasswordChoice::Other(_)
     ));
+}
+
+#[test]
+fn every_missing_personal_variable_is_reported_at_once_and_saved_in_place() {
+    let fx = Fixture::new("user-vars");
+    fx.write(
+        "repo/.spelunk/connections/orders.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"db.internal\"\ndatabase = \"orders\"\nuser = \"${user.db_user}\"\npassword = { secret = \"keychain\" }\ntunnel = \"bastion\"\n\n[tls]\nmode = \"verify-full\"\ncert = \"certs/${user.db_user}.crt\"\nkey = \"~/.ssl/${user.db_user}.key\"\n",
+    );
+    fx.write(
+        "repo/.spelunk/tunnels/bastion.toml",
+        "schema_version = 1\n\n[[hops]]\nhost = \"bastion.internal\"\nuser = \"${user.ssh_user}\"\nauth = [\"agent\"]\n",
+    );
+    let user_toml = fx.write(
+        "user/user.toml",
+        "# My personal settings\nschema_version = 1\n\n[vars]\nteam = \"dba\" # kept\n",
+    );
+    let trust = fx.trusted();
+    let backend = FakeBackend::default();
+    let resolve = || {
+        let config = load(Some(&fx.repo()), &fx.user());
+        Resolver::new(&config, &trust, &backend)
+            .resolve(&ws("orders"))
+            .map(|_| ())
+    };
+
+    // Both variables, the tunnel's too, once each, before anything is resolved.
+    match resolve() {
+        Err(ResolveError::MissingVariables { names }) => {
+            assert_eq!(names, ["db_user", "ssh_user"]);
+            let message = ResolveError::MissingVariables { names }.to_string();
+            assert!(
+                message.contains("${user.db_user}, ${user.ssh_user}")
+                    && message.contains("user.toml"),
+                "{message}"
+            );
+        }
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    assert!(
+        backend.keychain.lock().unwrap().is_empty(),
+        "nothing was read"
+    );
+
+    spelunk_config::set_user_vars(
+        &fx.user(),
+        &BTreeMap::from([("db_user".to_string(), " ana ".to_string())]),
+    )
+    .unwrap();
+    match resolve() {
+        Err(ResolveError::MissingVariables { names }) => assert_eq!(names, ["ssh_user"]),
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    spelunk_config::set_user_vars(
+        &fx.user(),
+        &BTreeMap::from([("ssh_user".to_string(), "ana.ops".to_string())]),
+    )
+    .unwrap();
+    resolve().unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let resolved = Resolver::new(&config, &trust, &backend)
+        .resolve(&ws("orders"))
+        .unwrap();
+    assert_eq!(resolved.params.user, "ana");
+    assert_eq!(resolved.tunnel.unwrap().hops[0].user, "ana.ops");
+
+    // The file keeps its comments and other values.
+    let content = std::fs::read_to_string(&user_toml).unwrap();
+    assert!(content.starts_with("# My personal settings\n"), "{content}");
+    assert!(content.contains("team = \"dba\" # kept"), "{content}");
+    assert!(content.contains("db_user = \"ana\""), "{content}");
+
+    // Bad names and empty values are refused; a new user directory gets a new file.
+    for (name, value) in [("db user", "x"), ("x}", "y"), ("ok", "  ")] {
+        assert!(
+            spelunk_config::set_user_vars(
+                &fx.user(),
+                &BTreeMap::from([(name.to_string(), value.to_string())])
+            )
+            .is_err(),
+            "{name:?} = {value:?}"
+        );
+    }
+    let fresh = fx.base.join("fresh-user");
+    spelunk_config::set_user_vars(
+        &fresh,
+        &BTreeMap::from([("db_user".to_string(), "luis".to_string())]),
+    )
+    .unwrap();
+    let config = load(None, &fresh);
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    assert_eq!(config.user.vars["db_user"], "luis");
 }

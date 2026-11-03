@@ -559,3 +559,38 @@ fn a_connection_changed_after_trusting_is_refused_until_reviewed() {
     assert!(!is_error && text.contains("| 3 |"), "{text}");
     agent.stop();
 }
+
+#[test]
+fn a_connection_missing_personal_variables_says_which_ones() {
+    let fx = Fixture::new("mcp-vars");
+    create_db(&fx.repo().join("shop.db"));
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/shop.toml"),
+        "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"${user.shop_file}\"\n\n[mcp]\nexposed = true\n",
+    )
+    .unwrap();
+    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    let query = json!({ "connection": "shop", "sql": "select count(*) as n from products" });
+
+    let mut agent = Agent::start(&fx);
+    let (text, is_error) = agent.call("run_query", query.clone());
+    assert!(
+        is_error && text.contains("${user.shop_file}") && text.contains("user.toml"),
+        "{text}"
+    );
+    agent.stop();
+
+    // Defined in user.toml, the agent can use it.
+    std::fs::write(
+        fx.user().join("user.toml"),
+        format!(
+            "schema_version = 1\n\n[vars]\nshop_file = {:?}\n",
+            fx.repo().join("shop.db").display().to_string()
+        ),
+    )
+    .unwrap();
+    let mut agent = Agent::start(&fx);
+    let (text, is_error) = agent.call("run_query", query);
+    assert!(!is_error && text.contains("| 3 |"), "{text}");
+    agent.stop();
+}

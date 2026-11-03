@@ -1,6 +1,6 @@
 # ADR-022: Sharing connections with a team, safely and without passwords
 
-- **Status:** Accepted (parts 1 to 3 implemented; parts 4 and 5 planned)
+- **Status:** Accepted (parts 1 to 4 implemented; part 5 planned)
 - **Date:** 2026-11-03
 - **Amends:** ADR-009 (repository trust)
 
@@ -59,6 +59,14 @@ trusts it. Teams of system administrators need more than that:
      PostgreSQL, MySQL and MariaDB; SQL Server takes Entra ID tokens differently (later).
 4. **Onboarding:** missing `${user.*}` variables are asked for once, in a dialog, and saved
    to `user.toml`.
+   - Before resolving anything, the resolver collects every `${user.*}` the connection and
+     its tunnel use (in any field) and, if some are not defined, returns them all together
+     (`ResolveError::MissingVariables`): one dialog, not one error after another. No secret
+     is read before that.
+   - Saving edits only those `[vars]` entries with `toml_edit` (comments and other values
+     stay) and checks the names (letters, digits, `_`, `-`, `.`) and that values are not
+     empty. The dialog says they are not for passwords.
+   - `spelunk mcp` reports the missing names and where to add them.
 5. **`spelunk check`** for the team repository's CI and pre-commit: schema validation and
    refusal of risky patterns (a secret written inside a `cmd:`, a production connection that
    lets agents write).

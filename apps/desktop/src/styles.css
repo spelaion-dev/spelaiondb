@@ -1699,3 +1699,10 @@ input[type="search"] {
   border-bottom: 1px solid var(--line);
   overflow-wrap: anywhere;
 }
+
+/* Personal variables asked before connecting (ADR-022). */
+.variables-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

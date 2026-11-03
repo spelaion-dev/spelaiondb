@@ -450,6 +450,7 @@ function ConnectionForm(props: {
           break;
         case "untrusted":
         case "changed":
+        case "missingVariables":
           setTest({ kind: "idle" });
           break;
       }

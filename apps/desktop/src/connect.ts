@@ -5,17 +5,25 @@
 import { call, commands, type ConnectResult } from "./api";
 import { useApp, useDialogs } from "./store";
 
-/** While a repository connection or tunnel is new or changed, shows the change and, if the
- *  user accepts it, records it and tries again. Returns null if the user refused. */
+/** What must be answered before resolving (ADR-022): a repository connection or tunnel that
+ *  is new or changed (shown, and recorded if accepted) and personal `${user.…}` variables
+ *  that are not defined yet (asked for and saved). Tries again after each answer; returns
+ *  null if the user refused. */
 export async function reviewChanges(
   outcome: ConnectResult,
   retry: () => Promise<ConnectResult>,
 ): Promise<ConnectResult | null> {
   // A connection and its tunnel may both have changed: one dialog each.
-  for (let i = 0; outcome.kind === "changed" && i < 10; i++) {
-    const accepted = await useDialogs.getState().askChange({ item: outcome.item, isNew: outcome.new, fields: outcome.fields });
-    if (!accepted) return null;
-    await call(commands.acceptChange(outcome.item));
+  for (let i = 0; (outcome.kind === "changed" || outcome.kind === "missingVariables") && i < 10; i++) {
+    if (outcome.kind === "changed") {
+      const accepted = await useDialogs.getState().askChange({ item: outcome.item, isNew: outcome.new, fields: outcome.fields });
+      if (!accepted) return null;
+      await call(commands.acceptChange(outcome.item));
+    } else {
+      const values = await useDialogs.getState().askVariables(outcome.names);
+      if (!values) return null;
+      await call(commands.setUserVars(values));
+    }
     outcome = await retry();
   }
   return outcome;
@@ -47,7 +55,7 @@ export async function openSession(session: string, connectionId: string): Promis
     if (!answer) return null;
     outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember));
   }
-  if (outcome.kind === "untrusted" || outcome.kind === "changed") return null;
+  if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables") return null;
   return outcome.serverVersion;
 }
 

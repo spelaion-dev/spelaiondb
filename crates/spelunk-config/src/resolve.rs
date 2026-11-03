@@ -152,6 +152,7 @@ impl<'a> Resolver<'a> {
 
     fn resolve_entry(&self, entry: &ConnectionEntry) -> Result<ResolvedConnection, ResolveError> {
         let base = self.base_dir(entry.id.source)?;
+        self.check_variables(entry)?;
         let file = &entry.file;
         let text = |value: &Option<String>| -> Result<Option<String>, ResolveError> {
             value
@@ -276,6 +277,31 @@ impl<'a> Resolver<'a> {
                 reference: format!("keychain:{account}"),
                 message,
             })
+    }
+
+    /// Every `${user.…}` variable the connection and its tunnel use must be defined; the
+    /// missing ones are reported together, for the app to ask for them at once (ADR-022).
+    fn check_variables(&self, entry: &ConnectionEntry) -> Result<(), ResolveError> {
+        let vars = &self.config.user.vars;
+        let mut texts = crate::vars::text_values(&entry.file);
+        if let Some(name) = &entry.file.tunnel
+            && let Some(tunnel) = self.config.tunnel_for(entry.id.source, name)
+        {
+            texts.extend(crate::vars::text_values(&tunnel.file));
+        }
+        let mut names: Vec<String> = Vec::new();
+        for text in &texts {
+            for name in crate::vars::missing_user_vars(text, vars) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        if names.is_empty() {
+            Ok(())
+        } else {
+            Err(ResolveError::MissingVariables { names })
+        }
     }
 
     /// A client certificate's private key: a repository connection may not keep it inside the

@@ -171,6 +171,11 @@ export const commands = {
 	 *  as it is now, and connecting can go on.
 	 */
 	acceptChange: (item: string) => typedError<null, string>(__TAURI_INVOKE("accept_change", { item })),
+	/**
+	 *  Saves values for `${user.…}` variables in the user's `user.toml` (ADR-022) and reloads
+	 *  the configuration. Only those entries change; the rest of the file stays as it was.
+	 */
+	setUserVars: (values: { [key in string]: string }) => typedError<null, string>(__TAURI_INVOKE("set_user_vars", { values })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	setHistoryEnabled: (connection: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
@@ -277,7 +282,12 @@ export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: str
  */
 { kind: "changed"; 
 /**  `connection:<id>` or `tunnel:<name>`, for `accept_change`. */
-item: string; new: boolean; fields: FieldChangeItem_Deserialize[] };
+item: string; new: boolean; fields: FieldChangeItem_Deserialize[] } | 
+/**
+ *  The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
+ *  their values, save them with `set_user_vars` and try again.
+ */
+{ kind: "missingVariables"; names: string[] };
 
 export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string } | 
 /**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
@@ -292,7 +302,12 @@ export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: strin
  */
 { kind: "changed"; 
 /**  `connection:<id>` or `tunnel:<name>`, for `accept_change`. */
-item: string; new: boolean; fields: FieldChangeItem_Serialize[] };
+item: string; new: boolean; fields: FieldChangeItem_Serialize[] } | 
+/**
+ *  The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
+ *  their values, save them with `set_user_vars` and try again.
+ */
+{ kind: "missingVariables"; names: string[] };
 
 /**
  *  What the "add connection" form sends. The password travels apart and is never stored in

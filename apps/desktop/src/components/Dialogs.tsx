@@ -10,6 +10,7 @@ export function Dialogs() {
   const password = useDialogs((s) => s.password);
   const trust = useDialogs((s) => s.trust);
   const change = useDialogs((s) => s.change);
+  const variables = useDialogs((s) => s.variables);
   const risk = useDialogs((s) => s.risk);
   const params = useDialogs((s) => s.params);
   const text = useDialogs((s) => s.text);
@@ -17,6 +18,7 @@ export function Dialogs() {
   if (interaction) return <InteractionDialog key={interaction.id} />;
   if (trust) return <TrustDialog />;
   if (change) return <ChangeDialog key={change.item} />;
+  if (variables) return <VariablesDialog key={variables.names.join(",")} />;
   if (params) return <ParamsDialog />;
   if (text) return <TextDialog />;
   if (risk) return <RiskDialog />;
@@ -92,6 +94,56 @@ function TrustDialog() {
           {t("trust")}
         </button>
       </div>
+    </Modal>
+  );
+}
+
+/** The personal values a repository connection needs (`${user.…}`, ADR-022), asked once and
+ *  saved in the user's `user.toml`, outside the repository. */
+function VariablesDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.variables);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const first = useRef<HTMLInputElement>(null);
+  useEffect(() => first.current?.focus(), []);
+  if (!request) return null;
+  const complete = request.names.every((name) => (values[name] ?? "").trim() !== "");
+  const submit = () => {
+    if (complete) request.resolve(Object.fromEntries(request.names.map((name) => [name, (values[name] ?? "").trim()])));
+  };
+  return (
+    <Modal title={t("variables.title")}>
+      <p>{t("variables.explanation")}</p>
+      <form
+        className="variables-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        {request.names.map((name, i) => (
+          <label key={name} className="field">
+            <span className="mono">{`\${user.${name}}`}</span>
+            <input
+              ref={i === 0 ? first : undefined}
+              type="text"
+              aria-label={name}
+              autoComplete="off"
+              value={values[name] ?? ""}
+              onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
+            />
+          </label>
+        ))}
+        <p className="muted small">{t("variables.advice")}</p>
+        <div className="modal-actions">
+          <button type="button" onClick={() => request.resolve(null)}>
+            {t("cancel")}
+          </button>
+          <button type="submit" className="primary" disabled={!complete}>
+            {t("variables.save")}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }
