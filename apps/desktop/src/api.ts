@@ -25,6 +25,7 @@ import {
   type TextFormat,
   type TlsModeItem,
   type TunnelItem,
+  type UrlFields_Serialize,
   type PasswordMode,
   type WorkspaceInfo_Serialize,
 } from "./bindings";
@@ -36,6 +37,7 @@ export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
+export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
 export type ObjectItem = ObjectItem_Serialize;
 // The channel delivers the deserialization variant (optional fields).

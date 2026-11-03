@@ -13,6 +13,7 @@ import {
   type PasswordMode,
   type TlsModeItem,
   type TunnelItem,
+  type UrlFields,
 } from "../api";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { engineBadge } from "../engines";
@@ -31,6 +32,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const editing = dialog.kind === "edit" ? dialog.id : null;
   const [engines, setEngines] = useState<EngineItem[]>([]);
   const [engine, setEngine] = useState<EngineItem | null>(null);
+  const [prefill, setPrefill] = useState<UrlFields | null>(null);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -73,9 +75,24 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : editing ? (
           engine && initial && <ConnectionForm engine={engine} editing={editing} initial={initial} onCancel={close} onSaved={close} />
         ) : engine ? (
-          <ConnectionForm engine={engine} onBack={() => setEngine(null)} onCancel={close} onSaved={close} />
+          <ConnectionForm
+            engine={engine}
+            prefill={prefill ?? undefined}
+            onBack={() => {
+              setEngine(null);
+              setPrefill(null);
+            }}
+            onCancel={close}
+            onSaved={close}
+          />
         ) : (
-          <EnginePicker engines={engines} onPick={setEngine} />
+          <EnginePicker
+            engines={engines}
+            onPick={(picked, fields) => {
+              setPrefill(fields ?? null);
+              setEngine(picked);
+            }}
+          />
         )}
       </div>
     </div>
@@ -90,9 +107,22 @@ function EngineBadge({ engine }: { engine: EngineItem }) {
   );
 }
 
-function EnginePicker({ engines, onPick }: { engines: EngineItem[]; onPick(engine: EngineItem): void }) {
+function EnginePicker({ engines, onPick }: { engines: EngineItem[]; onPick(engine: EngineItem, fields?: UrlFields): void }) {
   const { t } = useTranslation("connections");
   const [search, setSearch] = useState("");
+  const [url, setUrl] = useState("");
+  const [urlError, setUrlError] = useState<string | null>(null);
+  async function applyUrl() {
+    setUrlError(null);
+    try {
+      const fields = await call(commands.parseConnectionUrl(url));
+      const engine = engines.find((e) => e.id === fields.engine && e.available);
+      if (engine) onPick(engine, fields);
+      else setUrlError(t("url.unsupported"));
+    } catch (e) {
+      setUrlError(errorText(e));
+    }
+  }
   const query = search.trim().toLowerCase();
   const visible = engines.filter((e) => e.name.toLowerCase().includes(query));
   return (
@@ -106,6 +136,34 @@ function EnginePicker({ engines, onPick }: { engines: EngineItem[]; onPick(engin
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
+      <form
+        className="url-import"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void applyUrl();
+        }}
+      >
+        <input
+          type="text"
+          placeholder="postgres://user@host:5432/database"
+          aria-label={t("url.label")}
+          value={url}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            setUrlError(null);
+          }}
+          spellCheck={false}
+          autoComplete="off"
+        />
+        <button type="submit" disabled={!url.trim()}>
+          {t("url.use")}
+        </button>
+      </form>
+      {urlError && (
+        <p className="error small" role="alert">
+          {urlError}
+        </p>
+      )}
       <div className="engine-groups">
         {CATEGORIES.map((category) => {
           const items = visible.filter((e) => e.category === category);
@@ -175,6 +233,8 @@ function ConnectionForm(props: {
   /** Identifier of the connection being edited; absent when adding one. */
   editing?: string;
   initial?: ConnectionDraft;
+  /** Values read from a pasted connection URL. */
+  prefill?: UrlFields;
   onBack?(): void;
   onCancel(): void;
   onSaved(): void;
@@ -186,11 +246,11 @@ function ConnectionForm(props: {
   const network = engine.access === "network";
   const [tab, setTab] = useState<FormTab>("main");
   const [tunnels, setTunnels] = useState<TunnelItem[]>([]);
-  const { initial, editing } = props;
+  const { initial, editing, prefill } = props;
   const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network ? "password" : "none");
   const [savePassword, setSavePassword] = useState(initial ? initial.passwordMode !== "prompt" : true);
   const [useTunnel, setUseTunnel] = useState(Boolean(initial?.tunnel));
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState(prefill?.password ?? "");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -198,16 +258,16 @@ function ConnectionForm(props: {
   const [draft, setDraft] = useState<Omit<ConnectionDraft, "passwordMode" | "tunnel">>(() => initial ?? {
     personal: !hasWorkspace,
     folder: "",
-    name: "",
+    name: prefill ? prefill.database.split(/[\\/]/).pop() || prefill.host : "",
     engine: engine.id,
     env: "",
-    host: network ? "localhost" : "",
-    port: null,
-    database: "",
-    user: "",
+    host: prefill?.host || (network ? "localhost" : ""),
+    port: prefill?.port ?? null,
+    database: prefill?.database ?? "",
+    user: prefill?.user ?? "",
     passwordEnv: "",
     passwordOther: "",
-    tlsMode: "prefer",
+    tlsMode: prefill?.tlsMode ?? "prefer",
     tlsCa: "",
     readOnly: false,
     mcpExposed: false,

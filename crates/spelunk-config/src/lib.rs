@@ -10,6 +10,7 @@
 //! anything is resolved ([`TrustStore`]).
 
 mod accounts;
+mod conn_url;
 mod draft;
 mod edit;
 mod error;
@@ -22,6 +23,7 @@ mod tunnel_draft;
 mod vars;
 
 pub use accounts::{connection_account, tunnel_account};
+pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
 pub use draft::{
     ConnectionDraft, PasswordChoice, add_connection, connections_dir, delete_connection, slug,
     update_connection,

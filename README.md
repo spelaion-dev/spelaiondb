@@ -26,7 +26,10 @@ PostgreSQL, MySQL and MariaDB, and a PostgreSQL behind two SSH bastions with TLS
 
 The **+** button at the top of the sidebar opens **Add connection**: pick a database from the
 catalog (grouped as relational, analytical and NoSQL; engines without a driver yet are shown
-as *coming soon*), fill in its form, **Test connection** and **Save**.
+as *coming soon*), fill in its form, **Test connection** and **Save**. You can also paste a
+connection URL (`postgres://user:pass@host:5432/db?sslmode=require`, `mysql://…`,
+`mariadb://…`, their `jdbc:` forms or `sqlite:path`): it picks the engine and fills host,
+port, database, user, SSL mode and the password field (which is saved like a typed one).
 
 - **Save in:** *Project* writes `.spelunk/connections/<folder>/<name>.toml` in the
   repository, shared through git; *Personal* keeps it in your personal directory.

@@ -147,5 +147,10 @@
     "delete": "Delete tunnel",
     "confirmDelete": "Click again to delete"
   },
-  "newDatabase": "New database…"
+  "newDatabase": "New database…",
+  "url": {
+    "label": "Or paste a connection URL",
+    "use": "Use URL",
+    "unsupported": "This app has no driver for that database yet."
+  }
 }

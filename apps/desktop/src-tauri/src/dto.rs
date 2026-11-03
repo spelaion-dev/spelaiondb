@@ -411,6 +411,47 @@ pub enum TlsModeItem {
     VerifyFull,
 }
 
+impl From<spelunk_config::TlsModeConfig> for TlsModeItem {
+    fn from(mode: spelunk_config::TlsModeConfig) -> Self {
+        use spelunk_config::TlsModeConfig;
+        match mode {
+            TlsModeConfig::Disable => Self::Disable,
+            TlsModeConfig::Prefer => Self::Prefer,
+            TlsModeConfig::Require => Self::Require,
+            TlsModeConfig::VerifyCa => Self::VerifyCa,
+            TlsModeConfig::VerifyFull => Self::VerifyFull,
+        }
+    }
+}
+
+/// What a pasted connection URL fills in the form. The password goes only to the form's
+/// password field, like a typed one.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct UrlFields {
+    pub engine: String,
+    pub host: String,
+    pub port: Option<u16>,
+    pub database: String,
+    pub user: String,
+    pub password: Option<String>,
+    pub tls_mode: Option<TlsModeItem>,
+}
+
+impl From<spelunk_config::UrlConnection> for UrlFields {
+    fn from(c: spelunk_config::UrlConnection) -> Self {
+        Self {
+            engine: c.engine.as_str().into(),
+            host: c.host,
+            port: c.port,
+            database: c.database,
+            user: c.user,
+            password: c.password.map(|p| p.expose().to_string()),
+            tls_mode: c.tls_mode.map(TlsModeItem::from),
+        }
+    }
+}
+
 /// What the "add connection" form sends. The password travels apart and is never stored in
 /// the connection file.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -480,7 +521,7 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
 
 impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
     fn from(draft: spelunk_config::ConnectionDraft) -> Self {
-        use spelunk_config::{PasswordChoice, Source, TlsModeConfig};
+        use spelunk_config::{PasswordChoice, Source};
         let (password_mode, password_env, password_other) = match draft.password {
             PasswordChoice::None => (PasswordMode::None, String::new(), String::new()),
             PasswordChoice::Keychain => (PasswordMode::Keychain, String::new(), String::new()),
@@ -504,13 +545,7 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
             password_mode,
             password_env,
             password_other,
-            tls_mode: match draft.tls_mode {
-                TlsModeConfig::Disable => TlsModeItem::Disable,
-                TlsModeConfig::Prefer => TlsModeItem::Prefer,
-                TlsModeConfig::Require => TlsModeItem::Require,
-                TlsModeConfig::VerifyCa => TlsModeItem::VerifyCa,
-                TlsModeConfig::VerifyFull => TlsModeItem::VerifyFull,
-            },
+            tls_mode: draft.tls_mode.into(),
             tls_ca: draft.tls_ca,
             tunnel: draft.tunnel,
             read_only: draft.read_only,

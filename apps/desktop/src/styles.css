@@ -313,3 +313,7 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 
 /* ---------------------------------------------------------------- formatting */
 .format-error { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex-shrink: 1; }
+
+/* ---------------------------------------------------------------- connection URL */
+.url-import { display: flex; gap: 6px; margin-top: 8px; }
+.url-import input { flex: 1; min-width: 0; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }

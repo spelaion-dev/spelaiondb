@@ -557,6 +557,23 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.ok(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled());
   await wizard.locator(".engine-card", { hasText: "SQL Server" }).getByText("Coming soon").waitFor();
   await shot("12a-add-connection-catalog");
+  // A connection URL fills the form (password included, only in the form), then back.
+  await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");
+  await wizard.getByRole("button", { name: "Use URL" }).click();
+  let urlForm = page.locator(".modal.wizard");
+  await urlForm.getByRole("heading", { name: "New MySQL connection" }).waitFor();
+  assert.equal(await urlForm.getByLabel("Host", { exact: true }).inputValue(), "reports.example.com");
+  assert.equal(await urlForm.getByLabel("Port", { exact: true }).inputValue(), "3307");
+  assert.equal(await urlForm.getByLabel("Database", { exact: true }).inputValue(), "sales");
+  assert.equal(await urlForm.getByLabel("User", { exact: true }).inputValue(), "reader");
+  assert.equal(await urlForm.getByLabel("Password", { exact: true }).inputValue(), "s&cret");
+  assert.equal(await urlForm.getByLabel("Name", { exact: true }).inputValue(), "sales");
+  await shot("12a1-connection-url");
+  await urlForm.getByRole("button", { name: "Back", exact: true }).click();
+  wizard = page.getByRole("dialog", { name: "Add connection" });
+  await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("redis://cache:6379");
+  await wizard.getByRole("button", { name: "Use URL" }).click();
+  await wizard.getByRole("alert").filter({ hasText: "not a connection URL" }).waitFor();
   await wizard.getByRole("searchbox").fill("lite");
   assert.equal(await wizard.locator(".engine-card").count(), 1);
   await wizard.locator(".engine-card", { hasText: "SQLite" }).click();

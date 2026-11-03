@@ -147,5 +147,10 @@
     "delete": "Borrar túnel",
     "confirmDelete": "Pulsa otra vez para borrar"
   },
-  "newDatabase": "Nueva base de datos…"
+  "newDatabase": "Nueva base de datos…",
+  "url": {
+    "label": "O pega una URL de conexión",
+    "use": "Usar URL",
+    "unsupported": "La aplicación aún no tiene driver para esa base de datos."
+  }
 }

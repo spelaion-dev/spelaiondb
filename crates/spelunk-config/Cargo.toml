@@ -15,6 +15,7 @@ serde_json = "1"
 thiserror.workspace = true
 toml = "1"
 toml_edit = "0.25"
+url = "2"
 
 # System keychain: one store per platform, as keyring-rs recommends for applications.
 # On Linux, Secret Service through libdbus (the zbus variant pulls in unmaintained

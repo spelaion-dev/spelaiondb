@@ -845,6 +845,15 @@ async fn export_result(
     Ok(rows as f64)
 }
 
+/// Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form.
+#[tauri::command]
+#[specta::specta]
+fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
+    spelunk_config::parse_connection_url(&url)
+        .map(UrlFields::from)
+        .map_err(|e| e.to_string())
+}
+
 /// Creates an empty SQLite database file for a new connection. The core never overwrites an
 /// existing file.
 #[tauri::command]
@@ -1106,6 +1115,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             statement_at,
             create_sqlite_database,
             script_risks,
+            parse_connection_url,
             open_workspace,
             trust_workspace,
             list_connections,

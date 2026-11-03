@@ -84,6 +84,8 @@ export const commands = {
 	 *  without WHERE, DROP, TRUNCATE, or any write on a production connection.
 	 */
 	scriptRisks: (session: string, sql: string) => typedError<RiskyItem[], string>(__TAURI_INVOKE("script_risks", { session, sql })),
+	/**  Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form. */
+	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
@@ -437,6 +439,40 @@ export type TunnelItem = {
 export type TunnelTestOutcome = { kind: "connected" } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
+
+/**
+ *  What a pasted connection URL fills in the form. The password goes only to the form's
+ *  password field, like a typed one.
+ */
+export type UrlFields = UrlFields_Serialize | UrlFields_Deserialize;
+
+/**
+ *  What a pasted connection URL fills in the form. The password goes only to the form's
+ *  password field, like a typed one.
+ */
+export type UrlFields_Deserialize = {
+	engine: string,
+	host: string,
+	port?: number | null,
+	database: string,
+	user: string,
+	password?: string | null,
+	tlsMode?: TlsModeItem | null,
+};
+
+/**
+ *  What a pasted connection URL fills in the form. The password goes only to the form's
+ *  password field, like a typed one.
+ */
+export type UrlFields_Serialize = {
+	engine: string,
+	host: string,
+	port: number | null,
+	database: string,
+	user: string,
+	password: string | null,
+	tlsMode: TlsModeItem | null,
+};
 
 export type WorkspaceInfo = WorkspaceInfo_Serialize | WorkspaceInfo_Deserialize;
 
