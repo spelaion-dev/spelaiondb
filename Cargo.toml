@@ -41,3 +41,4 @@ unsafe_code = "forbid"
 # tiberius with a fix to cancelling (see vendor/tiberius/PATCHED.md).
 [patch.crates-io]
 tiberius = { path = "vendor/tiberius" }
+mysql_async = { path = "vendor/mysql_async" }

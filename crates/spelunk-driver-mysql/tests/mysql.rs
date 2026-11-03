@@ -370,6 +370,25 @@ async fn tls_modes_encrypt_and_verify() {
             "{}: verify-full must reject a name the certificate does not cover",
             server.label
         );
+
+        // verify-ca: a trusted authority, whatever the name; here the IP address, which the
+        // certificate does not list (vendor/mysql_async/PATCHED.md).
+        let mut by_authority = server.params();
+        by_authority.tls = TlsMode::VerifyCa;
+        by_authority.ca_certificate = Some(ca());
+        let conn = server
+            .driver
+            .connect(&by_authority)
+            .await
+            .unwrap_or_else(|e| panic!("{} verify-ca by IP: {e}", server.label));
+        assert!(encrypted(conn).await);
+        // A certificate from another authority is still refused.
+        by_authority.ca_certificate = Some(ca().with_file_name("client.crt"));
+        assert!(
+            server.driver.connect(&by_authority).await.is_err(),
+            "{}: verify-ca must reject another authority",
+            server.label
+        );
     }
 }
 
