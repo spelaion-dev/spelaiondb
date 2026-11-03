@@ -54,7 +54,7 @@
     "mcpAccess": "Agents can",
     "mcpRead": "Only read",
     "mcpWrite": "Read and write",
-    "mcpWriteHint": "Agents can run one write at a time (INSERT, UPDATE, DELETE with WHERE, CREATE, ALTER…), each in its own transaction. DROP, TRUNCATE and changes to every row are always refused, and everything is audited. PostgreSQL and SQLite for now.",
+    "mcpWriteHint": "Agents can run one write at a time (INSERT, UPDATE, DELETE with WHERE, CREATE or ALTER of tables, views and indexes…), each in its own transaction. DROP, TRUNCATE, changes to every row, procedures and permissions are always refused, and everything is audited.",
     "mcpProdWarning": "This is a production connection: agents will be able to change its data.",
     "namePlaceholder": "My {{engine}} database",
     "authentication": "Method",

@@ -1,17 +1,19 @@
 //! Statement classification for read-only mode (ADR-008, layer 4).
 //!
 //! Allow list: only what is recognised as a read passes; whatever cannot be parsed is
-//! rejected. It is not the only barrier: a function with side effects
-//! (`pg_terminate_backend`, a user function that writes) looks like a read. That is why it
-//! also runs in a read-only transaction and a read-only database user is recommended.
+//! rejected. Functions that reach outside the database (files, other servers, the session:
+//! [`reaches_outside`]) are refused by name. It is not the only barrier: a user function that
+//! writes looks like a read. That is why it also runs in a read-only (or always rolled back)
+//! transaction and a read-only database user is recommended.
 
 use std::ops::ControlFlow;
 
-use sqlparser::ast::{Expr, Query, SetExpr, Statement, Value as SqlValue, Visit, Visitor};
-use sqlparser::dialect::{
-    Dialect, DuckDbDialect, GenericDialect, MsSqlDialect, PostgreSqlDialect, SQLiteDialect,
+use sqlparser::ast::{
+    Expr, ObjectName, Query, SetExpr, Statement, Value as SqlValue, Visit, Visitor,
 };
 use sqlparser::parser::Parser;
+
+use crate::guard::sql_dialect;
 
 /// Kind of permitted read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,15 +28,7 @@ pub enum ReadKind {
 
 /// Is `sql` (a single statement) a read? `Err` explains why not.
 pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
-    let dialect: Box<dyn Dialect> = match engine {
-        "postgres" => Box::new(PostgreSqlDialect {}),
-        "sqlite" => Box::new(SQLiteDialect {}),
-        // Only to tell reads from writes for the "production" confirmation: the MCP's
-        // read-only mode does not serve these engines (`readonly.rs`).
-        "sqlserver" => Box::new(MsSqlDialect {}),
-        "duckdb" => Box::new(DuckDbDialect {}),
-        _ => Box::new(GenericDialect {}),
-    };
+    let dialect = sql_dialect(engine);
     let statements = Parser::parse_sql(dialect.as_ref(), sql)
         .map_err(|e| format!("could not parse the statement: {e}"))?;
     let statement = match statements.as_slice() {
@@ -68,7 +62,18 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
                 )),
             }
         }
-        Statement::ShowVariable { .. } => Ok(ReadKind::Show),
+        Statement::ShowVariable { .. }
+        | Statement::ShowVariables { .. }
+        | Statement::ShowStatus { .. }
+        | Statement::ShowTables { .. }
+        | Statement::ShowViews { .. }
+        | Statement::ShowColumns { .. }
+        | Statement::ShowCreate { .. }
+        | Statement::ShowDatabases { .. }
+        | Statement::ShowSchemas { .. }
+        | Statement::ShowFunctions { .. }
+        | Statement::ShowCollation { .. }
+        | Statement::ShowCharset(_) => Ok(ReadKind::Show),
         other => Err(format!("{} is not a read statement", kind_name(other))),
     }?;
 
@@ -78,7 +83,147 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
     if let ControlFlow::Break(kind) = statement.visit(&mut nested) {
         return Err(format!("contains a nested {kind} statement"));
     }
+    if let Some(reason) = reaches_outside(engine, std::slice::from_ref(statement)) {
+        return Err(reason);
+    }
     Ok(kind)
+}
+
+/// Functions that reach outside the database: files on the server, other servers, environment
+/// variables, or locks and settings that outlive the statement. Matched by their last name
+/// part, case-insensitively, as calls and as table functions.
+fn outside_functions(engine: &str) -> &'static [&'static str] {
+    match engine {
+        "postgres" => &[
+            "pg_read_file",
+            "pg_read_binary_file",
+            "pg_ls_dir",
+            "pg_stat_file",
+            "pg_ls_logdir",
+            "pg_ls_waldir",
+            "pg_ls_tmpdir",
+            "pg_ls_archive_statusdir",
+            "lo_import",
+            "lo_export",
+            "dblink",
+            "dblink_exec",
+            "dblink_connect",
+            "dblink_connect_u",
+            "dblink_send_query",
+            "pg_terminate_backend",
+            "pg_cancel_backend",
+            "pg_reload_conf",
+            "pg_rotate_logfile",
+            "set_config",
+            "pg_advisory_lock",
+            "pg_advisory_lock_shared",
+            "pg_try_advisory_lock",
+            "pg_try_advisory_lock_shared",
+        ],
+        "sqlite" => &[
+            "load_extension",
+            "readfile",
+            "writefile",
+            "edit",
+            "fts3_tokenizer",
+        ],
+        "mysql" => &[
+            "load_file",
+            "get_lock",
+            "release_lock",
+            "release_all_locks",
+            "sys_exec",
+            "sys_eval",
+        ],
+        "sqlserver" => &["openrowset", "opendatasource", "openquery"],
+        // The engine is the main barrier (`enable_external_access = false`); these are refused
+        // before reaching it, with a clearer message.
+        "duckdb" => &[
+            "read_csv",
+            "read_csv_auto",
+            "sniff_csv",
+            "read_parquet",
+            "parquet_scan",
+            "parquet_metadata",
+            "parquet_schema",
+            "read_json",
+            "read_json_auto",
+            "read_json_objects",
+            "read_ndjson",
+            "read_ndjson_auto",
+            "read_ndjson_objects",
+            "read_text",
+            "read_blob",
+            "read_xlsx",
+            "glob",
+            "getenv",
+            "sqlite_scan",
+            "postgres_scan",
+            "mysql_scan",
+            "iceberg_scan",
+            "delta_scan",
+        ],
+        _ => &[],
+    }
+}
+
+/// Why `statements` reach outside the database, if they do (see [`outside_functions`]). In
+/// SQL Server a four-part name (`server.database.schema.table`) goes to a linked server.
+pub(crate) fn reaches_outside(engine: &str, statements: &[Statement]) -> Option<String> {
+    let mut visitor = Outside {
+        functions: outside_functions(engine),
+        linked_servers: engine == "sqlserver",
+    };
+    statements
+        .iter()
+        .find_map(|statement| match statement.visit(&mut visitor) {
+            ControlFlow::Break(reason) => Some(reason),
+            ControlFlow::Continue(()) => None,
+        })
+}
+
+struct Outside {
+    functions: &'static [&'static str],
+    linked_servers: bool,
+}
+
+impl Outside {
+    fn check(&self, name: &ObjectName) -> ControlFlow<String> {
+        let last = name
+            .0
+            .last()
+            .and_then(|part| part.as_ident())
+            .map(|ident| ident.value.to_ascii_lowercase());
+        if let Some(last) = last
+            && self.functions.contains(&last.as_str())
+        {
+            return ControlFlow::Break(format!(
+                "{last}() reaches outside the database (files, other servers or the session)"
+            ));
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl Visitor for Outside {
+    type Break = String;
+
+    fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<String> {
+        if self.linked_servers && relation.0.len() >= 4 {
+            return ControlFlow::Break(format!(
+                "{relation} names another server (a linked server)"
+            ));
+        }
+        // `FROM read_csv('…')` is a relation with arguments.
+        self.check(relation)
+    }
+
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<String> {
+        match expr {
+            Expr::Function(function) => self.check(&function.name),
+            _ => ControlFlow::Continue(()),
+        }
+    }
 }
 
 fn check_query(query: &Query) -> Result<(), String> {
@@ -247,5 +392,57 @@ mod tests {
         assert!(pg("table orders").is_err());
         assert!(classify_read_only("sqlite", "pragma journal_mode = delete").is_err());
         assert!(classify_read_only("sqlite", "attach 'x.db' as x").is_err());
+    }
+
+    #[test]
+    fn each_engine_reads_in_its_own_dialect() {
+        for (engine, sql) in [
+            ("mysql", "select `name` from `products` limit 3"),
+            ("mysql", "show tables"),
+            ("mysql", "show create table products"),
+            ("mysql", "explain format=json select 1"),
+            ("sqlserver", "select top 5 [name] from dbo.products"),
+            ("sqlserver", "select * from spelunk.dbo.products"),
+            ("duckdb", "select * from range(10) t(i)"),
+            ("duckdb", "explain select 1"),
+        ] {
+            assert!(classify_read_only(engine, sql).is_ok(), "{engine}: {sql}");
+        }
+    }
+
+    #[test]
+    fn functions_that_reach_outside_are_refused() {
+        for (engine, sql) in [
+            ("postgres", "select pg_read_file('/etc/passwd')"),
+            (
+                "postgres",
+                "select * from dblink('host=x', 'select 1') as t(a int)",
+            ),
+            ("postgres", "select set_config('role', 'admin', false)"),
+            ("postgres", "select PG_TERMINATE_BACKEND(42)"),
+            ("postgres", "select pg_catalog.pg_ls_dir('.')"),
+            ("postgres", "select (select pg_advisory_lock(1))"),
+            ("sqlite", "select load_extension('x')"),
+            ("mysql", "select load_file('/etc/passwd')"),
+            ("mysql", "select get_lock('x', 10)"),
+            (
+                "sqlserver",
+                "select * from openrowset('SQLNCLI', 'server=x', 'select 1')",
+            ),
+            ("sqlserver", "select * from openquery(other, 'select 1')"),
+            ("sqlserver", "select * from other.spelunk.dbo.products"),
+            ("duckdb", "select * from read_csv('/etc/passwd')"),
+            ("duckdb", "select getenv('HOME')"),
+            ("duckdb", "select count(*) from glob('*')"),
+        ] {
+            let err = classify_read_only(engine, sql).unwrap_err();
+            assert!(
+                err.contains("outside the database") || err.contains("another server"),
+                "{engine}: {sql}: {err}"
+            );
+        }
+        // The same names as plain columns or tables are fine.
+        assert!(classify_read_only("duckdb", "select glob from files").is_ok());
+        assert!(classify_read_only("mysql", "select * from load_file_log").is_ok());
     }
 }

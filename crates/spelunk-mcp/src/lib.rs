@@ -25,7 +25,7 @@ use rmcp::{
 };
 use serde::Deserialize;
 use spelunk_config::{
-    Config, ConnectionEntry, Resolver, Source, SystemBackend, TrustStore, WritePolicy,
+    Config, ConnectionEntry, Engine, Resolver, Source, SystemBackend, TrustStore, WritePolicy,
 };
 use spelunk_core::{
     Engines, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits, ResultStore,
@@ -227,8 +227,12 @@ impl SpelunkMcp {
         let mut resolved = Resolver::new(&self.state.config, &self.state.trust, &SystemBackend)
             .resolve(&entry.id)
             .map_err(|e| e.to_string())?;
-        // Native read-only where the engine has it (SQLite), except to write.
-        resolved.params.read_only |= purpose == Use::Read;
+        // Native read-only where the engine has it (SQLite, DuckDB), except to write. DuckDB
+        // opens a file in one mode per process: where agents may write, the reads share the
+        // writable file and rely on the read-only transaction (ADR-020).
+        let shares_writable_file =
+            entry.file.engine == Engine::Duckdb && entry.file.mcp.writes == WritePolicy::Allow;
+        resolved.params.read_only |= purpose == Use::Read && !shares_writable_file;
         let options = OpenOptions {
             tunnels: self.state.tunnels.clone(),
             known_hosts: KnownHosts::for_user(&self.state.options.user_dir),

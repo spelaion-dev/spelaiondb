@@ -77,7 +77,7 @@ services:
         install -o mysql -g mysql -m 600 /certs/mysql.key /etc/mysql-tls/server.key
         install -o mysql -g mysql -m 644 /certs/mysql.crt /etc/mysql-tls/server.crt
         install -o mysql -g mysql -m 644 /certs/ca.crt /etc/mysql-tls/ca.crt
-        exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key
+        exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --log-bin-trust-function-creators=1
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uspelunk -pspelunk --silent"]
       interval: 2s

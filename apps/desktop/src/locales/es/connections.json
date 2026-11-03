@@ -54,7 +54,7 @@
     "mcpAccess": "Los agentes pueden",
     "mcpRead": "Solo leer",
     "mcpWrite": "Leer y escribir",
-    "mcpWriteHint": "Los agentes pueden ejecutar una escritura cada vez (INSERT, UPDATE, DELETE con WHERE, CREATE, ALTER…), cada una en su propia transacción. DROP, TRUNCATE y los cambios a todas las filas se rechazan siempre, y todo queda auditado. Por ahora, PostgreSQL y SQLite.",
+    "mcpWriteHint": "Los agentes pueden ejecutar una escritura cada vez (INSERT, UPDATE, DELETE con WHERE, CREATE o ALTER de tablas, vistas e índices…), cada una en su propia transacción. DROP, TRUNCATE, los cambios a todas las filas, los procedimientos y los permisos se rechazan siempre, y todo queda auditado.",
     "mcpProdWarning": "Es una conexión de producción: los agentes podrán cambiar sus datos.",
     "namePlaceholder": "Mi base de datos {{engine}}",
     "authentication": "Método",

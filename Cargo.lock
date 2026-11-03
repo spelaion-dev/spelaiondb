@@ -5395,9 +5395,12 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
+ "futures-util",
  "rusqlite",
  "serde_json",
  "spelunk-config",
+ "spelunk-driver-api",
+ "spelunk-driver-duckdb",
  "spelunk-mcp",
  "spelunk-store",
  "tokio",

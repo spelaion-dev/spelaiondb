@@ -245,10 +245,10 @@ async fn risky_statements_are_recognized() {
     assert_eq!(risks.len(), 3, "{risks:?}");
 }
 
-/// The MCP's read-only mode does not serve DuckDB (ADR-016): a "read" can still reach local
-/// files (`read_text`), so nothing is sent to DuckDB at all.
+/// The MCP's read-only mode serves DuckDB without its files (ADR-020): `read_text` is refused
+/// before anything is sent (`agents_engines.rs` tries the ways around it).
 #[tokio::test]
-async fn read_only_mode_refuses_duckdb() {
+async fn read_only_mode_never_reads_local_files() {
     let session = session().await;
     let result = session
         .run_read_only(
@@ -257,7 +257,7 @@ async fn read_only_mode_refuses_duckdb() {
         )
         .await;
     assert!(
-        matches!(result, Err(spelunk_core::ReadError::Unsupported(ref engine)) if engine == "duckdb"),
+        matches!(result, Err(spelunk_core::ReadError::Rejected(ref reason)) if reason.contains("outside the database")),
         "{result:?}"
     );
 }

@@ -68,9 +68,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   the paged SELECT of the table data tab (the filter typed by the user cannot change it).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
-  `write.rs` holds the barriers and the transaction of agents' writes (ADR-019: one statement,
-  never destructive, never transaction control nor other files); like `classify.rs`, any
-  change there needs tests that try to get around it.
+  `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
+  statement, never destructive, only the kinds on its allow list). Each engine's read barrier
+  is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
+  `classify.rs`, any change there needs tests that try to get around it.
 - `crates/spelunk-store`: local SQLite (audit, query history, saved queries and personal settings;
   later the schema cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.

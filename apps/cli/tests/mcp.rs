@@ -380,3 +380,141 @@ fn an_agent_writes_only_where_the_user_allowed_it() {
         "{audit}"
     );
 }
+
+/// Runs `script` on a DuckDB file, creating it, with the project's own driver.
+fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
+    use futures_util::StreamExt;
+    use spelunk_driver_api::{ConnectParams, Driver, ExecEvent, ExecOptions, Value};
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let driver = spelunk_driver_duckdb::DuckdbDriver {
+            create_if_missing: true,
+        };
+        let conn = driver
+            .connect(&ConnectParams {
+                database: path.display().to_string(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut values = Vec::new();
+        for sql in script {
+            let mut events = conn.execute(sql, &ExecOptions::default()).await.unwrap();
+            let mut logical = None;
+            while let Some(event) = events.next().await {
+                match event.unwrap() {
+                    ExecEvent::Columns(schema) => logical = Some(schema.columns[0].logical),
+                    ExecEvent::Batch(batch) if batch.num_rows() > 0 => {
+                        let value =
+                            Value::from_array(batch.column(0).as_ref(), 0, logical.unwrap())
+                                .unwrap();
+                        values.push(value.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        values
+    })
+}
+
+#[test]
+fn duckdb_connections_serve_agents_without_files() {
+    let fx = Fixture::new("mcp-duckdb");
+    duckdb(
+        &fx.repo().join("shop.duckdb"),
+        &[
+            "create table products (id integer primary key, name varchar not null); \
+           insert into products values (1, 'lamp'), (2, 'table'), (3, 'chair')",
+        ],
+    );
+    duckdb(
+        &fx.repo().join("archive.duckdb"),
+        &["create table products as select 1 as id"],
+    );
+    std::fs::write(fx.repo().join("secret.csv"), "password\nhunter2\n").unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/shop.toml"),
+        "schema_version = 1\nname = \"Shop\"\nengine = \"duckdb\"\ndatabase = \"shop.duckdb\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/archive.toml"),
+        "schema_version = 1\nname = \"Archive\"\nengine = \"duckdb\"\ndatabase = \"archive.duckdb\"\n\n[mcp]\nexposed = true\n",
+    )
+    .unwrap();
+    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    let mut agent = Agent::start(&fx);
+
+    let (text, _) = agent.call("list_connections", json!({}));
+    assert!(
+        text.contains("- shop — Shop (duckdb). Read and write")
+            && text.contains("- archive — Archive (duckdb). Read-only."),
+        "{text}"
+    );
+    let (text, is_error) = agent.call(
+        "run_query",
+        json!({ "connection": "shop", "sql": "select name from products order by id" }),
+    );
+    assert!(!is_error && text.contains("| lamp |"), "{text}");
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "insert into products values (4, 'desk')" }),
+    );
+    assert!(!is_error && text.contains("1 row(s) affected"), "{text}");
+    // Reads share the writable file, and see the write.
+    let (text, is_error) = agent.call(
+        "run_query",
+        json!({ "connection": "shop", "sql": "select count(*) as n from products" }),
+    );
+    assert!(!is_error && text.contains("| 4 |"), "{text}");
+    let (text, is_error) = agent.call(
+        "explain_query",
+        json!({ "connection": "shop", "sql": "select * from products" }),
+    );
+    assert!(!is_error, "{text}");
+
+    // No files, by name or as a table, not even through a write.
+    let csv = fx
+        .repo()
+        .join("secret.csv")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    for (tool, sql) in [
+        ("run_query", format!("select * from read_csv('{csv}')")),
+        ("run_query", format!("select * from '{csv}'")),
+        (
+            "execute_write",
+            format!("insert into products select 9, password from '{csv}'"),
+        ),
+        ("run_query", "select nextval('x')".into()),
+    ] {
+        let (text, is_error) = agent.call(tool, json!({ "connection": "shop", "sql": sql }));
+        assert!(is_error && !text.contains("hunter2"), "{sql}: {text}");
+    }
+
+    // The other connection does not let agents write.
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "archive", "sql": "insert into products values (2)" }),
+    );
+    assert!(is_error && text.contains("read-only for agents"), "{text}");
+    let (text, is_error) = agent.call(
+        "run_query",
+        json!({ "connection": "archive", "sql": "select count(*) as n from products" }),
+    );
+    assert!(!is_error && text.contains("| 1 |"), "{text}");
+    agent.stop();
+
+    assert_eq!(
+        duckdb(
+            &fx.repo().join("shop.duckdb"),
+            &["select string_agg(name, ',' order by id) from products"]
+        ),
+        ["lamp,table,chair,desk"]
+    );
+}

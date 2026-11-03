@@ -30,7 +30,8 @@ other database.
   `BEGIN`… with a `Success` column. For statements that are not queries (`SELECT`, `WITH`,
   `SHOW`, `DESCRIBE`, `PRAGMA`…), those become `Done { rows_affected }` instead of a result;
   `INSERT … RETURNING` still returns its rows.
-- **Not in `spelunk mcp` yet.** DuckDB's read-only queries can still read any local file
+- **Not in `spelunk mcp` yet** (superseded by ADR-020: the MCP serves DuckDB with
+  `enable_external_access = false`). DuckDB's read-only queries can still read any local file
   (`read_csv`, `read_text`) and, with extensions, the network: the MCP's "read-only" would
   not mean "only this database". The app works with DuckDB; the MCP refuses it
   (`ReadError::Unsupported`) until the read-only mode also limits file and network access.

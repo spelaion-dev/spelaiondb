@@ -5,7 +5,6 @@ and a built-in MCP server for AI agents.
 
 > **Status:** 0.2.0 preview. The drivers (PostgreSQL, MySQL/MariaDB and SQL Server with TLS,
 > SQLite, DuckDB), the configuration, SSH tunnels, `spelunk mcp` and the desktop app work.
-> `spelunk mcp` does not serve MySQL/MariaDB, SQL Server or DuckDB connections yet.
 
 ## Install
 
@@ -258,10 +257,14 @@ separate.
 `spelunk mcp` gives an agent access to the connections you mark with
 `[mcp] exposed = true` ("Expose to AI agents" in the connection form). Agents only read,
 unless you choose "Agents can: Read and write" (`[mcp] writes = "allow"`, ADR-019): then the
-`execute_write` tool runs one statement at a time in its own transaction. `DROP`, `TRUNCATE`,
-`DELETE`/`UPDATE` without `WHERE`, transaction control and statements that reach other files
-are always refused, and read-only connections never let agents write. Writes work on
-PostgreSQL and SQLite for now. Install the binary and add it to Claude Code:
+`execute_write` tool runs one statement at a time in its own transaction: data changes and
+`CREATE`/`ALTER` of tables, views, indexes, schemas and sequences. `DROP`, `TRUNCATE`,
+`DELETE`/`UPDATE` without `WHERE`, procedures, permissions, settings, transaction control and
+anything that reaches files or other servers are always refused, and read-only connections
+never let agents write. Every engine is served (PostgreSQL, MySQL, MariaDB, SQL Server,
+SQLite and DuckDB), each behind its own read-only barrier (ADR-020); for DuckDB, agents never
+reach files or the network. A read-only database user is still the safest choice for agents
+that only read. Install the binary and add it to Claude Code:
 
 ```bash
 cargo install --path apps/cli

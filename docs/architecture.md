@@ -56,7 +56,7 @@ A summary of how the pieces fit together. The reasons behind each decision are i
 - **Phase 0** (current): risk experiments in `spikes/`.
 - **v0.1:** PostgreSQL + SQLite, multi-hop SSH with agent, editor, read-only grid,
   explorer, history, read-only `spelunk mcp`.
-- **v0.2:** MySQL/MariaDB (driver done; MCP read-only mode pending), result editing,
+- **v0.2:** MySQL/MariaDB (in the MCP since ADR-020), result editing,
   export, automatic reconnection, 2FA and certificates, `~/.ssh/config` import.
 - **v0.3:** layered config and secret managers, the app serves MCP with confirmed writes,
   signing and auto-update.

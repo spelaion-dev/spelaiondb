@@ -37,7 +37,8 @@ own.
 - **Audit:** every write, executed, refused or failed, goes to the append-only audit log with
   its statement and rows affected.
 - **Engines:** those the MCP already serves (PostgreSQL and SQLite, local or on a server).
-  The others join the MCP with their own read barriers, and their writes with them.
+  The others join the MCP with their own read barriers, and their writes with them
+  (ADR-020, which also turns the kinds of write into an allow list).
 
 ## Alternatives
 - **Confirm each write in the app:** the safest, but `spelunk mcp` runs without the app

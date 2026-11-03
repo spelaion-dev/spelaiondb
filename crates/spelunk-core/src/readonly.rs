@@ -1,9 +1,18 @@
-//! Read-only execution with limits (ADR-008, layers 3 to 5). Used by the MCP.
+//! Read-only execution with limits (ADR-008, layers 3 to 5; ADR-020 for the other engines).
+//! Used by the MCP.
 //!
 //! Layers, from the outside in:
-//! 1. Classifier ([`classify_read_only`]): only recognised reads.
-//! 2. Read-only transaction (`BEGIN READ ONLY` … always `ROLLBACK`) in PostgreSQL;
-//!    in SQLite, a connection opened read-only plus `PRAGMA query_only`.
+//! 1. Classifier ([`classify_read_only`]): only recognised reads, nothing that reaches
+//!    outside the database.
+//! 2. The engine's own barrier, always ending in `ROLLBACK`:
+//!    - PostgreSQL: `BEGIN READ ONLY` with `statement_timeout`;
+//!    - SQLite: a connection opened read-only plus `PRAGMA query_only`;
+//!    - MySQL and MariaDB: `START TRANSACTION READ ONLY`;
+//!    - SQL Server: a transaction that is always rolled back (it has no read-only one);
+//!      `EXPLAIN` becomes `SET SHOWPLAN_XML ON`, under which nothing runs;
+//!    - DuckDB: `enable_external_access = false` (no files, network nor extensions; it
+//!      cannot be turned back on) and `BEGIN TRANSACTION READ ONLY`, on a database opened
+//!      read-only unless the connection lets agents write.
 //! 3. Limits: maximum time and maximum number of rows.
 //!
 //! None of them replaces a read-only database user, which is the only real guarantee
@@ -55,6 +64,10 @@ pub enum ReadError {
     Unsupported(String),
 }
 
+/// DuckDB without files, network nor extensions, for agents. DuckDB refuses to turn it back on
+/// while the database is open, so a statement cannot undo it.
+pub(crate) const DUCKDB_NO_EXTERNAL_ACCESS: &str = "set enable_external_access = false";
+
 /// Name of the server-side cursor used in PostgreSQL.
 const CURSOR: &str = "spelunk_readonly";
 
@@ -81,6 +94,21 @@ impl Session {
                     self.drain("pragma query_only = on").await?;
                     self.collect(sql, limits.max_rows).await
                 }
+                "mysql" => {
+                    self.rolled_back("start transaction read only", sql, limits)
+                        .await
+                }
+                "sqlserver" => match kind {
+                    ReadKind::Explain => self.showplan(sql, limits).await,
+                    ReadKind::Query | ReadKind::Show => {
+                        self.rolled_back("begin transaction", sql, limits).await
+                    }
+                },
+                "duckdb" => {
+                    self.drain(DUCKDB_NO_EXTERNAL_ACCESS).await?;
+                    self.rolled_back("begin transaction read only", sql, limits)
+                        .await
+                }
                 other => Err(ReadError::Unsupported(other.into())),
             }
         };
@@ -96,7 +124,7 @@ impl Session {
             Ok(result) => result?,
             Err(_) => {
                 let _ = self.cancel().await;
-                if engine == "postgres" {
+                if engine != "sqlite" {
                     self.rollback_until_clean().await;
                 }
                 return Err(ReadError::Timeout(limits.timeout));
@@ -144,11 +172,54 @@ impl Session {
         Ok(result)
     }
 
+    /// Runs `sql` inside the transaction `begin` opens, and always rolls it back.
+    async fn rolled_back(
+        &self,
+        begin: &str,
+        sql: &str,
+        limits: &ReadLimits,
+    ) -> Result<(Vec<ColumnMeta>, Vec<Vec<Value>>, bool), ReadError> {
+        self.drain(begin).await?;
+        let result = self.collect(sql, limits.max_rows).await;
+        let rollback = self.drain(self.rollback_statement()).await;
+        let result = result?;
+        rollback?;
+        Ok(result)
+    }
+
+    /// SQL Server's plan: under `SHOWPLAN_XML` statements are compiled, never run. Each SET
+    /// goes in a batch of its own, as SQL Server requires.
+    async fn showplan(
+        &self,
+        sql: &str,
+        limits: &ReadLimits,
+    ) -> Result<(Vec<ColumnMeta>, Vec<Vec<Value>>, bool), ReadError> {
+        let query = sql
+            .get(..7)
+            .filter(|word| word.eq_ignore_ascii_case("explain"))
+            .map(|_| sql[7..].trim())
+            .ok_or_else(|| ReadError::Rejected("EXPLAIN must come first".into()))?;
+        self.drain("set showplan_xml on").await?;
+        let result = self.collect(query, limits.max_rows).await;
+        let off = self.drain("set showplan_xml off").await;
+        let result = result?;
+        off?;
+        Ok(result)
+    }
+
+    /// The ROLLBACK that is harmless outside a transaction, in this engine.
+    pub(crate) fn rollback_statement(&self) -> &'static str {
+        match self.dialect().name() {
+            "sqlserver" => "if @@trancount > 0 rollback",
+            _ => "rollback",
+        }
+    }
+
     /// After a timeout cancellation: ROLLBACK until it works. Cancellation is asynchronous and
     /// may hit the ROLLBACK itself; a ROLLBACK outside a transaction is harmless.
     pub(crate) async fn rollback_until_clean(&self) {
         for _ in 0..5 {
-            if self.drain("rollback").await.is_ok() {
+            if self.drain(self.rollback_statement()).await.is_ok() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

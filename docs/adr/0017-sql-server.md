@@ -40,7 +40,7 @@ without quoting, and a batch can return several result sets.
   its four decimals), GUIDs in upper case, `xml` as text, `sql_variant` as its value's text.
   A nullable `smallmoney`/`smalldatetime` arrives as the same TDS type as `money`/`datetime`,
   so its native type shows as that.
-- **Not in `spelunk mcp` yet**, like MySQL: its read-only mode would need T-SQL's own
+- **Not in `spelunk mcp` yet** (superseded by ADR-020), like MySQL: its read-only mode would need T-SQL's own
   barriers (read-only transactions do not exist; `SET TRANSACTION ISOLATION LEVEL` is not
   enough).
 
