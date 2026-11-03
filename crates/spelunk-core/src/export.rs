@@ -389,6 +389,7 @@ pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
             let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
             match dialect {
                 "postgres" => format!("'\\x{hex}'"),
+                "duckdb" => format!("from_hex('{hex}')"),
                 _ => format!("X'{hex}'"),
             }
         }

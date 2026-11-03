@@ -160,6 +160,40 @@ async fn sqlite_from_config() {
 }
 
 #[tokio::test]
+async fn duckdb_from_config() {
+    let ws = Workspace::new("duckdb");
+    std::fs::create_dir_all(ws.base.join("repo/data")).unwrap();
+    spelunk_core::create_file_database(
+        spelunk_config::Engine::Duckdb,
+        &ws.base.join("repo/data/app.duckdb"),
+    )
+    .unwrap();
+    ws.write(
+        ".spelunk/connections/local.toml",
+        "schema_version = 1\nengine = \"duckdb\"\ndatabase = \"data/app.duckdb\"\n",
+    );
+    let conn = ws
+        .open("local", None, Arc::new(NonInteractive))
+        .await
+        .unwrap();
+    assert!(conn.tunnel_state().is_none());
+    assert_eq!(
+        first_value(
+            &conn,
+            "create table t (a int); insert into t values (41), (1); select sum(a) from t"
+        )
+        .await,
+        "42"
+    );
+    // A second connection to the same file (another tab) shares it.
+    let other = ws
+        .open("local", None, Arc::new(NonInteractive))
+        .await
+        .unwrap();
+    assert_eq!(first_value(&other, "select count(*) from t").await, "2");
+}
+
+#[tokio::test]
 async fn postgres_direct_with_a_command_secret() {
     let Ok(addr) = std::env::var("SPELUNK_TEST_PG") else {
         eprintln!("SPELUNK_TEST_PG not set: test skipped");

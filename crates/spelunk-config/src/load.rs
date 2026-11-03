@@ -267,7 +267,7 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
-        Engine::Sqlite => [("database", file.database.is_none())]
+        Engine::Sqlite | Engine::Duckdb => [("database", file.database.is_none())]
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
             .collect(),
@@ -282,10 +282,17 @@ pub(crate) fn validate_connection(
             ),
         ));
     }
-    if file.engine == Engine::Sqlite && (file.tunnel.is_some() || file.kubernetes.is_some()) {
+    if file.engine.is_file() && (file.tunnel.is_some() || file.kubernetes.is_some()) {
         return Err(ConfigError::new(
             path,
-            "SQLite is a local file: it does not support a tunnel",
+            format!(
+                "{} is a local file: it does not support a tunnel",
+                if file.engine == Engine::Sqlite {
+                    "SQLite"
+                } else {
+                    "DuckDB"
+                }
+            ),
         ));
     }
     if let Some(kubernetes) = &file.kubernetes {

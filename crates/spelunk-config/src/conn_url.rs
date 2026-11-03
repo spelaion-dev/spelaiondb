@@ -23,7 +23,9 @@ pub struct UrlConnection {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum UrlError {
-    #[error("not a connection URL this app knows (postgres://, mysql://, mariadb://, sqlite:)")]
+    #[error(
+        "not a connection URL this app knows (postgres://, mysql://, mariadb://, sqlite:, duckdb:)"
+    )]
     UnknownScheme,
     #[error("the URL could not be read: {0}")]
     Invalid(String),
@@ -48,7 +50,8 @@ pub fn parse_connection_url(text: &str) -> Result<UrlConnection, UrlError> {
         "postgres" | "postgresql" => Engine::Postgres,
         "mysql" => Engine::Mysql,
         "mariadb" => Engine::Mariadb,
-        "sqlite" | "sqlite3" => return Ok(sqlite(text)),
+        "sqlite" | "sqlite3" => return Ok(file(Engine::Sqlite, text)),
+        "duckdb" => return Ok(file(Engine::Duckdb, text)),
         _ => return Err(UrlError::UnknownScheme),
     };
     let url = Url::parse(text).map_err(|e| UrlError::Invalid(e.to_string()))?;
@@ -84,9 +87,9 @@ pub fn parse_connection_url(text: &str) -> Result<UrlConnection, UrlError> {
     })
 }
 
-fn sqlite(text: &str) -> UrlConnection {
+fn file(engine: Engine, text: &str) -> UrlConnection {
     let rest = text.split_once(':').map_or("", |(_, rest)| rest);
-    // `sqlite:///C:/data/x.db`, `sqlite:///home/me/x.db` and `sqlite:x.db`.
+    // `sqlite:///C:/data/x.db`, `sqlite:///home/me/x.db`, `sqlite:x.db` (and `duckdb:` alike).
     let path = match rest.strip_prefix("//") {
         Some(after) => {
             let windows = after.len() > 3 && after.as_bytes()[2] == b':' && after.starts_with('/');
@@ -95,7 +98,7 @@ fn sqlite(text: &str) -> UrlConnection {
         None => rest,
     };
     UrlConnection {
-        engine: Engine::Sqlite,
+        engine,
         host: String::new(),
         port: None,
         database: decode(path.split('?').next().unwrap_or("")),
@@ -198,6 +201,12 @@ mod tests {
         assert_eq!(path("sqlite:shop%20copy.db"), "shop copy.db");
         // Stray `%` and non-ASCII text survive decoding.
         assert_eq!(path("sqlite:100%é%2.db"), "100%é%2.db");
+        let duck = parse_connection_url("jdbc:duckdb:///C:/data/sales.duckdb").unwrap();
+        assert_eq!(
+            (duck.engine, duck.database.as_str()),
+            (Engine::Duckdb, "C:/data/sales.duckdb")
+        );
+        assert_eq!(path("duckdb:sales.duckdb"), "sales.duckdb");
     }
 
     #[test]

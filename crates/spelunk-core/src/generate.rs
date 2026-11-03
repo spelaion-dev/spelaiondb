@@ -109,9 +109,9 @@ pub(crate) async fn scalar_count(session: &Session, sql: &str) -> Result<i64, St
     }
 }
 
-/// `schema.table`, leaving out SQLite's implicit `main`.
+/// `schema.table`, leaving out the implicit `main` of SQLite and DuckDB.
 pub(crate) fn qualified(dialect: &dyn Dialect, schema: &str, name: &str) -> String {
-    if schema.is_empty() || (dialect.name() == "sqlite" && schema == "main") {
+    if schema.is_empty() || (matches!(dialect.name(), "sqlite" | "duckdb") && schema == "main") {
         dialect.quote_identifier(name)
     } else {
         format!(

@@ -7,8 +7,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 ## Before touching anything
 - Read `docs/architecture.md` and the ADRs in `docs/adr/`. ADRs rule: if a change
   contradicts them, do not make it; propose a new ADR that supersedes the old one.
-- Current state: **v0.1 under construction**. Done: PostgreSQL (with TLS), MySQL/MariaDB
-  and SQLite drivers, configuration, SSH tunnels, core, local store, read-only `spelunk mcp` and the
+- Current state: **v0.2**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQLite and DuckDB
+  drivers, configuration, SSH tunnels, core, local store, read-only `spelunk mcp` and the
   `spelunk` binary, and the first version of the desktop app (`apps/desktop`).
   `spikes/` is throwaway phase 0 code: it is never imported from `crates/`.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and
@@ -25,6 +25,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   text, on both servers.
 - `crates/spelunk-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
+- `crates/spelunk-driver-duckdb`: `duckdb` (bundled) in one thread per connection, one open
+  per file shared by clones (ADR-016). Arrow from DuckDB converted in `exec.rs`; nested types
+  written as DuckDB's text in `format.rs`. Its type zoo (`tests/duckdb.rs`) compares every
+  type with `CAST(… AS VARCHAR)`; it needs nothing external.
 - `crates/spelunk-config`: TOML files from `.spelunk/` and the personal directory,
   variables, secret references and repository trust (ADR-009). If you change `model.rs`,
   regenerate the schema: `SPELUNK_UPDATE_SCHEMA=1 cargo test -p spelunk-config`.

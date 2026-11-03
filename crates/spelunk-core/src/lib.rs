@@ -38,8 +38,23 @@ pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{CoreEvent, Session, StatementError};
 pub use sort::{SortKey, ViewError};
-pub use spelunk_driver_sqlite::create_database as create_sqlite_database;
 pub use spelunk_store::{HistoryEntry, Snippet};
 pub use table_data::{
     MAX_PAGE_ROWS, PageError, TablePage, count_table_rows, table_count_sql, table_page_sql,
 };
+
+/// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file
+/// is never touched.
+pub fn create_file_database(
+    engine: spelunk_config::Engine,
+    path: &std::path::Path,
+) -> Result<(), spelunk_driver_api::DriverError> {
+    use spelunk_config::Engine;
+    match engine {
+        Engine::Sqlite => spelunk_driver_sqlite::create_database(path),
+        Engine::Duckdb => spelunk_driver_duckdb::create_database(path),
+        Engine::Postgres | Engine::Mysql | Engine::Mariadb => Err(
+            spelunk_driver_api::DriverError::Other(format!("{} is not a file", engine.as_str())),
+        ),
+    }
+}

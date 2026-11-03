@@ -32,6 +32,8 @@ function startApp() {
       // Its own WebView2 profile: an installed SpelunkDB that is open (same app identifier)
       // would otherwise share it and the second webview fails to start.
       WEBVIEW2_USER_DATA_FOLDER: join(userDir, "webview2"),
+      // kubectl only ever sees the test cluster (or nothing), never the user's clusters.
+      KUBECONFIG: process.env.SPELUNK_TEST_K8S ?? join(userDir, "no-kubeconfig"),
     },
     stdio: "inherit",
   });
@@ -904,7 +906,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // First the password (the keychain does not have it yet, so it offers to remember it); then,
   // when the tunnel opens, the fingerprint of each bastion.
   await page.getByRole("dialog").getByText("Password for Postgres behind bastions").waitFor();
-  await page.getByText("Remember in the system keychain").waitFor();
+  // Offered, and left unticked: the smoke test never writes the user's real keychain.
+  await page.getByRole("checkbox", { name: "Remember in the system keychain" }).uncheck();
   await page.getByLabel("Password", { exact: true }).fill("spelunk");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   for (let hop = 1; hop <= 2; hop++) {
@@ -983,6 +986,38 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.evaluate(() => delete window.__spelunkSavePath);
   await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
   await wizard.waitFor({ state: "detached" });
+
+  step("DuckDB: a new database file, nested types as DuckDB writes them, two tabs on one file");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "DuckDB" }).click();
+  const duckDb = join(userDir, "analytics.duckdb");
+  await page.evaluate((target) => (window.__spelunkSavePath = target), duckDb);
+  await wizard.getByRole("button", { name: "New database…" }).click();
+  const duckFile = wizard.getByLabel("File", { exact: true });
+  for (let i = 0; i < 40 && (await duckFile.inputValue()) !== duckDb; i++) await page.waitForTimeout(100);
+  assert.equal(await duckFile.inputValue(), duckDb);
+  assert.equal(await wizard.getByLabel("Name", { exact: true }).inputValue(), "analytics");
+  await page.evaluate(() => delete window.__spelunkSavePath);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · v\d+\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "analytics" }).waitFor();
+  assert.match(readFileSync(join(userDir, "connections", "analytics.toml"), "utf8"), /engine = "duckdb"/);
+  panel = await newQuery(
+    "analytics",
+    "create table sales as select range as id, [range, range * 2] as pair, {'city': 'Madrid'} as place from range(3);\nselect * from sales order by id;",
+  );
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+  await shot("12a3-duckdb");
+  // A second tab on the same file (DuckDB opens a file once per process: they share it).
+  const second = await newQuery("analytics", "select count(*) as n from sales;");
+  await run(second);
+  await second.locator(".statusline", { hasText: "1 row" }).waitFor();
 
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard");

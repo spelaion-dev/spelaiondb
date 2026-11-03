@@ -83,7 +83,7 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
             Network,
             Some(26257),
         ),
-        planned("duckdb", "DuckDB", Analytical, File, None),
+        supported(Engine::Duckdb, "DuckDB", Analytical, File),
         planned("clickhouse", "ClickHouse", Analytical, Network, Some(8123)),
         planned("snowflake", "Snowflake", Analytical, Network, None),
         planned("bigquery", "BigQuery", Analytical, Network, None),
@@ -110,7 +110,7 @@ mod tests {
             if let Some(engine) = info.engine {
                 assert!(engines.get(engine).is_some(), "{} has no driver", info.id);
                 assert_eq!(info.default_port, engine.default_port());
-                assert_eq!(info.access == EngineAccess::File, engine == Engine::Sqlite);
+                assert_eq!(info.access == EngineAccess::File, engine.is_file());
             }
         }
         // Every engine of the configuration format appears exactly once.

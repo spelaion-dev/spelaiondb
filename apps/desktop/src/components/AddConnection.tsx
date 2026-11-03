@@ -28,6 +28,12 @@ const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** File types of the embedded engines, for the open and save dialogs. */
+const DATABASE_FILES: Record<string, { name: string; extensions: string[]; fallback: string }> = {
+  sqlite: { name: "SQLite", extensions: ["sqlite", "db", "sqlite3", "db3"], fallback: "database.sqlite" },
+  duckdb: { name: "DuckDB", extensions: ["duckdb", "db", "ddb"], fallback: "database.duckdb" },
+};
+
 export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const { t } = useTranslation("connections");
   const close = () => useApp.getState().setConnectionDialog(null);
@@ -348,22 +354,27 @@ function ConnectionForm(props: {
       directory: false,
       filters:
         field === "database"
-          ? [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3", "db3"] }, { name: t("allFiles"), extensions: ["*"] }]
+          ? [...databaseFilters(), { name: t("allFiles"), extensions: ["*"] }]
           : [{ name: t("certificates"), extensions: ["pem", "crt", "cer"] }, { name: t("allFiles"), extensions: ["*"] }],
     });
     if (typeof path === "string") update({ [field]: path });
   }
 
-  /** A new, empty SQLite file created by the core (never over an existing one). */
+  function databaseFilters() {
+    const files = DATABASE_FILES[engine.id];
+    return files ? [{ name: files.name, extensions: files.extensions }] : [];
+  }
+
+  /** A new, empty database file created by the core (never over an existing one). */
   async function createDatabase() {
     setFileError(null);
     const path = await chooseSavePath({
-      defaultPath: "database.sqlite",
-      filters: [{ name: "SQLite", extensions: ["sqlite", "db", "sqlite3", "db3"] }],
+      defaultPath: DATABASE_FILES[engine.id]?.fallback ?? "database.db",
+      filters: databaseFilters(),
     });
     if (!path) return;
     try {
-      await call(commands.createSqliteDatabase(path));
+      await call(commands.createDatabase(engine.id, path));
       const stem = (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]*$/, "");
       update(draft.name.trim() ? { database: path } : { database: path, name: stem });
     } catch (e) {

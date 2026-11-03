@@ -5,7 +5,8 @@
         "postgres",
         "sqlite",
         "mysql",
-        "mariadb"
+        "mariadb",
+        "duckdb"
       ],
       "type": "string"
     },
@@ -132,7 +133,7 @@
   "description": "A connection: `.spelunk/connections/<folders>/<id>.toml`.",
   "properties": {
     "database": {
-      "description": "Database; for SQLite, the file path (relative to the repository root).",
+      "description": "Database; for SQLite and DuckDB, the file path (relative to the repository root).",
       "type": [
         "string",
         "null"

@@ -49,7 +49,7 @@ pub struct ConnectionDraft {
     pub env: String,
     pub host: String,
     pub port: Option<u16>,
-    /// Database name; for SQLite, the file path.
+    /// Database name; for SQLite and DuckDB, the file path.
     pub database: String,
     pub user: String,
     pub password: PasswordChoice,
@@ -198,7 +198,7 @@ impl ConnectionDraft {
         if non_empty(&self.name).is_none() {
             return Err(ConfigError::new(path, "the name cannot be empty"));
         }
-        let network = self.engine != Engine::Sqlite;
+        let network = !self.engine.is_file();
         let password = match &self.password {
             PasswordChoice::None => None,
             PasswordChoice::Keychain => Some("keychain".to_string()),
@@ -259,7 +259,7 @@ impl ConnectionDraft {
                 .port
                 .filter(|p| network && Some(*p) != self.engine.default_port()),
             database: non_empty(&self.database).map(|d| match self.engine {
-                Engine::Sqlite => portable_path(&d, root),
+                Engine::Sqlite | Engine::Duckdb => portable_path(&d, root),
                 Engine::Postgres | Engine::Mysql | Engine::Mariadb => d,
             }),
             user: non_empty(&self.user).filter(|_| network),
@@ -309,7 +309,7 @@ pub fn add_connection(
     let dir = connections_dir(config, draft.source)?;
     let path = create_connection(&dir, &entry.id.path, &entry.file)?;
     if draft.password == PasswordChoice::Keychain
-        && draft.engine != Engine::Sqlite
+        && !draft.engine.is_file()
         && let Some(secret) = password.filter(|s| !s.expose().is_empty())
     {
         let account = connection_account(config, &entry.id);

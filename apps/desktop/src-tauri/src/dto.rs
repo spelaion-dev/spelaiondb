@@ -488,7 +488,7 @@ pub struct ConnectionDraftItem {
     pub personal: bool,
     pub folder: String,
     pub name: String,
-    /// An available engine id from the catalog (`postgres`, `sqlite`).
+    /// An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…).
     pub engine: String,
     pub env: String,
     pub host: String,
@@ -809,11 +809,11 @@ pub struct DbeaverItem {
     pub id: String,
     pub name: String,
     pub folder: String,
-    /// `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it.
+    /// `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it.
     pub engine: Option<String>,
     /// Why it cannot be imported, if it cannot.
     pub unsupported: Option<String>,
-    /// `host:port/database`, or the file for SQLite.
+    /// `host:port/database`, or the file for SQLite and DuckDB.
     pub target: String,
     pub user: String,
     pub env: String,
@@ -824,14 +824,14 @@ pub struct DbeaverItem {
 
 impl From<&spelunk_config::DbeaverConnection> for DbeaverItem {
     fn from(c: &spelunk_config::DbeaverConnection) -> Self {
-        let sqlite = c.engine == Ok(spelunk_config::Engine::Sqlite);
+        let file = c.engine.as_ref().is_ok_and(|e| e.is_file());
         Self {
             id: c.id.clone(),
             name: c.name.clone(),
             folder: c.folder.clone(),
             engine: c.engine.as_ref().ok().map(|e| e.as_str().to_string()),
             unsupported: c.engine.as_ref().err().cloned(),
-            target: if sqlite {
+            target: if file {
                 c.database.clone()
             } else {
                 let port = c.port.map(|p| format!(":{p}")).unwrap_or_default();
@@ -884,6 +884,7 @@ pub fn engine_named(name: &str) -> Result<spelunk_config::Engine, String> {
         "sqlite" => Engine::Sqlite,
         "mysql" => Engine::Mysql,
         "mariadb" => Engine::Mariadb,
+        "duckdb" => Engine::Duckdb,
         other => return Err(format!("unsupported engine: {other}")),
     })
 }

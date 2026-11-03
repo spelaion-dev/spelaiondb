@@ -1121,13 +1121,14 @@ async fn import_one(
     Err("every name tried is taken".into())
 }
 
-/// Creates an empty SQLite database file for a new connection. The core never overwrites an
-/// existing file.
+/// Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
+/// overwrites an existing file.
 #[tauri::command]
 #[specta::specta]
-async fn create_sqlite_database(path: String) -> CmdResult<()> {
+async fn create_database(engine: String, path: String) -> CmdResult<()> {
+    let engine = engine_named(&engine)?;
     tokio::task::spawn_blocking(move || {
-        spelunk_core::create_sqlite_database(Path::new(&path)).map_err(|e| e.to_string())
+        spelunk_core::create_file_database(engine, Path::new(&path)).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1630,7 +1631,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_snippets,
             delete_snippet,
             statement_at,
-            create_sqlite_database,
+            create_database,
             script_risks,
             script_params,
             bind_params,

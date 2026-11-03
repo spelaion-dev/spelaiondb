@@ -76,7 +76,13 @@ function flash(view: EditorView, from: number, to: number) {
   }, 1000);
 }
 
-const FORMAT_LANGUAGES: Record<string, SqlLanguage> = { postgres: "postgresql", sqlite: "sqlite", mysql: "mysql", mariadb: "mariadb" };
+const FORMAT_LANGUAGES: Record<string, SqlLanguage> = {
+  postgres: "postgresql",
+  sqlite: "sqlite",
+  mysql: "mysql",
+  mariadb: "mariadb",
+  duckdb: "duckdb",
+};
 
 /** Formats the selection, or everything, with the engine's dialect, in one undo step. The
  *  formatter is loaded on first use (it is large); `null` when it worked. */
@@ -112,6 +118,7 @@ async function formatIn(view: EditorView, engine: string | null): Promise<string
 }
 
 function language(engine: string | null, tables: Record<string, string[]>) {
+  // DuckDB's SQL comes from PostgreSQL's: the default dialect fits it.
   const dialects: Record<string, SQLDialect> = { sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL };
   return sql({ dialect: (engine && dialects[engine]) || PostgreSQL, schema: tables, upperCaseKeywords: false });
 }

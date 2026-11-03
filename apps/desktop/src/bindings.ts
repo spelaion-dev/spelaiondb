@@ -121,10 +121,10 @@ export const commands = {
 	 */
 	statementAt: (engine: string, sql: string, offset: number) => typedError<TextSpan | null, string>(__TAURI_INVOKE("statement_at", { engine, sql, offset })),
 	/**
-	 *  Creates an empty SQLite database file for a new connection. The core never overwrites an
-	 *  existing file.
+	 *  Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
+	 *  overwrites an existing file.
 	 */
-	createSqliteDatabase: (path: string) => typedError<null, string>(__TAURI_INVOKE("create_sqlite_database", { path })),
+	createDatabase: (engine: string, path: string) => typedError<null, string>(__TAURI_INVOKE("create_database", { engine, path })),
 	/**
 	 *  Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
 	 *  without WHERE, DROP, TRUNCATE, or any write on a production connection.
@@ -262,7 +262,7 @@ export type ConnectionDraftItem_Deserialize = {
 	personal: boolean,
 	folder: string,
 	name: string,
-	/**  An available engine id from the catalog (`postgres`, `sqlite`). */
+	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	env: string,
 	host: string,
@@ -289,7 +289,7 @@ export type ConnectionDraftItem_Serialize = {
 	personal: boolean,
 	folder: string,
 	name: string,
-	/**  An available engine id from the catalog (`postgres`, `sqlite`). */
+	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	env: string,
 	host: string,
@@ -350,11 +350,11 @@ export type DbeaverItem_Deserialize = {
 	id: string,
 	name: string,
 	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it. */
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it. */
 	engine?: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported?: string | null,
-	/**  `host:port/database`, or the file for SQLite. */
+	/**  `host:port/database`, or the file for SQLite and DuckDB. */
 	target: string,
 	user: string,
 	env: string,
@@ -371,11 +371,11 @@ export type DbeaverItem_Serialize = {
 	id: string,
 	name: string,
 	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it. */
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it. */
 	engine: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported: string | null,
-	/**  `host:port/database`, or the file for SQLite. */
+	/**  `host:port/database`, or the file for SQLite and DuckDB. */
 	target: string,
 	user: string,
 	env: string,

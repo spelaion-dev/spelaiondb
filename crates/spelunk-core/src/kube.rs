@@ -19,6 +19,8 @@ use tokio::task::JoinHandle;
 
 /// How long `kubectl port-forward` may take to report its local port.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a listing `kubectl` waits for the cluster (`--request-timeout`).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, thiserror::Error)]
 pub enum KubeError {
@@ -26,7 +28,7 @@ pub enum KubeError {
     Spawn { kubectl: String, message: String },
     #[error("kubectl: {0}")]
     Kubectl(String),
-    #[error("kubectl did not start forwarding within {} seconds", START_TIMEOUT.as_secs())]
+    #[error("kubectl did not answer within {} seconds", START_TIMEOUT.as_secs())]
     Timeout,
     #[error("the Kubernetes tunnel is down: {0}")]
     Down(String),
@@ -211,9 +213,16 @@ fn kubectl(spec: &ResolvedKubernetes) -> Command {
 
 /// Runs a short `kubectl` command and returns its output lines, or its error.
 async fn run(spec: &ResolvedKubernetes, args: &[&str]) -> Result<Vec<String>, KubeError> {
+    // kubectl gives up on its own before our timer (an unreachable cluster says so in its
+    // words), and a kubectl left behind by the timer is killed rather than orphaned.
     let output = tokio::time::timeout(
         START_TIMEOUT,
-        kubectl(spec).args(args).stdin(Stdio::null()).output(),
+        kubectl(spec)
+            .arg(format!("--request-timeout={}s", REQUEST_TIMEOUT.as_secs()))
+            .args(args)
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
     )
     .await
     .map_err(|_| KubeError::Timeout)?

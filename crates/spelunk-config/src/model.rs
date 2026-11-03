@@ -27,7 +27,7 @@ pub struct ConnectionFile {
     pub host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
-    /// Database; for SQLite, the file path (relative to the repository root).
+    /// Database; for SQLite and DuckDB, the file path (relative to the repository root).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,6 +62,7 @@ pub enum Engine {
     Sqlite,
     Mysql,
     Mariadb,
+    Duckdb,
 }
 
 impl Engine {
@@ -71,13 +72,22 @@ impl Engine {
             Engine::Sqlite => "sqlite",
             Engine::Mysql => "mysql",
             Engine::Mariadb => "mariadb",
+            Engine::Duckdb => "duckdb",
+        }
+    }
+
+    /// Embedded engines: `database` is a file, and there is no server, user or tunnel.
+    pub fn is_file(self) -> bool {
+        match self {
+            Engine::Sqlite | Engine::Duckdb => true,
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb => false,
         }
     }
 
     pub fn default_port(self) -> Option<u16> {
         match self {
             Engine::Postgres => Some(5432),
-            Engine::Sqlite => None,
+            Engine::Sqlite | Engine::Duckdb => None,
             Engine::Mysql | Engine::Mariadb => Some(3306),
         }
     }

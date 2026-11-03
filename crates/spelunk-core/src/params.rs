@@ -77,7 +77,8 @@ pub(crate) fn is_number(text: &str) -> bool {
 fn placeholders<'a>(dialect: &str, script: &'a str) -> Vec<(usize, usize, &'a str)> {
     let b = script.as_bytes();
     let mysql = dialect == "mysql" || dialect == "mariadb";
-    let postgres = dialect == "postgres";
+    // DuckDB's lexer comes from PostgreSQL's: `$tag$` bodies too.
+    let postgres = dialect == "postgres" || dialect == "duckdb";
     let mut found = Vec::new();
     let mut i = 0;
     while i < b.len() {

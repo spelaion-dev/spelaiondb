@@ -174,7 +174,7 @@ impl<'a> Resolver<'a> {
             user: text(&file.user)?.unwrap_or_default(),
             password: None,
             database: match file.engine {
-                Engine::Sqlite if database != ":memory:" => {
+                engine if engine.is_file() && database != ":memory:" => {
                     resolve_path(&database, &base).display().to_string()
                 }
                 _ => database,
