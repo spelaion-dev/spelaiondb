@@ -103,6 +103,8 @@ export function ResultGrid({
   const dragging = useRef(false);
   const [viewer, setViewer] = useState(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
+  /** Ctrl+Shift+J: the column picker's search text (`null` when closed). */
+  const [jump, setJump] = useState<string | null>(null);
 
   const redraw = useCallback(() => {
     if (frame.current !== null) return;
@@ -424,6 +426,16 @@ export function ResultGrid({
     else sortBy(undefined);
   }
 
+  /** Moves the active cell to `col` in the same row (the first row if none) and shows it. */
+  function jumpTo(col: number) {
+    setJump(null);
+    if (result.rows === 0) return;
+    const cell = { row: selection?.focus.row ?? 0, col };
+    setSelection({ anchor: cell, focus: cell });
+    scrollIntoView(cell);
+    scrollerRef.current?.focus();
+  }
+
   function scrollIntoView(cell: Cell) {
     const scroller = scrollerRef.current;
     if (!scroller) return;
@@ -504,6 +516,11 @@ export function ResultGrid({
     if (e.key === "Enter" && selection) {
       e.preventDefault();
       setViewer(true);
+      return;
+    }
+    if (mod && e.shiftKey && e.key.toLowerCase() === "j" && widths.length > 0) {
+      e.preventDefault();
+      setJump("");
       return;
     }
     if (mod && e.key.toLowerCase() === "a" && result.rows > 0) {
@@ -663,6 +680,18 @@ export function ResultGrid({
           )}
         </div>
       )}
+      {jump !== null && (
+        <ColumnJump
+          columns={result.columns.map((c) => c.name)}
+          search={jump}
+          onSearch={setJump}
+          onPick={jumpTo}
+          onClose={() => {
+            setJump(null);
+            scrollerRef.current?.focus();
+          }}
+        />
+      )}
       {notice && (
         <div className={`grid-notice ${notice.error ? "error" : ""}`} role="status">
           {notice.text}
@@ -696,6 +725,65 @@ export function ResultGrid({
         }}
       />
     )}
+    </div>
+  );
+}
+
+/** Column picker (Ctrl+Shift+J): names containing the typed text, in order; Enter picks the
+ *  highlighted one. */
+function ColumnJump(props: {
+  columns: string[];
+  search: string;
+  onSearch(text: string): void;
+  onPick(col: number): void;
+  onClose(): void;
+}) {
+  const { t } = useTranslation("editor");
+  const [active, setActive] = useState(0);
+  const query = props.search.trim().toLowerCase();
+  const matches = props.columns.map((name, col) => ({ name, col })).filter((c) => c.name.toLowerCase().includes(query));
+  const current = Math.min(active, Math.max(0, matches.length - 1));
+  return (
+    <div className="column-jump" role="dialog" aria-label={t("results.jumpTitle")}>
+      <input
+        autoFocus
+        value={props.search}
+        placeholder={t("results.jumpPlaceholder")}
+        aria-label={t("results.jumpTitle")}
+        onChange={(e) => {
+          props.onSearch(e.target.value);
+          setActive(0);
+        }}
+        onBlur={props.onClose}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") props.onClose();
+          else if (e.key === "ArrowDown") setActive(Math.min(current + 1, matches.length - 1));
+          else if (e.key === "ArrowUp") setActive(Math.max(current - 1, 0));
+          else if (e.key === "Enter") {
+            const pick = matches[current];
+            if (pick) props.onPick(pick.col);
+          } else return;
+          e.preventDefault();
+        }}
+      />
+      <ul role="listbox">
+        {matches.slice(0, 50).map((m, i) => (
+          <li
+            key={m.col}
+            role="option"
+            aria-selected={i === current}
+            className={i === current ? "active" : ""}
+            // Before the input's blur closes the picker.
+            onMouseDown={(e) => {
+              e.preventDefault();
+              props.onPick(m.col);
+            }}
+          >
+            {m.name}
+          </li>
+        ))}
+        {matches.length === 0 && <li className="muted">{t("results.jumpNone")}</li>}
+      </ul>
     </div>
   );
 }

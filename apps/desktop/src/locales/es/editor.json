@@ -60,7 +60,10 @@
     "copyMarkdown": "Copiar como tabla Markdown",
     "copiedOneColumn_one": "Copiada {{formattedCount}} fila × 1 columna",
     "copiedOneColumn_other": "Copiadas {{formattedCount}} filas × 1 columna",
-    "copyInList": "Copiar como lista IN de SQL"
+    "copyInList": "Copiar como lista IN de SQL",
+    "jumpTitle": "Ir a la columna",
+    "jumpPlaceholder": "Nombre de columna…",
+    "jumpNone": "Ninguna columna coincide"
   },
   "messages": {
     "connectionFailed": "No se pudo conectar: {{detail}}",

@@ -341,3 +341,10 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 .row-field.active { box-shadow: inset 3px 0 0 var(--accent); }
 .row-field dt { font-weight: 600; font-size: 12.5px; }
 .row-field dd { margin: 2px 0 0; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- jump to column */
+.column-jump { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 6; width: min(320px, 90%); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); padding: 6px; }
+.column-jump input { width: 100%; box-sizing: border-box; }
+.column-jump ul { list-style: none; margin: 4px 0 0; padding: 0; max-height: 240px; overflow: auto; }
+.column-jump li { padding: 4px 8px; border-radius: 4px; cursor: pointer; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; }
+.column-jump li.active { background: var(--accent-soft); }

@@ -109,6 +109,7 @@ connections that must never change.
 | Ctrl+, | Settings |
 | Ctrl+C, Ctrl+Shift+C | Copy the grid selection (with headers) |
 | Enter, Esc | Open / close the cell viewer |
+| Ctrl+Shift+J | Jump to a column of the result by name |
 
 ## Working with results
 

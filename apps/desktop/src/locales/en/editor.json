@@ -60,7 +60,10 @@
     "copyMarkdown": "Copy as Markdown table",
     "copiedOneColumn_one": "Copied {{formattedCount}} row × 1 column",
     "copiedOneColumn_other": "Copied {{formattedCount}} rows × 1 column",
-    "copyInList": "Copy as SQL IN list"
+    "copyInList": "Copy as SQL IN list",
+    "jumpTitle": "Jump to column",
+    "jumpPlaceholder": "Column name…",
+    "jumpNone": "No column matches"
   },
   "messages": {
     "connectionFailed": "Could not connect: {{detail}}",

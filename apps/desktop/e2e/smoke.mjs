@@ -399,6 +399,20 @@ try {
   assert.ok(fitted < createdWidth && fitted > 60, `fitted width ${fitted}`);
   await sortedAs("");
 
+  step("jump to column: Ctrl+Shift+J, type, Enter");
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+  await page.keyboard.press("Control+Shift+J");
+  const jump = panel.getByRole("dialog", { name: "Jump to column" });
+  await jump.getByRole("textbox").fill("tot");
+  assert.deepEqual(await jump.getByRole("option").allInnerTexts(), ["total"]);
+  await page.keyboard.press("Enter");
+  await jump.waitFor({ state: "detached" });
+  {
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Control+Shift+c");
+    assert.equal((await copied(before + 1)).split("\n")[0], "total");
+  }
+
   step("filter: the core keeps the rows with the text, sorting and copy follow");
   const filterBox = panel.getByRole("searchbox", { name: "Filter rows" });
   await filterBox.fill("4999");
