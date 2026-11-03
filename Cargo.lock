@@ -5199,6 +5199,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "futures-util",
+ "serde_json",
  "spelunk-config",
  "spelunk-driver-api",
  "spelunk-driver-mysql",

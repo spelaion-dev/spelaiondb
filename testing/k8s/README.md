@@ -1,6 +1,6 @@
 # Kubernetes test cluster
 
-A PostgreSQL inside a local Kubernetes cluster, for the Kubernetes tunnel tests (ADR-015).
+A PostgreSQL inside a local Kubernetes cluster, for the Kubernetes connection tests (ADR-015).
 It uses [kind](https://kind.sigs.k8s.io/) (Kubernetes in Docker) with its own kubeconfig in
 this folder, so your `~/.kube/config` is not touched. `bin/` and `kubeconfig` are ignored by git.
 

@@ -38,6 +38,10 @@ pub struct ConnectionFile {
     /// Name of a tunnel in `.spelunk/tunnels/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tunnel: Option<String>,
+    /// Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):
+    /// `port` is then the resource's port and `host` is only the name TLS checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubernetes: Option<KubernetesConfig>,
     /// Open read-only (native in SQLite).
     #[serde(default, skip_serializing_if = "is_false")]
     pub read_only: bool,
@@ -146,22 +150,16 @@ pub enum WritePolicy {
     Allow,
 }
 
-/// A tunnel: `.spelunk/tunnels/<name>.toml`. SSH (`[[hops]]`) or Kubernetes
-/// (`[kubernetes]`, ADR-015), never both.
+/// An SSH tunnel: `.spelunk/tunnels/<name>.toml`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TunnelFile {
     pub schema_version: u32,
-    /// SSH hops in order; the last one is the one that reaches the database.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Hops in order; the last one is the one that reaches the database.
     pub hops: Vec<HopConfig>,
-    /// `kubectl port-forward` to a resource of a cluster; the connection's port is the
-    /// remote port.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kubernetes: Option<KubernetesConfig>,
 }
 
-/// Where a Kubernetes tunnel forwards to (ADR-015).
+/// The cluster resource a connection reaches through `kubectl port-forward` (ADR-015).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct KubernetesConfig {

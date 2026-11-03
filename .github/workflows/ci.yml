@@ -83,8 +83,8 @@ jobs:
       - run: cargo test --workspace
 
   kubernetes:
-    # Kubernetes tunnels (ADR-015) against a real cluster: kind in Docker, a PostgreSQL inside.
-    name: Kubernetes tunnels (kind)
+    # Kubernetes connections (ADR-015) against a real cluster: kind in Docker, a PostgreSQL inside.
+    name: Kubernetes (kind)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

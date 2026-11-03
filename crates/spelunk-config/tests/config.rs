@@ -498,6 +498,7 @@ fn creates_new_connection_files() {
         user: None,
         password: None,
         tunnel: None,
+        kubernetes: None,
         read_only: true,
         tls: Default::default(),
         mcp: Default::default(),
@@ -595,6 +596,7 @@ fn postgres_draft() -> ConnectionDraft {
         tls_mode: TlsModeConfig::VerifyFull,
         tls_ca: String::new(),
         tunnel: String::new(),
+        kubernetes: None,
         read_only: false,
         mcp_exposed: true,
     }
@@ -1088,118 +1090,133 @@ fn two_hop_tunnel() -> TunnelDraft {
                 PasswordChoice::Keychain,
             ),
         ],
-        kubernetes: None,
     }
 }
 
-fn kubernetes_tunnel(resource: &str) -> TunnelDraft {
-    TunnelDraft {
+fn kubernetes_connection(resource: &str) -> ConnectionDraft {
+    ConnectionDraft {
         source: Source::Workspace,
-        name: "Orders cluster".into(),
-        hops: Vec::new(),
+        folder: String::new(),
+        name: "Orders in cluster".into(),
+        engine: Engine::Postgres,
+        env: String::new(),
+        host: String::new(),
+        port: Some(5432),
+        database: "orders".into(),
+        user: "app".into(),
+        password: PasswordChoice::Prompt,
+        tls_mode: TlsModeConfig::Disable,
+        tls_ca: String::new(),
+        tunnel: String::new(),
         kubernetes: Some(KubernetesDraft {
             context: "kind-orders".into(),
-            namespace: String::new(),
+            namespace: "shop".into(),
             resource: resource.into(),
             kubeconfig: String::new(),
             kubectl: String::new(),
         }),
+        read_only: false,
+        mcp_exposed: false,
     }
 }
 
 #[test]
-fn kubernetes_tunnels_are_written_resolved_and_validated() {
-    let fx = Fixture::new("tunnel-k8s");
+fn kubernetes_connections_are_written_resolved_and_validated() {
+    let fx = Fixture::new("conn-k8s");
     let config = load(Some(&fx.repo()), &fx.user());
     let backend = FakeBackend::default();
-    let name = add_tunnel(&config, &kubernetes_tunnel("svc/orders-db"), &[], &backend).unwrap();
-    assert_eq!(name, "orders-cluster");
-    let path = fx.repo().join(".spelunk/tunnels/orders-cluster.toml");
+    let id = add_connection(
+        &config,
+        &kubernetes_connection("svc/orders-db"),
+        None,
+        &backend,
+    )
+    .unwrap();
+    let path = fx
+        .repo()
+        .join(format!(".spelunk/connections/{}.toml", id.path));
     let content = std::fs::read_to_string(&path).unwrap();
-    assert!(content.contains("[kubernetes]"), "{content}");
-    assert!(!content.contains("hops"), "{content}");
     assert!(
-        !content.contains("namespace"),
-        "defaults are left out: {content}"
+        content.contains("[kubernetes]") && content.contains("resource = \"svc/orders-db\""),
+        "{content}"
+    );
+    assert!(!content.contains("host"), "no host needed: {content}");
+    assert!(
+        !content.contains("port"),
+        "the default port is implied: {content}"
     );
 
     let config = load(Some(&fx.repo()), &fx.user());
     assert!(config.problems.is_empty(), "{:?}", config.problems);
-    let entry = config
-        .tunnel_for(Source::Workspace, "orders-cluster")
-        .unwrap();
-    let draft = TunnelDraft::from_entry(entry);
-    assert_eq!(draft.kubernetes.as_ref().unwrap().resource, "svc/orders-db");
     let resolved = Resolver::new(&config, &fx.trusted(), &backend)
-        .resolve_tunnel_draft(&draft)
+        .resolve(&id)
         .unwrap();
-    assert!(resolved.hops.is_empty());
+    assert!(resolved.tunnel.is_none());
     let k = resolved.kubernetes.unwrap();
-    assert_eq!(k.context.as_deref(), Some("kind-orders"));
     assert_eq!(
-        (k.namespace, k.kubeconfig, k.kubectl.as_str()),
-        (None, None, "kubectl")
+        (k.context.as_deref(), k.namespace.as_deref()),
+        (Some("kind-orders"), Some("shop"))
+    );
+    assert_eq!(
+        (k.resource.as_str(), k.kubectl.as_str()),
+        ("svc/orders-db", "kubectl")
+    );
+    assert_eq!(
+        (resolved.params.host.as_str(), resolved.params.port),
+        ("localhost", 5432)
     );
 
-    // Switching it to SSH rewrites the file: hops in, [kubernetes] out; and back.
-    let mut ssh = two_hop_tunnel();
-    ssh.name = "orders-cluster".into();
-    update_tunnel(
-        &config,
-        Source::Workspace,
-        "orders-cluster",
-        &ssh,
-        &[],
-        &backend,
-    )
-    .unwrap();
+    // Editing: another resource and port, then back to a plain connection.
+    let entry = config.connection(&id).unwrap();
+    let mut draft = ConnectionDraft::from_entry(entry);
+    assert_eq!(draft.kubernetes.as_ref().unwrap().resource, "svc/orders-db");
+    draft.kubernetes.as_mut().unwrap().resource = "deployment/orders".into();
+    draft.port = Some(6432);
+    spelunk_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(
-        content.contains("[[hops]]") && !content.contains("kubernetes"),
+        content.contains("deployment/orders") && content.contains("port = 6432"),
         "{content}"
     );
     let config = load(Some(&fx.repo()), &fx.user());
-    update_tunnel(
-        &config,
-        Source::Workspace,
-        "orders-cluster",
-        &kubernetes_tunnel("deployment/orders"),
-        &[],
-        &backend,
-    )
-    .unwrap();
+    let mut plain = ConnectionDraft::from_entry(config.connection(&id).unwrap());
+    plain.kubernetes = None;
+    plain.host = "db.internal".into();
+    spelunk_config::update_connection(&config, &id, &plain, None, &backend).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(
-        content.contains("deployment/orders") && !content.contains("hops"),
+        !content.contains("kubernetes") && content.contains("db.internal"),
         "{content}"
     );
 
     for bad in ["orders-db", "secret/orders", "svc/", "svc/Orders_DB"] {
+        let mut draft = kubernetes_connection(bad);
+        draft.name = format!("bad {bad}");
         assert!(
-            add_tunnel(&config, &kubernetes_tunnel(bad), &[], &backend).is_err(),
+            add_connection(&config, &draft, None, &backend).is_err(),
             "{bad}"
         );
     }
 }
 
 #[test]
-fn a_tunnel_is_ssh_or_kubernetes_not_both() {
-    let fx = Fixture::new("tunnel-k8s-both");
-    std::fs::create_dir_all(fx.repo().join(".spelunk/tunnels")).unwrap();
+fn kubernetes_and_an_ssh_tunnel_do_not_mix() {
+    let fx = Fixture::new("conn-k8s-both");
+    std::fs::create_dir_all(fx.repo().join(".spelunk/connections")).unwrap();
     std::fs::write(
-        fx.repo().join(".spelunk/tunnels/mixed.toml"),
-        "schema_version = 1\n[kubernetes]\nresource = \"svc/db\"\n[[hops]]\nhost = \"jump\"\nuser = \"ana\"\n",
+        fx.repo().join(".spelunk/connections/mixed.toml"),
+        "schema_version = 1\nengine = \"postgres\"\ndatabase = \"d\"\nuser = \"u\"\ntunnel = \"jump\"\n[kubernetes]\nresource = \"svc/db\"\n",
     )
     .unwrap();
     std::fs::write(
-        fx.repo().join(".spelunk/tunnels/empty.toml"),
-        "schema_version = 1\n",
+        fx.repo().join(".spelunk/connections/local.toml"),
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"x.db\"\n[kubernetes]\nresource = \"svc/db\"\n",
     )
     .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     let problems = format!("{:?}", config.problems);
     assert!(problems.contains("not both"), "{problems}");
-    assert!(problems.contains("[kubernetes] section"), "{problems}");
+    assert!(problems.contains("SQLite is a local file"), "{problems}");
 }
 
 #[test]

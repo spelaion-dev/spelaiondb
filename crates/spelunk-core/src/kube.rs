@@ -15,6 +15,7 @@ use spelunk_ssh::TunnelState;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot, watch};
+use tokio::task::JoinHandle;
 
 /// How long `kubectl port-forward` may take to report its local port.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -42,6 +43,8 @@ struct Forward {
     local: SocketAddr,
     /// Stops the process (dropping it also does: `kill_on_drop`).
     stop: Option<oneshot::Sender<()>>,
+    /// The task that owns the process; it ends once `kubectl` has exited.
+    task: Option<JoinHandle<()>>,
 }
 
 impl KubeTunnel {
@@ -73,12 +76,16 @@ impl KubeTunnel {
         Ok(local)
     }
 
-    /// Stops every port-forward; the tunnel is down from then on.
+    /// Stops every port-forward and waits for each `kubectl` to exit; the tunnel is down from
+    /// then on.
     pub async fn close(&self) {
-        let mut forwards = self.forwards.lock().await;
-        for (_, mut forward) in forwards.drain() {
+        let forwards: Vec<Forward> = self.forwards.lock().await.drain().map(|(_, f)| f).collect();
+        for mut forward in forwards {
             if let Some(stop) = forward.stop.take() {
                 let _ = stop.send(());
+            }
+            if let Some(task) = forward.task.take() {
+                let _ = task.await;
             }
         }
         self.state.send_replace(TunnelState::Down {
@@ -151,7 +158,7 @@ impl KubeTunnel {
         };
         let (stop, stopped) = oneshot::channel();
         let tunnel = Arc::downgrade(self);
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             // Keep reading stdout ("Handling connection…") so kubectl never blocks on it.
             let drain = async { while let Ok(Some(_)) = lines.next_line().await {} };
             tokio::select! {
@@ -176,6 +183,7 @@ impl KubeTunnel {
         Ok(Forward {
             local,
             stop: Some(stop),
+            task: Some(task),
         })
     }
 }
@@ -230,14 +238,7 @@ async fn run(spec: &ResolvedKubernetes, args: &[&str]) -> Result<Vec<String>, Ku
         .collect())
 }
 
-/// Checks that the resource exists and is reachable with these settings ("Test tunnel").
-pub async fn check(spec: &ResolvedKubernetes) -> Result<(), KubeError> {
-    run(spec, &["get", &spec.resource, "-o", "name"])
-        .await
-        .map(|_| ())
-}
-
-/// The contexts of the kubeconfig, for the tunnel form.
+/// The contexts of the kubeconfig, for the Kubernetes tab of the connection form.
 pub async fn contexts(spec: &ResolvedKubernetes) -> Result<Vec<String>, KubeError> {
     let without_context = ResolvedKubernetes {
         context: None,
@@ -247,7 +248,7 @@ pub async fn contexts(spec: &ResolvedKubernetes) -> Result<Vec<String>, KubeErro
     run(&without_context, &["config", "get-contexts", "-o", "name"]).await
 }
 
-/// The namespaces of the context, for the tunnel form.
+/// The namespaces of the context, for the Kubernetes tab of the connection form.
 pub async fn namespaces(spec: &ResolvedKubernetes) -> Result<Vec<String>, KubeError> {
     let without_namespace = ResolvedKubernetes {
         namespace: None,
@@ -262,24 +263,110 @@ pub async fn namespaces(spec: &ResolvedKubernetes) -> Result<Vec<String>, KubeEr
     )
 }
 
-/// Services, deployments and pods of the namespace as `svc/…`, `deployment/…`, `pod/…`.
-pub async fn resources(spec: &ResolvedKubernetes) -> Result<Vec<String>, KubeError> {
-    Ok(
-        run(spec, &["get", "services,deployments,pods", "-o", "name"])
-            .await?
-            .into_iter()
-            .map(|name| short_resource(&name))
-            .collect(),
-    )
+/// Names of one kind of resource (`svc`, `pod` or `deployment`) in the namespace.
+pub async fn names(spec: &ResolvedKubernetes, kind: &str) -> Result<Vec<String>, KubeError> {
+    let kind = match kind {
+        "svc" | "service" => "services",
+        "pod" => "pods",
+        "deployment" => "deployments",
+        other => {
+            return Err(KubeError::Kubectl(format!(
+                "unknown resource type {other:?}"
+            )));
+        }
+    };
+    Ok(run(spec, &["get", kind, "-o", "name"])
+        .await?
+        .into_iter()
+        .map(|name| {
+            name.split_once('/')
+                .map_or(name.clone(), |(_, n)| n.to_string())
+        })
+        .collect())
 }
 
-/// `service/x` → `svc/x`, `deployment.apps/x` → `deployment/x`, `pod/x` stays.
-fn short_resource(name: &str) -> String {
-    match name.split_once('/') {
-        Some(("service", rest)) => format!("svc/{rest}"),
-        Some((kind, rest)) => format!("{}/{rest}", kind.split('.').next().unwrap_or(kind)),
-        None => name.to_string(),
+/// A TCP port of a resource, as `kubectl port-forward` takes it: a service's own port, or a
+/// container port of a pod or deployment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourcePort {
+    pub port: u16,
+    /// The port's name in the manifest (`postgres`, `http`…), if it has one.
+    pub name: Option<String>,
+    /// The container behind it (pods and deployments).
+    pub container: Option<String>,
+}
+
+/// The ports of the resource, read from its manifest; an error if it does not exist.
+pub async fn ports(spec: &ResolvedKubernetes) -> Result<Vec<ResourcePort>, KubeError> {
+    let json = run(spec, &["get", &spec.resource, "-o", "json"])
+        .await?
+        .join("\n");
+    let manifest: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| KubeError::Kubectl(format!("unexpected output: {e}")))?;
+    Ok(ports_of(&manifest))
+}
+
+fn ports_of(manifest: &serde_json::Value) -> Vec<ResourcePort> {
+    let tcp = |p: &serde_json::Value| {
+        p.get("protocol")
+            .and_then(|v| v.as_str())
+            .is_none_or(|v| v == "TCP")
+    };
+    let name = |p: &serde_json::Value| p.get("name").and_then(|v| v.as_str()).map(String::from);
+    let number = |p: &serde_json::Value, key: &str| {
+        p.get(key)
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u16::try_from(v).ok())
+    };
+    let mut out = Vec::new();
+    match manifest.get("kind").and_then(|k| k.as_str()) {
+        Some("Service") => {
+            for p in manifest
+                .pointer("/spec/ports")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if let (true, Some(port)) = (tcp(p), number(p, "port")) {
+                    out.push(ResourcePort {
+                        port,
+                        name: name(p),
+                        container: None,
+                    });
+                }
+            }
+        }
+        kind => {
+            let containers = if kind == Some("Pod") {
+                "/spec/containers"
+            } else {
+                "/spec/template/spec/containers"
+            };
+            for c in manifest
+                .pointer(containers)
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                let container = c.get("name").and_then(|v| v.as_str()).map(String::from);
+                for p in c
+                    .get("ports")
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten()
+                {
+                    if let (true, Some(port)) = (tcp(p), number(p, "containerPort")) {
+                        out.push(ResourcePort {
+                            port,
+                            name: name(p),
+                            container: container.clone(),
+                        });
+                    }
+                }
+            }
+        }
     }
+    out
 }
 
 #[cfg(test)]
@@ -287,13 +374,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resource_names_are_shortened_like_kubectl_accepts_them() {
-        assert_eq!(short_resource("service/postgres"), "svc/postgres");
+    fn ports_come_from_services_and_containers() {
+        let service = serde_json::json!({"kind": "Service", "spec": {"ports": [
+            {"name": "pg", "port": 5432, "protocol": "TCP", "targetPort": 5432},
+            {"name": "dns", "port": 53, "protocol": "UDP"}
+        ]}});
         assert_eq!(
-            short_resource("deployment.apps/orders"),
-            "deployment/orders"
+            ports_of(&service),
+            [ResourcePort {
+                port: 5432,
+                name: Some("pg".into()),
+                container: None
+            }]
         );
-        assert_eq!(short_resource("pod/orders-7d9f"), "pod/orders-7d9f");
+        let deployment = serde_json::json!({"kind": "Deployment", "spec": {"template": {"spec": {"containers": [
+            {"name": "db", "ports": [{"containerPort": 3306}]},
+            {"name": "metrics", "ports": [{"containerPort": 9104, "name": "metrics"}]}
+        ]}}}});
+        assert_eq!(
+            ports_of(&deployment),
+            [
+                ResourcePort {
+                    port: 3306,
+                    name: None,
+                    container: Some("db".into())
+                },
+                ResourcePort {
+                    port: 9104,
+                    name: Some("metrics".into()),
+                    container: Some("metrics".into())
+                },
+            ]
+        );
+        let pod = serde_json::json!({"kind": "Pod", "spec": {"containers": [{"name": "pg", "ports": [{"containerPort": 5432}]}]}});
+        assert_eq!(ports_of(&pod)[0].port, 5432);
     }
 
     #[tokio::test]
@@ -309,6 +423,6 @@ mod tests {
         let err = tunnel.forward(5432).await.unwrap_err();
         assert!(matches!(err, KubeError::Spawn { .. }), "{err}");
         assert!(err.to_string().contains("is kubectl installed"), "{err}");
-        assert!(matches!(check(&spec).await, Err(KubeError::Spawn { .. })));
+        assert!(matches!(ports(&spec).await, Err(KubeError::Spawn { .. })));
     }
 }

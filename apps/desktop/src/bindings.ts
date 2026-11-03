@@ -141,12 +141,14 @@ export const commands = {
 	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
 	/**  The DBeaver connections under a folder (DBeaver's workspace if none), without secrets. */
 	scanDbeaver: (path: string | null) => typedError<DbeaverScan_Serialize, string>(__TAURI_INVOKE("scan_dbeaver", { path })),
-	/**  The contexts of the kubeconfig, for the Kubernetes tunnel form (ADR-015). */
+	/**  The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015). */
 	kubeContexts: (form: KubernetesDraftItem) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form })),
 	/**  The namespaces of the chosen context. */
 	kubeNamespaces: (form: KubernetesDraftItem) => typedError<string[], string>(__TAURI_INVOKE("kube_namespaces", { form })),
-	/**  Services, deployments and pods of the chosen namespace, as `svc/…`, `deployment/…`, `pod/…`. */
-	kubeResources: (form: KubernetesDraftItem) => typedError<string[], string>(__TAURI_INVOKE("kube_resources", { form })),
+	/**  Names of one kind of resource (`svc`, `pod`, `deployment`) in the chosen namespace. */
+	kubeNames: (form: KubernetesDraftItem, kind: string) => typedError<string[], string>(__TAURI_INVOKE("kube_names", { form, kind })),
+	/**  The ports of the chosen resource: a service's ports or its containers' ports. */
+	kubePorts: (form: KubernetesDraftItem) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form })),
 	/**
 	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelunkDB files. The
 	 *  folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
@@ -273,6 +275,8 @@ export type ConnectionDraftItem_Deserialize = {
 	tlsMode: TlsModeItem,
 	tlsCa: string,
 	tunnel: string,
+	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
+	kubernetes?: KubernetesDraftItem | null,
 	readOnly: boolean,
 	mcpExposed: boolean,
 };
@@ -298,6 +302,8 @@ export type ConnectionDraftItem_Serialize = {
 	tlsMode: TlsModeItem,
 	tlsCa: string,
 	tunnel: string,
+	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
+	kubernetes: KubernetesDraftItem | null,
 	readOnly: boolean,
 	mcpExposed: boolean,
 };
@@ -506,7 +512,24 @@ export type InteractionRequest = {
 	request: InteractionKind,
 };
 
-/**  The Kubernetes part of the tunnel form; empty fields mean the defaults. */
+/**  A port of a Kubernetes resource, for the port picker. */
+export type KubePortItem = KubePortItem_Serialize | KubePortItem_Deserialize;
+
+/**  A port of a Kubernetes resource, for the port picker. */
+export type KubePortItem_Deserialize = {
+	port: number,
+	name?: string | null,
+	container?: string | null,
+};
+
+/**  A port of a Kubernetes resource, for the port picker. */
+export type KubePortItem_Serialize = {
+	port: number,
+	name: string | null,
+	container: string | null,
+};
+
+/**  The Kubernetes tab of the connection form; empty fields mean the defaults. */
 export type KubernetesDraftItem = {
 	context: string,
 	namespace: string,
@@ -640,16 +663,12 @@ export type TunnelDraftItem_Deserialize = {
 	personal: boolean,
 	name: string,
 	hops: HopDraftItem_Deserialize[],
-	/**  A Kubernetes tunnel instead of SSH (ADR-015); `hops` is then ignored. */
-	kubernetes?: KubernetesDraftItem | null,
 };
 
 export type TunnelDraftItem_Serialize = {
 	personal: boolean,
 	name: string,
 	hops: HopDraftItem_Serialize[],
-	/**  A Kubernetes tunnel instead of SSH (ADR-015); `hops` is then ignored. */
-	kubernetes: KubernetesDraftItem | null,
 };
 
 /**  A tunnel that a new connection can use. */

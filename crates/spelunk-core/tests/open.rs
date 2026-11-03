@@ -341,7 +341,6 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
             hop(host, Some(port.parse().unwrap()), "spelunk"),
             hop("bastion2", None, "spelunk"),
         ],
-        kubernetes: None,
     };
     let known_hosts = KnownHosts {
         user_file: None,

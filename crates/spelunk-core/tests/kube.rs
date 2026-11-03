@@ -36,8 +36,8 @@ fn spec(kubeconfig: &std::path::Path, resource: &str) -> ResolvedKubernetes {
     }
 }
 
-/// A personal connection to the cluster's PostgreSQL through a Kubernetes tunnel, opened
-/// from its files like the app does; two of them share one `kubectl port-forward`.
+/// A personal connection to the cluster's PostgreSQL through its `[kubernetes]` section,
+/// opened from its file like the app does; two of them share one `kubectl port-forward`.
 #[tokio::test]
 async fn connections_reach_a_database_inside_the_cluster() {
     let Some(kubeconfig) = kubeconfig() else {
@@ -46,21 +46,15 @@ async fn connections_reach_a_database_inside_the_cluster() {
     let base = std::env::temp_dir().join(format!("spelunk-kube-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let user = base.join("user");
-    std::fs::create_dir_all(user.join("tunnels")).unwrap();
     std::fs::create_dir_all(user.join("connections")).unwrap();
     std::fs::write(
-        user.join("tunnels/cluster.toml"),
+        user.join("connections/in-cluster.toml"),
         format!(
-            "schema_version = 1\n[kubernetes]\nnamespace = \"spelunk-test\"\nresource = \"svc/postgres\"\nkubeconfig = {:?}\n",
+            "schema_version = 1\nname = \"In cluster\"\nengine = \"postgres\"\nport = 5432\n\
+             database = \"spelunk\"\nuser = \"spelunk\"\npassword = {{ secret = \"prompt\" }}\n\
+             [tls]\nmode = \"disable\"\n[kubernetes]\nnamespace = \"spelunk-test\"\nresource = \"svc/postgres\"\nkubeconfig = {:?}\n",
             kubeconfig.display().to_string()
         ),
-    )
-    .unwrap();
-    std::fs::write(
-        user.join("connections/in-cluster.toml"),
-        "schema_version = 1\nname = \"In cluster\"\nengine = \"postgres\"\nhost = \"postgres\"\nport = 5432\n\
-         database = \"spelunk\"\nuser = \"spelunk\"\npassword = { secret = \"prompt\" }\ntunnel = \"cluster\"\n\
-         [tls]\nmode = \"disable\"\n",
     )
     .unwrap();
     let config = load(None, &user);
@@ -124,6 +118,14 @@ async fn connections_reach_a_database_inside_the_cluster() {
         "closed with the last one"
     );
     assert_eq!(pool.active().await, 0);
+
+    // The app's exit stops what its pool started, even with connections still open.
+    let third = open().await.expect("a new port-forward");
+    let state = third.tunnel_state().expect("goes through a tunnel");
+    pool.close_all().await;
+    assert!(matches!(*state.borrow(), TunnelState::Down { .. }));
+    assert_eq!(pool.active().await, 0);
+    drop(third);
     let _ = std::fs::remove_dir_all(base);
 }
 
@@ -140,24 +142,31 @@ async fn kubectl_errors_reach_the_user() {
         "{err}"
     );
 
-    spelunk_core::kube::check(&spec(&kubeconfig, "svc/postgres"))
+    let names = spelunk_core::kube::names(&spec(&kubeconfig, "svc/postgres"), "pod")
         .await
         .unwrap();
-    let err = spelunk_core::kube::check(&spec(&kubeconfig, "svc/no-such-service"))
+    assert!(
+        names.iter().any(|n| n.starts_with("postgres-")),
+        "{names:?}"
+    );
+    let ports = spelunk_core::kube::ports(&spec(&kubeconfig, "svc/postgres"))
+        .await
+        .unwrap();
+    assert_eq!(ports.iter().map(|p| p.port).collect::<Vec<_>>(), [5432]);
+    let err = spelunk_core::kube::ports(&spec(&kubeconfig, "svc/no-such-service"))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("not found"), "{err}");
-
-    let resources = spelunk_core::kube::resources(&spec(&kubeconfig, "svc/postgres"))
+    let services = spelunk_core::kube::names(&spec(&kubeconfig, "svc/postgres"), "svc")
         .await
         .unwrap();
-    assert!(
-        resources.contains(&"svc/postgres".to_string()),
-        "{resources:?}"
-    );
-    assert!(
-        resources.contains(&"deployment/postgres".to_string()),
-        "{resources:?}"
+    assert_eq!(services, ["postgres"]);
+    let ports = spelunk_core::kube::ports(&spec(&kubeconfig, "deployment/postgres"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (ports[0].port, ports[0].container.as_deref()),
+        (5432, Some("postgres"))
     );
     let namespaces = spelunk_core::kube::namespaces(&spec(&kubeconfig, "svc/postgres"))
         .await
@@ -188,5 +197,7 @@ async fn kubectl_errors_reach_the_user() {
         tunnel.forward(5432).await,
         Err(KubeError::Down(_))
     ));
+    // Closed means kubectl has exited: nothing listens on its port any more.
+    assert!(tokio::net::TcpStream::connect(local).await.is_err());
     let _ = OpenError::Kube(KubeError::Timeout).to_string();
 }

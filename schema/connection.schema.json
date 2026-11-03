@@ -9,6 +9,48 @@
       ],
       "type": "string"
     },
+    "KubernetesConfig": {
+      "additionalProperties": false,
+      "description": "The cluster resource a connection reaches through `kubectl port-forward` (ADR-015).",
+      "properties": {
+        "context": {
+          "description": "Context of the kubeconfig; its current context when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubeconfig": {
+          "description": "A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubectl": {
+          "description": "The `kubectl` executable; `kubectl` on the PATH when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespace": {
+          "description": "The context's namespace when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resource": {
+          "description": "`svc/<name>`, `pod/<name>` or `deployment/<name>`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource"
+      ],
+      "type": "object"
+    },
     "McpConfig": {
       "additionalProperties": false,
       "description": "What an agent can do with this connection (ADR-008).",
@@ -111,6 +153,17 @@
         "string",
         "null"
       ]
+    },
+    "kubernetes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KubernetesConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):\n`port` is then the resource's port and `host` is only the name TLS checks."
     },
     "mcp": {
       "$ref": "#/$defs/McpConfig"

@@ -556,7 +556,7 @@ async fn test_tunnel(
     Ok(TunnelTestOutcome::Connected)
 }
 
-/// What `kubectl` is asked with, from the tunnel form: empty fields mean the defaults.
+/// What `kubectl` is asked with, from the Kubernetes tab: empty fields mean the defaults.
 fn kube_spec(k: KubernetesDraftItem) -> spelunk_config::ResolvedKubernetes {
     let text = |v: String| Some(v.trim().to_string()).filter(|v| !v.is_empty());
     spelunk_config::ResolvedKubernetes {
@@ -568,7 +568,7 @@ fn kube_spec(k: KubernetesDraftItem) -> spelunk_config::ResolvedKubernetes {
     }
 }
 
-/// The contexts of the kubeconfig, for the Kubernetes tunnel form (ADR-015).
+/// The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015).
 #[tauri::command]
 #[specta::specta]
 async fn kube_contexts(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
@@ -586,12 +586,22 @@ async fn kube_namespaces(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
         .map_err(|e| e.to_string())
 }
 
-/// Services, deployments and pods of the chosen namespace, as `svc/…`, `deployment/…`, `pod/…`.
+/// Names of one kind of resource (`svc`, `pod`, `deployment`) in the chosen namespace.
 #[tauri::command]
 #[specta::specta]
-async fn kube_resources(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
-    spelunk_core::kube::resources(&kube_spec(form))
+async fn kube_names(form: KubernetesDraftItem, kind: String) -> CmdResult<Vec<String>> {
+    spelunk_core::kube::names(&kube_spec(form), &kind)
         .await
+        .map_err(|e| e.to_string())
+}
+
+/// The ports of the chosen resource: a service's ports or its containers' ports.
+#[tauri::command]
+#[specta::specta]
+async fn kube_ports(form: KubernetesDraftItem) -> CmdResult<Vec<KubePortItem>> {
+    spelunk_core::kube::ports(&kube_spec(form))
+        .await
+        .map(|ports| ports.into_iter().map(Into::into).collect())
         .map_err(|e| e.to_string())
 }
 
@@ -1628,7 +1638,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             scan_dbeaver,
             kube_contexts,
             kube_namespaces,
-            kube_resources,
+            kube_names,
+            kube_ports,
             import_dbeaver,
             open_workspace,
             trust_workspace,
@@ -1714,6 +1725,14 @@ pub fn run() {
             let _ = app.handle().get_webview_window("main");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while starting SpelunkDB");
+        .build(tauri::generate_context!())
+        .expect("error while starting SpelunkDB")
+        .run(|app, event| {
+            // Tauri exits without dropping the state: stop each `kubectl port-forward`
+            // first, or it would outlive the app (ADR-015).
+            if let tauri::RunEvent::Exit = event {
+                let tunnels = app.state::<AppState>().tunnels.clone();
+                tauri::async_runtime::block_on(tunnels.close_all());
+            }
+        });
 }

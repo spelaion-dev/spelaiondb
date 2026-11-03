@@ -2,7 +2,7 @@
 // 2) fill in the engine's form, test it and save it. Validation and writing the file live
 // in the core: this only collects what the user typed.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -21,6 +21,7 @@ import { refreshConnections } from "./Sidebar";
 import { chooseSavePath } from "../dialogs";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
+import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -226,7 +227,7 @@ type TestState =
 
 /** How the form asks for credentials, like DBeaver's "Authentication" selector. */
 type AuthMethod = "password" | "env" | "none" | "other";
-type FormTab = "main" | "ssl" | "ssh" | "options";
+type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "options";
 
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
@@ -273,12 +274,15 @@ function ConnectionForm(props: {
   const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network ? "password" : "none");
   const [savePassword, setSavePassword] = useState(initial ? initial.passwordMode !== "prompt" : true);
   const [useTunnel, setUseTunnel] = useState(Boolean(initial?.tunnel));
+  // Kubernetes and an SSH tunnel exclude each other (the core rejects both).
+  const [useKubernetes, setUseKubernetes] = useState(Boolean(initial?.kubernetes));
+  const [kubernetes, setKubernetes] = useState(initial?.kubernetes ?? EMPTY_KUBERNETES);
   const [password, setPassword] = useState(prefill?.password ?? "");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Omit<ConnectionDraft, "passwordMode" | "tunnel">>(() => initial ?? {
+  const [draft, setDraft] = useState<Omit<ConnectionDraft, "passwordMode" | "tunnel" | "kubernetes">>(() => initial ?? {
     personal: !hasWorkspace,
     folder: "",
     name: prefill ? prefill.database.split(/[\\/]/).pop() || prefill.host : "",
@@ -320,11 +324,21 @@ function ConnectionForm(props: {
     setDraft((d) => ({ ...d, ...patch }));
     changed();
   };
+  const setPort = useCallback((port: number) => {
+    setDraft((d) => ({ ...d, port }));
+    setTest({ kind: "idle" });
+    setSaveError(null);
+  }, []);
 
   // What the core receives: the form's choices mapped to the configuration format.
   const passwordMode: PasswordMode =
     !network || auth === "none" ? "none" : auth === "env" ? "env" : auth === "other" ? "other" : savePassword ? "keychain" : "prompt";
-  const request: ConnectionDraft = { ...draft, passwordMode, tunnel: network && useTunnel ? tunnel : "" };
+  const request: ConnectionDraft = {
+    ...draft,
+    passwordMode,
+    tunnel: network && useTunnel && !useKubernetes ? tunnel : "",
+    kubernetes: network && useKubernetes ? kubernetes : null,
+  };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.kind === "testing";
 
@@ -404,7 +418,7 @@ function ConnectionForm(props: {
     }
   }
 
-  const tabs: FormTab[] = network ? ["main", "ssl", "ssh", "options"] : ["main", "options"];
+  const tabs: FormTab[] = network ? ["main", "ssl", "ssh", "kubernetes", "options"] : ["main", "options"];
   return (
     <>
     <form
@@ -452,6 +466,7 @@ function ConnectionForm(props: {
                 <Field label={t("fields.database")}>
                   <input type="text" value={draft.database} onChange={(e) => update({ database: e.target.value })} />
                 </Field>
+                {useKubernetes && <p className="muted small">{t("kubernetes.mainHint")}</p>}
               </fieldset>
               <fieldset>
                 <legend>{t("sections.authentication")}</legend>
@@ -563,12 +578,21 @@ function ConnectionForm(props: {
             <fieldset>
               <legend>{t("sections.ssh")}</legend>
               <label className="check">
-                <input type="checkbox" checked={useTunnel} disabled={tunnels.length === 0} onChange={(e) => { setUseTunnel(e.target.checked); changed(); }} />
+                <input
+                  type="checkbox"
+                  checked={useTunnel && !useKubernetes}
+                  disabled={tunnels.length === 0}
+                  onChange={(e) => {
+                    setUseTunnel(e.target.checked);
+                    if (e.target.checked) setUseKubernetes(false);
+                    changed();
+                  }}
+                />
                 {t("fields.useTunnel")}
               </label>
               <div className="form-pair">
                 <Field label={t("fields.tunnel")} className="grow">
-                  <select aria-label={t("fields.tunnel")} value={tunnel} disabled={!useTunnel} onChange={(e) => { setTunnel(e.target.value); changed(); }}>
+                  <select aria-label={t("fields.tunnel")} value={tunnel} disabled={!useTunnel || useKubernetes} onChange={(e) => { setTunnel(e.target.value); changed(); }}>
                     {tunnels.map((item) => (
                       <option key={`${item.personal}:${item.name}`} value={item.name}>
                         {item.name}
@@ -577,7 +601,7 @@ function ConnectionForm(props: {
                     ))}
                   </select>
                 </Field>
-                <button type="button" disabled={!useTunnel || !selectedTunnel} onClick={() => selectedTunnel && setTunnelEditor({ kind: "edit", name: selectedTunnel.name, personal: selectedTunnel.personal })}>
+                <button type="button" disabled={!useTunnel || useKubernetes || !selectedTunnel} onClick={() => selectedTunnel && setTunnelEditor({ kind: "edit", name: selectedTunnel.name, personal: selectedTunnel.personal })}>
                   {t("tunnel.editButton")}
                 </button>
                 <button type="button" onClick={() => setTunnelEditor({ kind: "add", personal: draft.personal })}>
@@ -586,6 +610,27 @@ function ConnectionForm(props: {
               </div>
               <p className="muted small">{tunnels.length === 0 ? t("fields.noTunnelsHint") : t("fields.tunnelHint")}</p>
             </fieldset>
+          </div>
+        )}
+
+        {network && (
+          <div id="connection-tab-kubernetes" role="tabpanel" hidden={tab !== "kubernetes"}>
+            <KubernetesTab
+              enabled={useKubernetes}
+              onEnabled={(enabled) => {
+                setUseKubernetes(enabled);
+                if (enabled) setUseTunnel(false);
+                changed();
+              }}
+              value={kubernetes}
+              onChange={(next) => {
+                setKubernetes(next);
+                changed();
+              }}
+              port={draft.port ?? null}
+              defaultPort={engine.defaultPort ?? null}
+              onPort={setPort}
+            />
           </div>
         )}
 
@@ -665,6 +710,7 @@ function ConnectionForm(props: {
         onSaved={(saved) => {
           setTunnelEditor(null);
           setUseTunnel(true);
+          setUseKubernetes(false);
           changed();
           void loadTunnels(saved.name);
         }}

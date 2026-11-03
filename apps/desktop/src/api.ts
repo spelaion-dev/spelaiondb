@@ -23,6 +23,7 @@ import {
   type TableDetails_Serialize,
   type RiskKind,
   type KubernetesDraftItem,
+  type KubePortItem_Serialize,
   type DbeaverItem_Serialize,
   type DbeaverScan_Serialize,
   type ImportReport,
@@ -49,6 +50,7 @@ export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
 export type DbeaverItem = DbeaverItem_Serialize;
+export type KubePort = KubePortItem_Serialize;
 export type DbeaverScan = DbeaverScan_Serialize;
 export type RowChangeItem = RowChangeItem_Deserialize;
 export type CellEditItem = CellEditItem_Deserialize;

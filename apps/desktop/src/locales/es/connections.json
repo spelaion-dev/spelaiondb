@@ -21,7 +21,8 @@
     "ssh": "Túnel SSH",
     "organization": "Dónde guardarla",
     "safety": "Seguridad",
-    "general": "General"
+    "general": "General",
+    "kubernetes": "Port-forward de Kubernetes"
   },
   "fields": {
     "name": "Nombre",
@@ -82,6 +83,7 @@
     "main": "Principal",
     "ssl": "SSL",
     "ssh": "SSH",
+    "kubernetes": "Kubernetes",
     "options": "Opciones"
   },
   "auth": {
@@ -110,7 +112,7 @@
   "tunnel": {
     "newButton": "Nuevo túnel…",
     "editButton": "Editar túnel…",
-    "newTitle": "Túnel nuevo",
+    "newTitle": "Nuevo túnel SSH",
     "editTitle": "Editar el túnel {{name}}",
     "name": "Nombre del túnel",
     "nameHint": "Las conexiones se refieren al túnel por este nombre.",
@@ -146,19 +148,7 @@
     "ok_one": "Túnel correcto · {{count}} salto",
     "ok_other": "Túnel correcto · {{count}} saltos",
     "delete": "Borrar túnel",
-    "confirmDelete": "Pulsa otra vez para borrar",
-    "kind": "Tipo",
-    "kube": {
-      "context": "Contexto",
-      "currentContext": "Contexto actual",
-      "namespace": "Namespace",
-      "defaultNamespace": "el del contexto",
-      "resource": "Recurso (svc/…, deployment/…, pod/…)",
-      "kubeconfig": "Fichero kubeconfig",
-      "kubeconfigPlaceholder": "KUBECONFIG o ~/.kube/config",
-      "hint": "SpelunkDB ejecuta kubectl port-forward con tu kubeconfig. El puerto de la conexión es el puerto de este recurso; su host no se usa para llegar (solo para TLS).",
-      "ok": "kubectl encontró el recurso"
-    }
+    "confirmDelete": "Pulsa otra vez para borrar"
   },
   "newDatabase": "Nueva base de datos…",
   "url": {
@@ -187,5 +177,31 @@
     "tunnels_other": "Creados {{count}} túneles SSH.",
     "skipped": "No importadas:",
     "close": "Hecho"
+  },
+  "kubernetes": {
+    "use": "Conectar con kubectl port-forward",
+    "context": "Contexto",
+    "currentContext": "Contexto actual",
+    "namespace": "Namespace",
+    "defaultNamespace": "El del contexto",
+    "kind": "Tipo de recurso",
+    "kinds": {
+      "svc": "Service",
+      "pod": "Pod",
+      "deployment": "Deployment"
+    },
+    "name": "Nombre del recurso",
+    "choose": "Elige…",
+    "port": "Puerto del recurso",
+    "portContainer": "{{port}} ({{detail}})",
+    "noPorts": "El recurso no declara puertos: escribe el puerto en la pestaña Principal.",
+    "loading": "Preguntando a kubectl…",
+    "advanced": "kubectl",
+    "kubeconfig": "Fichero kubeconfig",
+    "kubeconfigPlaceholder": "KUBECONFIG o ~/.kube/config",
+    "kubectl": "Programa kubectl",
+    "hint": "SpelunkDB ejecuta kubectl port-forward con tu kubeconfig. El puerto de la conexión es el de este recurso; el host de la pestaña Principal solo se usa para TLS.",
+    "exclusive": "Una conexión va por Kubernetes o por un túnel SSH, no por los dos.",
+    "mainHint": "Por Kubernetes: el puerto es el del recurso, elegido en la pestaña Kubernetes."
   }
 }

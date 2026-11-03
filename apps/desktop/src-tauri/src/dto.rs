@@ -501,6 +501,8 @@ pub struct ConnectionDraftItem {
     pub tls_mode: TlsModeItem,
     pub tls_ca: String,
     pub tunnel: String,
+    /// Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's.
+    pub kubernetes: Option<KubernetesDraftItem>,
     pub read_only: bool,
     pub mcp_exposed: bool,
 }
@@ -541,6 +543,7 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
             },
             tls_ca: item.tls_ca,
             tunnel: item.tunnel,
+            kubernetes: item.kubernetes.map(Into::into),
             read_only: item.read_only,
             mcp_exposed: item.mcp_exposed,
         })
@@ -576,6 +579,7 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
             tls_mode: draft.tls_mode.into(),
             tls_ca: draft.tls_ca,
             tunnel: draft.tunnel,
+            kubernetes: draft.kubernetes.map(Into::into),
             read_only: draft.read_only,
             mcp_exposed: draft.mcp_exposed,
         }
@@ -612,11 +616,9 @@ pub struct TunnelDraftItem {
     pub personal: bool,
     pub name: String,
     pub hops: Vec<HopDraftItem>,
-    /// A Kubernetes tunnel instead of SSH (ADR-015); `hops` is then ignored.
-    pub kubernetes: Option<KubernetesDraftItem>,
 }
 
-/// The Kubernetes part of the tunnel form; empty fields mean the defaults.
+/// The Kubernetes tab of the connection form; empty fields mean the defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct KubernetesDraftItem {
@@ -635,6 +637,25 @@ impl From<KubernetesDraftItem> for spelunk_config::KubernetesDraft {
             resource: k.resource,
             kubeconfig: k.kubeconfig,
             kubectl: k.kubectl,
+        }
+    }
+}
+
+/// A port of a Kubernetes resource, for the port picker.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KubePortItem {
+    pub port: u16,
+    pub name: Option<String>,
+    pub container: Option<String>,
+}
+
+impl From<spelunk_core::kube::ResourcePort> for KubePortItem {
+    fn from(p: spelunk_core::kube::ResourcePort) -> Self {
+        Self {
+            port: p.port,
+            name: p.name,
+            container: p.container,
         }
     }
 }
@@ -734,7 +755,6 @@ impl From<TunnelDraftItem> for spelunk_config::TunnelDraft {
                     ),
                 })
                 .collect(),
-            kubernetes: item.kubernetes.map(Into::into),
         }
     }
 }
@@ -747,7 +767,6 @@ impl From<spelunk_config::TunnelDraft> for TunnelDraftItem {
                 spelunk_config::Source::Workspace => false,
             },
             name: draft.name,
-            kubernetes: draft.kubernetes.map(Into::into),
             hops: draft
                 .hops
                 .into_iter()

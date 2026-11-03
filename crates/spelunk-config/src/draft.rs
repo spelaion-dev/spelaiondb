@@ -14,7 +14,8 @@ use crate::load::{
     Config, ConnectionEntry, ConnectionId, Source, WORKSPACE_DIR, validate_connection,
 };
 use crate::model::{
-    ConnectionFile, Engine, McpConfig, SCHEMA_VERSION, SecretSpec, TlsConfig, TlsModeConfig,
+    ConnectionFile, Engine, KubernetesConfig, McpConfig, SCHEMA_VERSION, SecretSpec, TlsConfig,
+    TlsModeConfig,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::vars::home_dir;
@@ -55,8 +56,20 @@ pub struct ConnectionDraft {
     pub tls_mode: TlsModeConfig,
     pub tls_ca: String,
     pub tunnel: String,
+    /// Through `kubectl port-forward` instead of a tunnel (ADR-015).
+    pub kubernetes: Option<KubernetesDraft>,
     pub read_only: bool,
     pub mcp_exposed: bool,
+}
+
+/// The Kubernetes tab of the connection form; empty fields mean the defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KubernetesDraft {
+    pub context: String,
+    pub namespace: String,
+    pub resource: String,
+    pub kubeconfig: String,
+    pub kubectl: String,
 }
 
 /// Common Latin accents to their base letter, so `Análisis` becomes `analisis`.
@@ -211,7 +224,22 @@ impl ConnectionDraft {
             Source::Workspace => config.workspace_root.as_deref(),
             Source::User => None,
         };
-        let tunnel = non_empty(&self.tunnel).filter(|_| network);
+        let kubernetes = self
+            .kubernetes
+            .as_ref()
+            .filter(|_| network)
+            .map(|k| -> Result<KubernetesConfig, ConfigError> {
+                Ok(KubernetesConfig {
+                    context: non_empty(&k.context),
+                    namespace: non_empty(&k.namespace),
+                    resource: non_empty(&k.resource)
+                        .ok_or_else(|| ConfigError::new(path, "choose the Kubernetes resource"))?,
+                    kubeconfig: non_empty(&k.kubeconfig).map(|f| portable_path(&f, root)),
+                    kubectl: non_empty(&k.kubectl),
+                })
+            })
+            .transpose()?;
+        let tunnel = non_empty(&self.tunnel).filter(|_| network && kubernetes.is_none());
         if let Some(name) = &tunnel
             && config.tunnel_for(self.source, name).is_none()
         {
@@ -239,6 +267,7 @@ impl ConnectionDraft {
                 .filter(|_| network)
                 .map(|secret| SecretSpec { secret }),
             tunnel,
+            kubernetes,
             read_only: self.read_only,
             tls: if network {
                 TlsConfig {
@@ -325,6 +354,13 @@ impl ConnectionDraft {
             tls_mode: file.tls.mode,
             tls_ca: file.tls.ca.clone().unwrap_or_default(),
             tunnel: file.tunnel.clone().unwrap_or_default(),
+            kubernetes: file.kubernetes.as_ref().map(|k| KubernetesDraft {
+                context: k.context.clone().unwrap_or_default(),
+                namespace: k.namespace.clone().unwrap_or_default(),
+                resource: k.resource.clone(),
+                kubeconfig: k.kubeconfig.clone().unwrap_or_default(),
+                kubectl: k.kubectl.clone().unwrap_or_default(),
+            }),
             read_only: file.read_only,
             mcp_exposed: file.mcp.exposed,
         }
@@ -457,6 +493,24 @@ pub fn update_connection(
     }
     if old.tunnel != new.tunnel {
         put(&mut doc, &["tunnel"], text(&new.tunnel));
+    }
+    if old.kubernetes != new.kubernetes {
+        match &new.kubernetes {
+            None => {
+                doc.as_table_mut().remove("kubernetes");
+            }
+            Some(k) => {
+                put(&mut doc, &["kubernetes", "context"], text(&k.context));
+                put(&mut doc, &["kubernetes", "namespace"], text(&k.namespace));
+                put(
+                    &mut doc,
+                    &["kubernetes", "resource"],
+                    Some(Value::from(k.resource.as_str())),
+                );
+                put(&mut doc, &["kubernetes", "kubeconfig"], text(&k.kubeconfig));
+                put(&mut doc, &["kubernetes", "kubectl"], text(&k.kubectl));
+            }
+        }
     }
     if old.read_only != new.read_only {
         put(

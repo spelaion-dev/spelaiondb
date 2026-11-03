@@ -37,6 +37,8 @@ pub struct ResolvedConnection {
     pub params: ConnectParams,
     pub password: Password,
     pub tunnel: Option<ResolvedTunnel>,
+    /// `kubectl port-forward` to this resource (ADR-015); `params.port` is its port.
+    pub kubernetes: Option<ResolvedKubernetes>,
     pub mcp: McpConfig,
 }
 
@@ -63,12 +65,10 @@ impl ResolvedConnection {
 #[derive(Debug, Clone)]
 pub struct ResolvedTunnel {
     pub name: String,
-    /// SSH hops; empty for a Kubernetes tunnel.
     pub hops: Vec<ResolvedHop>,
-    pub kubernetes: Option<ResolvedKubernetes>,
 }
 
-/// A Kubernetes tunnel ready to run `kubectl port-forward` (ADR-015).
+/// A connection's Kubernetes resource, ready for `kubectl port-forward` (ADR-015).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedKubernetes {
     pub context: Option<String>,
@@ -147,8 +147,29 @@ impl<'a> Resolver<'a> {
         };
 
         let database = text(&file.database)?.unwrap_or_default();
+        let kubernetes = file
+            .kubernetes
+            .as_ref()
+            .map(|k| -> Result<ResolvedKubernetes, ResolveError> {
+                let field =
+                    |v: &Option<String>| text(v).map(|v| v.filter(|v| !v.trim().is_empty()));
+                Ok(ResolvedKubernetes {
+                    context: field(&k.context)?,
+                    namespace: field(&k.namespace)?,
+                    resource: self.expand(&entry.file_path, &k.resource)?,
+                    kubeconfig: field(&k.kubeconfig)?.map(|f| resolve_path(&f, &base)),
+                    kubectl: field(&k.kubectl)?.unwrap_or_else(|| "kubectl".into()),
+                })
+            })
+            .transpose()?;
+        let host = match text(&file.host)? {
+            Some(host) => host,
+            // Through Kubernetes the host only names the server for TLS.
+            None if kubernetes.is_some() => "localhost".into(),
+            None => String::new(),
+        };
         let params = ConnectParams {
-            host: text(&file.host)?.unwrap_or_default(),
+            host,
             port: file.port.or(file.engine.default_port()).unwrap_or(0),
             user: text(&file.user)?.unwrap_or_default(),
             password: None,
@@ -206,6 +227,7 @@ impl<'a> Resolver<'a> {
             params,
             password,
             tunnel,
+            kubernetes,
             mcp: file.mcp.clone(),
         })
     }
@@ -280,29 +302,9 @@ impl<'a> Resolver<'a> {
                 command: hop.command.clone(),
             });
         }
-        let kubernetes = file
-            .kubernetes
-            .as_ref()
-            .map(|k| -> Result<ResolvedKubernetes, ResolveError> {
-                let text = |v: &Option<String>| -> Result<Option<String>, ResolveError> {
-                    v.as_deref()
-                        .map(|v| self.expand(errors_at, v))
-                        .transpose()
-                        .map(|v| v.filter(|v| !v.trim().is_empty()))
-                };
-                Ok(ResolvedKubernetes {
-                    context: text(&k.context)?,
-                    namespace: text(&k.namespace)?,
-                    resource: self.expand(errors_at, &k.resource)?,
-                    kubeconfig: text(&k.kubeconfig)?.map(|f| resolve_path(&f, base)),
-                    kubectl: text(&k.kubectl)?.unwrap_or_else(|| "kubectl".into()),
-                })
-            })
-            .transpose()?;
         Ok(ResolvedTunnel {
             name: name.to_string(),
             hops,
-            kubernetes,
         })
     }
 

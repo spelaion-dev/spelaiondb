@@ -96,6 +96,22 @@ impl TunnelPool {
         ssh + kube
     }
 
+    /// Stops every `kubectl port-forward` and waits for them to exit. Processes outlive a
+    /// program that exits without dropping its pool (Tauri ends with `process::exit`), so
+    /// the app calls this when it is about to exit.
+    pub async fn close_all(&self) {
+        let kube: Vec<Arc<KubeTunnel>> = self
+            .kube
+            .lock()
+            .await
+            .drain()
+            .filter_map(|(_, t)| t.upgrade())
+            .collect();
+        for tunnel in kube {
+            tunnel.close().await;
+        }
+    }
+
     async fn get_or_start_kube(
         &self,
         key: String,
@@ -207,20 +223,17 @@ pub async fn open_connection(
     }
     let mut params = resolved.connect_params(options.password);
 
-    let tunnel = match &resolved.tunnel {
-        None => None,
+    let tunnel = match (&resolved.tunnel, &resolved.kubernetes) {
+        (None, None) => None,
         // Kubernetes: the connection's port is the remote port of the resource (ADR-015).
-        Some(ResolvedTunnel {
-            name,
-            kubernetes: Some(kubernetes),
-            ..
-        }) => {
-            let key = format!("{:?}|{name}|{kubernetes:?}", resolved.id.source);
+        // The configuration never has both: an SSH tunnel would be ignored here.
+        (_, Some(kubernetes)) => {
+            let key = format!("{:?}|{kubernetes:?}", resolved.id.source);
             let tunnel = options.tunnels.get_or_start_kube(key, kubernetes).await;
             params.connect_addr = Some(tunnel.forward(params.port).await?);
             Some(ActiveTunnel::Kube(tunnel))
         }
-        Some(resolved_tunnel) => {
+        (Some(resolved_tunnel), None) => {
             let spec = TunnelSpec {
                 hops: resolved_tunnel.hops.iter().map(hop_spec).collect(),
             };
@@ -255,16 +268,12 @@ pub async fn open_connection(
 /// Opens a tunnel and closes it again, to check it from the UI before saving. A typed
 /// `passwords[i]` is used for hop `i` when its password would otherwise be asked; unknown
 /// hosts and other questions go through `interaction` as usual. Nothing is reused or kept.
-/// A Kubernetes tunnel is checked by asking `kubectl` for its resource.
 pub async fn test_tunnel(
     tunnel: &ResolvedTunnel,
     passwords: Vec<Option<Secret>>,
     known_hosts: &KnownHosts,
     interaction: Arc<dyn Interaction>,
 ) -> Result<(), OpenError> {
-    if let Some(kubernetes) = &tunnel.kubernetes {
-        return Ok(crate::kube::check(kubernetes).await?);
-    }
     let mut typed = passwords.into_iter();
     let spec = TunnelSpec {
         hops: tunnel

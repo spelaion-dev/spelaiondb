@@ -6,7 +6,7 @@
 // run and, for the PostgreSQL steps, testing/docker up.
 //   node e2e/smoke.mjs [screenshots-dir]
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createCipheriv } from "node:crypto";
@@ -44,6 +44,25 @@ async function stopApp() {
   const exited = once(app, "exit");
   app.kill();
   await exited;
+}
+
+/** Closes the app like its window's close button (WM_CLOSE), so its exit code runs. */
+async function closeApp() {
+  const exited = once(app, "exit");
+  execFileSync("taskkill", ["/PID", String(app.pid)], { stdio: "ignore" });
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("the app did not close")), 15_000));
+  await Promise.race([exited, timeout]);
+}
+
+/** `kubectl` processes started with the test cluster's kubeconfig. */
+function testKubectls() {
+  const out = execFileSync(
+    "powershell",
+    ["-NoProfile", "-Command", "Get-CimInstance Win32_Process -Filter \"Name='kubectl.exe'\" | ForEach-Object { $_.CommandLine }"],
+    { encoding: "utf8" },
+  );
+  const kubeconfig = process.env.SPELUNK_TEST_K8S.replaceAll("\\", "/").toLowerCase();
+  return out.split(/\r?\n/).filter((line) => line.replaceAll("\\", "/").toLowerCase().includes(kubeconfig));
 }
 
 async function connect() {
@@ -968,7 +987,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard");
   await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
-  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Options"]);
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Kubernetes", "Options"]);
   await wizard.getByLabel("Name", { exact: true }).fill("Docker PG (wizard)");
   await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
   await wizard.getByLabel("Port", { exact: true }).fill("15432");
@@ -1043,7 +1062,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("tab", { name: "SSH" }).click();
   await wizard.getByRole("button", { name: "New tunnel…" }).click();
-  const editor = page.getByRole("dialog", { name: "New tunnel" });
+  const editor = page.getByRole("dialog", { name: "New SSH tunnel" });
   const key = join(root, "testing", "docker", "keys", "id_ed25519");
   await editor.getByLabel("Tunnel name").fill("Wizard bastions");
   await editor.getByRole("radio", { name: "Personal", exact: true }).check();
@@ -1102,43 +1121,64 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 
   // Only with the test cluster (testing/k8s): SPELUNK_TEST_K8S is its kubeconfig.
   if (process.env.SPELUNK_TEST_K8S) {
-    step("Kubernetes tunnel: kubectl port-forward to a PostgreSQL inside the test cluster");
+    step("Kubernetes tab: kubectl port-forward to a PostgreSQL inside the test cluster");
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     wizard = page.locator(".modal.wizard").first();
     await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
     await wizard.getByLabel("Name", { exact: true }).fill("PG in Kubernetes");
-    await wizard.getByLabel("Host", { exact: true }).fill("postgres");
     await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
     await wizard.getByLabel("User", { exact: true }).fill("spelunk");
     await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
     await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
     await wizard.getByRole("tab", { name: "Options" }).click();
     await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+    await wizard.getByRole("tab", { name: "Kubernetes" }).click();
+    const kube = wizard.locator("#connection-tab-kubernetes");
+    await kube.getByRole("checkbox", { name: "Connect through kubectl port-forward" }).check();
+    await kube.getByLabel("Kubeconfig file").fill(process.env.SPELUNK_TEST_K8S);
+    await kube.getByLabel("Kubeconfig file").blur();
+    // Every list comes from kubectl: contexts, namespaces, names of the type, ports.
+    await kube.getByLabel("Context").locator("option", { hasText: "kind-spelunk-test" }).waitFor({ state: "attached" });
+    await kube.getByLabel("Context").selectOption("kind-spelunk-test");
+    await kube.getByLabel("Namespace").locator("option[value='spelunk-test']").waitFor({ state: "attached" });
+    await kube.getByLabel("Namespace").selectOption("spelunk-test");
+    await kube.getByLabel("Resource type").selectOption("pod");
+    await kube.getByLabel("Resource name").locator("option", { hasText: /^postgres-/ }).first().waitFor({ state: "attached" });
+    // A deployment's ports are its containers' ports, named after the container.
+    await kube.getByLabel("Resource type").selectOption("deployment");
+    await kube.getByLabel("Resource name").locator("option[value='postgres']").waitFor({ state: "attached" });
+    await kube.getByLabel("Resource name").selectOption("postgres");
+    await kube.getByLabel("Resource port").locator("option", { hasText: "5432 (postgres)" }).waitFor({ state: "attached" });
+    assert.equal(await kube.getByLabel("Resource port").inputValue(), "5432");
+    await kube.getByLabel("Resource type").selectOption("svc");
+    await kube.getByLabel("Resource name").locator("option[value='postgres']").waitFor({ state: "attached" });
+    await kube.getByLabel("Resource name").selectOption("postgres");
+    await shot("14b-kubernetes-tab");
+    // The SSH tunnel and Kubernetes exclude each other.
     await wizard.getByRole("tab", { name: "SSH" }).click();
-    await wizard.getByRole("button", { name: "New tunnel…" }).click();
-    const kubeEditor = page.getByRole("dialog", { name: "New tunnel" });
-    await kubeEditor.getByLabel("Tunnel name").fill("Kind cluster");
-    await kubeEditor.getByRole("radio", { name: "Personal", exact: true }).check();
-    await kubeEditor.getByRole("radio", { name: "Kubernetes", exact: true }).check();
-    await kubeEditor.getByLabel("Kubeconfig file").fill(process.env.SPELUNK_TEST_K8S);
-    // Contexts, namespaces and resources come from kubectl.
-    await kubeEditor.getByLabel("Context").locator("option", { hasText: "kind-spelunk-test" }).waitFor({ state: "attached" });
-    await kubeEditor.getByLabel("Namespace").fill("spelunk-test");
-    await kubeEditor.locator("#kube-resources option[value='svc/postgres']").waitFor({ state: "attached" });
-    await kubeEditor.getByLabel("Resource (svc/…, deployment/…, pod/…)").fill("svc/postgres");
-    await kubeEditor.getByRole("button", { name: "Test tunnel" }).click();
-    await kubeEditor.locator(".test-result", { hasText: "kubectl found the resource" }).waitFor();
-    await shot("14b-kubernetes-tunnel");
-    await kubeEditor.getByRole("button", { name: "Save", exact: true }).click();
-    await kubeEditor.waitFor({ state: "detached" });
-    assert.equal(await wizard.getByLabel("SSH tunnel", { exact: true }).inputValue(), "kind-cluster");
+    assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), false);
     await wizard.getByRole("button", { name: "Test connection" }).click();
     await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
     await wizard.getByRole("button", { name: "Save", exact: true }).click();
     await wizard.waitFor({ state: "detached" });
-    const kubeTunnel = readFileSync(join(userDir, "tunnels", "kind-cluster.toml"), "utf8");
-    assert.match(kubeTunnel, /\[kubernetes\]/);
-    assert.match(kubeTunnel, /resource = "svc\/postgres"/);
+    const kubeFile = readFileSync(join(userDir, "connections", "pg-in-kubernetes.toml"), "utf8");
+    assert.match(kubeFile, /\[kubernetes\]/);
+    assert.match(kubeFile, /context = "kind-spelunk-test"/);
+    assert.match(kubeFile, /namespace = "spelunk-test"/);
+    assert.match(kubeFile, /resource = "svc\/postgres"/);
+    assert.doesNotMatch(kubeFile, /^tunnel/m);
+
+    // Editing shows the saved choice.
+    await (await connectionMenu("PG in Kubernetes")).getByRole("button", { name: "Edit…" }).click();
+    wizard = page.locator(".modal.wizard").first();
+    await wizard.getByRole("tab", { name: "Kubernetes" }).click();
+    const editKube = wizard.locator("#connection-tab-kubernetes");
+    assert.equal(await editKube.getByRole("checkbox", { name: "Connect through kubectl port-forward" }).isChecked(), true);
+    assert.equal(await editKube.getByLabel("Namespace").inputValue(), "spelunk-test");
+    assert.equal(await editKube.getByLabel("Resource name").inputValue(), "postgres");
+    await wizard.getByRole("button", { name: "Cancel" }).click();
+    await wizard.waitFor({ state: "detached" });
+
     panel = await newQuery("PG in Kubernetes", "select current_database() as db, inet_server_port() as port;");
     await run(panel);
     await page.getByRole("dialog").getByText("Password for PG in Kubernetes").waitFor();
@@ -1233,7 +1273,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await setLanguage("es");
   await setTheme("dark", "dark");
   await browser.close();
-  await stopApp();
+  if (process.env.SPELUNK_TEST_K8S && process.platform === "win32") {
+    // The Kubernetes connection is still open: closing the app stops its kubectl.
+    assert.ok(testKubectls().length > 0, "the port-forward is running");
+    await closeApp();
+    assert.deepEqual(testKubectls(), [], "kubectl outlived the app");
+  } else {
+    await stopApp();
+  }
   app = startApp();
   browser = await connect();
   page = browser.contexts()[0].pages()[0];

@@ -250,8 +250,9 @@ pub(crate) fn validate_connection(
 ) -> Result<ConnectionFile, ConfigError> {
     check_version(path, file.schema_version)?;
     let missing: Vec<&str> = match file.engine {
+        // Through Kubernetes the host is only a name for TLS: it may be left out.
         Engine::Postgres => [
-            ("host", file.host.is_none()),
+            ("host", file.host.is_none() && file.kubernetes.is_none()),
             ("database", file.database.is_none()),
             ("user", file.user.is_none()),
         ]
@@ -259,12 +260,13 @@ pub(crate) fn validate_connection(
         .filter_map(|(k, missing)| missing.then_some(k))
         .collect(),
         // A MySQL connection may have no default database: `USE` or qualified names work.
-        Engine::Mysql | Engine::Mariadb => {
-            [("host", file.host.is_none()), ("user", file.user.is_none())]
-                .into_iter()
-                .filter_map(|(k, m)| m.then_some(k))
-                .collect()
-        }
+        Engine::Mysql | Engine::Mariadb => [
+            ("host", file.host.is_none() && file.kubernetes.is_none()),
+            ("user", file.user.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(k, m)| m.then_some(k))
+        .collect(),
         Engine::Sqlite => [("database", file.database.is_none())]
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
@@ -280,33 +282,33 @@ pub(crate) fn validate_connection(
             ),
         ));
     }
-    if file.engine == Engine::Sqlite && file.tunnel.is_some() {
+    if file.engine == Engine::Sqlite && (file.tunnel.is_some() || file.kubernetes.is_some()) {
         return Err(ConfigError::new(
             path,
             "SQLite is a local file: it does not support a tunnel",
         ));
+    }
+    if let Some(kubernetes) = &file.kubernetes {
+        if file.tunnel.is_some() {
+            return Err(ConfigError::new(
+                path,
+                "a connection goes through an SSH tunnel or Kubernetes, not both",
+            ));
+        }
+        check_kubernetes_resource(&kubernetes.resource).map_err(|m| ConfigError::new(path, m))?;
     }
     Ok(file)
 }
 
 pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFile, ConfigError> {
     check_version(path, file.schema_version)?;
-    match (&file.kubernetes, file.hops.is_empty()) {
-        (Some(_), false) => Err(ConfigError::new(
+    if file.hops.is_empty() {
+        return Err(ConfigError::new(
             path,
-            "a tunnel is SSH ([[hops]]) or Kubernetes ([kubernetes]), not both",
-        )),
-        (None, true) => Err(ConfigError::new(
-            path,
-            "a tunnel needs at least one hop in [[hops]] or a [kubernetes] section",
-        )),
-        (Some(kubernetes), true) => {
-            check_kubernetes_resource(&kubernetes.resource)
-                .map_err(|m| ConfigError::new(path, m))?;
-            Ok(file)
-        }
-        (None, false) => Ok(file),
+            "a tunnel needs at least one hop in [[hops]]",
+        ));
     }
+    Ok(file)
 }
 
 /// `svc/<name>`, `pod/<name>` or `deployment/<name>` (and kubectl's other spellings).

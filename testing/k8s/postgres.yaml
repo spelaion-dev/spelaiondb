@@ -1,4 +1,4 @@
-# A PostgreSQL inside Kubernetes for the Kubernetes tunnel tests (ADR-015): namespace
+# A PostgreSQL inside Kubernetes for the Kubernetes connection tests (ADR-015): namespace
 # `spelunk-test`, service `postgres` on 5432, user/password/database `spelunk`.
 apiVersion: v1
 kind: Namespace
