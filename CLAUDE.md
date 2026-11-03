@@ -67,7 +67,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
   Installers: `npx tauri build` (NSIS + MSI on Windows). Releases: pushing a tag `vX.Y.Z`
   runs `.github/workflows/release.yml` (installers for every OS, the `spelunk` CLI, notes from
-  `docs/releases/vX.Y.Z.md`); the tag must match the version in `Cargo.toml` and `tauri.conf.json`.
+  `docs/releases/vX.Y.Z.md` plus every commit since the previous tag, from
+  `scripts/release-notes.sh`, so commit subjects must read well in a changelog); the tag must
+  match the version in `Cargo.toml` and `tauri.conf.json`.
 
 ## Branches
 - Day-to-day work goes to `dev` (push freely: CI does not run on its pushes, the repository
