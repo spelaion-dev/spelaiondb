@@ -1233,16 +1233,22 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("button", { name: "Save", exact: true }).click();
   await wizard.waitFor({ state: "detached" });
   assert.match(readFileSync(join(userDir, "connections", "sql-server-docker.toml"), "utf8"), /engine = "sqlserver"/);
-  panel = await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b;");
+  panel = await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b");
   await run(panel);
   await page.getByRole("dialog").getByText("Password for SQL Server (Docker)").waitFor();
   await page.getByLabel("Password", { exact: true }).fill("Spelunk-test-1");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   // One batch, two result sets: two result tabs.
   await panel.locator(".result-tabs button", { hasText: /^Result 2/ }).waitFor();
+  // The tab's database, from sys.databases; switching runs the next statements there.
+  const sqlServerDatabase = panel.getByLabel("Database", { exact: true });
+  await sqlServerDatabase.locator('option[value="tempdb"]').waitFor({ state: "attached" });
+  await page.waitForFunction((el) => !el.disabled && el.value === "master", await sqlServerDatabase.elementHandle());
+  await sqlServerDatabase.selectOption("tempdb");
+  await page.waitForFunction((el) => !el.disabled && el.value === "tempdb", await sqlServerDatabase.elementHandle());
   await shot("12a4-sqlserver");
-  // No completion list left open over the next dialog.
-  await page.keyboard.press("Escape");
+  // The query ends in a word, which may open the completion list as it is typed: the next
+  // dialog must not find it on top (the editor closes it when it loses focus).
 
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard");

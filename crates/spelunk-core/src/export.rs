@@ -59,6 +59,9 @@ impl Dialect for GenericDialect {
 /// Rows read per batch from the store while writing (keeps memory bounded on big exports).
 const CHUNK: usize = 10_000;
 
+/// Most rows SQL Server accepts in one `INSERT … VALUES` (error 10738 beyond).
+const SQL_SERVER_MAX_VALUES_ROWS: usize = 1_000;
+
 /// Writes the selected rows and columns of `result` to `out`; returns how many rows.
 pub fn write_result(
     result: &StoredResult,
@@ -159,6 +162,12 @@ pub fn write_result(
                     }
                     ExportFormat::SqlInsertBatch { .. } => {
                         if written == 0 {
+                            out.write_all(insert_prefix.as_bytes())?;
+                        } else if dialect.name() == "sqlserver"
+                            && written.is_multiple_of(SQL_SERVER_MAX_VALUES_ROWS)
+                        {
+                            // SQL Server takes at most 1000 rows per VALUES: another INSERT.
+                            out.write_all(b";\n")?;
                             out.write_all(insert_prefix.as_bytes())?;
                         } else {
                             out.write_all(b",\n  (")?;
@@ -649,6 +658,65 @@ mod tests {
             "INSERT INTO \"items\" (\"raw\") VALUES (X'dead');\n"
         );
         assert_eq!(render(batch(), 3..3, 0..2, false, "postgres"), "");
+    }
+
+    /// SQL Server takes 1000 rows per VALUES: 2500 rows become three INSERTs.
+    #[test]
+    fn copied_insert_splits_at_sql_servers_limit() {
+        let schema = Arc::new(ResultSchema::new(vec![ColumnMeta {
+            name: "id".into(),
+            logical: LogicalType::Int,
+            native_type: "int".into(),
+            native_id: None,
+        }]));
+        let store = ResultStore::new();
+        let id = store.create(schema.clone());
+        let values: ArrayRef = Arc::new(Int64Array::from_iter_values(0..2_500));
+        store
+            .append(
+                id,
+                RecordBatch::try_new(schema.arrow.clone(), vec![values]).unwrap(),
+            )
+            .unwrap();
+        let result = store.get(id).unwrap();
+        let mut out = Vec::new();
+        write_result(
+            &result.read().unwrap(),
+            &ExportOptions {
+                format: ExportFormat::SqlInsertBatch {
+                    table: "items".into(),
+                },
+                rows: 0..2_500,
+                columns: 0..1,
+                header: false,
+            },
+            &Quoted("sqlserver"),
+            &mut out,
+        )
+        .unwrap();
+        let sql = String::from_utf8(out).unwrap();
+        let statements: Vec<&str> = sql
+            .split(
+                ";
+",
+            )
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(statements.len(), 3);
+        assert_eq!(
+            statements[0]
+                .matches(
+                    "),
+  ("
+                )
+                .count(),
+            999
+        );
+        assert!(statements[1].starts_with("INSERT INTO \"items\" (\"id\") VALUES (1000)"));
+        assert!(sql.ends_with(
+            "(2499);
+"
+        ));
     }
 
     #[test]

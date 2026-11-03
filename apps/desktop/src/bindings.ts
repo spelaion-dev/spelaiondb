@@ -178,6 +178,8 @@ export const commands = {
 	/**  Frees a result the UI no longer shows. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
 	currentDatabase: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("current_database", { session })),
+	/**  The databases this tab's session can switch to (MySQL, MariaDB, SQL Server). */
+	listDatabases: (session: string) => typedError<string[], string>(__TAURI_INVOKE("list_databases", { session })),
 	selectDatabase: (session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("select_database", { session, database })),
 	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
 	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),

@@ -36,7 +36,7 @@ cd apps/desktop && npm install && npm run tauri dev -- -- ../../examples/demo
 ```
 
 `examples/demo` ships a local SQLite database and, if you start `testing/docker`, a direct
-PostgreSQL, MySQL and MariaDB, and a PostgreSQL behind two SSH bastions with TLS.
+PostgreSQL, MySQL, MariaDB and SQL Server, and a PostgreSQL behind two SSH bastions with TLS.
 
 ## Adding connections
 
@@ -48,7 +48,8 @@ The **+** button at the top of the sidebar opens **Add connection**: pick a data
 catalog (grouped as relational, analytical and NoSQL; engines without a driver yet are shown
 as *coming soon*), fill in its form, **Test connection** and **Save**. You can also paste a
 connection URL (`postgres://user:pass@host:5432/db?sslmode=require`, `mysql://…`,
-`mariadb://…`, their `jdbc:` forms or `sqlite:path`): it picks the engine and fills host,
+`mariadb://…`, `sqlserver://…`, their `jdbc:` forms, `sqlite:path` or `duckdb:path`): it
+picks the engine and fills host,
 port, database, user, SSL mode and the password field (which is saved like a typed one).
 
 - **Save in:** *Project* writes `.spelunk/connections/<folder>/<name>.toml` in the
@@ -62,11 +63,12 @@ port, database, user, SSL mode and the password field (which is saved like a typ
   keychain or are asked when connecting; key paths in project tunnels are stored relative
   to the repository or as `~/…`, so they work for the whole team. A tunnel in use by a
   connection cannot be deleted.
-- **SQLite:** pick an existing file with **Browse…**, or create an empty database with
-  **New database…** (it never replaces an existing file).
+- **SQLite and DuckDB:** pick an existing file with **Browse…**, or create an empty
+  database with **New database…** (it never replaces an existing file).
 
 **Import from DBeaver…** (in the same window) reads DBeaver's workspace, or a folder you
-choose, and lists its connections: PostgreSQL, MySQL, MariaDB and SQLite ones can be imported,
+choose, and lists its connections: PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB
+ones can be imported,
 with their folder, environment (DBeaver's connection type) and SSH tunnel (one SpelunkDB tunnel
 per bastion and user, shared by the connections that use it). The user names and passwords
 DBeaver saved are read from its credentials file; the passwords go to the system keychain only
@@ -136,8 +138,8 @@ key are read-only (ADR-014).
 
 ## Running SQL
 
-For MySQL and MariaDB, the database selector beside the connection chooses the default
-database for that query tab. It shows the current database after `USE` statements too; other
+For MySQL, MariaDB and SQL Server, the database selector beside the connection chooses the
+default database for that query tab. It shows the current database after `USE` statements too; other
 tabs and the saved connection are unchanged. Connect first to load the databases available
 to the user. Double-click a MySQL or MariaDB database in the connected explorer to open a
 query tab already connected to it. Queries and table tabs opened from the connected explorer

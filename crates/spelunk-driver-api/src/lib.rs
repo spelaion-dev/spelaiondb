@@ -149,6 +149,12 @@ pub trait Connection: Send + Sync {
             "changing database is not supported".into(),
         ))
     }
+    /// The databases [`Connection::select_database`] can switch to.
+    async fn list_databases(&self) -> Result<Vec<String>> {
+        Err(DriverError::Other(
+            "changing database is not supported".into(),
+        ))
+    }
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>>;
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>>;
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo>;

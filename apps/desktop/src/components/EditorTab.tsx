@@ -14,6 +14,11 @@ import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
 
+/** Engines whose sessions can change database with `USE` (a selector per tab). */
+function databaseSwitching(engine: string | undefined): boolean {
+  return engine === "mysql" || engine === "mariadb" || engine === "sqlserver";
+}
+
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -58,7 +63,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const historySaving = useApp((s) => tab.connectionId !== null && s.historySaving.includes(tab.connectionId));
   const workspaceChanging = useApp((s) => s.workspaceChanging);
   const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
-  const supportsDatabase = !tab.table && (connection?.engine === "mysql" || connection?.engine === "mariadb");
+  const supportsDatabase = !tab.table && databaseSwitching(connection?.engine);
   const [databases, setDatabases] = useState<string[]>([]);
   const [database, setDatabase] = useState<string | null>(null);
   const [databaseBusy, setDatabaseBusy] = useState(false);
@@ -320,10 +325,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
     let cancelled = false;
     databaseBusyRef.current = true;
     setDatabaseBusy(true);
-    Promise.all([call(commands.listSchemas(tab.id)), call(commands.currentDatabase(tab.id))])
-      .then(([schemas, current]) => {
+    Promise.all([call(commands.listDatabases(tab.id)), call(commands.currentDatabase(tab.id))])
+      .then(([names, current]) => {
         if (cancelled) return;
-        setDatabases(schemas.map((s) => s.name));
+        setDatabases(names);
         setDatabase(current);
         setDatabaseError(false);
       })

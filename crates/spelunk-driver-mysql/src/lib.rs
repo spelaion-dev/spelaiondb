@@ -432,6 +432,15 @@ impl Connection for MysqlConnection {
             .and_then(|row| row.into_iter().next().flatten()))
     }
 
+    /// MySQL calls its databases schemas: the same list as the explorer.
+    async fn list_databases(&self) -> Result<Vec<String>> {
+        Ok(introspect::list_schemas(self)
+            .await?
+            .into_iter()
+            .map(|s| s.name)
+            .collect())
+    }
+
     async fn select_database(&self, database: &str) -> Result<()> {
         let sql = format!("USE {}", MysqlDialect.quote_identifier(database));
         self.rows(&sql, vec![]).await?;

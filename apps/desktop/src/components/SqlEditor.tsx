@@ -208,6 +208,20 @@ export function SqlEditor({ handle, onFormatError, value, onChange, engine, tabl
           theme,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) callbacks.current.onChange(u.state.doc.toString());
+            // Completions arrive asynchronously: one that lands after the editor lost focus
+            // (a dialog opened meanwhile) would stay open on top of it.
+            if (!u.view.hasFocus && completionStatus(u.state) !== null) {
+              setTimeout(() => {
+                if (!u.view.hasFocus) closeCompletion(u.view);
+              });
+            }
+          }),
+          EditorView.domEventHandlers({
+            blur: (_event, view) => {
+              setTimeout(() => {
+                if (!view.hasFocus) closeCompletion(view);
+              });
+            },
           }),
         ],
       }),

@@ -1419,6 +1419,18 @@ async fn current_database(
         .map_err(|e| e.to_string())
 }
 
+/// The databases this tab's session can switch to (MySQL, MariaDB, SQL Server).
+#[tauri::command]
+#[specta::specta]
+async fn list_databases(session: String, state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .list_databases()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn select_database(
@@ -1769,6 +1781,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             cancel,
             release_result,
             current_database,
+            list_databases,
             select_database,
             list_schemas,
             list_objects,

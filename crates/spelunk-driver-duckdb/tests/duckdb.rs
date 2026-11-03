@@ -539,7 +539,18 @@ async fn attached_databases_are_browsable() {
         exec_all(&*conn, "create table things (a int)").await;
     }
     let conn = memory().await;
-    exec_all(&*conn, &format!("attach '{}' as other", other.0.display())).await;
+    // The writer's thread closes the file a moment after the connection is dropped, and
+    // ATTACH opens it outside the driver's registry (which would wait): try for a while.
+    let attach = format!("attach '{}' as other", other.0.display());
+    let mut attached = run(&*conn, &attach).await;
+    for _ in 0..50 {
+        if attached.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        attached = run(&*conn, &attach).await;
+    }
+    attached.expect("attaching the closed file");
     let schemas = conn.list_schemas().await.unwrap();
     assert!(
         schemas.iter().any(|s| s.name == "other.main"),
