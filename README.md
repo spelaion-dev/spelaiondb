@@ -122,6 +122,13 @@ until you have seen what changed, field by field, and accepted it. Changes you m
 the app's forms are yours and need no review. `spelunk trust <folder>` does the same from a
 terminal and lists the changes it accepts.
 
+Commit the team's SSH server keys as `.spelunk/known_hosts` (the usual `known_hosts`
+format; copy the lines from your own `~/.ssh/known_hosts` or SpelunkDB's after checking each
+server once). They are checked before anyone's own files, so a newcomer's first connection
+through a bastion is already verified instead of asking them to accept a fingerprint, and a
+server that shows another key is refused. A change to that file is reviewed like a change to
+a connection before it is used.
+
 ## Settings
 
 The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in its own tab:

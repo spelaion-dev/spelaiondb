@@ -1879,3 +1879,76 @@ fn repositories_trusted_before_snapshots_are_adopted_as_they_are() {
         Err(ResolveError::Untrusted { .. })
     ));
 }
+
+const TEAM_HOSTS: &str = "# Reviewed by the team\nbastion.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC0Cx5aAdFPmIIPx6ZxdIYFKbARZbBbB5NV0QIO3Qdp2\n";
+
+#[test]
+fn the_teams_known_hosts_is_used_only_as_trusted() {
+    let fx = Fixture::new("team-hosts");
+    fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    let hosts = fx.write("repo/.spelunk/known_hosts", TEAM_HOSTS);
+    let backend = FakeBackend::default();
+
+    // Untrusted repository: nothing of it is used (its connections do not even resolve).
+    let config = load(Some(&fx.repo()), &fx.user());
+    let untrusted = TrustStore::load(&fx.user()).unwrap();
+    assert!(matches!(
+        Resolver::new(&config, &untrusted, &backend).resolve(&ws("orders")),
+        Err(ResolveError::Untrusted { .. })
+    ));
+
+    // Trusted: the tunnel carries the team's file.
+    let trust = fx.trusted();
+    let known = |trust: &TrustStore| {
+        let config = load(Some(&fx.repo()), &fx.user());
+        Resolver::new(&config, trust, &backend)
+            .resolve(&ws("orders"))
+            .map(|r| r.tunnel.unwrap().known_hosts)
+    };
+    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+
+    // Comments and blank lines are not changes.
+    std::fs::write(&hosts, format!("{TEAM_HOSTS}\n# another comment\n")).unwrap();
+    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+
+    // Another key for the bastion: the connection waits for a review, and says what changed.
+    std::fs::write(&hosts, TEAM_HOSTS.replace("Qdp2", "XXXX")).unwrap();
+    let change = changed(known(&trust).map(|_| ()));
+    assert_eq!(change.item, spelunk_config::KNOWN_HOSTS_ITEM);
+    assert_eq!(change.fields[0].field, "bastion.internal ssh-ed25519");
+    assert!(
+        change
+            .to_string()
+            .contains("the file .spelunk/known_hosts changed"),
+        "{change}"
+    );
+    // Testing a tunnel from its editor leaves the unreviewed file out instead.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = spelunk_config::TunnelDraft::from_entry(
+        config
+            .tunnel_for(Source::Workspace, "bastion")
+            .expect("the tunnel"),
+    );
+    let tested = Resolver::new(&config, &trust, &backend)
+        .resolve_tunnel_draft(&draft)
+        .unwrap();
+    assert_eq!(tested.known_hosts, None);
+
+    // Accepting it records it; then it is used again.
+    let mut trust = trust;
+    trust
+        .accept(&config, spelunk_config::KNOWN_HOSTS_ITEM)
+        .unwrap();
+    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+
+    // Added after trusting: new, so reviewed before it is used.
+    std::fs::remove_file(&hosts).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    trust
+        .accept(&config, spelunk_config::KNOWN_HOSTS_ITEM)
+        .unwrap();
+    assert_eq!(known(&trust).unwrap(), None);
+    std::fs::write(&hosts, TEAM_HOSTS).unwrap();
+    assert!(changed(known(&trust).map(|_| ())).new);
+}

@@ -75,6 +75,7 @@
     "newTitle": "New in the repository",
     "connection": "the connection {{name}}",
     "tunnel": "the SSH tunnel {{name}}",
+    "knownHosts": "the shared SSH server keys (.spelunk/known_hosts)",
     "explanation": "Someone changed {{what}} in the repository (for example in a git pull). Until you accept the change, it reads no secret and runs no command.",
     "newExplanation": "Someone added {{what}} to the repository after you trusted it. Until you accept it, it reads no secret and runs no command.",
     "field": "Field",

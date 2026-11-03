@@ -75,6 +75,7 @@
     "newTitle": "Nuevo en el repositorio",
     "connection": "la conexión {{name}}",
     "tunnel": "el túnel SSH {{name}}",
+    "knownHosts": "las huellas compartidas de los servidores SSH (.spelunk/known_hosts)",
     "explanation": "Alguien ha cambiado {{what}} en el repositorio (por ejemplo, en un git pull). Hasta que aceptes el cambio, no lee ningún secreto ni ejecuta ningún comando.",
     "newExplanation": "Alguien ha añadido {{what}} al repositorio después de que confiaras en él. Hasta que lo aceptes, no lee ningún secreto ni ejecuta ningún comando.",
     "field": "Campo",

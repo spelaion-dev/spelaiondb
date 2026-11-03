@@ -1,6 +1,6 @@
 # ADR-022: Sharing connections with a team, safely and without passwords
 
-- **Status:** Accepted (part 1 implemented; parts 2 to 5 planned)
+- **Status:** Accepted (parts 1 and 2 implemented; parts 3 to 5 planned)
 - **Date:** 2026-11-03
 - **Amends:** ADR-009 (repository trust)
 
@@ -37,7 +37,12 @@ trusts it. Teams of system administrators need more than that:
      recorded the first time the app or `spelunk trust` loads them, as trust worked before.
 2. **Shared server keys:** a reviewed `.spelunk/known_hosts` in the repository is checked
    before the user's own files, so a newcomer's first SSH connection is already verified. A
-   different key stays a blocking error.
+   different key stays a blocking error, even if the user's own file has the right one.
+   - It is used only from a trusted repository and only as the user trusted it: the file is
+     part of the snapshots of part 1 (one field per entry, comments not counted), so a pull
+     that changes a key is reviewed before it is used. Testing a tunnel from its editor
+     leaves an unreviewed file out (the hosts are asked about, as without one).
+   - It is read, never written: keys the user accepts still go to their own file.
 3. **Logins without passwords:** TLS client certificates (`tls.cert`, `tls.key`; the key
    from the user's directory, never the repository) and documented presets for short-lived
    tokens through `cmd:` (AWS RDS IAM, Azure AD, GCP). SSH certificates from a team CA later.

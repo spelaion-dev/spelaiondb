@@ -69,6 +69,9 @@ impl ResolvedConnection {
 pub struct ResolvedTunnel {
     pub name: String,
     pub hops: Vec<ResolvedHop>,
+    /// The team's `.spelunk/known_hosts` (ADR-022), checked before the user's own files:
+    /// only from a trusted repository and only as the user trusted it.
+    pub known_hosts: Option<PathBuf>,
 }
 
 /// A connection's Kubernetes resource, ready for `kubectl port-forward` (ADR-015).
@@ -230,13 +233,16 @@ impl<'a> Resolver<'a> {
                         .check_tunnel(&root, tunnel)
                         .map_err(|change| ResolveError::Changed { root, change })?;
                 }
-                Some(self.resolve_tunnel(
+                let mut resolved = self.resolve_tunnel(
                     name,
                     tunnel.source,
                     &tunnel.file,
                     &base,
                     &entry.file_path,
-                )?)
+                )?;
+                // A changed shared file stops the connection until it is reviewed.
+                resolved.known_hosts = self.team_known_hosts(true)?;
+                Some(resolved)
             }
         };
 
@@ -294,7 +300,33 @@ impl<'a> Resolver<'a> {
         let base = self.base_dir(draft.source)?;
         let path = draft.path(self.config)?;
         let file = draft.to_file(self.config)?;
-        self.resolve_tunnel(&draft.file_name()?, draft.source, &file, &base, &path)
+        let mut resolved =
+            self.resolve_tunnel(&draft.file_name()?, draft.source, &file, &base, &path)?;
+        // Testing a tunnel from its editor: an unreviewed shared file is left out (the hosts
+        // are then asked about, as without one), not an error.
+        resolved.known_hosts = self.team_known_hosts(false)?;
+        Ok(resolved)
+    }
+
+    /// The team's `.spelunk/known_hosts`, if the open repository has one, is trusted and the
+    /// file is as the user trusted it. `strict`: a changed file is an error to review;
+    /// otherwise it is just not used.
+    fn team_known_hosts(&self, strict: bool) -> Result<Option<PathBuf>, ResolveError> {
+        let Some(root) = self.config.workspace_root.as_deref() else {
+            return Ok(None);
+        };
+        let path = crate::trust::team_known_hosts(root);
+        if !path.is_file() || !self.trust.is_trusted(root) {
+            return Ok(None);
+        }
+        match self.trust.check_known_hosts(root) {
+            Ok(()) => Ok(Some(path)),
+            Err(change) if strict => Err(ResolveError::Changed {
+                root: root.to_path_buf(),
+                change,
+            }),
+            Err(_) => Ok(None),
+        }
     }
 
     /// Hops ready to open: variables substituted, key paths resolved against `base` and
@@ -330,6 +362,7 @@ impl<'a> Resolver<'a> {
         Ok(ResolvedTunnel {
             name: name.to_string(),
             hops,
+            known_hosts: None,
         })
     }
 

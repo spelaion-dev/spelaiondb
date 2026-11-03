@@ -10,6 +10,10 @@ use crate::{HostInfo, Interaction, SshError};
 /// Where fingerprints are looked up and stored.
 #[derive(Debug, Clone)]
 pub struct KnownHosts {
+    /// The team's `.spelunk/known_hosts`, reviewed in git (ADR-022): looked up first, so a
+    /// newcomer's first connection is already verified. Read, never written. The caller
+    /// passes it only from a trusted repository and only as the user trusted it.
+    pub team_file: Option<PathBuf>,
     /// The user's `~/.ssh/known_hosts`: read, never written.
     pub user_file: Option<PathBuf>,
     /// SpelunkDB's own file, where accepted fingerprints are stored.
@@ -23,14 +27,18 @@ impl KnownHosts {
         let user_file =
             std::env::var_os(var).map(|home| PathBuf::from(home).join(".ssh").join("known_hosts"));
         Self {
+            team_file: None,
             user_file,
             app_file: app_dir.join("known_hosts"),
         }
     }
 
+    /// In order: the team's, the user's, SpelunkDB's. The first file that names the host
+    /// decides: a matching key is accepted, a different one is a blocking error.
     fn files(&self) -> impl Iterator<Item = &PathBuf> {
-        self.user_file
+        self.team_file
             .iter()
+            .chain(self.user_file.iter())
             .chain(std::iter::once(&self.app_file))
             .filter(|p| p.is_file())
     }

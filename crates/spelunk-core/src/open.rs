@@ -282,9 +282,14 @@ pub async fn open_connection(
                 "{:?}|{}|{:?}",
                 resolved.id.source, resolved_tunnel.name, resolved_tunnel.hops
             );
+            // The team's reviewed server keys come first (ADR-022).
+            let known_hosts = KnownHosts {
+                team_file: resolved_tunnel.known_hosts.clone(),
+                ..options.known_hosts.clone()
+            };
             let tunnel = options
                 .tunnels
-                .get_or_connect(key, &spec, &options.known_hosts, options.interaction)
+                .get_or_connect(key, &spec, &known_hosts, options.interaction)
                 .await?;
             if resolved.engine == Engine::Sqlite {
                 // The file is on the last hop: its sqlite3 is run there (ADR-018).
@@ -336,7 +341,11 @@ pub async fn test_tunnel(
             })
             .collect(),
     };
-    let opened = Tunnel::connect(&spec, known_hosts, interaction).await?;
+    let known_hosts = KnownHosts {
+        team_file: tunnel.known_hosts.clone(),
+        ..known_hosts.clone()
+    };
+    let opened = Tunnel::connect(&spec, &known_hosts, interaction).await?;
     opened.close().await;
     Ok(())
 }

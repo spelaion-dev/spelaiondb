@@ -102,8 +102,13 @@ function ChangeDialog() {
   const { t } = useTranslation("shell");
   const request = useDialogs((s) => s.change);
   if (!request) return null;
-  const [kind, name] = request.item.includes(":") ? request.item.split(/:(.*)/s) : ["connection", request.item];
-  const what = kind === "tunnel" ? t("change.tunnel", { name }) : t("change.connection", { name });
+  const [kind, name] = request.item.includes(":") ? request.item.split(/:(.*)/s) : [request.item, ""];
+  const what =
+    kind === "tunnel"
+      ? t("change.tunnel", { name })
+      : kind === "known_hosts"
+        ? t("change.knownHosts")
+        : t("change.connection", { name });
   return (
     <Modal title={request.isNew ? t("change.newTitle") : t("change.title")}>
       <p>{request.isNew ? t("change.newExplanation", { what }) : t("change.explanation", { what })}</p>

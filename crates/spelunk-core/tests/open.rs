@@ -64,6 +64,7 @@ impl Workspace {
         let options = OpenOptions {
             tunnels: self.tunnels.clone(),
             known_hosts: KnownHosts {
+                team_file: None,
                 user_file: None,
                 app_file: self.base.join("user/known_hosts"),
             },
@@ -376,6 +377,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
         ],
     };
     let known_hosts = KnownHosts {
+        team_file: None,
         user_file: None,
         app_file: ws.base.join("user/known_hosts"),
     };
@@ -699,4 +701,78 @@ async fn sqlite_on_a_server_says_what_is_wrong() {
         }
         Ok(_) => panic!("a bastion that runs no commands cannot open a file"),
     }
+}
+
+/// A newcomer who must not be asked about any host: the team's file answers for them.
+struct RefuseHosts;
+
+#[async_trait]
+impl Interaction for RefuseHosts {
+    async fn confirm_unknown_host(&self, host: &HostInfo) -> bool {
+        panic!("the team's known_hosts should have verified {host:?}");
+    }
+
+    async fn ask_secret(&self, _request: &SecretRequest) -> Option<Secret> {
+        None
+    }
+}
+
+/// ADR-022: `.spelunk/known_hosts` in the repository verifies a newcomer's first connection.
+#[tokio::test]
+async fn the_teams_known_hosts_verifies_a_newcomers_first_connection() {
+    let Ok(addr) = std::env::var("SPELUNK_TEST_SSH") else {
+        eprintln!("SPELUNK_TEST_SSH not set: test skipped");
+        return;
+    };
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let identity = toml_path(&keys().join("id_ed25519"));
+    let setup = |ws: &Workspace| {
+        ws.write(
+            ".spelunk/tunnels/bastions.toml",
+            &format!(
+                "schema_version = 1\n\n[[hops]]\nhost = \"{host}\"\nport = {port}\nuser = \"spelunk\"\nauth = [\"key\"]\nidentity_file = {identity}\n\n[[hops]]\nhost = \"bastion2\"\nuser = \"spelunk\"\nauth = [\"key\"]\nidentity_file = {identity}\n"
+            ),
+        );
+        ws.write(
+            ".spelunk/connections/orders.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"postgres\"\ndatabase = \"spelunk\"\nuser = \"spelunk\"\npassword = { secret = \"prompt\" }\ntunnel = \"bastions\"\n",
+        );
+    };
+
+    // Someone on the team connects once and commits the keys they checked.
+    let veteran = Workspace::new("team-hosts-veteran");
+    setup(&veteran);
+    let conn = veteran
+        .open(
+            "orders",
+            Some(Secret::new("spelunk")),
+            Arc::new(AcceptHosts),
+        )
+        .await
+        .unwrap();
+    conn.close().await;
+    let learnt = std::fs::read_to_string(veteran.base.join("user/known_hosts")).unwrap();
+
+    // A newcomer clones the repository with that file and has nothing of their own.
+    let newcomer = Workspace::new("team-hosts-newcomer");
+    setup(&newcomer);
+    newcomer.write(".spelunk/known_hosts", &learnt);
+    let conn = newcomer
+        .open(
+            "orders",
+            Some(Secret::new("spelunk")),
+            Arc::new(RefuseHosts),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        conn.resolved.tunnel.as_ref().unwrap().known_hosts,
+        Some(newcomer.base.join("repo/.spelunk/known_hosts"))
+    );
+    assert_eq!(first_value(&conn, "select 1").await, "1");
+    conn.close().await;
+    assert!(
+        !newcomer.base.join("user/known_hosts").exists(),
+        "nothing was asked or learnt"
+    );
 }

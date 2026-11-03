@@ -50,7 +50,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   password is forgotten when that hop points to another server). `dbeaver.rs` reads DBeaver's
   connections and saved credentials for the import (passwords only as `Secret`, to the keychain).
 - `crates/spelunk-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
-  it receives a `TunnelSpec`. Dialogs go through the `Interaction` trait. Tests against the
+  it receives a `TunnelSpec`. `KnownHosts` checks the team's `.spelunk/known_hosts` first
+  (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Dialogs go through the `Interaction` trait. Tests against the
   Docker bastions with `SPELUNK_TEST_SSH=127.0.0.1:2221`.
   Kubernetes (ADR-015) is not a tunnel file but a connection's `[kubernetes]` section:
   `spelunk-core::kube` runs `kubectl port-forward` and lists contexts, namespaces, names and

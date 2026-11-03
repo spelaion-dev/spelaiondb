@@ -7,8 +7,9 @@
 //! commands. Personal configuration does not need this: the user wrote it.
 //!
 //! Trusting is not forever: it records a snapshot of every connection and tunnel in the
-//! repository (every field but the display name). A `git pull` that changes one, or adds a
-//! new one, stops it from resolving until the user has seen the change and accepted it.
+//! repository (every field but the display name), and of the team's SSH server keys
+//! (`.spelunk/known_hosts`). A `git pull` that changes one, or adds a new one, stops it from
+//! being used until the user has seen the change and accepted it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -78,7 +79,11 @@ pub struct ItemChange {
 
 impl fmt::Display for ItemChange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (kind, name) = self.item.split_once(':').unwrap_or(("item", &self.item));
+        let (kind, name) = match self.item.split_once(':') {
+            Some(parts) => parts,
+            None if self.item == KNOWN_HOSTS_ITEM => ("file", ".spelunk/known_hosts"),
+            None => ("item", self.item.as_str()),
+        };
         if self.new {
             return write!(
                 f,
@@ -106,6 +111,14 @@ impl fmt::Display for ItemChange {
     }
 }
 
+/// The key of the team's SSH server keys in the trust file.
+pub const KNOWN_HOSTS_ITEM: &str = "known_hosts";
+
+/// The team's SSH server keys, reviewed in git (ADR-022).
+pub fn team_known_hosts(root: &Path) -> PathBuf {
+    root.join(".spelunk").join("known_hosts")
+}
+
 /// The key of a repository connection in the trust file.
 pub fn connection_item(id: &ConnectionId) -> String {
     format!("connection:{id}")
@@ -126,6 +139,41 @@ fn connection_snapshot(file: &ConnectionFile) -> Snapshot {
 
 fn tunnel_snapshot(file: &TunnelFile) -> Snapshot {
     flatten(toml::Value::try_from(file).unwrap_or(toml::Value::Table(Default::default())))
+}
+
+/// One field per entry: `<hosts> <type>` (with `@cert-authority`/`@revoked` if present)
+/// mapped to the key. Comments and blank lines do not count.
+fn known_hosts_snapshot(path: &Path) -> Snapshot {
+    let mut out = Snapshot::new();
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (marker, rest) = match fields.first() {
+            Some(first) if first.starts_with('@') => (Some(*first), &fields[1..]),
+            _ => (None, &fields[..]),
+        };
+        let [hosts, kind, key, ..] = rest else {
+            // A broken line is kept as it is: changing it is a change too.
+            out.insert(format!("line {line}"), String::new());
+            continue;
+        };
+        let mut name = match marker {
+            Some(marker) => format!("{marker} {hosts} {kind}"),
+            None => format!("{hosts} {kind}"),
+        };
+        let base = name.clone();
+        let mut n = 2;
+        while out.contains_key(&name) {
+            name = format!("{base} #{n}");
+            n += 1;
+        }
+        out.insert(name, key.to_string());
+    }
+    out
 }
 
 fn flatten(value: toml::Value) -> Snapshot {
@@ -309,6 +357,12 @@ impl TrustStore {
         )
     }
 
+    /// Is the team's `.spelunk/known_hosts` as the user trusted it? `Err` says what changed.
+    pub(crate) fn check_known_hosts(&self, root: &Path) -> Result<(), ItemChange> {
+        let path = team_known_hosts(root);
+        self.check(root, KNOWN_HOSTS_ITEM.into(), known_hosts_snapshot(&path))
+    }
+
     /// Is this repository tunnel as the user trusted it? `Err` says what changed.
     pub(crate) fn check_tunnel(&self, root: &Path, entry: &TunnelEntry) -> Result<(), ItemChange> {
         self.check(root, tunnel_item(&entry.name), tunnel_snapshot(&entry.file))
@@ -378,7 +432,13 @@ fn repository_items(config: &Config) -> Vec<(String, Snapshot)> {
         .iter()
         .filter(|t| t.source == Source::Workspace)
         .map(|t| (tunnel_item(&t.name), tunnel_snapshot(&t.file)));
-    connections.chain(tunnels).collect()
+    let known_hosts = config
+        .workspace_root
+        .as_deref()
+        .map(team_known_hosts)
+        .filter(|path| path.is_file())
+        .map(|path| (KNOWN_HOSTS_ITEM.to_string(), known_hosts_snapshot(&path)));
+    connections.chain(tunnels).chain(known_hosts).collect()
 }
 
 fn current(config: &Config, item: &str) -> Option<Snapshot> {
