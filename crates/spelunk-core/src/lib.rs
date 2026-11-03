@@ -53,7 +53,7 @@ pub fn create_file_database(
     match engine {
         Engine::Sqlite => spelunk_driver_sqlite::create_database(path),
         Engine::Duckdb => spelunk_driver_duckdb::create_database(path),
-        Engine::Postgres | Engine::Mysql | Engine::Mariadb => Err(
+        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => Err(
             spelunk_driver_api::DriverError::Other(format!("{} is not a file", engine.as_str())),
         ),
     }

@@ -377,10 +377,17 @@ pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
         } else {
             text
         };
-        format!("'{text}'")
+        // SQL Server: `N'…'` keeps every character (plain `'…'` goes through a code page).
+        if dialect == "sqlserver" {
+            format!("N'{text}'")
+        } else {
+            format!("'{text}'")
+        }
     };
     match value {
         Value::Null => "NULL".into(),
+        // T-SQL has no TRUE or FALSE: `bit` takes 1 and 0.
+        Value::Bool(b) if dialect == "sqlserver" => if *b { "1" } else { "0" }.into(),
         Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
         Value::Int(i) => i.to_string(),
         Value::Float(f) if f.is_finite() => value.to_string(),
@@ -390,6 +397,7 @@ pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
             match dialect {
                 "postgres" => format!("'\\x{hex}'"),
                 "duckdb" => format!("from_hex('{hex}')"),
+                "sqlserver" => format!("0x{hex}"),
                 _ => format!("X'{hex}'"),
             }
         }

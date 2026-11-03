@@ -7,8 +7,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 ## Before touching anything
 - Read `docs/architecture.md` and the ADRs in `docs/adr/`. ADRs rule: if a change
   contradicts them, do not make it; propose a new ADR that supersedes the old one.
-- Current state: **v0.2**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQLite and DuckDB
-  drivers, configuration, SSH tunnels, core, local store, read-only `spelunk mcp` and the
+- Current state: **v0.2**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQL Server, SQLite
+  and DuckDB drivers, configuration, SSH tunnels, core, local store, read-only `spelunk mcp` and the
   `spelunk` binary, and the first version of the desktop app (`apps/desktop`).
   `spikes/` is throwaway phase 0 code: it is never imported from `crates/`.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and
@@ -25,6 +25,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   text, on both servers.
 - `crates/spelunk-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
+- `crates/spelunk-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
+  (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a batch may return
+  several result sets. Cancel is a TDS Attention through a patched tiberius in
+  `vendor/tiberius` (read its `PATCHED.md` before upgrading). Tests against the Docker SQL
+  Server with `SPELUNK_TEST_MSSQL=127.0.0.1:11433`.
 - `crates/spelunk-driver-duckdb`: `duckdb` (bundled) in one thread per connection, one open
   per file shared by clones (ADR-016). Arrow from DuckDB converted in `exec.rs`; nested types
   written as DuckDB's text in `format.rs`. Its type zoo (`tests/duckdb.rs`) compares every
@@ -108,7 +113,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   **not** count as tested):
   `docker compose -f testing/docker/compose.yaml up -d --wait` and
   `SPELUNK_TEST_PG=127.0.0.1:15432 SPELUNK_TEST_MYSQL=127.0.0.1:13306
-  SPELUNK_TEST_MARIADB=127.0.0.1:13307 SPELUNK_TEST_SSH=127.0.0.1:2221 cargo test --workspace`.
+  SPELUNK_TEST_MARIADB=127.0.0.1:13307 SPELUNK_TEST_MSSQL=127.0.0.1:11433
+  SPELUNK_TEST_SSH=127.0.0.1:2221 cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test `node e2e/smoke.mjs` (drives the real app over WebView2 CDP).

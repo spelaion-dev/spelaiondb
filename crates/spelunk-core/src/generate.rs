@@ -24,8 +24,15 @@ pub fn table_sql(dialect: &dyn Dialect, table: &TableInfo, template: SqlTemplate
     let name = qualified(dialect, &table.object.schema, &table.object.name);
     let quote = |c: &str| dialect.quote_identifier(c);
     let columns: Vec<&str> = table.columns.iter().map(|c| c.name.as_str()).collect();
+    // T-SQL has no LIMIT: `SELECT TOP n`.
+    let sqlserver = dialect.name() == "sqlserver";
     match template {
+        SqlTemplate::Preview if sqlserver => format!("SELECT TOP {PREVIEW_ROWS} *\nFROM {name};\n"),
         SqlTemplate::Preview => format!("SELECT *\nFROM {name}\nLIMIT {PREVIEW_ROWS};\n"),
+        SqlTemplate::Select if sqlserver => format!(
+            "SELECT TOP {PREVIEW_ROWS}\n{}\nFROM {name};\n",
+            list(columns.iter().map(|c| quote(c)), ",\n")
+        ),
         SqlTemplate::Select => format!(
             "SELECT\n{}\nFROM {name}\nLIMIT {PREVIEW_ROWS};\n",
             list(columns.iter().map(|c| quote(c)), ",\n")

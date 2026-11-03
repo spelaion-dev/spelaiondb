@@ -19,12 +19,13 @@ env:
 
 jobs:
   linux:
-    name: Linux · fmt, clippy, tests with PostgreSQL (TLS), SQLite, DuckDB and SSH tunnels
+    name: Linux · fmt, clippy, tests with PostgreSQL (TLS), MySQL, SQL Server, SQLite, DuckDB and SSH tunnels
     runs-on: ubuntu-latest
     env:
       SPELUNK_TEST_PG: 127.0.0.1:15432
       SPELUNK_TEST_MYSQL: 127.0.0.1:13306
       SPELUNK_TEST_MARIADB: 127.0.0.1:13307
+      SPELUNK_TEST_MSSQL: 127.0.0.1:11433
       SPELUNK_TEST_SSH: 127.0.0.1:2221
       SPELUNK_TEST_SSH_AGENT: "1"
     steps:

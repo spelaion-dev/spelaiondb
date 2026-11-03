@@ -3,10 +3,11 @@
 #   host ──2221──► bastion1 ──(mid network)──► bastion2 ──(data network)──► postgres:5432
 #                                                                          mysql:3306
 #                                                                          mariadb:3306
+#                                                                          sqlserver:1433
 #
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
-# Postgres is also published on 127.0.0.1:15432, MySQL on 13306 and MariaDB on 13307, for
-# tests without SSH.
+# Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307 and SQL
+# Server on 11433, for tests without SSH.
 name: spelunk-test
 
 services:
@@ -106,6 +107,23 @@ services:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s
       retries: 60
+    networks: [data, direct]
+
+  # SQL Server 2022 (Developer edition, free for development and testing). It encrypts with a
+  # self-signed certificate of its own. Tests log in as `sa` and create the `spelunk` database.
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: Spelunk-test-1
+    ports:
+      - "127.0.0.1:11433:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"select 1\" -b -o /dev/null"]
+      interval: 3s
+      retries: 60
+      start_period: 10s
     networks: [data, direct]
 
 networks:

@@ -74,7 +74,7 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         supported(Engine::Sqlite, "SQLite", Relational, File),
         supported(Engine::Mysql, "MySQL", Relational, Network),
         supported(Engine::Mariadb, "MariaDB", Relational, Network),
-        planned("sqlserver", "SQL Server", Relational, Network, Some(1433)),
+        supported(Engine::Sqlserver, "SQL Server", Relational, Network),
         planned("oracle", "Oracle", Relational, Network, Some(1521)),
         planned(
             "cockroachdb",

@@ -6,7 +6,8 @@
         "sqlite",
         "mysql",
         "mariadb",
-        "duckdb"
+        "duckdb",
+        "sqlserver"
       ],
       "type": "string"
     },

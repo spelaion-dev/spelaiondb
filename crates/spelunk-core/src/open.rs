@@ -9,6 +9,7 @@ use spelunk_driver_duckdb::DuckdbDriver;
 use spelunk_driver_mysql::MysqlDriver;
 use spelunk_driver_postgres::PostgresDriver;
 use spelunk_driver_sqlite::SqliteDriver;
+use spelunk_driver_sqlserver::SqlServerDriver;
 use spelunk_ssh::{
     AuthMethod, HopSpec, Interaction, KnownHosts, SshError, Target, Tunnel, TunnelSpec, TunnelState,
 };
@@ -25,10 +26,11 @@ pub struct Engines {
 impl Engines {
     /// The engines that ship with SpelunkDB.
     pub fn builtin() -> Self {
-        let drivers: [Arc<dyn Driver>; 5] = [
+        let drivers: [Arc<dyn Driver>; 6] = [
             Arc::new(PostgresDriver),
             Arc::new(SqliteDriver::default()),
             Arc::new(DuckdbDriver::default()),
+            Arc::new(SqlServerDriver),
             Arc::new(MysqlDriver::mysql()),
             Arc::new(MysqlDriver::mariadb()),
         ];

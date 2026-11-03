@@ -31,7 +31,7 @@
     "copyright": "Copyright 2026 SpelunkDB contributors. Licensed under Apache-2.0.",
     "category": "DeveloperTool",
     "shortDescription": "Desktop database client with first-class SSH tunnels and an MCP server",
-    "longDescription": "SpelunkDB is an open-source desktop client for PostgreSQL, MySQL, MariaDB, SQLite and DuckDB, with SSH tunnels through any number of bastions, a read-only MCP server for AI agents, and configuration you can share through git.",
+    "longDescription": "SpelunkDB is an open-source desktop client for PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB, with SSH tunnels through any number of bastions, a read-only MCP server for AI agents, and configuration you can share through git.",
     "homepage": "https://github.com/petilolz/spelunkdb",
     "license": "Apache-2.0",
     "licenseFile": "../../../LICENSE",

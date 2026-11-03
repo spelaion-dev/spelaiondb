@@ -885,6 +885,7 @@ pub fn engine_named(name: &str) -> Result<spelunk_config::Engine, String> {
         "mysql" => Engine::Mysql,
         "mariadb" => Engine::Mariadb,
         "duckdb" => Engine::Duckdb,
+        "sqlserver" => Engine::Sqlserver,
         other => return Err(format!("unsupported engine: {other}")),
     })
 }

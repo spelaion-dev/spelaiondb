@@ -1,0 +1,25 @@
+[package]
+name = "spelunk-driver-sqlserver"
+description = "SQL Server driver for SpelunkDB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+spelunk-driver-api.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+# TDS 7.4/8.0 over rustls. Its TLS uses the process-wide rustls provider when one is
+# installed: the driver installs ring, like the other drivers use.
+tiberius = { version = "0.13", default-features = false, features = ["tds80", "rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio = { workspace = true, features = ["net"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

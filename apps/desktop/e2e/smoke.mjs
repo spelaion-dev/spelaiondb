@@ -517,7 +517,14 @@ try {
   step("Ctrl+Enter runs the statement under the cursor, Ctrl+Shift+Enter all of them");
   await replaceQuery(panel, "select 'first' as which;\nselect 'second;' as which;\n\n-- the third\nselect 'third' as which");
   const firstCell = async () => {
-    const box = await panel.locator(".grid-scroller").boundingBox();
+    // Between two runs the grid is replaced: wait until the new one is there.
+    const grid = panel.locator(".grid-scroller");
+    await grid.waitFor();
+    let box = await grid.boundingBox();
+    for (let i = 0; i < 40 && !box; i++) {
+      await page.waitForTimeout(100);
+      box = await grid.boundingBox();
+    }
     const before = await page.evaluate(() => window.__copied.length);
     await page.mouse.click(box.x + 80, box.y + 36 + 13);
     await page.keyboard.press("Control+c");
@@ -926,8 +933,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("heading", { name: "NoSQL" }).waitFor();
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "MySQL" }).isDisabled()));
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "MariaDB" }).isDisabled()));
-  assert.ok(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled());
-  await wizard.locator(".engine-card", { hasText: "SQL Server" }).getByText("Coming soon").waitFor();
+  assert.ok(!(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled()));
+  assert.ok(!(await wizard.locator(".engine-card", { hasText: "DuckDB" }).isDisabled()));
+  assert.ok(await wizard.locator(".engine-card", { hasText: "Oracle" }).isDisabled());
+  await wizard.locator(".engine-card", { hasText: "Oracle" }).getByText("Coming soon").waitFor();
   await shot("12a-add-connection-catalog");
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");
@@ -1018,6 +1027,35 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const second = await newQuery("analytics", "select count(*) as n from sales;");
   await run(second);
   await second.locator(".statusline", { hasText: "1 row" }).waitFor();
+
+  step("SQL Server: a new connection, a batch with two result sets");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "SQL Server" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("SQL Server (Docker)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("11433");
+  await wizard.getByLabel("User", { exact: true }).fill("sa");
+  // Asked every time: never stored, not even in the keychain.
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("Spelunk-test-1");
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 16\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  assert.match(readFileSync(join(userDir, "connections", "sql-server-docker.toml"), "utf8"), /engine = "sqlserver"/);
+  panel = await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b;");
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for SQL Server (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("Spelunk-test-1");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  // One batch, two result sets: two result tabs.
+  await panel.locator(".result-tabs button", { hasText: /^Result 2/ }).waitFor();
+  await shot("12a4-sqlserver");
+  // No completion list left open over the next dialog.
+  await page.keyboard.press("Escape");
 
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard");

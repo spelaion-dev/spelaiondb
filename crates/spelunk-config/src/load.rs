@@ -260,7 +260,7 @@ pub(crate) fn validate_connection(
         .filter_map(|(k, missing)| missing.then_some(k))
         .collect(),
         // A MySQL connection may have no default database: `USE` or qualified names work.
-        Engine::Mysql | Engine::Mariadb => [
+        Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => [
             ("host", file.host.is_none() && file.kubernetes.is_none()),
             ("user", file.user.is_none()),
         ]

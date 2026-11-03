@@ -2,7 +2,7 @@
 resolver = "3"
 members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
 # The phase 0 spikes are a separate, throwaway workspace.
-exclude = ["spikes"]
+exclude = ["spikes", "vendor"]
 
 [workspace.package]
 version = "0.2.0"
@@ -17,6 +17,7 @@ spelunk-driver-postgres = { path = "crates/spelunk-driver-postgres" }
 spelunk-driver-sqlite = { path = "crates/spelunk-driver-sqlite" }
 spelunk-driver-mysql = { path = "crates/spelunk-driver-mysql" }
 spelunk-driver-duckdb = { path = "crates/spelunk-driver-duckdb" }
+spelunk-driver-sqlserver = { path = "crates/spelunk-driver-sqlserver" }
 spelunk-core = { path = "crates/spelunk-core" }
 spelunk-config = { path = "crates/spelunk-config" }
 spelunk-ssh = { path = "crates/spelunk-ssh" }
@@ -36,3 +37,7 @@ tokio-postgres = "0.7"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# tiberius with a fix to cancelling (see vendor/tiberius/PATCHED.md).
+[patch.crates-io]
+tiberius = { path = "vendor/tiberius" }

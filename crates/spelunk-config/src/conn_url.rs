@@ -24,7 +24,7 @@ pub struct UrlConnection {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum UrlError {
     #[error(
-        "not a connection URL this app knows (postgres://, mysql://, mariadb://, sqlite:, duckdb:)"
+        "not a connection URL this app knows (postgres://, mysql://, mariadb://, sqlserver://, sqlite:, duckdb:)"
     )]
     UnknownScheme,
     #[error("the URL could not be read: {0}")]
@@ -52,6 +52,8 @@ pub fn parse_connection_url(text: &str) -> Result<UrlConnection, UrlError> {
         "mariadb" => Engine::Mariadb,
         "sqlite" | "sqlite3" => return Ok(file(Engine::Sqlite, text)),
         "duckdb" => return Ok(file(Engine::Duckdb, text)),
+        "sqlserver" | "mssql" if !text.contains('@') => return sqlserver_jdbc(text),
+        "sqlserver" | "mssql" => Engine::Sqlserver,
         _ => return Err(UrlError::UnknownScheme),
     };
     let url = Url::parse(text).map_err(|e| UrlError::Invalid(e.to_string()))?;
@@ -85,6 +87,57 @@ pub fn parse_connection_url(text: &str) -> Result<UrlConnection, UrlError> {
         password: password.map(Secret::new),
         tls_mode,
     })
+}
+
+/// The JDBC form, `sqlserver://host[:port][;key=value]…`, with the database and the
+/// credentials as properties. `encrypt` and `trustServerCertificate` give the TLS mode.
+fn sqlserver_jdbc(text: &str) -> Result<UrlConnection, UrlError> {
+    let rest = text.split_once("://").map_or("", |(_, rest)| rest);
+    let mut parts = rest.split(';');
+    let authority = parts.next().unwrap_or("");
+    // A named instance (`host\SQLEXPRESS`) is found through the SQL Browser: not supported.
+    if authority.contains('\\') {
+        return Err(UrlError::Invalid(
+            "named instances (host\\instance) are not supported: use the instance's port".into(),
+        ));
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (
+            host,
+            Some(
+                port.parse::<u16>()
+                    .map_err(|_| UrlError::Invalid(format!("bad port: {port}")))?,
+            ),
+        ),
+        None => (authority, None),
+    };
+    let mut connection = UrlConnection {
+        engine: Engine::Sqlserver,
+        host: host.to_string(),
+        port,
+        database: String::new(),
+        user: String::new(),
+        password: None,
+        tls_mode: None,
+    };
+    let (mut encrypt, mut trust) = (None, false);
+    for (key, value) in parts.filter_map(|p| p.split_once('=')) {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "databasename" | "database" => connection.database = value.to_string(),
+            "user" | "username" => connection.user = value.to_string(),
+            "password" => connection.password = Some(Secret::new(value)),
+            "encrypt" => encrypt = Some(value.trim().to_ascii_lowercase()),
+            "trustservercertificate" => trust = value.trim().eq_ignore_ascii_case("true"),
+            _ => {}
+        }
+    }
+    connection.tls_mode = match (encrypt.as_deref(), trust) {
+        (Some("false"), _) => Some(TlsModeConfig::Disable),
+        (Some(_), true) => Some(TlsModeConfig::Require),
+        (Some(_), false) => Some(TlsModeConfig::VerifyFull),
+        (None, _) => None,
+    };
+    Ok(connection)
 }
 
 fn file(engine: Engine, text: &str) -> UrlConnection {
@@ -191,6 +244,33 @@ mod tests {
         assert_eq!(c.tls_mode, Some(TlsModeConfig::Require));
         let c = parse_connection_url("jdbc:mysql://h:3306/db?sslMode=VERIFY_IDENTITY").unwrap();
         assert_eq!(c.tls_mode, Some(TlsModeConfig::VerifyFull));
+    }
+
+    #[test]
+    fn sql_server_urls() {
+        let c = parse_connection_url(
+            "jdbc:sqlserver://db.internal:1433;databaseName=sales;user=app;password=s;3cret;encrypt=true;trustServerCertificate=true",
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                c.engine,
+                c.host.as_str(),
+                c.port,
+                c.database.as_str(),
+                c.user.as_str()
+            ),
+            (Engine::Sqlserver, "db.internal", Some(1433), "sales", "app")
+        );
+        assert_eq!(c.tls_mode, Some(TlsModeConfig::Require));
+        let c = parse_connection_url("sqlserver://db;encrypt=false").unwrap();
+        assert_eq!((c.port, c.tls_mode), (None, Some(TlsModeConfig::Disable)));
+        let c = parse_connection_url("mssql://app:pw@db.internal:14330/sales").unwrap();
+        assert_eq!(
+            (c.engine, c.port, c.database.as_str(), c.user.as_str()),
+            (Engine::Sqlserver, Some(14330), "sales", "app")
+        );
+        assert!(parse_connection_url("jdbc:sqlserver://db\\SQLEXPRESS;databaseName=x").is_err());
     }
 
     #[test]
