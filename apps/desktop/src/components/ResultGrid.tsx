@@ -60,6 +60,7 @@ const COPY_ITEMS: { key: string; format: TextFormat; header: boolean }[] = [
   { key: "copyCsv", format: "csv", header: true },
   { key: "copyJson", format: "json", header: false },
   { key: "copyMarkdown", format: "markdown", header: true },
+  { key: "copyInList", format: "inList", header: false },
   { key: "copyInsert", format: "sqlInsert", header: false },
 ];
 

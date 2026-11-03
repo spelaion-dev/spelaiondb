@@ -59,7 +59,8 @@
     "rowsFiltered_other": "{{formattedCount}} de {{total}} filas",
     "copyMarkdown": "Copiar como tabla Markdown",
     "copiedOneColumn_one": "Copiada {{formattedCount}} fila × 1 columna",
-    "copiedOneColumn_other": "Copiadas {{formattedCount}} filas × 1 columna"
+    "copiedOneColumn_other": "Copiadas {{formattedCount}} filas × 1 columna",
+    "copyInList": "Copiar como lista IN de SQL"
   },
   "messages": {
     "connectionFailed": "No se pudo conectar: {{detail}}",

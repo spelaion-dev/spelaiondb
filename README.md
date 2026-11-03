@@ -114,7 +114,8 @@ Select cells in the result grid by clicking and dragging, with Shift and the arr
 clicking row numbers (whole rows) or with Ctrl+A. **Ctrl+C** copies the selection as
 tab-separated text for spreadsheets and **Ctrl+Shift+C** adds the column names. The
 right-click menu also copies as CSV, JSON (numbers stay numbers, JSON columns are embedded)
-or SQL `INSERT` statements with the engine's quoting, or as a Markdown table. The core formats the rows from the
+or SQL `INSERT` statements with the engine's quoting, as a Markdown table or as an SQL
+`IN` list (`(1, 2, 3)`, repeated values once). The core formats the rows from the
 typed data; up to 100,000 rows can be copied at once.
 
 **Export ▾** writes the whole result to a file (CSV with a byte order mark so Excel reads

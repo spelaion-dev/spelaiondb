@@ -21,6 +21,9 @@ pub enum ExportFormat {
     SqlInsert { table: String },
     /// A Markdown (GitHub) table: always with the header row, numbers aligned right.
     Markdown,
+    /// The values as an SQL list for `IN`: `(1, 'a')`, or `((1, 'a'), (2, 'b'))` with several
+    /// columns; duplicates kept once, in order.
+    InList,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +89,10 @@ pub fn write_result(
                 .collect();
             writeln!(out, "| {} |", rules.join(" | "))?;
         }
-        ExportFormat::Tsv | ExportFormat::Csv | ExportFormat::SqlInsert { .. } => {}
+        ExportFormat::Tsv
+        | ExportFormat::Csv
+        | ExportFormat::SqlInsert { .. }
+        | ExportFormat::InList => {}
     }
 
     let insert_prefix = match &options.format {
@@ -102,6 +108,7 @@ pub fn write_result(
         _ => String::new(),
     };
 
+    let mut items: Vec<String> = Vec::new();
     let mut written = 0usize;
     let mut start = rows.start;
     while start < rows.end {
@@ -147,6 +154,20 @@ pub fn write_result(
                         out.write_all(literals.join(", ").as_bytes())?;
                         out.write_all(b");\n")?;
                     }
+                    ExportFormat::InList => {
+                        let literals: Vec<String> = values
+                            .iter()
+                            .map(|v| sql_literal(v, dialect.name()))
+                            .collect();
+                        let item = if literals.len() == 1 {
+                            literals.join("")
+                        } else {
+                            format!("({})", literals.join(", "))
+                        };
+                        if !items.contains(&item) {
+                            items.push(item);
+                        }
+                    }
                     ExportFormat::Markdown => {
                         let cells: Vec<String> = values
                             .iter()
@@ -162,6 +183,9 @@ pub fn write_result(
     }
     if options.format == ExportFormat::Json {
         out.write_all(if written == 0 { b"]\n" } else { b"\n]\n" })?;
+    }
+    if options.format == ExportFormat::InList {
+        write!(out, "({})", items.join(", "))?;
     }
     Ok(written)
 }
@@ -501,6 +525,22 @@ mod tests {
         assert_eq!(
             render(ExportFormat::Markdown, 0..0, 1..2, false, "postgres"),
             "| name |\n| --- |\n"
+        );
+    }
+
+    #[test]
+    fn in_lists_use_literals_and_drop_repeats() {
+        assert_eq!(
+            render(ExportFormat::InList, 0..3, 1..2, false, "postgres"),
+            "('plain', 'a,b \"q\"\tc\nd', 'it''s \\ x')"
+        );
+        assert_eq!(
+            render(ExportFormat::InList, 0..3, 0..1, false, "postgres"),
+            "(1, 2, NULL)"
+        );
+        assert_eq!(
+            render(ExportFormat::InList, 0..2, 0..2, false, "mysql"),
+            "((1, 'plain'), (2, 'a,b \"q\"\tc\nd'))"
         );
     }
 

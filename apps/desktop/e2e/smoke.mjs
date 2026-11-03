@@ -268,6 +268,12 @@ try {
   assert.equal(markdown[1], "| --- |");
   assert.equal(markdown.length, 3);
   await panel.getByRole("status").filter({ hasText: "Copied 1 row × 1 column" }).waitFor();
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Copy as SQL IN list" }).click();
+  assert.match(await copied(5), /^\('[^']+', '[^']+', '[^']+'\)$/);
 
   step("export: the whole result to CSV and JSON files written by the core");
   // The native save dialog cannot be driven: src/dialogs.ts takes this path instead.
