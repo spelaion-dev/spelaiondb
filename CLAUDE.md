@@ -69,6 +69,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   runs `.github/workflows/release.yml` (installers for every OS, the `spelunk` CLI, notes from
   `docs/releases/vX.Y.Z.md`); the tag must match the version in `Cargo.toml` and `tauri.conf.json`.
 
+## Branches
+- Day-to-day work goes to `dev` (push freely: CI does not run on its pushes, the repository
+  is private and Actions minutes cost). Run the local checks below before each commit.
+- To release, open a pull request `dev` → `main`: CI runs on it, and it is merged only when
+  green. Then tag `main` with `vX.Y.Z`. CI can also be started by hand on `dev`
+  (`gh workflow run CI --ref dev`), for example for a change that touches macOS or Windows.
+
 ## Non-negotiable rules
 - `spelunk-core` does not depend on Tauri. The app, the CLI and the MCP are thin adapters.
 - All security lives in the core: statement splitting and classification, permissions,

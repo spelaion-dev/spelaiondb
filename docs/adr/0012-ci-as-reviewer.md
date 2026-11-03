@@ -7,6 +7,9 @@
 There is no human code review. Automated checks are the only filter.
 
 ## Decision
+- **When it runs:** on pull requests, on pushes to `main` and by hand (`workflow_dispatch`).
+  Work happens on `dev`, whose pushes do not run it (Actions minutes in a private
+  repository); it reaches `main` only through a pull request that passed.
 - **Mandatory gates:** `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo-deny`
   (licenses and vulnerabilities), strict TypeScript + ESLint, all tests green.
 - **Real integration** in Docker: PostgreSQL (several versions), MySQL 8, MariaDB;
