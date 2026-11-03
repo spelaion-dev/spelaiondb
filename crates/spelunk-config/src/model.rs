@@ -147,7 +147,8 @@ pub struct McpConfig {
     /// Maximum rows per response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rows: Option<u32>,
-    /// Write policy. On `env = "prod"` connections it is always `deny`.
+    /// What agents may do (ADR-019): `deny` (read only, the default) or `allow` (writes
+    /// through `execute_write`). `confirm` is not supported yet.
     #[serde(default)]
     pub writes: WritePolicy,
 }

@@ -59,7 +59,7 @@ fn statement_risk(engine: &str, sql: &str, production: bool) -> Option<Risk> {
     })
 }
 
-fn destructive(engine: &str, sql: &str) -> Option<Risk> {
+pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
     let first = first_word(sql);
     // Every kind of DROP (table, schema, database, function…), parsed or not.
     if first == "drop" {

@@ -601,6 +601,7 @@ fn postgres_draft() -> ConnectionDraft {
         sqlite3: String::new(),
         read_only: false,
         mcp_exposed: true,
+        mcp_writes: false,
     }
 }
 
@@ -679,6 +680,7 @@ fn sqlite_drafts_keep_repository_paths_portable_and_drop_network_fields() {
         tunnel: String::new(),
         password: PasswordChoice::Prompt,
         mcp_exposed: false,
+        mcp_writes: false,
         ..postgres_draft()
     };
     let file = draft.to_file(&config).unwrap();
@@ -906,6 +908,61 @@ fn editing_keeps_comments_and_settings_the_form_does_not_show() {
 }
 
 #[test]
+fn the_form_lets_agents_write_or_only_read() {
+    let fx = Fixture::new("draft-mcp-writes");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
+    let id = ws("orders");
+    let backend = FakeBackend::default();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft::from_entry(config.connection(&id).unwrap());
+    assert!(!draft.mcp_writes);
+
+    let allow = ConnectionDraft {
+        mcp_writes: true,
+        ..draft.clone()
+    };
+    spelunk_config::update_connection(&config, &id, &allow, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("writes = \"allow\""), "{content}");
+    assert!(
+        content.contains("max_rows = 50 # agents get few rows"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.connection(&id).unwrap();
+    assert_eq!(entry.file.mcp.writes, WritePolicy::Allow);
+    assert!(ConnectionDraft::from_entry(entry).mcp_writes);
+
+    // Back to reading only: the default, so the key goes away.
+    spelunk_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(!content.contains("writes"), "{content}");
+
+    // A hand-written `confirm` the form cannot show is kept by unrelated edits.
+    fx.write(
+        "repo/.spelunk/connections/orders.toml",
+        &HAND_WRITTEN.replace("writes = \"deny\"", "writes = \"confirm\""),
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let renamed = ConnectionDraft {
+        name: "Orders (EU)".into(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelunk_config::update_connection(&config, &id, &renamed, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("writes = \"confirm\""), "{content}");
+
+    // New connections that allow writes say so in their file.
+    let file = ConnectionDraft {
+        mcp_writes: true,
+        ..postgres_draft()
+    }
+    .to_file(&config)
+    .unwrap();
+    assert_eq!(file.mcp.writes, WritePolicy::Allow);
+}
+
+#[test]
 fn editing_the_password_updates_or_forgets_the_keychain_entry() {
     let fx = Fixture::new("draft-edit-password");
     let path = fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
@@ -1121,6 +1178,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         }),
         read_only: false,
         mcp_exposed: false,
+        mcp_writes: false,
     }
 }
 

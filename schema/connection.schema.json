@@ -74,7 +74,7 @@
         "writes": {
           "$ref": "#/$defs/WritePolicy",
           "default": "deny",
-          "description": "Write policy. On `env = \"prod\"` connections it is always `deny`."
+          "description": "What agents may do (ADR-019): `deny` (read only, the default) or `allow` (writes\nthrough `execute_write`). `confirm` is not supported yet."
         }
       },
       "type": "object"

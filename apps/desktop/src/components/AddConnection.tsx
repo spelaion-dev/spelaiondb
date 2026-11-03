@@ -307,6 +307,7 @@ function ConnectionForm(props: {
     tlsCa: "",
     readOnly: false,
     mcpExposed: false,
+    mcpWrites: false,
     sqlite3: "",
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
@@ -340,11 +341,14 @@ function ConnectionForm(props: {
     setSaveError(null);
   }, []);
 
+  // Agents write only on an exposed connection that is not read-only (ADR-019).
+  const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly;
   // What the core receives: the form's choices mapped to the configuration format.
   const passwordMode: PasswordMode =
     !network || auth === "none" ? "none" : auth === "env" ? "env" : auth === "other" ? "other" : savePassword ? "keychain" : "prompt";
   const request: ConnectionDraft = {
     ...draft,
+    mcpWrites: agentsWrite,
     passwordMode,
     tunnel: tunnelsAllowed && useTunnel && !useKubernetes ? tunnel : "",
     sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
@@ -707,7 +711,21 @@ function ConnectionForm(props: {
               <input type="checkbox" checked={draft.mcpExposed} onChange={(e) => update({ mcpExposed: e.target.checked })} />
               {t("fields.mcpExposed")}
             </label>
-            <p className="muted small">{t("fields.mcpHint")}</p>
+            <Field label={t("fields.mcpAccess")}>
+              <select
+                aria-label={t("fields.mcpAccess")}
+                value={agentsWrite ? "write" : "read"}
+                disabled={!draft.mcpExposed || draft.readOnly}
+                onChange={(e) => update({ mcpWrites: e.target.value === "write" })}
+              >
+                <option value="read">{t("fields.mcpRead")}</option>
+                <option value="write">{t("fields.mcpWrite")}</option>
+              </select>
+            </Field>
+            {agentsWrite && draft.env.trim().toLowerCase() === "prod" && (
+              <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
+            )}
+            <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
           </fieldset>
         </div>
       </div>

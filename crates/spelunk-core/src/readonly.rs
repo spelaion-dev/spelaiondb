@@ -146,7 +146,7 @@ impl Session {
 
     /// After a timeout cancellation: ROLLBACK until it works. Cancellation is asynchronous and
     /// may hit the ROLLBACK itself; a ROLLBACK outside a transaction is harmless.
-    async fn rollback_until_clean(&self) {
+    pub(crate) async fn rollback_until_clean(&self) {
         for _ in 0..5 {
             if self.drain("rollback").await.is_ok() {
                 return;

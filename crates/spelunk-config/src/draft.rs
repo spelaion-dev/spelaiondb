@@ -15,7 +15,7 @@ use crate::load::{
 };
 use crate::model::{
     ConnectionFile, Engine, KubernetesConfig, McpConfig, SCHEMA_VERSION, SecretSpec, TlsConfig,
-    TlsModeConfig,
+    TlsModeConfig, WritePolicy,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::vars::home_dir;
@@ -62,6 +62,8 @@ pub struct ConnectionDraft {
     pub sqlite3: String,
     pub read_only: bool,
     pub mcp_exposed: bool,
+    /// Agents may write through `execute_write` (ADR-019); otherwise they only read.
+    pub mcp_writes: bool,
 }
 
 /// The Kubernetes tab of the connection form; empty fields mean the defaults.
@@ -287,6 +289,11 @@ impl ConnectionDraft {
             },
             mcp: McpConfig {
                 exposed: self.mcp_exposed,
+                writes: if self.mcp_writes {
+                    WritePolicy::Allow
+                } else {
+                    WritePolicy::Deny
+                },
                 ..McpConfig::default()
             },
         };
@@ -372,6 +379,7 @@ impl ConnectionDraft {
             }),
             read_only: file.read_only,
             mcp_exposed: file.mcp.exposed,
+            mcp_writes: file.mcp.writes == WritePolicy::Allow,
         }
     }
 }
@@ -551,6 +559,15 @@ pub fn update_connection(
             &mut doc,
             &["mcp", "exposed"],
             new.mcp.exposed.then(|| Value::from(true)),
+        );
+    }
+    // The form only knows allow and deny: a hand-written `confirm` stays until it is changed.
+    let allows = |file: &ConnectionFile| file.mcp.writes == WritePolicy::Allow;
+    if allows(old) != allows(&new) {
+        put(
+            &mut doc,
+            &["mcp", "writes"],
+            allows(&new).then(|| Value::from("allow")),
         );
     }
 

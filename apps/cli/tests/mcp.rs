@@ -172,7 +172,7 @@ fn an_agent_can_read_but_never_write() {
     fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
     let mut agent = Agent::start(&fx);
 
-    // Every tool is announced as read-only.
+    // Every tool but execute_write is announced as read-only.
     let tools = agent.request("tools/list", json!({}));
     let tools = tools["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -183,20 +183,23 @@ fn an_agent_can_read_but_never_write() {
         "search_schema",
         "run_query",
         "explain_query",
+        "execute_write",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert!(
-        tools
-            .iter()
-            .all(|t| t["annotations"]["readOnlyHint"] == json!(true)),
-        "{tools:?}"
-    );
+    for tool in tools {
+        let read_only = tool["name"] != json!("execute_write");
+        assert_eq!(
+            tool["annotations"]["readOnlyHint"],
+            json!(read_only),
+            "{tool:?}"
+        );
+    }
 
     // Only exposed connections.
     let (text, _) = agent.call("list_connections", json!({}));
     assert!(
-        text.contains("- shop — Shop (sqlite)") && !text.contains("hidden"),
+        text.contains("- shop — Shop (sqlite). Read-only.") && !text.contains("hidden"),
         "{text}"
     );
     let (text, is_error) = agent.call(
@@ -260,6 +263,12 @@ fn an_agent_can_read_but_never_write() {
         json!({ "connection": "shop", "sql": "analyze delete from products" }),
     );
     assert!(is_error, "EXPLAIN ANALYZE should be rejected: {text}");
+    // The connection does not allow writes.
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "delete from products where id = 1" }),
+    );
+    assert!(is_error && text.contains("read-only for agents"), "{text}");
     agent.stop();
 
     let conn = rusqlite::Connection::open(fx.repo().join("shop.db")).unwrap();
@@ -279,4 +288,95 @@ fn an_agent_can_read_but_never_write() {
         "{audit}"
     );
     assert!(audit.contains("· hidden · REJECTED"), "{audit}");
+}
+
+#[test]
+fn an_agent_writes_only_where_the_user_allowed_it() {
+    let fx = Fixture::new("mcp-write");
+    create_db(&fx.repo().join("shop.db"));
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/shop.toml"),
+        "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
+    )
+    .unwrap();
+    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    let mut agent = Agent::start(&fx);
+
+    let (text, _) = agent.call("list_connections", json!({}));
+    assert!(
+        text.contains("- shop — Shop (sqlite). Read and write"),
+        "{text}"
+    );
+
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "update products set price = 10 where name = 'lamp'" }),
+    );
+    assert!(!is_error && text.contains("1 row(s) affected"), "{text}");
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "insert into products (name, price) values ('desk', 80), ('shelf', 30);" }),
+    );
+    assert!(!is_error && text.contains("2 row(s) affected"), "{text}");
+
+    // Barriers that no setting lifts, and a failure that changes nothing.
+    for (sql, why) in [
+        ("drop table products", "DROP"),
+        ("delete from products", "DELETE without WHERE"),
+        ("select * from products", "run_query"),
+        ("attach 'x.db' as x", "other files"),
+        ("begin", "transaction"),
+        (
+            "delete from products where id = 1; drop table products",
+            "one statement",
+        ),
+    ] {
+        let (text, is_error) =
+            agent.call("execute_write", json!({ "connection": "shop", "sql": sql }));
+        assert!(is_error && text.contains(why), "{sql}: {text}");
+    }
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "insert into products (name) values ('ok'), (null)" }),
+    );
+    assert!(is_error && text.contains("rolled back"), "{text}");
+
+    // Reads still go through the read-only session, and see the writes.
+    let (text, is_error) = agent.call(
+        "run_query",
+        json!({ "connection": "shop", "sql": "select count(*) as n from products" }),
+    );
+    assert!(!is_error && text.contains("| 5 |"), "{text}");
+    let (text, is_error) = agent.call(
+        "run_query",
+        json!({ "connection": "shop", "sql": "delete from products" }),
+    );
+    assert!(is_error && text.contains("rejected"), "{text}");
+    agent.stop();
+
+    let conn = rusqlite::Connection::open(fx.repo().join("shop.db")).unwrap();
+    let (count, lamp): (i64, f64) = conn
+        .query_row(
+            "select count(*), (select price from products where name = 'lamp') from products",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((count, lamp), (5, 10.0));
+
+    let audit = fx.spelunk(&["audit", "--limit", "50"]);
+    assert!(
+        audit.contains("test-agent · shop · executed: update products set price = 10"),
+        "{audit}"
+    );
+    assert!(
+        audit.contains("test-agent · shop · REJECTED: drop table products"),
+        "{audit}"
+    );
+    assert!(
+        audit.contains(
+            "test-agent · shop · failed: insert into products (name) values ('ok'), (null)"
+        ),
+        "{audit}"
+    );
 }

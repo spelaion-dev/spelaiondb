@@ -57,7 +57,7 @@ impl ResolvedConnection {
         params
     }
 
-    /// `env = "prod"`: the MCP never writes here, whatever `mcp.writes` says (ADR-008).
+    /// `env = "prod"`: the editor asks before writes here (`guard.rs`).
     pub fn is_production(&self) -> bool {
         self.env
             .as_deref()

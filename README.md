@@ -255,8 +255,13 @@ separate.
 
 ## For AI agents (MCP)
 
-`spelunk mcp` gives an agent **read-only** access to the connections you mark with
-`[mcp] exposed = true`. Install the binary and add it to Claude Code:
+`spelunk mcp` gives an agent access to the connections you mark with
+`[mcp] exposed = true` ("Expose to AI agents" in the connection form). Agents only read,
+unless you choose "Agents can: Read and write" (`[mcp] writes = "allow"`, ADR-019): then the
+`execute_write` tool runs one statement at a time in its own transaction. `DROP`, `TRUNCATE`,
+`DELETE`/`UPDATE` without `WHERE`, transaction control and statements that reach other files
+are always refused, and read-only connections never let agents write. Writes work on
+PostgreSQL and SQLite for now. Install the binary and add it to Claude Code:
 
 ```bash
 cargo install --path apps/cli
@@ -266,7 +271,7 @@ cargo install --path apps/cli
 claude mcp add spelunkdb -- spelunk mcp
 ```
 
-Every query is recorded: `spelunk audit`.
+Every query and write, run or refused, is recorded: `spelunk audit`.
 
 - Architecture: [`docs/architecture.md`](docs/architecture.md)
 - Decisions: [`docs/adr/`](docs/adr/README.md)

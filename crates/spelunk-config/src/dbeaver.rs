@@ -341,6 +341,7 @@ pub fn import_plan(
             sqlite3: String::new(),
             read_only: false,
             mcp_exposed: false,
+            mcp_writes: false,
         },
         password: if sqlite {
             None

@@ -27,3 +27,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [016](0016-duckdb.md) | DuckDB driver: bundled, one open per file, not in the MCP yet | Accepted |
 | [017](0017-sql-server.md) | SQL Server driver: tiberius, T-SQL batches, cancel by Attention | Accepted |
 | [018](0018-sqlite-over-ssh.md) | SQLite files on a server, through the server's `sqlite3` over SSH | Accepted |
+| [019](0019-mcp-writes.md) | Agents may write, per connection (supersedes ADR-008's writes) | Accepted |

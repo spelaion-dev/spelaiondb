@@ -1277,6 +1277,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByLabel("Folder", { exact: true }).fill("Wizard");
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  // Agents only read unless the user lets them write, and only on an exposed connection.
+  const agentsCan = wizard.getByLabel("Agents can", { exact: true });
+  assert.equal(await agentsCan.isDisabled(), true);
+  await wizard.getByRole("checkbox", { name: "Expose to AI agents" }).check();
+  await agentsCan.selectOption("write");
+  await wizard.getByLabel("Environment", { exact: true }).fill("prod");
+  await wizard.getByRole("alert").filter({ hasText: "agents will be able to change its data" }).waitFor();
+  await wizard.getByLabel("Environment", { exact: true }).fill("");
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
   await shot("12c-add-connection-options");
@@ -1286,6 +1294,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const saved = readFileSync(join(userDir, "connections", "wizard", "docker-pg-wizard.toml"), "utf8");
   assert.match(saved, /secret = "prompt"/);
   assert.match(saved, /mode = "require"/);
+  assert.match(saved, /\[mcp\]\nexposed = true\nwrites = "allow"/);
   assert.doesNotMatch(saved, /wrong|password = "/);
   assert.ok(!existsSync(join(demo, ".spelunk", "connections", "shop-copy.toml")), "personal connections stay out of the repository");
 

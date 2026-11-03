@@ -8,7 +8,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - Read `docs/architecture.md` and the ADRs in `docs/adr/`. ADRs rule: if a change
   contradicts them, do not make it; propose a new ADR that supersedes the old one.
 - Current state: **v0.2**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQL Server, SQLite
-  and DuckDB drivers, configuration, SSH tunnels, core, local store, read-only `spelunk mcp` and the
+  and DuckDB drivers, configuration, SSH tunnels, core, local store, `spelunk mcp` (read-only, writes per connection) and the
   `spelunk` binary, and the first version of the desktop app (`apps/desktop`).
   `spikes/` is throwaway phase 0 code: it is never imported from `crates/`.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and
@@ -68,11 +68,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   the paged SELECT of the table data tab (the filter typed by the user cannot change it).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
+  `write.rs` holds the barriers and the transaction of agents' writes (ADR-019: one statement,
+  never destructive, never transaction control nor other files); like `classify.rs`, any
+  change there needs tests that try to get around it.
 - `crates/spelunk-store`: local SQLite (audit, query history, saved queries and personal settings;
   later the schema cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelunk-mcp` + `apps/cli`: `spelunk mcp` and utilities (`connections`, `trust`,
-  `audit`). In `spelunk mcp`, stdout is the protocol: no `println!`.
+  `audit`). In `spelunk mcp`, stdout is the protocol: no `println!`. Reads and writes
+  (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions.
 - `apps/desktop`: Tauri 2 + React app. `src-tauri` is a thin adapter over the core; the
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelunk-desktop --features bindings --bin export-bindings`; CI checks it is up to date).

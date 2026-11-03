@@ -49,6 +49,8 @@ A summary of how the pieces fit together. The reasons behind each decision are i
    `mcp.exposed = true`.
 3. Every `run_query` goes through the classifier, runs in a read-only transaction with
    limits, and is recorded in the audit log.
+4. On connections with `mcp.writes = "allow"`, `execute_write` runs one checked write in its
+   own transaction, in a session separate from the reads, also audited (ADR-019).
 
 ## Phases
 - **Phase 0** (current): risk experiments in `spikes/`.

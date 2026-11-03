@@ -290,6 +290,8 @@ export type ConnectionDraftItem_Deserialize = {
 	sqlite3: string,
 	readOnly: boolean,
 	mcpExposed: boolean,
+	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
+	mcpWrites: boolean,
 };
 
 /**
@@ -319,6 +321,8 @@ export type ConnectionDraftItem_Serialize = {
 	sqlite3: string,
 	readOnly: boolean,
 	mcpExposed: boolean,
+	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
+	mcpWrites: boolean,
 };
 
 export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deserialize;

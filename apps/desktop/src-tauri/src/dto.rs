@@ -507,6 +507,8 @@ pub struct ConnectionDraftItem {
     pub sqlite3: String,
     pub read_only: bool,
     pub mcp_exposed: bool,
+    /// Agents may write (`[mcp] writes = "allow"`, ADR-019).
+    pub mcp_writes: bool,
 }
 
 impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
@@ -549,6 +551,7 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
             sqlite3: item.sqlite3,
             read_only: item.read_only,
             mcp_exposed: item.mcp_exposed,
+            mcp_writes: item.mcp_writes,
         })
     }
 }
@@ -586,6 +589,7 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
             sqlite3: draft.sqlite3,
             read_only: draft.read_only,
             mcp_exposed: draft.mcp_exposed,
+            mcp_writes: draft.mcp_writes,
         }
     }
 }
