@@ -260,6 +260,14 @@ try {
   assert.equal(typeof json[0].orders, "number");
   assert.ok(json[0].country);
   await panel.getByRole("status").filter({ hasText: "Copied 3 rows × 2 columns" }).waitFor();
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Copy as Markdown table" }).click();
+  const markdown = (await copied(4)).trimEnd().split("\n");
+  assert.equal(markdown[0], "| country |");
+  assert.equal(markdown[1], "| --- |");
+  assert.equal(markdown.length, 3);
+  await panel.getByRole("status").filter({ hasText: "Copied 1 row × 1 column" }).waitFor();
 
   step("export: the whole result to CSV and JSON files written by the core");
   // The native save dialog cannot be driven: src/dialogs.ts takes this path instead.
@@ -280,6 +288,13 @@ try {
   const exported = JSON.parse(readFileSync(exportPath("result.json"), "utf8"));
   assert.equal(exported.length, 6);
   assert.equal(typeof exported[0].total, "number");
+  await answerSaveDialog(exportPath("result.md"));
+  await panel.getByRole("button", { name: "Export ▾" }).click();
+  await page.getByRole("menuitem", { name: "Markdown table" }).click();
+  await panel.getByRole("status").filter({ hasText: "result.md" }).waitFor();
+  const md = readFileSync(exportPath("result.md"), "utf8").trimEnd().split("\n");
+  assert.equal(md.length, 8);
+  assert.equal(md[1], "| --- | ---: | ---: |");
 
   step("cell viewer: pretty JSON, hex dump of bytes, full text");
   panel = await newQuery(

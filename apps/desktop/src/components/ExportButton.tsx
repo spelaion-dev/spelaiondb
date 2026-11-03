@@ -12,6 +12,7 @@ const FORMATS: { format: TextFormat; extension: string }[] = [
   { format: "tsv", extension: "tsv" },
   { format: "json", extension: "json" },
   { format: "sqlInsert", extension: "sql" },
+  { format: "markdown", extension: "md" },
 ];
 
 export function ExportButton({ result, session }: { result: ResultMeta; session: string }) {

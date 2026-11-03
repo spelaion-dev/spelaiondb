@@ -42,7 +42,8 @@
       "json": "JSON",
       "sqlInsert": "SQL INSERT statements",
       "done_one": "Exported {{formattedCount}} row to {{path}}",
-      "done_other": "Exported {{formattedCount}} rows to {{path}}"
+      "done_other": "Exported {{formattedCount}} rows to {{path}}",
+      "markdown": "Markdown table"
     },
     "sortAsc": "Sort ascending",
     "sortDesc": "Sort descending",
@@ -55,7 +56,10 @@
     "filterHint": "Rows where some cell contains this text (any case). Copy and export follow the filter.",
     "filterWhenComplete": "The result can be filtered once every row has arrived",
     "rowsFiltered_one": "{{formattedCount}} of {{total}} rows",
-    "rowsFiltered_other": "{{formattedCount}} of {{total}} rows"
+    "rowsFiltered_other": "{{formattedCount}} of {{total}} rows",
+    "copyMarkdown": "Copy as Markdown table",
+    "copiedOneColumn_one": "Copied {{formattedCount}} row × 1 column",
+    "copiedOneColumn_other": "Copied {{formattedCount}} rows × 1 column"
   },
   "messages": {
     "connectionFailed": "Could not connect: {{detail}}",

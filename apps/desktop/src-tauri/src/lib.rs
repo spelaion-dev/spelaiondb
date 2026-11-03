@@ -759,6 +759,7 @@ fn export_format(format: TextFormat) -> ExportFormat {
         TextFormat::Tsv => ExportFormat::Tsv,
         TextFormat::Csv => ExportFormat::Csv,
         TextFormat::Json => ExportFormat::Json,
+        TextFormat::Markdown => ExportFormat::Markdown,
         TextFormat::SqlInsert => ExportFormat::SqlInsert {
             table: INSERT_TABLE.into(),
         },

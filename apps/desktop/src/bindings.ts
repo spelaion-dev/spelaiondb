@@ -416,7 +416,7 @@ export type TableDetails_Serialize = {
 };
 
 /**  Text format to copy or export rows in. */
-export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert";
+export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown";
 
 /**  A piece of a script, in UTF-8 bytes like every position the core gives. */
 export type TextSpan = {

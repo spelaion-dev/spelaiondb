@@ -59,6 +59,7 @@ const COPY_ITEMS: { key: string; format: TextFormat; header: boolean }[] = [
   { key: "copyWithHeaders", format: "tsv", header: true },
   { key: "copyCsv", format: "csv", header: true },
   { key: "copyJson", format: "json", header: false },
+  { key: "copyMarkdown", format: "markdown", header: true },
   { key: "copyInsert", format: "sqlInsert", header: false },
 ];
 
@@ -458,7 +459,11 @@ export function ResultGrid({
       const text = await call(commands.copyRows(result.id, session, range, format, header));
       await navigator.clipboard.writeText(text);
       setNotice({
-        text: t("results.copied", { count: range.rows, formattedCount: numbers.format(range.rows), columns: range.columns }),
+        text: t(range.columns === 1 ? "results.copiedOneColumn" : "results.copied", {
+          count: range.rows,
+          formattedCount: numbers.format(range.rows),
+          columns: numbers.format(range.columns),
+        }),
         error: false,
       });
     } catch (e) {

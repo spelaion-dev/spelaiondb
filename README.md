@@ -99,11 +99,11 @@ Select cells in the result grid by clicking and dragging, with Shift and the arr
 clicking row numbers (whole rows) or with Ctrl+A. **Ctrl+C** copies the selection as
 tab-separated text for spreadsheets and **Ctrl+Shift+C** adds the column names. The
 right-click menu also copies as CSV, JSON (numbers stay numbers, JSON columns are embedded)
-or SQL `INSERT` statements with the engine's quoting. The core formats the rows from the
+or SQL `INSERT` statements with the engine's quoting, or as a Markdown table. The core formats the rows from the
 typed data; up to 100,000 rows can be copied at once.
 
 **Export ▾** writes the whole result to a file (CSV with a byte order mark so Excel reads
-accents, TSV, JSON or SQL `INSERT`). The core writes it in chunks to a temporary file that is
+accents, TSV, JSON, SQL `INSERT` or a Markdown table). The core writes it in chunks to a temporary file that is
 renamed at the end, so it works with millions of rows and never leaves half-written files.
 
 Drag the edge of a column header to resize the column; double-click the edge to fit it to

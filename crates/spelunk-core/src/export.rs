@@ -19,6 +19,8 @@ pub enum ExportFormat {
     Json,
     /// One `INSERT` per row into `table`, with the engine's literals and quoting.
     SqlInsert { table: String },
+    /// A Markdown (GitHub) table: always with the header row, numbers aligned right.
+    Markdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +77,15 @@ pub fn write_result(
             write_line(out, &options.format, &fields)?;
         }
         ExportFormat::Json => out.write_all(b"[")?,
+        ExportFormat::Markdown => {
+            let cells: Vec<String> = names.iter().map(|n| markdown_cell(n)).collect();
+            writeln!(out, "| {} |", cells.join(" | "))?;
+            let rules: Vec<&str> = metas
+                .iter()
+                .map(|m| if is_numeric(m.logical) { "---:" } else { "---" })
+                .collect();
+            writeln!(out, "| {} |", rules.join(" | "))?;
+        }
         ExportFormat::Tsv | ExportFormat::Csv | ExportFormat::SqlInsert { .. } => {}
     }
 
@@ -136,6 +147,13 @@ pub fn write_result(
                         out.write_all(literals.join(", ").as_bytes())?;
                         out.write_all(b");\n")?;
                     }
+                    ExportFormat::Markdown => {
+                        let cells: Vec<String> = values
+                            .iter()
+                            .map(|v| markdown_cell(&text(v).unwrap_or_else(|| "NULL".into())))
+                            .collect();
+                        writeln!(out, "| {} |", cells.join(" | "))?;
+                    }
                 }
                 written += 1;
             }
@@ -178,6 +196,32 @@ pub fn export_to_file(
             let _ = std::fs::remove_file(&temporary);
             Err(e)
         }
+    }
+}
+
+/// A Markdown table cell: `|` escaped, line breaks as `<br>`, backslashes kept literal.
+fn markdown_cell(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace("\r\n", "<br>")
+        .replace(['\n', '\r'], "<br>")
+}
+
+fn is_numeric(logical: LogicalType) -> bool {
+    match logical {
+        LogicalType::Int | LogicalType::Float | LogicalType::Decimal => true,
+        LogicalType::Bool
+        | LogicalType::Text
+        | LogicalType::Bytes
+        | LogicalType::Date
+        | LogicalType::Time
+        | LogicalType::Timestamp
+        | LogicalType::TimestampTz
+        | LogicalType::Uuid
+        | LogicalType::Json
+        | LogicalType::Interval
+        | LogicalType::Array
+        | LogicalType::Native => false,
     }
 }
 
@@ -441,6 +485,22 @@ mod tests {
         assert_eq!(
             render(ExportFormat::Tsv, 0..3, 0..2, true, "postgres"),
             "id\tname\n1\tplain\n2\t\"a,b \"\"q\"\"\tc\nd\"\n\tit's \\ x\n"
+        );
+    }
+
+    #[test]
+    fn markdown_tables_escape_pipes_and_line_breaks() {
+        assert_eq!(
+            render(ExportFormat::Markdown, 0..3, 0..3, false, "postgres"),
+            "| id | name | price |\n\
+             | ---: | --- | ---: |\n\
+             | 1 | plain | 1.5 |\n\
+             | 2 | a,b \"q\"\tc<br>d | NaN |\n\
+             | NULL | it's \\\\ x | NULL |\n"
+        );
+        assert_eq!(
+            render(ExportFormat::Markdown, 0..0, 1..2, false, "postgres"),
+            "| name |\n| --- |\n"
         );
     }
 

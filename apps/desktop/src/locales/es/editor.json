@@ -42,7 +42,8 @@
       "json": "JSON",
       "sqlInsert": "Sentencias INSERT de SQL",
       "done_one": "Exportada {{formattedCount}} fila a {{path}}",
-      "done_other": "Exportadas {{formattedCount}} filas a {{path}}"
+      "done_other": "Exportadas {{formattedCount}} filas a {{path}}",
+      "markdown": "Tabla Markdown"
     },
     "sortAsc": "Ordenar ascendente",
     "sortDesc": "Ordenar descendente",
@@ -55,7 +56,10 @@
     "filterHint": "Filas con alguna celda que contiene este texto (sin distinguir mayúsculas). Copiar y exportar siguen el filtro.",
     "filterWhenComplete": "El resultado se puede filtrar cuando hayan llegado todas las filas",
     "rowsFiltered_one": "{{formattedCount}} de {{total}} filas",
-    "rowsFiltered_other": "{{formattedCount}} de {{total}} filas"
+    "rowsFiltered_other": "{{formattedCount}} de {{total}} filas",
+    "copyMarkdown": "Copiar como tabla Markdown",
+    "copiedOneColumn_one": "Copiada {{formattedCount}} fila × 1 columna",
+    "copiedOneColumn_other": "Copiadas {{formattedCount}} filas × 1 columna"
   },
   "messages": {
     "connectionFailed": "No se pudo conectar: {{detail}}",

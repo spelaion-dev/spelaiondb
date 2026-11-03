@@ -711,6 +711,7 @@ pub enum TextFormat {
     Csv,
     Json,
     SqlInsert,
+    Markdown,
 }
 
 /// The engine behind the id the UI uses (`postgres`, `mysql`…).
