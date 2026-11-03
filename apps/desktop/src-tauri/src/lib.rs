@@ -47,6 +47,8 @@ struct AppState {
 
 struct DesktopSession {
     open: Arc<OpenConnection>,
+    /// A prompted password stays in memory only for the lifetime of this session.
+    password: Option<Secret>,
     /// Captured when connecting: changing folders must not reattribute an existing tab.
     history_workspace: String,
 }
@@ -750,6 +752,7 @@ async fn connect(
         session,
         DesktopSession {
             open: Arc::new(open),
+            password,
             history_workspace,
         },
     );
@@ -758,6 +761,84 @@ async fn connect(
         old.close().await;
     }
     Ok(ConnectOutcome::Connected { server_version })
+}
+
+/// Open an independent tab from an existing explorer session, reusing its in-memory
+/// credentials and exact resolved connection. Passwords never cross back into the UI.
+#[tauri::command]
+#[specta::specta]
+async fn connect_from_session(
+    source: String,
+    session: String,
+    database: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    if source == session {
+        return Err("the source and target sessions must differ".into());
+    }
+    let workspace_version = state.workspace_version.load(Ordering::Acquire);
+    if !workspace_version.is_multiple_of(2) {
+        return Err("the folder is changing; select a connection again".into());
+    }
+    let (source_open, password, history_workspace) = {
+        let sessions = state.sessions.lock().await;
+        let source = sessions
+            .get(&source)
+            .ok_or("the source connection is closed")?;
+        (
+            source.open.clone(),
+            source.password.clone(),
+            source.history_workspace.clone(),
+        )
+    };
+    let options = OpenOptions {
+        tunnels: state.tunnels.clone(),
+        known_hosts: KnownHosts::for_user(&state.user_dir),
+        interaction: Arc::new(AppInteraction::new(app, state.pending.clone())),
+        password: password.clone(),
+    };
+    let open = open_connection(
+        source_open.resolved.clone(),
+        &state.engines,
+        options,
+        state.results.clone(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Some(database) = database
+        && let Err(error) = open.session.connection().select_database(&database).await
+    {
+        open.close().await;
+        return Err(error.to_string());
+    }
+    let server_version = match open.session.connection().server_version().await {
+        Ok(version) => version,
+        Err(error) => {
+            open.close().await;
+            return Err(error.to_string());
+        }
+    };
+    let mut sessions = state.sessions.lock().await;
+    if workspace_version != state.workspace_version.load(Ordering::Acquire)
+        || !sessions
+            .get(&source)
+            .is_some_and(|s| Arc::ptr_eq(&s.open, &source_open))
+        || sessions.contains_key(&session)
+    {
+        drop(sessions);
+        open.close().await;
+        return Err("the source connection or folder changed while connecting".into());
+    }
+    sessions.insert(
+        session,
+        DesktopSession {
+            open: Arc::new(open),
+            password,
+            history_workspace,
+        },
+    );
+    Ok(server_version)
 }
 
 #[tauri::command]
@@ -921,7 +1002,12 @@ async fn copy_rows(
         .ok_or("result freed")?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let options = ExportOptions {
-        format: export_format(format),
+        format: match format {
+            TextFormat::SqlInsert => ExportFormat::SqlInsertBatch {
+                table: INSERT_TABLE.into(),
+            },
+            other => export_format(other),
+        },
         rows: range.first_row as usize..(range.first_row + range.rows) as usize,
         columns: range.first_column as usize..(range.first_column + range.columns) as usize,
         header,
@@ -1321,6 +1407,47 @@ async fn release_result(result: u32, state: State<'_, AppState>) -> CmdResult<()
 
 #[tauri::command]
 #[specta::specta]
+async fn current_database(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .current_database()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The databases this tab's session can switch to (MySQL, MariaDB, SQL Server).
+#[tauri::command]
+#[specta::specta]
+async fn list_databases(session: String, state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .list_databases()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn select_database(
+    session: String,
+    database: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .select_database(&database)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn list_schemas(session: String, state: State<'_, AppState>) -> CmdResult<Vec<SchemaItem>> {
     let open = state.session(&session).await?;
     let schemas = open
@@ -1648,10 +1775,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_history,
             set_history_enabled,
             connect,
+            connect_from_session,
             disconnect,
             run_script,
             cancel,
             release_result,
+            current_database,
+            list_databases,
+            select_database,
             list_schemas,
             list_objects,
             describe_table,

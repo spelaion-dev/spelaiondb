@@ -4,5 +4,7 @@
   "newQueryShortcut": "Nueva consulta (Ctrl+T)",
   "welcome": "Selecciona una conexión a la izquierda o abre una consulta nueva.",
   "newQuery": "Nueva consulta",
+  "resizeSidebar": "Ajustar la anchura del panel de conexiones",
+  "resizeSidebarHint": "Arrastra para ajustar el panel de conexiones. Doble clic para restablecer.",
   "preferenceLoadError": "No se pudieron cargar tus preferencias:"
 }

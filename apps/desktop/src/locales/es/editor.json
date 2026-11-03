@@ -1,5 +1,11 @@
 {
   "connection": "Conexión",
+  "database": "Base de datos",
+  "noDatabase": "— Sin base de datos —",
+  "loadingDatabases": "Cargando bases de datos…",
+  "databaseLoadFailed": "No se pudieron cargar las bases de datos",
+  "retryDatabases": "Reintentar",
+  "connectToChooseDatabase": "Conectar para elegir base de datos",
   "noConnection": "— Sin conexión —",
   "pickConnection": "Elige una conexión para esta pestaña.",
   "status": {
@@ -9,8 +15,11 @@
   },
   "production": "PRODUCCIÓN",
   "cancel": "Cancelar",
+  "editorActions": "Acciones de consulta",
   "run": "Ejecutar",
-  "runHint": "Ejecuta todo (Ctrl+Mayús+Intro). Ctrl+Intro ejecuta la sentencia bajo el cursor o la selección",
+  "runHint": "Ejecutar la selección o la sentencia bajo el cursor (Ctrl+Intro)",
+  "runScript": "Ejecutar script",
+  "runScriptHint": "Ejecutar todo el script (Ctrl+Mayús+Intro)",
   "resizeEditor": "Ajustar el tamaño del editor y los resultados",
   "sqlEditor": "Editor SQL",
   "results": {

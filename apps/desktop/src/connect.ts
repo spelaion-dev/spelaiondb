@@ -30,6 +30,39 @@ export async function openSession(session: string, connectionId: string): Promis
   return outcome.serverVersion;
 }
 
+/** Open an independent editor session from a connected explorer without exposing its password. */
+export function connectTabFromExplorer(tabId: string, source: string, database?: string) {
+  const initial = useApp.getState().tabs.find((tab) => tab.id === tabId);
+  if (!initial?.connectionId) return;
+  const connectionId = initial.connectionId;
+  useApp.getState().updateTab(tabId, { status: "connecting", serverVersion: null });
+  void (async () => {
+    try {
+      const serverVersion = await call(commands.connectFromSession(source, tabId, database ?? null));
+      const tab = useApp.getState().tabs.find((item) => item.id === tabId);
+      if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") {
+        await call(commands.disconnect(tabId)).catch(() => undefined);
+        return;
+      }
+      useApp.getState().updateTab(tabId, { status: "connected", serverVersion });
+    } catch (e) {
+      const tab = useApp.getState().tabs.find((item) => item.id === tabId);
+      if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") return;
+      const detail = e instanceof Error ? e.message : String(e);
+      useApp.getState().updateTab(tabId, {
+        status: "disconnected",
+        run: { running: false, results: [], activeResult: null, messages: [], error: { message: detail, offset: null, translation: { key: "messages.connectionFailed", values: { detail } } }, startedAt: 0, elapsedMs: null },
+      });
+    }
+  })();
+}
+
+/** MySQL and MariaDB call databases schemas in their explorer. */
+export function explorerDatabase(connectionId: string, schema: string): string | undefined {
+  const engine = useApp.getState().connections.find((item) => item.id === connectionId)?.engine;
+  return engine === "mysql" || engine === "mariadb" ? schema : undefined;
+}
+
 /** Closes a query tab: its session is disconnected and its results are freed in the core (a
  *  script still running finishes and is recorded). Ctrl+Shift+T reopens it, without results. */
 export function closeQueryTab(id: string) {

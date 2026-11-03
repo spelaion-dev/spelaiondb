@@ -416,6 +416,15 @@ async fn connections_to_one_file_share_it() {
         other => panic!("{:?}", other.err()),
     }
     drop(first);
+    match DuckdbDriver::default().connect(&read_only).await {
+        Err(DriverError::Connection(message)) => {
+            assert!(message.contains("already open"), "{message}")
+        }
+        other => panic!(
+            "the remaining connection should keep the file open: {:?}",
+            other.err()
+        ),
+    }
     drop(second);
     // Closed: it opens read-only now, and writes fail.
     let conn = DuckdbDriver::default()
@@ -428,6 +437,21 @@ async fn connections_to_one_file_share_it() {
             assert!(message.to_lowercase().contains("read-only"), "{message}")
         }
         other => panic!("the write should fail: {other:?}"),
+    }
+    drop(conn);
+    // Closing an actor is asynchronous: changing mode immediately must still be reliable.
+    for _ in 0..10 {
+        let writable = DuckdbDriver::default()
+            .connect(&db.params())
+            .await
+            .expect("writable after closing read-only");
+        drop(writable);
+        let readonly = DuckdbDriver::default()
+            .connect(&read_only)
+            .await
+            .expect("read-only after closing writable");
+        assert_eq!(table(&*readonly, "select a from t").await.1[0][0], "1");
+        drop(readonly);
     }
 }
 
@@ -515,7 +539,18 @@ async fn attached_databases_are_browsable() {
         exec_all(&*conn, "create table things (a int)").await;
     }
     let conn = memory().await;
-    exec_all(&*conn, &format!("attach '{}' as other", other.0.display())).await;
+    // The writer's thread closes the file a moment after the connection is dropped, and
+    // ATTACH opens it outside the driver's registry (which would wait): try for a while.
+    let attach = format!("attach '{}' as other", other.0.display());
+    let mut attached = run(&*conn, &attach).await;
+    for _ in 0..50 {
+        if attached.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        attached = run(&*conn, &attach).await;
+    }
+    attached.expect("attaching the closed file");
     let schemas = conn.list_schemas().await.unwrap();
     assert!(
         schemas.iter().any(|s| s.name == "other.main"),

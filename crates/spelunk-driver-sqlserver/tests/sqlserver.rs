@@ -510,6 +510,51 @@ async fn tls_modes_and_login_errors() {
     }
 }
 
+/// The database is per session, a script's `USE` moves it too, and a name never runs as SQL.
+#[tokio::test]
+async fn database_selection_is_per_session_and_tracks_use() {
+    let Some(first) = connect().await else { return };
+    let second = connect().await.unwrap();
+    let databases = first.list_databases().await.unwrap();
+    assert!(
+        databases.contains(&"spelunk".to_string()) && databases.contains(&"master".to_string()),
+        "{databases:?}"
+    );
+    assert_eq!(
+        first.current_database().await.unwrap().as_deref(),
+        Some("spelunk")
+    );
+    first.select_database("master").await.unwrap();
+    assert_eq!(
+        first.current_database().await.unwrap().as_deref(),
+        Some("master")
+    );
+    assert_eq!(
+        second.current_database().await.unwrap().as_deref(),
+        Some("spelunk")
+    );
+    // Statements now run there.
+    assert_eq!(
+        tables(&*first, "select db_name() as d").await[0].1,
+        [["master"]]
+    );
+    run(&*first, "use spelunk").await.unwrap();
+    assert_eq!(
+        first.current_database().await.unwrap().as_deref(),
+        Some("spelunk")
+    );
+    assert!(
+        first
+            .select_database("missing]; use master; --")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        first.current_database().await.unwrap().as_deref(),
+        Some("spelunk")
+    );
+}
+
 #[tokio::test]
 async fn introspection_describes_tables() {
     let Some(conn) = connect().await else { return };

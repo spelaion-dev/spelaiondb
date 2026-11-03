@@ -203,14 +203,18 @@ async fn actor(
 }
 
 async fn rows(client: &mut SqlClient, sql: &str, params: &[String]) -> Result<Rows> {
-    let mut query = tiberius::Query::new(sql);
-    for param in params {
-        query.bind(param.as_str());
+    // Without parameters, a plain batch: through `sp_executesql` a `USE` would only last for
+    // that call.
+    let stream = if params.is_empty() {
+        client.simple_query(sql).await
+    } else {
+        let mut query = tiberius::Query::new(sql);
+        for param in params {
+            query.bind(param.as_str());
+        }
+        query.query(client).await
     }
-    let stream = query
-        .query(client)
-        .await
-        .map_err(|e| map_error(e, Some(sql)))?;
+    .map_err(|e| map_error(e, Some(sql)))?;
     let rows = stream
         .into_first_result()
         .await
@@ -420,6 +424,36 @@ impl Connection for SqlServerConnection {
             .next()
             .and_then(|row| row.into_iter().next().flatten())
             .unwrap_or_default())
+    }
+
+    async fn current_database(&self) -> Result<Option<String>> {
+        let rows = self.rows("select db_name()", vec![]).await?;
+        Ok(rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next().flatten()))
+    }
+
+    /// The online databases this login can enter; the system ones last.
+    async fn list_databases(&self) -> Result<Vec<String>> {
+        let rows = self
+            .rows(
+                "select name from sys.databases where state = 0 and has_dbaccess(name) = 1 \
+                 order by case when database_id <= 4 then 1 else 0 end, name",
+                vec![],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .collect())
+    }
+
+    async fn select_database(&self, database: &str) -> Result<()> {
+        // Always bracketed: the name is data, never SQL.
+        let sql = format!("USE [{}]", database.replace(']', "]]"));
+        self.rows(&sql, vec![]).await?;
+        Ok(())
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {

@@ -4,5 +4,7 @@
   "newQueryShortcut": "New query (Ctrl+T)",
   "welcome": "Pick a connection on the left or open a new query.",
   "newQuery": "New query",
+  "resizeSidebar": "Resize the connections panel",
+  "resizeSidebarHint": "Drag to resize the connections panel. Double-click to reset.",
   "preferenceLoadError": "Could not load your preferences:"
 }

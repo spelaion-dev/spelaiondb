@@ -1,5 +1,11 @@
 {
   "connection": "Connection",
+  "database": "Database",
+  "noDatabase": "— No database —",
+  "loadingDatabases": "Loading databases…",
+  "databaseLoadFailed": "Could not load databases",
+  "retryDatabases": "Retry",
+  "connectToChooseDatabase": "Connect to choose database",
   "noConnection": "— No connection —",
   "pickConnection": "Pick a connection for this tab.",
   "status": {
@@ -9,8 +15,11 @@
   },
   "production": "PRODUCTION",
   "cancel": "Cancel",
+  "editorActions": "Query actions",
   "run": "Run",
-  "runHint": "Runs everything (Ctrl+Shift+Enter). Ctrl+Enter runs the statement under the cursor or the selection",
+  "runHint": "Run the selection or the statement under the cursor (Ctrl+Enter)",
+  "runScript": "Run script",
+  "runScriptHint": "Run the entire script (Ctrl+Shift+Enter)",
   "resizeEditor": "Resize editor and results",
   "sqlEditor": "SQL editor",
   "results": {
