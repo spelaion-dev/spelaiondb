@@ -514,6 +514,22 @@ try {
   await panel.getByRole("alert").filter({ hasText: "Could not format" }).waitFor();
   assert.equal(await sqlEditor.innerText(), "select 'unterminated");
 
+  step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab moves");
+  const queryTabCount = await page.locator(".tabbar .tab:not(.settings-tab)").count();
+  await sqlEditor.click();
+  await page.keyboard.press("Control+w");
+  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab:not(.settings-tab)").length === n, queryTabCount - 1);
+  await page.keyboard.press("Control+Shift+T");
+  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab:not(.settings-tab)").length === n, queryTabCount);
+  assert.equal(await panel.locator(".cm-content").innerText(), "select 'unterminated");
+  assert.equal(await panel.locator("select").first().evaluate((el) => el.selectedOptions[0].text), "Shop (SQLite) (sqlite)");
+  const activeName = () => page.locator(".tabbar .tab.active").innerText();
+  const reopened = await activeName();
+  await page.keyboard.press("Control+Tab");
+  assert.notEqual(await activeName(), reopened);
+  await page.keyboard.press("Control+Shift+Tab");
+  assert.equal(await activeName(), reopened);
+
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
     "Postgres (Docker)",

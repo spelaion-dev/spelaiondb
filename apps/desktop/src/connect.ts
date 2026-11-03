@@ -29,3 +29,13 @@ export async function openSession(session: string, connectionId: string): Promis
   if (outcome.kind === "untrusted") return null;
   return outcome.serverVersion;
 }
+
+/** Closes a query tab: its session is disconnected and its results are freed in the core (a
+ *  script still running finishes and is recorded). Ctrl+Shift+T reopens it, without results. */
+export function closeQueryTab(id: string) {
+  const tab = useApp.getState().tabs.find((t) => t.id === id);
+  if (!tab) return;
+  useApp.getState().closeTab(id);
+  void call(commands.disconnect(id)).catch(() => undefined);
+  for (const r of tab.run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
+}

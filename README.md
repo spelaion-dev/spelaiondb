@@ -79,6 +79,20 @@ in a confirmation dialog where **Cancel** has the focus; nothing runs until you 
 **Run anyway**. This is a safety net against slips; read-only mode remains the barrier for
 connections that must never change.
 
+### Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| Ctrl+Enter | Run the selection or the statement under the cursor |
+| Ctrl+Shift+Enter | Run the whole script |
+| Shift+Alt+F | Format the selection or the script |
+| Ctrl+T / Ctrl+W | New query tab / close the tab (its connection and results are freed) |
+| Ctrl+Shift+T | Reopen the last closed tab with its SQL |
+| Ctrl+Tab, Ctrl+Shift+Tab | Next / previous tab (also Ctrl+PageDown / Ctrl+PageUp) |
+| Ctrl+, | Settings |
+| Ctrl+C, Ctrl+Shift+C | Copy the grid selection (with headers) |
+| Enter, Esc | Open / close the cell viewer |
+
 ## Working with results
 
 Select cells in the result grid by clicking and dragging, with Shift and the arrow keys, by

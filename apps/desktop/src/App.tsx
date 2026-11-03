@@ -8,6 +8,7 @@ import { EditorTab } from "./components/EditorTab";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { SettingsTab } from "./components/SettingsTab";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
+import { closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
 import { SETTINGS_TAB, useApp, useDialogs } from "./store";
 
@@ -16,7 +17,6 @@ export default function App() {
   const tabs = useApp((s) => s.tabs);
   const activeTab = useApp((s) => s.activeTab);
   const addTab = useApp((s) => s.addTab);
-  const closeTab = useApp((s) => s.closeTab);
   const setActiveTab = useApp((s) => s.setActiveTab);
   const historyOpen = useApp((s) => s.historyOpen);
   const settingsOpen = useApp((s) => s.settingsOpen);
@@ -42,12 +42,29 @@ export default function App() {
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "t") {
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      const app = useApp.getState();
+      if (mod && key === "t") {
         e.preventDefault();
-        useApp.getState().addTab(null);
-      } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        if (e.shiftKey) app.reopenTab();
+        else app.addTab(null);
+      } else if (mod && key === "w") {
         e.preventDefault();
-        useApp.getState().openSettings();
+        if (app.activeTab === SETTINGS_TAB) app.closeSettings();
+        else if (app.activeTab) closeQueryTab(app.activeTab);
+      } else if (mod && (e.key === "Tab" || e.key === "PageDown" || e.key === "PageUp")) {
+        // Next or previous tab, the settings tab included, wrapping around.
+        const order = [...app.tabs.map((t) => t.id), ...(app.settingsOpen ? [SETTINGS_TAB] : [])];
+        if (order.length === 0) return;
+        e.preventDefault();
+        const back = e.key === "PageUp" || (e.key === "Tab" && e.shiftKey);
+        const at = Math.max(0, order.indexOf(app.activeTab ?? ""));
+        const next = order[(at + (back ? order.length - 1 : 1)) % order.length];
+        if (next) app.setActiveTab(next);
+      } else if (mod && e.key === ",") {
+        e.preventDefault();
+        app.openSettings();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -80,7 +97,7 @@ export default function App() {
                 aria-label={t("closeTab", { name: t("shell:queryTab", { number: tab.number }) })}
                 onClick={(e) => {
                   e.stopPropagation();
-                  closeTab(tab.id);
+                  closeQueryTab(tab.id);
                 }}
               >
                 ×

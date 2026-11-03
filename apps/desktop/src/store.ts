@@ -71,6 +71,9 @@ let tabCounter = 0;
 
 export type ConnectionDialog = { kind: "add" } | { kind: "edit"; id: string };
 
+/** How many closed tabs Ctrl+Shift+T can bring back. */
+const MAX_CLOSED_TABS = 20;
+
 /** `activeTab` value of the settings tab, which lives beside the query tabs. */
 export const SETTINGS_TAB = "settings";
 
@@ -92,6 +95,10 @@ interface AppStore {
   setConnections(list: ConnectionItem[]): void;
   addTab(connectionId: string | null, sql?: string): string;
   closeTab(id: string): void;
+  /** Opens again the last closed query tab (its connection and SQL, not its results). */
+  reopenTab(): void;
+  /** Closed query tabs, the last one at the end. */
+  closedTabs: { connectionId: string | null; sql: string }[];
   setActiveTab(id: string): void;
   updateTab(id: string, patch: Partial<Tab>): void;
   updateRun(id: string, update: (run: RunState) => RunState): void;
@@ -135,12 +142,26 @@ export const useApp = create<AppStore>((set) => ({
     set((s) => ({ tabs: [...s.tabs, tab], activeTab: id }));
     return id;
   },
+  closedTabs: [],
   closeTab: (id) =>
     set((s) => {
+      const closed = s.tabs.find((t) => t.id === id);
       const tabs = s.tabs.filter((t) => t.id !== id);
       const fallback = tabs[tabs.length - 1]?.id ?? (s.settingsOpen ? SETTINGS_TAB : null);
-      return { tabs, activeTab: s.activeTab === id ? fallback : s.activeTab };
+      const closedTabs = closed
+        ? [...s.closedTabs, { connectionId: closed.connectionId, sql: closed.sql }].slice(-MAX_CLOSED_TABS)
+        : s.closedTabs;
+      return { tabs, closedTabs, activeTab: s.activeTab === id ? fallback : s.activeTab };
     }),
+  reopenTab: () => {
+    const s = useApp.getState();
+    const last = s.closedTabs[s.closedTabs.length - 1];
+    if (!last) return;
+    set({ closedTabs: s.closedTabs.slice(0, -1) });
+    // The connection may have been deleted since.
+    const connectionId = last.connectionId && s.connections.some((c) => c.id === last.connectionId) ? last.connectionId : null;
+    s.addTab(connectionId, last.sql);
+  },
   setActiveTab: (activeTab) => set({ activeTab }),
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   updateRun: (id, update) =>
