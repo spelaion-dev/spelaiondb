@@ -9,6 +9,7 @@ import { openSession } from "../connect";
 import { useApp, useDialogs, type RunState, type SortState, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
+import { ResultFilter } from "./ResultFilter";
 import { ResultGrid } from "./ResultGrid";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 
@@ -274,6 +275,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
             onSorted={(result, sort) =>
               updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
             }
+            onFiltered={(result, filter, rows, total) =>
+              updateRun(tab.id, (r) => ({
+                ...r,
+                results: r.results.map((x) => (x.id === result ? { ...x, filter, rows, total } : x)),
+              }))
+            }
           />
         </div>
       </div>
@@ -298,11 +305,13 @@ function Results({
   session,
   onSelect,
   onSorted,
+  onFiltered,
 }: {
   run: RunState | null;
   session: string;
   onSelect(id: number | null): void;
   onSorted(result: number, sort: SortState | undefined): void;
+  onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
@@ -321,6 +330,13 @@ function Results({
         <button className={showMessages ? "active" : ""} onClick={() => onSelect(null)}>
           {t("results.messages")}{run.messages.some((m) => m.kind === "error") ? " ⚠" : ""}
         </button>
+        {active && (
+          <ResultFilter
+            key={active.id}
+            result={active}
+            onFiltered={(filter, rows, total) => onFiltered(active.id, filter, rows, total)}
+          />
+        )}
         {active && <ExportButton key={active.id} result={active} session={session} />}
       </div>
       <div className="result-body">
@@ -342,7 +358,13 @@ function Results({
           <span>{t("results.running")}</span>
         ) : (
           <span>
-            {active ? `${t("results.rows", { count: active.rows, formattedCount: numbers.format(active.rows) })}${active.complete ? "" : t("results.loading")} · ` : ""}
+            {active
+              ? `${
+                  active.filter
+                    ? t("results.rowsFiltered", { count: active.rows, formattedCount: numbers.format(active.rows), total: numbers.format(active.total ?? active.rows) })
+                    : t("results.rows", { count: active.rows, formattedCount: numbers.format(active.rows) })
+                }${active.complete ? "" : t("results.loading")} · `
+              : ""}
             {run.elapsedMs != null ? t("results.duration", { duration: numbers.format(Math.round(run.elapsedMs)) }) : ""}
           </span>
         )}

@@ -95,8 +95,6 @@ export function ResultGrid({
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const dragging = useRef(false);
   const [viewer, setViewer] = useState(false);
-  /** Changes with every sort, so the cell viewer asks for its (moved) cell again. */
-  const [order, setOrder] = useState(0);
 
   const redraw = useCallback(() => {
     if (frame.current !== null) return;
@@ -107,7 +105,10 @@ export function ResultGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, redraw]);
+  // A sort or filter changes which row is at each position: a new cache asks the core again
+  // (blocks still on their way to the old one are dropped with it).
+  const view = `${result.sort ? `${result.sort.column}:${result.sort.descending}` : ""}|${result.filter ?? ""}`;
+  const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw]);
   cache.grewTo(result.rows);
 
   // Widths: header and type, bounded. (Fitting to content: next iteration.)
@@ -292,6 +293,12 @@ export function ResultGrid({
   });
 
   useEffect(() => {
+    // Other rows: the selection would point at rows that moved or are gone.
+    setSelection(null);
+    setViewer(false);
+  }, [result.filter]);
+
+  useEffect(() => {
     // New result: scroll to the top and clear the selection.
     setSelection(null);
     setMenu(null);
@@ -331,28 +338,41 @@ export function ResultGrid({
   }
 
   /** Sorts in the core and asks for the rows again; `undefined` restores the server order. */
-  async function sortBy(sort: SortState | undefined) {
+  // Clicks can come faster than the core answers: the next click cycles from the last sort
+  // asked for, and the requests reach the core one after another, in order.
+  const requestedSort = useRef(result.sort);
+  const sortQueue = useRef<Promise<void>>(Promise.resolve());
+  useEffect(() => {
+    requestedSort.current = result.sort;
+    // Only when another result is shown; within one result the ref leads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result.id]);
+
+  function sortBy(sort: SortState | undefined) {
     setMenu(null);
     if (!result.complete) {
       setNotice({ text: t("results.sortWhenComplete"), error: true });
       return;
     }
-    try {
-      await call(commands.sortResult(result.id, sort?.column ?? null, sort?.descending ?? false));
-      onSorted(sort);
-      setOrder((n) => n + 1);
-      cache.reset();
-    } catch (e) {
-      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
-    }
+    const previous = requestedSort.current;
+    requestedSort.current = sort;
+    sortQueue.current = sortQueue.current.then(async () => {
+      try {
+        await call(commands.sortResult(result.id, sort?.column ?? null, sort?.descending ?? false));
+        onSorted(sort);
+      } catch (e) {
+        requestedSort.current = previous;
+        setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+      }
+    });
   }
 
   /** Header clicks cycle: ascending, descending, server order. */
   function cycleSort(col: number) {
-    const current = result.sort;
-    if (current?.column !== col) void sortBy({ column: col, descending: false });
-    else if (!current.descending) void sortBy({ column: col, descending: true });
-    else void sortBy(undefined);
+    const current = requestedSort.current;
+    if (current?.column !== col) sortBy({ column: col, descending: false });
+    else if (!current.descending) sortBy({ column: col, descending: true });
+    else sortBy(undefined);
   }
 
   function scrollIntoView(cell: Cell) {
@@ -550,14 +570,14 @@ export function ResultGrid({
           {selection && (
             <>
               <hr />
-              <button role="menuitem" onClick={() => void sortBy({ column: selection.focus.col, descending: false })}>
+              <button role="menuitem" onClick={() => sortBy({ column: selection.focus.col, descending: false })}>
                 {t("results.sortAsc")}
               </button>
-              <button role="menuitem" onClick={() => void sortBy({ column: selection.focus.col, descending: true })}>
+              <button role="menuitem" onClick={() => sortBy({ column: selection.focus.col, descending: true })}>
                 {t("results.sortDesc")}
               </button>
               {result.sort && (
-                <button role="menuitem" onClick={() => void sortBy(undefined)}>
+                <button role="menuitem" onClick={() => sortBy(undefined)}>
                   {t("results.sortClear")}
                 </button>
               )}
@@ -573,7 +593,7 @@ export function ResultGrid({
     </div>
     {viewer && selection && focusMeta && (
       <CellViewer
-        key={order}
+        key={view}
         resultId={result.id}
         row={selection.focus.row}
         column={selection.focus.col}

@@ -12,6 +12,9 @@ export interface ResultMeta {
   complete: boolean;
   /** Column the core sorted the rows by (`undefined`: the server's order). */
   sort?: SortState;
+  /** Text the core filtered the rows by; `rows` then counts what is left of `total`. */
+  filter?: string;
+  total?: number;
 }
 
 export interface SortState {

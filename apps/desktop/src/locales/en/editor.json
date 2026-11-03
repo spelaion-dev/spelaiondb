@@ -50,7 +50,12 @@
     "sortWhenComplete": "The result can be sorted once every row has arrived",
     "gridSorted": "sorted by {{column}}, {{direction}}",
     "ascending": "ascending",
-    "descending": "descending"
+    "descending": "descending",
+    "filter": "Filter rows",
+    "filterHint": "Rows where some cell contains this text (any case). Copy and export follow the filter.",
+    "filterWhenComplete": "The result can be filtered once every row has arrived",
+    "rowsFiltered_one": "{{formattedCount}} of {{total}} rows",
+    "rowsFiltered_other": "{{formattedCount}} of {{total}} rows"
   },
   "messages": {
     "connectionFailed": "Could not connect: {{detail}}",

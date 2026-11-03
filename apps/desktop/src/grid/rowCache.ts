@@ -11,8 +11,6 @@ export class RowCache {
   private blocks = new Map<number, Vector[]>();
   private pending = new Set<number>();
   private loadedRows = 0;
-  /** Bumped by `reset`, so blocks requested before it are dropped when they arrive. */
-  private generation = 0;
 
   constructor(
     readonly resultId: number,
@@ -39,21 +37,11 @@ export class RowCache {
     this.loadedRows = rows;
   }
 
-  /** The rows changed order in the core (sorting): everything is asked for again. */
-  reset() {
-    this.generation++;
-    this.blocks.clear();
-    this.pending.clear();
-    this.onLoaded();
-  }
-
   private request(b: number) {
     if (this.pending.has(b)) return;
     this.pending.add(b);
-    const generation = this.generation;
     fetchWindow(this.resultId, b * BLOCK, BLOCK)
       .then((table: Table) => {
-        if (generation !== this.generation) return;
         const columns: Vector[] = [];
         for (let i = 0; i < table.numCols; i++) {
           const child = table.getChildAt(i);
@@ -68,8 +56,6 @@ export class RowCache {
         this.onLoaded();
       })
       .catch((e: unknown) => console.error("fetch_window", e))
-      .finally(() => {
-        if (generation === this.generation) this.pending.delete(b);
-      });
+      .finally(() => this.pending.delete(b));
   }
 }

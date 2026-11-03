@@ -95,6 +95,9 @@ renamed at the end, so it works with millions of rows and never leaves half-writ
 Clicking a column header sorts the loaded rows ascending, then descending, then back to the
 server's order (also in the right-click menu). The core sorts by the typed values (numbers and
 decimals by value, dates by date) with NULLs last, and copies and exports follow that order.
+**Filter rows** above the grid keeps the rows where some cell contains the text (ignoring
+case), also filtered in the core: the status line shows "15 of 50,000 rows", sorting works on
+what is left, and copies and exports take only those rows. **Esc** clears it.
 
 **Enter** or a double-click opens the cell viewer beside the grid with the full value of the
 active cell: JSON pretty-printed, binary values as a hex dump and long text with its line

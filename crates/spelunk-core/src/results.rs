@@ -9,9 +9,9 @@ use arrow::array::{Array, RecordBatch};
 use arrow::compute::{concat, interleave_record_batch};
 use arrow::error::ArrowError;
 use arrow::ipc::writer::StreamWriter;
-use spelunk_driver_api::ResultSchema;
+use spelunk_driver_api::{ResultSchema, Value};
 
-use crate::sort::{SortError, SortKey, sorted_rows};
+use crate::sort::{SortKey, ViewError, sorted_rows};
 
 /// Identifier of a result within a [`ResultStore`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -26,8 +26,11 @@ pub struct StoredResult {
     starts: Vec<usize>,
     rows: usize,
     complete: bool,
-    /// When sorted, the original row number shown at each position.
-    order: Option<(SortKey, Vec<u32>)>,
+    sort: Option<(SortKey, Vec<u32>)>,
+    /// The filter text and, per original row, whether it matches.
+    filter: Option<(String, Vec<bool>)>,
+    /// With a sort or a filter, the original row shown at each position.
+    view: Option<Vec<u32>>,
 }
 
 impl StoredResult {
@@ -38,7 +41,9 @@ impl StoredResult {
             starts: Vec::new(),
             rows: 0,
             complete: false,
-            order: None,
+            sort: None,
+            filter: None,
+            view: None,
         }
     }
 
@@ -46,7 +51,13 @@ impl StoredResult {
         &self.schema
     }
 
+    /// Rows in the current view (after the filter, if any).
     pub fn rows(&self) -> usize {
+        self.view.as_ref().map_or(self.rows, Vec::len)
+    }
+
+    /// Rows received, whatever the filter.
+    pub fn total_rows(&self) -> usize {
         self.rows
     }
 
@@ -57,27 +68,28 @@ impl StoredResult {
 
     /// The column the rows are sorted by, if any.
     pub fn sort_key(&self) -> Option<SortKey> {
-        self.order.as_ref().map(|(key, _)| *key)
+        self.sort.as_ref().map(|(key, _)| *key)
+    }
+
+    /// The text rows are filtered by, if any.
+    pub fn filter_text(&self) -> Option<&str> {
+        self.filter.as_ref().map(|(text, _)| text.as_str())
     }
 
     /// Sorts the rows by one column (`None` goes back to the order the server sent). Every
     /// later window, copy and export sees the new order.
-    pub fn sort(&mut self, key: Option<SortKey>) -> Result<(), SortError> {
+    pub fn sort(&mut self, key: Option<SortKey>) -> Result<(), ViewError> {
         let Some(key) = key else {
-            self.order = None;
+            self.sort = None;
+            self.rebuild_view();
             return Ok(());
         };
-        if !self.complete {
-            return Err(SortError::Incomplete);
-        }
+        self.check_viewable()?;
         let meta = self
             .schema
             .columns
             .get(key.column)
-            .ok_or(SortError::NoSuchColumn(key.column))?;
-        if u32::try_from(self.rows).is_err() {
-            return Err(SortError::TooManyRows);
-        }
+            .ok_or(ViewError::NoSuchColumn(key.column))?;
         let parts: Vec<&dyn Array> = self
             .batches
             .iter()
@@ -86,22 +98,82 @@ impl StoredResult {
         let rows = if parts.is_empty() {
             Vec::new()
         } else {
-            let values = concat(&parts).map_err(|_| SortError::UnexpectedArray(key.column))?;
+            let values = concat(&parts).map_err(|_| ViewError::UnexpectedArray(key.column))?;
             sorted_rows(values.as_ref(), meta.logical, key)?
         };
-        self.order = Some((key, rows));
+        self.sort = Some((key, rows));
+        self.rebuild_view();
         Ok(())
     }
 
-    /// Rows `[start, start + len)` (clipped at the end), in the current order. Unsorted, the
-    /// batches are slices without copying data; sorted, the window's rows are gathered.
+    /// Keeps the rows where some cell's text (as the grid shows it) contains `text`,
+    /// ignoring case; `None` or blank shows every row again. Returns the rows left.
+    pub fn filter(&mut self, text: Option<&str>) -> Result<usize, ViewError> {
+        let text = text.map(str::trim).filter(|t| !t.is_empty());
+        let Some(text) = text else {
+            self.filter = None;
+            self.rebuild_view();
+            return Ok(self.rows());
+        };
+        self.check_viewable()?;
+        let needle = text.to_lowercase();
+        let columns = &self.schema.columns;
+        let mut matches = Vec::with_capacity(self.rows);
+        for batch in &self.batches {
+            for row in 0..batch.num_rows() {
+                matches.push(columns.iter().enumerate().any(|(i, meta)| {
+                    match Value::from_array(batch.column(i).as_ref(), row, meta.logical) {
+                        Some(Value::Null) | None => false,
+                        Some(value) => value.to_string().to_lowercase().contains(&needle),
+                    }
+                }));
+            }
+        }
+        self.filter = Some((text.to_string(), matches));
+        self.rebuild_view();
+        Ok(self.rows())
+    }
+
+    fn check_viewable(&self) -> Result<(), ViewError> {
+        if !self.complete {
+            return Err(ViewError::Incomplete);
+        }
+        if u32::try_from(self.rows).is_err() {
+            return Err(ViewError::TooManyRows);
+        }
+        Ok(())
+    }
+
+    /// The order of the sort (or the server's) keeping only the rows the filter matches.
+    fn rebuild_view(&mut self) {
+        self.view = match (&self.sort, &self.filter) {
+            (None, None) => None,
+            (Some((_, order)), None) => Some(order.clone()),
+            (None, Some((_, matches))) => Some(
+                (0..self.rows as u32)
+                    .filter(|&row| matches[row as usize])
+                    .collect(),
+            ),
+            (Some((_, order)), Some((_, matches))) => Some(
+                order
+                    .iter()
+                    .copied()
+                    .filter(|&row| matches[row as usize])
+                    .collect(),
+            ),
+        };
+    }
+
+    /// Rows `[start, start + len)` of the current view (clipped at the end). Without a sort
+    /// or filter, the batches are slices without copying data; otherwise the window's rows
+    /// are gathered.
     pub fn window(&self, start: usize, len: usize) -> Vec<RecordBatch> {
-        let end = start.saturating_add(len).min(self.rows);
+        let end = start.saturating_add(len).min(self.rows());
         if start >= end {
             return Vec::new();
         }
-        if let Some((_, order)) = &self.order {
-            let picks: Vec<(usize, usize)> = order[start..end]
+        if let Some(view) = &self.view {
+            let picks: Vec<(usize, usize)> = view[start..end]
                 .iter()
                 .map(|&row| {
                     let row = row as usize;
@@ -291,7 +363,7 @@ mod tests {
             column: 0,
             descending: true,
         };
-        assert_eq!(r.sort(Some(down)), Err(SortError::Incomplete));
+        assert_eq!(r.sort(Some(down)), Err(ViewError::Incomplete));
         drop(r);
         store.complete(id);
         let r = store.get(id).unwrap();
@@ -301,7 +373,7 @@ mod tests {
                 column: 1,
                 descending: false
             })),
-            Err(SortError::NoSuchColumn(1))
+            Err(ViewError::NoSuchColumn(1))
         );
         r.sort(Some(down)).unwrap();
         assert_eq!(r.sort_key(), Some(down));
@@ -311,6 +383,41 @@ mod tests {
         r.sort(None).unwrap();
         assert_eq!(r.sort_key(), None);
         assert_eq!(values(&r.window(8, 3)), [8, 9, 10]);
+    }
+
+    #[test]
+    fn filters_combine_with_sorting_and_count_what_is_left() {
+        let store = ResultStore::new();
+        let s = schema();
+        let id = store.create(s.clone());
+        for (from, to) in [(0, 10), (10, 25)] {
+            store.append(id, batch(&s, from, to));
+        }
+        let r = store.get(id).unwrap();
+        let mut r = r.write().unwrap();
+        assert_eq!(r.filter(Some("1")), Err(ViewError::Incomplete));
+        drop(r);
+        store.complete(id);
+        let r = store.get(id).unwrap();
+        let mut r = r.write().unwrap();
+        // 1, 10..=19, 21: the text as the grid shows it.
+        assert_eq!(r.filter(Some(" 1 ")), Ok(12));
+        assert_eq!(r.rows(), 12);
+        assert_eq!(r.total_rows(), 25);
+        assert_eq!(r.filter_text(), Some("1"));
+        assert_eq!(values(&r.window(0, 3)), [1, 10, 11]);
+        r.sort(Some(SortKey {
+            column: 0,
+            descending: true,
+        }))
+        .unwrap();
+        assert_eq!(values(&r.window(0, 3)), [21, 19, 18]);
+        assert_eq!(values(&r.window(10, 5)), [10, 1]);
+        assert_eq!(r.filter(Some("nothing")), Ok(0));
+        assert!(r.window(0, 5).is_empty());
+        assert_eq!(r.filter(Some("  ")), Ok(25));
+        assert_eq!(r.filter_text(), None);
+        assert_eq!(values(&r.window(0, 2)), [24, 23]);
     }
 
     #[test]

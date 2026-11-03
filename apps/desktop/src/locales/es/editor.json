@@ -50,7 +50,12 @@
     "sortWhenComplete": "El resultado se puede ordenar cuando hayan llegado todas las filas",
     "gridSorted": "ordenado por {{column}}, {{direction}}",
     "ascending": "ascendente",
-    "descending": "descendente"
+    "descending": "descendente",
+    "filter": "Filtrar filas",
+    "filterHint": "Filas con alguna celda que contiene este texto (sin distinguir mayúsculas). Copiar y exportar siguen el filtro.",
+    "filterWhenComplete": "El resultado se puede filtrar cuando hayan llegado todas las filas",
+    "rowsFiltered_one": "{{formattedCount}} de {{total}} filas",
+    "rowsFiltered_other": "{{formattedCount}} de {{total}} filas"
   },
   "messages": {
     "connectionFailed": "No se pudo conectar: {{detail}}",

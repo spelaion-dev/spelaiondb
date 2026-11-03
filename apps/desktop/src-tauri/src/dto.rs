@@ -772,6 +772,13 @@ impl From<spelunk_core::RiskyStatement> for RiskyItem {
     }
 }
 
+/// Rows left after filtering a result, out of all it has.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct FilterOutcome {
+    pub rows: u32,
+    pub total: u32,
+}
+
 /// A piece of a script, in UTF-8 bytes like every position the core gives.
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct TextSpan {

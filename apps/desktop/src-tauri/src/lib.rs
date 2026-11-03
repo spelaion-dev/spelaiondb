@@ -919,6 +919,34 @@ async fn sort_result(
     .map_err(|e| e.to_string())?
 }
 
+/// Filters a result in the core: rows where some cell contains `text` (ignoring case);
+/// `None` shows every row again. The grid then asks for its windows again.
+#[tauri::command]
+#[specta::specta]
+async fn filter_result(
+    result: u32,
+    text: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<FilterOutcome> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    tokio::task::spawn_blocking(move || {
+        let mut stored = stored
+            .write()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let rows = stored.filter(text.as_deref()).map_err(|e| e.to_string())?;
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        Ok(FilterOutcome {
+            rows: n(rows),
+            total: n(stored.total_rows()),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
 /// what fits, and the row may not be in its cache.
 #[tauri::command]
@@ -1112,6 +1140,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             export_result,
             cell_value,
             sort_result,
+            filter_result,
             statement_at,
             create_sqlite_database,
             script_risks,

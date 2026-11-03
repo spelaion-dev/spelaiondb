@@ -317,3 +317,7 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 /* ---------------------------------------------------------------- connection URL */
 .url-import { display: flex; gap: 6px; margin-top: 8px; }
 .url-import input { flex: 1; min-width: 0; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+
+/* ---------------------------------------------------------------- result filter */
+.result-filter { margin-left: auto; width: 200px; min-width: 120px; font-size: 12.5px; padding: 3px 8px; }
+.result-filter.invalid { border-color: var(--danger, #c0392b); }

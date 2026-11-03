@@ -19,12 +19,12 @@ pub struct SortKey {
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum SortError {
-    #[error("the result is still arriving; it can be sorted when it is complete")]
+pub enum ViewError {
+    #[error("the result is still arriving; it can be sorted or filtered when it is complete")]
     Incomplete,
     #[error("the result has no column {0}")]
     NoSuchColumn(usize),
-    #[error("the result is too large to sort in the app")]
+    #[error("the result is too large to sort or filter in the app")]
     TooManyRows,
     #[error("column {0} does not hold the values its type announces")]
     UnexpectedArray(usize),
@@ -35,8 +35,8 @@ pub(crate) fn sorted_rows(
     values: &dyn Array,
     logical: LogicalType,
     key: SortKey,
-) -> Result<Vec<u32>, SortError> {
-    let unexpected = || SortError::UnexpectedArray(key.column);
+) -> Result<Vec<u32>, ViewError> {
+    let unexpected = || ViewError::UnexpectedArray(key.column);
     let d = key.descending;
     match logical {
         LogicalType::Bool => {
@@ -250,7 +250,7 @@ mod tests {
         );
         assert_eq!(
             sorted_rows(&t, LogicalType::Int, key),
-            Err(SortError::UnexpectedArray(4))
+            Err(ViewError::UnexpectedArray(4))
         );
     }
 }

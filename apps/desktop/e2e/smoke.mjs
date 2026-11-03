@@ -353,6 +353,22 @@ try {
   await sortedAs("");
   assert.deepEqual(await copyFirstRows(0, 2), ["1", "2"]);
 
+  step("filter: the core keeps the rows with the text, sorting and copy follow");
+  const filterBox = panel.getByRole("searchbox", { name: "Filter rows" });
+  await filterBox.fill("4999");
+  await panel.locator(".statusline", { hasText: "15 of 50,000 rows" }).waitFor();
+  assert.deepEqual(await copyFirstRows(0, 3), ["4999", "14999", "24999"]);
+  // Two quick clicks: the second cycles from the first even before the core answers.
+  await clickHeader(ID_X);
+  await clickHeader(ID_X);
+  await panel.locator('.grid-scroller[aria-label="Result with 15 rows, sorted by id, descending"]').waitFor();
+  assert.deepEqual(await copyFirstRows(0, 2), ["49999", "49998"]);
+  await shot("04c-grid-filtered");
+  await filterBox.press("Escape");
+  await panel.locator(".statusline", { hasText: "50,000 rows" }).waitFor();
+  await clickHeader(ID_X);
+  await sortedAs("");
+
   step("error with its position underlined");
   panel = await newQuery("Shop (SQLite)", "select id, total\nfrom ordrs\nwhere total > 100;");
   await run(panel);

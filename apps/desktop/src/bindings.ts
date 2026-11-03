@@ -70,6 +70,11 @@ export const commands = {
 	 */
 	sortResult: (result: number, column: number | null, descending: boolean) => typedError<null, string>(__TAURI_INVOKE("sort_result", { result, column, descending })),
 	/**
+	 *  Filters a result in the core: rows where some cell contains `text` (ignoring case);
+	 *  `None` shows every row again. The grid then asks for its windows again.
+	 */
+	filterResult: (result: number, text: string | null) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_result", { result, text })),
+	/**
 	 *  The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
 	 *  engine's dialect in the core like a script run, for Ctrl+Enter.
 	 */
@@ -266,6 +271,12 @@ export type EngineItem_Serialize = {
 	access: string,
 	defaultPort: number | null,
 	available: boolean,
+};
+
+/**  Rows left after filtering a result, out of all it has. */
+export type FilterOutcome = {
+	rows: number,
+	total: number,
 };
 
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
