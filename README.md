@@ -69,6 +69,14 @@ DBeaver saved are read from its credentials file; the passwords go to the system
 if you tick that option, and are asked when connecting otherwise. A name already taken gets
 ` (DBeaver)` added; nothing existing is overwritten.
 
+- **Kubernetes:** a tunnel can also be **Kubernetes** instead of SSH: a context of your
+  kubeconfig, a namespace and a resource (`svc/postgres`, `deployment/…`, `pod/…`), all
+  offered by `kubectl` as you fill the form. SpelunkDB runs `kubectl port-forward` with your
+  kubeconfig (so EKS, GKE or AKS authentication works as in your terminal); the connection's
+  port is the resource's port. Connections to the same resource and port share one
+  `kubectl`, stopped with the last one; if it exits, the tunnel shows `kubectl`'s message and
+  is not restarted on its own. Repository Kubernetes tunnels need a trusted repository.
+
 Testing a connection writes nothing. Saving never overwrites an existing connection.
 
 The **⋯** menu next to each connection has **Edit…** and **Delete…**. Editing keeps the same

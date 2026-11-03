@@ -1043,7 +1043,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("tab", { name: "SSH" }).click();
   await wizard.getByRole("button", { name: "New tunnel…" }).click();
-  const editor = page.getByRole("dialog", { name: "New SSH tunnel" });
+  const editor = page.getByRole("dialog", { name: "New tunnel" });
   const key = join(root, "testing", "docker", "keys", "id_ed25519");
   await editor.getByLabel("Tunnel name").fill("Wizard bastions");
   await editor.getByRole("radio", { name: "Personal", exact: true }).check();
@@ -1099,6 +1099,53 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("button", { name: "Cancel" }).click();
   await wizard.waitFor({ state: "detached" });
   assert.ok(existsSync(join(userDir, "tunnels", "wizard-bastions.toml")));
+
+  // Only with the test cluster (testing/k8s): SPELUNK_TEST_K8S is its kubeconfig.
+  if (process.env.SPELUNK_TEST_K8S) {
+    step("Kubernetes tunnel: kubectl port-forward to a PostgreSQL inside the test cluster");
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    wizard = page.locator(".modal.wizard").first();
+    await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+    await wizard.getByLabel("Name", { exact: true }).fill("PG in Kubernetes");
+    await wizard.getByLabel("Host", { exact: true }).fill("postgres");
+    await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
+    await wizard.getByLabel("User", { exact: true }).fill("spelunk");
+    await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+    await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
+    await wizard.getByRole("tab", { name: "Options" }).click();
+    await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+    await wizard.getByRole("tab", { name: "SSH" }).click();
+    await wizard.getByRole("button", { name: "New tunnel…" }).click();
+    const kubeEditor = page.getByRole("dialog", { name: "New tunnel" });
+    await kubeEditor.getByLabel("Tunnel name").fill("Kind cluster");
+    await kubeEditor.getByRole("radio", { name: "Personal", exact: true }).check();
+    await kubeEditor.getByRole("radio", { name: "Kubernetes", exact: true }).check();
+    await kubeEditor.getByLabel("Kubeconfig file").fill(process.env.SPELUNK_TEST_K8S);
+    // Contexts, namespaces and resources come from kubectl.
+    await kubeEditor.getByLabel("Context").locator("option", { hasText: "kind-spelunk-test" }).waitFor({ state: "attached" });
+    await kubeEditor.getByLabel("Namespace").fill("spelunk-test");
+    await kubeEditor.locator("#kube-resources option[value='svc/postgres']").waitFor({ state: "attached" });
+    await kubeEditor.getByLabel("Resource (svc/…, deployment/…, pod/…)").fill("svc/postgres");
+    await kubeEditor.getByRole("button", { name: "Test tunnel" }).click();
+    await kubeEditor.locator(".test-result", { hasText: "kubectl found the resource" }).waitFor();
+    await shot("14b-kubernetes-tunnel");
+    await kubeEditor.getByRole("button", { name: "Save", exact: true }).click();
+    await kubeEditor.waitFor({ state: "detached" });
+    assert.equal(await wizard.getByLabel("SSH tunnel", { exact: true }).inputValue(), "kind-cluster");
+    await wizard.getByRole("button", { name: "Test connection" }).click();
+    await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
+    await wizard.getByRole("button", { name: "Save", exact: true }).click();
+    await wizard.waitFor({ state: "detached" });
+    const kubeTunnel = readFileSync(join(userDir, "tunnels", "kind-cluster.toml"), "utf8");
+    assert.match(kubeTunnel, /\[kubernetes\]/);
+    assert.match(kubeTunnel, /resource = "svc\/postgres"/);
+    panel = await newQuery("PG in Kubernetes", "select current_database() as db, inet_server_port() as port;");
+    await run(panel);
+    await page.getByRole("dialog").getByText("Password for PG in Kubernetes").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelunk");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  }
 
   step("delete a connection: confirmation, its tab is left without a connection");
   await (await connectionMenu("Shop copy")).getByRole("button", { name: "Delete…" }).click();

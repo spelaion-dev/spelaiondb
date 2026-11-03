@@ -1,11 +1,22 @@
-// SSH tunnel editor, opened from the SSH tab of the connection form: the hops in order
-// (the last one reaches the database), each with its server and authentication. The core
-// validates and writes the file; passwords go to the keychain, never to the file.
+// Tunnel editor, opened from the SSH tab of the connection form. An SSH tunnel is its hops in
+// order (the last one reaches the database), each with its server and authentication; a
+// Kubernetes tunnel (ADR-015) is a context, namespace and resource that `kubectl
+// port-forward` reaches. The core validates and writes the file; passwords go to the
+// keychain, never to the file.
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
-import { call, commands, type HopDraft, type PasswordMode, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
+import {
+  call,
+  commands,
+  type HopDraft,
+  type KubernetesDraftItem,
+  type PasswordMode,
+  type SshAuthItem,
+  type TunnelDraft,
+  type TunnelItem,
+} from "../api";
 import { useApp, useDialogs } from "../store";
 
 export type TunnelEditorMode = { kind: "add"; personal: boolean } | { kind: "edit"; name: string; personal: boolean };
@@ -81,6 +92,29 @@ function toDraft(hop: HopState): HopDraft {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+const emptyKube = (): KubernetesDraftItem => ({ context: "", namespace: "", resource: "", kubeconfig: "", kubectl: "" });
+
+/** Asks `kubectl` for choices (contexts, namespaces, resources) as the form changes. */
+function useKubeChoices(enabled: boolean, load: () => Promise<string[]>, deps: unknown[]) {
+  const [choices, setChoices] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      load()
+        .then((list) => active && (setChoices(list), setError(null)))
+        .catch((e: unknown) => active && (setChoices([]), setError(errorText(e))));
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, ...deps]);
+  return { choices, error };
+}
+
 export function TunnelEditor(props: {
   mode: TunnelEditorMode;
   onClose(): void;
@@ -95,6 +129,23 @@ export function TunnelEditor(props: {
   const [name, setName] = useState(editing ? mode.name : "");
   const [personal, setPersonal] = useState(mode.personal || !hasWorkspace);
   const [hops, setHops] = useState<HopState[]>(editing ? [] : [emptyHop()]);
+  const [kind, setKind] = useState<"ssh" | "kubernetes">("ssh");
+  const [kube, setKube] = useState<KubernetesDraftItem>(emptyKube());
+  const isKube = kind === "kubernetes";
+  const updateKube = (patch: Partial<KubernetesDraftItem>) => {
+    setKube((k) => ({ ...k, ...patch }));
+    setStatus({ kind: "idle" });
+  };
+  // What kubectl knows, to fill the form: contexts of the kubeconfig, then the context's
+  // namespaces, then the namespace's services, deployments and pods.
+  const contexts = useKubeChoices(isKube, () => call(commands.kubeContexts(kube)), [kube.kubeconfig, kube.kubectl]);
+  const namespaces = useKubeChoices(isKube, () => call(commands.kubeNamespaces(kube)), [kube.kubeconfig, kube.kubectl, kube.context]);
+  const resources = useKubeChoices(isKube, () => call(commands.kubeResources(kube)), [
+    kube.kubeconfig,
+    kube.kubectl,
+    kube.context,
+    kube.namespace,
+  ]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "idle" | "testing" | "ok" } | { kind: "error"; message: string }>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
@@ -103,7 +154,15 @@ export function TunnelEditor(props: {
   useEffect(() => {
     if (mode.kind !== "edit") return;
     call(commands.tunnelDraft(mode.name, mode.personal))
-      .then((draft) => setHops((draft as TunnelDraft).hops.map(fromDraft)))
+      .then((loaded) => {
+        const draft = loaded as TunnelDraft;
+        setHops(draft.hops.map(fromDraft));
+        if (draft.kubernetes) {
+          setKind("kubernetes");
+          setKube(draft.kubernetes);
+          setHops([emptyHop()]);
+        }
+      })
       .catch((e: unknown) => setLoadError(errorText(e)));
   }, [mode]);
 
@@ -133,8 +192,10 @@ export function TunnelEditor(props: {
     setStatus({ kind: "idle" });
   };
 
-  const draft: TunnelDraft = { personal, name, hops: hops.map(toDraft) };
-  const passwords = hops.map((hop) => hop.password || null);
+  const draft: TunnelDraft = isKube
+    ? { personal, name, hops: [], kubernetes: kube }
+    : { personal, name, hops: hops.map(toDraft), kubernetes: null };
+  const passwords = isKube ? [] : hops.map((hop) => hop.password || null);
 
   async function browseKey(i: number) {
     const path = await open({ multiple: false, directory: false });
@@ -233,9 +294,110 @@ export function TunnelEditor(props: {
                 </div>
               </div>
               <p className="muted small">{editing ? t("tunnel.fixedHint") : t("tunnel.nameHint")}</p>
+              <div className="form-row" role="radiogroup" aria-label={t("tunnel.kind")}>
+                <span>{t("tunnel.kind")}</span>
+                <label className="check">
+                  <input type="radio" name="tunnel-kind" checked={!isKube} onChange={() => setKind("ssh")} />
+                  SSH
+                </label>
+                <label className="check">
+                  <input
+                    type="radio"
+                    name="tunnel-kind"
+                    checked={isKube}
+                    onChange={() => {
+                      setKind("kubernetes");
+                      setStatus({ kind: "idle" });
+                    }}
+                  />
+                  Kubernetes
+                </label>
+              </div>
             </fieldset>
 
-            {hops.map((hop, i) => {
+            {isKube && (
+              <fieldset className="kube" aria-label="Kubernetes">
+                <legend>Kubernetes</legend>
+                <div className="form-pair">
+                  <label className="field grow">
+                    <span>{t("tunnel.kube.context")}</span>
+                    <select value={kube.context} onChange={(e) => updateKube({ context: e.target.value })}>
+                      <option value="">{t("tunnel.kube.currentContext")}</option>
+                      {kube.context && !contexts.choices.includes(kube.context) && <option value={kube.context}>{kube.context}</option>}
+                      {contexts.choices.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field grow">
+                    <span>{t("tunnel.kube.namespace")}</span>
+                    <input
+                      type="text"
+                      list="kube-namespaces"
+                      value={kube.namespace}
+                      placeholder={t("tunnel.kube.defaultNamespace")}
+                      onChange={(e) => updateKube({ namespace: e.target.value })}
+                    />
+                    <datalist id="kube-namespaces">
+                      {namespaces.choices.map((n) => (
+                        <option key={n} value={n} />
+                      ))}
+                    </datalist>
+                  </label>
+                </div>
+                <label className="field">
+                  <span>{t("tunnel.kube.resource")}</span>
+                  <input
+                    type="text"
+                    list="kube-resources"
+                    value={kube.resource}
+                    placeholder="svc/postgres"
+                    autoComplete="off"
+                    onChange={(e) => updateKube({ resource: e.target.value })}
+                  />
+                  <datalist id="kube-resources">
+                    {resources.choices.map((r) => (
+                      <option key={r} value={r} />
+                    ))}
+                  </datalist>
+                </label>
+                {(contexts.error ?? namespaces.error ?? resources.error) && (
+                  <p className="error small" role="alert">
+                    {contexts.error ?? namespaces.error ?? resources.error}
+                  </p>
+                )}
+                <div className="form-pair">
+                  <label className="field grow">
+                    <span>{t("tunnel.kube.kubeconfig")}</span>
+                    <input
+                      type="text"
+                      value={kube.kubeconfig}
+                      placeholder={t("tunnel.kube.kubeconfigPlaceholder")}
+                      onChange={(e) => updateKube({ kubeconfig: e.target.value })}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void open({ multiple: false, directory: false }).then((path) => {
+                        if (typeof path === "string") updateKube({ kubeconfig: path });
+                      })
+                    }
+                  >
+                    {t("browse")}
+                  </button>
+                  <label className="field">
+                    <span>kubectl</span>
+                    <input type="text" value={kube.kubectl} placeholder="kubectl" onChange={(e) => updateKube({ kubectl: e.target.value })} />
+                  </label>
+                </div>
+                <p className="muted small">{t("tunnel.kube.hint")}</p>
+              </fieldset>
+            )}
+
+            {!isKube && hops.map((hop, i) => {
               const label = t("tunnel.hop", { number: i + 1 });
               const auth: SshAuthItem[] = hop.method === "custom" ? hop.auth : [hop.method];
               return (
@@ -334,9 +496,11 @@ export function TunnelEditor(props: {
                 </fieldset>
               );
             })}
-            <button type="button" className="add-hop" onClick={() => setHops((list) => [...list, emptyHop()])}>
-              {t("tunnel.addHop")}
-            </button>
+            {!isKube && (
+              <button type="button" className="add-hop" onClick={() => setHops((list) => [...list, emptyHop()])}>
+                {t("tunnel.addHop")}
+              </button>
+            )}
           </div>
 
           <div className="wizard-footer">
@@ -345,7 +509,7 @@ export function TunnelEditor(props: {
             </button>
             <div className="test-result" role="status">
               {status.kind === "testing" && <span className="muted">{t("test.testing")}</span>}
-              {status.kind === "ok" && <span className="ok">{t("tunnel.ok", { count: hops.length })}</span>}
+              {status.kind === "ok" && <span className="ok">{isKube ? t("tunnel.kube.ok") : t("tunnel.ok", { count: hops.length })}</span>}
               {status.kind === "error" && <span className="error">{status.message}</span>}
             </div>
             {editing && (

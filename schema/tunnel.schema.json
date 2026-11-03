@@ -59,6 +59,48 @@
       ],
       "type": "object"
     },
+    "KubernetesConfig": {
+      "additionalProperties": false,
+      "description": "Where a Kubernetes tunnel forwards to (ADR-015).",
+      "properties": {
+        "context": {
+          "description": "Context of the kubeconfig; its current context when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubeconfig": {
+          "description": "A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubectl": {
+          "description": "The `kubectl` executable; `kubectl` on the PATH when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespace": {
+          "description": "The context's namespace when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resource": {
+          "description": "`svc/<name>`, `pod/<name>` or `deployment/<name>`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource"
+      ],
+      "type": "object"
+    },
     "SecretSpec": {
       "additionalProperties": false,
       "description": "Reference to a secret. Accepted forms:\n`keychain`, `keychain:<name>`, `env:<VARIABLE>`, `op://<vault>/<item>/<field>`,\n`cmd:<command>` and `prompt` (asked when connecting).",
@@ -84,14 +126,25 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "An SSH tunnel: `.spelunk/tunnels/<name>.toml`.",
+  "description": "A tunnel: `.spelunk/tunnels/<name>.toml`. SSH (`[[hops]]`) or Kubernetes\n(`[kubernetes]`, ADR-015), never both.",
   "properties": {
     "hops": {
-      "description": "Hops in order; the last one is the one that reaches the database.",
+      "description": "SSH hops in order; the last one is the one that reaches the database.",
       "items": {
         "$ref": "#/$defs/HopConfig"
       },
       "type": "array"
+    },
+    "kubernetes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KubernetesConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`kubectl port-forward` to a resource of a cluster; the connection's port is the\nremote port."
     },
     "schema_version": {
       "format": "uint32",
@@ -100,8 +153,7 @@
     }
   },
   "required": [
-    "schema_version",
-    "hops"
+    "schema_version"
   ],
   "title": "TunnelFile",
   "type": "object"

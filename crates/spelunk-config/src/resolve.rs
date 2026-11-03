@@ -63,7 +63,20 @@ impl ResolvedConnection {
 #[derive(Debug, Clone)]
 pub struct ResolvedTunnel {
     pub name: String,
+    /// SSH hops; empty for a Kubernetes tunnel.
     pub hops: Vec<ResolvedHop>,
+    pub kubernetes: Option<ResolvedKubernetes>,
+}
+
+/// A Kubernetes tunnel ready to run `kubectl port-forward` (ADR-015).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedKubernetes {
+    pub context: Option<String>,
+    pub namespace: Option<String>,
+    pub resource: String,
+    pub kubeconfig: Option<PathBuf>,
+    /// `kubectl` unless the tunnel names another executable.
+    pub kubectl: String,
 }
 
 #[derive(Debug, Clone)]
@@ -267,9 +280,29 @@ impl<'a> Resolver<'a> {
                 command: hop.command.clone(),
             });
         }
+        let kubernetes = file
+            .kubernetes
+            .as_ref()
+            .map(|k| -> Result<ResolvedKubernetes, ResolveError> {
+                let text = |v: &Option<String>| -> Result<Option<String>, ResolveError> {
+                    v.as_deref()
+                        .map(|v| self.expand(errors_at, v))
+                        .transpose()
+                        .map(|v| v.filter(|v| !v.trim().is_empty()))
+                };
+                Ok(ResolvedKubernetes {
+                    context: text(&k.context)?,
+                    namespace: text(&k.namespace)?,
+                    resource: self.expand(errors_at, &k.resource)?,
+                    kubeconfig: text(&k.kubeconfig)?.map(|f| resolve_path(&f, base)),
+                    kubectl: text(&k.kubectl)?.unwrap_or_else(|| "kubectl".into()),
+                })
+            })
+            .transpose()?;
         Ok(ResolvedTunnel {
             name: name.to_string(),
             hops,
+            kubernetes,
         })
     }
 

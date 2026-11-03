@@ -82,6 +82,28 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  kubernetes:
+    # Kubernetes tunnels (ADR-015) against a real cluster: kind in Docker, a PostgreSQL inside.
+    name: Kubernetes tunnels (kind)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kubernetes
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: spelunk-test
+      - run: kubectl apply -f testing/k8s/postgres.yaml
+      - run: kubectl -n spelunk-test rollout status deployment/postgres --timeout=180s
+      - run: cargo test -p spelunk-core --test kube
+        env:
+          SPELUNK_TEST_K8S: /home/runner/.kube/config
+
   deny:
     name: Licenses and vulnerabilities
     runs-on: ubuntu-latest

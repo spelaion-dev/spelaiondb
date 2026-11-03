@@ -12,7 +12,7 @@ use crate::draft::{PasswordChoice, portable_path, slug};
 use crate::edit::{read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, Source, TunnelEntry, WORKSPACE_DIR, validate_tunnel};
-use crate::model::{HopConfig, SCHEMA_VERSION, SecretSpec, SshAuth, TunnelFile};
+use crate::model::{HopConfig, KubernetesConfig, SCHEMA_VERSION, SecretSpec, SshAuth, TunnelFile};
 use crate::secrets::{SecretBackend, SecretRef};
 
 /// JSON Schema URL put in the header of new tunnel files.
@@ -40,8 +40,20 @@ pub struct TunnelDraft {
     pub source: Source,
     /// Also the file name (`.spelunk/tunnels/<slug>.toml`), which connections refer to.
     pub name: String,
-    /// In order; the last one reaches the database.
+    /// In order; the last one reaches the database. Ignored for a Kubernetes tunnel.
     pub hops: Vec<HopDraft>,
+    /// A Kubernetes tunnel instead of SSH (ADR-015).
+    pub kubernetes: Option<KubernetesDraft>,
+}
+
+/// The Kubernetes part of the tunnel form; empty fields mean the defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KubernetesDraft {
+    pub context: String,
+    pub namespace: String,
+    pub resource: String,
+    pub kubeconfig: String,
+    pub kubectl: String,
 }
 
 /// Directory holding the tunnels of a layer.
@@ -103,6 +115,24 @@ impl TunnelDraft {
             Source::Workspace => config.workspace_root.as_deref(),
             Source::User => None,
         };
+        if let Some(k) = &self.kubernetes {
+            return validate_tunnel(
+                path,
+                TunnelFile {
+                    schema_version: SCHEMA_VERSION,
+                    hops: Vec::new(),
+                    kubernetes: Some(KubernetesConfig {
+                        context: non_empty(&k.context),
+                        namespace: non_empty(&k.namespace),
+                        resource: non_empty(&k.resource).ok_or_else(|| {
+                            ConfigError::new(path, "the Kubernetes resource cannot be empty")
+                        })?,
+                        kubeconfig: non_empty(&k.kubeconfig).map(|f| portable_path(&f, root)),
+                        kubectl: non_empty(&k.kubectl),
+                    }),
+                },
+            );
+        }
         let mut hops = Vec::with_capacity(self.hops.len());
         for (i, hop) in self.hops.iter().enumerate() {
             let at = |field: &str| {
@@ -148,6 +178,7 @@ impl TunnelDraft {
             TunnelFile {
                 schema_version: SCHEMA_VERSION,
                 hops,
+                kubernetes: None,
             },
         )
     }
@@ -175,10 +206,18 @@ impl TunnelDraft {
                 },
             })
             .collect();
+        let kubernetes = entry.file.kubernetes.as_ref().map(|k| KubernetesDraft {
+            context: k.context.clone().unwrap_or_default(),
+            namespace: k.namespace.clone().unwrap_or_default(),
+            resource: k.resource.clone(),
+            kubeconfig: k.kubeconfig.clone().unwrap_or_default(),
+            kubectl: k.kubectl.clone().unwrap_or_default(),
+        });
         Self {
             source: entry.source,
             name: entry.name.clone(),
             hops,
+            kubernetes,
         }
     }
 }
@@ -344,7 +383,25 @@ pub fn update_tunnel(
     let old = &entry.file;
 
     let (original, mut doc) = read_doc(path)?;
-    {
+    if let Some(k) = &new.kubernetes {
+        // Kubernetes: its section rewritten (keys it lacks removed), no hops left.
+        doc.remove("hops");
+        let table = doc
+            .entry("kubernetes")
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| ConfigError::new(path, "kubernetes must be a table"))?;
+        put(table, "context", k.context.as_deref().map(Value::from));
+        put(table, "namespace", k.namespace.as_deref().map(Value::from));
+        put(table, "resource", Some(Value::from(k.resource.as_str())));
+        put(
+            table,
+            "kubeconfig",
+            k.kubeconfig.as_deref().map(Value::from),
+        );
+        put(table, "kubectl", k.kubectl.as_deref().map(Value::from));
+    } else {
+        doc.remove("kubernetes");
         let hops = doc
             .entry("hops")
             .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()))

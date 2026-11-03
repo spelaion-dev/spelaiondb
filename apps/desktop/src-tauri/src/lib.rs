@@ -556,6 +556,45 @@ async fn test_tunnel(
     Ok(TunnelTestOutcome::Connected)
 }
 
+/// What `kubectl` is asked with, from the tunnel form: empty fields mean the defaults.
+fn kube_spec(k: KubernetesDraftItem) -> spelunk_config::ResolvedKubernetes {
+    let text = |v: String| Some(v.trim().to_string()).filter(|v| !v.is_empty());
+    spelunk_config::ResolvedKubernetes {
+        context: text(k.context),
+        namespace: text(k.namespace),
+        resource: k.resource,
+        kubeconfig: text(k.kubeconfig).map(PathBuf::from),
+        kubectl: text(k.kubectl).unwrap_or_else(|| "kubectl".into()),
+    }
+}
+
+/// The contexts of the kubeconfig, for the Kubernetes tunnel form (ADR-015).
+#[tauri::command]
+#[specta::specta]
+async fn kube_contexts(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
+    spelunk_core::kube::contexts(&kube_spec(form))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The namespaces of the chosen context.
+#[tauri::command]
+#[specta::specta]
+async fn kube_namespaces(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
+    spelunk_core::kube::namespaces(&kube_spec(form))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Services, deployments and pods of the chosen namespace, as `svc/…`, `deployment/…`, `pod/…`.
+#[tauri::command]
+#[specta::specta]
+async fn kube_resources(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
+    spelunk_core::kube::resources(&kube_spec(form))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Saves a new tunnel (and its `keychain` passwords) and reloads the configuration.
 #[tauri::command]
 #[specta::specta]
@@ -1587,6 +1626,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             bind_params,
             parse_connection_url,
             scan_dbeaver,
+            kube_contexts,
+            kube_namespaces,
+            kube_resources,
             import_dbeaver,
             open_workspace,
             trust_workspace,

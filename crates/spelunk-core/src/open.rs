@@ -13,6 +13,7 @@ use spelunk_ssh::{
 };
 use tokio::sync::watch;
 
+use crate::kube::{KubeError, KubeTunnel};
 use crate::{ResultStore, Session};
 
 /// Available engines, by the name the configuration uses (`engine = "postgres"`).
@@ -53,6 +54,9 @@ pub enum OpenError {
     Tunnel(#[from] SshError),
 
     #[error("{0}")]
+    Kube(#[from] KubeError),
+
+    #[error("{0}")]
     Driver(#[from] DriverError),
 }
 
@@ -62,6 +66,8 @@ pub enum OpenError {
 #[derive(Default)]
 pub struct TunnelPool {
     tunnels: tokio::sync::Mutex<HashMap<String, Weak<Tunnel>>>,
+    /// Kubernetes tunnels (ADR-015), shared the same way.
+    kube: tokio::sync::Mutex<HashMap<String, Weak<KubeTunnel>>>,
 }
 
 impl TunnelPool {
@@ -71,12 +77,41 @@ impl TunnelPool {
 
     /// Live, active tunnels.
     pub async fn active(&self) -> usize {
-        let tunnels = self.tunnels.lock().await;
-        tunnels
+        let ssh = self
+            .tunnels
+            .lock()
+            .await
             .values()
             .filter_map(Weak::upgrade)
             .filter(|t| *t.state().borrow() == TunnelState::Up)
-            .count()
+            .count();
+        let kube = self
+            .kube
+            .lock()
+            .await
+            .values()
+            .filter_map(Weak::upgrade)
+            .filter(|t| *t.state().borrow() == TunnelState::Up)
+            .count();
+        ssh + kube
+    }
+
+    async fn get_or_start_kube(
+        &self,
+        key: String,
+        spec: &spelunk_config::ResolvedKubernetes,
+    ) -> Arc<KubeTunnel> {
+        let mut tunnels = self.kube.lock().await;
+        tunnels.retain(|_, t| t.strong_count() > 0);
+        if let Some(tunnel) = tunnels.get(&key).and_then(Weak::upgrade)
+            && *tunnel.state().borrow() == TunnelState::Up
+        {
+            return tunnel;
+        }
+        // Down or missing: a new one (a downed tunnel is never restarted on its own).
+        let tunnel = Arc::new(KubeTunnel::new(spec.clone()));
+        tunnels.insert(key, Arc::downgrade(&tunnel));
+        tunnel
     }
 
     async fn get_or_connect(
@@ -111,18 +146,27 @@ pub struct OpenOptions {
     pub password: Option<Secret>,
 }
 
+/// The tunnel a connection goes through.
+enum ActiveTunnel {
+    Ssh(Arc<Tunnel>),
+    Kube(Arc<KubeTunnel>),
+}
+
 /// An open connection. The tunnel lives as long as the session.
 pub struct OpenConnection {
     // Field order = drop order: first the session, then the tunnel.
     pub session: Session,
     pub resolved: ResolvedConnection,
-    tunnel: Option<Arc<Tunnel>>,
+    tunnel: Option<ActiveTunnel>,
 }
 
 impl OpenConnection {
     /// Tunnel state, if the connection goes through one.
     pub fn tunnel_state(&self) -> Option<watch::Receiver<TunnelState>> {
-        self.tunnel.as_ref().map(|t| t.state())
+        self.tunnel.as_ref().map(|t| match t {
+            ActiveTunnel::Ssh(t) => t.state(),
+            ActiveTunnel::Kube(t) => t.state(),
+        })
     }
 
     /// Closes the session and, if it was the last one using the tunnel, the tunnel too.
@@ -131,10 +175,14 @@ impl OpenConnection {
             session, tunnel, ..
         } = self;
         drop(session);
-        if let Some(tunnel) = tunnel
-            && Arc::strong_count(&tunnel) == 1
-        {
-            tunnel.close().await;
+        match tunnel {
+            Some(ActiveTunnel::Ssh(tunnel)) if Arc::strong_count(&tunnel) == 1 => {
+                tunnel.close().await
+            }
+            Some(ActiveTunnel::Kube(tunnel)) if Arc::strong_count(&tunnel) == 1 => {
+                tunnel.close().await
+            }
+            Some(ActiveTunnel::Ssh(_) | ActiveTunnel::Kube(_)) | None => {}
         }
     }
 }
@@ -161,6 +209,17 @@ pub async fn open_connection(
 
     let tunnel = match &resolved.tunnel {
         None => None,
+        // Kubernetes: the connection's port is the remote port of the resource (ADR-015).
+        Some(ResolvedTunnel {
+            name,
+            kubernetes: Some(kubernetes),
+            ..
+        }) => {
+            let key = format!("{:?}|{name}|{kubernetes:?}", resolved.id.source);
+            let tunnel = options.tunnels.get_or_start_kube(key, kubernetes).await;
+            params.connect_addr = Some(tunnel.forward(params.port).await?);
+            Some(ActiveTunnel::Kube(tunnel))
+        }
         Some(resolved_tunnel) => {
             let spec = TunnelSpec {
                 hops: resolved_tunnel.hops.iter().map(hop_spec).collect(),
@@ -180,7 +239,7 @@ pub async fn open_connection(
                 port: params.port,
             };
             params.connect_addr = Some(tunnel.forward(target).await?);
-            Some(tunnel)
+            Some(ActiveTunnel::Ssh(tunnel))
         }
     };
 
@@ -196,12 +255,16 @@ pub async fn open_connection(
 /// Opens a tunnel and closes it again, to check it from the UI before saving. A typed
 /// `passwords[i]` is used for hop `i` when its password would otherwise be asked; unknown
 /// hosts and other questions go through `interaction` as usual. Nothing is reused or kept.
+/// A Kubernetes tunnel is checked by asking `kubectl` for its resource.
 pub async fn test_tunnel(
     tunnel: &ResolvedTunnel,
     passwords: Vec<Option<Secret>>,
     known_hosts: &KnownHosts,
     interaction: Arc<dyn Interaction>,
-) -> Result<(), SshError> {
+) -> Result<(), OpenError> {
+    if let Some(kubernetes) = &tunnel.kubernetes {
+        return Ok(crate::kube::check(kubernetes).await?);
+    }
     let mut typed = passwords.into_iter();
     let spec = TunnelSpec {
         hops: tunnel

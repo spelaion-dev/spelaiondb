@@ -341,6 +341,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
             hop(host, Some(port.parse().unwrap()), "spelunk"),
             hop("bastion2", None, "spelunk"),
         ],
+        kubernetes: None,
     };
     let known_hosts = KnownHosts {
         user_file: None,
@@ -358,7 +359,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
         .resolve_tunnel_draft(&draft)
         .unwrap();
     match test_tunnel(&resolved, vec![], &known_hosts, Arc::new(AcceptHosts)).await {
-        Err(spelunk_ssh::SshError::Auth { hop: 1, .. }) => {}
+        Err(OpenError::Tunnel(spelunk_ssh::SshError::Auth { hop: 1, .. })) => {}
         other => panic!("expected an authentication error at hop 2: {other:?}"),
     }
     assert!(

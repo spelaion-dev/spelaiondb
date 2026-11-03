@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use spelunk_config::{
-    ConnectionDraft, ConnectionFile, ConnectionId, Engine, HopDraft, Password, PasswordChoice,
-    ResolveError, Resolver, SecretBackend, Source, SshAuth, SystemBackend, TlsModeConfig,
-    TrustStore, TunnelDraft, WritePolicy, add_connection, add_tunnel, connection_account,
-    create_connection, delete_tunnel, load, set_value, slug, tunnel_account, update_tunnel,
+    ConnectionDraft, ConnectionFile, ConnectionId, Engine, HopDraft, KubernetesDraft, Password,
+    PasswordChoice, ResolveError, Resolver, SecretBackend, Source, SshAuth, SystemBackend,
+    TlsModeConfig, TrustStore, TunnelDraft, WritePolicy, add_connection, add_tunnel,
+    connection_account, create_connection, delete_tunnel, load, set_value, slug, tunnel_account,
+    update_tunnel,
 };
 use spelunk_driver_api::{Secret, TlsMode};
 
@@ -1087,7 +1088,118 @@ fn two_hop_tunnel() -> TunnelDraft {
                 PasswordChoice::Keychain,
             ),
         ],
+        kubernetes: None,
     }
+}
+
+fn kubernetes_tunnel(resource: &str) -> TunnelDraft {
+    TunnelDraft {
+        source: Source::Workspace,
+        name: "Orders cluster".into(),
+        hops: Vec::new(),
+        kubernetes: Some(KubernetesDraft {
+            context: "kind-orders".into(),
+            namespace: String::new(),
+            resource: resource.into(),
+            kubeconfig: String::new(),
+            kubectl: String::new(),
+        }),
+    }
+}
+
+#[test]
+fn kubernetes_tunnels_are_written_resolved_and_validated() {
+    let fx = Fixture::new("tunnel-k8s");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+    let name = add_tunnel(&config, &kubernetes_tunnel("svc/orders-db"), &[], &backend).unwrap();
+    assert_eq!(name, "orders-cluster");
+    let path = fx.repo().join(".spelunk/tunnels/orders-cluster.toml");
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("[kubernetes]"), "{content}");
+    assert!(!content.contains("hops"), "{content}");
+    assert!(
+        !content.contains("namespace"),
+        "defaults are left out: {content}"
+    );
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config
+        .tunnel_for(Source::Workspace, "orders-cluster")
+        .unwrap();
+    let draft = TunnelDraft::from_entry(entry);
+    assert_eq!(draft.kubernetes.as_ref().unwrap().resource, "svc/orders-db");
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve_tunnel_draft(&draft)
+        .unwrap();
+    assert!(resolved.hops.is_empty());
+    let k = resolved.kubernetes.unwrap();
+    assert_eq!(k.context.as_deref(), Some("kind-orders"));
+    assert_eq!(
+        (k.namespace, k.kubeconfig, k.kubectl.as_str()),
+        (None, None, "kubectl")
+    );
+
+    // Switching it to SSH rewrites the file: hops in, [kubernetes] out; and back.
+    let mut ssh = two_hop_tunnel();
+    ssh.name = "orders-cluster".into();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "orders-cluster",
+        &ssh,
+        &[],
+        &backend,
+    )
+    .unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.contains("[[hops]]") && !content.contains("kubernetes"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "orders-cluster",
+        &kubernetes_tunnel("deployment/orders"),
+        &[],
+        &backend,
+    )
+    .unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.contains("deployment/orders") && !content.contains("hops"),
+        "{content}"
+    );
+
+    for bad in ["orders-db", "secret/orders", "svc/", "svc/Orders_DB"] {
+        assert!(
+            add_tunnel(&config, &kubernetes_tunnel(bad), &[], &backend).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn a_tunnel_is_ssh_or_kubernetes_not_both() {
+    let fx = Fixture::new("tunnel-k8s-both");
+    std::fs::create_dir_all(fx.repo().join(".spelunk/tunnels")).unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/tunnels/mixed.toml"),
+        "schema_version = 1\n[kubernetes]\nresource = \"svc/db\"\n[[hops]]\nhost = \"jump\"\nuser = \"ana\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/tunnels/empty.toml"),
+        "schema_version = 1\n",
+    )
+    .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let problems = format!("{:?}", config.problems);
+    assert!(problems.contains("not both"), "{problems}");
+    assert!(problems.contains("[kubernetes] section"), "{problems}");
 }
 
 #[test]

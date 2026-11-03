@@ -1,0 +1,50 @@
+# A PostgreSQL inside Kubernetes for the Kubernetes tunnel tests (ADR-015): namespace
+# `spelunk-test`, service `postgres` on 5432, user/password/database `spelunk`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spelunk-test
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: spelunk-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - name: POSTGRES_USER
+              value: spelunk
+            - name: POSTGRES_PASSWORD
+              value: spelunk
+            - name: POSTGRES_DB
+              value: spelunk
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "spelunk"]
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: spelunk-test
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

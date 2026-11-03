@@ -297,6 +297,7 @@ pub fn import_plan(
                     identity_file: ssh.key_path.clone(),
                     password,
                 }],
+                kubernetes: None,
             },
             vec![keep(&ssh.password)],
         )

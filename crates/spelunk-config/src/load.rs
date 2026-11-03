@@ -291,11 +291,50 @@ pub(crate) fn validate_connection(
 
 pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFile, ConfigError> {
     check_version(path, file.schema_version)?;
-    if file.hops.is_empty() {
-        return Err(ConfigError::new(
+    match (&file.kubernetes, file.hops.is_empty()) {
+        (Some(_), false) => Err(ConfigError::new(
             path,
-            "a tunnel needs at least one hop in [[hops]]",
-        ));
+            "a tunnel is SSH ([[hops]]) or Kubernetes ([kubernetes]), not both",
+        )),
+        (None, true) => Err(ConfigError::new(
+            path,
+            "a tunnel needs at least one hop in [[hops]] or a [kubernetes] section",
+        )),
+        (Some(kubernetes), true) => {
+            check_kubernetes_resource(&kubernetes.resource)
+                .map_err(|m| ConfigError::new(path, m))?;
+            Ok(file)
+        }
+        (None, false) => Ok(file),
     }
-    Ok(file)
+}
+
+/// `svc/<name>`, `pod/<name>` or `deployment/<name>` (and kubectl's other spellings).
+pub(crate) fn check_kubernetes_resource(resource: &str) -> Result<(), String> {
+    let (kind, name) = resource.trim().split_once('/').ok_or_else(|| {
+        format!("the resource {resource:?} must be svc/<name>, pod/<name> or deployment/<name>")
+    })?;
+    let known = matches!(
+        kind.to_ascii_lowercase().as_str(),
+        "svc"
+            | "service"
+            | "services"
+            | "pod"
+            | "pods"
+            | "po"
+            | "deployment"
+            | "deployments"
+            | "deploy"
+    );
+    let valid_name = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.');
+    if known && valid_name {
+        Ok(())
+    } else {
+        Err(format!(
+            "the resource {resource:?} must be svc/<name>, pod/<name> or deployment/<name>"
+        ))
+    }
 }

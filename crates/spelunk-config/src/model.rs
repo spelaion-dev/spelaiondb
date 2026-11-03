@@ -146,13 +146,39 @@ pub enum WritePolicy {
     Allow,
 }
 
-/// An SSH tunnel: `.spelunk/tunnels/<name>.toml`.
+/// A tunnel: `.spelunk/tunnels/<name>.toml`. SSH (`[[hops]]`) or Kubernetes
+/// (`[kubernetes]`, ADR-015), never both.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TunnelFile {
     pub schema_version: u32,
-    /// Hops in order; the last one is the one that reaches the database.
+    /// SSH hops in order; the last one is the one that reaches the database.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hops: Vec<HopConfig>,
+    /// `kubectl port-forward` to a resource of a cluster; the connection's port is the
+    /// remote port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubernetes: Option<KubernetesConfig>,
+}
+
+/// Where a Kubernetes tunnel forwards to (ADR-015).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KubernetesConfig {
+    /// Context of the kubeconfig; its current context when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// The context's namespace when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// `svc/<name>`, `pod/<name>` or `deployment/<name>`.
+    pub resource: String,
+    /// A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubeconfig: Option<String>,
+    /// The `kubectl` executable; `kubectl` on the PATH when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubectl: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]

@@ -12,6 +12,7 @@ mod filter;
 mod generate;
 mod guard;
 mod history;
+pub mod kube;
 mod open;
 mod params;
 mod readonly;

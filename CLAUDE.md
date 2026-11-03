@@ -36,6 +36,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelunk-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
   it receives a `TunnelSpec`. Dialogs go through the `Interaction` trait. Tests against the
   Docker bastions with `SPELUNK_TEST_SSH=127.0.0.1:2221`.
+  Kubernetes tunnels (ADR-015) are not SSH: `spelunk-core::kube` runs `kubectl port-forward`;
+  tests against a kind cluster with `SPELUNK_TEST_K8S=<kubeconfig>` (see `testing/k8s`).
 - `crates/spelunk-core`: `open_connection` (resolved configuration → tunnel from the
   `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts, stops at
   the first error) and `ResultStore` (results in the core, served in Arrow IPC windows).

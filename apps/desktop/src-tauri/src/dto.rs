@@ -612,6 +612,43 @@ pub struct TunnelDraftItem {
     pub personal: bool,
     pub name: String,
     pub hops: Vec<HopDraftItem>,
+    /// A Kubernetes tunnel instead of SSH (ADR-015); `hops` is then ignored.
+    pub kubernetes: Option<KubernetesDraftItem>,
+}
+
+/// The Kubernetes part of the tunnel form; empty fields mean the defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesDraftItem {
+    pub context: String,
+    pub namespace: String,
+    pub resource: String,
+    pub kubeconfig: String,
+    pub kubectl: String,
+}
+
+impl From<KubernetesDraftItem> for spelunk_config::KubernetesDraft {
+    fn from(k: KubernetesDraftItem) -> Self {
+        Self {
+            context: k.context,
+            namespace: k.namespace,
+            resource: k.resource,
+            kubeconfig: k.kubeconfig,
+            kubectl: k.kubectl,
+        }
+    }
+}
+
+impl From<spelunk_config::KubernetesDraft> for KubernetesDraftItem {
+    fn from(k: spelunk_config::KubernetesDraft) -> Self {
+        Self {
+            context: k.context,
+            namespace: k.namespace,
+            resource: k.resource,
+            kubeconfig: k.kubeconfig,
+            kubectl: k.kubectl,
+        }
+    }
 }
 
 /// Result of testing a tunnel from the editor.
@@ -697,6 +734,7 @@ impl From<TunnelDraftItem> for spelunk_config::TunnelDraft {
                     ),
                 })
                 .collect(),
+            kubernetes: item.kubernetes.map(Into::into),
         }
     }
 }
@@ -709,6 +747,7 @@ impl From<spelunk_config::TunnelDraft> for TunnelDraftItem {
                 spelunk_config::Source::Workspace => false,
             },
             name: draft.name,
+            kubernetes: draft.kubernetes.map(Into::into),
             hops: draft
                 .hops
                 .into_iter()

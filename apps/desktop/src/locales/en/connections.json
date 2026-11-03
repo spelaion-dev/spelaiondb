@@ -20,7 +20,8 @@
     "ssl": "Encryption (SSL/TLS)",
     "ssh": "SSH tunnel",
     "organization": "Where to save it",
-    "safety": "Safety"
+    "safety": "Safety",
+    "general": "General"
   },
   "fields": {
     "name": "Name",
@@ -109,7 +110,7 @@
   "tunnel": {
     "newButton": "New tunnel…",
     "editButton": "Edit tunnel…",
-    "newTitle": "New SSH tunnel",
+    "newTitle": "New tunnel",
     "editTitle": "Edit tunnel {{name}}",
     "name": "Tunnel name",
     "nameHint": "Connections refer to the tunnel by this name.",
@@ -145,7 +146,19 @@
     "ok_one": "Tunnel OK · {{count}} hop",
     "ok_other": "Tunnel OK · {{count}} hops",
     "delete": "Delete tunnel",
-    "confirmDelete": "Click again to delete"
+    "confirmDelete": "Click again to delete",
+    "kind": "Type",
+    "kube": {
+      "context": "Context",
+      "currentContext": "Current context",
+      "namespace": "Namespace",
+      "defaultNamespace": "the context's default",
+      "resource": "Resource (svc/…, deployment/…, pod/…)",
+      "kubeconfig": "Kubeconfig file",
+      "kubeconfigPlaceholder": "KUBECONFIG or ~/.kube/config",
+      "hint": "SpelunkDB runs kubectl port-forward with your kubeconfig. The connection’s port is the port of this resource; its host is not used to reach it (only for TLS).",
+      "ok": "kubectl found the resource"
+    }
   },
   "newDatabase": "New database…",
   "url": {

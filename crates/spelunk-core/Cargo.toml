@@ -19,7 +19,8 @@ async-stream = "0.3"
 futures-util.workspace = true
 sqlparser = { version = "0.63", features = ["visitor"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+# process + io-util: `kubectl port-forward` for Kubernetes tunnels (kube.rs).
+tokio = { workspace = true, features = ["sync", "time", "process", "io-util"] }
 
 [dev-dependencies]
 async-trait.workspace = true
