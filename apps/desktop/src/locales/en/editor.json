@@ -133,5 +133,8 @@
     "characters_other": "{{formattedCount}} characters",
     "bytes_one": "{{formattedCount}} byte",
     "bytes_other": "{{formattedCount}} bytes"
-  }
+  },
+  "format": "Format",
+  "formatHint": "Format the selection or the whole script (Shift+Alt+F)",
+  "formatFailed": "Could not format: {{reason}}"
 }

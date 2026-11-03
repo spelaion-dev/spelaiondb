@@ -66,7 +66,8 @@ Preferences are stored in the personal `state.db` and apply to every workspace.
 highlighted for a moment. The core finds it with the same dialect splitter that runs scripts
 (quotes, comments, dollar-quoted bodies and MySQL `DELIMITER` included), so what is
 highlighted is exactly what runs. **Ctrl+Shift+Enter** or **Run** runs the whole script,
-statement by statement, stopping at the first error.
+statement by statement, stopping at the first error. **Shift+Alt+F** or **Format** formats
+the selection or the whole script in the connection's dialect (one undo step).
 
 Before anything runs, the core looks for statements that are easy to regret: `DELETE` or
 `UPDATE` without `WHERE` (also inside a `WITH`), `DROP` and `TRUNCATE`, and, on connections

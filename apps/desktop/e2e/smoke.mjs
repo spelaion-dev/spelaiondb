@@ -467,6 +467,20 @@ try {
   await risk.waitFor({ state: "detached" });
   await panel.getByText("Statement 3: 2 rows", { exact: false }).waitFor();
 
+  step("format: Shift+Alt+F and the Format button, one undo step, errors shown");
+  await replaceQuery(panel, "select id, total from orders where total > 100 and id < 5");
+  await page.keyboard.press("Shift+Alt+F");
+  const formatted = "select\n  id,\n  total\nfrom\n  orders\nwhere\n  total > 100\n  and id < 5";
+  for (let i = 0; i < 20 && (await sqlEditor.innerText()) !== formatted; i++) await page.waitForTimeout(100);
+  assert.equal(await sqlEditor.innerText(), formatted);
+  await shot("05e-formatted");
+  await page.keyboard.press("Control+z");
+  assert.equal(await sqlEditor.innerText(), "select id, total from orders where total > 100 and id < 5");
+  await replaceQuery(panel, "select 'unterminated");
+  await panel.getByRole("button", { name: "Format", exact: true }).click();
+  await panel.getByRole("alert").filter({ hasText: "Could not format" }).waitFor();
+  assert.equal(await sqlEditor.innerText(), "select 'unterminated");
+
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
     "Postgres (Docker)",

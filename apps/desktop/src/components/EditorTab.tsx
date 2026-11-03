@@ -10,7 +10,7 @@ import { useApp, useDialogs, type RunState, type SortState, type Tab, type Trans
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultGrid } from "./ResultGrid";
-import { SqlEditor, type RunRequest } from "./SqlEditor";
+import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -48,6 +48,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   const lastRequest = useRef<RunRequest | null>(null);
+  const editor = useRef<SqlEditorHandle>(null);
+  const [formatError, setFormatError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!formatError) return;
+    const timer = setTimeout(() => setFormatError(null), 6000);
+    return () => clearTimeout(timer);
+  }, [formatError]);
 
   // Autocompletion: tables and views of the user schemas.
   useEffect(() => {
@@ -218,7 +225,15 @@ export function EditorTab({ tab }: { tab: Tab }) {
           {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
         </span>
         {connection?.env?.toLowerCase().startsWith("prod") && <span className="badge badge-prod">{t("production")}</span>}
+        {formatError && (
+          <span className="error small format-error" role="alert">
+            {formatError}
+          </span>
+        )}
         <div className="spacer" />
+        <button className="ghost" title={t("formatHint")} onClick={() => editor.current?.format()}>
+          {t("format")}
+        </button>
         {running ? (
           <button className="danger" onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
             {t("cancel")}
@@ -237,8 +252,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
       <div className="editor-body" ref={body}>
         <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane">
           <SqlEditor
+            handle={editor}
+            onFormatError={(reason) => setFormatError(t("formatFailed", { reason }))}
             value={tab.sql}
-            onChange={(sql) => updateTab(tab.id, { sql })}
+            onChange={(sql) => {
+              setFormatError(null);
+              updateTab(tab.id, { sql });
+            }}
             engine={connection?.engine ?? null}
             tables={tables}
             onRun={(r) => void run(r)}

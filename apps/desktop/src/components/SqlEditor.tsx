@@ -1,8 +1,8 @@
 // SQL editor with CodeMirror 6: engine dialect, table autocompletion, Ctrl/Cmd+Enter to run
 // the statement under the cursor (split by the core) or the selection, Ctrl/Cmd+Shift+Enter
-// to run everything, and underlining of the error at its position.
+// to run everything, Shift+Alt+F to format, and underlining of the error at its position.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useImperativeHandle, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { basicSetup } from "codemirror";
 import { Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
@@ -11,6 +11,7 @@ import { MariaSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@code
 import { closeLintPanel, openLintPanel, setDiagnostics } from "@codemirror/lint";
 import { closeSearchPanel, gotoLine, openSearchPanel, searchPanelOpen } from "@codemirror/search";
 import { closeCompletion, completionStatus, startCompletion } from "@codemirror/autocomplete";
+import type { SqlLanguage } from "sql-formatter";
 import { call, commands } from "../api";
 import { byteToIndex, indexToByte, wordEnd } from "../text";
 
@@ -21,7 +22,15 @@ export interface RunRequest {
   from: number;
 }
 
+/** What the toolbar can ask the editor to do. */
+export interface SqlEditorHandle {
+  format(): void;
+}
+
 interface Props {
+  handle?: React.Ref<SqlEditorHandle>;
+  /** Formatting failed (the formatter could not read the SQL). */
+  onFormatError(message: string): void;
   value: string;
   onChange(value: string): void;
   engine: string | null;
@@ -67,19 +76,68 @@ function flash(view: EditorView, from: number, to: number) {
   }, 1000);
 }
 
+const FORMAT_LANGUAGES: Record<string, SqlLanguage> = { postgres: "postgresql", sqlite: "sqlite", mysql: "mysql", mariadb: "mariadb" };
+
+/** Formats the selection, or everything, with the engine's dialect, in one undo step. The
+ *  formatter is loaded on first use (it is large); `null` when it worked. */
+async function formatIn(view: EditorView, engine: string | null): Promise<string | null> {
+  const sel = view.state.selection.main;
+  const from = sel.empty ? 0 : sel.from;
+  const to = sel.empty ? view.state.doc.length : sel.to;
+  const before = view.state.doc;
+  const text = view.state.sliceDoc(from, to);
+  if (!text.trim()) return null;
+  let formatted: string;
+  try {
+    const { format: formatSql } = await import("sql-formatter");
+    formatted = formatSql(text, {
+      language: (engine && FORMAT_LANGUAGES[engine]) || "sql",
+      keywordCase: "preserve",
+      tabWidth: 2,
+      linesBetweenQueries: 1,
+    });
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  // Typing while the formatter loaded: the positions are stale, so leave the text alone.
+  if (formatted !== text && view.state.doc === before) {
+    view.dispatch({
+      changes: { from, to, insert: formatted },
+      selection: sel.empty ? undefined : { anchor: from, head: from + formatted.length },
+      userEvent: "input.format",
+      scrollIntoView: true,
+    });
+  }
+  return null;
+}
+
 function language(engine: string | null, tables: Record<string, string[]>) {
   const dialects: Record<string, SQLDialect> = { sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL };
   return sql({ dialect: (engine && dialects[engine]) || PostgreSQL, schema: tables, upperCaseKeywords: false });
 }
 
-export function SqlEditor({ value, onChange, engine, tables, onRun, error }: Props) {
+export function SqlEditor({ handle, onFormatError, value, onChange, engine, tables, onRun, error }: Props) {
   const { t } = useTranslation("editor");
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const locale = useRef(new Compartment());
-  const callbacks = useRef({ onChange, onRun, engine });
-  callbacks.current = { onChange, onRun, engine };
+  const callbacks = useRef({ onChange, onRun, engine, onFormatError });
+  callbacks.current = { onChange, onRun, engine, onFormatError };
+  const format = (v: EditorView) => {
+    void formatIn(v, callbacks.current.engine).then((failure) => {
+      if (failure) callbacks.current.onFormatError(failure);
+    });
+    return true;
+  };
+  useImperativeHandle(handle, () => ({
+    format: () => {
+      if (view.current) {
+        format(view.current);
+        view.current.focus();
+      }
+    },
+  }));
 
   useEffect(() => {
     if (!host.current) return;
@@ -118,6 +176,7 @@ export function SqlEditor({ value, onChange, engine, tables, onRun, error }: Pro
             keymap.of([
               { key: "Mod-Shift-Enter", run: runAll },
               { key: "Mod-Enter", run },
+              { key: "Shift-Alt-f", run: format },
             ]),
           ),
           ranField,
