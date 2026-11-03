@@ -65,5 +65,6 @@
     "explanation": "Numbers, NULL, TRUE and FALSE are written as they are; anything else as text, quoted for this database.",
     "cancel": "Cancel",
     "run": "Run"
-  }
+  },
+  "savedQueries": "Saved queries"
 }

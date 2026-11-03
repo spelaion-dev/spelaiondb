@@ -599,6 +599,33 @@ try {
   await page.keyboard.press("Escape");
   await page.getByRole("dialog", { name: "Query parameters" }).waitFor({ state: "detached" });
 
+  step("saved queries: Ctrl+S names the SQL, the panel opens and deletes it");
+  await replaceQuery(panel, "select 'snippet_marker' as saved;");
+  await page.keyboard.press("Control+s");
+  const saveDialog = page.getByRole("dialog", { name: "Save query" });
+  await saveDialog.getByLabel("Name").fill("Marker query");
+  await page.keyboard.press("Enter");
+  await panel.getByRole("status").filter({ hasText: "Saved as “Marker query”" }).waitFor();
+  // Saving again offers the same name and replaces the saved SQL.
+  await replaceQuery(panel, "select 'snippet_marker' as saved, 2 as version;");
+  await panel.getByRole("button", { name: "Save", exact: true }).click();
+  assert.equal(await page.getByRole("dialog", { name: "Save query" }).getByLabel("Name").inputValue(), "Marker query");
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Saved queries", exact: true }).click();
+  const snippets = page.getByRole("complementary", { name: "Saved queries" });
+  const markerEntry = snippets.locator(".snippet-entry", { hasText: "Marker query" });
+  await markerEntry.locator(".history-sql", { hasText: "2 as version" }).waitFor();
+  assert.equal(await snippets.locator(".snippet-entry").count(), 1);
+  await shot("05h-saved-queries");
+  await markerEntry.getByRole("button", { name: "Open" }).click();
+  await snippets.waitFor({ state: "detached" });
+  assert.equal(await panel.locator(".cm-content").innerText(), "select 'snippet_marker' as saved, 2 as version;");
+  await page.getByRole("button", { name: "Saved queries", exact: true }).click();
+  await markerEntry.getByRole("button", { name: "Delete" }).click();
+  await markerEntry.getByRole("button", { name: "Confirm delete" }).click();
+  await snippets.getByText("No saved queries yet.", { exact: false }).waitFor();
+  await page.getByRole("button", { name: "Close saved queries" }).click();
+
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
     "Postgres (Docker)",

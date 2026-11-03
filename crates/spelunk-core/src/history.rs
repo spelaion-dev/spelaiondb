@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
-use spelunk_store::{HistoryEntry, NewHistoryEntry, Store, StoreError};
+use spelunk_store::{HistoryEntry, NewHistoryEntry, Snippet, Store, StoreError};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{CoreEvent, ResultId, Session};
@@ -24,7 +24,12 @@ pub enum HistoryError {
     UnsupportedLanguage,
     #[error("unsupported theme; expected system, light or dark")]
     UnsupportedTheme,
+    #[error("a saved query needs a name of 1 to {MAX_SNIPPET_NAME} characters")]
+    InvalidSnippetName,
 }
+
+/// Longest name of a saved query, in characters.
+const MAX_SNIPPET_NAME: usize = 200;
 
 type Reply<T> = oneshot::Sender<Result<T, StoreError>>;
 
@@ -64,6 +69,22 @@ enum Request {
     Record {
         entry: NewHistoryEntry,
         reply: Reply<()>,
+    },
+    SaveSnippet {
+        workspace: String,
+        name: String,
+        statement: String,
+        connection: String,
+        reply: Reply<i64>,
+    },
+    Snippets {
+        workspace: String,
+        search: String,
+        reply: Reply<Vec<Snippet>>,
+    },
+    DeleteSnippet {
+        id: i64,
+        reply: Reply<bool>,
     },
 }
 
@@ -125,6 +146,30 @@ impl QueryHistory {
                         }
                         Request::Record { entry, reply } => {
                             let _ = reply.send(store.record_history(&entry));
+                        }
+                        Request::SaveSnippet {
+                            workspace,
+                            name,
+                            statement,
+                            connection,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.save_snippet(
+                                &workspace,
+                                &name,
+                                &statement,
+                                &connection,
+                            ));
+                        }
+                        Request::Snippets {
+                            workspace,
+                            search,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.snippets(&workspace, &search));
+                        }
+                        Request::DeleteSnippet { id, reply } => {
+                            let _ = reply.send(store.delete_snippet(id));
                         }
                     }
                 }
@@ -216,6 +261,48 @@ impl QueryHistory {
             reply,
         })
         .await
+    }
+
+    /// Saves a query (replacing one with the same name in the workspace); the name is
+    /// trimmed. Returns its identifier.
+    pub async fn save_snippet(
+        &self,
+        workspace: String,
+        name: String,
+        statement: String,
+        connection: String,
+    ) -> Result<i64, HistoryError> {
+        let name = name.trim().to_string();
+        if name.is_empty() || name.chars().count() > MAX_SNIPPET_NAME {
+            return Err(HistoryError::InvalidSnippetName);
+        }
+        self.request(|reply| Request::SaveSnippet {
+            workspace,
+            name,
+            statement,
+            connection,
+            reply,
+        })
+        .await
+    }
+
+    /// Saved queries of the workspace and the personal ones, by name.
+    pub async fn snippets(
+        &self,
+        workspace: String,
+        search: String,
+    ) -> Result<Vec<Snippet>, HistoryError> {
+        self.request(|reply| Request::Snippets {
+            workspace,
+            search,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn delete_snippet(&self, id: i64) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::DeleteSnippet { id, reply })
+            .await
     }
 
     async fn record(&self, entry: NewHistoryEntry) -> Result<(), HistoryError> {
@@ -452,6 +539,36 @@ mod tests {
         }
         assert!(matches!(
             history.set_theme("dark".into()).await,
+            Err(HistoryError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn snippet_names_are_checked_before_reaching_the_store_actor() {
+        let (requests, receiver) = mpsc::channel(1);
+        drop(receiver);
+        let history = QueryHistory { requests };
+        for invalid in [
+            String::new(),
+            "   ".into(),
+            "x".repeat(MAX_SNIPPET_NAME + 1),
+        ] {
+            assert!(matches!(
+                history
+                    .save_snippet(String::new(), invalid, "select 1".into(), String::new())
+                    .await,
+                Err(HistoryError::InvalidSnippetName)
+            ));
+        }
+        assert!(matches!(
+            history
+                .save_snippet(
+                    String::new(),
+                    " ok ".into(),
+                    "select 1".into(),
+                    String::new()
+                )
+                .await,
             Err(HistoryError::Closed)
         ));
     }

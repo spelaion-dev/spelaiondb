@@ -11,10 +11,12 @@ export function Dialogs() {
   const trust = useDialogs((s) => s.trust);
   const risk = useDialogs((s) => s.risk);
   const params = useDialogs((s) => s.params);
+  const text = useDialogs((s) => s.text);
   const interaction = useDialogs((s) => s.interactions[0]);
   if (interaction) return <InteractionDialog key={interaction.id} />;
   if (trust) return <TrustDialog />;
   if (params) return <ParamsDialog />;
+  if (text) return <TextDialog />;
   if (risk) return <RiskDialog />;
   if (password) return <PasswordDialog key={password.connectionName + (password.error ?? "")} />;
   return null;
@@ -86,6 +88,38 @@ function TrustDialog() {
         <button onClick={() => request.resolve(false)}>{t("dontTrust")}</button>
         <button className="primary" onClick={() => request.resolve(true)}>
           {t("trust")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function TextDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.text);
+  const [value, setValue] = useState(request?.initial ?? "");
+  if (!request) return null;
+  const submit = () => value.trim() && request.resolve(value.trim());
+  return (
+    <Modal title={request.title}>
+      <label className="field">
+        <span>{request.label}</span>
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onFocus={(e) => e.currentTarget.select()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+            if (e.key === "Escape") request.resolve(null);
+          }}
+          maxLength={200}
+        />
+      </label>
+      <div className="modal-actions">
+        <button onClick={() => request.resolve(null)}>{t("params.cancel")}</button>
+        <button className="primary" disabled={!value.trim()} onClick={submit}>
+          {request.confirm}
         </button>
       </div>
     </Modal>

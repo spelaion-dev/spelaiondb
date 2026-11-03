@@ -1,7 +1,7 @@
 //! SpelunkDB local storage (ADR-011): a SQLite database in the personal directory.
 //!
-//! Query history and the MCP audit log. Snippets and the schema cache will come here
-//! with their own migrations.
+//! Query history, saved queries (snippets) and the MCP audit log. The schema cache will
+//! come here with its own migration.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -80,8 +80,37 @@ const MIGRATIONS: &[&str] = &["create table audit (
         begin select raise(abort, 'unsupported theme'); end;
     create trigger personal_settings_theme_update before update on personal_settings
         when new.key = 'theme' and new.value not in ('system', 'light', 'dark')
-        begin select raise(abort, 'unsupported theme'); end;"
+        begin select raise(abort, 'unsupported theme'); end;",
+    "create table snippets (
+        id            integer primary key,
+        workspace     text not null,
+        name          text not null check (length(trim(name)) > 0),
+        statement     text not null,
+        connection    text not null,
+        updated_ms    integer not null,
+        unique (workspace, name)
+    );"
 ];
+
+/// Milliseconds since 1970 (UTC); 0 if the clock is before it.
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// A saved query. Like history, it belongs to a workspace (a repository's canonical root,
+/// or empty outside one) and remembers the connection it was saved with (may be empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snippet {
+    pub id: i64,
+    pub workspace: String,
+    pub name: String,
+    pub statement: String,
+    pub connection: String,
+    pub updated_ms: i64,
+}
 
 /// One execution from the desktop app, scoped to its workspace and connection identifier.
 /// An empty workspace identifies a personal connection, visible from every workspace.
@@ -160,12 +189,8 @@ pub struct AuditEntry {
 
 impl AuditEntry {
     pub fn now(client: &str, connection: &str, statement: &str, decision: Decision) -> Self {
-        let at_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
         Self {
-            at_ms,
+            at_ms: now_ms(),
             client: client.into(),
             connection: connection.into(),
             statement: statement.into(),
@@ -254,6 +279,66 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Saves a query under `name` in `workspace`, replacing one with the same name there.
+    /// Returns its identifier.
+    pub fn save_snippet(
+        &self,
+        workspace: &str,
+        name: &str,
+        statement: &str,
+        connection: &str,
+    ) -> Result<i64, StoreError> {
+        Ok(self.conn.query_row(
+            "insert into snippets (workspace, name, statement, connection, updated_ms)
+             values (?1, ?2, ?3, ?4, ?5)
+             on conflict (workspace, name) do update set
+                 statement = excluded.statement,
+                 connection = excluded.connection,
+                 updated_ms = excluded.updated_ms
+             returning id",
+            params![workspace, name, statement, connection, now_ms()],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Saved queries of `workspace` and the personal ones (empty workspace), by name; `search`
+    /// keeps those whose name or SQL contains it, ignoring case.
+    pub fn snippets(&self, workspace: &str, search: &str) -> Result<Vec<Snippet>, StoreError> {
+        let pattern = format!(
+            "%{}%",
+            search
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let mut statement = self.conn.prepare(
+            "select id, workspace, name, statement, connection, updated_ms from snippets
+             where workspace in (?1, '')
+               and (name like ?2 escape '\\' or statement like ?2 escape '\\')
+             order by name collate nocase, id",
+        )?;
+        let rows = statement.query_map(params![workspace, pattern], |r| {
+            Ok(Snippet {
+                id: r.get(0)?,
+                workspace: r.get(1)?,
+                name: r.get(2)?,
+                statement: r.get(3)?,
+                connection: r.get(4)?,
+                updated_ms: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Deletes a saved query; `false` if it did not exist.
+    pub fn delete_snippet(&self, id: i64) -> Result<bool, StoreError> {
+        Ok(self
+            .conn
+            .execute("delete from snippets where id = ?1", params![id])?
+            > 0)
     }
 
     /// Inserts only when history is currently enabled for this connection.
@@ -455,6 +540,47 @@ mod tests {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
         path
+    }
+
+    #[test]
+    fn snippets_are_saved_by_name_searched_and_deleted() {
+        let path = temp("snippets");
+        let store = Store::open(&path).unwrap();
+        let first = store
+            .save_snippet("/repo", "Top customers", "select * from customer", "shop")
+            .unwrap();
+        store
+            .save_snippet("", "Personal 100%_done", "select 1", "")
+            .unwrap();
+        store
+            .save_snippet("/other", "Elsewhere", "select 2", "")
+            .unwrap();
+        // Same name in the same workspace: replaced, same identifier.
+        let again = store
+            .save_snippet(
+                "/repo",
+                "Top customers",
+                "select * from customer limit 5",
+                "shop",
+            )
+            .unwrap();
+        assert_eq!(again, first);
+        let names = |search: &str| -> Vec<String> {
+            store
+                .snippets("/repo", search)
+                .unwrap()
+                .into_iter()
+                .map(|s| s.name)
+                .collect()
+        };
+        assert_eq!(names(""), ["Personal 100%_done", "Top customers"]);
+        assert_eq!(names("LIMIT 5"), ["Top customers"]);
+        assert_eq!(names("100%_"), ["Personal 100%_done"]);
+        assert!(names("%").len() == 1, "% is literal");
+        assert!(store.save_snippet("/repo", "  ", "select 3", "").is_err());
+        assert!(store.delete_snippet(first).unwrap());
+        assert!(!store.delete_snippet(first).unwrap());
+        assert_eq!(names(""), ["Personal 100%_done"]);
     }
 
     #[test]

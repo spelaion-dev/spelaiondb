@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type ScriptEvent } from "../api";
 import { openSession } from "../connect";
-import { useApp, useDialogs, type RunState, type SortState, type Tab, type Translation } from "../store";
+import { SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
@@ -52,12 +52,41 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** Values given to `:name` placeholders in this tab, offered again next time. */
   const paramValues = useRef<Record<string, string>>({});
   const editor = useRef<SqlEditorHandle>(null);
-  const [formatError, setFormatError] = useState<string | null>(null);
+  // A short message in the toolbar: a formatting error or "saved as …".
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   useEffect(() => {
-    if (!formatError) return;
-    const timer = setTimeout(() => setFormatError(null), 6000);
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), notice.error ? 6000 : 2500);
     return () => clearTimeout(timer);
-  }, [formatError]);
+  }, [notice]);
+
+  /** Saves the SQL as a named query in the local store (Ctrl+S). */
+  async function saveQuery() {
+    const name = await useDialogs.getState().askText({
+      title: t("snippets.saveTitle"),
+      label: t("snippets.name"),
+      initial: tab.snippetName ?? "",
+      confirm: t("snippets.save"),
+    });
+    if (!name) return;
+    try {
+      await call(commands.saveSnippet(name, tab.sql, tab.connectionId));
+      updateTab(tab.id, { snippetName: name });
+      useApp.getState().refreshSnippets();
+      setNotice({ text: t("snippets.saved", { name }), error: false });
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    }
+  }
+  const save = useRef(saveQuery);
+  save.current = saveQuery;
+  useEffect(() => {
+    const onSave = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === tab.id) void save.current();
+    };
+    window.addEventListener(SAVE_QUERY_EVENT, onSave);
+    return () => window.removeEventListener(SAVE_QUERY_EVENT, onSave);
+  }, [tab.id]);
 
   // Autocompletion: tables and views of the user schemas.
   useEffect(() => {
@@ -246,12 +275,15 @@ export function EditorTab({ tab }: { tab: Tab }) {
           {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
         </span>
         {connection?.env?.toLowerCase().startsWith("prod") && <span className="badge badge-prod">{t("production")}</span>}
-        {formatError && (
-          <span className="error small format-error" role="alert">
-            {formatError}
+        {notice && (
+          <span className={`small format-error ${notice.error ? "error" : "muted"}`} role={notice.error ? "alert" : "status"}>
+            {notice.text}
           </span>
         )}
         <div className="spacer" />
+        <button className="ghost" title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
+          {t("snippets.save")}
+        </button>
         <button className="ghost" title={t("formatHint")} onClick={() => editor.current?.format()}>
           {t("format")}
         </button>
@@ -274,10 +306,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
         <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane">
           <SqlEditor
             handle={editor}
-            onFormatError={(reason) => setFormatError(t("formatFailed", { reason }))}
+            onFormatError={(reason) => setNotice({ text: t("formatFailed", { reason }), error: true })}
             value={tab.sql}
             onChange={(sql) => {
-              setFormatError(null);
+              if (notice?.error) setNotice(null);
               updateTab(tab.id, { sql });
             }}
             engine={connection?.engine ?? null}

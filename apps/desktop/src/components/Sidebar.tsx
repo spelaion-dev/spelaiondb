@@ -24,6 +24,7 @@ export function Sidebar() {
   const workspace = useApp((s) => s.workspace);
   const connections = useApp((s) => s.connections);
   const historyOpen = useApp((s) => s.historyOpen);
+  const snippetsOpen = useApp((s) => s.snippetsOpen);
   const settingsActive = useApp((s) => s.settingsOpen && s.activeTab === SETTINGS_TAB);
   const openSettings = useApp((s) => s.openSettings);
   const setHistoryOpen = useApp((s) => s.setHistoryOpen);
@@ -134,6 +135,9 @@ export function Sidebar() {
       <div className="sidebar-footer">
         <button aria-pressed={historyOpen} aria-controls="query-history" onClick={() => setHistoryOpen(!historyOpen)}>
           {t("queryHistory")}
+        </button>
+        <button aria-pressed={snippetsOpen} aria-controls="saved-queries" onClick={() => useApp.getState().setSnippetsOpen(!snippetsOpen)}>
+          {t("savedQueries")}
         </button>
         <button
           className="settings-button"

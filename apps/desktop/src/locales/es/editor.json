@@ -146,5 +146,24 @@
   },
   "format": "Formatear",
   "formatHint": "Formatea la selección o todo el script (Mayús+Alt+F)",
-  "formatFailed": "No se pudo formatear: {{reason}}"
+  "formatFailed": "No se pudo formatear: {{reason}}",
+  "snippets": {
+    "title": "Consultas guardadas",
+    "close": "Cerrar las consultas guardadas",
+    "searchPlaceholder": "Buscar nombre o SQL…",
+    "searchLabel": "Buscar consultas guardadas",
+    "help": "Se guardan en este equipo, para este repositorio (o para todos si se guardan fuera de uno). Guardar con un nombre que ya existe lo reemplaza.",
+    "empty": "Aún no hay consultas guardadas. Ctrl+S en una pestaña del editor guarda su SQL.",
+    "noMatches": "Ninguna consulta guardada coincide.",
+    "personal": "personal",
+    "noConnection": "Sin conexión",
+    "open": "Abrir",
+    "delete": "Borrar",
+    "confirmDelete": "Confirmar borrado",
+    "save": "Guardar",
+    "saveHint": "Guarda este SQL como una consulta con nombre (Ctrl+S)",
+    "saveTitle": "Guardar consulta",
+    "name": "Nombre",
+    "saved": "Guardada como «{{name}}»"
+  }
 }

@@ -146,5 +146,24 @@
   },
   "format": "Format",
   "formatHint": "Format the selection or the whole script (Shift+Alt+F)",
-  "formatFailed": "Could not format: {{reason}}"
+  "formatFailed": "Could not format: {{reason}}",
+  "snippets": {
+    "title": "Saved queries",
+    "close": "Close saved queries",
+    "searchPlaceholder": "Search name or SQL…",
+    "searchLabel": "Search saved queries",
+    "help": "Saved on this computer, for this repository (or for every one when saved outside a repository). Saving with an existing name replaces it.",
+    "empty": "No saved queries yet. Ctrl+S in an editor tab saves its SQL.",
+    "noMatches": "No matching saved queries.",
+    "personal": "personal",
+    "noConnection": "No connection",
+    "open": "Open",
+    "delete": "Delete",
+    "confirmDelete": "Confirm delete",
+    "save": "Save",
+    "saveHint": "Save this SQL as a named query (Ctrl+S)",
+    "saveTitle": "Save query",
+    "name": "Name",
+    "saved": "Saved as “{{name}}”"
+  }
 }

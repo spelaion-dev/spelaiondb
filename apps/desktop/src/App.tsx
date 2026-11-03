@@ -7,10 +7,11 @@ import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { SettingsTab } from "./components/SettingsTab";
+import { SnippetsPanel } from "./components/SnippetsPanel";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
 import { closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
-import { SETTINGS_TAB, useApp, useDialogs } from "./store";
+import { SAVE_QUERY_EVENT, SETTINGS_TAB, useApp, useDialogs } from "./store";
 
 export default function App() {
   const { t } = useTranslation(["app", "shell", "settings"]);
@@ -19,6 +20,7 @@ export default function App() {
   const addTab = useApp((s) => s.addTab);
   const setActiveTab = useApp((s) => s.setActiveTab);
   const historyOpen = useApp((s) => s.historyOpen);
+  const snippetsOpen = useApp((s) => s.snippetsOpen);
   const settingsOpen = useApp((s) => s.settingsOpen);
   const closeSettings = useApp((s) => s.closeSettings);
   const connectionDialog = useApp((s) => s.connectionDialog);
@@ -49,6 +51,11 @@ export default function App() {
         e.preventDefault();
         if (e.shiftKey) app.reopenTab();
         else app.addTab(null);
+      } else if (mod && key === "s") {
+        e.preventDefault();
+        if (app.activeTab && app.activeTab !== SETTINGS_TAB) {
+          window.dispatchEvent(new CustomEvent(SAVE_QUERY_EVENT, { detail: app.activeTab }));
+        }
       } else if (mod && key === "w") {
         e.preventDefault();
         if (app.activeTab === SETTINGS_TAB) app.closeSettings();
@@ -155,6 +162,7 @@ export default function App() {
             )}
           </div>
           {historyOpen && <HistoryPanel />}
+          {snippetsOpen && <SnippetsPanel />}
         </div>
       </main>
       {connectionDialog && (

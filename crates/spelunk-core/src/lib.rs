@@ -33,4 +33,4 @@ pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{CoreEvent, Session, StatementError};
 pub use sort::{SortKey, ViewError};
 pub use spelunk_driver_sqlite::create_database as create_sqlite_database;
-pub use spelunk_store::HistoryEntry;
+pub use spelunk_store::{HistoryEntry, Snippet};

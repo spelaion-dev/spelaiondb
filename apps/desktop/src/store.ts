@@ -65,11 +65,16 @@ export interface Tab {
   serverVersion: string | null;
   sql: string;
   run: RunState | null;
+  /** Name it was saved under (or opened from), offered again by Ctrl+S. */
+  snippetName?: string;
 }
 
 let tabCounter = 0;
 
 export type ConnectionDialog = { kind: "add" } | { kind: "edit"; id: string };
+
+/** Window event asking the editor tab whose id is in `detail` to save its query (Ctrl+S). */
+export const SAVE_QUERY_EVENT = "spelunk:save-query";
 
 /** How many closed tabs Ctrl+Shift+T can bring back. */
 const MAX_CLOSED_TABS = 20;
@@ -83,6 +88,8 @@ interface AppStore {
   tabs: Tab[];
   activeTab: string | null;
   historyOpen: boolean;
+  snippetsOpen: boolean;
+  snippetsRevision: number;
   settingsOpen: boolean;
   /** The add/edit connection wizard, if open. */
   connectionDialog: ConnectionDialog | null;
@@ -103,6 +110,9 @@ interface AppStore {
   updateTab(id: string, patch: Partial<Tab>): void;
   updateRun(id: string, update: (run: RunState) => RunState): void;
   setHistoryOpen(open: boolean): void;
+  /** The saved queries panel takes the place of the history panel, and vice versa. */
+  setSnippetsOpen(open: boolean): void;
+  refreshSnippets(): void;
   openSettings(): void;
   closeSettings(): void;
   setConnectionDialog(dialog: ConnectionDialog | null): void;
@@ -119,6 +129,8 @@ export const useApp = create<AppStore>((set) => ({
   tabs: [],
   activeTab: null,
   historyOpen: false,
+  snippetsOpen: false,
+  snippetsRevision: 0,
   settingsOpen: false,
   connectionDialog: null,
   deletingConnection: null,
@@ -166,7 +178,9 @@ export const useApp = create<AppStore>((set) => ({
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   updateRun: (id, update) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id && t.run ? { ...t, run: update(t.run) } : t)) })),
-  setHistoryOpen: (historyOpen) => set({ historyOpen }),
+  setHistoryOpen: (historyOpen) => set(historyOpen ? { historyOpen, snippetsOpen: false } : { historyOpen }),
+  setSnippetsOpen: (snippetsOpen) => set(snippetsOpen ? { snippetsOpen, historyOpen: false } : { snippetsOpen }),
+  refreshSnippets: () => set((s) => ({ snippetsRevision: s.snippetsRevision + 1 })),
   setConnectionDialog: (connectionDialog) => set({ connectionDialog }),
   setDeletingConnection: (deletingConnection) => set({ deletingConnection }),
   openSettings: () => set({ settingsOpen: true, activeTab: SETTINGS_TAB }),
@@ -197,6 +211,15 @@ export interface TrustRequest {
   resolve(accept: boolean): void;
 }
 
+/** A line of text, such as the name to save a query under. */
+export interface TextRequest {
+  title: string;
+  label: string;
+  initial: string;
+  confirm: string;
+  resolve(text: string | null): void;
+}
+
 /** Values for the `:name` placeholders of a script. */
 export interface ParamsRequest {
   names: string[];
@@ -222,7 +245,9 @@ interface DialogStore {
   trust: TrustRequest | null;
   risk: RiskRequest | null;
   params: ParamsRequest | null;
+  text: TextRequest | null;
   interactions: InteractionItem[];
+  askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
   askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
   askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
@@ -236,7 +261,20 @@ export const useDialogs = create<DialogStore>((set) => ({
   trust: null,
   risk: null,
   params: null,
+  text: null,
   interactions: [],
+  askText: (request) =>
+    new Promise((resolve) =>
+      set({
+        text: {
+          ...request,
+          resolve: (text) => {
+            set({ text: null });
+            resolve(text);
+          },
+        },
+      }),
+    ),
   askParams: (names, previous) =>
     new Promise((resolve) =>
       set({

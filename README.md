@@ -102,6 +102,7 @@ connections that must never change.
 | Ctrl+Enter | Run the selection or the statement under the cursor |
 | Ctrl+Shift+Enter | Run the whole script |
 | Shift+Alt+F | Format the selection or the script |
+| Ctrl+S | Save the SQL as a named query |
 | Ctrl+T / Ctrl+W | New query tab / close the tab (its connection and results are freed) |
 | Ctrl+Shift+T | Reopen the last closed tab with its SQL |
 | Ctrl+Tab, Ctrl+Shift+Tab | Next / previous tab (also Ctrl+PageDown / Ctrl+PageUp) |
@@ -136,6 +137,14 @@ what is left, and copies and exports take only those rows. **Esc** clears it.
 **Enter** or a double-click opens the cell viewer beside the grid with the full value of the
 active cell: JSON pretty-printed, binary values as a hex dump and long text with its line
 breaks. The arrow keys move through cells while it stays open; **Esc** closes it.
+
+## Saved queries
+
+**Ctrl+S** (or **Save** in the editor toolbar) saves the tab's SQL under a name, together with
+its connection; saving again offers the same name, and an existing name is replaced.
+**Saved queries** in the sidebar lists them with a search box: **Open** puts one in a new tab
+(without connecting or running it) and **Delete** asks for a second click. They live in the
+local store on this computer, per repository, or for every repository when saved outside one.
 
 ## Query history
 

@@ -82,6 +82,14 @@ export const commands = {
 	/**  The exact row count of a table or view, counted by the core on the explorer's session. */
 	countRows: (session: string, schema: string, name: string) => typedError<number | null, string>(__TAURI_INVOKE("count_rows", { session, schema, name })),
 	/**
+	 *  Saves the query under `name` for the open workspace (or personally outside one),
+	 *  replacing a saved query with that name. Returns its identifier.
+	 */
+	saveSnippet: (name: string, sql: string, connection: string | null) => typedError<number, string>(__TAURI_INVOKE("save_snippet", { name, sql, connection })),
+	/**  Saved queries of the open workspace and the personal ones, by name. */
+	listSnippets: (search: string) => typedError<SnippetItem[], string>(__TAURI_INVOKE("list_snippets", { search })),
+	deleteSnippet: (id: number) => typedError<boolean, string>(__TAURI_INVOKE("delete_snippet", { id })),
+	/**
 	 *  The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
 	 *  engine's dialect in the core like a script run, for Ctrl+Enter.
 	 */
@@ -410,6 +418,17 @@ scriptOffset: number | null; cancelled: boolean } | { kind: "scriptFinished"; ex
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
+
+/**  A saved query; `connection` is empty when it was saved without one. */
+export type SnippetItem = {
+	id: number,
+	name: string,
+	statement: string,
+	connection: string,
+	updatedMs: number,
+	/**  Saved outside any repository: visible from every workspace. */
+	personal: boolean,
+};
 
 /**  SQL the explorer can write for a table (see `spelunk_core::SqlTemplate`). */
 export type SqlTemplateItem = "preview" | "select" | "insert" | "update" | "delete";

@@ -50,6 +50,34 @@ pub struct HistoryItem {
     pub cancelled: bool,
 }
 
+/// A saved query; `connection` is empty when it was saved without one.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SnippetItem {
+    #[specta(type = specta_typescript::Number)]
+    pub id: i64,
+    pub name: String,
+    pub statement: String,
+    pub connection: String,
+    #[specta(type = specta_typescript::Number)]
+    pub updated_ms: i64,
+    /// Saved outside any repository: visible from every workspace.
+    pub personal: bool,
+}
+
+impl From<spelunk_core::Snippet> for SnippetItem {
+    fn from(s: spelunk_core::Snippet) -> Self {
+        Self {
+            id: s.id,
+            personal: s.workspace.is_empty(),
+            name: s.name,
+            statement: s.statement,
+            connection: s.connection,
+            updated_ms: s.updated_ms,
+        }
+    }
+}
+
 impl From<spelunk_core::HistoryEntry> for HistoryItem {
     fn from(entry: spelunk_core::HistoryEntry) -> Self {
         Self {

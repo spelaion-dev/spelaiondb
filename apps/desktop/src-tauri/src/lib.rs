@@ -267,6 +267,48 @@ async fn list_history(
         .map_err(|e| e.to_string())
 }
 
+/// Saves the query under `name` for the open workspace (or personally outside one),
+/// replacing a saved query with that name. Returns its identifier.
+#[tauri::command]
+#[specta::specta]
+async fn save_snippet(
+    name: String,
+    sql: String,
+    connection: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let id = state
+        .history
+        .save_snippet(workspace, name, sql, connection.unwrap_or_default())
+        .await
+        .map_err(|e| e.to_string())?;
+    u32::try_from(id).map_err(|_| format!("saved query id out of range: {id}"))
+}
+
+/// Saved queries of the open workspace and the personal ones, by name.
+#[tauri::command]
+#[specta::specta]
+async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<Vec<SnippetItem>> {
+    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    state
+        .history
+        .snippets(workspace, search)
+        .await
+        .map(|items| items.into_iter().map(SnippetItem::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> {
+    state
+        .history
+        .delete_snippet(id.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn set_history_enabled(
@@ -1214,6 +1256,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             filter_result,
             table_sql,
             count_rows,
+            save_snippet,
+            list_snippets,
+            delete_snippet,
             statement_at,
             create_sqlite_database,
             script_risks,
