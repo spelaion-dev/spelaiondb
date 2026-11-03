@@ -63,6 +63,7 @@ pub enum Engine {
     Mysql,
     Mariadb,
     Duckdb,
+    Sqlserver,
 }
 
 impl Engine {
@@ -73,6 +74,7 @@ impl Engine {
             Engine::Mysql => "mysql",
             Engine::Mariadb => "mariadb",
             Engine::Duckdb => "duckdb",
+            Engine::Sqlserver => "sqlserver",
         }
     }
 
@@ -80,7 +82,7 @@ impl Engine {
     pub fn is_file(self) -> bool {
         match self {
             Engine::Sqlite | Engine::Duckdb => true,
-            Engine::Postgres | Engine::Mysql | Engine::Mariadb => false,
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => false,
         }
     }
 
@@ -89,6 +91,7 @@ impl Engine {
             Engine::Postgres => Some(5432),
             Engine::Sqlite | Engine::Duckdb => None,
             Engine::Mysql | Engine::Mariadb => Some(3306),
+            Engine::Sqlserver => Some(1433),
         }
     }
 }

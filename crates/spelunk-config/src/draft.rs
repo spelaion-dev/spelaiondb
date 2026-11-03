@@ -260,7 +260,7 @@ impl ConnectionDraft {
                 .filter(|p| network && Some(*p) != self.engine.default_port()),
             database: non_empty(&self.database).map(|d| match self.engine {
                 Engine::Sqlite | Engine::Duckdb => portable_path(&d, root),
-                Engine::Postgres | Engine::Mysql | Engine::Mariadb => d,
+                Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => d,
             }),
             user: non_empty(&self.user).filter(|_| network),
             password: password

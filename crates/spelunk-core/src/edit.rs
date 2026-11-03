@@ -198,7 +198,13 @@ pub async fn apply_edits(session: &Session, statements: &[String]) -> Result<usi
     if statements.is_empty() {
         return Err(EditError::Nothing);
     }
-    run_one(session, "BEGIN")
+    // In T-SQL a lone BEGIN opens a block, not a transaction.
+    let begin = if session.dialect().name() == "sqlserver" {
+        "BEGIN TRANSACTION"
+    } else {
+        "BEGIN"
+    };
+    run_one(session, begin)
         .await
         .map_err(|message| EditError::Failed { index: 0, message })?;
     for (i, statement) in statements.iter().enumerate() {

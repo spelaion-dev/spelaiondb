@@ -132,6 +132,9 @@ impl Driver for MysqlDriver {
     }
 
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
+        // mysql_async builds its TLS with the process's rustls provider: ring, like the other
+        // drivers (with more than one compiled in, rustls would not choose).
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let ca = params.ca_certificate.as_deref();
         let mut opts = opts(params, tls_opts(params.tls, ca));
         let conn = match open(opts.clone()).await {

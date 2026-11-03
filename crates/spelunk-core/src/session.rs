@@ -172,6 +172,10 @@ impl Session {
                 while let Some(event) = events.next().await {
                     match event {
                         Ok(ExecEvent::Columns(schema)) => {
+                            // A batch may return several result sets (SQL Server).
+                            if let Some(previous) = current {
+                                results.complete(previous);
+                            }
                             let result = results.create(schema.clone());
                             current = Some(result);
                             yield CoreEvent::ResultStarted { index, result, schema };

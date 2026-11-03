@@ -8,7 +8,9 @@
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{Expr, Query, SetExpr, Statement, Value as SqlValue, Visit, Visitor};
-use sqlparser::dialect::{Dialect, GenericDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::dialect::{
+    Dialect, DuckDbDialect, GenericDialect, MsSqlDialect, PostgreSqlDialect, SQLiteDialect,
+};
 use sqlparser::parser::Parser;
 
 /// Kind of permitted read.
@@ -27,6 +29,10 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
     let dialect: Box<dyn Dialect> = match engine {
         "postgres" => Box::new(PostgreSqlDialect {}),
         "sqlite" => Box::new(SQLiteDialect {}),
+        // Only to tell reads from writes for the "production" confirmation: the MCP's
+        // read-only mode does not serve these engines (`readonly.rs`).
+        "sqlserver" => Box::new(MsSqlDialect {}),
+        "duckdb" => Box::new(DuckDbDialect {}),
         _ => Box::new(GenericDialect {}),
     };
     let statements = Parser::parse_sql(dialect.as_ref(), sql)

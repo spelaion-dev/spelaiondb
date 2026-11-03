@@ -97,7 +97,9 @@ impl Default for ExecOptions {
 }
 
 /// Event produced while executing a statement, in this order:
-/// `Columns` (only if it returns rows) → `Batch`* → `Notice`* → `Done`.
+/// `Columns` (only if it returns rows) → `Batch`* → `Notice`* → `Done`. A statement that
+/// returns several result sets (a SQL Server batch or procedure) repeats `Columns` →
+/// `Batch`* for each one before `Done`.
 #[derive(Debug, Clone)]
 pub enum ExecEvent {
     Columns(Arc<ResultSchema>),

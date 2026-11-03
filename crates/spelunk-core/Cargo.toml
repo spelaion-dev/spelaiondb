@@ -13,6 +13,7 @@ spelunk-driver-mysql.workspace = true
 spelunk-driver-postgres.workspace = true
 spelunk-driver-sqlite.workspace = true
 spelunk-driver-duckdb.workspace = true
+spelunk-driver-sqlserver.workspace = true
 spelunk-ssh.workspace = true
 spelunk-store.workspace = true
 arrow.workspace = true

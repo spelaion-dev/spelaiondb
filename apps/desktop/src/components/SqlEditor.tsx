@@ -7,7 +7,7 @@ import { useTranslation } from "react-i18next";
 import { basicSetup } from "codemirror";
 import { Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
-import { MariaSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@codemirror/lang-sql";
+import { MariaSQL, MSSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@codemirror/lang-sql";
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { closeLintPanel, openLintPanel, setDiagnostics } from "@codemirror/lint";
@@ -90,6 +90,7 @@ const FORMAT_LANGUAGES: Record<string, SqlLanguage> = {
   mysql: "mysql",
   mariadb: "mariadb",
   duckdb: "duckdb",
+  sqlserver: "transactsql",
 };
 
 /** Formats the selection, or everything, with the engine's dialect, in one undo step. The
@@ -127,7 +128,7 @@ async function formatIn(view: EditorView, engine: string | null): Promise<string
 
 function language(engine: string | null, tables: Record<string, string[]>) {
   // DuckDB's SQL comes from PostgreSQL's: the default dialect fits it.
-  const dialects: Record<string, SQLDialect> = { sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL };
+  const dialects: Record<string, SQLDialect> = { sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL, sqlserver: MSSQL };
   return sql({ dialect: (engine && dialects[engine]) || PostgreSQL, schema: tables, upperCaseKeywords: false });
 }
 

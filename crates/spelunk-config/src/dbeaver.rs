@@ -188,6 +188,7 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
         ("mysql", _) => Ok(Engine::Mysql),
         ("sqlite", _) | ("generic", "sqlite_jdbc") => Ok(Engine::Sqlite),
         ("duckdb", _) | ("generic", "duckdb_jdbc") => Ok(Engine::Duckdb),
+        ("sqlserver", _) | ("mssql", _) => Ok(Engine::Sqlserver),
         (p, d) => Err(format!("{p}/{d} is not supported yet")),
     };
     let saved = credentials.and_then(|c| c.get("#connection"));

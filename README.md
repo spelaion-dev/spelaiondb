@@ -3,9 +3,9 @@
 An open-source desktop database client: fast and lightweight, with first-class SSH tunnels
 and a built-in MCP server for AI agents.
 
-> **Status:** 0.2.0 preview. The drivers (PostgreSQL and MySQL/MariaDB with TLS, SQLite,
-> DuckDB), the configuration, SSH tunnels, `spelunk mcp` and the desktop app work.
-> `spelunk mcp` does not serve MySQL/MariaDB or DuckDB connections yet.
+> **Status:** 0.2.0 preview. The drivers (PostgreSQL, MySQL/MariaDB and SQL Server with TLS,
+> SQLite, DuckDB), the configuration, SSH tunnels, `spelunk mcp` and the desktop app work.
+> `spelunk mcp` does not serve MySQL/MariaDB, SQL Server or DuckDB connections yet.
 
 ## Install
 
