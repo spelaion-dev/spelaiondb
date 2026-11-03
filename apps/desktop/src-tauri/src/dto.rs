@@ -743,6 +743,81 @@ pub enum TextFormat {
     InList,
 }
 
+/// A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
+/// a password.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DbeaverItem {
+    pub id: String,
+    pub name: String,
+    pub folder: String,
+    /// `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it.
+    pub engine: Option<String>,
+    /// Why it cannot be imported, if it cannot.
+    pub unsupported: Option<String>,
+    /// `host:port/database`, or the file for SQLite.
+    pub target: String,
+    pub user: String,
+    pub env: String,
+    pub has_password: bool,
+    /// `user@host:port` of its SSH tunnel.
+    pub ssh: Option<String>,
+}
+
+impl From<&spelunk_config::DbeaverConnection> for DbeaverItem {
+    fn from(c: &spelunk_config::DbeaverConnection) -> Self {
+        let sqlite = c.engine == Ok(spelunk_config::Engine::Sqlite);
+        Self {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            folder: c.folder.clone(),
+            engine: c.engine.as_ref().ok().map(|e| e.as_str().to_string()),
+            unsupported: c.engine.as_ref().err().cloned(),
+            target: if sqlite {
+                c.database.clone()
+            } else {
+                let port = c.port.map(|p| format!(":{p}")).unwrap_or_default();
+                let database = if c.database.is_empty() {
+                    String::new()
+                } else {
+                    format!("/{}", c.database)
+                };
+                format!("{}{port}{database}", c.host)
+            },
+            user: c.user.clone(),
+            env: c.env.clone(),
+            has_password: c.password.is_some(),
+            ssh: c.ssh.as_ref().map(|s| {
+                let port = s.port.map(|p| format!(":{p}")).unwrap_or_default();
+                format!("{}@{}{port}", s.user, s.host)
+            }),
+        }
+    }
+}
+
+/// What `scan_dbeaver` found, and where.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct DbeaverScan {
+    pub dir: String,
+    pub connections: Vec<DbeaverItem>,
+}
+
+/// One connection that could not be imported, and why.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ImportSkip {
+    pub name: String,
+    pub reason: String,
+}
+
+/// The outcome of an import: the names given to the new connections (`(DBeaver)` is added
+/// when the name was taken) and those left out.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ImportReport {
+    pub imported: Vec<String>,
+    pub tunnels: Vec<String>,
+    pub skipped: Vec<ImportSkip>,
+}
+
 /// The engine behind the id the UI uses (`postgres`, `mysql`…).
 pub fn engine_named(name: &str) -> Result<spelunk_config::Engine, String> {
     use spelunk_config::Engine;

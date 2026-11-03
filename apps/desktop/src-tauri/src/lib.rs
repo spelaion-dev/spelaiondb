@@ -928,6 +928,150 @@ fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
         .map_err(|e| e.to_string())
 }
 
+/// The DBeaver folder to read: the one chosen, or DBeaver's workspace on this system.
+fn dbeaver_dir(path: Option<String>) -> CmdResult<PathBuf> {
+    match path.filter(|p| !p.trim().is_empty()) {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => spelunk_config::dbeaver_workspace()
+            .ok_or_else(|| "DBeaver's folder is unknown on this system".into()),
+    }
+}
+
+/// The DBeaver connections under a folder (DBeaver's workspace if none), without secrets.
+#[tauri::command]
+#[specta::specta]
+async fn scan_dbeaver(path: Option<String>) -> CmdResult<DbeaverScan> {
+    let dir = dbeaver_dir(path)?;
+    let found = tokio::task::spawn_blocking({
+        let dir = dir.clone();
+        move || spelunk_config::read_dbeaver(&dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    Ok(DbeaverScan {
+        dir: dir.display().to_string(),
+        connections: found.iter().map(DbeaverItem::from).collect(),
+    })
+}
+
+/// Imports the chosen DBeaver connections (and their SSH tunnels) as SpelunkDB files. The
+/// folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
+/// DBeaver saved go to the keychain, otherwise they are asked when connecting.
+#[tauri::command]
+#[specta::specta]
+async fn import_dbeaver(
+    path: Option<String>,
+    ids: Vec<String>,
+    personal: bool,
+    save_passwords: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<ImportReport> {
+    let dir = dbeaver_dir(path)?;
+    let found = tokio::task::spawn_blocking(move || spelunk_config::read_dbeaver(&dir))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let source = source_of(personal);
+    let mut report = ImportReport {
+        imported: Vec::new(),
+        tunnels: Vec::new(),
+        skipped: Vec::new(),
+    };
+    for connection in found.iter().filter(|c| ids.contains(&c.id)) {
+        let engine = match &connection.engine {
+            Ok(engine) => *engine,
+            Err(reason) => {
+                report.skipped.push(ImportSkip {
+                    name: connection.name.clone(),
+                    reason: reason.clone(),
+                });
+                continue;
+            }
+        };
+        // One tunnel per bastion and user: connections through the same one share it.
+        let tunnel_name = connection
+            .ssh
+            .as_ref()
+            .map(|s| spelunk_config::slug(&format!("{} {}", s.user, s.host)))
+            .unwrap_or_default();
+        match import_one(
+            &state,
+            connection,
+            engine,
+            source,
+            save_passwords,
+            &tunnel_name,
+        )
+        .await
+        {
+            Ok((name, created_tunnel)) => {
+                report.imported.push(name);
+                if created_tunnel {
+                    report.tunnels.push(tunnel_name);
+                }
+            }
+            Err(reason) => report.skipped.push(ImportSkip {
+                name: connection.name.clone(),
+                reason,
+            }),
+        }
+    }
+    Ok(report)
+}
+
+/// Creates the tunnel (unless one with its name exists) and the connection, trying
+/// `name (DBeaver)`, `name (DBeaver 2)`… when the name is taken.
+async fn import_one(
+    state: &AppState,
+    connection: &spelunk_config::DbeaverConnection,
+    engine: spelunk_config::Engine,
+    source: Source,
+    save_passwords: bool,
+    tunnel_name: &str,
+) -> Result<(String, bool), String> {
+    let plan = spelunk_config::import_plan(connection, engine, source, save_passwords, tunnel_name);
+    let mut created_tunnel = false;
+    if let Some((tunnel, passwords)) = &plan.tunnel {
+        let exists = state
+            .config
+            .read()
+            .await
+            .tunnels
+            .iter()
+            .any(|t| t.source == source && t.name == tunnel_name);
+        if !exists {
+            let config = state.config.read().await;
+            spelunk_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
+                .map_err(|e| e.to_string())?;
+            created_tunnel = true;
+        }
+        state.reload().await;
+    }
+    let mut draft = plan.connection;
+    let base = draft.name.clone();
+    for attempt in 0..10 {
+        draft.name = match attempt {
+            0 => base.clone(),
+            1 => format!("{base} (DBeaver)"),
+            n => format!("{base} (DBeaver {n})"),
+        };
+        let added = {
+            let config = state.config.read().await;
+            spelunk_config::add_connection(&config, &draft, plan.password.as_ref(), &SystemBackend)
+        };
+        match added {
+            Ok(_) => {
+                state.reload().await;
+                return Ok((draft.name, created_tunnel));
+            }
+            Err(e) if e.to_string().contains("already exists") => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("every name tried is taken".into())
+}
+
 /// Creates an empty SQLite database file for a new connection. The core never overwrites an
 /// existing file.
 #[tauri::command]
@@ -1442,6 +1586,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             script_params,
             bind_params,
             parse_connection_url,
+            scan_dbeaver,
+            import_dbeaver,
             open_workspace,
             trust_workspace,
             list_connections,

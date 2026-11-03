@@ -152,5 +152,27 @@
     "label": "Or paste a connection URL",
     "use": "Use URL",
     "unsupported": "This app has no driver for that database yet."
+  },
+  "dbeaver": {
+    "or": "Or bring your connections from another client:",
+    "button": "Import from DBeaver…",
+    "title": "Import from DBeaver",
+    "from": "From",
+    "defaultFolder": "DBeaver's workspace",
+    "chooseFolder": "Choose folder…",
+    "reading": "Reading DBeaver connections…",
+    "none": "No connections found there.",
+    "list": "DBeaver connections",
+    "passwordSaved": "password saved",
+    "savePasswords": "Store the passwords DBeaver saved in the system keychain",
+    "passwordsHint": "Otherwise SpelunkDB asks for them when connecting. Passwords are never written to the connection files. SSH tunnels are imported too.",
+    "import_one": "Import {{count}} connection",
+    "import_other": "Import {{count}} connections",
+    "imported_one": "Imported {{count}} connection.",
+    "imported_other": "Imported {{count}} connections.",
+    "tunnels_one": "Created {{count}} SSH tunnel.",
+    "tunnels_other": "Created {{count}} SSH tunnels.",
+    "skipped": "Not imported:",
+    "close": "Done"
   }
 }

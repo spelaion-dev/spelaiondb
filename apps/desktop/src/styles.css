@@ -373,3 +373,18 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 .pending-changes { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; border-left: 1px solid var(--line); }
 .insert-row-fields { display: flex; flex-direction: column; gap: 8px; max-height: 55vh; overflow: auto; margin: 8px 0 12px; }
 .insert-row-fields > .field { display: grid; grid-template-columns: minmax(120px, max-content) 1fr auto; align-items: center; gap: 8px; }
+
+/* ---------------------------------------------------------------- import from DBeaver */
+.import-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.dbeaver-import { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; min-height: 0; overflow: auto; flex: 1; }
+.dbeaver-source { display: flex; align-items: center; gap: 8px; }
+.dbeaver-dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.dbeaver-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 6px; max-height: 45vh; overflow: auto; }
+.dbeaver-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.dbeaver-item:last-child { border-bottom: none; }
+.dbeaver-item.unsupported { opacity: 0.6; cursor: default; }
+.dbeaver-main { display: flex; flex-direction: column; min-width: 0; }
+.dbeaver-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbeaver-options { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.dbeaver-passwords { flex-basis: 100%; }
+.dbeaver-report { margin: 0; padding-left: 18px; }

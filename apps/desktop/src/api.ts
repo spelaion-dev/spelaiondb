@@ -22,6 +22,9 @@ import {
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
   type RiskKind,
+  type DbeaverItem_Serialize,
+  type DbeaverScan_Serialize,
+  type ImportReport,
   type RowChangeItem_Deserialize,
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
@@ -37,12 +40,15 @@ import {
 } from "./bindings";
 
 export { commands, events };
+export type { ImportReport };
 export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutcome, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
+export type DbeaverItem = DbeaverItem_Serialize;
+export type DbeaverScan = DbeaverScan_Serialize;
 export type RowChangeItem = RowChangeItem_Deserialize;
 export type CellEditItem = CellEditItem_Deserialize;
 export type UrlFields = UrlFields_Serialize;

@@ -61,6 +61,14 @@ port, database, user, SSL mode and the password field (which is saved like a typ
 - **SQLite:** pick an existing file with **Browse…**, or create an empty database with
   **New database…** (it never replaces an existing file).
 
+**Import from DBeaver…** (in the same window) reads DBeaver's workspace, or a folder you
+choose, and lists its connections: PostgreSQL, MySQL, MariaDB and SQLite ones can be imported,
+with their folder, environment (DBeaver's connection type) and SSH tunnel (one SpelunkDB tunnel
+per bastion and user, shared by the connections that use it). The user names and passwords
+DBeaver saved are read from its credentials file; the passwords go to the system keychain only
+if you tick that option, and are asked when connecting otherwise. A name already taken gets
+` (DBeaver)` added; nothing existing is overwritten.
+
 Testing a connection writes nothing. Saving never overwrites an existing connection.
 
 The **⋯** menu next to each connection has **Edit…** and **Delete…**. Editing keeps the same

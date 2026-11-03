@@ -152,5 +152,27 @@
     "label": "O pega una URL de conexión",
     "use": "Usar URL",
     "unsupported": "La aplicación aún no tiene driver para esa base de datos."
+  },
+  "dbeaver": {
+    "or": "O trae tus conexiones de otro cliente:",
+    "button": "Importar de DBeaver…",
+    "title": "Importar de DBeaver",
+    "from": "Desde",
+    "defaultFolder": "El espacio de trabajo de DBeaver",
+    "chooseFolder": "Elegir carpeta…",
+    "reading": "Leyendo las conexiones de DBeaver…",
+    "none": "No hay conexiones ahí.",
+    "list": "Conexiones de DBeaver",
+    "passwordSaved": "contraseña guardada",
+    "savePasswords": "Guardar en el llavero del sistema las contraseñas que DBeaver tenía guardadas",
+    "passwordsHint": "Si no, SpelunkDB las pide al conectar. Las contraseñas nunca se escriben en los ficheros de conexión. Los túneles SSH también se importan.",
+    "import_one": "Importar {{count}} conexión",
+    "import_other": "Importar {{count}} conexiones",
+    "imported_one": "Importada {{count}} conexión.",
+    "imported_other": "Importadas {{count}} conexiones.",
+    "tunnels_one": "Creado {{count}} túnel SSH.",
+    "tunnels_other": "Creados {{count}} túneles SSH.",
+    "skipped": "No importadas:",
+    "close": "Hecho"
   }
 }

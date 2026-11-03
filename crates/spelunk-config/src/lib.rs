@@ -11,6 +11,7 @@
 
 mod accounts;
 mod conn_url;
+mod dbeaver;
 mod draft;
 mod edit;
 mod error;
@@ -24,6 +25,10 @@ mod vars;
 
 pub use accounts::{connection_account, tunnel_account};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
+pub use dbeaver::{
+    DbeaverConnection, DbeaverError, DbeaverSsh, ImportPlan, dbeaver_workspace, import_plan,
+    read_dbeaver,
+};
 pub use draft::{
     ConnectionDraft, PasswordChoice, add_connection, connections_dir, delete_connection, slug,
     update_connection,

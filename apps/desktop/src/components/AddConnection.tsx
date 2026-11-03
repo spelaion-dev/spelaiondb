@@ -19,6 +19,7 @@ import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { engineBadge } from "../engines";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath } from "../dialogs";
+import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
@@ -33,6 +34,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const [engines, setEngines] = useState<EngineItem[]>([]);
   const [engine, setEngine] = useState<EngineItem | null>(null);
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
+  const [importing, setImporting] = useState(false);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -64,7 +66,13 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         <div className="wizard-header">
           <h2>
             {engine && <EngineBadge engine={engine} />}
-            {editing ? t("editTitle", { name: initial?.name ?? editing }) : engine ? t("formTitle", { engine: engine.name }) : t("title")}
+            {editing
+              ? t("editTitle", { name: initial?.name ?? editing })
+              : importing
+                ? t("dbeaver.title")
+                : engine
+                  ? t("formTitle", { engine: engine.name })
+                  : t("title")}
           </h2>
           <button className="ghost" aria-label={t("close")} onClick={close}>
             ×
@@ -74,6 +82,8 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
           <p className="error wizard-error" role="alert">{loadError}</p>
         ) : editing ? (
           engine && initial && <ConnectionForm engine={engine} editing={editing} initial={initial} onCancel={close} onSaved={close} />
+        ) : importing ? (
+          <DbeaverImport onBack={() => setImporting(false)} onDone={close} />
         ) : engine ? (
           <ConnectionForm
             engine={engine}
@@ -88,6 +98,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : (
           <EnginePicker
             engines={engines}
+            onImport={() => setImporting(true)}
             onPick={(picked, fields) => {
               setPrefill(fields ?? null);
               setEngine(picked);
@@ -107,7 +118,15 @@ function EngineBadge({ engine }: { engine: EngineItem }) {
   );
 }
 
-function EnginePicker({ engines, onPick }: { engines: EngineItem[]; onPick(engine: EngineItem, fields?: UrlFields): void }) {
+function EnginePicker({
+  engines,
+  onPick,
+  onImport,
+}: {
+  engines: EngineItem[];
+  onPick(engine: EngineItem, fields?: UrlFields): void;
+  onImport(): void;
+}) {
   const { t } = useTranslation("connections");
   const [search, setSearch] = useState("");
   const [url, setUrl] = useState("");
@@ -164,6 +183,10 @@ function EnginePicker({ engines, onPick }: { engines: EngineItem[]; onPick(engin
           {urlError}
         </p>
       )}
+      <div className="import-row">
+        <span className="muted small">{t("dbeaver.or")}</span>
+        <button onClick={onImport}>{t("dbeaver.button")}</button>
+      </div>
       <div className="engine-groups">
         {CATEGORIES.map((category) => {
           const items = visible.filter((e) => e.category === category);

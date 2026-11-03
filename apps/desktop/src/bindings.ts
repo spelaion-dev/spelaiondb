@@ -139,6 +139,14 @@ export const commands = {
 	bindParams: (session: string, sql: string, values: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("bind_params", { session, sql, values })),
 	/**  Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form. */
 	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
+	/**  The DBeaver connections under a folder (DBeaver's workspace if none), without secrets. */
+	scanDbeaver: (path: string | null) => typedError<DbeaverScan_Serialize, string>(__TAURI_INVOKE("scan_dbeaver", { path })),
+	/**
+	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelunkDB files. The
+	 *  folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
+	 *  DBeaver saved go to the keychain, otherwise they are asked when connecting.
+	 */
+	importDbeaver: (path: string | null, ids: string[], personal: boolean, savePasswords: boolean) => typedError<ImportReport, string>(__TAURI_INVOKE("import_dbeaver", { path, ids, personal, savePasswords })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
@@ -316,6 +324,69 @@ export type ConnectionItem_Serialize = {
 	historyEnabled: boolean,
 };
 
+/**
+ *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
+ *  a password.
+ */
+export type DbeaverItem = DbeaverItem_Serialize | DbeaverItem_Deserialize;
+
+/**
+ *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
+ *  a password.
+ */
+export type DbeaverItem_Deserialize = {
+	id: string,
+	name: string,
+	folder: string,
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it. */
+	engine?: string | null,
+	/**  Why it cannot be imported, if it cannot. */
+	unsupported?: string | null,
+	/**  `host:port/database`, or the file for SQLite. */
+	target: string,
+	user: string,
+	env: string,
+	hasPassword: boolean,
+	/**  `user@host:port` of its SSH tunnel. */
+	ssh?: string | null,
+};
+
+/**
+ *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
+ *  a password.
+ */
+export type DbeaverItem_Serialize = {
+	id: string,
+	name: string,
+	folder: string,
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it. */
+	engine: string | null,
+	/**  Why it cannot be imported, if it cannot. */
+	unsupported: string | null,
+	/**  `host:port/database`, or the file for SQLite. */
+	target: string,
+	user: string,
+	env: string,
+	hasPassword: boolean,
+	/**  `user@host:port` of its SSH tunnel. */
+	ssh: string | null,
+};
+
+/**  What `scan_dbeaver` found, and where. */
+export type DbeaverScan = DbeaverScan_Serialize | DbeaverScan_Deserialize;
+
+/**  What `scan_dbeaver` found, and where. */
+export type DbeaverScan_Deserialize = {
+	dir: string,
+	connections: DbeaverItem_Deserialize[],
+};
+
+/**  What `scan_dbeaver` found, and where. */
+export type DbeaverScan_Serialize = {
+	dir: string,
+	connections: DbeaverItem_Serialize[],
+};
+
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
 export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;
 
@@ -403,6 +474,22 @@ export type HopDraftItem_Serialize = {
 	passwordMode: PasswordMode,
 	passwordEnv: string,
 	passwordOther: string,
+};
+
+/**
+ *  The outcome of an import: the names given to the new connections (`(DBeaver)` is added
+ *  when the name was taken) and those left out.
+ */
+export type ImportReport = {
+	imported: string[],
+	tunnels: string[],
+	skipped: ImportSkip[],
+};
+
+/**  One connection that could not be imported, and why. */
+export type ImportSkip = {
+	name: string,
+	reason: string,
 };
 
 export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; port: number; algorithm: string; fingerprint: string } | { kind: "secret"; title: string; prompt: string; echo: boolean; label: SecretLabel };

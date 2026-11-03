@@ -5175,7 +5175,9 @@ dependencies = [
 name = "spelunk-config"
 version = "0.1.0"
 dependencies = [
+ "aes 0.8.4",
  "apple-native-keyring-store",
+ "cbc 0.1.2",
  "dbus-secret-service-keyring-store",
  "keyring-core",
  "schemars 1.2.3",

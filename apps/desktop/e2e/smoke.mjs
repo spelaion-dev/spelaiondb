@@ -9,7 +9,8 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createCipheriv } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -28,6 +29,9 @@ function startApp() {
       ...process.env,
       SPELUNK_USER_DIR: userDir,
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
+      // Its own WebView2 profile: an installed SpelunkDB that is open (same app identifier)
+      // would otherwise share it and the second webview fails to start.
+      WEBVIEW2_USER_DATA_FOLDER: join(userDir, "webview2"),
     },
     stdio: "inherit",
   });
@@ -1106,6 +1110,78 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor({ state: "detached" });
   assert.ok(!existsSync(join(userDir, "connections", "shop-copy.toml")));
 
+  step("import from DBeaver: its files (made here, never the user's), passwords kept out");
+  {
+    // A DBeaver workspace like the one DBeaver writes, credentials encrypted the same way.
+    const dbeaverDir = join(userDir, "dbeaver", "General", ".dbeaver");
+    mkdirSync(dbeaverDir, { recursive: true });
+    writeFileSync(
+      join(dbeaverDir, "data-sources.json"),
+      JSON.stringify({
+        folders: {},
+        connections: {
+          "sqlite_jdbc-1": { provider: "sqlite", driver: "sqlite_jdbc", name: "Shop via DBeaver", configuration: { database: join(demo, "data", "shop.db"), type: "dev" } },
+          "postgres-jdbc-2": { provider: "postgresql", driver: "postgres-jdbc", name: "Docker PG via DBeaver", configuration: { host: "127.0.0.1", port: "15432", database: "spelunk", type: "dev" } },
+          "postgres-jdbc-3": {
+            provider: "postgresql",
+            driver: "postgres-jdbc",
+            name: "PG behind bastion via DBeaver",
+            configuration: {
+              host: "postgres",
+              port: "5432",
+              database: "spelunk",
+              type: "prod",
+              handlers: { ssh_tunnel: { type: "TUNNEL", enabled: true, properties: { host: "127.0.0.1", port: 2221, authType: "PASSWORD" } } },
+            },
+          },
+          "oracle_thin-4": { provider: "oracle", driver: "oracle_thin", name: "Old Oracle", configuration: { host: "ora", port: "1521" } },
+        },
+      }),
+    );
+    const credentials = JSON.stringify({
+      "postgres-jdbc-2": { "#connection": { user: "spelunk", password: "spelunk" } },
+      "postgres-jdbc-3": { "#connection": { user: "spelunk", password: "spelunk" }, "network/ssh_tunnel": { user: "tester", password: "not-saved" } },
+    });
+    const key = Buffer.from([0xba, 0xbb, 0x4a, 0x9f, 0x77, 0x4a, 0xb8, 0x53, 0xc9, 0x6c, 0x2d, 0x65, 0x3d, 0xfe, 0x54, 0x4a]);
+    const iv = Buffer.alloc(16, 7);
+    const cipher = createCipheriv("aes-128-cbc", key, iv);
+    writeFileSync(join(dbeaverDir, "credentials-config.json"), Buffer.concat([iv, cipher.update(credentials), cipher.final()]));
+    await page.evaluate((dir) => (window.__spelunkDbeaverDir = dir), join(userDir, "dbeaver"));
+
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    await page.getByRole("button", { name: "Import from DBeaver…" }).click();
+    const importer = page.locator(".modal.wizard");
+    await importer.getByRole("heading", { name: "Import from DBeaver" }).waitFor();
+    const list = importer.getByRole("list", { name: "DBeaver connections" });
+    await list.getByRole("listitem").nth(3).waitFor();
+    assert.ok(await list.getByRole("checkbox", { name: "Old Oracle" }).isDisabled());
+    assert.ok(await list.getByRole("checkbox", { name: "Shop via DBeaver" }).isChecked());
+    await list.getByRole("listitem").filter({ hasText: "PG behind bastion via DBeaver" }).getByText("SSH tester@127.0.0.1:2221").waitFor();
+    await list.getByRole("listitem").filter({ hasText: "Docker PG via DBeaver" }).getByText("password saved", { exact: false }).waitFor();
+    await importer.getByRole("radio", { name: "Personal", exact: true }).check();
+    // Never the user's real keychain from the smoke test: passwords are asked instead.
+    await importer.getByRole("checkbox", { name: "Store the passwords DBeaver saved in the system keychain" }).uncheck();
+    await shot("13c-import-dbeaver");
+    await importer.getByRole("button", { name: "Import 3 connections" }).click();
+    await importer.getByRole("status").filter({ hasText: "Imported 3 connections. Created 1 SSH tunnel." }).waitFor();
+    await shot("13d-import-dbeaver-done");
+    await importer.getByRole("button", { name: "Done", exact: true }).click();
+    await importer.waitFor({ state: "detached" });
+    for (const name of ["Shop via DBeaver", "Docker PG via DBeaver", "PG behind bastion via DBeaver"]) {
+      await page.locator(".connection-row", { hasText: name }).waitFor();
+    }
+    // Nothing secret in the new files; the SQLite one works right away.
+    const files = ["shop-via-dbeaver.toml", "docker-pg-via-dbeaver.toml", "pg-behind-bastion-via-dbeaver.toml"].map((f) =>
+      readFileSync(join(userDir, "connections", f), "utf8"),
+    );
+    assert.ok(files.every((text) => !text.includes("spelunk\"\npassword") && !text.includes("not-saved")));
+    assert.ok(existsSync(join(userDir, "tunnels", "tester-127-0-0-1.toml")));
+    panel = await newQuery("Shop via DBeaver", "select count(*) as products from product;");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await page.evaluate(() => delete window.__spelunkDbeaverDir);
+  }
+
   step("history, theme and per-connection preference survive an app restart");
   await setLanguage("es");
   await setTheme("dark", "dark");
@@ -1183,6 +1259,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 } finally {
   await browser.close().catch(() => {});
   await stopApp();
-  rmSync(userDir, { recursive: true, force: true });
+  // WebView2 lets go of its profile (inside userDir) a moment after the app exits.
+  try {
+    rmSync(userDir, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 });
+  } catch (e) {
+    console.warn(`could not remove ${userDir}: ${e.message}`);
+  }
   process.exit(failed ? 1 : 0);
 }
