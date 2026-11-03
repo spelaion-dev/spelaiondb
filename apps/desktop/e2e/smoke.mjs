@@ -71,7 +71,7 @@ try {
   }
   async function run(panel) {
     await panel.locator(".cm-content").click();
-    await page.keyboard.press("Control+Enter");
+    await page.keyboard.press("Control+Shift+Enter");
   }
   async function replaceQuery(panel, sql) {
     await panel.locator(".cm-content").click();
@@ -412,6 +412,42 @@ try {
   await history.getByText("No matching queries.", { exact: true }).waitFor();
   await shot("05b-history-disabled");
   await page.getByRole("button", { name: "Close query history" }).click();
+
+  step("Ctrl+Enter runs the statement under the cursor, Ctrl+Shift+Enter all of them");
+  await replaceQuery(panel, "select 'first' as which;\nselect 'second;' as which;\n\n-- the third\nselect 'third' as which");
+  const firstCell = async () => {
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.mouse.click(box.x + 80, box.y + 36 + 13);
+    await page.keyboard.press("Control+c");
+    return (await copied(before + 1)).trimEnd();
+  };
+  const sqlEditor = panel.locator(".cm-content");
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("End");
+  await page.keyboard.press("Control+Enter");
+  await panel.locator(".cm-ran", { hasText: "select 'second;' as which" }).waitFor();
+  await shot("05c-statement-under-cursor");
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.equal(await panel.locator(".result-tabs button", { hasText: /^Result/ }).count(), 1);
+  assert.equal(await firstCell(), "second;");
+  await sqlEditor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.press("Control+Enter");
+  await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector(".cm-ran")?.textContent?.includes("-- the third"));
+  // The status line already says "1 row" from the previous run: wait for the new value.
+  let third = "";
+  for (let i = 0; i < 20 && third !== "third"; i++) {
+    third = await firstCell();
+    if (third !== "third") await page.waitForTimeout(250);
+  }
+  assert.equal(third, "third");
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Shift+Enter");
+  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
 
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(

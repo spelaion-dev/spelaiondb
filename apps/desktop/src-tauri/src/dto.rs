@@ -440,14 +440,8 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
     type Error = String;
 
     fn try_from(item: ConnectionDraftItem) -> Result<Self, String> {
-        use spelunk_config::{Engine, PasswordChoice, Source, TlsModeConfig};
-        let engine = match item.engine.as_str() {
-            "postgres" => Engine::Postgres,
-            "sqlite" => Engine::Sqlite,
-            "mysql" => Engine::Mysql,
-            "mariadb" => Engine::Mariadb,
-            other => return Err(format!("unsupported engine: {other}")),
-        };
+        use spelunk_config::{PasswordChoice, Source, TlsModeConfig};
+        let engine = engine_named(&item.engine)?;
         Ok(Self {
             source: if item.personal {
                 Source::User
@@ -682,6 +676,25 @@ pub enum TextFormat {
     Csv,
     Json,
     SqlInsert,
+}
+
+/// The engine behind the id the UI uses (`postgres`, `mysql`…).
+pub fn engine_named(name: &str) -> Result<spelunk_config::Engine, String> {
+    use spelunk_config::Engine;
+    Ok(match name {
+        "postgres" => Engine::Postgres,
+        "sqlite" => Engine::Sqlite,
+        "mysql" => Engine::Mysql,
+        "mariadb" => Engine::Mariadb,
+        other => return Err(format!("unsupported engine: {other}")),
+    })
+}
+
+/// A piece of a script, in UTF-8 bytes like every position the core gives.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct TextSpan {
+    pub start: u32,
+    pub end: u32,
 }
 
 /// A rectangle of a result: rows and columns by position.

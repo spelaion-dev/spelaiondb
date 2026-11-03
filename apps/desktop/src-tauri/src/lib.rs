@@ -815,6 +815,30 @@ async fn export_result(
     Ok(rows as f64)
 }
 
+/// The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
+/// engine's dialect in the core like a script run, for Ctrl+Enter.
+#[tauri::command]
+#[specta::specta]
+async fn statement_at(
+    engine: String,
+    sql: String,
+    offset: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<TextSpan>> {
+    let driver = state
+        .engines
+        .get(engine_named(&engine)?)
+        .ok_or("no driver for this engine")?;
+    Ok(
+        spelunk_core::statement_at(driver.dialect().as_ref(), &sql, offset as usize).map(|span| {
+            TextSpan {
+                start: u32::try_from(span.start).unwrap_or(u32::MAX),
+                end: u32::try_from(span.end).unwrap_or(u32::MAX),
+            }
+        }),
+    )
+}
+
 /// Sorts a result by one column in the core (`None` restores the server's order). The
 /// grid then asks for its windows again.
 #[tauri::command]
@@ -1037,6 +1061,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             export_result,
             cell_value,
             sort_result,
+            statement_at,
             open_workspace,
             trust_workspace,
             list_connections,

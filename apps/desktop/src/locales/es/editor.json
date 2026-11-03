@@ -10,7 +10,7 @@
   "production": "PRODUCCIÓN",
   "cancel": "Cancelar",
   "run": "Ejecutar",
-  "runHint": "Ctrl+Intro (ejecuta la selección si hay una)",
+  "runHint": "Ejecuta todo (Ctrl+Mayús+Intro). Ctrl+Intro ejecuta la sentencia bajo el cursor o la selección",
   "resizeEditor": "Ajustar el tamaño del editor y los resultados",
   "sqlEditor": "Editor SQL",
   "results": {

@@ -69,6 +69,11 @@ export const commands = {
 	 *  grid then asks for its windows again.
 	 */
 	sortResult: (result: number, column: number | null, descending: boolean) => typedError<null, string>(__TAURI_INVOKE("sort_result", { result, column, descending })),
+	/**
+	 *  The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
+	 *  engine's dialect in the core like a script run, for Ctrl+Enter.
+	 */
+	statementAt: (engine: string, sql: string, offset: number) => typedError<TextSpan | null, string>(__TAURI_INVOKE("statement_at", { engine, sql, offset })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
@@ -378,6 +383,12 @@ export type TableDetails_Serialize = {
 
 /**  Text format to copy or export rows in. */
 export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert";
+
+/**  A piece of a script, in UTF-8 bytes like every position the core gives. */
+export type TextSpan = {
+	start: number,
+	end: number,
+};
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 

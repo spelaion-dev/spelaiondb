@@ -14,6 +14,11 @@ export function byteToIndex(text: string, byteOffset: number): number {
   return index;
 }
 
+/** UTF-8 byte offset of the JS index `index` within `text` (the inverse of `byteToIndex`). */
+export function indexToByte(text: string, index: number): number {
+  return encoder.encode(text.slice(0, index)).length;
+}
+
 /** End of the word starting at `index` (to underline an error). */
 export function wordEnd(text: string, index: number): number {
   const match = /^[\p{L}\p{N}_."$]+/u.exec(text.slice(index));

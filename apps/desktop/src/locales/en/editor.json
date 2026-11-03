@@ -10,7 +10,7 @@
   "production": "PRODUCTION",
   "cancel": "Cancel",
   "run": "Run",
-  "runHint": "Ctrl+Enter (runs the selection if there is one)",
+  "runHint": "Runs everything (Ctrl+Shift+Enter). Ctrl+Enter runs the statement under the cursor or the selection",
   "resizeEditor": "Resize editor and results",
   "sqlEditor": "SQL editor",
   "results": {

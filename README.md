@@ -58,6 +58,14 @@ The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in
 
 Preferences are stored in the personal `state.db` and apply to every workspace.
 
+## Running SQL
+
+**Ctrl+Enter** runs the selection or, without one, the statement under the cursor, which is
+highlighted for a moment. The core finds it with the same dialect splitter that runs scripts
+(quotes, comments, dollar-quoted bodies and MySQL `DELIMITER` included), so what is
+highlighted is exactly what runs. **Ctrl+Shift+Enter** or **Run** runs the whole script,
+statement by statement, stopping at the first error.
+
 ## Working with results
 
 Select cells in the result grid by clicking and dragging, with Shift and the arrow keys, by

@@ -1,19 +1,21 @@
 // SQL editor with CodeMirror 6: engine dialect, table autocompletion, Ctrl/Cmd+Enter to run
-// and underlining of the error at its position.
+// the statement under the cursor (split by the core) or the selection, Ctrl/Cmd+Shift+Enter
+// to run everything, and underlining of the error at its position.
 
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { basicSetup } from "codemirror";
-import { Compartment, EditorState, Prec } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
 import { MariaSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@codemirror/lang-sql";
 import { closeLintPanel, openLintPanel, setDiagnostics } from "@codemirror/lint";
 import { closeSearchPanel, gotoLine, openSearchPanel, searchPanelOpen } from "@codemirror/search";
 import { closeCompletion, completionStatus, startCompletion } from "@codemirror/autocomplete";
-import { wordEnd } from "../text";
+import { call, commands } from "../api";
+import { byteToIndex, indexToByte, wordEnd } from "../text";
 
 export interface RunRequest {
-  /** Text to run: the selection, or everything if there is no selection. */
+  /** Text to run: a statement, the selection or everything. */
   text: string;
   /** Index (JS) in the document where `text` starts. */
   from: number;
@@ -39,8 +41,31 @@ const theme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
     backgroundColor: "var(--accent-soft) !important",
   },
+  ".cm-ran": { backgroundColor: "var(--accent-soft)", transition: "background-color 0.3s" },
   ".cm-tooltip": { backgroundColor: "var(--panel)", color: "var(--fg)", border: "1px solid var(--line)" },
 });
+
+/** Marks the text that was just sent to run, for a moment. */
+const flashRun = StateEffect.define<{ from: number; to: number } | null>();
+const ranMark = Decoration.mark({ class: "cm-ran" });
+const ranField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, tr) {
+    let next = marks.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(flashRun)) next = e.value && e.value.to > e.value.from ? Decoration.set([ranMark.range(e.value.from, e.value.to)]) : Decoration.none;
+    }
+    return next;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+function flash(view: EditorView, from: number, to: number) {
+  view.dispatch({ effects: flashRun.of({ from, to }) });
+  setTimeout(() => {
+    if (view.dom.isConnected) view.dispatch({ effects: flashRun.of(null) });
+  }, 1000);
+}
 
 function language(engine: string | null, tables: Record<string, string[]>) {
   const dialects: Record<string, SQLDialect> = { sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL };
@@ -53,15 +78,35 @@ export function SqlEditor({ value, onChange, engine, tables, onRun, error }: Pro
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const locale = useRef(new Compartment());
-  const callbacks = useRef({ onChange, onRun });
-  callbacks.current = { onChange, onRun };
+  const callbacks = useRef({ onChange, onRun, engine });
+  callbacks.current = { onChange, onRun, engine };
 
   useEffect(() => {
     if (!host.current) return;
+    const runAll = (v: EditorView) => {
+      callbacks.current.onRun({ text: v.state.doc.toString(), from: 0 });
+      return true;
+    };
+    // The selection if there is one; otherwise the statement under the cursor, which the
+    // core finds with the same splitter that runs scripts.
     const run = (v: EditorView) => {
       const sel = v.state.selection.main;
-      const text = sel.empty ? v.state.doc.toString() : v.state.sliceDoc(sel.from, sel.to);
-      callbacks.current.onRun({ text, from: sel.empty ? 0 : sel.from });
+      if (!sel.empty) {
+        callbacks.current.onRun({ text: v.state.sliceDoc(sel.from, sel.to), from: sel.from });
+        return true;
+      }
+      const engine = callbacks.current.engine;
+      if (!engine) return runAll(v);
+      const doc = v.state.doc.toString();
+      call(commands.statementAt(engine, doc, indexToByte(doc, sel.head)))
+        .then((span) => {
+          if (!span || v.state.doc.toString() !== doc) return;
+          const from = byteToIndex(doc, span.start);
+          const to = byteToIndex(doc, span.end);
+          flash(v, from, to);
+          callbacks.current.onRun({ text: doc.slice(from, to), from });
+        })
+        .catch((e: unknown) => console.error("statement_at", e));
       return true;
     };
     const editor = new EditorView({
@@ -69,7 +114,13 @@ export function SqlEditor({ value, onChange, engine, tables, onRun, error }: Pro
       state: EditorState.create({
         doc: value,
         extensions: [
-          Prec.highest(keymap.of([{ key: "Mod-Enter", run }])),
+          Prec.highest(
+            keymap.of([
+              { key: "Mod-Shift-Enter", run: runAll },
+              { key: "Mod-Enter", run },
+            ]),
+          ),
+          ranField,
           basicSetup,
           lang.current.of(language(engine, tables)),
           locale.current.of([
