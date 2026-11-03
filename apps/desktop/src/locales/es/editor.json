@@ -63,7 +63,20 @@
     "copyInList": "Copiar como lista IN de SQL",
     "jumpTitle": "Ir a la columna",
     "jumpPlaceholder": "Nombre de columna…",
-    "jumpNone": "Ninguna columna coincide"
+    "jumpNone": "Ninguna columna coincide",
+    "columnFilters": "Filtros de columna",
+    "filteredBy": "Filtrado por",
+    "removeFilter": "Quitar el filtro {{filter}}",
+    "resetFilters": "Quitar filtros",
+    "customFilter": "Filtro personalizado…",
+    "customFilterTitle": "Filtro personalizado",
+    "filterColumn": "Columna",
+    "filterOperator": "Operador",
+    "filterValue": "Valor",
+    "customFilterHint": "Las condiciones se suman (AND) y siguen a SQL: NULL solo cumple IS NULL. Los números se comparan por valor; el texto, sin distinguir mayúsculas. LIKE usa % y _.",
+    "cancel": "Cancelar",
+    "applyFilter": "Filtrar",
+    "filterMenu": "Filtrar"
   },
   "messages": {
     "connectionFailed": "No se pudo conectar: {{detail}}",

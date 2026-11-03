@@ -135,6 +135,14 @@ decimals by value, dates by date) with NULLs last, and copies and exports follow
 case), also filtered in the core: the status line shows "15 of 50,000 rows", sorting works on
 what is left, and copies and exports take only those rows. **Esc** clears it.
 
+Column filters work like SQLyog's: right-click a cell, **Filter ▸** offers `= 'value'`,
+`<> 'value'`, `>`, `<`, `LIKE '%value%'`, `NOT LIKE`, `IS NULL` and `IS NOT NULL` for that cell,
+plus **Custom filter…** (any column, operator and value) and **Reset filters**. Conditions add
+up (AND), show above the grid with a × each, and follow SQL: a NULL only matches `IS NULL`.
+Numbers compare by value and text ignores case. They run in the core on the loaded rows, so
+they also work where a `WHERE` cannot go, such as `SHOW FULL PROCESSLIST` filtered by
+`Command <> 'Sleep'`.
+
 **Enter** or a double-click opens the cell viewer beside the grid with the full value of the
 active cell: JSON pretty-printed, binary values as a hex dump and long text with its line
 breaks. **Row** switches to every column of the active row, one under the other (click a

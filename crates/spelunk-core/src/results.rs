@@ -11,6 +11,7 @@ use arrow::error::ArrowError;
 use arrow::ipc::writer::StreamWriter;
 use spelunk_driver_api::{ResultSchema, Value};
 
+use crate::filter::{ColumnFilter, matches, validate};
 use crate::sort::{SortKey, ViewError, sorted_rows};
 
 /// Identifier of a result within a [`ResultStore`].
@@ -29,6 +30,8 @@ pub struct StoredResult {
     sort: Option<(SortKey, Vec<u32>)>,
     /// The filter text and, per original row, whether it matches.
     filter: Option<(String, Vec<bool>)>,
+    /// Column filters (all must pass) and, per original row, whether it passes them.
+    column_filters: Option<(Vec<ColumnFilter>, Vec<bool>)>,
     /// With a sort or a filter, the original row shown at each position.
     view: Option<Vec<u32>>,
 }
@@ -43,6 +46,7 @@ impl StoredResult {
             complete: false,
             sort: None,
             filter: None,
+            column_filters: None,
             view: None,
         }
     }
@@ -134,6 +138,46 @@ impl StoredResult {
         Ok(self.rows())
     }
 
+    /// The column filters in force.
+    pub fn column_filters(&self) -> &[ColumnFilter] {
+        self.column_filters
+            .as_ref()
+            .map_or(&[], |(filters, _)| filters.as_slice())
+    }
+
+    /// Keeps the rows that pass every column filter (an empty list removes them), on top of
+    /// the text filter. Returns the rows left.
+    pub fn filter_columns(&mut self, filters: Vec<ColumnFilter>) -> Result<usize, ViewError> {
+        if filters.is_empty() {
+            self.column_filters = None;
+            self.rebuild_view();
+            return Ok(self.rows());
+        }
+        self.check_viewable()?;
+        let columns = &self.schema.columns;
+        for filter in &filters {
+            let meta = columns
+                .get(filter.column)
+                .ok_or(ViewError::NoSuchColumn(filter.column))?;
+            validate(filter, meta.logical)?;
+        }
+        let mut passes = Vec::with_capacity(self.rows);
+        for batch in &self.batches {
+            for row in 0..batch.num_rows() {
+                passes.push(filters.iter().all(|filter| {
+                    let logical = columns[filter.column].logical;
+                    let cell =
+                        Value::from_array(batch.column(filter.column).as_ref(), row, logical)
+                            .unwrap_or(Value::Null);
+                    matches(&cell, logical, filter)
+                }));
+            }
+        }
+        self.column_filters = Some((filters, passes));
+        self.rebuild_view();
+        Ok(self.rows())
+    }
+
     fn check_viewable(&self) -> Result<(), ViewError> {
         if !self.complete {
             return Err(ViewError::Incomplete);
@@ -144,23 +188,19 @@ impl StoredResult {
         Ok(())
     }
 
-    /// The order of the sort (or the server's) keeping only the rows the filter matches.
+    /// The order of the sort (or the server's) keeping only the rows both filters let
+    /// through.
     fn rebuild_view(&mut self) {
-        self.view = match (&self.sort, &self.filter) {
-            (None, None) => None,
-            (Some((_, order)), None) => Some(order.clone()),
-            (None, Some((_, matches))) => Some(
-                (0..self.rows as u32)
-                    .filter(|&row| matches[row as usize])
-                    .collect(),
-            ),
-            (Some((_, order)), Some((_, matches))) => Some(
-                order
-                    .iter()
-                    .copied()
-                    .filter(|&row| matches[row as usize])
-                    .collect(),
-            ),
+        let text = self.filter.as_ref().map(|(_, m)| m);
+        let columns = self.column_filters.as_ref().map(|(_, m)| m);
+        let keep = |row: u32| {
+            text.is_none_or(|m| m[row as usize]) && columns.is_none_or(|m| m[row as usize])
+        };
+        let filtered = text.is_some() || columns.is_some();
+        self.view = match &self.sort {
+            None if !filtered => None,
+            None => Some((0..self.rows as u32).filter(|&row| keep(row)).collect()),
+            Some((_, order)) => Some(order.iter().copied().filter(|&row| keep(row)).collect()),
         };
     }
 
@@ -418,6 +458,59 @@ mod tests {
         assert_eq!(r.filter(Some("  ")), Ok(25));
         assert_eq!(r.filter_text(), None);
         assert_eq!(values(&r.window(0, 2)), [24, 23]);
+    }
+
+    #[test]
+    fn column_filters_combine_with_the_text_filter_and_the_sort() {
+        use crate::filter::FilterOp;
+        let store = ResultStore::new();
+        let s = schema();
+        let id = store.create(s.clone());
+        store.append(id, batch(&s, 0, 10));
+        store.append(id, batch(&s, 10, 30));
+        store.complete(id);
+        let r = store.get(id).unwrap();
+        let mut r = r.write().unwrap();
+        let filter = |op, value: &str| ColumnFilter {
+            column: 0,
+            op,
+            value: value.into(),
+        };
+        // 10..=19 by value (not as text, where "9" > "19").
+        assert_eq!(
+            r.filter_columns(vec![filter(FilterOp::Ge, "10"), filter(FilterOp::Lt, "20")]),
+            Ok(10)
+        );
+        assert_eq!(values(&r.window(0, 3)), [10, 11, 12]);
+        assert_eq!(r.filter(Some("5")), Ok(1));
+        assert_eq!(values(&r.window(0, 5)), [15]);
+        r.filter(None).unwrap();
+        r.sort(Some(SortKey {
+            column: 0,
+            descending: true,
+        }))
+        .unwrap();
+        assert_eq!(values(&r.window(0, 2)), [19, 18]);
+        assert_eq!(r.column_filters().len(), 2);
+        assert_eq!(
+            r.filter_columns(vec![filter(FilterOp::Gt, "many")]),
+            Err(ViewError::NotANumber {
+                column: 0,
+                value: "many".into()
+            })
+        );
+        // A refused filter leaves the previous ones in force.
+        assert_eq!(r.rows(), 10);
+        assert_eq!(
+            r.filter_columns(vec![ColumnFilter {
+                column: 3,
+                op: FilterOp::IsNull,
+                value: String::new()
+            }]),
+            Err(ViewError::NoSuchColumn(3))
+        );
+        assert_eq!(r.filter_columns(Vec::new()), Ok(30));
+        assert_eq!(values(&r.window(0, 1)), [29]);
     }
 
     #[test]

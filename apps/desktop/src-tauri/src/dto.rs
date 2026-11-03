@@ -825,6 +825,52 @@ impl From<SqlTemplateItem> for spelunk_core::SqlTemplate {
     }
 }
 
+/// A column filter operator (see `spelunk_core::FilterOp`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterOpItem {
+    Eq,
+    NotEq,
+    Gt,
+    Lt,
+    Ge,
+    Le,
+    Like,
+    NotLike,
+    IsNull,
+    IsNotNull,
+}
+
+/// One condition on a result column; all of them must hold.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ColumnFilterItem {
+    pub column: u32,
+    pub op: FilterOpItem,
+    pub value: String,
+}
+
+impl From<ColumnFilterItem> for spelunk_core::ColumnFilter {
+    fn from(item: ColumnFilterItem) -> Self {
+        use spelunk_core::FilterOp;
+        Self {
+            column: item.column as usize,
+            op: match item.op {
+                FilterOpItem::Eq => FilterOp::Eq,
+                FilterOpItem::NotEq => FilterOp::NotEq,
+                FilterOpItem::Gt => FilterOp::Gt,
+                FilterOpItem::Lt => FilterOp::Lt,
+                FilterOpItem::Ge => FilterOp::Ge,
+                FilterOpItem::Le => FilterOp::Le,
+                FilterOpItem::Like => FilterOp::Like,
+                FilterOpItem::NotLike => FilterOp::NotLike,
+                FilterOpItem::IsNull => FilterOp::IsNull,
+                FilterOpItem::IsNotNull => FilterOp::IsNotNull,
+            },
+            value: item.value,
+        }
+    }
+}
+
 /// Rows left after filtering a result, out of all it has.
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct FilterOutcome {

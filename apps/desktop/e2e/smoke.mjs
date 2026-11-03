@@ -685,6 +685,58 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.match(await panel.locator(".status-connected").innerText(), version);
     if (connection.startsWith("MySQL")) await shot("07b-mysql");
   }
+  // SQLyog-style column filters on SHOW FULL PROCESSLIST (no WHERE possible there).
+  panel = await newQuery("MySQL (Docker)", "show full processlist;");
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for MySQL (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".statusline", { hasText: /\d+ rows? ·/ }).waitFor();
+  const processlistTotal = Number((await panel.locator(".statusline").innerText()).match(/(\d+) rows?/)[1]);
+  // The filter bar moves the grid down: its box is read before every right-click.
+  const rightClickFirstCell = async () => {
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.click(box.x + 80, box.y + 36 + 13, { button: "right" });
+  };
+  const filterBy = async (op, value) => {
+    await rightClickFirstCell();
+    await panel.getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await panel.getByRole("menuitem", { name: "Custom filter…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Custom filter" });
+    await dialog.getByLabel("Column").selectOption({ label: "Command" });
+    await dialog.getByLabel("Operator").selectOption({ label: op });
+    await dialog.getByLabel("Value").fill(value);
+    await dialog.getByRole("button", { name: "Filter", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+  };
+  const shownOf = async () => {
+    const text = await panel.locator(".statusline").innerText();
+    const m = text.match(/(\d+) of (\d+) rows?/);
+    return m ? [Number(m[1]), Number(m[2])] : null;
+  };
+  await filterBy("<>", "Sleep");
+  await panel.locator(".filter-chip", { hasText: "Command <> 'Sleep'" }).waitFor();
+  await panel.locator(".statusline", { hasText: " of " }).waitFor();
+  const [busy, total] = await shownOf();
+  assert.equal(total, processlistTotal);
+  assert.ok(busy >= 1, "this query is running");
+  await shot("07c-processlist-filtered");
+  await panel.getByRole("button", { name: "Remove the filter Command <> 'Sleep'" }).click();
+  await panel.locator(".filter-chip").waitFor({ state: "detached" });
+  await filterBy("=", "sleep");
+  await panel.locator(".filter-chip", { hasText: "Command = 'sleep'" }).waitFor();
+  await panel.locator(".statusline", { hasText: " of " }).waitFor();
+  const [sleeping] = await shownOf();
+  assert.equal(sleeping + busy, processlistTotal);
+  // From the cell's own menu: the filter for its value, then reset.
+  await rightClickFirstCell();
+  await panel.getByRole("menuitem", { name: "Filter ▸" }).hover();
+  await panel.getByRole("menuitem", { name: /^Id <> \d+$/ }).click();
+  await panel.locator(".filter-chip").nth(1).waitFor();
+  await panel.getByRole("button", { name: "Reset filters" }).click();
+  await panel.locator(".filter-chip").first().waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: `${processlistTotal} row` }).waitFor();
+
   // The explorer lists MySQL databases and their tables.
   // Its own session ("ask every time"): the password is asked again.
   await page.locator('.connection-row:has-text("MySQL (Docker)") .twisty').click();

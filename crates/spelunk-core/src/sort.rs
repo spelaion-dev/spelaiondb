@@ -28,6 +28,8 @@ pub enum ViewError {
     TooManyRows,
     #[error("column {0} does not hold the values its type announces")]
     UnexpectedArray(usize),
+    #[error("column {column} holds numbers: \"{value}\" is not one")]
+    NotANumber { column: usize, value: String },
 }
 
 /// Row numbers of `values` in sorted order.
@@ -145,7 +147,7 @@ fn parse_decimal(s: &str) -> Decimal<'_> {
     }
 }
 
-fn cmp_decimal(a: &str, b: &str) -> Ordering {
+pub(crate) fn cmp_decimal(a: &str, b: &str) -> Ordering {
     // Fractions without trailing zeros compare digit by digit (`.5` > `.45`); integer parts
     // without leading zeros compare by length first.
     let magnitude = |ai: &str, af: &str, bi: &str, bf: &str| {

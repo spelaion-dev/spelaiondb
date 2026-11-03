@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type CellRange, type TextFormat } from "../api";
+import { call, commands, type CellRange, type ColumnFilterItem, type FilterOpItem, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT } from "../preferences";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta, SortState } from "../store";
@@ -82,14 +82,44 @@ function cssVar(style: CSSStyleDeclaration, name: string): string {
   return style.getPropertyValue(name).trim() || "#888";
 }
 
+/** SQL spelling of each column filter operator, as SQLyog shows them. */
+const OPS: { op: FilterOpItem; sql: string }[] = [
+  { op: "eq", sql: "=" },
+  { op: "notEq", sql: "<>" },
+  { op: "gt", sql: ">" },
+  { op: "lt", sql: "<" },
+  { op: "ge", sql: ">=" },
+  { op: "le", sql: "<=" },
+  { op: "like", sql: "LIKE" },
+  { op: "notLike", sql: "NOT LIKE" },
+  { op: "isNull", sql: "IS NULL" },
+  { op: "isNotNull", sql: "IS NOT NULL" },
+];
+const takesValue = (op: FilterOpItem) => op !== "isNull" && op !== "isNotNull";
+
+/** `Command <> 'Sleep'`, `Id > 10`, `Info IS NULL`: how a condition reads. */
+function filterLabel(filter: ColumnFilterItem, columns: ResultMeta["columns"]): string {
+  const column = columns[filter.column];
+  const sql = OPS.find((o) => o.op === filter.op)?.sql ?? filter.op;
+  if (!takesValue(filter.op)) return `${column?.name ?? "?"} ${sql}`;
+  const numeric = NUMERIC.has(column?.logical ?? "") && filter.op !== "like" && filter.op !== "notLike";
+  const value = numeric ? filter.value : `'${filter.value.replace(/'/g, "''")}'`;
+  return `${column?.name ?? "?"} ${sql} ${value}`;
+}
+
+/** Text for `LIKE '%…%'`: its own `%`, `_` and `\` are escaped. */
+const likeContaining = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
 export function ResultGrid({
   result,
   session,
   onSorted,
+  onColumnFiltered,
 }: {
   result: ResultMeta;
   session: string;
   onSorted(sort: SortState | undefined): void;
+  onColumnFiltered(filters: ColumnFilterItem[], rows: number, total: number): void;
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
@@ -98,7 +128,10 @@ export function ResultGrid({
   const frame = useRef<number | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  /** The context menu, with the cell it was opened on (for the Filter submenu). */
+  const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell | null; left: boolean } | null>(null);
+  /** The custom filter dialog, starting from a column and a value. */
+  const [customFilter, setCustomFilter] = useState<ColumnFilterItem | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const dragging = useRef(false);
   const [viewer, setViewer] = useState(false);
@@ -117,7 +150,8 @@ export function ResultGrid({
 
   // A sort or filter changes which row is at each position: a new cache asks the core again
   // (blocks still on their way to the old one are dropped with it).
-  const view = `${result.sort ? `${result.sort.column}:${result.sort.descending}` : ""}|${result.filter ?? ""}`;
+  const filtersKey = JSON.stringify(result.columnFilters ?? []);
+  const view = `${result.sort ? `${result.sort.column}:${result.sort.descending}` : ""}|${result.filter ?? ""}|${filtersKey}`;
   const cache = useMemo(() => new RowCache(result.id, () => redraw()), [result.id, view, redraw]);
   cache.grewTo(result.rows);
 
@@ -310,7 +344,7 @@ export function ResultGrid({
     // Other rows: the selection would point at rows that moved or are gone.
     setSelection(null);
     setViewer(false);
-  }, [result.filter]);
+  }, [result.filter, filtersKey]);
 
   useEffect(() => {
     // New result: scroll to the top and clear the selection.
@@ -337,6 +371,29 @@ export function ResultGrid({
     let col = offsets.findIndex((o, i) => i < widths.length && dataX >= o && dataX < (offsets[i + 1] ?? 0));
     if (col < 0) col = dataX < 0 ? 0 : widths.length - 1;
     return { row, col, gutter };
+  }
+
+  /** Applies the column conditions in the core (an empty list removes them). */
+  async function applyColumnFilters(filters: ColumnFilterItem[]) {
+    setMenu(null);
+    setCustomFilter(null);
+    if (!result.complete) {
+      setNotice({ text: t("results.filterWhenComplete"), error: true });
+      return;
+    }
+    try {
+      const outcome = await call(commands.filterColumns(result.id, filters));
+      onColumnFiltered(filters, outcome.rows, outcome.total);
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  /** Adds a condition to those in force, unless it is already there. */
+  function addColumnFilter(filter: ColumnFilterItem) {
+    const current = result.columnFilters ?? [];
+    const same = (f: ColumnFilterItem) => f.column === filter.column && f.op === filter.op && f.value === filter.value;
+    void applyColumnFilters(current.some(same) ? current : [...current, filter]);
   }
 
   /** The column whose right header edge is under the pointer, if any (to resize it). */
@@ -577,6 +634,27 @@ export function ResultGrid({
   const focusMeta = selection ? result.columns[selection.focus.col] : undefined;
   return (
     <div className="grid-wrap">
+    <div className="grid-main">
+    {(result.columnFilters?.length ?? 0) > 0 && (
+      <div className="filter-bar" role="toolbar" aria-label={t("results.columnFilters")}>
+        <span className="muted small">{t("results.filteredBy")}</span>
+        {(result.columnFilters ?? []).map((f, i) => (
+          <span key={i} className="filter-chip">
+            <code>{filterLabel(f, result.columns)}</code>
+            <button
+              className="ghost small"
+              aria-label={t("results.removeFilter", { filter: filterLabel(f, result.columns) })}
+              onClick={() => void applyColumnFilters((result.columnFilters ?? []).filter((_, j) => j !== i))}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <button className="ghost small" onClick={() => void applyColumnFilters([])}>
+          {t("results.resetFilters")}
+        </button>
+      </div>
+    )}
     <div className="grid-host">
       <canvas ref={canvasRef} className="grid-canvas" style={{ width: size.w, height: size.h }} />
       <div
@@ -608,7 +686,9 @@ export function ResultGrid({
           // Right-click outside the selection selects that cell first.
           if (!selection || (!cell.gutter && !inside(bounds(selection), cell.row, cell.col))) selectAt(e, false);
           const host = e.currentTarget.getBoundingClientRect();
-          setMenu({ x: e.clientX - host.left, y: e.clientY - host.top });
+          const x = e.clientX - host.left;
+          // Near the right edge the Filter submenu opens to the left.
+          setMenu({ x, y: e.clientY - host.top, cell: cell.gutter ? null : cell, left: x > host.width - 480 });
         }}
         onMouseMove={(e) => {
           e.currentTarget.style.cursor =
@@ -662,6 +742,24 @@ export function ResultGrid({
               {t(`results.${item.key}`)}
             </button>
           ))}
+          {menu.cell && (
+            <>
+              <hr />
+              <FilterSubmenu
+                cell={menu.cell}
+                value={cache.get(menu.cell.row, menu.cell.col)}
+                columns={result.columns}
+                active={result.columnFilters ?? []}
+                left={menu.left}
+                onAdd={addColumnFilter}
+                onCustom={(start) => {
+                  setMenu(null);
+                  setCustomFilter(start);
+                }}
+                onReset={() => void applyColumnFilters([])}
+              />
+            </>
+          )}
           {selection && (
             <>
               <hr />
@@ -697,6 +795,18 @@ export function ResultGrid({
           {notice.text}
         </div>
       )}
+      {customFilter && (
+        <CustomFilterDialog
+          start={customFilter}
+          columns={result.columns}
+          onApply={addColumnFilter}
+          onCancel={() => {
+            setCustomFilter(null);
+            scrollerRef.current?.focus();
+          }}
+        />
+      )}
+    </div>
     </div>
     {viewer && selection && focusMeta && (
       <CellViewer
@@ -784,6 +894,125 @@ function ColumnJump(props: {
         ))}
         {matches.length === 0 && <li className="muted">{t("results.jumpNone")}</li>}
       </ul>
+    </div>
+  );
+}
+
+/** "Filter ▸" in the grid's context menu, from the cell it was opened on (like SQLyog). */
+function FilterSubmenu(props: {
+  cell: Cell;
+  value: string | null | undefined;
+  columns: ResultMeta["columns"];
+  active: ColumnFilterItem[];
+  left: boolean;
+  onAdd(filter: ColumnFilterItem): void;
+  onCustom(start: ColumnFilterItem): void;
+  onReset(): void;
+}) {
+  const { t } = useTranslation("editor");
+  const column = props.cell.col;
+  const value = props.value;
+  const items: ColumnFilterItem[] =
+    value === null
+      ? [
+          { column, op: "isNull", value: "" },
+          { column, op: "isNotNull", value: "" },
+        ]
+      : value === undefined
+        ? []
+        : [
+            ...(["eq", "notEq", "gt", "lt"] as const).map((op) => ({ column, op, value })),
+            { column, op: "like" as const, value: likeContaining(value) },
+            { column, op: "notLike" as const, value: likeContaining(value) },
+            { column, op: "isNull" as const, value: "" },
+            { column, op: "isNotNull" as const, value: "" },
+          ];
+  return (
+    <div className="grid-submenu">
+      <button role="menuitem" aria-haspopup="menu">
+        {t("results.filterMenu")} ▸
+      </button>
+      <div className={`grid-menu ${props.left ? "open-left" : ""}`} role="menu" aria-label={t("results.filterMenu")}>
+        {items.map((filter) => (
+          <button key={filter.op} role="menuitem" onClick={() => props.onAdd(filter)}>
+            <code>{filterLabel(filter, props.columns)}</code>
+          </button>
+        ))}
+        <hr />
+        <button role="menuitem" onClick={() => props.onCustom({ column, op: value === null ? "isNull" : "eq", value: value ?? "" })}>
+          {t("results.customFilter")}
+        </button>
+        {props.active.length > 0 && (
+          <button role="menuitem" onClick={props.onReset}>
+            {t("results.resetFilters")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** One condition chosen by hand: column, operator and value. */
+function CustomFilterDialog(props: {
+  start: ColumnFilterItem;
+  columns: ResultMeta["columns"];
+  onApply(filter: ColumnFilterItem): void;
+  onCancel(): void;
+}) {
+  const { t } = useTranslation("editor");
+  const [filter, setFilter] = useState(props.start);
+  const needsValue = takesValue(filter.op);
+  const apply = () => props.onApply(needsValue ? filter : { ...filter, value: "" });
+  return (
+    <div className="modal-backdrop">
+      <div className="modal custom-filter" role="dialog" aria-modal="true" aria-label={t("results.customFilterTitle")}>
+        <h2>{t("results.customFilterTitle")}</h2>
+        <div
+          className="custom-filter-row"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") apply();
+            if (e.key === "Escape") props.onCancel();
+          }}
+        >
+          <select
+            aria-label={t("results.filterColumn")}
+            value={filter.column}
+            onChange={(e) => setFilter({ ...filter, column: Number(e.target.value) })}
+          >
+            {props.columns.map((c, i) => (
+              <option key={i} value={i}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label={t("results.filterOperator")}
+            value={filter.op}
+            onChange={(e) => setFilter({ ...filter, op: e.target.value as FilterOpItem })}
+          >
+            {OPS.map((o) => (
+              <option key={o.op} value={o.op}>
+                {o.sql}
+              </option>
+            ))}
+          </select>
+          <input
+            autoFocus
+            aria-label={t("results.filterValue")}
+            value={needsValue ? filter.value : ""}
+            disabled={!needsValue}
+            onChange={(e) => setFilter({ ...filter, value: e.target.value })}
+            spellCheck={false}
+          />
+        </div>
+        <p className="muted small">{t("results.customFilterHint")}</p>
+        <div className="modal-actions">
+          <button onClick={props.onCancel}>{t("results.cancel")}</button>
+          <button className="primary" onClick={apply}>
+            {t("results.applyFilter")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

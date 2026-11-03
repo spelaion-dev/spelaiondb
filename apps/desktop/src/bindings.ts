@@ -74,6 +74,11 @@ export const commands = {
 	 *  `None` shows every row again. The grid then asks for its windows again.
 	 */
 	filterResult: (result: number, text: string | null) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_result", { result, text })),
+	/**
+	 *  Filters a result by column conditions in the core (all must hold; an empty list removes
+	 *  them), on top of the text filter. The grid then asks for its windows again.
+	 */
+	filterColumns: (result: number, filters: ColumnFilterItem[]) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_columns", { result, filters })),
 	/**  Every cell of one row as text (`None` for NULL), for the viewer's row view. */
 	rowValues: (result: number, row: number) => typedError<(string | null)[], string>(__TAURI_INVOKE("row_values", { result, row })),
 	/**
@@ -169,6 +174,13 @@ export type ColumnDetails_Serialize = {
 	nullable: boolean,
 	default: string | null,
 	comment: string | null,
+};
+
+/**  One condition on a result column; all of them must hold. */
+export type ColumnFilterItem = {
+	column: number,
+	op: FilterOpItem,
+	value: string,
 };
 
 export type ColumnItem = {
@@ -296,6 +308,9 @@ export type EngineItem_Serialize = {
 	defaultPort: number | null,
 	available: boolean,
 };
+
+/**  A column filter operator (see `spelunk_core::FilterOp`). */
+export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "isNull" | "isNotNull";
 
 /**  Rows left after filtering a result, out of all it has. */
 export type FilterOutcome = {

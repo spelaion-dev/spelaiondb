@@ -63,7 +63,20 @@
     "copyInList": "Copy as SQL IN list",
     "jumpTitle": "Jump to column",
     "jumpPlaceholder": "Column name…",
-    "jumpNone": "No column matches"
+    "jumpNone": "No column matches",
+    "columnFilters": "Column filters",
+    "filteredBy": "Filtered by",
+    "removeFilter": "Remove the filter {{filter}}",
+    "resetFilters": "Reset filters",
+    "customFilter": "Custom filter…",
+    "customFilterTitle": "Custom filter",
+    "filterColumn": "Column",
+    "filterOperator": "Operator",
+    "filterValue": "Value",
+    "customFilterHint": "Conditions add up (AND) and follow SQL: NULL only matches IS NULL. Numbers compare by value; text ignores case. LIKE uses % and _.",
+    "cancel": "Cancel",
+    "applyFilter": "Filter",
+    "filterMenu": "Filter"
   },
   "messages": {
     "connectionFailed": "Could not connect: {{detail}}",

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { call, commands, type ScriptEvent } from "../api";
+import { call, commands, type ColumnFilterItem, type ScriptEvent } from "../api";
 import { openSession } from "../connect";
 import { SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
@@ -327,6 +327,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
             onSorted={(result, sort) =>
               updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
             }
+            onColumnFiltered={(result, columnFilters, rows, total) =>
+              updateRun(tab.id, (r) => ({
+                ...r,
+                results: r.results.map((x) => (x.id === result ? { ...x, columnFilters, rows, total } : x)),
+              }))
+            }
             onFiltered={(result, filter, rows, total) =>
               updateRun(tab.id, (r) => ({
                 ...r,
@@ -358,12 +364,14 @@ function Results({
   onSelect,
   onSorted,
   onFiltered,
+  onColumnFiltered,
 }: {
   run: RunState | null;
   session: string;
   onSelect(id: number | null): void;
   onSorted(result: number, sort: SortState | undefined): void;
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
+  onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
@@ -393,7 +401,12 @@ function Results({
       </div>
       <div className="result-body">
         {active ? (
-          <ResultGrid result={active} session={session} onSorted={(sort) => onSorted(active.id, sort)} />
+          <ResultGrid
+            result={active}
+            session={session}
+            onSorted={(sort) => onSorted(active.id, sort)}
+            onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
+          />
         ) : (
           <div className="messages">
             {error && <pre className="error-box">{error}</pre>}
@@ -412,7 +425,7 @@ function Results({
           <span>
             {active
               ? `${
-                  active.filter
+                  active.filter || active.columnFilters?.length
                     ? t("results.rowsFiltered", { count: active.rows, formattedCount: numbers.format(active.rows), total: numbers.format(active.total ?? active.rows) })
                     : t("results.rows", { count: active.rows, formattedCount: numbers.format(active.rows) })
                 }${active.complete ? "" : t("results.loading")} · `

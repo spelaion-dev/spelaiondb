@@ -22,6 +22,8 @@ import {
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
   type RiskKind,
+  type ColumnFilterItem,
+  type FilterOpItem,
   type SqlTemplateItem,
   type SnippetItem,
   type TextFormat,
@@ -33,7 +35,7 @@ import {
 } from "./bindings";
 
 export { commands, events };
-export type { CellRange, ColumnItem, ConnectOutcome, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
+export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutcome, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;

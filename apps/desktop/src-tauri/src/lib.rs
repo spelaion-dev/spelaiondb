@@ -993,6 +993,35 @@ async fn sort_result(
     .map_err(|e| e.to_string())?
 }
 
+/// Filters a result by column conditions in the core (all must hold; an empty list removes
+/// them), on top of the text filter. The grid then asks for its windows again.
+#[tauri::command]
+#[specta::specta]
+async fn filter_columns(
+    result: u32,
+    filters: Vec<ColumnFilterItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<FilterOutcome> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let filters: Vec<spelunk_core::ColumnFilter> = filters.into_iter().map(Into::into).collect();
+    tokio::task::spawn_blocking(move || {
+        let mut stored = stored
+            .write()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let rows = stored.filter_columns(filters).map_err(|e| e.to_string())?;
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        Ok(FilterOutcome {
+            rows: n(rows),
+            total: n(stored.total_rows()),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Every cell of one row as text (`None` for NULL), for the viewer's row view.
 #[tauri::command]
 #[specta::specta]
@@ -1286,6 +1315,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             cell_value,
             sort_result,
             filter_result,
+            filter_columns,
             row_values,
             table_sql,
             count_rows,

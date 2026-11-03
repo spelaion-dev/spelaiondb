@@ -348,3 +348,15 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 .column-jump ul { list-style: none; margin: 4px 0 0; padding: 0; max-height: 240px; overflow: auto; }
 .column-jump li { padding: 4px 8px; border-radius: 4px; cursor: pointer; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; }
 .column-jump li.active { background: var(--accent-soft); }
+
+/* ---------------------------------------------------------------- column filters */
+.grid-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.filter-chip { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--accent-soft); font-size: 12px; }
+.filter-chip code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.grid-submenu { position: relative; display: flex; flex-direction: column; }
+.grid-submenu > .grid-menu { display: none; left: 100%; top: -4px; }
+.grid-submenu > .grid-menu.open-left { left: auto; right: 100%; }
+.grid-submenu:hover > .grid-menu, .grid-submenu:focus-within > .grid-menu { display: flex; }
+.grid-menu code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.custom-filter-row { display: grid; grid-template-columns: minmax(120px, 1fr) auto minmax(140px, 2fr); gap: 8px; margin: 8px 0; }

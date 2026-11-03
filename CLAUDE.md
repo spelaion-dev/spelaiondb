@@ -43,7 +43,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   there needs tests that try to get around them. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, production
   writes); `run_script` refuses unconfirmed risky scripts. `sort.rs` orders stored results
-  (`results.rs` combines the sort and the row filter into one view)
+  (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
+  one view)
   and `cursor.rs` finds the statement under the editor's cursor.
 - `crates/spelunk-store`: local SQLite (audit, query history, saved queries and personal settings;
   later the schema cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps

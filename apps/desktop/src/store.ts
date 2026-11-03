@@ -2,7 +2,7 @@
 // requested from the core in windows.
 
 import { create } from "zustand";
-import type { ColumnItem, ConnectionItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
+import type { ColumnFilterItem, ColumnItem, ConnectionItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
 
 export interface ResultMeta {
   id: number;
@@ -14,6 +14,8 @@ export interface ResultMeta {
   sort?: SortState;
   /** Text the core filtered the rows by; `rows` then counts what is left of `total`. */
   filter?: string;
+  /** Column conditions the core filtered the rows by (all must hold). */
+  columnFilters?: ColumnFilterItem[];
   total?: number;
 }
 
