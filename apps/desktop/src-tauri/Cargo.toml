@@ -20,10 +20,18 @@ name = "spelunk-desktop"
 path = "src/main.rs"
 test = false
 
+# Only with `--features bindings`: Tauri bundles every binary it builds into the app, and this
+# one is a development tool. (Not an example: on Windows those lack the app manifest and a
+# Tauri executable without it does not start.)
 [[bin]]
 name = "export-bindings"
 path = "src/bin/export-bindings.rs"
 test = false
+required-features = ["bindings"]
+
+[features]
+# Builds the `export-bindings` development tool (see above).
+bindings = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

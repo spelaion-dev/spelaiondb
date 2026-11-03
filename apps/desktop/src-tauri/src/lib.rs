@@ -1460,7 +1460,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .events(tauri_specta::collect_events![InteractionRequest])
 }
 
-/// Generates `src/bindings.ts`. Run by `cargo run -p spelunk-desktop --bin export-bindings`
+/// Generates `src/bindings.ts`. Run by `cargo run -p spelunk-desktop --features bindings --bin export-bindings`
 /// and, in development, on every app start.
 pub fn export_bindings(path: &std::path::Path) -> Result<(), String> {
     specta_builder()

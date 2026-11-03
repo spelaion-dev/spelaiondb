@@ -9,6 +9,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # No debug info in CI builds: the target directory of a whole-workspace build with tests
+  # otherwise fills the runner's disk.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
   linux:
@@ -21,6 +25,9 @@ jobs:
       SPELUNK_TEST_SSH: 127.0.0.1:2221
       SPELUNK_TEST_SSH_AGENT: "1"
     steps:
+      # The runner ships tools this build never uses; their space is needed (Docker images,
+      # a Rust target directory with Tauri and every driver).
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -42,7 +49,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       # The app's TS types are generated from Rust: the file in the repo must be up to date.
-      - run: cargo run -q -p spelunk-desktop --bin export-bindings
+      - run: cargo run -q -p spelunk-desktop --features bindings --bin export-bindings
       - run: git diff --exit-code apps/desktop/src/bindings.ts
 
   frontend:

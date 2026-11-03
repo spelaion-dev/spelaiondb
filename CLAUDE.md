@@ -56,7 +56,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `audit`). In `spelunk mcp`, stdout is the protocol: no `println!`.
 - `apps/desktop`: Tauri 2 + React app. `src-tauri` is a thin adapter over the core; the
   command types are generated into `src/bindings.ts`
-  (`cargo run -p spelunk-desktop --bin export-bindings`; CI checks it is up to date).
+  (`cargo run -p spelunk-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
   text). Our own canvas grid (`ResultGrid.tsx`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).

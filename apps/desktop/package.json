@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/check-i18n.mjs && tsc --noEmit && vite build",
-    "bindings": "cargo run -q -p spelunk-desktop --bin export-bindings",
+    "bindings": "cargo run -q -p spelunk-desktop --features bindings --bin export-bindings",
     "tauri": "tauri"
   },
   "dependencies": {
