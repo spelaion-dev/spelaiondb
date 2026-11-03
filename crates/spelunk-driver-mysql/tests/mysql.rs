@@ -86,6 +86,42 @@ async fn run(conn: &dyn Connection, sql: &str) -> Result<Vec<ExecEvent>, DriverE
     run_with(conn, sql, 10_000).await
 }
 
+#[tokio::test]
+async fn database_selection_is_per_session_and_tracks_use() {
+    for server in servers() {
+        let first = server.connect().await;
+        let second = server.connect().await;
+        assert_eq!(
+            first.current_database().await.unwrap().as_deref(),
+            Some("spelunk")
+        );
+        first.select_database("information_schema").await.unwrap();
+        assert_eq!(
+            first.current_database().await.unwrap().as_deref(),
+            Some("information_schema")
+        );
+        assert_eq!(
+            second.current_database().await.unwrap().as_deref(),
+            Some("spelunk")
+        );
+        run(first.as_ref(), "USE `spelunk`").await.unwrap();
+        assert_eq!(
+            first.current_database().await.unwrap().as_deref(),
+            Some("spelunk")
+        );
+        assert!(
+            first
+                .select_database("missing`; USE information_schema; --")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            first.current_database().await.unwrap().as_deref(),
+            Some("spelunk")
+        );
+    }
+}
+
 async fn run_with(
     conn: &dyn Connection,
     sql: &str,

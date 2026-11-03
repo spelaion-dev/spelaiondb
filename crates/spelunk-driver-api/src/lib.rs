@@ -135,6 +135,18 @@ pub trait Connection: Send + Sync {
     fn cancel_handle(&self) -> Arc<dyn CancelHandle>;
 
     async fn server_version(&self) -> Result<String>;
+    /// Current database for engines that support changing it within a session.
+    async fn current_database(&self) -> Result<Option<String>> {
+        Err(DriverError::Other(
+            "changing database is not supported".into(),
+        ))
+    }
+    /// Change this session's database without changing the saved connection.
+    async fn select_database(&self, _database: &str) -> Result<()> {
+        Err(DriverError::Other(
+            "changing database is not supported".into(),
+        ))
+    }
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>>;
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>>;
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo>;

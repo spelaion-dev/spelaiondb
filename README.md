@@ -40,6 +40,10 @@ PostgreSQL, MySQL and MariaDB, and a PostgreSQL behind two SSH bastions with TLS
 
 ## Adding connections
 
+The activity bar gives access to connections, query history, saved queries and settings.
+Use the connections icon to show or hide the explorer. Drag its right edge to resize it;
+double-click the edge to reset its width. The focused edge can also be moved with the arrow keys.
+
 The **+** button at the top of the sidebar opens **Add connection**: pick a database from the
 catalog (grouped as relational, analytical and NoSQL; engines without a driver yet are shown
 as *coming soon*), fill in its form, **Test connection** and **Save**. You can also paste a
@@ -132,10 +136,18 @@ key are read-only (ADR-014).
 
 ## Running SQL
 
+For MySQL and MariaDB, the database selector beside the connection chooses the default
+database for that query tab. It shows the current database after `USE` statements too; other
+tabs and the saved connection are unchanged. Connect first to load the databases available
+to the user. Double-click a MySQL or MariaDB database in the connected explorer to open a
+query tab already connected to it. Queries and table tabs opened from the connected explorer
+use their own sessions, without asking again for the password already provided there.
+
 **Ctrl+Enter** runs the selection or, without one, the statement under the cursor, which is
 highlighted for a moment. The core finds it with the same dialect splitter that runs scripts
 (quotes, comments, dollar-quoted bodies and MySQL `DELIMITER` included), so what is
-highlighted is exactly what runs. **Ctrl+Shift+Enter** or **Run** runs the whole script,
+highlighted is exactly what runs. **Run** in the editor's side toolbar does the same.
+**Ctrl+Shift+Enter** or **Run script** runs the whole script,
 statement by statement, stopping at the first error. **Shift+Alt+F** or **Format** formats
 the selection or the whole script in the connection's dialect (one undo step).
 
@@ -174,7 +186,7 @@ Select cells in the result grid by clicking and dragging, with Shift and the arr
 clicking row numbers (whole rows) or with Ctrl+A. **Ctrl+C** copies the selection as
 tab-separated text for spreadsheets and **Ctrl+Shift+C** adds the column names. The
 right-click menu also copies as CSV, JSON (numbers stay numbers, JSON columns are embedded)
-or SQL `INSERT` statements with the engine's quoting, as a Markdown table or as an SQL
+or a single SQL `INSERT` with all selected rows and the engine's quoting, as a Markdown table or as an SQL
 `IN` list (`(1, 2, 3)`, repeated values once). The core formats the rows from the
 typed data; up to 100,000 rows can be copied at once.
 

@@ -166,12 +166,19 @@ export const commands = {
 	 *  instead of failing, so the UI can ask for it.
 	 */
 	connect: (session: string, connection: string, password: string | null, remember: boolean) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("connect", { session, connection, password, remember })),
+	/**
+	 *  Open an independent tab from an existing explorer session, reusing its in-memory
+	 *  credentials and exact resolved connection. Passwords never cross back into the UI.
+	 */
+	connectFromSession: (source: string, session: string, database: string | null) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
 	runScript: (session: string, sql: string, confirmed: boolean, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, onEvent })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
 	/**  Frees a result the UI no longer shows. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
+	currentDatabase: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("current_database", { session })),
+	selectDatabase: (session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("select_database", { session, database })),
 	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
 	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),
 	describeTable: (session: string, schema: string, name: string) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name })),

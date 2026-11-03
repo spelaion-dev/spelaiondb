@@ -19,6 +19,8 @@ pub enum ExportFormat {
     Json,
     /// One `INSERT` per row into `table`, with the engine's literals and quoting.
     SqlInsert { table: String },
+    /// One `INSERT` containing every selected row, with the engine's literals and quoting.
+    SqlInsertBatch { table: String },
     /// A Markdown (GitHub) table: always with the header row, numbers aligned right.
     Markdown,
     /// The values as an SQL list for `IN`: `(1, 'a')`, or `((1, 'a'), (2, 'b'))` with several
@@ -92,11 +94,12 @@ pub fn write_result(
         ExportFormat::Tsv
         | ExportFormat::Csv
         | ExportFormat::SqlInsert { .. }
+        | ExportFormat::SqlInsertBatch { .. }
         | ExportFormat::InList => {}
     }
 
     let insert_prefix = match &options.format {
-        ExportFormat::SqlInsert { table } => format!(
+        ExportFormat::SqlInsert { table } | ExportFormat::SqlInsertBatch { table } => format!(
             "INSERT INTO {} ({}) VALUES (",
             dialect.quote_identifier(table),
             metas
@@ -154,6 +157,19 @@ pub fn write_result(
                         out.write_all(literals.join(", ").as_bytes())?;
                         out.write_all(b");\n")?;
                     }
+                    ExportFormat::SqlInsertBatch { .. } => {
+                        if written == 0 {
+                            out.write_all(insert_prefix.as_bytes())?;
+                        } else {
+                            out.write_all(b",\n  (")?;
+                        }
+                        let literals: Vec<String> = values
+                            .iter()
+                            .map(|v| sql_literal(v, dialect.name()))
+                            .collect();
+                        out.write_all(literals.join(", ").as_bytes())?;
+                        out.write_all(b")")?;
+                    }
                     ExportFormat::InList => {
                         let literals: Vec<String> = values
                             .iter()
@@ -186,6 +202,9 @@ pub fn write_result(
     }
     if options.format == ExportFormat::InList {
         write!(out, "({})", items.join(", "))?;
+    }
+    if matches!(options.format, ExportFormat::SqlInsertBatch { .. }) && written > 0 {
+        out.write_all(b";\n")?;
     }
     Ok(written)
 }
@@ -606,6 +625,62 @@ mod tests {
             sqlite,
             "INSERT INTO \"items\" (\"raw\") VALUES (X'dead');\n"
         );
+    }
+
+    #[test]
+    fn copied_insert_groups_rows_and_preserves_literals() {
+        let batch = || ExportFormat::SqlInsertBatch {
+            table: "items".into(),
+        };
+        assert_eq!(
+            render(batch(), 0..3, 0..2, false, "mysql"),
+            "INSERT INTO `items` (`id`, `name`) VALUES (1, 'plain'),\n  (2, 'a,b \"q\"\tc\nd'),\n  (NULL, 'it''s \\\\ x');\n"
+        );
+        assert_eq!(
+            render(batch(), 0..1, 5..6, false, "sqlite"),
+            "INSERT INTO \"items\" (\"raw\") VALUES (X'dead');\n"
+        );
+        assert_eq!(render(batch(), 3..3, 0..2, false, "postgres"), "");
+    }
+
+    #[test]
+    fn copied_insert_stays_one_statement_across_chunks() {
+        let schema = Arc::new(ResultSchema::new(vec![ColumnMeta {
+            name: "id".into(),
+            logical: LogicalType::Int,
+            native_type: "integer".into(),
+            native_id: None,
+        }]));
+        let store = ResultStore::new();
+        let id = store.create(schema.clone());
+        let values: ArrayRef = Arc::new(Int64Array::from_iter_values(0..=CHUNK as i64));
+        store
+            .append(
+                id,
+                RecordBatch::try_new(schema.arrow.clone(), vec![values]).unwrap(),
+            )
+            .unwrap();
+        let result = store.get(id).unwrap();
+        let mut out = Vec::new();
+        let count = write_result(
+            &result.read().unwrap(),
+            &ExportOptions {
+                format: ExportFormat::SqlInsertBatch {
+                    table: "items".into(),
+                },
+                rows: 0..CHUNK + 1,
+                columns: 0..1,
+                header: false,
+            },
+            &Quoted("sqlite"),
+            &mut out,
+        )
+        .unwrap();
+        let sql = String::from_utf8(out).unwrap();
+        assert_eq!(count, CHUNK + 1);
+        assert_eq!(sql.matches("INSERT INTO").count(), 1);
+        assert!(sql.ends_with(&format!("  ({CHUNK});\n")));
+        assert!(sql.contains(&format!("  ({}),\n  ({CHUNK})", CHUNK - 1)));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // Canvas result grid (ADR-010). Only what is visible is painted; scrolling is native
 // (a container with a "spacer" of the full size) and the canvas is redrawn on top.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type CellRange, type ColumnFilterItem, type FilterOpItem, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT } from "../preferences";
@@ -23,6 +23,14 @@ const DATA_FONT = '12.5px ui-monospace, "Cascadia Mono", Consolas, monospace';
 const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
 const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
 const NUMERIC = new Set(["int", "float", "decimal"]);
+const MENU_MARGIN = 8;
+
+/** Keep a measured popup inside the window, including when the window is resized. */
+function placeMenu(menu: HTMLElement, x: number, y: number) {
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(MENU_MARGIN, Math.min(x, window.innerWidth - rect.width - MENU_MARGIN))}px`;
+  menu.style.top = `${Math.max(MENU_MARGIN, Math.min(y, window.innerHeight - rect.height - MENU_MARGIN))}px`;
+}
 
 interface Cell {
   row: number;
@@ -150,7 +158,8 @@ export function ResultGrid({
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [selection, setSelection] = useState<Selection | null>(null);
   /** The context menu, with the cell it was opened on (for the Filter submenu). */
-  const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell | null; left: boolean } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell | null } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   /** The custom filter dialog, starting from a column and a value. */
   const [customFilter, setCustomFilter] = useState<ColumnFilterItem | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
@@ -635,6 +644,14 @@ export function ResultGrid({
     };
   }, [menu]);
 
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) return;
+    const position = () => { if (menuRef.current) placeMenu(menuRef.current, menu.x, menu.y); };
+    position();
+    window.addEventListener("resize", position);
+    return () => window.removeEventListener("resize", position);
+  }, [menu]);
+
   function onKeyDown(e: React.KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
     if (e.key === "Escape" && viewer) {
@@ -743,7 +760,7 @@ export function ResultGrid({
         ref={scrollerRef}
         className="grid-scroller"
         tabIndex={0}
-        onScroll={redraw}
+        onScroll={() => { redraw(); setMenu(null); }}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           const edge = edgeAt(e.clientX, e.clientY);
@@ -767,10 +784,7 @@ export function ResultGrid({
           if (!cell) return;
           // Right-click outside the selection selects that cell first.
           if (!selection || (!cell.gutter && !inside(bounds(selection), cell.row, cell.col))) selectAt(e, false);
-          const host = e.currentTarget.getBoundingClientRect();
-          const x = e.clientX - host.left;
-          // Near the right edge the Filter submenu opens to the left.
-          setMenu({ x, y: e.clientY - host.top, cell: cell.gutter ? null : cell, left: x > host.width - 480 });
+          setMenu({ x: e.clientX, y: e.clientY, cell: cell.gutter ? null : cell });
         }}
         onMouseMove={(e) => {
           e.currentTarget.style.cursor =
@@ -812,7 +826,7 @@ export function ResultGrid({
         <div style={{ width: totalW, height: totalH }} />
       </div>
       {menu && (
-        <div className="grid-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+        <div ref={menuRef} className="grid-menu result-grid-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
           {editing && menu.cell && (
             <>
               <button
@@ -879,7 +893,6 @@ export function ResultGrid({
                 value={cache.get(menu.cell.row, menu.cell.col)}
                 columns={result.columns}
                 active={result.columnFilters ?? []}
-                left={menu.left}
                 onAdd={addColumnFilter}
                 onCustom={(start) => {
                   setMenu(null);
@@ -1060,12 +1073,32 @@ function FilterSubmenu(props: {
   value: string | null | undefined;
   columns: ResultMeta["columns"];
   active: ColumnFilterItem[];
-  left: boolean;
   onAdd(filter: ColumnFilterItem): void;
   onCustom(start: ColumnFilterItem): void;
   onReset(): void;
 }) {
   const { t } = useTranslation("editor");
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const submenu = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open || !trigger.current || !submenu.current) return;
+    const position = () => {
+      if (!trigger.current || !submenu.current) return;
+      const anchor = trigger.current.getBoundingClientRect();
+      const width = submenu.current.getBoundingClientRect().width;
+      const right = anchor.right;
+      const x = right + width <= window.innerWidth - MENU_MARGIN ? right : anchor.left - width;
+      placeMenu(submenu.current, x, anchor.top);
+    };
+    position();
+    window.addEventListener("resize", position);
+    window.addEventListener("scroll", position, true);
+    return () => {
+      window.removeEventListener("resize", position);
+      window.removeEventListener("scroll", position, true);
+    };
+  }, [open, props.value, props.active.length, props.columns]);
   const column = props.cell.col;
   const value = props.value;
   const items: ColumnFilterItem[] =
@@ -1084,11 +1117,15 @@ function FilterSubmenu(props: {
             { column, op: "isNotNull" as const, value: "" },
           ];
   return (
-    <div className="grid-submenu">
-      <button role="menuitem" aria-haspopup="menu">
+    <div className="grid-submenu" onMouseEnter={() => setOpen(true)} onMouseLeave={(e) => {
+      if (!e.currentTarget.contains(document.activeElement)) setOpen(false);
+    }} onFocus={() => setOpen(true)} onBlur={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
+    }}>
+      <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open}>
         {t("results.filterMenu")} ▸
       </button>
-      <div className={`grid-menu ${props.left ? "open-left" : ""}`} role="menu" aria-label={t("results.filterMenu")}>
+      {open && <div ref={submenu} className="grid-menu grid-filter-menu" role="menu" aria-label={t("results.filterMenu")}>
         {items.map((filter) => (
           <button key={filter.op} role="menuitem" onClick={() => props.onAdd(filter)}>
             <code>{filterLabel(filter, props.columns)}</code>
@@ -1103,7 +1140,7 @@ function FilterSubmenu(props: {
             {t("results.resetFilters")}
           </button>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

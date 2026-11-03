@@ -1,5 +1,6 @@
 [package]
 name = "spelunk-desktop"
+default-run = "spelunk-desktop"
 description = "SpelunkDB desktop app (Tauri 2)"
 version.workspace = true
 edition.workspace = true

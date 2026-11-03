@@ -11,6 +11,8 @@
   "configurationErrors_other": "{{displayCount}} archivos de configuración con errores",
   "noConnections": "Todavía no hay conexiones. Añade una, o crea archivos en <code>.spelunk/connections/</code> o en tu carpeta personal.",
   "queryHistory": "Historial de consultas",
+  "activityBar": "Barra de actividades",
+  "connections": "Conexiones",
   "toggleConnection": "Expandir o contraer {{connection}}",
   "tunnel": "Túnel {{name}}",
   "newQuery": "Nueva consulta",

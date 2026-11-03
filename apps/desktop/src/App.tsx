@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { events } from "./api";
+import { ActivityBar } from "./components/ActivityBar";
 import { AddConnection } from "./components/AddConnection";
 import { DeleteConnection } from "./components/DeleteConnection";
 import { Dialogs } from "./components/Dialogs";
@@ -12,6 +13,12 @@ import { Sidebar, refreshConnections } from "./components/Sidebar";
 import { closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
 import { SAVE_QUERY_EVENT, SETTINGS_TAB, useApp, useDialogs } from "./store";
+
+const SIDEBAR_DEFAULT = 290;
+const SIDEBAR_MIN = 210;
+const SIDEBAR_MAX = 700;
+const EDITOR_MIN = 360;
+const ACTIVITY_WIDTH = 48;
 
 export default function App() {
   const { t } = useTranslation(["app", "shell", "settings"]);
@@ -28,6 +35,19 @@ export default function App() {
   // Save errors are shown next to the setting; only startup load errors need a banner.
   const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
+  const maxSidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, windowWidth - EDITOR_MIN - ACTIVITY_WIDTH));
+  const clampSidebar = (width: number) => Math.round(Math.max(SIDEBAR_MIN, Math.min(maxSidebarWidth, width)));
+  const shownSidebarWidth = clampSidebar(sidebarWidth);
+
+  useEffect(() => {
+    const resize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
 
   async function loadConnections() {
     try {
@@ -82,8 +102,47 @@ export default function App() {
   }, []);
 
   return (
-    <div className="app">
-      <Sidebar />
+    <div className="app" style={{ gridTemplateColumns: `${ACTIVITY_WIDTH}px ${sidebarOpen ? shownSidebarWidth : 0}px 0px minmax(0, 1fr)` }}>
+      <ActivityBar connectionsOpen={sidebarOpen} onToggleConnections={() => setSidebarOpen((open) => !open)} />
+      <Sidebar hidden={!sidebarOpen} />
+      <div
+        className="sidebar-resizer"
+        hidden={!sidebarOpen}
+        role="separator"
+        tabIndex={0}
+        aria-label={t("resizeSidebar")}
+        title={t("resizeSidebarHint")}
+        aria-controls="connections-sidebar"
+        aria-orientation="vertical"
+        aria-valuemin={SIDEBAR_MIN}
+        aria-valuemax={maxSidebarWidth}
+        aria-valuenow={shownSidebarWidth}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          sidebarDrag.current = { x: e.clientX, width: shownSidebarWidth };
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          if (!sidebarDrag.current) return;
+          setSidebarWidth(clampSidebar(sidebarDrag.current.width + e.clientX - sidebarDrag.current.x));
+        }}
+        onPointerUp={(e) => {
+          sidebarDrag.current = null;
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+        }}
+        onPointerCancel={() => { sidebarDrag.current = null; }}
+        onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
+        onKeyDown={(e) => {
+          const step = e.shiftKey ? 50 : 10;
+          if (e.key === "ArrowLeft") setSidebarWidth(clampSidebar(shownSidebarWidth - step));
+          else if (e.key === "ArrowRight") setSidebarWidth(clampSidebar(shownSidebarWidth + step));
+          else if (e.key === "Home") setSidebarWidth(SIDEBAR_MIN);
+          else if (e.key === "End") setSidebarWidth(maxSidebarWidth);
+          else return;
+          e.preventDefault();
+        }}
+      />
       <main className="main">
         {loadError && <div className="banner" role="alert">{loadError}<button onClick={() => void loadConnections()}>{t("retryConnections")}</button></div>}
         {preferenceError && <div className="banner" role="alert">{t("preferenceLoadError")} {preferenceError.detail}</div>}

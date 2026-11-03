@@ -8,6 +8,8 @@ import { basicSetup } from "codemirror";
 import { Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
 import { MariaSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@codemirror/lang-sql";
+import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { closeLintPanel, openLintPanel, setDiagnostics } from "@codemirror/lint";
 import { closeSearchPanel, gotoLine, openSearchPanel, searchPanelOpen } from "@codemirror/search";
 import { closeCompletion, completionStatus, startCompletion } from "@codemirror/autocomplete";
@@ -25,6 +27,8 @@ export interface RunRequest {
 /** What the toolbar can ask the editor to do. */
 export interface SqlEditorHandle {
   format(): void;
+  runCurrent(): void;
+  runScript(): void;
 }
 
 interface Props {
@@ -53,6 +57,10 @@ const theme = EditorView.theme({
   ".cm-ran": { backgroundColor: "var(--accent-soft)", transition: "background-color 0.3s" },
   ".cm-tooltip": { backgroundColor: "var(--panel)", color: "var(--fg)", border: "1px solid var(--line)" },
 });
+
+// Keep CodeMirror's existing colors and attach a stable class to keywords so the dark
+// theme can override just their color, including when the theme changes at runtime.
+const sqlKeywords = HighlightStyle.define([{ tag: tags.keyword, class: "sql-keyword" }]);
 
 /** Marks the text that was just sent to run, for a moment. */
 const flashRun = StateEffect.define<{ from: number; to: number } | null>();
@@ -137,6 +145,31 @@ export function SqlEditor({ handle, onFormatError, value, onChange, engine, tabl
     });
     return true;
   };
+  const runAll = (v: EditorView) => {
+    callbacks.current.onRun({ text: v.state.doc.toString(), from: 0 });
+    return true;
+  };
+  // Use the same selection and dialect splitter for the toolbar and keyboard shortcut.
+  const run = (v: EditorView) => {
+    const sel = v.state.selection.main;
+    if (!sel.empty) {
+      callbacks.current.onRun({ text: v.state.sliceDoc(sel.from, sel.to), from: sel.from });
+      return true;
+    }
+    const engine = callbacks.current.engine;
+    if (!engine) return runAll(v);
+    const doc = v.state.doc.toString();
+    call(commands.statementAt(engine, doc, indexToByte(doc, sel.head)))
+      .then((span) => {
+        if (!span || v.state.doc.toString() !== doc) return;
+        const from = byteToIndex(doc, span.start);
+        const to = byteToIndex(doc, span.end);
+        flash(v, from, to);
+        callbacks.current.onRun({ text: doc.slice(from, to), from });
+      })
+      .catch((e: unknown) => console.error("statement_at", e));
+    return true;
+  };
   useImperativeHandle(handle, () => ({
     format: () => {
       if (view.current) {
@@ -144,36 +177,12 @@ export function SqlEditor({ handle, onFormatError, value, onChange, engine, tabl
         view.current.focus();
       }
     },
+    runCurrent: () => { if (view.current) run(view.current); },
+    runScript: () => { if (view.current) runAll(view.current); },
   }));
 
   useEffect(() => {
     if (!host.current) return;
-    const runAll = (v: EditorView) => {
-      callbacks.current.onRun({ text: v.state.doc.toString(), from: 0 });
-      return true;
-    };
-    // The selection if there is one; otherwise the statement under the cursor, which the
-    // core finds with the same splitter that runs scripts.
-    const run = (v: EditorView) => {
-      const sel = v.state.selection.main;
-      if (!sel.empty) {
-        callbacks.current.onRun({ text: v.state.sliceDoc(sel.from, sel.to), from: sel.from });
-        return true;
-      }
-      const engine = callbacks.current.engine;
-      if (!engine) return runAll(v);
-      const doc = v.state.doc.toString();
-      call(commands.statementAt(engine, doc, indexToByte(doc, sel.head)))
-        .then((span) => {
-          if (!span || v.state.doc.toString() !== doc) return;
-          const from = byteToIndex(doc, span.start);
-          const to = byteToIndex(doc, span.end);
-          flash(v, from, to);
-          callbacks.current.onRun({ text: doc.slice(from, to), from });
-        })
-        .catch((e: unknown) => console.error("statement_at", e));
-      return true;
-    };
     const editor = new EditorView({
       parent: host.current,
       state: EditorState.create({
@@ -188,6 +197,8 @@ export function SqlEditor({ handle, onFormatError, value, onChange, engine, tabl
           ),
           ranField,
           basicSetup,
+          syntaxHighlighting(defaultHighlightStyle),
+          syntaxHighlighting(sqlKeywords),
           lang.current.of(language(engine, tables)),
           locale.current.of([
             EditorState.phrases.of(t("codeMirror", { returnObjects: true }) as Record<string, string>),
