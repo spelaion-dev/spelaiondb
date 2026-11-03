@@ -24,8 +24,3 @@ export function wordEnd(text: string, index: number): number {
   const match = /^[\p{L}\p{N}_."$]+/u.exec(text.slice(index));
   return index + Math.max(1, match ? match[0].length : 1);
 }
-
-/** SQL identifier, quoted if needed (for the SQL the UI generates). */
-export function quoteIdent(name: string): string {
-  return /^[a-z_][a-z0-9_]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`;
-}

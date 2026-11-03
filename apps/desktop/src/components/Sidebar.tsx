@@ -1,14 +1,13 @@
 // Side panel: open repository, connections (by folder) and schema explorer.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
-import { call, commands, type ConnectionItem, type ObjectItem, type SchemaItem, type TableDetails } from "../api";
+import { call, commands, type ConnectionItem, type ObjectItem, type SchemaItem, type SqlTemplateItem, type TableDetails } from "../api";
 import { openSession } from "../connect";
 import { SETTINGS_TAB, useApp, useDialogs } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { engineBadge } from "../engines";
-import { quoteIdent } from "../text";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -254,6 +253,23 @@ function ObjectNode({ session, connectionId, object }: { session: string; connec
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (e instanceof MouseEvent && (e.target as Element | null)?.closest(".object-menu")) return;
+      setMenu(null);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [menu]);
 
   async function toggle() {
     setOpen(!open);
@@ -261,12 +277,25 @@ function ObjectNode({ session, connectionId, object }: { session: string; connec
     setDetails(await call(commands.describeTable(session, object.schema, object.name)).catch(() => null));
   }
 
-  const preview = () =>
-    addTab(connectionId, `select *\nfrom ${quoteIdent(object.schema)}.${quoteIdent(object.name)}\nlimit 100;\n`);
+  /** The core writes the SQL with the engine's quoting; it opens in a new tab, not run. */
+  async function openSql(template: SqlTemplateItem) {
+    setMenu(null);
+    try {
+      setError(null);
+      addTab(connectionId, await call(commands.tableSql(session, object.schema, object.name, template)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+  const preview = () => void openSql("preview");
   const view = object.kind.includes("view");
+  const templates: SqlTemplateItem[] = view ? ["select"] : ["select", "insert", "update", "delete"];
   return (
     <div className="node">
-      <div className="row" onClick={() => void toggle()} onDoubleClick={preview} title={object.comment ?? t("viewRowsHint")} role="button" tabIndex={0} aria-expanded={open} aria-label={t("toggleObject", { name: object.name })} onKeyDown={(e) => {
+      <div className="row" onClick={() => void toggle()} onDoubleClick={preview} onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }} title={object.comment ?? t("viewRowsHint")} role="button" tabIndex={0} aria-expanded={open} aria-label={t("toggleObject", { name: object.name })} onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           void toggle();
@@ -279,6 +308,24 @@ function ObjectNode({ session, connectionId, object }: { session: string; connec
           <span className="muted small">~{object.estimatedRows.toLocaleString(i18n.language)}</span>
         )}
       </div>
+      {menu && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <button role="menuitem" onClick={preview}>
+            {t("sql.preview")}
+          </button>
+          <hr />
+          {templates.map((template) => (
+            <button key={template} role="menuitem" onClick={() => void openSql(template)}>
+              {t(`sql.${template}`)}
+            </button>
+          ))}
+        </div>
+      )}
+      {error && (
+        <p className="error small" role="alert">
+          {error}
+        </p>
+      )}
       {open && details && (
         <div className="children">
           {details.columns.map((c) => (

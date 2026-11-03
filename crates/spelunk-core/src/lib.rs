@@ -7,6 +7,7 @@ mod catalog;
 mod classify;
 mod cursor;
 mod export;
+mod generate;
 mod guard;
 mod history;
 mod open;
@@ -19,6 +20,7 @@ pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
 pub use cursor::statement_at;
 pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
+pub use generate::{SqlTemplate, table_sql};
 pub use guard::{Risk, RiskyStatement, script_risks};
 pub use history::{HistoryError, QueryHistory};
 pub use open::{

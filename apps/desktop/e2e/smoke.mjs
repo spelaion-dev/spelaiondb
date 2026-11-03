@@ -545,6 +545,25 @@ try {
   await page.keyboard.press("Control+Shift+Tab");
   assert.equal(await activeName(), reopened);
 
+  step("explorer: view rows and generate SQL written by the core");
+  await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
+  await page.getByRole("button", { name: "Expand or collapse schema main" }).click();
+  const ordersNode = page.getByRole("button", { name: "Expand or collapse orders", exact: true });
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate UPDATE" }).click();
+  await panel.locator(".cm-content", { hasText: "UPDATE orders" }).waitFor();
+  assert.equal(
+    (await panel.locator(".cm-content").innerText()).trimEnd(),
+    "UPDATE orders\nSET\n  customer_id = :customer_id,\n  created = :created,\n  total = :total\nWHERE id = :id;",
+  );
+  await shot("05f-generated-update");
+  await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).dblclick();
+  await panel.locator(".cm-content", { hasText: "FROM big_orders" }).waitFor();
+  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM big_orders\nLIMIT 100;");
+  await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).click({ button: "right" });
+  assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE" }).count(), 0);
+  await page.keyboard.press("Escape");
+
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
     "Postgres (Docker)",

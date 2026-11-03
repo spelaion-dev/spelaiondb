@@ -75,6 +75,11 @@ export const commands = {
 	 */
 	filterResult: (result: number, text: string | null) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_result", { result, text })),
 	/**
+	 *  SQL for a table written by the core with the engine's quoting (preview, SELECT, INSERT,
+	 *  UPDATE or DELETE with `:named` placeholders), to open in a new tab.
+	 */
+	tableSql: (session: string, schema: string, name: string, template: SqlTemplateItem) => typedError<string, string>(__TAURI_INVOKE("table_sql", { session, schema, name, template })),
+	/**
 	 *  The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
 	 *  engine's dialect in the core like a script run, for Ctrl+Enter.
 	 */
@@ -396,6 +401,9 @@ scriptOffset: number | null; cancelled: boolean } | { kind: "scriptFinished"; ex
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
+
+/**  SQL the explorer can write for a table (see `spelunk_core::SqlTemplate`). */
+export type SqlTemplateItem = "preview" | "select" | "insert" | "update" | "delete";
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
 

@@ -17,7 +17,7 @@
   "connecting": "Conectando…",
   "toggleSchema": "Expandir o contraer el esquema {{name}}",
   "toggleObject": "Expandir o contraer {{name}}",
-  "viewRowsHint": "Doble clic: ver filas",
+  "viewRowsHint": "Doble clic: ver filas. Clic derecho: generar SQL",
   "passwordFor": "Contraseña de {{connection}}",
   "password": "Contraseña",
   "rememberPassword": "Recordar en el llavero del sistema",
@@ -48,5 +48,12 @@
     "productionWrite": "Cambia una base de datos de producción",
     "cancel": "Cancelar",
     "run": "Ejecutar de todos modos"
+  },
+  "sql": {
+    "preview": "Ver filas",
+    "select": "Generar SELECT",
+    "insert": "Generar INSERT",
+    "update": "Generar UPDATE",
+    "delete": "Generar DELETE"
   }
 }

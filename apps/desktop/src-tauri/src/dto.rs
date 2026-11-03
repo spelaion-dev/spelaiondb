@@ -773,6 +773,29 @@ impl From<spelunk_core::RiskyStatement> for RiskyItem {
     }
 }
 
+/// SQL the explorer can write for a table (see `spelunk_core::SqlTemplate`).
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SqlTemplateItem {
+    Preview,
+    Select,
+    Insert,
+    Update,
+    Delete,
+}
+
+impl From<SqlTemplateItem> for spelunk_core::SqlTemplate {
+    fn from(item: SqlTemplateItem) -> Self {
+        match item {
+            SqlTemplateItem::Preview => Self::Preview,
+            SqlTemplateItem::Select => Self::Select,
+            SqlTemplateItem::Insert => Self::Insert,
+            SqlTemplateItem::Update => Self::Update,
+            SqlTemplateItem::Delete => Self::Delete,
+        }
+    }
+}
+
 /// Rows left after filtering a result, out of all it has.
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct FilterOutcome {

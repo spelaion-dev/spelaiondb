@@ -1045,6 +1045,31 @@ async fn describe_table(
     Ok(TableDetails::from(table))
 }
 
+/// SQL for a table written by the core with the engine's quoting (preview, SELECT, INSERT,
+/// UPDATE or DELETE with `:named` placeholders), to open in a new tab.
+#[tauri::command]
+#[specta::specta]
+async fn table_sql(
+    session: String,
+    schema: String,
+    name: String,
+    template: SqlTemplateItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    let table = open
+        .session
+        .connection()
+        .describe_table(&schema, &name)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(spelunk_core::table_sql(
+        open.session.dialect().as_ref(),
+        &table,
+        template.into(),
+    ))
+}
+
 /// The UI's answer to a tunnel dialog (unknown host, passphrase…).
 #[tauri::command]
 #[specta::specta]
@@ -1142,6 +1167,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             cell_value,
             sort_result,
             filter_result,
+            table_sql,
             statement_at,
             create_sqlite_database,
             script_risks,

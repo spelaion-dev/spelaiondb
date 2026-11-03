@@ -17,7 +17,7 @@
   "connecting": "Connecting…",
   "toggleSchema": "Expand or collapse schema {{name}}",
   "toggleObject": "Expand or collapse {{name}}",
-  "viewRowsHint": "Double-click: view rows",
+  "viewRowsHint": "Double-click: view rows. Right-click: generate SQL",
   "passwordFor": "Password for {{connection}}",
   "password": "Password",
   "rememberPassword": "Remember in the system keychain",
@@ -48,5 +48,12 @@
     "productionWrite": "Changes a production database",
     "cancel": "Cancel",
     "run": "Run anyway"
+  },
+  "sql": {
+    "preview": "View rows",
+    "select": "Generate SELECT",
+    "insert": "Generate INSERT",
+    "update": "Generate UPDATE",
+    "delete": "Generate DELETE"
   }
 }

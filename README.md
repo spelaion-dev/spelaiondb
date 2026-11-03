@@ -63,6 +63,15 @@ The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in
 
 Preferences are stored in the personal `state.db` and apply to every workspace.
 
+## Schema explorer
+
+Expanding a connection in the sidebar lists its schemas (databases in MySQL), tables and
+views with their columns and primary key. Double-click a table or view to open
+`SELECT * … LIMIT 100` in a new tab; right-click it to generate a `SELECT` with every column
+or, for tables, an `INSERT`, an `UPDATE` (on the primary key) or a `DELETE`. The core writes
+them with the engine's quoting and `:name` placeholders for the values; nothing runs until
+you replace them and run it.
+
 ## Running SQL
 
 **Ctrl+Enter** runs the selection or, without one, the statement under the cursor, which is
