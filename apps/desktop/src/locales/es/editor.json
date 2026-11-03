@@ -206,5 +206,27 @@
     "countHint": "Cuenta las filas que deja el filtro (SELECT COUNT(*))",
     "refresh": "Recargar",
     "refreshHint": "Vuelve a cargar la página"
+  },
+  "edit": {
+    "editCell": "Editar celda (F2)",
+    "setNull": "Poner NULL",
+    "deleteRows_one": "Borrar fila (Supr)",
+    "deleteRows_other": "Borrar {{count}} filas (Supr)",
+    "revert": "Deshacer cambios",
+    "cellLabel": "Nuevo valor para {{column}}",
+    "readOnly": "Solo lectura",
+    "readOnlyHint": "La tabla no tiene clave primaria: sus filas no se distinguen, así que no se puede editar aquí.",
+    "addRow": "Añadir fila",
+    "addRowTitle": "Fila nueva",
+    "addRowHint": "Los campos vacíos toman el valor por defecto de la columna. No se escribe nada hasta Aplicar.",
+    "defaultValue": "por defecto",
+    "addRowConfirm": "Añadir",
+    "pending_one": "{{count}} cambio pendiente",
+    "pending_other": "{{count}} cambios pendientes",
+    "apply": "Aplicar",
+    "discard": "Descartar",
+    "applied_one": "Aplicado {{count}} cambio",
+    "applied_other": "Aplicados {{count}} cambios",
+    "applyFirst": "Aplica o descarta antes los cambios pendientes"
   }
 }

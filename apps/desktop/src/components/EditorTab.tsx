@@ -4,13 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { call, commands, type ColumnFilterItem, type ScriptEvent } from "../api";
+import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
 import { openSession } from "../connect";
 import { SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
-import { ResultGrid } from "./ResultGrid";
+import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
 
@@ -61,16 +61,108 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => clearTimeout(timer);
   }, [notice]);
 
+  // Pending changes of a table data tab (ADR-014): the user's input until Apply.
+  const [pending, setPending] = useState<{ cells: Record<string, string | null>; deleted: number[]; inserts: CellEditItem[][] }>({
+    cells: {},
+    deleted: [],
+    inserts: [],
+  });
+  const pendingCount = Object.keys(pending.cells).length + pending.deleted.length + pending.inserts.length;
+  const clearPending = () => setPending({ cells: {}, deleted: [], inserts: [] });
+  /** The table's primary key (`null` until known): editing needs one. */
+  const [primaryKey, setPrimaryKey] = useState<string[] | null>(null);
+
+  const editing: GridEditing | undefined =
+    tab.table && primaryKey && primaryKey.length > 0
+      ? {
+          cells: pending.cells,
+          deleted: pending.deleted,
+          onEdit: (row, col, value) =>
+            setPending((p) => {
+              const cells = { ...p.cells };
+              if (value === undefined) delete cells[`${row}:${col}`];
+              else cells[`${row}:${col}`] = value;
+              return { ...p, cells };
+            }),
+          onDelete: (rows) => setPending((p) => ({ ...p, deleted: [...new Set([...p.deleted, ...rows])] })),
+          onRevert: (rows) =>
+            setPending((p) => ({
+              ...p,
+              deleted: p.deleted.filter((r) => !rows.includes(r)),
+              cells: Object.fromEntries(Object.entries(p.cells).filter(([k]) => !rows.includes(Number(k.split(":")[0])))),
+            })),
+        }
+      : undefined;
+
+  /** Sends the pending changes; the core writes and applies them in one transaction. */
+  async function applyEdits() {
+    const view = tab.table;
+    const result = tab.run?.results[0];
+    if (!view || !result || pendingCount === 0) return;
+    const deleted = new Set(pending.deleted);
+    const updates = new Map<number, CellEditItem[]>();
+    for (const [key, value] of Object.entries(pending.cells)) {
+      const [row = 0, column = 0] = key.split(":").map(Number);
+      if (deleted.has(row)) continue;
+      updates.set(row, [...(updates.get(row) ?? []), { column, value }]);
+    }
+    const changes: RowChangeItem[] = [
+      ...[...updates].map(([row, values]): RowChangeItem => ({ kind: "update", row, values })),
+      ...pending.deleted.map((row): RowChangeItem => ({ kind: "delete", row })),
+      ...pending.inserts.map((values): RowChangeItem => ({ kind: "insert", values })),
+    ];
+    try {
+      let confirmed = false;
+      if (connection?.env?.toLowerCase().startsWith("prod")) {
+        const statements = await call(commands.previewTableEdits(tab.id, result.id, view.schema, view.name, changes));
+        const ok = await useDialogs.getState().askRisks(connection.name, statements.map((sql) => ({ sql, risk: "productionWrite" as const })));
+        if (!ok) return;
+        confirmed = true;
+      }
+      const applied = await call(commands.applyTableEdits(tab.id, result.id, view.schema, view.name, changes, confirmed));
+      clearPending();
+      setNotice({ text: t("edit.applied", { count: applied }), error: false });
+      void loadPage(view);
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    }
+  }
+
   /** The page asked for while another one was loading: it loads when that one ends. */
   const queuedPage = useRef<TableView | null>(null);
+  /** A page load is between its start and the start of its run. */
+  const loadingPage = useRef(false);
 
   /** Loads a page of a table data tab: the core writes and checks the SELECT. */
   async function loadPage(view: TableView) {
-    if (useApp.getState().tabs.find((t) => t.id === tab.id)?.run?.running) {
+    const busy = () => loadingPage.current || useApp.getState().tabs.find((t) => t.id === tab.id)?.run?.running;
+    if (busy()) {
       queuedPage.current = view;
       return;
     }
+    // Set before any await: a second click must queue, not start a race with this load.
+    loadingPage.current = true;
+    try {
+      await loadPageNow(view);
+    } finally {
+      loadingPage.current = false;
+      const queued = queuedPage.current;
+      // A load that never started a run (an error, no connection) does not end one either.
+      if (queued && !busy()) {
+        queuedPage.current = null;
+        void loadPage(queued);
+      }
+    }
+  }
+
+  async function loadPageNow(view: TableView) {
     if (!(await ensureConnected())) return;
+    if (primaryKey === null) {
+      call(commands.describeTable(tab.id, view.schema, view.name))
+        .then((details) => setPrimaryKey(details.primaryKey))
+        .catch(() => setPrimaryKey([]));
+    }
+    clearPending();
     let sql: string;
     try {
       sql = await call(
@@ -93,6 +185,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** Changes what the table data tab shows and loads it again. */
   function changeView(patch: Partial<TableView>) {
     if (!tab.table) return;
+    if (pendingCount > 0) {
+      setNotice({ text: t("edit.applyFirst"), error: true });
+      return;
+    }
     const next = { ...tab.table, ...patch };
     updateTab(tab.id, { table: next });
     void loadPage(next);
@@ -191,7 +287,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }, [tab.status, tab.id]);
 
   async function ensureConnected(): Promise<boolean> {
-    if (tab.status === "connected") return true;
+    // The store, not this render's `tab`: a caller may have just connected (loading a
+    // table page connects, then runs its SELECT through `run`).
+    if (useApp.getState().tabs.find((t) => t.id === tab.id)?.status === "connected") return true;
     if (!tab.connectionId) {
       updateTab(tab.id, { run: errorRun("", { key: "pickConnection" }) });
       return false;
@@ -382,7 +480,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
             className="primary"
             disabled={historySaving || tab.status === "connecting" || workspaceChanging}
             title={tab.table ? t("table.refreshHint") : t("runHint")}
-            onClick={() => void (tab.table ? loadPage(tab.table) : run({ text: tab.sql, from: 0 }))}
+            onClick={() => {
+              if (tab.table && pendingCount > 0) setNotice({ text: t("edit.applyFirst"), error: true });
+              else void (tab.table ? loadPage(tab.table) : run({ text: tab.sql, from: 0 }));
+            }}
           >
             {tab.table ? t("table.refresh") : t("run")}
           </button>
@@ -396,6 +497,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
             busy={running}
             onChange={changeView}
             onCount={() => void countTable()}
+            editable={primaryKey === null ? null : primaryKey.length > 0}
+            pending={pendingCount}
+            columns={tab.run?.results[0]?.columns ?? []}
+            onInsert={(values) => setPending((p) => ({ ...p, inserts: [...p.inserts, values] }))}
+            onApply={() => void applyEdits()}
+            onDiscard={clearPending}
           />
         )}
         {!tab.table && (
@@ -423,6 +530,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
             run={tab.run}
             session={tab.id}
             serverSort={tab.table ? { sort: tab.table.sort, onSort: (sort) => void sortTable(sort) } : undefined}
+            editing={editing}
             onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))}
             onSorted={(result, sort) =>
               updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
@@ -466,6 +574,7 @@ function Results({
   onFiltered,
   onColumnFiltered,
   serverSort,
+  editing,
 }: {
   run: RunState | null;
   session: string;
@@ -474,6 +583,7 @@ function Results({
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
   onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
   serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
+  editing?: GridEditing;
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
@@ -497,6 +607,7 @@ function Results({
             key={`filter-${active.id}`}
             result={active}
             onFiltered={(filter, rows, total) => onFiltered(active.id, filter, rows, total)}
+            locked={editing !== undefined && (editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)}
           />
         )}
         {active && <ExportButton key={`export-${active.id}`} result={active} session={session} />}
@@ -509,6 +620,7 @@ function Results({
             onSorted={(sort) => onSorted(active.id, sort)}
             onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
             serverSort={serverSort}
+            editing={editing}
           />
         ) : (
           <div className="messages">

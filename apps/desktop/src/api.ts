@@ -22,6 +22,8 @@ import {
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
   type RiskKind,
+  type RowChangeItem_Deserialize,
+  type CellEditItem_Deserialize,
   type ColumnFilterItem,
   type FilterOpItem,
   type SqlTemplateItem,
@@ -41,6 +43,8 @@ export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
+export type RowChangeItem = RowChangeItem_Deserialize;
+export type CellEditItem = CellEditItem_Deserialize;
 export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
 export type ObjectItem = ObjectItem_Serialize;

@@ -47,6 +47,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one view)
   and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it).
+  `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
+  database, one transaction, one row per statement).
 - `crates/spelunk-store`: local SQLite (audit, query history, saved queries and personal settings;
   later the schema cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.

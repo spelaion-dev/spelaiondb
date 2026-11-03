@@ -206,5 +206,27 @@
     "countHint": "Count the rows the filter keeps (SELECT COUNT(*))",
     "refresh": "Refresh",
     "refreshHint": "Load the page again"
+  },
+  "edit": {
+    "editCell": "Edit cell (F2)",
+    "setNull": "Set NULL",
+    "deleteRows_one": "Delete row (Del)",
+    "deleteRows_other": "Delete {{count}} rows (Del)",
+    "revert": "Revert changes",
+    "cellLabel": "New value for {{column}}",
+    "readOnly": "Read-only",
+    "readOnlyHint": "The table has no primary key: its rows cannot be told apart, so it cannot be edited here.",
+    "addRow": "Add row",
+    "addRowTitle": "New row",
+    "addRowHint": "Empty fields take the column default. Nothing is written until Apply.",
+    "defaultValue": "default",
+    "addRowConfirm": "Add",
+    "pending_one": "{{count}} pending change",
+    "pending_other": "{{count}} pending changes",
+    "apply": "Apply",
+    "discard": "Discard",
+    "applied_one": "Applied {{count}} change",
+    "applied_other": "Applied {{count}} changes",
+    "applyFirst": "Apply or discard the pending changes first"
   }
 }

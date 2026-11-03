@@ -76,6 +76,9 @@ fn opts(params: &ConnectParams, tls: Option<SslOpts>) -> Opts {
         .db_name((!params.database.is_empty()).then(|| params.database.clone()))
         // Always TCP: a local socket would bypass the host the user configured.
         .prefer_socket(false)
+        // Affected rows count the rows matched, as other engines do: an UPDATE that leaves a
+        // value as it was still reports its row (ADR-014 checks one row per statement).
+        .client_found_rows(true)
         .ssl_opts(tls)
         .into()
 }

@@ -64,7 +64,7 @@ fn literal(dialect: &str, raw: &str) -> String {
 }
 
 /// `-12`, `3.5`, `.5`: plain decimal numbers only (no exponents, no hex).
-fn is_number(text: &str) -> bool {
+pub(crate) fn is_number(text: &str) -> bool {
     let digits = text.strip_prefix('-').unwrap_or(text);
     let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
     !(int.is_empty() && frac.is_empty())

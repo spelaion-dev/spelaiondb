@@ -624,10 +624,18 @@ try {
     await panel.locator('.grid-scroller[aria-label$="sorted by id, descending"]').waitFor();
     assert.equal(await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue(), "id DESC");
     await range.filter({ hasText: "rows 1–500" }).waitFor();
-    const before = await page.evaluate(() => window.__copied.length);
-    await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
-    await page.keyboard.press("Control+c");
-    assert.equal((await copied(before + 1)).trimEnd(), "50000");
+    // The sort shows at once; the page it asked for may still be on its way.
+    let firstId = "";
+    for (let i = 0; i < 20 && firstId !== "50000"; i++) {
+      if (i > 0) await page.waitForTimeout(250);
+      const grid = await panel.locator(".grid-scroller").boundingBox();
+      if (!grid) continue;
+      const before = await page.evaluate(() => window.__copied.length);
+      await page.mouse.click(grid.x + 52 + 20, grid.y + 36 + 13);
+      await page.keyboard.press("Control+c");
+      firstId = (await copied(before + 1)).trimEnd();
+    }
+    assert.equal(firstId, "50000");
   }
   // What is typed cannot turn the page into another statement.
   await panel.getByRole("textbox", { name: "WHERE" }).fill("1=1); drop table orders; select (1");
@@ -778,6 +786,16 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.locator(".filter-chip").first().waitFor({ state: "detached" });
   await panel.locator(".statusline", { hasText: `${processlistTotal} row` }).waitFor();
 
+  // A table of the test server to edit (never the demo database).
+  await replaceQuery(
+    panel,
+    "create table if not exists smoke_edit (id int primary key, name varchar(20), qty int default 1);\n" +
+      "delete from smoke_edit where id > 0;\n" +
+      "insert into smoke_edit values (1, 'one', 1), (2, 'two', 2), (3, 'three', 3);",
+  );
+  await run(panel);
+  await panel.getByText("Statement 3: 3 rows", { exact: false }).waitFor();
+
   // The explorer lists MySQL databases and their tables.
   // Its own session ("ask every time"): the password is asked again.
   await page.locator('.connection-row:has-text("MySQL (Docker)") .twisty').click();
@@ -785,6 +803,74 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).waitFor();
   assert.equal(await page.locator('.connection-row:has-text("MySQL (Docker)") .engine').innerText(), "MY");
+
+  step("editing table data: cells, NULL, delete and insert applied in one transaction");
+  await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).click();
+  await page.getByRole("button", { name: "Expand or collapse smoke_edit", exact: true }).dblclick();
+  await page.locator(".tabbar .tab.active", { hasText: "smoke_edit" }).waitFor();
+  await page.getByRole("dialog").getByText("Password for MySQL (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
+  await panel.getByRole("button", { name: "Add row" }).waitFor();
+  await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id");
+  await panel.getByRole("button", { name: "Apply", exact: true }).click();
+  await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
+  {
+    let box = null;
+    for (let i = 0; i < 40 && !box; i++) {
+      box = await panel.locator(".grid-scroller").boundingBox();
+      if (!box) await page.waitForTimeout(100);
+    }
+    // Read the grid's place each time: nothing above it may move, but if it does the
+    // clicks still land on the intended cell.
+    const cellAt = async (row, x) => {
+      const now = await panel.locator(".grid-scroller").boundingBox();
+      return [now.x + 52 + x + 20, now.y + 36 + 13 + row * 26];
+    };
+    // name of row 1 → "edited" (inline editor).
+    await page.mouse.dblclick(...(await cellAt(0, 110)));
+    const editor = panel.getByRole("textbox", { name: "New value for name" });
+    await editor.fill("edited");
+    await editor.press("Enter");
+    // qty of row 2 → NULL (context menu).
+    await page.mouse.click(...(await cellAt(1, 270)), { button: "right" });
+    await panel.getByRole("menuitem", { name: "Set NULL" }).click();
+    // row 3 deleted (Del key).
+    await page.mouse.click(...(await cellAt(2, 0)));
+    await page.keyboard.press("Delete");
+    // A new row with id 4; qty takes its default.
+    await panel.getByRole("button", { name: "Add row" }).click();
+    const newRow = page.getByRole("dialog", { name: "New row" });
+    await newRow.getByRole("textbox", { name: "id", exact: true }).fill("4");
+    await newRow.getByRole("textbox", { name: "name", exact: true }).fill("four");
+    await newRow.getByRole("button", { name: "Add", exact: true }).click();
+    await panel.getByText("4 pending changes").waitFor();
+    assert.ok(await panel.getByRole("button", { name: "Next page" }).isDisabled());
+    await shot("07d-editing-pending");
+    await panel.getByRole("button", { name: "Apply", exact: true }).last().click();
+    await panel.getByRole("status").filter({ hasText: "Applied 4 changes" }).waitFor();
+    await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
+    for (let i = 0; i < 40 && !(box = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Control+c");
+    assert.deepEqual((await copied(before + 1)).trimEnd().split("\n"), ["1\tedited\t1", "2\ttwo\t", "4\tfour\t1"]);
+  }
+  // A typed value that does not fit the column is refused by the core; nothing is applied.
+  {
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 36 + 13);
+    const editor = panel.getByRole("textbox", { name: "New value for qty" });
+    await editor.fill("lots");
+    await editor.press("Enter");
+    await panel.getByRole("button", { name: "Apply", exact: true }).last().click();
+    await panel.getByRole("alert").filter({ hasText: "is not a whole number" }).waitFor();
+    await panel.getByRole("button", { name: "Discard" }).click();
+    await panel.getByText("pending change").waitFor({ state: "detached" });
+  }
+  await page.keyboard.press("Control+w");
 
   step("PostgreSQL behind two bastions with TLS verify-full");
   panel = await newQuery(

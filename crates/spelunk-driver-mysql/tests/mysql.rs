@@ -412,6 +412,15 @@ async fn large_results_arrive_in_batches_with_counts() {
             ),
             Some(3)
         );
+        // Matched rows, not changed rows: setting a value to itself still counts its row.
+        assert_eq!(
+            done(
+                &run(&*conn, "update counted set a = 1 where a = 1")
+                    .await
+                    .unwrap()
+            ),
+            Some(1)
+        );
         run(&*conn, "drop table counted").await.unwrap();
     }
 }

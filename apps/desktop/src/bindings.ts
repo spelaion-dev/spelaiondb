@@ -98,6 +98,16 @@ export const commands = {
 	/**  An identifier quoted for the session's engine (for an ORDER BY the UI writes). */
 	quoteIdentifier: (session: string, identifier: string) => typedError<string, string>(__TAURI_INVOKE("quote_identifier", { session, identifier })),
 	/**
+	 *  The statements the core would run for the pending changes of a table data tab, to show
+	 *  before applying them (production asks for confirmation).
+	 */
+	previewTableEdits: (session: string, result: number, schema: string, name: string, changes: RowChangeItem_Deserialize[]) => typedError<string[], string>(__TAURI_INVOKE("preview_table_edits", { session, result, schema, name, changes })),
+	/**
+	 *  Applies the pending changes in one transaction (ADR-014): refused on read-only
+	 *  connections, and on production unless the user confirmed the statements.
+	 */
+	applyTableEdits: (session: string, result: number, schema: string, name: string, changes: RowChangeItem_Deserialize[], confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_table_edits", { session, result, schema, name, changes, confirmed })),
+	/**
 	 *  Saves the query under `name` for the open workspace (or personally outside one),
 	 *  replacing a saved query with that name. Returns its identifier.
 	 */
@@ -159,6 +169,21 @@ export const events = {
 };
 
 /* Types */
+/**  A value typed in the grid for a result column (`None` is NULL). */
+export type CellEditItem = CellEditItem_Serialize | CellEditItem_Deserialize;
+
+/**  A value typed in the grid for a result column (`None` is NULL). */
+export type CellEditItem_Deserialize = {
+	column: number,
+	value?: string | null,
+};
+
+/**  A value typed in the grid for a result column (`None` is NULL). */
+export type CellEditItem_Serialize = {
+	column: number,
+	value: string | null,
+};
+
 /**  A rectangle of a result: rows and columns by position. */
 export type CellRange = {
 	firstRow: number,
@@ -422,6 +447,15 @@ export type RiskyItem = {
 	end: number,
 	risk: RiskKind,
 };
+
+/**  A pending change of a table data tab (ADR-014), by position in the page shown. */
+export type RowChangeItem = RowChangeItem_Serialize | RowChangeItem_Deserialize;
+
+/**  A pending change of a table data tab (ADR-014), by position in the page shown. */
+export type RowChangeItem_Deserialize = { kind: "update"; row: number; values: CellEditItem_Deserialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Deserialize[] };
+
+/**  A pending change of a table data tab (ADR-014), by position in the page shown. */
+export type RowChangeItem_Serialize = { kind: "update"; row: number; values: CellEditItem_Serialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Serialize[] };
 
 export type SchemaItem = {
 	name: string,

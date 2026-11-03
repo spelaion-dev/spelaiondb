@@ -202,3 +202,92 @@ async fn results_sort_by_typed_values_across_batches() {
     stored.sort(None).unwrap();
     assert_eq!(tsv(&stored, 0..2, 0), ["1", "2"]);
 }
+
+#[tokio::test]
+async fn table_edits_write_typed_literals_on_postgres() {
+    use spelunk_core::{CellInput, RowChange, TablePage};
+    let Some(session) = session().await else {
+        return;
+    };
+    let _: Vec<CoreEvent> = session
+        .run_script(
+            "drop table if exists core_edits; \
+             create table core_edits (id uuid primary key, price numeric(10,2), day date, ok boolean, raw bytea); \
+             insert into core_edits values ('6f1c1f7e-0000-4000-8000-000000000001', 1.50, '2026-01-01', false, '\\x00')",
+        )
+        .collect()
+        .await;
+    let table = session
+        .connection()
+        .describe_table("public", "core_edits")
+        .await
+        .unwrap();
+    let page = TablePage {
+        schema: "public".into(),
+        name: "core_edits".into(),
+        filter: String::new(),
+        order_by: String::new(),
+        limit: 10,
+        offset: 0,
+    };
+    let sql = spelunk_core::table_page_sql(session.dialect().as_ref(), &page).unwrap();
+    let events: Vec<CoreEvent> = session.run_script(&sql).collect().await;
+    let id = events
+        .iter()
+        .find_map(|e| match e {
+            CoreEvent::ResultStarted { result, .. } => Some(*result),
+            _ => None,
+        })
+        .unwrap();
+    let statements = {
+        let stored = session.results().get(id).unwrap();
+        let stored = stored.read().unwrap();
+        spelunk_core::edit_statements(
+            session.dialect().as_ref(),
+            &table,
+            &stored,
+            &[RowChange::Update {
+                row: 0,
+                values: vec![
+                    (1, CellInput::Text("19.99".into())),
+                    (2, CellInput::Text("2026-11-03".into())),
+                    (3, CellInput::Text("true".into())),
+                    (4, CellInput::Text("\\xcafe".into())),
+                ],
+            }],
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        spelunk_core::apply_edits(&session, &statements).await,
+        Ok(1)
+    );
+    let check: Vec<CoreEvent> = session
+        .run_script(
+            "select count(*) from core_edits where price = 19.99 and day = '2026-11-03' \
+             and ok and raw = '\\xcafe'::bytea",
+        )
+        .collect()
+        .await;
+    let id = check
+        .iter()
+        .find_map(|e| match e {
+            CoreEvent::ResultStarted { result, .. } => Some(*result),
+            _ => None,
+        })
+        .unwrap();
+    {
+        let stored = session.results().get(id).unwrap();
+        let stored = stored.read().unwrap();
+        let batch = stored.window(0, 1).remove(0);
+        assert_eq!(
+            spelunk_driver_api::Value::from_array(
+                batch.column(0).as_ref(),
+                0,
+                stored.schema().columns[0].logical
+            ),
+            Some(spelunk_driver_api::Value::Int(1))
+        );
+    }
+    let _: Vec<CoreEvent> = session.run_script("drop table core_edits").collect().await;
+}

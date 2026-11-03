@@ -82,6 +82,20 @@ function cssVar(style: CSSStyleDeclaration, name: string): string {
   return style.getPropertyValue(name).trim() || "#888";
 }
 
+/** Pending changes of a table data tab (ADR-014): drawn over the page until applied. */
+export interface GridEditing {
+  /** `"row:col"` → the value typed (`null` is NULL). */
+  cells: Record<string, string | null>;
+  deleted: number[];
+  /** `undefined` takes the cell back to its value in the database. */
+  onEdit(row: number, col: number, value: string | null | undefined): void;
+  onDelete(rows: number[]): void;
+  onRevert(rows: number[]): void;
+}
+
+const EDITED_BG = "rgba(250, 204, 21, 0.30)";
+const DELETED_BG = "rgba(239, 68, 68, 0.20)";
+
 /** SQL spelling of each column filter operator, as SQLyog shows them. */
 const OPS: { op: FilterOpItem; sql: string }[] = [
   { op: "eq", sql: "=" },
@@ -116,6 +130,7 @@ export function ResultGrid({
   onSorted,
   onColumnFiltered,
   serverSort,
+  editing,
 }: {
   result: ResultMeta;
   session: string;
@@ -123,6 +138,8 @@ export function ResultGrid({
   onColumnFiltered(filters: ColumnFilterItem[], rows: number, total: number): void;
   /** In a table data tab, header clicks sort in the server (ORDER BY) instead. */
   serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
+  /** Editable table data tab: pending changes and how to change them. */
+  editing?: GridEditing;
 }) {
   const sortShown = serverSort ? serverSort.sort : result.sort;
   const { t, i18n } = useTranslation("editor");
@@ -140,6 +157,35 @@ export function ResultGrid({
   const dragging = useRef(false);
   const [viewer, setViewer] = useState(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
+  /** The cell being typed into (table data tabs). */
+  const [cellEditor, setCellEditor] = useState<{ row: number; col: number; value: string } | null>(null);
+
+  /** Opens the inline editor on a cell, with its pending value or the one loaded. */
+  function startEdit(cell: Cell) {
+    if (!editing) return;
+    const key = `${cell.row}:${cell.col}`;
+    const current = key in editing.cells ? editing.cells[key] : cache.get(cell.row, cell.col);
+    setSelection({ anchor: cell, focus: cell });
+    scrollIntoView(cell);
+    setCellEditor({ row: cell.row, col: cell.col, value: current ?? "" });
+  }
+
+  function commitEdit(value: string) {
+    if (!editing || !cellEditor) return;
+    const original = cache.get(cellEditor.row, cellEditor.col);
+    // Typing back the loaded value takes the cell back to it.
+    editing.onEdit(cellEditor.row, cellEditor.col, original !== undefined && original !== null && value === original ? undefined : value);
+    setCellEditor(null);
+    scrollerRef.current?.focus();
+  }
+
+  /** Rows of the selection (the active row without one). */
+  const selectedRows = (): number[] => {
+    if (!selection) return [];
+    const b = bounds(selection);
+    return Array.from({ length: b.r1 - b.r0 + 1 }, (_, i) => b.r0 + i);
+  };
+
   /** Ctrl+Shift+J: the column picker's search text (`null` when closed). */
   const [jump, setJump] = useState<string | null>(null);
 
@@ -186,14 +232,15 @@ export function ResultGrid({
   const totalH = HEADER_H + result.rows * ROW_H;
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown });
-  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing };
 
   function draw() {
     const canvas = canvasRef.current;
     const scroller = scrollerRef.current;
     if (!canvas || !scroller) return;
-    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown } = live.current;
+    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing } = live.current;
+    const deletedRows = new Set(editing?.deleted ?? []);
     const range = selection ? bounds(selection) : null;
     const dpr = window.devicePixelRatio || 1;
     if (canvas.width !== size.w * dpr || canvas.height !== size.h * dpr) {
@@ -234,6 +281,11 @@ export function ResultGrid({
         ctx.fillStyle = c.stripe;
         ctx.fillRect(rowNumW, y, size.w, ROW_H);
       }
+      const deleted = deletedRows.has(row);
+      if (deleted) {
+        ctx.fillStyle = DELETED_BG;
+        ctx.fillRect(rowNumW, y, size.w, ROW_H);
+      }
       for (let col = firstCol; col < widths.length; col++) {
         const x = rowNumW + (offsets[col] ?? 0) - left;
         if (x > size.w) break;
@@ -246,7 +298,13 @@ export function ResultGrid({
           ctx.strokeStyle = c.accent;
           ctx.strokeRect(x + 0.5, y + 0.5, w - 1, ROW_H - 1);
         }
-        const value = cache.get(row, col);
+        const editKey = `${row}:${col}`;
+        const edited = editing !== undefined && editKey in editing.cells;
+        if (edited) {
+          ctx.fillStyle = EDITED_BG;
+          ctx.fillRect(x, y, w, ROW_H);
+        }
+        const value = edited ? (editing?.cells[editKey] ?? null) : cache.get(row, col);
         const numeric = NUMERIC.has(result.columns[col]?.logical ?? "");
         let text: string;
         if (value === undefined) {
@@ -267,6 +325,11 @@ export function ResultGrid({
         } else {
           ctx.fillText(shown, x + PAD, y + ROW_H / 2);
         }
+      }
+      if (deleted) {
+        // Struck through until the change is applied or reverted.
+        ctx.fillStyle = c.muted;
+        ctx.fillRect(rowNumW, y + ROW_H / 2, size.w, 1);
       }
       ctx.fillStyle = c.line;
       ctx.fillRect(rowNumW, y + ROW_H - 1, size.w, 1);
@@ -584,6 +647,16 @@ export function ResultGrid({
       setViewer(true);
       return;
     }
+    if (editing && e.key === "F2" && selection) {
+      e.preventDefault();
+      startEdit(selection.focus);
+      return;
+    }
+    if (editing && e.key === "Delete" && selection) {
+      e.preventDefault();
+      editing.onDelete(selectedRows());
+      return;
+    }
     if (mod && e.shiftKey && e.key.toLowerCase() === "j" && widths.length > 0) {
       e.preventDefault();
       setJump("");
@@ -716,6 +789,10 @@ export function ResultGrid({
           }
           const cell = cellAt(e.clientX, e.clientY);
           if (cell && !cell.gutter) {
+            if (editing) {
+              startEdit(cell);
+              return;
+            }
             setSelection({ anchor: cell, focus: cell });
             setViewer(true);
           }
@@ -736,6 +813,49 @@ export function ResultGrid({
       </div>
       {menu && (
         <div className="grid-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+          {editing && menu.cell && (
+            <>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  if (menu.cell) startEdit(menu.cell);
+                }}
+              >
+                {t("edit.editCell")}
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  if (menu.cell) editing.onEdit(menu.cell.row, menu.cell.col, null);
+                }}
+              >
+                {t("edit.setNull")}
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  editing.onDelete(selectedRows());
+                }}
+              >
+                {t("edit.deleteRows", { count: selectedRows().length })}
+              </button>
+              {selectedRows().some((r) => editing.deleted.includes(r) || Object.keys(editing.cells).some((k) => k.startsWith(`${r}:`))) && (
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMenu(null);
+                    editing.onRevert(selectedRows());
+                  }}
+                >
+                  {t("edit.revert")}
+                </button>
+              )}
+              <hr />
+            </>
+          )}
           <button
             role="menuitem"
             onClick={() => {
@@ -751,7 +871,7 @@ export function ResultGrid({
               {t(`results.${item.key}`)}
             </button>
           ))}
-          {menu.cell && (
+          {menu.cell && !(editing && (editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) && (
             <>
               <hr />
               <FilterSubmenu
@@ -786,6 +906,33 @@ export function ResultGrid({
             </>
           )}
         </div>
+      )}
+      {cellEditor && (
+        <input
+          className="cell-editor"
+          aria-label={t("edit.cellLabel", { column: result.columns[cellEditor.col]?.name ?? "" })}
+          autoFocus
+          spellCheck={false}
+          style={{
+            left: rowNumW + (offsets[cellEditor.col] ?? 0) - (scrollerRef.current?.scrollLeft ?? 0),
+            top: HEADER_H + cellEditor.row * ROW_H - (scrollerRef.current?.scrollTop ?? 0),
+            width: widths[cellEditor.col] ?? MIN_COL,
+            height: ROW_H,
+          }}
+          value={cellEditor.value}
+          onChange={(e) => setCellEditor({ ...cellEditor, value: e.target.value })}
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={(e) => commitEdit(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitEdit(e.currentTarget.value);
+            else if (e.key === "Escape") {
+              setCellEditor(null);
+              scrollerRef.current?.focus();
+            } else return;
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        />
       )}
       {jump !== null && (
         <ColumnJump

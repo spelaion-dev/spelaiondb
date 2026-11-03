@@ -10,6 +10,8 @@ const DELAY_MS = 250;
 
 export function ResultFilter(props: {
   result: ResultMeta;
+  /** Pending edits refer to rows by position: the view must not change meanwhile. */
+  locked?: boolean;
   onFiltered(filter: string | undefined, rows: number, total: number): void;
 }) {
   const { result } = props;
@@ -44,7 +46,7 @@ export function ResultFilter(props: {
       placeholder={t("results.filter")}
       aria-label={t("results.filter")}
       title={error ?? (result.complete ? t("results.filterHint") : t("results.filterWhenComplete"))}
-      disabled={!result.complete}
+      disabled={!result.complete || props.locked}
       value={text}
       onChange={(e) => setText(e.target.value)}
       onKeyDown={(e) => {

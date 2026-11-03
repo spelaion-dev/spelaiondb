@@ -896,6 +896,49 @@ impl From<TablePageItem> for spelunk_core::TablePage {
     }
 }
 
+/// A value typed in the grid for a result column (`None` is NULL).
+#[derive(Debug, Clone, Deserialize, Type)]
+pub struct CellEditItem {
+    pub column: u32,
+    pub value: Option<String>,
+}
+
+/// A pending change of a table data tab (ADR-014), by position in the page shown.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RowChangeItem {
+    Update { row: u32, values: Vec<CellEditItem> },
+    Delete { row: u32 },
+    Insert { values: Vec<CellEditItem> },
+}
+
+impl From<RowChangeItem> for spelunk_core::RowChange {
+    fn from(item: RowChangeItem) -> Self {
+        let values = |values: Vec<CellEditItem>| {
+            values
+                .into_iter()
+                .map(|v| {
+                    (
+                        v.column as usize,
+                        match v.value {
+                            Some(text) => spelunk_core::CellInput::Text(text),
+                            None => spelunk_core::CellInput::Null,
+                        },
+                    )
+                })
+                .collect()
+        };
+        match item {
+            RowChangeItem::Update { row, values: v } => Self::Update {
+                row: row as usize,
+                values: values(v),
+            },
+            RowChangeItem::Delete { row } => Self::Delete { row: row as usize },
+            RowChangeItem::Insert { values: v } => Self::Insert { values: values(v) },
+        }
+    }
+}
+
 /// Rows left after filtering a result, out of all it has.
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct FilterOutcome {

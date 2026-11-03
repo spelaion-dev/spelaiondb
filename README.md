@@ -77,6 +77,20 @@ or, for tables, an `INSERT`, an `UPDATE` (on the primary key) or a `DELETE`. The
 them with the engine's quoting and `:name` placeholders for the values; nothing runs until
 you replace them and run it.
 
+### Editing data
+
+In a table data tab of a table with a primary key, double-click a cell (or **F2**) to change
+it; the right-click menu also has **Set NULL**, **Delete row** (or the **Del** key) and
+**Revert changes**, and **Add row** opens a form (empty fields take the column default).
+Changes stay pending, drawn in the grid (edited cells highlighted, deleted rows struck
+through), until **Apply** or **Discard**; paging and filtering wait meanwhile. The core
+writes the `UPDATE`/`DELETE` statements by primary key (read from the database, with the key
+values of the loaded rows) and the `INSERT`s, checks each typed value against its column type,
+and applies everything in one transaction: if a statement does not affect exactly one row
+(the row changed or vanished meanwhile), nothing is applied. Production connections show the
+statements for confirmation first, and read-only connections refuse. Tables without a primary
+key are read-only (ADR-014).
+
 ## Running SQL
 
 **Ctrl+Enter** runs the selection or, without one, the statement under the cursor, which is

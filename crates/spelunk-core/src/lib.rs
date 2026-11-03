@@ -6,6 +6,7 @@
 mod catalog;
 mod classify;
 mod cursor;
+mod edit;
 mod export;
 mod filter;
 mod generate;
@@ -22,6 +23,7 @@ mod table_data;
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
 pub use cursor::statement_at;
+pub use edit::{CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements};
 pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
 pub use filter::{ColumnFilter, FilterOp};
 pub use generate::{SqlTemplate, count_rows, table_sql};

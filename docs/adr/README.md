@@ -22,3 +22,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [011](0011-local-storage.md) | Local SQLite in WAL mode | Accepted |
 | [012](0012-ci-as-reviewer.md) | CI is the code reviewer | Accepted |
 | [013](0013-license-and-repo.md) | Apache-2.0 + DCO + trademark policy; monorepo | Accepted |
+| [014](0014-editing-table-data.md) | Editing in table data tabs, by primary key, in one transaction | Accepted |

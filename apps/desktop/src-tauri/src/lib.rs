@@ -1259,6 +1259,74 @@ async fn quote_identifier(
     Ok(open.session.dialect().quote_identifier(&identifier))
 }
 
+/// The statements the core would run for the pending changes of a table data tab, to show
+/// before applying them (production asks for confirmation).
+#[tauri::command]
+#[specta::specta]
+async fn preview_table_edits(
+    session: String,
+    result: u32,
+    schema: String,
+    name: String,
+    changes: Vec<RowChangeItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let open = state.session(&session).await?;
+    table_edit_statements(&state, &open, result, &schema, &name, changes).await
+}
+
+/// Applies the pending changes in one transaction (ADR-014): refused on read-only
+/// connections, and on production unless the user confirmed the statements.
+#[tauri::command]
+#[specta::specta]
+async fn apply_table_edits(
+    session: String,
+    result: u32,
+    schema: String,
+    name: String,
+    changes: Vec<RowChangeItem>,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    spelunk_core::check_edit_policy(
+        open.resolved.params.read_only,
+        open.resolved.is_production(),
+        confirmed,
+    )
+    .map_err(|e| e.to_string())?;
+    let statements = table_edit_statements(&state, &open, result, &schema, &name, changes).await?;
+    let applied = spelunk_core::apply_edits(&open.session, &statements)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(applied).unwrap_or(u32::MAX))
+}
+
+async fn table_edit_statements(
+    state: &AppState,
+    open: &OpenConnection,
+    result: u32,
+    schema: &str,
+    name: &str,
+    changes: Vec<RowChangeItem>,
+) -> CmdResult<Vec<String>> {
+    // The primary key comes from the database, never from the UI.
+    let table = open
+        .session
+        .connection()
+        .describe_table(schema, name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let changes: Vec<spelunk_core::RowChange> = changes.into_iter().map(Into::into).collect();
+    spelunk_core::edit_statements(open.session.dialect().as_ref(), &table, &stored, &changes)
+        .map_err(|e| e.to_string())
+}
+
 /// The UI's answer to a tunnel dialog (unknown host, passphrase…).
 #[tauri::command]
 #[specta::specta]
@@ -1363,6 +1431,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             table_page_sql,
             count_table_rows,
             quote_identifier,
+            preview_table_edits,
+            apply_table_edits,
             save_snippet,
             list_snippets,
             delete_snippet,
