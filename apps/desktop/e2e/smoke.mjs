@@ -569,6 +569,9 @@ try {
   await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).click({ button: "right" });
   assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE" }).count(), 0);
   await page.keyboard.press("Escape");
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Count rows" }).click();
+  await ordersNode.getByText("50,000", { exact: true }).waitFor();
 
   step("query parameters: :name values asked once, written in by the core");
   await replaceQuery(panel, "select :name as who, :n + 1 as next, :name || '!' as again;");

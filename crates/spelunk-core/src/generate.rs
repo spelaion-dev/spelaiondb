@@ -2,7 +2,10 @@
 //! with the engine's identifier quoting. Values are `:named` placeholders to replace before
 //! running; UPDATE and DELETE always carry a WHERE (on the primary key when there is one).
 
-use spelunk_driver_api::{Dialect, TableInfo};
+use futures_util::StreamExt;
+use spelunk_driver_api::{Dialect, TableInfo, Value};
+
+use crate::session::{CoreEvent, Session};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SqlTemplate {
@@ -55,6 +58,49 @@ pub fn table_sql(dialect: &dyn Dialect, table: &TableInfo, template: SqlTemplate
             "DELETE FROM {name}\n{}",
             where_clause(dialect, &keys(table), table.primary_key.is_empty())
         ),
+    }
+}
+
+/// The exact number of rows of a table or view (`SELECT COUNT(*)`), run on `session`; the
+/// result is freed right away. Counting a big table can take a while: it can be cancelled.
+pub async fn count_rows(session: &Session, schema: &str, name: &str) -> Result<i64, String> {
+    let sql = format!(
+        "SELECT COUNT(*) FROM {}",
+        qualified(session.dialect().as_ref(), schema, name)
+    );
+    let mut events = session.run_script(&sql);
+    let mut result = None;
+    let mut failure = None;
+    while let Some(event) = events.next().await {
+        match event {
+            CoreEvent::ResultStarted { result: id, .. } => result = Some(id),
+            CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
+            CoreEvent::StatementStarted { .. }
+            | CoreEvent::Rows { .. }
+            | CoreEvent::Notice { .. }
+            | CoreEvent::StatementFinished { .. }
+            | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::HistoryWarning { .. } => {}
+        }
+    }
+    if let Some(message) = failure {
+        return Err(message);
+    }
+    let id = result.ok_or("the count returned no result")?;
+    let store = session.results();
+    let count = store.get(id).and_then(|stored| {
+        let stored = stored.read().ok()?;
+        let batch = stored.window(0, 1).into_iter().next()?;
+        let logical = stored.schema().columns.first()?.logical;
+        Value::from_array(batch.column(0).as_ref(), 0, logical)
+    });
+    store.remove(id);
+    match count {
+        Some(Value::Int(n)) => Ok(n),
+        Some(Value::Decimal(text) | Value::Text(text)) => text
+            .parse()
+            .map_err(|_| format!("unexpected count: {text}")),
+        other => Err(format!("unexpected count: {other:?}")),
     }
 }
 

@@ -1101,6 +1101,20 @@ async fn table_sql(
     ))
 }
 
+/// The exact row count of a table or view, counted by the core on the explorer's session.
+#[tauri::command]
+#[specta::specta]
+async fn count_rows(
+    session: String,
+    schema: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<f64> {
+    let open = state.session(&session).await?;
+    // f64 holds every count up to 2^53 exactly, and TypeScript numbers are f64.
+    Ok(spelunk_core::count_rows(&open.session, &schema, &name).await? as f64)
+}
+
 /// The UI's answer to a tunnel dialog (unknown host, passphrase…).
 #[tauri::command]
 #[specta::specta]
@@ -1199,6 +1213,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sort_result,
             filter_result,
             table_sql,
+            count_rows,
             statement_at,
             create_sqlite_database,
             script_risks,

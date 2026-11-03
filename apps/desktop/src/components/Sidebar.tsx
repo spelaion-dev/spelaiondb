@@ -254,6 +254,8 @@ function ObjectNode({ session, connectionId, object }: { session: string; connec
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  /** Exact count asked from the menu ("counting" while it runs). */
+  const [count, setCount] = useState<number | "counting" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -288,6 +290,17 @@ function ObjectNode({ session, connectionId, object }: { session: string; connec
     }
   }
   const preview = () => void openSql("preview");
+  async function countRows() {
+    setMenu(null);
+    setError(null);
+    setCount("counting");
+    try {
+      setCount(await call(commands.countRows(session, object.schema, object.name)));
+    } catch (e) {
+      setCount(null);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
   const view = object.kind.includes("view");
   const templates: SqlTemplateItem[] = view ? ["select"] : ["select", "insert", "update", "delete"];
   return (
@@ -304,14 +317,27 @@ function ObjectNode({ session, connectionId, object }: { session: string; connec
         <span className="twisty">{open ? "▾" : "▸"}</span>
         <span className={`kind ${view ? "kind-view" : "kind-table"}`}>{view ? "V" : "T"}</span>
         <span className="label">{object.name}</span>
-        {object.estimatedRows != null && (
-          <span className="muted small">~{object.estimatedRows.toLocaleString(i18n.language)}</span>
+        {count === "counting" ? (
+          <span className="muted small">{t("sql.counting")}</span>
+        ) : count != null ? (
+          <span className="small" title={t("sql.exactCount")}>
+            {count.toLocaleString(i18n.language)}
+          </span>
+        ) : (
+          object.estimatedRows != null && (
+            <span className="muted small" title={t("sql.estimate")}>
+              ~{object.estimatedRows.toLocaleString(i18n.language)}
+            </span>
+          )
         )}
       </div>
       {menu && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
           <button role="menuitem" onClick={preview}>
             {t("sql.preview")}
+          </button>
+          <button role="menuitem" onClick={() => void countRows()}>
+            {t("sql.count")}
           </button>
           <hr />
           {templates.map((template) => (

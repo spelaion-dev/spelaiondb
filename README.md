@@ -66,7 +66,8 @@ Preferences are stored in the personal `state.db` and apply to every workspace.
 ## Schema explorer
 
 Expanding a connection in the sidebar lists its schemas (databases in MySQL), tables and
-views with their columns and primary key. Double-click a table or view to open
+views with their columns, primary key and estimated rows (**Count rows** in the right-click
+menu gets the exact number). Double-click a table or view to open
 `SELECT * … LIMIT 100` in a new tab; right-click it to generate a `SELECT` with every column
 or, for tables, an `INSERT`, an `UPDATE` (on the primary key) or a `DELETE`. The core writes
 them with the engine's quoting and `:name` placeholders for the values; nothing runs until

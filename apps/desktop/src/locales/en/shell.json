@@ -54,7 +54,11 @@
     "select": "Generate SELECT",
     "insert": "Generate INSERT",
     "update": "Generate UPDATE",
-    "delete": "Generate DELETE"
+    "delete": "Generate DELETE",
+    "count": "Count rows",
+    "counting": "counting…",
+    "exactCount": "Exact row count",
+    "estimate": "Estimated rows (from the planner, not counted)"
   },
   "params": {
     "title": "Query parameters",

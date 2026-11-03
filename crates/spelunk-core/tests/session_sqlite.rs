@@ -78,3 +78,34 @@ async fn syntax_errors_point_into_the_script() {
         &script[offset..]
     );
 }
+
+#[tokio::test]
+async fn tables_and_views_are_counted_exactly_and_the_result_is_freed() {
+    let session = session().await;
+    let setup: Vec<CoreEvent> = session
+        .run_script(
+            "create table \"order lines\" (x int); \
+             insert into \"order lines\" values (1), (2), (3); \
+             create view big as select * from \"order lines\" where x > 1",
+        )
+        .collect()
+        .await;
+    assert!(matches!(
+        setup.last(),
+        Some(CoreEvent::ScriptFinished { failed: false, .. })
+    ));
+    let before = session.results().len();
+    assert_eq!(
+        spelunk_core::count_rows(&session, "main", "order lines").await,
+        Ok(3)
+    );
+    assert_eq!(
+        spelunk_core::count_rows(&session, "main", "big").await,
+        Ok(2)
+    );
+    assert_eq!(session.results().len(), before);
+    let err = spelunk_core::count_rows(&session, "main", "missing")
+        .await
+        .unwrap_err();
+    assert!(err.contains("no such table"), "{err}");
+}

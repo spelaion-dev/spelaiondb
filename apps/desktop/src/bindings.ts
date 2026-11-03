@@ -79,6 +79,8 @@ export const commands = {
 	 *  UPDATE or DELETE with `:named` placeholders), to open in a new tab.
 	 */
 	tableSql: (session: string, schema: string, name: string, template: SqlTemplateItem) => typedError<string, string>(__TAURI_INVOKE("table_sql", { session, schema, name, template })),
+	/**  The exact row count of a table or view, counted by the core on the explorer's session. */
+	countRows: (session: string, schema: string, name: string) => typedError<number | null, string>(__TAURI_INVOKE("count_rows", { session, schema, name })),
 	/**
 	 *  The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
 	 *  engine's dialect in the core like a script run, for Ctrl+Enter.

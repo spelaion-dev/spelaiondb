@@ -54,7 +54,11 @@
     "select": "Generar SELECT",
     "insert": "Generar INSERT",
     "update": "Generar UPDATE",
-    "delete": "Generar DELETE"
+    "delete": "Generar DELETE",
+    "count": "Contar filas",
+    "counting": "contando…",
+    "exactCount": "Número exacto de filas",
+    "estimate": "Filas estimadas (del planificador, sin contar)"
   },
   "params": {
     "title": "Parámetros de la consulta",
