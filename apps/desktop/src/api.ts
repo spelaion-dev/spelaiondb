@@ -28,6 +28,7 @@ import {
   type DbeaverScan_Serialize,
   type ImportReport,
   type RowChangeItem_Deserialize,
+  type UpdateStatus_Serialize,
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
   type FilterOpItem,
@@ -61,6 +62,7 @@ export type ObjectItem = ObjectItem_Serialize;
 export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
+export type UpdateStatus = UpdateStatus_Serialize;
 
 type Typed<T> = { status: "ok"; data: T } | { status: "error"; error: string };
 

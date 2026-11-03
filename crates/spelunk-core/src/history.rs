@@ -48,6 +48,13 @@ enum Request {
         theme: String,
         reply: Reply<()>,
     },
+    GetUpdateCheck {
+        reply: Reply<bool>,
+    },
+    SetUpdateCheck {
+        enabled: bool,
+        reply: Reply<()>,
+    },
     List {
         workspace: String,
         search: String,
@@ -115,6 +122,12 @@ impl QueryHistory {
                         }
                         Request::SetTheme { theme, reply } => {
                             let _ = reply.send(store.set_theme(&theme));
+                        }
+                        Request::GetUpdateCheck { reply } => {
+                            let _ = reply.send(store.get_update_check());
+                        }
+                        Request::SetUpdateCheck { enabled, reply } => {
+                            let _ = reply.send(store.set_update_check(enabled));
                         }
                         Request::List {
                             workspace,
@@ -215,6 +228,17 @@ impl QueryHistory {
             return Err(HistoryError::UnsupportedTheme);
         }
         self.request(|reply| Request::SetTheme { theme, reply })
+            .await
+    }
+
+    /// Whether the app checks for updates when it starts (ADR-021), defaulting to on.
+    pub async fn update_check(&self) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::GetUpdateCheck { reply })
+            .await
+    }
+
+    pub async fn set_update_check(&self, enabled: bool) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetUpdateCheck { enabled, reply })
             .await
     }
 

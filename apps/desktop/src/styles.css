@@ -249,6 +249,10 @@ input[type="search"] {
   flex-direction: column;
   gap: 6px;
 }
+.banner-actions {
+  display: flex;
+  gap: 6px;
+}
 .banner ul {
   margin: 0;
   padding-left: 16px;

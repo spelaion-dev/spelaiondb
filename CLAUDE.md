@@ -84,6 +84,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
   text). Our own canvas grid (`ResultGrid.tsx`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
+  Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin; its
+  `ENDPOINTS` stay empty until releases have a public home, and then the app says updates are
+  unavailable). Update artifacts are signed only in the release workflow
+  (`tauri.release.conf.json`, secret `TAURI_SIGNING_PRIVATE_KEY`); never commit a private key.
   Installers: `npx tauri build` (NSIS + MSI on Windows). Releases: pushing a tag `vX.Y.Z`
   runs `.github/workflows/release.yml` (installers for every OS, the `spelunk` CLI, notes from
   `docs/releases/vX.Y.Z.md` plus every commit since the previous tag, from

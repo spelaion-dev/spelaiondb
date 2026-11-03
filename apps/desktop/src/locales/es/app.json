@@ -6,5 +6,11 @@
   "newQuery": "Nueva consulta",
   "resizeSidebar": "Ajustar la anchura del panel de conexiones",
   "resizeSidebarHint": "Arrastra para ajustar el panel de conexiones. Doble clic para restablecer.",
-  "preferenceLoadError": "No se pudieron cargar tus preferencias:"
+  "preferenceLoadError": "No se pudieron cargar tus preferencias:",
+  "update": {
+    "available": "Hay una nueva versión de SpelunkDB, la {{version}} (tienes la {{current}}).",
+    "install": "Instalar y reiniciar",
+    "installing": "Instalando…",
+    "later": "Más tarde"
+  }
 }

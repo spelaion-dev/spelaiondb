@@ -245,6 +245,12 @@ try {
   await settingsDialog.getByRole("heading", { name: "Appearance" }).waitFor();
   assert.equal(await page.locator(".tabbar [role=tab]").count(), tabsWithoutSettings, "no settings tab");
   assert.equal(await page.locator(".activity-bar .settings-button").getAttribute("aria-pressed"), "true");
+  // Updates (ADR-021): this build has no public source yet, so it says so and asks nothing.
+  await settingsDialog.getByRole("button", { name: "Updates", exact: true }).click();
+  await settingsDialog.getByRole("heading", { name: "Updates" }).waitFor();
+  await settingsDialog.getByText(/^Version \d+\.\d+\.\d+$/).waitFor();
+  await settingsDialog.getByRole("status").filter({ hasText: "not available in this build" }).waitFor();
+  assert.equal(await page.locator(".update-notice").count(), 0, "no update notice");
   await page.keyboard.press("Escape");
   await settingsDialog.waitFor({ state: "detached" });
   const systemTheme = await page.evaluate(() => (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));

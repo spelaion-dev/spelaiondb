@@ -25,5 +25,17 @@
     "perConnection": "Saving is set per connection: open the “⋯” menu next to a connection in the sidebar. Turn it off before running SQL with passwords or other secrets. Turning it off keeps the queries already saved.",
     "audit": "This history belongs to the desktop app. Queries from AI agents (spelunk mcp) go to a separate audit log.",
     "open": "Open query history"
+  },
+  "updates": {
+    "title": "Updates",
+    "version": "Version {{version}}",
+    "unavailable": "Automatic updates are not available in this build yet. New versions are on the releases page.",
+    "atStartup": "Check for updates when the app starts",
+    "check": "Check now",
+    "checking": "Checking…",
+    "upToDate": "You have the latest version.",
+    "available": "Version {{version}} is available: install it from the notice at the top of the window.",
+    "hint": "Updates are signed and installed only when you click “Install and restart”. Open tabs come back with their SQL, not run.",
+    "error": "Could not check for updates:"
   }
 }

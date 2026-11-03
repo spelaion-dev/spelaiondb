@@ -6,10 +6,12 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
 import { usePreferences, type ThemePreference } from "../preferences";
+import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
+import { useUpdate } from "../update";
 
-type Category = "appearance" | "language" | "history";
-const CATEGORIES: Category[] = ["appearance", "language", "history"];
+type Category = "appearance" | "language" | "history" | "updates";
+const CATEGORIES: Category[] = ["appearance", "language", "history", "updates"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -56,6 +58,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "appearance" && <AppearanceSettings />}
         {category === "language" && <LanguageSettings />}
         {category === "history" && <HistorySettings />}
+        {category === "updates" && <UpdateSettings />}
       </section>
     </div>
   );
@@ -159,6 +162,55 @@ function HistorySettings() {
       <p>{t("history.perConnection")}</p>
       <p className="muted small">{t("history.audit")}</p>
       <button onClick={() => setHistoryOpen(true)}>{t("history.open")}</button>
+    </>
+  );
+}
+
+function UpdateSettings() {
+  const { t } = useTranslation("settings");
+  const [version, setVersion] = useState("");
+  const status = useUpdate((s) => s.status);
+  const checking = useUpdate((s) => s.checking);
+  const checkAtStartup = useUpdate((s) => s.checkAtStartup);
+  const error = useUpdate((s) => s.error);
+  const check = useUpdate((s) => s.check);
+  const setCheckAtStartup = useUpdate((s) => s.setCheckAtStartup);
+  useEffect(() => {
+    void getVersion().then(setVersion);
+  }, []);
+  // Know at once whether this build can update at all; with no endpoint nothing is requested.
+  useEffect(() => {
+    if (useUpdate.getState().status === null) void useUpdate.getState().check();
+  }, []);
+  const unavailable = status?.kind === "unavailable";
+  return (
+    <>
+      <p>{t("updates.version", { version })}</p>
+      {unavailable ? (
+        <p className="muted small" role="status">{t("updates.unavailable")}</p>
+      ) : (
+        <>
+          <label className="check">
+            <input type="checkbox" checked={checkAtStartup} onChange={(e) => void setCheckAtStartup(e.target.checked)} />
+            {t("updates.atStartup")}
+          </label>
+          <div>
+            <button disabled={checking} onClick={() => void check()}>
+              {checking ? t("updates.checking") : t("updates.check")}
+            </button>
+          </div>
+          <p className="small" role="status">
+            {status?.kind === "upToDate" && t("updates.upToDate")}
+            {status?.kind === "available" && t("updates.available", { version: status.version })}
+          </p>
+          <p className="muted small">{t("updates.hint")}</p>
+        </>
+      )}
+      {error && (
+        <p className="error small" role="alert">
+          {t("updates.error")} {error}
+        </p>
+      )}
     </>
   );
 }

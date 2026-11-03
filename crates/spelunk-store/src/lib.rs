@@ -433,6 +433,23 @@ impl Store {
         self.set_personal_setting("theme", theme)
     }
 
+    /// Whether the app checks for updates when it starts (ADR-021). On unless turned off.
+    pub fn get_update_check(&self) -> Result<bool, StoreError> {
+        let value = self
+            .conn
+            .query_row(
+                "select value from personal_settings where key = 'update_check'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(value.as_deref() != Some("off"))
+    }
+
+    pub fn set_update_check(&self, enabled: bool) -> Result<(), StoreError> {
+        self.set_personal_setting("update_check", if enabled { "on" } else { "off" })
+    }
+
     fn set_personal_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
         self.conn.execute(
             "insert into personal_settings (key, value) values (?1, ?2)
@@ -994,6 +1011,22 @@ mod tests {
             Store::open(&second_path).unwrap().get_language().unwrap(),
             "en"
         );
+    }
+
+    #[test]
+    fn update_check_is_on_until_turned_off_and_persistent() {
+        let path = temp("update-check");
+        let store = Store::open(&path).unwrap();
+        assert!(store.get_update_check().unwrap());
+        store.set_update_check(false).unwrap();
+        assert!(!store.get_update_check().unwrap());
+        store.set_theme("dark").unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert!(!reopened.get_update_check().unwrap());
+        assert_eq!(reopened.get_theme().unwrap(), "dark");
+        reopened.set_update_check(true).unwrap();
+        assert!(reopened.get_update_check().unwrap());
     }
 
     #[test]

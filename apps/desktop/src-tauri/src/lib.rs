@@ -3,6 +3,7 @@
 
 mod dto;
 mod interaction;
+mod update;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -167,6 +168,26 @@ async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
     state
         .history
         .set_theme(theme)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
+    state
+        .history
+        .update_check()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .history
+        .set_update_check(enabled)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1728,6 +1749,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_language,
             get_theme,
             set_theme,
+            get_update_check,
+            set_update_check,
+            update::update_check,
+            update::update_install,
             engine_catalog,
             list_tunnels,
             test_connection,
@@ -1847,7 +1872,9 @@ pub fn run() {
     let typed = builder.invoke_handler();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
+        .manage(update::PendingUpdate::default())
         .invoke_handler(move |invoke| match invoke.message.command() {
             "fetch_window" => raw_handler(invoke),
             _ => typed(invoke),

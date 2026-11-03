@@ -12,6 +12,7 @@ import { SnippetsPanel } from "./components/SnippetsPanel";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
 import { closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
+import { useUpdate } from "./update";
 import { SAVE_QUERY_EVENT, useApp, useDialogs } from "./store";
 
 const SIDEBAR_DEFAULT = 290;
@@ -146,6 +147,7 @@ export default function App() {
       <main className="main">
         {loadError && <div className="banner" role="alert">{loadError}<button onClick={() => void loadConnections()}>{t("retryConnections")}</button></div>}
         {preferenceError && <div className="banner" role="alert">{t("preferenceLoadError")} {preferenceError.detail}</div>}
+        <UpdateNotice />
         <div className="tab-strip">
         <div className="tabbar" role="tablist">
           {tabs.map((tab) => (
@@ -204,6 +206,32 @@ export default function App() {
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       <Dialogs />
+    </div>
+  );
+}
+
+/** A new version is out: installing waits for the user's click (ADR-021). */
+function UpdateNotice() {
+  const { t } = useTranslation("app");
+  const status = useUpdate((s) => s.status);
+  const dismissed = useUpdate((s) => s.dismissed);
+  const installing = useUpdate((s) => s.installing);
+  const error = useUpdate((s) => s.error);
+  const install = useUpdate((s) => s.install);
+  const dismiss = useUpdate((s) => s.dismiss);
+  if (status?.kind !== "available" || dismissed) return null;
+  return (
+    <div className="banner update-notice" role="status">
+      <span>{t("update.available", { version: status.version, current: status.currentVersion })}</span>
+      {error && <span className="error">{error}</span>}
+      <div className="banner-actions">
+        <button className="primary" disabled={installing} onClick={() => void install()}>
+          {installing ? t("update.installing") : t("update.install")}
+        </button>
+        <button disabled={installing} onClick={dismiss}>
+          {t("update.later")}
+        </button>
+      </div>
     </div>
   );
 }

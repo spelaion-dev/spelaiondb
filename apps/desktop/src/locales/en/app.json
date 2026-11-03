@@ -6,5 +6,11 @@
   "newQuery": "New query",
   "resizeSidebar": "Resize the connections panel",
   "resizeSidebarHint": "Drag to resize the connections panel. Double-click to reset.",
-  "preferenceLoadError": "Could not load your preferences:"
+  "preferenceLoadError": "Could not load your preferences:",
+  "update": {
+    "available": "SpelunkDB {{version}} is available (you have {{current}}).",
+    "install": "Install and restart",
+    "installing": "Installing…",
+    "later": "Later"
+  }
 }

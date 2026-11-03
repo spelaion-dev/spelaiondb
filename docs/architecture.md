@@ -59,5 +59,6 @@ A summary of how the pieces fit together. The reasons behind each decision are i
 - **v0.2:** MySQL/MariaDB (in the MCP since ADR-020), result editing,
   export, automatic reconnection, 2FA and certificates, `~/.ssh/config` import.
 - **v0.3:** layered config and secret managers, the app serves MCP with confirmed writes,
-  signing and auto-update.
+  automatic updates (prepared and signed, ADR-021; on once releases are public), and
+  installer signing.
 - **v0.4+:** ERD, plan visualizer, more engines, external drivers and a JDBC bridge.

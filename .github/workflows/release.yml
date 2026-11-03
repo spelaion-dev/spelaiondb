@@ -1,7 +1,9 @@
 # Releases: pushing a tag `vX.Y.Z` (from a main that passed CI) builds the desktop installers
 # on Windows, macOS (Apple Silicon and Intel) and Linux, plus the `spelunk` CLI with the MCP
 # server, and publishes them as a GitHub pre-release. Its notes are `docs/releases/vX.Y.Z.md`
-# followed by every commit since the previous tag (`scripts/release-notes.sh`).
+# followed by every commit since the previous tag (`scripts/release-notes.sh`). The app's
+# update artifacts (`.sig` files and `latest.json`) are signed with the repository secret
+# `TAURI_SIGNING_PRIVATE_KEY` (ADR-021).
 name: Release
 
 on:
@@ -79,12 +81,16 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # The key has no password (ADR-021).
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseDraft: true
           prerelease: true
-          args: ${{ matrix.args }}
+          # Update artifacts only here: local builds need no signing key.
+          args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }}
 
   cli:
     name: CLI · ${{ matrix.target }}

@@ -22,6 +22,11 @@ Releases are built by CI from a version tag (`.github/workflows/release.yml`): b
 version in `Cargo.toml` and `apps/desktop/src-tauri/tauri.conf.json`, write
 `docs/releases/vX.Y.Z.md`, and push the tag `vX.Y.Z`.
 
+Automatic updates (ADR-021) are prepared but off: the app can check, download a signed
+update and install it when you click "Install and restart", but it has no public place to
+look yet, so for now Settings → Updates says they are not available and new versions are
+installed by hand.
+
 ## Build from source
 
 With Rust, Node and the [Tauri prerequisites](https://tauri.app/start/prerequisites/):

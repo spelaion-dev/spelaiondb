@@ -12,6 +12,14 @@ export const commands = {
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
 	setTheme: (theme: string) => typedError<null, string>(__TAURI_INVOKE("set_theme", { theme })),
+	getUpdateCheck: () => typedError<boolean, string>(__TAURI_INVOKE("get_update_check")),
+	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
+	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
+	/**
+	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
+	 *  come back with their SQL, not executed (CLAUDE.md).
+	 */
+	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
 	/**  Tunnels a new connection can use (from the repository and the personal directory). */
@@ -698,6 +706,16 @@ export type TunnelItem = {
 export type TunnelTestOutcome = { kind: "connected" } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
+
+export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
+
+export type UpdateStatus_Deserialize = 
+/**  This build has nowhere to look for updates. */
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null };
+
+export type UpdateStatus_Serialize = 
+/**  This build has nowhere to look for updates. */
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null };
 
 /**
  *  What a pasted connection URL fills in the form. The password goes only to the form's

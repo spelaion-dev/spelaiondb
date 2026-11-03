@@ -29,3 +29,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [018](0018-sqlite-over-ssh.md) | SQLite files on a server, through the server's `sqlite3` over SSH | Accepted |
 | [019](0019-mcp-writes.md) | Agents may write, per connection (supersedes ADR-008's writes) | Accepted |
 | [020](0020-mcp-engines.md) | The MCP serves MySQL, MariaDB, SQL Server and DuckDB, with each engine's barriers | Accepted |
+| [021](0021-automatic-updates.md) | Automatic updates: signed, installed on the user's click, off until there is a public source | Accepted |
