@@ -14,8 +14,11 @@ mod format;
 mod introspect;
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use duckdb::{AccessMode, Config, InterruptHandle};
@@ -30,12 +33,42 @@ pub use dialect::DuckdbDialect;
 /// A database opened in this process: the handle the connections are cloned from.
 type Root = Arc<Mutex<duckdb::Connection>>;
 
-/// An open database as the registry sees it: read-only or not, and its root while it lives.
-type Opened = (bool, Weak<Mutex<duckdb::Connection>>);
+struct Opened {
+    read_only: bool,
+    root: Root,
+    clients: Arc<AtomicUsize>,
+    actors: usize,
+}
 
 /// Open databases by file.
-static OPEN: LazyLock<Mutex<HashMap<PathBuf, Opened>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static OPEN: LazyLock<(Mutex<HashMap<PathBuf, Opened>>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(HashMap::new()), Condvar::new()));
+
+/// Tracks connections visible to callers, independently of their closing threads.
+struct ClientLease(Arc<AtomicUsize>);
+
+impl Drop for ClientLease {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Keeps the root alive until the actor has closed its cloned connection.
+struct ActorLease(PathBuf);
+
+impl Drop for ActorLease {
+    fn drop(&mut self) {
+        if let Ok(mut open) = OPEN.0.lock() {
+            if let Some(entry) = open.get_mut(&self.0) {
+                entry.actors -= 1;
+                if entry.actors == 0 {
+                    open.remove(&self.0);
+                }
+            }
+            OPEN.1.notify_all();
+        }
+    }
+}
 
 /// Creates an empty DuckDB database at `path`. An existing file is never touched.
 pub fn create_database(path: &Path) -> Result<()> {
@@ -61,10 +94,14 @@ pub struct DuckdbDriver {
 }
 
 /// Opens the database or clones the connection that already has it open.
-fn open(path: &str, read_only: bool, create: bool) -> Result<(Option<Root>, duckdb::Connection)> {
+fn open(
+    path: &str,
+    read_only: bool,
+    create: bool,
+) -> Result<(Option<ActorLease>, duckdb::Connection, Option<ClientLease>)> {
     if path == ":memory:" {
         let conn = duckdb::Connection::open_in_memory().map_err(exec::map_error)?;
-        return Ok((None, conn));
+        return Ok((None, conn, None));
     }
     let file = Path::new(path);
     if !file.exists() && !(create && !read_only) {
@@ -82,42 +119,69 @@ fn open(path: &str, read_only: bool, create: bool) -> Result<(Option<Root>, duck
         })
         .unwrap_or_else(|_| file.to_path_buf());
     let mut open = OPEN
+        .0
         .lock()
         .map_err(|_| DriverError::Other("the DuckDB registry is poisoned".into()))?;
-    open.retain(|_, (_, root)| root.strong_count() > 0);
-    let root = match open
-        .get(&key)
-        .and_then(|(mode, root)| Some((*mode, root.upgrade()?)))
-    {
-        Some((mode, root)) if mode == read_only => root,
-        Some((mode, _)) => {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while let Some(entry) = open.get(&key) {
+        if entry.read_only == read_only {
+            break;
+        }
+        if entry.clients.load(Ordering::Acquire) > 0 {
             return Err(DriverError::Connection(format!(
                 "{path} is already open {} in SpelunkDB; DuckDB opens a file in one mode at a time",
-                if mode { "read-only" } else { "for writing" }
+                if entry.read_only {
+                    "read-only"
+                } else {
+                    "for writing"
+                }
             )));
         }
-        None => {
-            let config = Config::default()
-                .access_mode(if read_only {
-                    AccessMode::ReadOnly
-                } else {
-                    AccessMode::ReadWrite
-                })
-                .map_err(exec::map_error)?;
-            let conn =
-                duckdb::Connection::open_with_flags(file, config).map_err(exec::map_error)?;
-            let root: Root = Arc::new(Mutex::new(conn));
-            open.insert(key, (read_only, Arc::downgrade(&root)));
-            root
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(DriverError::Connection(format!(
+                "{path} is still closing; try opening it again"
+            )));
+        };
+        open = OPEN
+            .1
+            .wait_timeout(open, remaining)
+            .map_err(|_| DriverError::Other("the DuckDB registry is poisoned".into()))?
+            .0;
+    }
+    if let Entry::Vacant(entry) = open.entry(key.clone()) {
+        let config = Config::default()
+            .access_mode(if read_only {
+                AccessMode::ReadOnly
+            } else {
+                AccessMode::ReadWrite
+            })
+            .map_err(exec::map_error)?;
+        let root = duckdb::Connection::open_with_flags(file, config).map_err(exec::map_error)?;
+        entry.insert(Opened {
+            read_only,
+            root: Arc::new(Mutex::new(root)),
+            clients: Arc::new(AtomicUsize::new(0)),
+            actors: 0,
+        });
+    }
+    let entry = open.get_mut(&key).expect("database was inserted");
+    let conn = match entry.root.lock() {
+        Ok(root) => root.try_clone().map_err(exec::map_error),
+        Err(_) => Err(DriverError::Other("a DuckDB connection is poisoned".into())),
+    };
+    let conn = match conn {
+        Ok(conn) => conn,
+        Err(error) => {
+            if entry.actors == 0 {
+                open.remove(&key);
+            }
+            return Err(error);
         }
     };
-    drop(open);
-    let conn = root
-        .lock()
-        .map_err(|_| DriverError::Other("a DuckDB connection is poisoned".into()))?
-        .try_clone()
-        .map_err(exec::map_error)?;
-    Ok((Some(root), conn))
+    entry.actors += 1;
+    entry.clients.fetch_add(1, Ordering::AcqRel);
+    let client = ClientLease(Arc::clone(&entry.clients));
+    Ok((Some(ActorLease(key)), conn, Some(client)))
 }
 
 #[async_trait]
@@ -140,25 +204,26 @@ impl Driver for DuckdbDriver {
         std::thread::Builder::new()
             .name(format!("duckdb {path}"))
             .spawn(move || {
-                let (root, conn) = match open(&path, read_only, create) {
+                let (actor_lease, conn, client_lease) = match open(&path, read_only, create) {
                     Ok(opened) => opened,
                     Err(e) => {
                         let _ = ready_tx.send(Err(e));
                         return;
                     }
                 };
-                let _ = ready_tx.send(Ok(conn.interrupt_handle()));
+                let _ = ready_tx.send(Ok((conn.interrupt_handle(), client_lease)));
                 actor(&conn, inbox);
                 // The connection goes before the root, so the root is the last to close the file.
                 drop(conn);
-                drop(root);
+                drop(actor_lease);
             })
             .map_err(|e| DriverError::Other(format!("could not spawn the DuckDB thread: {e}")))?;
 
-        let interrupt = ready_rx.await.map_err(|_| {
+        let (interrupt, client_lease) = ready_rx.await.map_err(|_| {
             DriverError::Connection("the DuckDB thread ended while opening".into())
         })??;
         Ok(Box::new(DuckdbConnection {
+            _lease: client_lease,
             commands,
             cancel: Arc::new(DuckdbCancel(interrupt)),
             capabilities: Capabilities {
@@ -219,6 +284,8 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
 }
 
 struct DuckdbConnection {
+    // Drop the client lease before closing the command channel.
+    _lease: Option<ClientLease>,
     commands: mpsc::UnboundedSender<Command>,
     cancel: Arc<DuckdbCancel>,
     capabilities: Capabilities,

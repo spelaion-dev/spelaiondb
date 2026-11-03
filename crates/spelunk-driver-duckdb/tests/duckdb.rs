@@ -416,6 +416,15 @@ async fn connections_to_one_file_share_it() {
         other => panic!("{:?}", other.err()),
     }
     drop(first);
+    match DuckdbDriver::default().connect(&read_only).await {
+        Err(DriverError::Connection(message)) => {
+            assert!(message.contains("already open"), "{message}")
+        }
+        other => panic!(
+            "the remaining connection should keep the file open: {:?}",
+            other.err()
+        ),
+    }
     drop(second);
     // Closed: it opens read-only now, and writes fail.
     let conn = DuckdbDriver::default()
@@ -428,6 +437,21 @@ async fn connections_to_one_file_share_it() {
             assert!(message.to_lowercase().contains("read-only"), "{message}")
         }
         other => panic!("the write should fail: {other:?}"),
+    }
+    drop(conn);
+    // Closing an actor is asynchronous: changing mode immediately must still be reliable.
+    for _ in 0..10 {
+        let writable = DuckdbDriver::default()
+            .connect(&db.params())
+            .await
+            .expect("writable after closing read-only");
+        drop(writable);
+        let readonly = DuckdbDriver::default()
+            .connect(&read_only)
+            .await
+            .expect("read-only after closing writable");
+        assert_eq!(table(&*readonly, "select a from t").await.1[0][0], "1");
+        drop(readonly);
     }
 }
 
