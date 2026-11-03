@@ -831,8 +831,12 @@ input[type="search"] {
   display: flex;
   flex: 1;
   min-width: 0;
-  height: 100%;
+  min-height: 0;
   background: var(--panel);
+}
+.modal.settings-dialog {
+  width: min(720px, 94vw);
+  height: min(520px, 86vh);
 }
 .settings-nav {
   display: flex;

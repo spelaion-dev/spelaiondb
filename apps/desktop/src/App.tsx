@@ -7,12 +7,12 @@ import { DeleteConnection } from "./components/DeleteConnection";
 import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
 import { HistoryPanel } from "./components/HistoryPanel";
-import { SettingsTab } from "./components/SettingsTab";
+import { SettingsDialog } from "./components/Settings";
 import { SnippetsPanel } from "./components/SnippetsPanel";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
 import { closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
-import { SAVE_QUERY_EVENT, SETTINGS_TAB, useApp, useDialogs } from "./store";
+import { SAVE_QUERY_EVENT, useApp, useDialogs } from "./store";
 
 const SIDEBAR_DEFAULT = 290;
 const SIDEBAR_MIN = 210;
@@ -73,16 +73,16 @@ export default function App() {
         else app.addTab(null);
       } else if (mod && key === "s") {
         e.preventDefault();
-        if (app.activeTab && app.activeTab !== SETTINGS_TAB) {
+        if (app.activeTab && !app.settingsOpen) {
           window.dispatchEvent(new CustomEvent(SAVE_QUERY_EVENT, { detail: app.activeTab }));
         }
       } else if (mod && key === "w") {
         e.preventDefault();
-        if (app.activeTab === SETTINGS_TAB) app.closeSettings();
+        if (app.settingsOpen) app.closeSettings();
         else if (app.activeTab) closeQueryTab(app.activeTab);
       } else if (mod && (e.key === "Tab" || e.key === "PageDown" || e.key === "PageUp")) {
-        // Next or previous tab, the settings tab included, wrapping around.
-        const order = [...app.tabs.map((t) => t.id), ...(app.settingsOpen ? [SETTINGS_TAB] : [])];
+        // Next or previous tab, wrapping around.
+        const order = app.tabs.map((t) => t.id);
         if (order.length === 0) return;
         e.preventDefault();
         const back = e.key === "PageUp" || (e.key === "Tab" && e.shiftKey);
@@ -170,27 +170,6 @@ export default function App() {
               </button>
             </div>
           ))}
-          {settingsOpen && (
-            <div
-              role="tab"
-              aria-selected={activeTab === SETTINGS_TAB}
-              className={`tab settings-tab ${activeTab === SETTINGS_TAB ? "active" : ""}`}
-              onClick={() => setActiveTab(SETTINGS_TAB)}
-            >
-              <span aria-hidden="true">⚙</span>
-              <span>{t("settings:title")}</span>
-              <button
-                className="close"
-                aria-label={t("closeTab", { name: t("settings:title") })}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeSettings();
-                }}
-              >
-                ×
-              </button>
-            </div>
-          )}
           <button className="new-tab" onClick={() => addTab(null)} title={t("newQueryShortcut")}>
             +
           </button>
@@ -198,12 +177,7 @@ export default function App() {
         </div>
         <div className="workspace-content">
           <div className="editor-workspace">
-            {settingsOpen && (
-              <div className="tab-panel" hidden={activeTab !== SETTINGS_TAB}>
-                <SettingsTab />
-              </div>
-            )}
-            {tabs.length === 0 && !settingsOpen ? (
+            {tabs.length === 0 ? (
               <div className="welcome">
                 <h1>SpelunkDB</h1>
                 <p>{t("welcome")}</p>
@@ -228,6 +202,7 @@ export default function App() {
         <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : "add"} dialog={connectionDialog} />
       )}
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
+      {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       <Dialogs />
     </div>
   );

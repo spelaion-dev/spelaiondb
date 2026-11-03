@@ -1,19 +1,47 @@
-// Settings tab: personal preferences grouped by category. Per-connection options (such as
-// saving query history) live with each connection in the sidebar, not here.
+// Settings dialog: personal preferences grouped by category, applied as they change (the app
+// behind shows a new theme at once). Per-connection options (such as saving query history)
+// live with each connection in the sidebar, not here.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
 import { usePreferences, type ThemePreference } from "../preferences";
-import { useApp } from "../store";
+import { useApp, useDialogs } from "../store";
 
 type Category = "appearance" | "language" | "history";
 const CATEGORIES: Category[] = ["appearance", "language", "history"];
 
-export function SettingsTab() {
+export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
   const [category, setCategory] = useState<Category>("appearance");
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Dialogs opened on top (trust, passwords…) handle their own Escape.
+      const dialogs = useDialogs.getState();
+      if (e.key === "Escape" && !dialogs.trust && !dialogs.password && dialogs.interactions.length === 0) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop wizard-backdrop">
+      <div className="modal wizard settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div className="wizard-header">
+          <h2 id="settings-title">{t("title")}</h2>
+          <button className="ghost" aria-label={t("close")} onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <Settings category={category} onCategory={setCategory} />
+      </div>
+    </div>
+  );
+}
+
+function Settings({ category, onCategory: setCategory }: { category: Category; onCategory(category: Category): void }) {
+  const { t } = useTranslation("settings");
   return (
     <div className="settings">
       <nav className="settings-nav" aria-label={t("categories")}>

@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { SETTINGS_TAB, useApp } from "../store";
+import { useApp } from "../store";
 
 type IconName = "connections" | "history" | "saved" | "settings";
 
@@ -18,7 +18,7 @@ export function ActivityBar({ connectionsOpen, onToggleConnections }: { connecti
   const { t } = useTranslation(["shell", "settings"]);
   const historyOpen = useApp((s) => s.historyOpen);
   const snippetsOpen = useApp((s) => s.snippetsOpen);
-  const settingsActive = useApp((s) => s.settingsOpen && s.activeTab === SETTINGS_TAB);
+  const settingsActive = useApp((s) => s.settingsOpen);
   return (
     <nav className="activity-bar" aria-label={t("activityBar")}>
       <button className="activity-button" aria-label={t("connections")} title={t("connections")} aria-pressed={connectionsOpen} aria-controls="connections-sidebar" onClick={onToggleConnections}>

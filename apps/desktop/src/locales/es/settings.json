@@ -1,6 +1,7 @@
 {
   "title": "Configuración",
   "open": "Configuración (Ctrl+,)",
+  "close": "Cerrar",
   "categories": "Categorías de la configuración",
   "loadError": "No se pudo cargar este ajuste:",
   "saveError": "No se pudo guardar este ajuste:",

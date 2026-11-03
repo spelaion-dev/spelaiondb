@@ -1,6 +1,7 @@
 {
   "title": "Settings",
   "open": "Settings (Ctrl+,)",
+  "close": "Close",
   "categories": "Settings categories",
   "loadError": "Could not load this setting:",
   "saveError": "Could not save this setting:",

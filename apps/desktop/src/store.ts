@@ -103,7 +103,6 @@ export const SAVE_QUERY_EVENT = "spelunk:save-query";
 const MAX_CLOSED_TABS = 20;
 
 /** `activeTab` value of the settings tab, which lives beside the query tabs. */
-export const SETTINGS_TAB = "settings";
 
 interface AppStore {
   workspace: WorkspaceInfo | null;
@@ -190,7 +189,7 @@ export const useApp = create<AppStore>((set) => ({
     set((s) => {
       const closed = s.tabs.find((t) => t.id === id);
       const tabs = s.tabs.filter((t) => t.id !== id);
-      const fallback = tabs[tabs.length - 1]?.id ?? (s.settingsOpen ? SETTINGS_TAB : null);
+      const fallback = tabs[tabs.length - 1]?.id ?? null;
       const closedTabs = closed
         ? [...s.closedTabs, { connectionId: closed.connectionId, sql: closed.sql }].slice(-MAX_CLOSED_TABS)
         : s.closedTabs;
@@ -214,12 +213,8 @@ export const useApp = create<AppStore>((set) => ({
   refreshSnippets: () => set((s) => ({ snippetsRevision: s.snippetsRevision + 1 })),
   setConnectionDialog: (connectionDialog) => set({ connectionDialog }),
   setDeletingConnection: (deletingConnection) => set({ deletingConnection }),
-  openSettings: () => set({ settingsOpen: true, activeTab: SETTINGS_TAB }),
-  closeSettings: () =>
-    set((s) => ({
-      settingsOpen: false,
-      activeTab: s.activeTab === SETTINGS_TAB ? (s.tabs[s.tabs.length - 1]?.id ?? null) : s.activeTab,
-    })),
+  openSettings: () => set({ settingsOpen: true }),
+  closeSettings: () => set({ settingsOpen: false }),
   refreshHistory: () => set((s) => ({ historyRevision: s.historyRevision + 1 })),
   setHistorySaving: (connection, saving) => set((s) => ({
     historySaving: saving ? [...new Set([...s.historySaving, connection])] : s.historySaving.filter((id) => id !== connection),

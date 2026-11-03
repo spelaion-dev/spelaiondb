@@ -131,21 +131,17 @@ try {
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "detached" });
   }
-  // Opens a settings category in its own tab, runs `action` and goes back to the tab that
-  // was active, closing the settings tab, so the rest of the test sees the same layout.
+  // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
+  // the tabs behind it are left as they were.
   const CATEGORY = { appearance: 1, language: 2, history: 3 };
   async function withSettings(category, action) {
-    const tabs = page.locator(".tabbar [role=tab]");
-    let selected = -1;
-    for (let i = 0; i < (await tabs.count()); i++) {
-      if ((await tabs.nth(i).getAttribute("aria-selected")) === "true") selected = i;
-    }
     await page.locator(".activity-bar .settings-button").click();
-    await page.locator(`.settings-nav button:nth-child(${CATEGORY[category]})`).click();
-    await action(page.locator(".settings"));
-    if (selected >= 0) await tabs.nth(selected).click();
-    await page.locator(".settings-tab .close").click();
-    await page.locator(".settings-tab").waitFor({ state: "detached" });
+    const dialog = page.locator(".settings-dialog");
+    await dialog.waitFor();
+    await dialog.locator(`.settings-nav button:nth-child(${CATEGORY[category]})`).click();
+    await action(dialog.locator(".settings"));
+    await dialog.locator(".wizard-header button").click();
+    await dialog.waitFor({ state: "detached" });
   }
   async function setLanguage(value) {
     await withSettings("language", async (settings) => {
@@ -242,11 +238,15 @@ try {
   await sidebarResizer.dblclick();
   assert.equal(Math.round((await sidebar.boundingBox()).width), 290);
 
-  step("settings: theme in its own tab, Ctrl+, shortcut");
+  step("settings: a dialog over the tabs, Ctrl+, opens it and Escape closes it");
+  const tabsWithoutSettings = await page.locator(".tabbar [role=tab]").count();
   await page.keyboard.press("Control+,");
-  await page.locator(".settings-tab[aria-selected=true]").waitFor();
-  await page.getByRole("heading", { name: "Appearance" }).waitFor();
-  await page.locator(".settings-tab .close").click();
+  const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+  await settingsDialog.getByRole("heading", { name: "Appearance" }).waitFor();
+  assert.equal(await page.locator(".tabbar [role=tab]").count(), tabsWithoutSettings, "no settings tab");
+  assert.equal(await page.locator(".activity-bar .settings-button").getAttribute("aria-pressed"), "true");
+  await page.keyboard.press("Escape");
+  await settingsDialog.waitFor({ state: "detached" });
   const systemTheme = await page.evaluate(() => (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   assert.equal(await page.locator("html").getAttribute("data-theme"), systemTheme);
   await setTheme("dark", "dark");
@@ -722,12 +722,12 @@ try {
   assert.equal(await sqlEditor.innerText(), "select 'unterminated");
 
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab moves");
-  const queryTabCount = await page.locator(".tabbar .tab:not(.settings-tab)").count();
+  const queryTabCount = await page.locator(".tabbar .tab").count();
   await sqlEditor.click();
   await page.keyboard.press("Control+w");
-  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab:not(.settings-tab)").length === n, queryTabCount - 1);
+  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, queryTabCount - 1);
   await page.keyboard.press("Control+Shift+T");
-  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab:not(.settings-tab)").length === n, queryTabCount);
+  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, queryTabCount);
   assert.equal(await panel.locator(".cm-content").innerText(), "select 'unterminated");
   assert.equal(await panel.locator("select").first().evaluate((el) => el.selectedOptions[0].text), "Shop (SQLite) (sqlite)");
   const activeName = () => page.locator(".tabbar .tab.active").innerText();
