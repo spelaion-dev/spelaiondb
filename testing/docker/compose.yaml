@@ -3,10 +3,13 @@
 #   host ──2221──► bastion1 ──(mid network)──► bastion2 ──(data network)──► postgres:5432
 #                                                                          mysql:3306
 #                                                                          mariadb:3306
+#                                                                          sqlserver:1433
+#
+#   host ──2221──► bastion1 ──(mid network)──► sqlitehost (sqlite3 runs there)
 #
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
-# Postgres is also published on 127.0.0.1:15432, MySQL on 13306 and MariaDB on 13307, for
-# tests without SSH.
+# Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307 and SQL
+# Server on 11433, for tests without SSH.
 name: spelunk-test
 
 services:
@@ -36,14 +39,20 @@ services:
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
       - ./keys/server.crt:/certs/server.crt:ro
       - ./keys/server.key:/certs/server.key:ro
+      - ./keys/ca.crt:/certs/ca.crt:ro
+      - ./postgres/pg_hba.conf:/certs/pg_hba.conf:ro
     # TLS enabled (without requiring it): PostgreSQL rejects keys mounted from Windows because
     # of their permissions, so they are copied inside with the owner and permissions it wants.
+    # The user "spelunk_cert" logs in only with a client certificate from the test authority
+    # (ADR-022; see postgres/pg_hba.conf).
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         install -o postgres -g postgres -m 600 /certs/server.key /var/lib/postgresql/server.key
         install -o postgres -g postgres -m 644 /certs/server.crt /var/lib/postgresql/server.crt
-        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+        install -o postgres -g postgres -m 644 /certs/ca.crt /var/lib/postgresql/ca.crt
+        install -o postgres -g postgres -m 644 /certs/pg_hba.conf /var/lib/postgresql/pg_hba.conf
+        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key -c ssl_ca_file=/var/lib/postgresql/ca.crt -c hba_file=/var/lib/postgresql/pg_hba.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U spelunk -d spelunk"]
       interval: 2s
@@ -74,7 +83,7 @@ services:
         install -o mysql -g mysql -m 600 /certs/mysql.key /etc/mysql-tls/server.key
         install -o mysql -g mysql -m 644 /certs/mysql.crt /etc/mysql-tls/server.crt
         install -o mysql -g mysql -m 644 /certs/ca.crt /etc/mysql-tls/ca.crt
-        exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key
+        exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --log-bin-trust-function-creators=1
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uspelunk -pspelunk --silent"]
       interval: 2s
@@ -106,6 +115,31 @@ services:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s
       retries: 60
+    networks: [data, direct]
+
+  # A server holding a SQLite file (ADR-018): it lets the client run commands and has
+  # sqlite3, unlike the bastions. Only bastion1 reaches it: tests go through two hops.
+  sqlitehost:
+    build: ./sqlitehost
+    volumes:
+      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelunk:ro
+    networks: [mid]
+
+  # SQL Server 2022 (Developer edition, free for development and testing). It encrypts with a
+  # self-signed certificate of its own. Tests log in as `sa` and create the `spelunk` database.
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: Spelunk-test-1
+    ports:
+      - "127.0.0.1:11433:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"select 1\" -b -o /dev/null"]
+      interval: 3s
+      retries: 60
+      start_period: 10s
     networks: [data, direct]
 
 networks:

@@ -600,3 +600,85 @@ async fn cancel_works_over_tls() {
     canceller.await.unwrap().unwrap();
     assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
 }
+
+fn test_key(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testing/docker/keys")
+        .join(name)
+}
+
+/// ADR-022: the user "spelunk_cert" logs in with a client certificate and no password
+/// (testing/docker/postgres/pg_hba.conf).
+#[tokio::test]
+async fn client_certificates_log_in_without_a_password() {
+    let Some(admin) = connect().await else { return };
+    run(
+        &*admin,
+        "do $$ begin create role spelunk_cert login; exception when duplicate_object then null; end $$",
+    )
+    .await
+    .unwrap();
+    let (host, port) = test_addr().unwrap();
+    let params = ConnectParams {
+        host,
+        port,
+        user: "spelunk_cert".into(),
+        password: None,
+        database: "spelunk".into(),
+        tls: TlsMode::VerifyCa,
+        ca_certificate: Some(test_key("ca.crt")),
+        client_certificate: Some(test_key("client.crt")),
+        client_key: Some(test_key("client.key")),
+        ..Default::default()
+    };
+    let conn = PostgresDriver
+        .connect(&params)
+        .await
+        .expect("logging in with the client certificate");
+    let events = run(
+        &*conn,
+        "select current_user::text, client_dn from pg_stat_ssl where pid = pg_backend_pid()",
+    )
+    .await
+    .unwrap();
+    let batch = events
+        .iter()
+        .find_map(|e| match e {
+            ExecEvent::Batch(batch) => Some(batch.clone()),
+            _ => None,
+        })
+        .expect("a row");
+    let text = |c: usize| {
+        spelunk_driver_api::Value::from_array(batch.column(c).as_ref(), 0, LogicalType::Text)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        (text(0), text(1)),
+        ("spelunk_cert".into(), "/CN=spelunk_cert".into())
+    );
+
+    // Without the certificate the same user is refused, with or without TLS.
+    for tls in [TlsMode::VerifyCa, TlsMode::Disable] {
+        let without = ConnectParams {
+            tls,
+            client_certificate: None,
+            client_key: None,
+            ..params.clone()
+        };
+        assert!(PostgresDriver.connect(&without).await.is_err(), "{tls:?}");
+    }
+    // A key that cannot be read says which file, and nothing of any key.
+    let missing = ConnectParams {
+        client_key: Some(test_key("no-such.key")),
+        ..params.clone()
+    };
+    let message = PostgresDriver
+        .connect(&missing)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(message.contains("no-such.key"), "{message}");
+    assert!(!message.contains("PRIVATE KEY"), "{message}");
+}

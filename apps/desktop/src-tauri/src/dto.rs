@@ -114,6 +114,47 @@ pub enum ConnectOutcome {
     },
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
+    /// A repository connection or tunnel is new or changed since the repository was trusted
+    /// (ADR-022): show the change and ask before resolving anything.
+    Changed {
+        /// `connection:<id>` or `tunnel:<name>`, for `accept_change`.
+        item: String,
+        new: bool,
+        fields: Vec<FieldChangeItem>,
+    },
+    /// The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
+    /// their values, save them with `set_user_vars` and try again.
+    MissingVariables {
+        names: Vec<String>,
+    },
+}
+
+/// One field of a changed repository item. Repository files hold secret references, never
+/// secrets.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldChangeItem {
+    pub field: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+impl From<spelunk_config::ItemChange> for ConnectOutcome {
+    fn from(change: spelunk_config::ItemChange) -> Self {
+        ConnectOutcome::Changed {
+            item: change.item,
+            new: change.new,
+            fields: change
+                .fields
+                .into_iter()
+                .map(|f| FieldChangeItem {
+                    field: f.field,
+                    before: f.before,
+                    after: f.after,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -427,6 +468,35 @@ pub enum PasswordMode {
     Env,
     /// A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is.
     Other,
+    /// Short-lived tokens from a cloud provider's CLI (ADR-022).
+    AwsRds,
+    AzureAd,
+    GoogleCloudSql,
+}
+
+impl PasswordMode {
+    fn cloud_token(self) -> Option<spelunk_config::CloudToken> {
+        use spelunk_config::CloudToken;
+        match self {
+            PasswordMode::AwsRds => Some(CloudToken::AwsRds),
+            PasswordMode::AzureAd => Some(CloudToken::AzureAd),
+            PasswordMode::GoogleCloudSql => Some(CloudToken::GoogleCloudSql),
+            PasswordMode::None
+            | PasswordMode::Keychain
+            | PasswordMode::Prompt
+            | PasswordMode::Env
+            | PasswordMode::Other => None,
+        }
+    }
+
+    fn from_cloud_token(token: spelunk_config::CloudToken) -> Self {
+        use spelunk_config::CloudToken;
+        match token {
+            CloudToken::AwsRds => PasswordMode::AwsRds,
+            CloudToken::AzureAd => PasswordMode::AzureAd,
+            CloudToken::GoogleCloudSql => PasswordMode::GoogleCloudSql,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -488,7 +558,7 @@ pub struct ConnectionDraftItem {
     pub personal: bool,
     pub folder: String,
     pub name: String,
-    /// An available engine id from the catalog (`postgres`, `sqlite`).
+    /// An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…).
     pub engine: String,
     pub env: String,
     pub host: String,
@@ -500,11 +570,18 @@ pub struct ConnectionDraftItem {
     pub password_other: String,
     pub tls_mode: TlsModeItem,
     pub tls_ca: String,
+    /// Client certificate and its private key (ADR-022); empty for none.
+    pub tls_cert: String,
+    pub tls_key: String,
     pub tunnel: String,
     /// Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's.
     pub kubernetes: Option<KubernetesDraftItem>,
+    /// SQLite on a server (with a tunnel): the program there; empty for `sqlite3`.
+    pub sqlite3: String,
     pub read_only: bool,
     pub mcp_exposed: bool,
+    /// Agents may write (`[mcp] writes = "allow"`, ADR-019).
+    pub mcp_writes: bool,
 }
 
 impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
@@ -533,6 +610,11 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
                 PasswordMode::Prompt => PasswordChoice::Prompt,
                 PasswordMode::Env => PasswordChoice::Env(item.password_env),
                 PasswordMode::Other => PasswordChoice::Other(item.password_other),
+                mode @ (PasswordMode::AwsRds
+                | PasswordMode::AzureAd
+                | PasswordMode::GoogleCloudSql) => {
+                    PasswordChoice::CloudToken(mode.cloud_token().expect("a cloud token mode"))
+                }
             },
             tls_mode: match item.tls_mode {
                 TlsModeItem::Disable => TlsModeConfig::Disable,
@@ -542,10 +624,14 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
                 TlsModeItem::VerifyFull => TlsModeConfig::VerifyFull,
             },
             tls_ca: item.tls_ca,
+            tls_cert: item.tls_cert,
+            tls_key: item.tls_key,
             tunnel: item.tunnel,
             kubernetes: item.kubernetes.map(Into::into),
+            sqlite3: item.sqlite3,
             read_only: item.read_only,
             mcp_exposed: item.mcp_exposed,
+            mcp_writes: item.mcp_writes,
         })
     }
 }
@@ -559,6 +645,11 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
             PasswordChoice::Prompt => (PasswordMode::Prompt, String::new(), String::new()),
             PasswordChoice::Env(var) => (PasswordMode::Env, var, String::new()),
             PasswordChoice::Other(reference) => (PasswordMode::Other, String::new(), reference),
+            PasswordChoice::CloudToken(token) => (
+                PasswordMode::from_cloud_token(token),
+                String::new(),
+                String::new(),
+            ),
         };
         Self {
             personal: match draft.source {
@@ -578,10 +669,14 @@ impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
             password_other,
             tls_mode: draft.tls_mode.into(),
             tls_ca: draft.tls_ca,
+            tls_cert: draft.tls_cert,
+            tls_key: draft.tls_key,
             tunnel: draft.tunnel,
             kubernetes: draft.kubernetes.map(Into::into),
+            sqlite3: draft.sqlite3,
             read_only: draft.read_only,
             mcp_exposed: draft.mcp_exposed,
+            mcp_writes: draft.mcp_writes,
         }
     }
 }
@@ -715,6 +810,10 @@ fn password_choice(
         PasswordMode::Prompt => PasswordChoice::Prompt,
         PasswordMode::Env => PasswordChoice::Env(env),
         PasswordMode::Other => PasswordChoice::Other(other),
+        // Not offered for SSH hops: the core refuses it with a message.
+        mode @ (PasswordMode::AwsRds | PasswordMode::AzureAd | PasswordMode::GoogleCloudSql) => {
+            PasswordChoice::CloudToken(mode.cloud_token().expect("a cloud token mode"))
+        }
     }
 }
 
@@ -726,6 +825,11 @@ fn password_fields(choice: spelunk_config::PasswordChoice) -> (PasswordMode, Str
         PasswordChoice::Prompt => (PasswordMode::Prompt, String::new(), String::new()),
         PasswordChoice::Env(var) => (PasswordMode::Env, var, String::new()),
         PasswordChoice::Other(reference) => (PasswordMode::Other, String::new(), reference),
+        PasswordChoice::CloudToken(token) => (
+            PasswordMode::from_cloud_token(token),
+            String::new(),
+            String::new(),
+        ),
     }
 }
 
@@ -809,11 +913,11 @@ pub struct DbeaverItem {
     pub id: String,
     pub name: String,
     pub folder: String,
-    /// `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it.
+    /// `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it.
     pub engine: Option<String>,
     /// Why it cannot be imported, if it cannot.
     pub unsupported: Option<String>,
-    /// `host:port/database`, or the file for SQLite.
+    /// `host:port/database`, or the file for SQLite and DuckDB.
     pub target: String,
     pub user: String,
     pub env: String,
@@ -824,14 +928,14 @@ pub struct DbeaverItem {
 
 impl From<&spelunk_config::DbeaverConnection> for DbeaverItem {
     fn from(c: &spelunk_config::DbeaverConnection) -> Self {
-        let sqlite = c.engine == Ok(spelunk_config::Engine::Sqlite);
+        let file = c.engine.as_ref().is_ok_and(|e| e.is_file());
         Self {
             id: c.id.clone(),
             name: c.name.clone(),
             folder: c.folder.clone(),
             engine: c.engine.as_ref().ok().map(|e| e.as_str().to_string()),
             unsupported: c.engine.as_ref().err().cloned(),
-            target: if sqlite {
+            target: if file {
                 c.database.clone()
             } else {
                 let port = c.port.map(|p| format!(":{p}")).unwrap_or_default();
@@ -884,6 +988,8 @@ pub fn engine_named(name: &str) -> Result<spelunk_config::Engine, String> {
         "sqlite" => Engine::Sqlite,
         "mysql" => Engine::Mysql,
         "mariadb" => Engine::Mariadb,
+        "duckdb" => Engine::Duckdb,
+        "sqlserver" => Engine::Sqlserver,
         other => return Err(format!("unsupported engine: {other}")),
     })
 }

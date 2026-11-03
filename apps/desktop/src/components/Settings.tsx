@@ -1,19 +1,49 @@
-// Settings tab: personal preferences grouped by category. Per-connection options (such as
-// saving query history) live with each connection in the sidebar, not here.
+// Settings dialog: personal preferences grouped by category, applied as they change (the app
+// behind shows a new theme at once). Per-connection options (such as saving query history)
+// live with each connection in the sidebar, not here.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
 import { usePreferences, type ThemePreference } from "../preferences";
-import { useApp } from "../store";
+import { getVersion } from "@tauri-apps/api/app";
+import { useApp, useDialogs } from "../store";
+import { useUpdate } from "../update";
 
-type Category = "appearance" | "language" | "history";
-const CATEGORIES: Category[] = ["appearance", "language", "history"];
+type Category = "appearance" | "language" | "history" | "updates";
+const CATEGORIES: Category[] = ["appearance", "language", "history", "updates"];
 
-export function SettingsTab() {
+export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
   const [category, setCategory] = useState<Category>("appearance");
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Dialogs opened on top (trust, passwords…) handle their own Escape.
+      const dialogs = useDialogs.getState();
+      if (e.key === "Escape" && !dialogs.trust && !dialogs.password && dialogs.interactions.length === 0) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop wizard-backdrop">
+      <div className="modal wizard settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div className="wizard-header">
+          <h2 id="settings-title">{t("title")}</h2>
+          <button className="ghost" aria-label={t("close")} onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <Settings category={category} onCategory={setCategory} />
+      </div>
+    </div>
+  );
+}
+
+function Settings({ category, onCategory: setCategory }: { category: Category; onCategory(category: Category): void }) {
+  const { t } = useTranslation("settings");
   return (
     <div className="settings">
       <nav className="settings-nav" aria-label={t("categories")}>
@@ -28,6 +58,7 @@ export function SettingsTab() {
         {category === "appearance" && <AppearanceSettings />}
         {category === "language" && <LanguageSettings />}
         {category === "history" && <HistorySettings />}
+        {category === "updates" && <UpdateSettings />}
       </section>
     </div>
   );
@@ -131,6 +162,55 @@ function HistorySettings() {
       <p>{t("history.perConnection")}</p>
       <p className="muted small">{t("history.audit")}</p>
       <button onClick={() => setHistoryOpen(true)}>{t("history.open")}</button>
+    </>
+  );
+}
+
+function UpdateSettings() {
+  const { t } = useTranslation("settings");
+  const [version, setVersion] = useState("");
+  const status = useUpdate((s) => s.status);
+  const checking = useUpdate((s) => s.checking);
+  const checkAtStartup = useUpdate((s) => s.checkAtStartup);
+  const error = useUpdate((s) => s.error);
+  const check = useUpdate((s) => s.check);
+  const setCheckAtStartup = useUpdate((s) => s.setCheckAtStartup);
+  useEffect(() => {
+    void getVersion().then(setVersion);
+  }, []);
+  // Know at once whether this build can update at all; with no endpoint nothing is requested.
+  useEffect(() => {
+    if (useUpdate.getState().status === null) void useUpdate.getState().check();
+  }, []);
+  const unavailable = status?.kind === "unavailable";
+  return (
+    <>
+      <p>{t("updates.version", { version })}</p>
+      {unavailable ? (
+        <p className="muted small" role="status">{t("updates.unavailable")}</p>
+      ) : (
+        <>
+          <label className="check">
+            <input type="checkbox" checked={checkAtStartup} onChange={(e) => void setCheckAtStartup(e.target.checked)} />
+            {t("updates.atStartup")}
+          </label>
+          <div>
+            <button disabled={checking} onClick={() => void check()}>
+              {checking ? t("updates.checking") : t("updates.check")}
+            </button>
+          </div>
+          <p className="small" role="status">
+            {status?.kind === "upToDate" && t("updates.upToDate")}
+            {status?.kind === "available" && t("updates.available", { version: status.version })}
+          </p>
+          <p className="muted small">{t("updates.hint")}</p>
+        </>
+      )}
+      {error && (
+        <p className="error small" role="alert">
+          {t("updates.error")} {error}
+        </p>
+      )}
     </>
   );
 }

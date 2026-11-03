@@ -39,6 +39,9 @@ pub struct ResolvedConnection {
     pub tunnel: Option<ResolvedTunnel>,
     /// `kubectl port-forward` to this resource (ADR-015); `params.port` is its port.
     pub kubernetes: Option<ResolvedKubernetes>,
+    /// A SQLite file on the tunnel's last hop (ADR-018): the program that opens it there.
+    /// `params.database` is then its path on that machine.
+    pub sqlite3: Option<String>,
     pub mcp: McpConfig,
 }
 
@@ -54,7 +57,7 @@ impl ResolvedConnection {
         params
     }
 
-    /// `env = "prod"`: the MCP never writes here, whatever `mcp.writes` says (ADR-008).
+    /// `env = "prod"`: the editor asks before writes here (`guard.rs`).
     pub fn is_production(&self) -> bool {
         self.env
             .as_deref()
@@ -66,6 +69,9 @@ impl ResolvedConnection {
 pub struct ResolvedTunnel {
     pub name: String,
     pub hops: Vec<ResolvedHop>,
+    /// The team's `.spelunk/known_hosts` (ADR-022), checked before the user's own files:
+    /// only from a trusted repository and only as the user trusted it.
+    pub known_hosts: Option<PathBuf>,
 }
 
 /// A connection's Kubernetes resource, ready for `kubectl port-forward` (ADR-015).
@@ -111,6 +117,14 @@ impl<'a> Resolver<'a> {
         let entry = self.config.connection(id).ok_or_else(|| {
             ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
         })?;
+        // A saved repository connection must be as the user trusted it (ADR-022). Drafts are
+        // what the user is typing: theirs.
+        if entry.id.source == Source::Workspace {
+            let root = self.base_dir(Source::Workspace)?;
+            self.trust
+                .check_connection(&root, entry)
+                .map_err(|change| ResolveError::Changed { root, change })?;
+        }
         self.resolve_entry(entry)
     }
 
@@ -138,6 +152,7 @@ impl<'a> Resolver<'a> {
 
     fn resolve_entry(&self, entry: &ConnectionEntry) -> Result<ResolvedConnection, ResolveError> {
         let base = self.base_dir(entry.id.source)?;
+        self.check_variables(entry)?;
         let file = &entry.file;
         let text = |value: &Option<String>| -> Result<Option<String>, ResolveError> {
             value
@@ -169,12 +184,15 @@ impl<'a> Resolver<'a> {
             None => String::new(),
         };
         let params = ConnectParams {
+            // Set by the core from the tunnel (ADR-018).
+            remote: None,
             host,
             port: file.port.or(file.engine.default_port()).unwrap_or(0),
             user: text(&file.user)?.unwrap_or_default(),
             password: None,
             database: match file.engine {
-                Engine::Sqlite if database != ":memory:" => {
+                // On a server (with a tunnel), the path is the server's: kept as written.
+                engine if engine.is_file() && database != ":memory:" && file.tunnel.is_none() => {
                     resolve_path(&database, &base).display().to_string()
                 }
                 _ => database,
@@ -188,6 +206,11 @@ impl<'a> Resolver<'a> {
                 TlsModeConfig::VerifyFull => TlsMode::VerifyFull,
             },
             ca_certificate: text(&file.tls.ca)?.map(|ca| resolve_path(&ca, &base)),
+            client_certificate: text(&file.tls.cert)?.map(|cert| resolve_path(&cert, &base)),
+            client_key: match text(&file.tls.key)? {
+                None => None,
+                Some(key) => Some(self.private_key(entry, &key, &base)?),
+            },
             read_only: file.read_only,
             connect_addr: None,
         };
@@ -209,13 +232,23 @@ impl<'a> Resolver<'a> {
                             format!("tunnel {name:?} does not exist in .spelunk/tunnels/"),
                         )
                     })?;
-                Some(self.resolve_tunnel(
+                // A repository tunnel, even under a draft, must be as the user trusted it.
+                if tunnel.source == Source::Workspace {
+                    let root = self.base_dir(Source::Workspace)?;
+                    self.trust
+                        .check_tunnel(&root, tunnel)
+                        .map_err(|change| ResolveError::Changed { root, change })?;
+                }
+                let mut resolved = self.resolve_tunnel(
                     name,
                     tunnel.source,
                     &tunnel.file,
                     &base,
                     &entry.file_path,
-                )?)
+                )?;
+                // A changed shared file stops the connection until it is reviewed.
+                resolved.known_hosts = self.team_known_hosts(true)?;
+                Some(resolved)
             }
         };
 
@@ -228,6 +261,10 @@ impl<'a> Resolver<'a> {
             password,
             tunnel,
             kubernetes,
+            sqlite3: match &file.sqlite3 {
+                Some(program) => Some(self.expand(&entry.file_path, program)?),
+                None => None,
+            },
             mcp: file.mcp.clone(),
         })
     }
@@ -240,6 +277,62 @@ impl<'a> Resolver<'a> {
                 reference: format!("keychain:{account}"),
                 message,
             })
+    }
+
+    /// Every `${user.…}` variable the connection and its tunnel use must be defined; the
+    /// missing ones are reported together, for the app to ask for them at once (ADR-022).
+    fn check_variables(&self, entry: &ConnectionEntry) -> Result<(), ResolveError> {
+        let vars = &self.config.user.vars;
+        let mut texts = crate::vars::text_values(&entry.file);
+        if let Some(name) = &entry.file.tunnel
+            && let Some(tunnel) = self.config.tunnel_for(entry.id.source, name)
+        {
+            texts.extend(crate::vars::text_values(&tunnel.file));
+        }
+        let mut names: Vec<String> = Vec::new();
+        for text in &texts {
+            for name in crate::vars::missing_user_vars(text, vars) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        if names.is_empty() {
+            Ok(())
+        } else {
+            Err(ResolveError::MissingVariables { names })
+        }
+    }
+
+    /// A client certificate's private key: a repository connection may not keep it inside the
+    /// repository, where it would be committed and shared (ADR-022).
+    fn private_key(
+        &self,
+        entry: &ConnectionEntry,
+        key: &str,
+        base: &Path,
+    ) -> Result<PathBuf, ResolveError> {
+        let path = resolve_path(key, base);
+        if entry.id.source == Source::Workspace {
+            // As written, and canonical when the file exists (another spelling of the same
+            // place). A key that does not exist yet is still refused by the first check.
+            let inside = |p: &Path| {
+                let canonical = |p: &Path| std::fs::canonicalize(p).ok();
+                p.starts_with(base)
+                    || matches!(
+                        (canonical(p), canonical(base)),
+                        (Some(p), Some(root)) if p.starts_with(&root)
+                    )
+            };
+            if inside(&path) {
+                return Err(ConfigError::new(
+                    &entry.file_path,
+                    "tls.key is inside the repository, where it would be shared: keep private keys in your personal folder (~/…) or name them with a ${user.…} variable",
+                )
+                .into());
+            }
+        }
+        Ok(path)
     }
 
     /// Directory relative paths are resolved against; checks trust.
@@ -269,7 +362,33 @@ impl<'a> Resolver<'a> {
         let base = self.base_dir(draft.source)?;
         let path = draft.path(self.config)?;
         let file = draft.to_file(self.config)?;
-        self.resolve_tunnel(&draft.file_name()?, draft.source, &file, &base, &path)
+        let mut resolved =
+            self.resolve_tunnel(&draft.file_name()?, draft.source, &file, &base, &path)?;
+        // Testing a tunnel from its editor: an unreviewed shared file is left out (the hosts
+        // are then asked about, as without one), not an error.
+        resolved.known_hosts = self.team_known_hosts(false)?;
+        Ok(resolved)
+    }
+
+    /// The team's `.spelunk/known_hosts`, if the open repository has one, is trusted and the
+    /// file is as the user trusted it. `strict`: a changed file is an error to review;
+    /// otherwise it is just not used.
+    fn team_known_hosts(&self, strict: bool) -> Result<Option<PathBuf>, ResolveError> {
+        let Some(root) = self.config.workspace_root.as_deref() else {
+            return Ok(None);
+        };
+        let path = crate::trust::team_known_hosts(root);
+        if !path.is_file() || !self.trust.is_trusted(root) {
+            return Ok(None);
+        }
+        match self.trust.check_known_hosts(root) {
+            Ok(()) => Ok(Some(path)),
+            Err(change) if strict => Err(ResolveError::Changed {
+                root: root.to_path_buf(),
+                change,
+            }),
+            Err(_) => Ok(None),
+        }
     }
 
     /// Hops ready to open: variables substituted, key paths resolved against `base` and
@@ -305,6 +424,7 @@ impl<'a> Resolver<'a> {
         Ok(ResolvedTunnel {
             name: name.to_string(),
             hops,
+            known_hosts: None,
         })
     }
 

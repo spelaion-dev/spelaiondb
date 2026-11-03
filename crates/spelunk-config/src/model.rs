@@ -27,7 +27,7 @@ pub struct ConnectionFile {
     pub host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
-    /// Database; for SQLite, the file path (relative to the repository root).
+    /// Database; for SQLite and DuckDB, the file path (relative to the repository root).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,6 +42,10 @@ pub struct ConnectionFile {
     /// `port` is then the resource's port and `host` is only the name TLS checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kubernetes: Option<KubernetesConfig>,
+    /// SQLite with a tunnel: the file is on the tunnel's last hop, opened by its `sqlite3`
+    /// (ADR-018); this names that program when it is not `sqlite3` on the PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite3: Option<String>,
     /// Open read-only (native in SQLite).
     #[serde(default, skip_serializing_if = "is_false")]
     pub read_only: bool,
@@ -62,6 +66,8 @@ pub enum Engine {
     Sqlite,
     Mysql,
     Mariadb,
+    Duckdb,
+    Sqlserver,
 }
 
 impl Engine {
@@ -71,14 +77,25 @@ impl Engine {
             Engine::Sqlite => "sqlite",
             Engine::Mysql => "mysql",
             Engine::Mariadb => "mariadb",
+            Engine::Duckdb => "duckdb",
+            Engine::Sqlserver => "sqlserver",
+        }
+    }
+
+    /// Embedded engines: `database` is a file, and there is no server, user or tunnel.
+    pub fn is_file(self) -> bool {
+        match self {
+            Engine::Sqlite | Engine::Duckdb => true,
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => false,
         }
     }
 
     pub fn default_port(self) -> Option<u16> {
         match self {
             Engine::Postgres => Some(5432),
-            Engine::Sqlite => None,
+            Engine::Sqlite | Engine::Duckdb => None,
             Engine::Mysql | Engine::Mariadb => Some(3306),
+            Engine::Sqlserver => Some(1433),
         }
     }
 }
@@ -100,6 +117,14 @@ pub struct TlsConfig {
     /// Certificate (PEM) of the authority, relative to the repository root or with `~/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca: Option<String>,
+    /// Client certificate (PEM) to log in without a password (ADR-022): PostgreSQL, MySQL and
+    /// MariaDB. Relative to the repository root or with `~/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert: Option<String>,
+    /// Private key (PEM) of the client certificate. Never inside the repository: `~/…`, an
+    /// absolute path or a `${user.…}` variable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 impl TlsConfig {
@@ -130,7 +155,8 @@ pub struct McpConfig {
     /// Maximum rows per response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rows: Option<u32>,
-    /// Write policy. On `env = "prod"` connections it is always `deny`.
+    /// What agents may do (ADR-019): `deny` (read only, the default) or `allow` (writes
+    /// through `execute_write`). `confirm` is not supported yet.
     #[serde(default)]
     pub writes: WritePolicy,
 }

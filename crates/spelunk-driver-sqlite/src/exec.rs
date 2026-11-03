@@ -118,7 +118,7 @@ fn find_word(sql: &str, word: &str) -> Option<u32> {
 /// SQLite type affinity from the declared type (rules from the documentation,
 /// section 3.1 of "Datatypes In SQLite").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Affinity {
+pub(crate) enum Affinity {
     Integer,
     Text,
     Blob,
@@ -145,7 +145,7 @@ fn affinity(declared: Option<&str>) -> Affinity {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-struct Seen {
+pub(crate) struct Seen {
     int: bool,
     real: bool,
     text: bool,
@@ -153,7 +153,7 @@ struct Seen {
 }
 
 impl Seen {
-    fn add(&mut self, v: &SqlValue) {
+    pub(crate) fn add(&mut self, v: &SqlValue) {
         match v {
             SqlValue::Null => {}
             SqlValue::Integer(_) => self.int = true,
@@ -163,7 +163,7 @@ impl Seen {
         }
     }
 
-    fn storage_class(self) -> &'static str {
+    pub(crate) fn storage_class(self) -> &'static str {
         match (self.int, self.real, self.text, self.blob) {
             (true, false, false, false) => "INTEGER",
             (false, true, false, false) | (true, true, false, false) => "REAL",
@@ -176,7 +176,7 @@ impl Seen {
 }
 
 /// Logical type of a column from its affinity and what was seen in the first batch.
-fn decide(affinity: Affinity, seen: Seen) -> LogicalType {
+pub(crate) fn decide(affinity: Affinity, seen: Seen) -> LogicalType {
     match (seen.int, seen.real, seen.text, seen.blob) {
         (false, false, false, false) => match affinity {
             Affinity::Integer => LogicalType::Int,
@@ -193,7 +193,7 @@ fn decide(affinity: Affinity, seen: Seen) -> LogicalType {
     }
 }
 
-enum Builder {
+pub(crate) enum Builder {
     Int(Int64Builder),
     Float(Float64Builder),
     Bytes(BinaryBuilder),
@@ -201,7 +201,7 @@ enum Builder {
 }
 
 impl Builder {
-    fn new(logical: LogicalType) -> Self {
+    pub(crate) fn new(logical: LogicalType) -> Self {
         match logical {
             LogicalType::Int => Self::Int(Int64Builder::new()),
             LogicalType::Float => Self::Float(Float64Builder::new()),
@@ -211,7 +211,7 @@ impl Builder {
     }
 
     /// Adds a value; `Err` with the SQLite type name if it does not fit without losing information.
-    fn append(&mut self, v: ValueRef<'_>) -> std::result::Result<(), &'static str> {
+    pub(crate) fn append(&mut self, v: ValueRef<'_>) -> std::result::Result<(), &'static str> {
         match (self, v) {
             (Self::Int(b), ValueRef::Null) => b.append_null(),
             (Self::Float(b), ValueRef::Null) => b.append_null(),
@@ -248,7 +248,7 @@ impl Builder {
         Ok(())
     }
 
-    fn finish(&mut self) -> ArrayRef {
+    pub(crate) fn finish(&mut self) -> ArrayRef {
         match self {
             Self::Int(b) => Arc::new(b.finish()),
             Self::Float(b) => Arc::new(b.finish()),
@@ -281,7 +281,7 @@ fn to_owned(v: ValueRef<'_>) -> SqlValue {
     }
 }
 
-fn as_ref(v: &SqlValue) -> ValueRef<'_> {
+pub(crate) fn as_ref(v: &SqlValue) -> ValueRef<'_> {
     match v {
         SqlValue::Null => ValueRef::Null,
         SqlValue::Integer(i) => ValueRef::Integer(*i),
@@ -325,7 +325,19 @@ pub fn execute(
     }
 }
 
-fn is_dml(sql: &str) -> bool {
+/// Statements whose result is rows, even when there are none.
+pub(crate) fn is_query(sql: &str) -> bool {
+    let first = sql
+        .trim_start()
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .next()
+        .unwrap_or("");
+    ["select", "with", "values", "pragma", "explain"]
+        .iter()
+        .any(|k| first.eq_ignore_ascii_case(k))
+}
+
+pub(crate) fn is_dml(sql: &str) -> bool {
     let first = sql
         .trim_start()
         .split(|c: char| !c.is_ascii_alphabetic())

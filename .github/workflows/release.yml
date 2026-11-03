@@ -1,6 +1,9 @@
 # Releases: pushing a tag `vX.Y.Z` (from a main that passed CI) builds the desktop installers
 # on Windows, macOS (Apple Silicon and Intel) and Linux, plus the `spelunk` CLI with the MCP
-# server, and publishes them as a GitHub pre-release with `docs/releases/vX.Y.Z.md` as notes.
+# server, and publishes them as a GitHub pre-release. Its notes are `docs/releases/vX.Y.Z.md`
+# followed by every commit since the previous tag (`scripts/release-notes.sh`). The app's
+# update artifacts (`.sig` files and `latest.json`) are signed with the repository secret
+# `TAURI_SIGNING_PRIVATE_KEY` (ADR-021).
 name: Release
 
 on:
@@ -19,6 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history and the tags: the notes list the commits since the last release.
+          fetch-depth: 0
       # The tag, the app and the crates must agree on the version.
       - run: |
           app=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
@@ -28,8 +34,9 @@ jobs:
           test -f "docs/releases/$GITHUB_REF_NAME.md" || {
             echo "missing docs/releases/$GITHUB_REF_NAME.md"; exit 1; }
       - run: |
+          scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" --draft --prerelease --verify-tag \
-            --title "SpelunkDB ${GITHUB_REF_NAME#v}" --notes-file "docs/releases/$GITHUB_REF_NAME.md"
+            --title "SpelunkDB ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -74,12 +81,16 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # The key has no password (ADR-021).
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseDraft: true
           prerelease: true
-          args: ${{ matrix.args }}
+          # Update artifacts only here: local builds need no signing key.
+          args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }}
 
   cli:
     name: CLI · ${{ matrix.target }}

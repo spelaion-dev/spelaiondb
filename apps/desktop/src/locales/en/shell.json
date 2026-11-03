@@ -11,6 +11,8 @@
   "configurationErrors_other": "{{displayCount}} configuration files with errors",
   "noConnections": "No connections yet. Add one, or create files in <code>.spelunk/connections/</code> or in your personal folder.",
   "queryHistory": "Query history",
+  "activityBar": "Activity bar",
+  "connections": "Connections",
   "toggleConnection": "Expand or collapse {{connection}}",
   "tunnel": "Tunnel {{name}}",
   "newQuery": "New query",
@@ -67,5 +69,28 @@
     "cancel": "Cancel",
     "run": "Run"
   },
-  "savedQueries": "Saved queries"
+  "savedQueries": "Saved queries",
+  "change": {
+    "title": "This changed since you trusted the repository",
+    "newTitle": "New in the repository",
+    "connection": "the connection {{name}}",
+    "tunnel": "the SSH tunnel {{name}}",
+    "knownHosts": "the shared SSH server keys (.spelunk/known_hosts)",
+    "explanation": "Someone changed {{what}} in the repository (for example in a git pull). Until you accept the change, it reads no secret and runs no command.",
+    "newExplanation": "Someone added {{what}} to the repository after you trusted it. Until you accept it, it reads no secret and runs no command.",
+    "field": "Field",
+    "before": "Before",
+    "after": "Now",
+    "value": "Value",
+    "none": "(none)",
+    "advice": "Check who made the change and why (git log) before accepting, above all a new server, secret or command.",
+    "reject": "Don't use it",
+    "accept": "Accept the change"
+  },
+  "variables": {
+    "title": "This connection needs some personal values",
+    "explanation": "It uses variables that each person fills in for themselves, such as their own database user. They are asked once and saved in your user.toml, on this computer and outside the repository.",
+    "advice": "Not for passwords: those go in the keychain or are asked when connecting.",
+    "save": "Save and connect"
+  }
 }

@@ -49,8 +49,19 @@ impl TempKnownHosts {
 
     fn known(&self) -> KnownHosts {
         KnownHosts {
+            team_file: None,
             user_file: None,
             app_file: self.0.join("known_hosts"),
+        }
+    }
+
+    /// With the team's file next to ours (ADR-022).
+    fn with_team(&self, content: &str) -> KnownHosts {
+        let team = self.0.join("team_known_hosts");
+        std::fs::write(&team, content).unwrap();
+        KnownHosts {
+            team_file: Some(team),
+            ..self.known()
         }
     }
 }
@@ -509,4 +520,76 @@ async fn one_chain_serves_several_targets() {
         tunnel.forward(postgres()).await.is_err(),
         "a closed tunnel does not forward"
     );
+}
+
+/// A UI that must not be asked about any host.
+struct NeverAsked;
+
+#[async_trait]
+impl Interaction for NeverAsked {
+    async fn confirm_unknown_host(&self, host: &HostInfo) -> bool {
+        panic!("the team's known_hosts should have verified {host:?}");
+    }
+
+    async fn ask_secret(&self, _: &SecretRequest) -> Option<Secret> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn the_teams_known_hosts_verifies_the_first_connection_and_blocks_a_different_key() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    // Someone on the team learnt both bastions' keys; that file is what the repository holds.
+    let learnt = TempKnownHosts::new("team-learn");
+    let tunnel = Tunnel::connect(&two_hops(&host, port), &learnt.known(), TestUi::accepting())
+        .await
+        .unwrap();
+    tunnel.close().await;
+    let team = std::fs::read_to_string(learnt.0.join("known_hosts")).unwrap();
+    assert_eq!(
+        team.lines().filter(|l| !l.trim().is_empty()).count(),
+        2,
+        "{team}"
+    );
+
+    // A newcomer with nothing of their own: verified by the team's file, nothing asked.
+    let newcomer = TempKnownHosts::new("team-newcomer");
+    let tunnel = Tunnel::connect(
+        &two_hops(&host, port),
+        &newcomer.with_team(&team),
+        Arc::new(NeverAsked),
+    )
+    .await
+    .unwrap();
+    tunnel.close().await;
+    assert!(
+        !newcomer.0.join("known_hosts").exists(),
+        "nothing was learnt"
+    );
+
+    // The team's file says another key for the first bastion: blocked, even though the
+    // user's own file has the right one, and the error names the team's file.
+    let first = team
+        .lines()
+        .find(|l| l.contains(&format!(":{port}")))
+        .unwrap();
+    let mut fields: Vec<&str> = first.split_whitespace().collect();
+    assert_eq!(fields[1], "ssh-ed25519", "{first}");
+    let other = std::fs::read_to_string(key("id_ed25519.pub")).unwrap();
+    let other_key = other.split_whitespace().nth(1).unwrap().to_string();
+    fields[2] = &other_key;
+    let tampered = team.replace(first, &fields.join(" "));
+    let known = KnownHosts {
+        user_file: Some(learnt.0.join("known_hosts")),
+        ..newcomer.with_team(&tampered)
+    };
+    match Tunnel::connect(&two_hops(&host, port), &known, Arc::new(NeverAsked)).await {
+        Err(SshError::HostKeyChanged { hop, file, .. }) => {
+            assert_eq!(hop, 0);
+            assert_eq!(file, newcomer.0.join("team_known_hosts"));
+        }
+        other => panic!("expected a blocking key change: {:?}", other.map(|_| ())),
+    }
 }

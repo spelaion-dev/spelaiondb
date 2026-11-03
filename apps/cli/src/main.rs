@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use spelunk_config::{Source, TrustStore, default_user_dir, find_workspace, load};
+use spelunk_config::{
+    Severity, Source, TrustStore, check_workspace, default_user_dir, find_workspace, load,
+};
 use spelunk_store::{Decision, Store};
 
 #[derive(Parser)]
@@ -45,11 +47,56 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
+    /// Checks a repository's `.spelunk/` for a team's CI or pre-commit hook: files that do
+    /// not load, passwords written in commands, private keys in the repository… Exits with 1
+    /// when it finds an error (or a warning, with --strict). Reads nothing personal.
+    Check {
+        /// Repository directory (defaults to the one containing the current directory).
+        path: Option<PathBuf>,
+        /// Fail on warnings too.
+        #[arg(long)]
+        strict: bool,
+    },
     /// Shows the latest entries of the MCP audit log.
     Audit {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+}
+
+/// `spelunk check`: prints each finding and fails when it must (ADR-022).
+fn check(path: Option<PathBuf>, strict: bool) -> Result<()> {
+    let start = workspace_or_cwd(path)?;
+    let root = find_workspace(&start).ok_or_else(|| {
+        anyhow!(
+            "{} is not inside a repository with .spelunk/",
+            start.display()
+        )
+    })?;
+    let findings = check_workspace(&root);
+    let (mut errors, mut warnings) = (0, 0);
+    for finding in &findings {
+        let shown = finding.path.strip_prefix(&root).unwrap_or(&finding.path);
+        let label = match finding.severity {
+            Severity::Error => {
+                errors += 1;
+                "error"
+            }
+            Severity::Warning => {
+                warnings += 1;
+                "warning"
+            }
+        };
+        println!("{}: {label}: {}", shown.display(), finding.message);
+    }
+    println!(
+        "{}: {errors} error(s), {warnings} warning(s)",
+        root.join(spelunk_config::WORKSPACE_DIR).display()
+    );
+    if errors > 0 || (strict && warnings > 0) {
+        return Err(anyhow!("the check failed"));
+    }
+    Ok(())
 }
 
 fn user_dir(cli: &Cli) -> Result<PathBuf> {
@@ -69,8 +116,13 @@ fn workspace_or_cwd(path: Option<PathBuf>) -> Result<PathBuf> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Checking a repository needs no personal directory (it runs in CI).
+    if let Command::Check { path, strict } = cli.command {
+        return check(path, strict);
+    }
     let user_dir = user_dir(&cli)?;
     match cli.command {
+        Command::Check { .. } => unreachable!("handled above"),
         Command::Mcp { workspace, timeout } => {
             // stdout is the protocol channel: notices go to stderr.
             let options = spelunk_mcp::ServerOptions {
@@ -129,9 +181,13 @@ async fn main() -> Result<()> {
                 trust.revoke(&root)?;
                 println!("Trust revoked for {}", root.display());
             } else {
-                trust.trust(&root)?;
+                let config = load(Some(&root), &user_dir);
+                let changes = trust.trust(&config)?;
+                for change in &changes {
+                    println!("Accepted: {change}");
+                }
                 println!(
-                    "{} is now trusted: its connections can resolve secrets and run the commands in its configuration.",
+                    "{} is now trusted as it is: its connections can resolve secrets and run the commands in its configuration. A later change to one of them is asked about again.",
                     root.display()
                 );
             }

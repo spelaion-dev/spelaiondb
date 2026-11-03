@@ -3,6 +3,7 @@
 
 mod dto;
 mod interaction;
+mod update;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -47,6 +48,8 @@ struct AppState {
 
 struct DesktopSession {
     open: Arc<OpenConnection>,
+    /// A prompted password stays in memory only for the lifetime of this session.
+    password: Option<Secret>,
     /// Captured when connecting: changing folders must not reattribute an existing tab.
     history_workspace: String,
 }
@@ -58,11 +61,29 @@ impl AppState {
         let version = self.workspace_version.load(Ordering::Acquire);
         let workspace = self.workspace.read().await.clone();
         let loaded = load(workspace.as_deref(), &self.user_dir);
+        if let Ok(mut trust) = TrustStore::load(&self.user_dir) {
+            let _ = trust.adopt(&loaded);
+        }
         let mut config = self.config.write().await;
         // A reload started in the previous folder must not overwrite the new one.
         if version == self.workspace_version.load(Ordering::Acquire) {
             *config = loaded;
         }
+    }
+
+    /// Records a repository item the user just wrote through the app as trusted: their own
+    /// change is not one to review (ADR-022). Personal items and untrusted repositories have
+    /// nothing to record.
+    async fn accept_own(&self, item: String) -> CmdResult<()> {
+        let config = self.config.read().await;
+        let Some(root) = config.workspace_root.as_deref() else {
+            return Ok(());
+        };
+        let mut trust = TrustStore::load(&self.user_dir).map_err(|e| e.to_string())?;
+        if !trust.is_trusted(root) {
+            return Ok(());
+        }
+        trust.accept(&config, &item).map_err(|e| e.to_string())
     }
 
     async fn info(&self) -> CmdResult<WorkspaceInfo> {
@@ -171,6 +192,26 @@ async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
 
 #[tauri::command]
 #[specta::specta]
+async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
+    state
+        .history
+        .update_check()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .history
+        .set_update_check(enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
     let version = state.workspace_version.load(Ordering::Acquire);
     if !version.is_multiple_of(2)
@@ -212,8 +253,38 @@ async fn trust_workspace(state: State<'_, AppState>) -> CmdResult<WorkspaceInfo>
         .clone()
         .ok_or("no repository is open")?;
     let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    trust.trust(&root).map_err(|e| e.to_string())?;
+    let config = state.config.read().await;
+    if config.workspace_root.as_deref() != Some(root.as_path()) {
+        return Err("the folder changed; trust it again".into());
+    }
+    trust.trust(&config).map_err(|e| e.to_string())?;
+    drop(config);
     state.info().await
+}
+
+/// Saves values for `${user.…}` variables in the user's `user.toml` (ADR-022) and reloads
+/// the configuration. Only those entries change; the rest of the file stays as it was.
+#[tauri::command]
+#[specta::specta]
+async fn set_user_vars(
+    values: HashMap<String, String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let values = values.into_iter().collect();
+    spelunk_config::set_user_vars(&state.user_dir, &values).map_err(|e| e.to_string())?;
+    state.reload().await;
+    Ok(())
+}
+
+/// Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
+/// as it is now, and connecting can go on.
+#[tauri::command]
+#[specta::specta]
+async fn accept_change(item: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state.reload().await;
+    let config = state.config.read().await;
+    let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    trust.accept(&config, &item).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -381,6 +452,12 @@ async fn test_connection(
             Err(spelunk_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
             }
+            Err(spelunk_config::ResolveError::Changed { change, .. }) => {
+                return Ok(change.into());
+            }
+            Err(spelunk_config::ResolveError::MissingVariables { names }) => {
+                return Ok(ConnectOutcome::MissingVariables { names });
+            }
             Err(e) => return Err(e.to_string()),
         }
     };
@@ -434,6 +511,11 @@ async fn add_connection(
             .map_err(|e| e.to_string())?
     };
     state.reload().await;
+    if id.source == Source::Workspace {
+        state
+            .accept_own(spelunk_config::connection_item(&id))
+            .await?;
+    }
     Ok(id.to_string())
 }
 
@@ -475,6 +557,12 @@ async fn update_connection(
         .map_err(|e| e.to_string())?;
     }
     state.reload().await;
+    let id = parse_id(&connection);
+    if id.source == Source::Workspace {
+        state
+            .accept_own(spelunk_config::connection_item(&id))
+            .await?;
+    }
     Ok(())
 }
 
@@ -488,6 +576,12 @@ async fn delete_connection(connection: String, state: State<'_, AppState>) -> Cm
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
+    let id = parse_id(&connection);
+    if id.source == Source::Workspace {
+        state
+            .accept_own(spelunk_config::connection_item(&id))
+            .await?;
+    }
     Ok(())
 }
 
@@ -621,6 +715,9 @@ async fn add_tunnel(
             .map_err(|e| e.to_string())?
     };
     state.reload().await;
+    if !personal {
+        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+    }
     Ok(TunnelItem { name, personal })
 }
 
@@ -648,6 +745,9 @@ async fn update_tunnel(
         .map_err(|e| e.to_string())?;
     }
     state.reload().await;
+    if !personal {
+        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+    }
     Ok(())
 }
 
@@ -661,6 +761,9 @@ async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>)
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
+    if !personal {
+        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+    }
     Ok(())
 }
 
@@ -688,6 +791,12 @@ async fn connect(
             Ok(resolved) => resolved,
             Err(spelunk_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
+            }
+            Err(spelunk_config::ResolveError::Changed { change, .. }) => {
+                return Ok(change.into());
+            }
+            Err(spelunk_config::ResolveError::MissingVariables { names }) => {
+                return Ok(ConnectOutcome::MissingVariables { names });
             }
             Err(e) => return Err(e.to_string()),
         };
@@ -750,6 +859,7 @@ async fn connect(
         session,
         DesktopSession {
             open: Arc::new(open),
+            password,
             history_workspace,
         },
     );
@@ -758,6 +868,84 @@ async fn connect(
         old.close().await;
     }
     Ok(ConnectOutcome::Connected { server_version })
+}
+
+/// Open an independent tab from an existing explorer session, reusing its in-memory
+/// credentials and exact resolved connection. Passwords never cross back into the UI.
+#[tauri::command]
+#[specta::specta]
+async fn connect_from_session(
+    source: String,
+    session: String,
+    database: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    if source == session {
+        return Err("the source and target sessions must differ".into());
+    }
+    let workspace_version = state.workspace_version.load(Ordering::Acquire);
+    if !workspace_version.is_multiple_of(2) {
+        return Err("the folder is changing; select a connection again".into());
+    }
+    let (source_open, password, history_workspace) = {
+        let sessions = state.sessions.lock().await;
+        let source = sessions
+            .get(&source)
+            .ok_or("the source connection is closed")?;
+        (
+            source.open.clone(),
+            source.password.clone(),
+            source.history_workspace.clone(),
+        )
+    };
+    let options = OpenOptions {
+        tunnels: state.tunnels.clone(),
+        known_hosts: KnownHosts::for_user(&state.user_dir),
+        interaction: Arc::new(AppInteraction::new(app, state.pending.clone())),
+        password: password.clone(),
+    };
+    let open = open_connection(
+        source_open.resolved.clone(),
+        &state.engines,
+        options,
+        state.results.clone(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Some(database) = database
+        && let Err(error) = open.session.connection().select_database(&database).await
+    {
+        open.close().await;
+        return Err(error.to_string());
+    }
+    let server_version = match open.session.connection().server_version().await {
+        Ok(version) => version,
+        Err(error) => {
+            open.close().await;
+            return Err(error.to_string());
+        }
+    };
+    let mut sessions = state.sessions.lock().await;
+    if workspace_version != state.workspace_version.load(Ordering::Acquire)
+        || !sessions
+            .get(&source)
+            .is_some_and(|s| Arc::ptr_eq(&s.open, &source_open))
+        || sessions.contains_key(&session)
+    {
+        drop(sessions);
+        open.close().await;
+        return Err("the source connection or folder changed while connecting".into());
+    }
+    sessions.insert(
+        session,
+        DesktopSession {
+            open: Arc::new(open),
+            password,
+            history_workspace,
+        },
+    );
+    Ok(server_version)
 }
 
 #[tauri::command]
@@ -921,7 +1109,12 @@ async fn copy_rows(
         .ok_or("result freed")?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let options = ExportOptions {
-        format: export_format(format),
+        format: match format {
+            TextFormat::SqlInsert => ExportFormat::SqlInsertBatch {
+                table: INSERT_TABLE.into(),
+            },
+            other => export_format(other),
+        },
         rows: range.first_row as usize..(range.first_row + range.rows) as usize,
         columns: range.first_column as usize..(range.first_column + range.columns) as usize,
         header,
@@ -1096,6 +1289,11 @@ async fn import_one(
             created_tunnel = true;
         }
         state.reload().await;
+        if created_tunnel && source == Source::Workspace {
+            state
+                .accept_own(spelunk_config::tunnel_item(tunnel_name))
+                .await?;
+        }
     }
     let mut draft = plan.connection;
     let base = draft.name.clone();
@@ -1110,8 +1308,13 @@ async fn import_one(
             spelunk_config::add_connection(&config, &draft, plan.password.as_ref(), &SystemBackend)
         };
         match added {
-            Ok(_) => {
+            Ok(id) => {
                 state.reload().await;
+                if id.source == Source::Workspace {
+                    state
+                        .accept_own(spelunk_config::connection_item(&id))
+                        .await?;
+                }
                 return Ok((draft.name, created_tunnel));
             }
             Err(e) if e.to_string().contains("already exists") => continue,
@@ -1121,13 +1324,14 @@ async fn import_one(
     Err("every name tried is taken".into())
 }
 
-/// Creates an empty SQLite database file for a new connection. The core never overwrites an
-/// existing file.
+/// Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
+/// overwrites an existing file.
 #[tauri::command]
 #[specta::specta]
-async fn create_sqlite_database(path: String) -> CmdResult<()> {
+async fn create_database(engine: String, path: String) -> CmdResult<()> {
+    let engine = engine_named(&engine)?;
     tokio::task::spawn_blocking(move || {
-        spelunk_core::create_sqlite_database(Path::new(&path)).map_err(|e| e.to_string())
+        spelunk_core::create_file_database(engine, Path::new(&path)).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1316,6 +1520,47 @@ async fn cell_value(
 async fn release_result(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
     state.results.remove(ResultId(result.into()));
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn current_database(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .current_database()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The databases this tab's session can switch to (MySQL, MariaDB, SQL Server).
+#[tauri::command]
+#[specta::specta]
+async fn list_databases(session: String, state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .list_databases()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn select_database(
+    session: String,
+    database: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .select_database(&database)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1600,6 +1845,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_language,
             get_theme,
             set_theme,
+            get_update_check,
+            set_update_check,
+            update::update_check,
+            update::update_install,
             engine_catalog,
             list_tunnels,
             test_connection,
@@ -1630,7 +1879,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_snippets,
             delete_snippet,
             statement_at,
-            create_sqlite_database,
+            create_database,
             script_risks,
             script_params,
             bind_params,
@@ -1643,14 +1892,20 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             import_dbeaver,
             open_workspace,
             trust_workspace,
+            accept_change,
+            set_user_vars,
             list_connections,
             list_history,
             set_history_enabled,
             connect,
+            connect_from_session,
             disconnect,
             run_script,
             cancel,
             release_result,
+            current_database,
+            list_databases,
+            select_database,
             list_schemas,
             list_objects,
             describe_table,
@@ -1715,7 +1970,9 @@ pub fn run() {
     let typed = builder.invoke_handler();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
+        .manage(update::PendingUpdate::default())
         .invoke_handler(move |invoke| match invoke.message.command() {
             "fetch_window" => raw_handler(invoke),
             _ => typed(invoke),

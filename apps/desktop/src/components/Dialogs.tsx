@@ -1,5 +1,5 @@
-// Modal dialogs: password, repository trust, query parameters, risky statements and SSH
-// tunnel questions.
+// Modal dialogs: password, repository trust, changes to trusted repository items, query
+// parameters, risky statements and SSH tunnel questions.
 
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -9,12 +9,16 @@ import { useDialogs } from "../store";
 export function Dialogs() {
   const password = useDialogs((s) => s.password);
   const trust = useDialogs((s) => s.trust);
+  const change = useDialogs((s) => s.change);
+  const variables = useDialogs((s) => s.variables);
   const risk = useDialogs((s) => s.risk);
   const params = useDialogs((s) => s.params);
   const text = useDialogs((s) => s.text);
   const interaction = useDialogs((s) => s.interactions[0]);
   if (interaction) return <InteractionDialog key={interaction.id} />;
   if (trust) return <TrustDialog />;
+  if (change) return <ChangeDialog key={change.item} />;
+  if (variables) return <VariablesDialog key={variables.names.join(",")} />;
   if (params) return <ParamsDialog />;
   if (text) return <TextDialog />;
   if (risk) return <RiskDialog />;
@@ -88,6 +92,103 @@ function TrustDialog() {
         <button onClick={() => request.resolve(false)}>{t("dontTrust")}</button>
         <button className="primary" onClick={() => request.resolve(true)}>
           {t("trust")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** The personal values a repository connection needs (`${user.…}`, ADR-022), asked once and
+ *  saved in the user's `user.toml`, outside the repository. */
+function VariablesDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.variables);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const first = useRef<HTMLInputElement>(null);
+  useEffect(() => first.current?.focus(), []);
+  if (!request) return null;
+  const complete = request.names.every((name) => (values[name] ?? "").trim() !== "");
+  const submit = () => {
+    if (complete) request.resolve(Object.fromEntries(request.names.map((name) => [name, (values[name] ?? "").trim()])));
+  };
+  return (
+    <Modal title={t("variables.title")}>
+      <p>{t("variables.explanation")}</p>
+      <form
+        className="variables-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        {request.names.map((name, i) => (
+          <label key={name} className="field">
+            <span className="mono">{`\${user.${name}}`}</span>
+            <input
+              ref={i === 0 ? first : undefined}
+              type="text"
+              aria-label={name}
+              autoComplete="off"
+              value={values[name] ?? ""}
+              onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))}
+            />
+          </label>
+        ))}
+        <p className="muted small">{t("variables.advice")}</p>
+        <div className="modal-actions">
+          <button type="button" onClick={() => request.resolve(null)}>
+            {t("cancel")}
+          </button>
+          <button type="submit" className="primary" disabled={!complete}>
+            {t("variables.save")}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** What changed in a repository connection or tunnel since the user trusted it: nothing of
+ *  it is used (no secret read, no command run) until they accept (ADR-022). */
+function ChangeDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.change);
+  if (!request) return null;
+  const [kind, name] = request.item.includes(":") ? request.item.split(/:(.*)/s) : [request.item, ""];
+  const what =
+    kind === "tunnel"
+      ? t("change.tunnel", { name })
+      : kind === "known_hosts"
+        ? t("change.knownHosts")
+        : t("change.connection", { name });
+  return (
+    <Modal title={request.isNew ? t("change.newTitle") : t("change.title")}>
+      <p>{request.isNew ? t("change.newExplanation", { what }) : t("change.explanation", { what })}</p>
+      <div className="change-table-wrap">
+        <table className="change-table">
+          <thead>
+            <tr>
+              <th>{t("change.field")}</th>
+              {!request.isNew && <th>{t("change.before")}</th>}
+              <th>{request.isNew ? t("change.value") : t("change.after")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {request.fields.map((f) => (
+              <tr key={f.field}>
+                <td className="mono">{f.field}</td>
+                {!request.isNew && <td className="mono">{f.before ?? t("change.none")}</td>}
+                <td className="mono">{f.after ?? t("change.none")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted small">{t("change.advice")}</p>
+      <div className="modal-actions">
+        <button onClick={() => request.resolve(false)}>{t("change.reject")}</button>
+        <button className="primary" onClick={() => request.resolve(true)}>
+          {t("change.accept")}
         </button>
       </div>
     </Modal>

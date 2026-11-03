@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use russh::client::{self, DisconnectReason, Handle};
 use russh::keys::PublicKeyOrCertificate;
+use russh::{ChannelMsg, ChannelWriteHalf, Sig};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::process::Child;
@@ -19,6 +20,28 @@ use crate::hostkeys::{self, KnownHosts};
 use crate::{HopSpec, Interaction, SshError, Target, TunnelSpec};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A command running on a tunnel's last hop ([`Tunnel::exec`]).
+pub struct RemoteExec {
+    pub stdin: std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>,
+    /// Its output and its errors, merged.
+    pub stdout: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>,
+    pub control: RemoteSignals,
+}
+
+/// Signals for a [`RemoteExec`].
+#[derive(Clone)]
+pub struct RemoteSignals(Arc<ChannelWriteHalf<client::Msg>>);
+
+impl RemoteSignals {
+    /// SIGINT, as Ctrl+C would send. Servers may ignore it (OpenSSH honours it).
+    pub async fn interrupt(&self) -> Result<(), SshError> {
+        self.0
+            .signal(Sig::INT)
+            .await
+            .map_err(|e| SshError::Other(format!("could not interrupt the command: {e}")))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TunnelState {
@@ -213,6 +236,59 @@ impl Tunnel {
             forwards: Mutex::new(HashMap::new()),
             primary: std::sync::OnceLock::new(),
             child: Mutex::new(child),
+        })
+    }
+
+    /// Runs `command` on the last hop, in an SSH session channel of its own, for programs
+    /// the client talks to through their standard input and output (SQLite on a server,
+    /// ADR-018). Its standard error is merged into the output. The bastions of a chain only
+    /// forward; the last hop must allow commands, or the output says it refused.
+    pub async fn exec(&self, command: &str) -> Result<RemoteExec, SshError> {
+        if let TunnelState::Down { reason } = &*self.state.borrow() {
+            return Err(SshError::Other(format!("the tunnel is down: {reason}")));
+        }
+        let session = self.sessions.last().expect("a tunnel has at least one hop");
+        let channel = session
+            .channel_open_session()
+            .await
+            .map_err(|e| SshError::Other(format!("the last hop could not open a session: {e}")))?;
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| SshError::Other(format!("the last hop did not run the command: {e}")))?;
+        let (mut read, write) = channel.split();
+        let (mut output, stdout) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            while let Some(message) = read.wait().await {
+                let written = match message {
+                    ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                        output.write_all(&data).await
+                    }
+                    ChannelMsg::Failure => {
+                        output
+                            .write_all(
+                                b"
+the server refused to run a command (it may allow only port forwarding)
+",
+                            )
+                            .await
+                    }
+                    ChannelMsg::Close => break,
+                    _ => Ok(()),
+                };
+                if written.is_err() {
+                    break;
+                }
+            }
+            // The reader sees the end of the output.
+            let _ = output.shutdown().await;
+        });
+        let write = Arc::new(write);
+        Ok(RemoteExec {
+            stdin: Box::pin(write.make_writer()),
+            stdout: Box::pin(stdout),
+            control: RemoteSignals(write),
         })
     }
 

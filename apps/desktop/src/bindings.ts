@@ -12,6 +12,14 @@ export const commands = {
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
 	setTheme: (theme: string) => typedError<null, string>(__TAURI_INVOKE("set_theme", { theme })),
+	getUpdateCheck: () => typedError<boolean, string>(__TAURI_INVOKE("get_update_check")),
+	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
+	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
+	/**
+	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
+	 *  come back with their SQL, not executed (CLAUDE.md).
+	 */
+	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
 	/**  Tunnels a new connection can use (from the repository and the personal directory). */
@@ -21,7 +29,7 @@ export const commands = {
 	 *  the file nor the keychain. `editing` is the connection being edited, if any: its stored
 	 *  password is used when none is typed.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("test_connection", { draft, password, editing })),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
 	 *  configuration. Returns the new connection's identifier.
@@ -121,10 +129,10 @@ export const commands = {
 	 */
 	statementAt: (engine: string, sql: string, offset: number) => typedError<TextSpan | null, string>(__TAURI_INVOKE("statement_at", { engine, sql, offset })),
 	/**
-	 *  Creates an empty SQLite database file for a new connection. The core never overwrites an
-	 *  existing file.
+	 *  Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
+	 *  overwrites an existing file.
 	 */
-	createSqliteDatabase: (path: string) => typedError<null, string>(__TAURI_INVOKE("create_sqlite_database", { path })),
+	createDatabase: (engine: string, path: string) => typedError<null, string>(__TAURI_INVOKE("create_database", { engine, path })),
 	/**
 	 *  Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
 	 *  without WHERE, DROP, TRUNCATE, or any write on a production connection.
@@ -158,6 +166,16 @@ export const commands = {
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
+	/**
+	 *  Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
+	 *  as it is now, and connecting can go on.
+	 */
+	acceptChange: (item: string) => typedError<null, string>(__TAURI_INVOKE("accept_change", { item })),
+	/**
+	 *  Saves values for `${user.…}` variables in the user's `user.toml` (ADR-022) and reloads
+	 *  the configuration. Only those entries change; the rest of the file stays as it was.
+	 */
+	setUserVars: (values: { [key in string]: string }) => typedError<null, string>(__TAURI_INVOKE("set_user_vars", { values })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	setHistoryEnabled: (connection: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
@@ -165,13 +183,22 @@ export const commands = {
 	 *  Opens a session (`session` is chosen by the UI). If a password is needed, it says so
 	 *  instead of failing, so the UI can ask for it.
 	 */
-	connect: (session: string, connection: string, password: string | null, remember: boolean) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("connect", { session, connection, password, remember })),
+	connect: (session: string, connection: string, password: string | null, remember: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember })),
+	/**
+	 *  Open an independent tab from an existing explorer session, reusing its in-memory
+	 *  credentials and exact resolved connection. Passwords never cross back into the UI.
+	 */
+	connectFromSession: (source: string, session: string, database: string | null) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
 	runScript: (session: string, sql: string, confirmed: boolean, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, onEvent })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
 	/**  Frees a result the UI no longer shows. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
+	currentDatabase: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("current_database", { session })),
+	/**  The databases this tab's session can switch to (MySQL, MariaDB, SQL Server). */
+	listDatabases: (session: string) => typedError<string[], string>(__TAURI_INVOKE("list_databases", { session })),
+	selectDatabase: (session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("select_database", { session, database })),
 	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
 	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),
 	describeTable: (session: string, schema: string, name: string) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name })),
@@ -240,13 +267,47 @@ export type ColumnItem = {
 	nativeType: string,
 };
 
-export type ConnectOutcome = { kind: "connected"; serverVersion: string } | 
+export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
+
+export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string } | 
 /**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
 { kind: "authFailed"; message: string; canRemember: boolean } | 
 /**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" };
+{ kind: "untrusted" } | 
+/**
+ *  A repository connection or tunnel is new or changed since the repository was trusted
+ *  (ADR-022): show the change and ask before resolving anything.
+ */
+{ kind: "changed"; 
+/**  `connection:<id>` or `tunnel:<name>`, for `accept_change`. */
+item: string; new: boolean; fields: FieldChangeItem_Deserialize[] } | 
+/**
+ *  The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
+ *  their values, save them with `set_user_vars` and try again.
+ */
+{ kind: "missingVariables"; names: string[] };
+
+export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string } | 
+/**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
+{ kind: "passwordRequired"; canRemember: boolean } | 
+/**  The server rejected the password (or the user): it must be asked for again. */
+{ kind: "authFailed"; message: string; canRemember: boolean } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" } | 
+/**
+ *  A repository connection or tunnel is new or changed since the repository was trusted
+ *  (ADR-022): show the change and ask before resolving anything.
+ */
+{ kind: "changed"; 
+/**  `connection:<id>` or `tunnel:<name>`, for `accept_change`. */
+item: string; new: boolean; fields: FieldChangeItem_Serialize[] } | 
+/**
+ *  The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
+ *  their values, save them with `set_user_vars` and try again.
+ */
+{ kind: "missingVariables"; names: string[] };
 
 /**
  *  What the "add connection" form sends. The password travels apart and is never stored in
@@ -262,7 +323,7 @@ export type ConnectionDraftItem_Deserialize = {
 	personal: boolean,
 	folder: string,
 	name: string,
-	/**  An available engine id from the catalog (`postgres`, `sqlite`). */
+	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	env: string,
 	host: string,
@@ -274,11 +335,18 @@ export type ConnectionDraftItem_Deserialize = {
 	passwordOther: string,
 	tlsMode: TlsModeItem,
 	tlsCa: string,
+	/**  Client certificate and its private key (ADR-022); empty for none. */
+	tlsCert: string,
+	tlsKey: string,
 	tunnel: string,
 	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
 	kubernetes?: KubernetesDraftItem | null,
+	/**  SQLite on a server (with a tunnel): the program there; empty for `sqlite3`. */
+	sqlite3: string,
 	readOnly: boolean,
 	mcpExposed: boolean,
+	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
+	mcpWrites: boolean,
 };
 
 /**
@@ -289,7 +357,7 @@ export type ConnectionDraftItem_Serialize = {
 	personal: boolean,
 	folder: string,
 	name: string,
-	/**  An available engine id from the catalog (`postgres`, `sqlite`). */
+	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	env: string,
 	host: string,
@@ -301,11 +369,18 @@ export type ConnectionDraftItem_Serialize = {
 	passwordOther: string,
 	tlsMode: TlsModeItem,
 	tlsCa: string,
+	/**  Client certificate and its private key (ADR-022); empty for none. */
+	tlsCert: string,
+	tlsKey: string,
 	tunnel: string,
 	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
 	kubernetes: KubernetesDraftItem | null,
+	/**  SQLite on a server (with a tunnel): the program there; empty for `sqlite3`. */
+	sqlite3: string,
 	readOnly: boolean,
 	mcpExposed: boolean,
+	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
+	mcpWrites: boolean,
 };
 
 export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deserialize;
@@ -350,11 +425,11 @@ export type DbeaverItem_Deserialize = {
 	id: string,
 	name: string,
 	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it. */
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it. */
 	engine?: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported?: string | null,
-	/**  `host:port/database`, or the file for SQLite. */
+	/**  `host:port/database`, or the file for SQLite and DuckDB. */
 	target: string,
 	user: string,
 	env: string,
@@ -371,11 +446,11 @@ export type DbeaverItem_Serialize = {
 	id: string,
 	name: string,
 	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`; `None` when SpelunkDB cannot open it. */
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it. */
 	engine: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported: string | null,
-	/**  `host:port/database`, or the file for SQLite. */
+	/**  `host:port/database`, or the file for SQLite and DuckDB. */
 	target: string,
 	user: string,
 	env: string,
@@ -424,6 +499,32 @@ export type EngineItem_Serialize = {
 	access: string,
 	defaultPort: number | null,
 	available: boolean,
+};
+
+/**
+ *  One field of a changed repository item. Repository files hold secret references, never
+ *  secrets.
+ */
+export type FieldChangeItem = FieldChangeItem_Serialize | FieldChangeItem_Deserialize;
+
+/**
+ *  One field of a changed repository item. Repository files hold secret references, never
+ *  secrets.
+ */
+export type FieldChangeItem_Deserialize = {
+	field: string,
+	before?: string | null,
+	after?: string | null,
+};
+
+/**
+ *  One field of a changed repository item. Repository files hold secret references, never
+ *  secrets.
+ */
+export type FieldChangeItem_Serialize = {
+	field: string,
+	before: string | null,
+	after: string | null,
 };
 
 /**  A column filter operator (see `spelunk_core::FilterOp`). */
@@ -560,7 +661,9 @@ export type ObjectItem_Serialize = {
 
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */
-"other";
+"other" | 
+/**  Short-lived tokens from a cloud provider's CLI (ADR-022). */
+"awsRds" | "azureAd" | "googleCloudSql";
 
 /**  Why a statement asks for confirmation before running (see `spelunk_core::Risk`). */
 export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";
@@ -681,6 +784,16 @@ export type TunnelItem = {
 export type TunnelTestOutcome = { kind: "connected" } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
+
+export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
+
+export type UpdateStatus_Deserialize = 
+/**  This build has nowhere to look for updates. */
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null };
+
+export type UpdateStatus_Serialize = 
+/**  This build has nowhere to look for updates. */
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null };
 
 /**
  *  What a pasted connection URL fills in the form. The password goes only to the form's

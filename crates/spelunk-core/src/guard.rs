@@ -9,7 +9,8 @@ use std::ops::ControlFlow;
 use spelunk_driver_api::{Dialect, StatementSpan};
 use sqlparser::ast::{Statement, visit_statements};
 use sqlparser::dialect::{
-    Dialect as SqlDialect, GenericDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect,
+    Dialect as SqlDialect, DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect,
+    PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
 
@@ -58,7 +59,7 @@ fn statement_risk(engine: &str, sql: &str, production: bool) -> Option<Risk> {
     })
 }
 
-fn destructive(engine: &str, sql: &str) -> Option<Risk> {
+pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
     let first = first_word(sql);
     // Every kind of DROP (table, schema, database, function…), parsed or not.
     if first == "drop" {
@@ -97,6 +98,8 @@ pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
         "postgres" => Box::new(PostgreSqlDialect {}),
         "sqlite" => Box::new(SQLiteDialect {}),
         "mysql" | "mariadb" => Box::new(MySqlDialect {}),
+        "duckdb" => Box::new(DuckDbDialect {}),
+        "sqlserver" => Box::new(MsSqlDialect {}),
         _ => Box::new(GenericDialect {}),
     }
 }

@@ -4,5 +4,13 @@
   "newQueryShortcut": "New query (Ctrl+T)",
   "welcome": "Pick a connection on the left or open a new query.",
   "newQuery": "New query",
-  "preferenceLoadError": "Could not load your preferences:"
+  "resizeSidebar": "Resize the connections panel",
+  "resizeSidebarHint": "Drag to resize the connections panel. Double-click to reset.",
+  "preferenceLoadError": "Could not load your preferences:",
+  "update": {
+    "available": "SpelunkDB {{version}} is available (you have {{current}}).",
+    "install": "Install and restart",
+    "installing": "Installing…",
+    "later": "Later"
+  }
 }

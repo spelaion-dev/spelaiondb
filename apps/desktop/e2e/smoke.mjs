@@ -32,6 +32,8 @@ function startApp() {
       // Its own WebView2 profile: an installed SpelunkDB that is open (same app identifier)
       // would otherwise share it and the second webview fails to start.
       WEBVIEW2_USER_DATA_FOLDER: join(userDir, "webview2"),
+      // kubectl only ever sees the test cluster (or nothing), never the user's clusters.
+      KUBECONFIG: process.env.SPELUNK_TEST_K8S ?? join(userDir, "no-kubeconfig"),
     },
     stdio: "inherit",
   });
@@ -77,6 +79,9 @@ async function connect() {
 }
 
 let failed = false;
+// The demo's shop.toml is changed during the run (ADR-022) and always put back.
+const shopFile = join(demo, ".spelunk", "connections", "shop.toml");
+const shopOriginal = readFileSync(shopFile, "utf8");
 let browser = await connect();
 try {
   let page = browser.contexts()[0].pages()[0];
@@ -87,6 +92,7 @@ try {
   async function newQuery(connection, sql) {
     await page.locator(`.connection-row:has-text("${connection}") button[title="New query"]`).click();
     const panel = page.locator(".tab-panel:not([hidden])");
+    await panel.locator(".status-connecting").waitFor({ state: "detached" });
     await panel.locator(".cm-content").click();
     // insertText does not trigger autocompletion (Enter would accept a suggestion).
     await page.keyboard.insertText(sql);
@@ -128,21 +134,17 @@ try {
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "detached" });
   }
-  // Opens a settings category in its own tab, runs `action` and goes back to the tab that
-  // was active, closing the settings tab, so the rest of the test sees the same layout.
+  // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
+  // the tabs behind it are left as they were.
   const CATEGORY = { appearance: 1, language: 2, history: 3 };
   async function withSettings(category, action) {
-    const tabs = page.locator(".tabbar [role=tab]");
-    let selected = -1;
-    for (let i = 0; i < (await tabs.count()); i++) {
-      if ((await tabs.nth(i).getAttribute("aria-selected")) === "true") selected = i;
-    }
-    await page.locator(".sidebar-footer .settings-button").click();
-    await page.locator(`.settings-nav button:nth-child(${CATEGORY[category]})`).click();
-    await action(page.locator(".settings"));
-    if (selected >= 0) await tabs.nth(selected).click();
-    await page.locator(".settings-tab .close").click();
-    await page.locator(".settings-tab").waitFor({ state: "detached" });
+    await page.locator(".activity-bar .settings-button").click();
+    const dialog = page.locator(".settings-dialog");
+    await dialog.waitFor();
+    await dialog.locator(`.settings-nav button:nth-child(${CATEGORY[category]})`).click();
+    await action(dialog.locator(".settings"));
+    await dialog.locator(".wizard-header button").click();
+    await dialog.waitFor({ state: "detached" });
   }
   async function setLanguage(value) {
     await withSettings("language", async (settings) => {
@@ -172,7 +174,7 @@ try {
   }
 
   step("startup and untrusted repository");
-  await page.locator(".sidebar-footer .settings-button").waitFor();
+  await page.locator(".activity-bar .settings-button").waitFor();
   assert.equal(await page.locator(".language-setting").count(), 0, "the language selector left the tab bar");
   assert.equal(await savedLanguage(), "system");
   await page.evaluate(() => {
@@ -188,16 +190,72 @@ try {
   await setLanguage("es");
   await page.getByText("Selecciona una conexión a la izquierda o abre una consulta nueva.").waitFor();
   await page.getByRole("button", { name: "Configuración", exact: true }).waitFor();
+  const spanishActivities = page.getByRole("navigation", { name: "Barra de actividades" });
+  await spanishActivities.getByRole("button", { name: "Conexiones", exact: true }).waitFor();
+  await spanishActivities.getByRole("button", { name: "Historial de consultas", exact: true }).waitFor();
   await setLanguage("en");
   await page.getByText("Shop (SQLite)").waitFor();
   await page.getByText("is not trusted").waitFor();
   await shot("01-start");
 
-  step("settings: theme in its own tab, Ctrl+, shortcut");
+  step("connections sidebar: drag, keyboard resizing, limits and reset");
+  const sidebar = page.locator(".sidebar");
+  const activities = page.getByRole("navigation", { name: "Activity bar" });
+  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Query history", "Saved queries", "Settings"]);
+  for (const button of await activities.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
+  const connectionsActivity = activities.getByRole("button", { name: "Connections" });
+  assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "true");
+  await connectionsActivity.click();
+  await sidebar.waitFor({ state: "hidden" });
+  assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "false");
+  await connectionsActivity.click();
+  await sidebar.waitFor({ state: "visible" });
+  assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "true");
+  const sidebarResizer = page.getByRole("separator", { name: "Resize the connections panel" });
+  const sidebarBox = await sidebar.boundingBox();
+  const handleBox = await sidebarResizer.boundingBox();
+  const mainBox = await page.locator(".main").boundingBox();
+  assert.equal(Math.round(sidebarBox.width), 290);
+  assert.equal(Math.round(sidebarBox.x + sidebarBox.width), Math.round(mainBox.x));
+  assert.equal(Math.round(handleBox.x), Math.round(mainBox.x));
+  assert.equal(Math.round(handleBox.width), 6);
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2 + 120, handleBox.y + 100, { steps: 5 });
+  await page.mouse.up();
+  assert.equal(Math.round((await sidebar.boundingBox()).width), 410);
+  assert.equal(await sidebarResizer.getAttribute("aria-valuenow"), "410");
+  await connectionsActivity.click();
+  await sidebar.waitFor({ state: "hidden" });
+  await connectionsActivity.click();
+  await sidebar.waitFor({ state: "visible" });
+  assert.equal(Math.round((await sidebar.boundingBox()).width), 410);
+  await sidebarResizer.focus();
+  await page.keyboard.press("ArrowLeft");
+  assert.equal(Math.round((await sidebar.boundingBox()).width), 400);
+  await page.keyboard.press("Home");
+  assert.equal(Math.round((await sidebar.boundingBox()).width), 210);
+  await page.keyboard.press("End");
+  assert.equal(Math.round((await sidebar.boundingBox()).width), Number(await sidebarResizer.getAttribute("aria-valuemax")));
+  assert.ok((await page.locator(".main").boundingBox()).width >= 360);
+  await sidebarResizer.dblclick();
+  assert.equal(Math.round((await sidebar.boundingBox()).width), 290);
+
+  step("settings: a dialog over the tabs, Ctrl+, opens it and Escape closes it");
+  const tabsWithoutSettings = await page.locator(".tabbar [role=tab]").count();
   await page.keyboard.press("Control+,");
-  await page.locator(".settings-tab[aria-selected=true]").waitFor();
-  await page.getByRole("heading", { name: "Appearance" }).waitFor();
-  await page.locator(".settings-tab .close").click();
+  const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+  await settingsDialog.getByRole("heading", { name: "Appearance" }).waitFor();
+  assert.equal(await page.locator(".tabbar [role=tab]").count(), tabsWithoutSettings, "no settings tab");
+  assert.equal(await page.locator(".activity-bar .settings-button").getAttribute("aria-pressed"), "true");
+  // Updates (ADR-021): this build has no public source yet, so it says so and asks nothing.
+  await settingsDialog.getByRole("button", { name: "Updates", exact: true }).click();
+  await settingsDialog.getByRole("heading", { name: "Updates" }).waitFor();
+  await settingsDialog.getByText(/^Version \d+\.\d+\.\d+$/).waitFor();
+  await settingsDialog.getByRole("status").filter({ hasText: "not available in this build" }).waitFor();
+  assert.equal(await page.locator(".update-notice").count(), 0, "no update notice");
+  await page.keyboard.press("Escape");
+  await settingsDialog.waitFor({ state: "detached" });
   const systemTheme = await page.evaluate(() => (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   assert.equal(await page.locator("html").getAttribute("data-theme"), systemTheme);
   await setTheme("dark", "dark");
@@ -219,6 +277,15 @@ try {
   );
   await run(panel);
   await panel.locator(".statusline", { hasText: "6 rows" }).waitFor();
+  step("SQL keywords remain legible when switching themes");
+  const keywords = panel.locator(".cm-content .sql-keyword");
+  await keywords.first().waitFor();
+  const lightKeywordColor = await keywords.first().evaluate((el) => getComputedStyle(el).color);
+  assert.equal(lightKeywordColor, "rgb(119, 0, 136)");
+  await setTheme("dark", "dark");
+  assert.equal(await keywords.first().evaluate((el) => getComputedStyle(el).color), "rgb(199, 146, 234)");
+  await setTheme("light", "light");
+  assert.equal(await keywords.first().evaluate((el) => getComputedStyle(el).color), lightKeywordColor);
   await panel.locator(".cm-content").click();
   await page.keyboard.press("Control+f");
   const searchInput = panel.locator('.cm-search input[name="search"]');
@@ -297,6 +364,10 @@ try {
   await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
   await panel.getByRole("menuitem", { name: "Copy as SQL IN list" }).click();
   assert.match(await copied(5), /^\('[^']+', '[^']+', '[^']+'\)$/);
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Copy as SQL INSERT" }).click();
+  const tuples = json.map((row) => `('${row.country.replaceAll("'", "''")}')`).join(",\n  ");
+  assert.equal(await copied(6), `INSERT INTO table_name (country) VALUES ${tuples};\n`);
 
   step("export: the whole result to CSV and JSON files written by the core");
   // The native save dialog cannot be driven: src/dialogs.ts takes this path instead.
@@ -355,6 +426,40 @@ try {
   await viewer.locator(".cell-viewer-json").waitFor();
   await page.keyboard.press("Escape");
   await viewer.waitFor({ state: "detached" });
+
+  step("grid menu and filter submenu stay visible near the window edges");
+  await setHistorySaving("Shop (SQLite)", false);
+  panel = await newQuery("Shop (SQLite)", "select id as a, id as b, id as c, id as d, id as e, id as f, id as g, id as h, id as i, id as j, id as k, id as l from orders limit 100;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+  const edgeGrid = panel.locator(".grid-scroller");
+  const edgeBox = await edgeGrid.boundingBox();
+  await page.waitForTimeout(300);
+  await page.mouse.click(edgeBox.x + edgeBox.width - 30, edgeBox.y + edgeBox.height - 30, { button: "right" });
+  const edgeMenu = panel.locator(".result-grid-menu");
+  await edgeMenu.waitFor();
+  const withinWindow = async (locator) => {
+    const box = await locator.boundingBox();
+    const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height, JSON.stringify({ box, viewport }));
+  };
+  const hitTarget = async (locator) => locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return hit !== null && element.contains(hit);
+  });
+  await withinWindow(edgeMenu);
+  assert.ok(await hitTarget(edgeMenu.getByRole("menuitem", { name: "Copy as SQL INSERT" })));
+  await edgeMenu.getByRole("menuitem", { name: "Filter ▸" }).hover();
+  const edgeSubmenu = panel.getByRole("menu", { name: "Filter", exact: true });
+  await edgeSubmenu.waitFor();
+  await withinWindow(edgeSubmenu);
+  const customFilter = edgeSubmenu.getByRole("menuitem", { name: "Custom filter…" });
+  assert.ok(await hitTarget(customFilter));
+  await customFilter.click();
+  await page.getByRole("dialog", { name: "Custom filter" }).getByRole("button", { name: "Cancel" }).click();
+  await page.keyboard.press("Control+w");
+  await setHistorySaving("Shop (SQLite)", true);
 
   step("SQLite: 50,000 rows and scrolling");
   panel = await newQuery("Shop (SQLite)", "select * from orders;");
@@ -515,7 +620,14 @@ try {
   step("Ctrl+Enter runs the statement under the cursor, Ctrl+Shift+Enter all of them");
   await replaceQuery(panel, "select 'first' as which;\nselect 'second;' as which;\n\n-- the third\nselect 'third' as which");
   const firstCell = async () => {
-    const box = await panel.locator(".grid-scroller").boundingBox();
+    // Between two runs the grid is replaced: wait until the new one is there.
+    const grid = panel.locator(".grid-scroller");
+    await grid.waitFor();
+    let box = await grid.boundingBox();
+    for (let i = 0; i < 40 && !box; i++) {
+      await page.waitForTimeout(100);
+      box = await grid.boundingBox();
+    }
     const before = await page.evaluate(() => window.__copied.length);
     await page.mouse.click(box.x + 80, box.y + 36 + 13);
     await page.keyboard.press("Control+c");
@@ -544,6 +656,44 @@ try {
     if (third !== "third") await page.waitForTimeout(250);
   }
   assert.equal(third, "third");
+
+  step("editor toolbar: run the current statement or selection, and run the whole script");
+  const actions = panel.getByRole("toolbar", { name: "Query actions" });
+  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Format", "Save"]);
+  for (const button of await actions.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("End");
+  let previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+  await actions.getByRole("button", { name: "Run", exact: true }).click();
+  await page.waitForFunction((button) => !button.isConnected, previousResult);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  let selected = "";
+  for (let i = 0; i < 20 && selected !== "second;"; i++) {
+    selected = await firstCell();
+    if (selected !== "second;") await page.waitForTimeout(250);
+  }
+  assert.equal(selected, "second;");
+  assert.equal(await panel.locator(".result-tabs button", { hasText: /^Result/ }).count(), 1);
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+End");
+  previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+  await actions.getByRole("button", { name: "Run", exact: true }).click();
+  await page.waitForFunction((button) => !button.isConnected, previousResult);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  selected = "";
+  for (let i = 0; i < 20 && selected !== "first"; i++) {
+    selected = await firstCell();
+    if (selected !== "first") await page.waitForTimeout(250);
+  }
+  assert.equal(selected, "first");
+  await sqlEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+End");
+  await actions.getByRole("button", { name: "Run script", exact: true }).click();
+  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
   await sqlEditor.click();
   await page.keyboard.press("Control+Shift+Enter");
   await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
@@ -559,7 +709,7 @@ try {
   await page.keyboard.press("Enter");
   await risk.waitFor({ state: "detached" });
   await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
-  await run(panel);
+  await actions.getByRole("button", { name: "Run script", exact: true }).click();
   risk = page.getByRole("dialog", { name: "Run these statements?" });
   await shot("05d-risky-statements");
   await risk.getByRole("button", { name: "Run anyway" }).click();
@@ -581,12 +731,12 @@ try {
   assert.equal(await sqlEditor.innerText(), "select 'unterminated");
 
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab moves");
-  const queryTabCount = await page.locator(".tabbar .tab:not(.settings-tab)").count();
+  const queryTabCount = await page.locator(".tabbar .tab").count();
   await sqlEditor.click();
   await page.keyboard.press("Control+w");
-  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab:not(.settings-tab)").length === n, queryTabCount - 1);
+  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, queryTabCount - 1);
   await page.keyboard.press("Control+Shift+T");
-  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab:not(.settings-tab)").length === n, queryTabCount);
+  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, queryTabCount);
   assert.equal(await panel.locator(".cm-content").innerText(), "select 'unterminated");
   assert.equal(await panel.locator("select").first().evaluate((el) => el.selectedOptions[0].text), "Shop (SQLite) (sqlite)");
   const activeName = () => page.locator(".tabbar .tab.active").innerText();
@@ -615,7 +765,16 @@ try {
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM big_orders\nLIMIT 100;");
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
-  await ordersNode.getByText("50,000", { exact: true }).waitFor();
+  const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');
+  await exactCount.waitFor();
+  assert.equal(await exactCount.innerText(), "50K");
+  assert.equal(await ordersNode.getAttribute("aria-description"), "Exact row count: 50,000");
+  await setLanguage("es");
+  const ordersNodeEs = page.getByRole("button", { name: "Expandir o contraer orders", exact: true });
+  const spanishCount = ordersNodeEs.locator('[title="Número exacto de filas: 50.000"]');
+  await spanishCount.waitFor();
+  assert.equal(await spanishCount.innerText(), new Intl.NumberFormat("es", { notation: "compact", maximumFractionDigits: 1 }).format(50_000));
+  await setLanguage("en");
 
   step("table data: pages, WHERE and ORDER BY written and checked by the core");
   await ordersNode.dblclick();
@@ -632,8 +791,12 @@ try {
   await panel.getByRole("textbox", { name: "WHERE" }).fill("");
   await panel.getByRole("button", { name: "Apply", exact: true }).click();
   await range.filter({ hasText: "rows 1–500" }).waitFor();
+  await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
+  const firstPageResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
   await panel.getByRole("button", { name: "Next page" }).click();
   await range.filter({ hasText: "rows 501–1,000" }).waitFor();
+  await page.waitForFunction((button) => !button.isConnected, firstPageResult);
+  await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
   // A header click sorts in the server: ORDER BY written with the engine's quoting.
   {
     // The new page mounts a new grid: wait until it is laid out.
@@ -749,13 +912,32 @@ try {
 from ${status}
 where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     );
-    await run(panel);
+    await panel.getByRole("button", { name: "Connect to choose database" }).click();
     await page.getByRole("dialog").getByText(`Password for ${connection}`).waitFor();
     await page.getByLabel("Password", { exact: true }).fill("spelunk");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
+    const database = panel.getByLabel("Database", { exact: true });
+    await database.locator('option[value="information_schema"]').waitFor({ state: "attached" });
+    await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await database.elementHandle());
+    await run(panel);
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
     assert.match(await panel.locator(".status-connected").innerText(), version);
     if (connection.startsWith("MySQL")) await shot("07b-mysql");
+    await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await database.elementHandle());
+    await database.selectOption("information_schema");
+    await page.waitForFunction((el) => !el.disabled && el.value === "information_schema", await database.elementHandle());
+    await replaceQuery(panel, "select 1 where database() = 'information_schema';");
+    let previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+    await run(panel);
+    await page.waitForFunction((el) => !el.isConnected, previousResult);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await page.waitForFunction((el) => !el.disabled, await database.elementHandle());
+    await replaceQuery(panel, "use spelunk; select 1 where database() = 'spelunk';");
+    previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+    await run(panel);
+    await page.waitForFunction((el) => !el.isConnected, previousResult);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await database.elementHandle());
   }
   // SQLyog-style column filters on SHOW FULL PROCESSLIST (no WHERE possible there).
   panel = await newQuery("MySQL (Docker)", "show full processlist;");
@@ -826,14 +1008,37 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).waitFor();
   assert.equal(await page.locator('.connection-row:has-text("MySQL (Docker)") .engine').innerText(), "MY");
+  await connectionsActivity.click();
+  await sidebar.waitFor({ state: "hidden" });
+  await connectionsActivity.click();
+  await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0);
+
+  step("explorer: open a connected query for the selected database without asking again");
+  await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
+  await panel.locator(".status-connected").waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  const mysqlSchema = page.getByRole("button", { name: "Expand or collapse schema spelunk" });
+  await mysqlSchema.dblclick();
+  await panel.locator(".status-connected").waitFor();
+  const selectedDatabase = panel.getByLabel("Database", { exact: true });
+  await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await selectedDatabase.elementHandle());
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  await panel.locator(".cm-content").click();
+  await page.keyboard.insertText("select 1 where database() = 'spelunk';");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
   step("editing table data: cells, NULL, delete and insert applied in one transaction");
-  await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).click();
-  await page.getByRole("button", { name: "Expand or collapse smoke_edit", exact: true }).dblclick();
+  if ((await mysqlSchema.getAttribute("aria-expanded")) !== "true") await mysqlSchema.click();
+  const smokeEditNode = page.getByRole("button", { name: "Expand or collapse smoke_edit", exact: true });
+  const estimate = smokeEditNode.locator('[title^="Estimated rows (from the planner, not counted): "]');
+  await estimate.waitFor();
+  assert.match(await estimate.innerText(), /^~\d/);
+  await smokeEditNode.dblclick();
   await page.locator(".tabbar .tab.active", { hasText: "smoke_edit" }).waitFor();
-  await page.getByRole("dialog").getByText("Password for MySQL (Docker)").waitFor();
-  await page.getByLabel("Password", { exact: true }).fill("spelunk");
-  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".status-connected").waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0);
   await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
   await panel.getByRole("button", { name: "Add row" }).waitFor();
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id");
@@ -904,7 +1109,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // First the password (the keychain does not have it yet, so it offers to remember it); then,
   // when the tunnel opens, the fingerprint of each bastion.
   await page.getByRole("dialog").getByText("Password for Postgres behind bastions").waitFor();
-  await page.getByText("Remember in the system keychain").waitFor();
+  // Offered, and left unticked: the smoke test never writes the user's real keychain.
+  await page.getByRole("checkbox", { name: "Remember in the system keychain" }).uncheck();
   await page.getByLabel("Password", { exact: true }).fill("spelunk");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   for (let hop = 1; hop <= 2; hop++) {
@@ -923,8 +1129,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("heading", { name: "NoSQL" }).waitFor();
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "MySQL" }).isDisabled()));
   assert.ok(!(await wizard.locator(".engine-card", { hasText: "MariaDB" }).isDisabled()));
-  assert.ok(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled());
-  await wizard.locator(".engine-card", { hasText: "SQL Server" }).getByText("Coming soon").waitFor();
+  assert.ok(!(await wizard.locator(".engine-card", { hasText: "SQL Server" }).isDisabled()));
+  assert.ok(!(await wizard.locator(".engine-card", { hasText: "DuckDB" }).isDisabled()));
+  assert.ok(await wizard.locator(".engine-card", { hasText: "Oracle" }).isDisabled());
+  await wizard.locator(".engine-card", { hasText: "Oracle" }).getByText("Coming soon").waitFor();
   await shot("12a-add-connection-catalog");
   // A connection URL fills the form (password included, only in the form), then back.
   await wizard.getByRole("textbox", { name: "Or paste a connection URL" }).fill("jdbc:mysql://reports.example.com:3307/sales?user=reader&password=s%26cret&sslMode=VERIFY_IDENTITY");
@@ -948,8 +1156,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.locator(".engine-card", { hasText: "SQLite" }).click();
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("heading", { name: "New SQLite connection" }).waitFor();
-  // SQLite has no SSL or SSH tabs.
-  assert.equal(await wizard.getByRole("tab").count(), 2);
+  // SQLite has no SSL tab; SSH is for a file on a server (ADR-018).
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSH", "Options"]);
   await wizard.getByLabel("Name", { exact: true }).fill("Shop copy");
   await wizard.getByLabel("File", { exact: true }).fill(join(demo, "data", "shop.db"));
   await wizard.getByRole("tab", { name: "Options" }).click();
@@ -984,6 +1192,73 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
   await wizard.waitFor({ state: "detached" });
 
+  step("DuckDB: a new database file, nested types as DuckDB writes them, two tabs on one file");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "DuckDB" }).click();
+  const duckDb = join(userDir, "analytics.duckdb");
+  await page.evaluate((target) => (window.__spelunkSavePath = target), duckDb);
+  await wizard.getByRole("button", { name: "New database…" }).click();
+  const duckFile = wizard.getByLabel("File", { exact: true });
+  for (let i = 0; i < 40 && (await duckFile.inputValue()) !== duckDb; i++) await page.waitForTimeout(100);
+  assert.equal(await duckFile.inputValue(), duckDb);
+  assert.equal(await wizard.getByLabel("Name", { exact: true }).inputValue(), "analytics");
+  await page.evaluate(() => delete window.__spelunkSavePath);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · v\d+\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "analytics" }).waitFor();
+  assert.match(readFileSync(join(userDir, "connections", "analytics.toml"), "utf8"), /engine = "duckdb"/);
+  panel = await newQuery(
+    "analytics",
+    "create table sales as select range as id, [range, range * 2] as pair, {'city': 'Madrid'} as place from range(3);\nselect * from sales order by id;",
+  );
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+  await shot("12a3-duckdb");
+  // A second tab on the same file (DuckDB opens a file once per process: they share it).
+  const second = await newQuery("analytics", "select count(*) as n from sales;");
+  await run(second);
+  await second.locator(".statusline", { hasText: "1 row" }).waitFor();
+
+  step("SQL Server: a new connection, a batch with two result sets");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "SQL Server" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("SQL Server (Docker)");
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill("11433");
+  await wizard.getByLabel("User", { exact: true }).fill("sa");
+  // Asked every time: never stored, not even in the keychain.
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("Spelunk-test-1");
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 16\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  assert.match(readFileSync(join(userDir, "connections", "sql-server-docker.toml"), "utf8"), /engine = "sqlserver"/);
+  panel = await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b");
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for SQL Server (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("Spelunk-test-1");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  // One batch, two result sets: two result tabs.
+  await panel.locator(".result-tabs button", { hasText: /^Result 2/ }).waitFor();
+  // The tab's database, from sys.databases; switching runs the next statements there.
+  const sqlServerDatabase = panel.getByLabel("Database", { exact: true });
+  await sqlServerDatabase.locator('option[value="tempdb"]').waitFor({ state: "attached" });
+  await page.waitForFunction((el) => !el.disabled && el.value === "master", await sqlServerDatabase.elementHandle());
+  await sqlServerDatabase.selectOption("tempdb");
+  await page.waitForFunction((el) => !el.disabled && el.value === "tempdb", await sqlServerDatabase.elementHandle());
+  await shot("12a4-sqlserver");
+  // The query ends in a word, which may open the completion list as it is typed: the next
+  // dialog must not find it on top (the editor closes it when it loses focus).
+
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard");
   await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
@@ -993,6 +1268,13 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("Port", { exact: true }).fill("15432");
   await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
   await wizard.getByLabel("User", { exact: true }).fill("spelunk");
+  // Passwordless logins (ADR-022): a cloud provider's token here, a client certificate in SSL.
+  const authMethod = wizard.getByLabel("Method", { exact: true });
+  await authMethod.selectOption("token");
+  await wizard.getByLabel("Provider", { exact: true }).selectOption("googleCloudSql");
+  await wizard.getByText("gcloud sql generate-login-token", { exact: false }).waitFor();
+  assert.equal(await wizard.getByLabel("Password", { exact: true }).count(), 0);
+  await authMethod.selectOption("password");
   // Not saving the password means "ask every time": the typed one is only used for the test
   // and never stored (not even in the keychain).
   await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
@@ -1005,12 +1287,22 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await shot("12b-add-connection-main");
   await wizard.getByRole("tab", { name: "SSL" }).click();
   await wizard.getByLabel("TLS", { exact: true }).selectOption("require");
+  await wizard.getByLabel("Client certificate (PEM)", { exact: true }).waitFor();
+  await wizard.getByLabel("Client key (PEM)", { exact: true }).waitFor();
   await wizard.getByRole("tab", { name: "SSH" }).click();
   // The demo defines one tunnel; leaving the box unchecked connects directly.
   assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), false);
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByLabel("Folder", { exact: true }).fill("Wizard");
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  // Agents only read unless the user lets them write, and only on an exposed connection.
+  const agentsCan = wizard.getByLabel("Agents can", { exact: true });
+  assert.equal(await agentsCan.isDisabled(), true);
+  await wizard.getByRole("checkbox", { name: "Expose to AI agents" }).check();
+  await agentsCan.selectOption("write");
+  await wizard.getByLabel("Environment", { exact: true }).fill("prod");
+  await wizard.getByRole("alert").filter({ hasText: "agents will be able to change its data" }).waitFor();
+  await wizard.getByLabel("Environment", { exact: true }).fill("");
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
   await shot("12c-add-connection-options");
@@ -1020,6 +1312,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const saved = readFileSync(join(userDir, "connections", "wizard", "docker-pg-wizard.toml"), "utf8");
   assert.match(saved, /secret = "prompt"/);
   assert.match(saved, /mode = "require"/);
+  assert.match(saved, /\[mcp\]\nexposed = true\nwrites = "allow"/);
   assert.doesNotMatch(saved, /wrong|password = "/);
   assert.ok(!existsSync(join(demo, ".spelunk", "connections", "shop-copy.toml")), "personal connections stay out of the repository");
 
@@ -1118,6 +1411,59 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("button", { name: "Cancel" }).click();
   await wizard.waitFor({ state: "detached" });
   assert.ok(existsSync(join(userDir, "tunnels", "wizard-bastions.toml")));
+
+  step("SQLite on a server: the server's sqlite3 through two hops, nothing copied");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard").first();
+  await wizard.locator(".engine-card", { hasText: "SQLite" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("Shop on a server");
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSH", "Options"]);
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("tab", { name: "SSH" }).click();
+  await wizard.getByRole("button", { name: "New tunnel…" }).click();
+  const serverTunnel = page.getByRole("dialog", { name: "New SSH tunnel" });
+  await serverTunnel.getByLabel("Tunnel name").fill("File server");
+  await serverTunnel.getByRole("radio", { name: "Personal", exact: true }).check();
+  await serverTunnel.getByLabel("Hop 1 Host").fill("127.0.0.1");
+  await serverTunnel.getByLabel("Hop 1 Port").fill("2221");
+  await serverTunnel.getByLabel("Hop 1 User").fill("spelunk");
+  await serverTunnel.getByLabel("Hop 1 Authentication").selectOption("key");
+  await serverTunnel.getByLabel("Hop 1 Private key file").fill(key);
+  await serverTunnel.getByRole("button", { name: "+ Add hop" }).click();
+  await serverTunnel.getByLabel("Hop 2 Host").fill("sqlitehost");
+  await serverTunnel.getByLabel("Hop 2 User").fill("spelunk");
+  await serverTunnel.getByLabel("Hop 2 Authentication").selectOption("key");
+  await serverTunnel.getByLabel("Hop 2 Private key file").fill(key);
+  await serverTunnel.getByRole("button", { name: "Test tunnel" }).click();
+  // bastion1 is known from earlier steps; the file server is new.
+  await Promise.race([
+    serverTunnel.locator(".test-result", { hasText: "Tunnel OK · 2 hops" }).waitFor(),
+    (async () => {
+      for (let i = 0; i < 2; i++) {
+        await page.getByRole("button", { name: "Trust and remember" }).click({ timeout: 10_000 }).catch(() => {});
+      }
+      await serverTunnel.locator(".test-result", { hasText: "Tunnel OK · 2 hops" }).waitFor();
+    })(),
+  ]);
+  await serverTunnel.getByRole("button", { name: "Save", exact: true }).click();
+  await serverTunnel.waitFor({ state: "detached" });
+  assert.equal(await wizard.getByRole("checkbox", { name: "The file is on a server: open it there through an SSH tunnel" }).isChecked(), true);
+  await wizard.getByRole("tab", { name: "Main" }).click();
+  // On a server, the field is the server's path and the local buttons are gone.
+  assert.equal(await wizard.getByRole("button", { name: "Browse…" }).count(), 0);
+  await wizard.getByLabel("File on the server", { exact: true }).fill("/home/spelunk/shop.db");
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 3\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  const remoteFile = readFileSync(join(userDir, "connections", "shop-on-a-server.toml"), "utf8");
+  assert.match(remoteFile, /database = "\/home\/spelunk\/shop\.db"/);
+  assert.match(remoteFile, /tunnel = "file-server"/);
+  panel = await newQuery("Shop on a server", "select id, name, price from product order by id;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+  await shot("14c-sqlite-on-a-server");
 
   // Only with the test cluster (testing/k8s): SPELUNK_TEST_K8S is its kubeconfig.
   if (process.env.SPELUNK_TEST_K8S) {
@@ -1281,6 +1627,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   } else {
     await stopApp();
   }
+  // While the app is closed, the repository changes as a `git pull` would (ADR-022).
+  writeFileSync(shopFile, shopOriginal.replace("max_rows = 100", "max_rows = 50"));
+  // And a personal connection whose file is a variable each person fills in (ADR-022).
+  mkdirSync(join(userDir, "connections"), { recursive: true });
+  writeFileSync(
+    join(userDir, "connections", "vars-demo.toml"),
+    'schema_version = 1\nname = "Personal vars"\nengine = "sqlite"\ndatabase = "${user.demo_db}"\n',
+  );
   app = startApp();
   browser = await connect();
   page = browser.contexts()[0].pages()[0];
@@ -1295,7 +1649,17 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.locator(".connection-row", { hasText: "Docker PG (edited)" }).waitFor();
   assert.equal(await page.locator(".connection-row", { hasText: "Shop copy" }).count(), 0);
   assert.equal(await historySaving("Shop (SQLite)"), false);
+  step("a repository connection changed since it was trusted is shown before it is used");
+  // History saving is still off for this connection: this first run is not recorded.
   panel = await newQuery("Shop (SQLite)", "select 'history_resumed_marker' as resumed;");
+  await run(panel);
+  const change = page.getByRole("dialog", { name: "This changed since you trusted the repository" });
+  await change.locator("tr", { hasText: "mcp.max_rows" }).filter({ hasText: "100" }).filter({ hasText: "50" }).waitFor();
+  await change.getByText("the connection shop", { exact: false }).waitFor();
+  await shot("10a-repository-change");
+  await change.getByRole("button", { name: "Accept the change" }).click();
+  await change.waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   history = page.getByRole("complementary", { name: "Query history", exact: true });
   await history.getByRole("textbox", { name: "Search query history" }).fill("round");
@@ -1343,6 +1707,19 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await history.getByRole("button", { name: "Load more", exact: true }).count(), 0);
   await shot("11-history-pages");
 
+  step("personal variables a connection needs are asked once and saved in user.toml");
+  await page.getByRole("button", { name: "Close query history" }).click();
+  const varsPanel = await newQuery("Personal vars", "select count(*) as n from product;");
+  await run(varsPanel);
+  const variables = page.getByRole("dialog", { name: "This connection needs some personal values" });
+  await variables.getByText("${user.demo_db}", { exact: true }).waitFor();
+  await shot("11a-personal-variables");
+  await variables.getByLabel("demo_db", { exact: true }).fill(join(demo, "data", "shop.db").replaceAll("\\", "/"));
+  await variables.getByRole("button", { name: "Save and connect" }).click();
+  await variables.waitFor({ state: "detached" });
+  await varsPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.match(readFileSync(join(userDir, "user.toml"), "utf8"), /demo_db = ".*shop\.db"/);
+
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {
   failed = true;
@@ -1351,6 +1728,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await browser.contexts()[0].pages()[0].screenshot({ path: join(shots, "failure.png") });
   } catch {}
 } finally {
+  writeFileSync(shopFile, shopOriginal);
   await browser.close().catch(() => {});
   await stopApp();
   // WebView2 lets go of its profile (inside userDir) a moment after the app exits.

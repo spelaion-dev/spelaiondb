@@ -2,7 +2,7 @@
 // requested from the core in windows.
 
 import { create } from "zustand";
-import type { ColumnFilterItem, ColumnItem, ConnectionItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
+import type { ColumnFilterItem, ColumnItem, ConnectionItem, FieldChangeItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
 
 export interface ResultMeta {
   id: number;
@@ -103,7 +103,6 @@ export const SAVE_QUERY_EVENT = "spelunk:save-query";
 const MAX_CLOSED_TABS = 20;
 
 /** `activeTab` value of the settings tab, which lives beside the query tabs. */
-export const SETTINGS_TAB = "settings";
 
 interface AppStore {
   workspace: WorkspaceInfo | null;
@@ -190,7 +189,7 @@ export const useApp = create<AppStore>((set) => ({
     set((s) => {
       const closed = s.tabs.find((t) => t.id === id);
       const tabs = s.tabs.filter((t) => t.id !== id);
-      const fallback = tabs[tabs.length - 1]?.id ?? (s.settingsOpen ? SETTINGS_TAB : null);
+      const fallback = tabs[tabs.length - 1]?.id ?? null;
       const closedTabs = closed
         ? [...s.closedTabs, { connectionId: closed.connectionId, sql: closed.sql }].slice(-MAX_CLOSED_TABS)
         : s.closedTabs;
@@ -214,12 +213,8 @@ export const useApp = create<AppStore>((set) => ({
   refreshSnippets: () => set((s) => ({ snippetsRevision: s.snippetsRevision + 1 })),
   setConnectionDialog: (connectionDialog) => set({ connectionDialog }),
   setDeletingConnection: (deletingConnection) => set({ deletingConnection }),
-  openSettings: () => set({ settingsOpen: true, activeTab: SETTINGS_TAB }),
-  closeSettings: () =>
-    set((s) => ({
-      settingsOpen: false,
-      activeTab: s.activeTab === SETTINGS_TAB ? (s.tabs[s.tabs.length - 1]?.id ?? null) : s.activeTab,
-    })),
+  openSettings: () => set({ settingsOpen: true }),
+  closeSettings: () => set({ settingsOpen: false }),
   refreshHistory: () => set((s) => ({ historyRevision: s.historyRevision + 1 })),
   setHistorySaving: (connection, saving) => set((s) => ({
     historySaving: saving ? [...new Set([...s.historySaving, connection])] : s.historySaving.filter((id) => id !== connection),
@@ -239,6 +234,20 @@ export interface PasswordRequest {
 
 export interface TrustRequest {
   workspace: string | null;
+  resolve(accept: boolean): void;
+}
+
+/** Values for the user's personal `${user.…}` variables (ADR-022). */
+export interface VariablesRequest {
+  names: string[];
+  resolve(values: Record<string, string> | null): void;
+}
+
+/** A repository connection or tunnel changed since the repository was trusted (ADR-022). */
+export interface ChangeRequest {
+  item: string;
+  isNew: boolean;
+  fields: FieldChangeItem[];
   resolve(accept: boolean): void;
 }
 
@@ -274,6 +283,8 @@ export interface InteractionItem {
 interface DialogStore {
   password: PasswordRequest | null;
   trust: TrustRequest | null;
+  change: ChangeRequest | null;
+  variables: VariablesRequest | null;
   risk: RiskRequest | null;
   params: ParamsRequest | null;
   text: TextRequest | null;
@@ -283,6 +294,8 @@ interface DialogStore {
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
   askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
   askTrust(workspace: string | null): Promise<boolean>;
+  askChange(change: Omit<ChangeRequest, "resolve">): Promise<boolean>;
+  askVariables(names: string[]): Promise<Record<string, string> | null>;
   pushInteraction(item: InteractionItem): void;
   popInteraction(id: number): void;
 }
@@ -290,6 +303,8 @@ interface DialogStore {
 export const useDialogs = create<DialogStore>((set) => ({
   password: null,
   trust: null,
+  change: null,
+  variables: null,
   risk: null,
   params: null,
   text: null,
@@ -354,6 +369,30 @@ export const useDialogs = create<DialogStore>((set) => ({
           resolve: (accept) => {
             set({ trust: null });
             resolve(accept);
+          },
+        },
+      }),
+    ),
+  askChange: (change) =>
+    new Promise((resolve) =>
+      set({
+        change: {
+          ...change,
+          resolve: (accept) => {
+            set({ change: null });
+            resolve(accept);
+          },
+        },
+      }),
+    ),
+  askVariables: (names) =>
+    new Promise((resolve) =>
+      set({
+        variables: {
+          names,
+          resolve: (values) => {
+            set({ variables: null });
+            resolve(values);
           },
         },
       }),

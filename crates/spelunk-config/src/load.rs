@@ -260,14 +260,14 @@ pub(crate) fn validate_connection(
         .filter_map(|(k, missing)| missing.then_some(k))
         .collect(),
         // A MySQL connection may have no default database: `USE` or qualified names work.
-        Engine::Mysql | Engine::Mariadb => [
+        Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => [
             ("host", file.host.is_none() && file.kubernetes.is_none()),
             ("user", file.user.is_none()),
         ]
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
-        Engine::Sqlite => [("database", file.database.is_none())]
+        Engine::Sqlite | Engine::Duckdb => [("database", file.database.is_none())]
             .into_iter()
             .filter_map(|(k, m)| m.then_some(k))
             .collect(),
@@ -282,10 +282,55 @@ pub(crate) fn validate_connection(
             ),
         ));
     }
-    if file.engine == Engine::Sqlite && (file.tunnel.is_some() || file.kubernetes.is_some()) {
+    // A SQLite file may be on a server, reached through a tunnel (ADR-018); DuckDB may not.
+    let remote_sqlite = file.engine == Engine::Sqlite && file.tunnel.is_some();
+    if file.engine.is_file()
+        && (file.kubernetes.is_some() || file.tunnel.is_some() && !remote_sqlite)
+    {
         return Err(ConfigError::new(
             path,
-            "SQLite is a local file: it does not support a tunnel",
+            format!(
+                "{} is a local file: it does not support {}",
+                if file.engine == Engine::Sqlite {
+                    "SQLite"
+                } else {
+                    "DuckDB"
+                },
+                if file.kubernetes.is_some() {
+                    "Kubernetes"
+                } else {
+                    "a tunnel"
+                }
+            ),
+        ));
+    }
+    if file.tls.cert.is_some() != file.tls.key.is_some() {
+        return Err(ConfigError::new(
+            path,
+            "tls.cert and tls.key go together: the client certificate and its private key",
+        ));
+    }
+    if file.tls.cert.is_some() {
+        match file.engine {
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
+            Engine::Sqlserver => {
+                return Err(ConfigError::new(
+                    path,
+                    "SQL Server does not log SQL users in with a client certificate: use a password or a token",
+                ));
+            }
+            Engine::Sqlite | Engine::Duckdb => {
+                return Err(ConfigError::new(
+                    path,
+                    "a local file has no client certificate",
+                ));
+            }
+        }
+    }
+    if file.sqlite3.is_some() && !remote_sqlite {
+        return Err(ConfigError::new(
+            path,
+            "sqlite3 only applies to a SQLite file on a server (a connection with a tunnel)",
         ));
     }
     if let Some(kubernetes) = &file.kubernetes {

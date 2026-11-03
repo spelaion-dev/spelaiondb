@@ -31,10 +31,6 @@ impl Workspace {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("repo/.spelunk")).unwrap();
         std::fs::create_dir_all(base.join("user")).unwrap();
-        TrustStore::load(&base.join("user"))
-            .unwrap()
-            .trust(&base.join("repo"))
-            .unwrap();
         Self {
             base,
             tunnels: Arc::new(TunnelPool::new()),
@@ -55,7 +51,9 @@ impl Workspace {
     ) -> Result<OpenConnection, OpenError> {
         let config = load(Some(&self.base.join("repo")), &self.base.join("user"));
         assert!(config.problems.is_empty(), "{:?}", config.problems);
-        let trust = TrustStore::load(&self.base.join("user")).unwrap();
+        // The repository is trusted as the test wrote it (ADR-022 pins its content).
+        let mut trust = TrustStore::load(&self.base.join("user")).unwrap();
+        trust.trust(&config).unwrap();
         let id = ConnectionId {
             source: Source::Workspace,
             path: id.into(),
@@ -66,6 +64,7 @@ impl Workspace {
         let options = OpenOptions {
             tunnels: self.tunnels.clone(),
             known_hosts: KnownHosts {
+                team_file: None,
                 user_file: None,
                 app_file: self.base.join("user/known_hosts"),
             },
@@ -157,6 +156,40 @@ async fn sqlite_from_config() {
         .await,
         "42"
     );
+}
+
+#[tokio::test]
+async fn duckdb_from_config() {
+    let ws = Workspace::new("duckdb");
+    std::fs::create_dir_all(ws.base.join("repo/data")).unwrap();
+    spelunk_core::create_file_database(
+        spelunk_config::Engine::Duckdb,
+        &ws.base.join("repo/data/app.duckdb"),
+    )
+    .unwrap();
+    ws.write(
+        ".spelunk/connections/local.toml",
+        "schema_version = 1\nengine = \"duckdb\"\ndatabase = \"data/app.duckdb\"\n",
+    );
+    let conn = ws
+        .open("local", None, Arc::new(NonInteractive))
+        .await
+        .unwrap();
+    assert!(conn.tunnel_state().is_none());
+    assert_eq!(
+        first_value(
+            &conn,
+            "create table t (a int); insert into t values (41), (1); select sum(a) from t"
+        )
+        .await,
+        "42"
+    );
+    // A second connection to the same file (another tab) shares it.
+    let other = ws
+        .open("local", None, Arc::new(NonInteractive))
+        .await
+        .unwrap();
+    assert_eq!(first_value(&other, "select count(*) from t").await, "2");
 }
 
 #[tokio::test]
@@ -324,7 +357,8 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
     let (host, port) = addr.rsplit_once(':').unwrap();
     let ws = Workspace::new("tunnel-draft");
     let config = load(Some(&ws.base.join("repo")), &ws.base.join("user"));
-    let trust = TrustStore::load(&ws.base.join("user")).unwrap();
+    let mut trust = TrustStore::load(&ws.base.join("user")).unwrap();
+    trust.trust(&config).unwrap();
     let identity = keys().join("id_ed25519").display().to_string();
     let hop = |host: &str, port: Option<u16>, user: &str| HopDraft {
         host: host.into(),
@@ -343,6 +377,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
         ],
     };
     let known_hosts = KnownHosts {
+        team_file: None,
         user_file: None,
         app_file: ws.base.join("user/known_hosts"),
     };
@@ -408,4 +443,336 @@ async fn mysql_through_two_bastions_with_verify_full() {
         "1"
     );
     conn.close().await;
+}
+
+/// The tunnel to the Docker server that holds a SQLite file (ADR-018): bastion1, then
+/// `last_hop` (`sqlitehost` runs commands; `bastion2` only forwards).
+fn sqlite_server(ws: &Workspace, addr: &str, last_hop: &str) {
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let identity = toml_path(&keys().join("id_ed25519"));
+    ws.write(
+        ".spelunk/tunnels/server.toml",
+        &format!(
+            "schema_version = 1\n\n[[hops]]\nhost = \"{host}\"\nport = {port}\nuser = \"spelunk\"\nauth = [\"key\"]\nidentity_file = {identity}\n\n[[hops]]\nhost = \"{last_hop}\"\nuser = \"spelunk\"\nauth = [\"key\"]\nidentity_file = {identity}\n"
+        ),
+    );
+}
+
+/// Every event of a script, and the error of its failed statement if any.
+async fn script(
+    conn: &OpenConnection,
+    sql: &str,
+) -> (Vec<CoreEvent>, Option<spelunk_core::StatementError>) {
+    let events: Vec<CoreEvent> = conn.session.run_script(sql).collect().await;
+    let error = events.iter().find_map(|e| match e {
+        CoreEvent::StatementFailed { error, .. } => Some(error.clone()),
+        _ => None,
+    });
+    (events, error)
+}
+
+fn first_result(events: &[CoreEvent]) -> spelunk_core::ResultId {
+    events
+        .iter()
+        .find_map(|e| match e {
+            CoreEvent::ResultStarted { result, .. } => Some(*result),
+            _ => None,
+        })
+        .expect("a result")
+}
+
+#[tokio::test]
+async fn sqlite_on_a_server_through_two_hops() {
+    let Ok(addr) = std::env::var("SPELUNK_TEST_SSH") else {
+        eprintln!("SPELUNK_TEST_SSH not set: test skipped");
+        return;
+    };
+    let ws = Workspace::new("sqlite-remote");
+    sqlite_server(&ws, &addr, "sqlitehost");
+    ws.write(
+        ".spelunk/connections/shop.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"/home/spelunk/shop.db\"\ntunnel = \"server\"\n",
+    );
+    let conn = ws
+        .open("shop", None, Arc::new(AcceptHosts))
+        .await
+        .expect("opening the remote file");
+    let version = conn.session.connection().server_version().await.unwrap();
+    assert!(version.starts_with("3."), "{version}");
+
+    // Values keep their storage class: integers, text, reals and blobs.
+    let (events, error) = script(
+        &conn,
+        "select id, name, price, photo from product order by id",
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    let stored = conn.session.results().get(first_result(&events)).unwrap();
+    {
+        use spelunk_driver_api::LogicalType;
+        let stored = stored.read().unwrap();
+        let logical: Vec<_> = stored.schema().columns.iter().map(|c| c.logical).collect();
+        assert_eq!(
+            logical,
+            [
+                LogicalType::Int,
+                LogicalType::Text,
+                LogicalType::Float,
+                LogicalType::Bytes
+            ]
+        );
+        let batch = &stored.window(0, 3)[0];
+        let cell = |c: usize, r: usize| {
+            Value::from_array(
+                batch.column(c).as_ref(),
+                r,
+                stored.schema().columns[c].logical,
+            )
+            .unwrap()
+            .to_string()
+        };
+        assert_eq!(
+            (cell(1, 0), cell(2, 0), cell(3, 0)),
+            ("Lamp".into(), "19.5".into(), "\\x00ff".into())
+        );
+        assert_eq!(cell(1, 2), "it's a chair");
+    }
+
+    // The explorer reads the server's catalog.
+    let objects = conn
+        .session
+        .connection()
+        .list_objects("main")
+        .await
+        .unwrap();
+    assert!(objects.iter().any(|o| o.name == "product"), "{objects:?}");
+    let product = conn
+        .session
+        .connection()
+        .describe_table("main", "product")
+        .await
+        .unwrap();
+    assert_eq!(product.primary_key, ["id"]);
+
+    // Writes, row counts, a value with a line break and a transaction across statements.
+    let (events, error) = script(
+        &conn,
+        "create table if not exists remote_t (id integer primary key, note text);\n\
+         delete from remote_t;\n\
+         insert into remote_t values (1, 'a'), (2, 'it''s\nmultiline');\n\
+         begin; delete from remote_t; rollback",
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    assert!(events.iter().any(|e| matches!(
+        e,
+        CoreEvent::StatementFinished {
+            index: 2,
+            rows_affected: Some(2),
+            ..
+        }
+    )));
+    assert_eq!(
+        first_value(&conn, "select note from remote_t where id = 2").await,
+        "it's\nmultiline"
+    );
+
+    // Editing a page of the table, in one transaction.
+    let table = conn
+        .session
+        .connection()
+        .describe_table("main", "remote_t")
+        .await
+        .unwrap();
+    let page = spelunk_core::TablePage {
+        schema: "main".into(),
+        name: "remote_t".into(),
+        filter: String::new(),
+        order_by: "id".into(),
+        limit: 10,
+        offset: 0,
+    };
+    let sql = spelunk_core::table_page_sql(conn.session.dialect().as_ref(), &page).unwrap();
+    let (events, _) = script(&conn, &sql).await;
+    let stored = conn.session.results().get(first_result(&events)).unwrap();
+    let statements = spelunk_core::edit_statements(
+        conn.session.dialect().as_ref(),
+        &table,
+        &stored.read().unwrap(),
+        &[spelunk_core::RowChange::Update {
+            row: 0,
+            values: vec![(1, spelunk_core::CellInput::Text("edited".into()))],
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        spelunk_core::apply_edits(&conn.session, &statements).await,
+        Ok(1)
+    );
+    assert_eq!(
+        first_value(&conn, "select note from remote_t where id = 1").await,
+        "edited"
+    );
+
+    // The shell never runs commands of its own, nor a statement that would swallow the rest.
+    let (_, error) = script(&conn, ".shell echo pwned").await;
+    assert!(error.unwrap().message.contains("not run on the server"));
+    let (_, error) = script(&conn, "select 'open").await;
+    assert!(error.unwrap().message.contains("not complete"));
+
+    // Cancelling interrupts the statement and keeps the session.
+    let cancel = conn.session.connection().cancel_handle();
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        cancel.cancel().await
+    });
+    let (_, error) = script(
+        &conn,
+        "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c",
+    )
+    .await;
+    canceller.await.unwrap().unwrap();
+    assert!(error.as_ref().is_some_and(|e| e.cancelled), "{error:?}");
+    // sqlite3 ends when interrupted: the session says so, and a new one goes on.
+    let (_, error) = script(&conn, "select 1").await;
+    let message = error.unwrap().message;
+    assert!(message.contains("reconnect"), "{message}");
+    let conn = ws.open("shop", None, Arc::new(AcceptHosts)).await.unwrap();
+    assert_eq!(
+        first_value(&conn, "select count(*) from remote_t").await,
+        "2"
+    );
+    let (_, error) = script(&conn, "drop table remote_t").await;
+    assert!(error.is_none(), "{error:?}");
+
+    // Safe mode: what touches the server's files ends sqlite3, and the session says so.
+    let (_, error) = script(&conn, "select writefile('/tmp/x', 1)").await;
+    let message = error.unwrap().message;
+    assert!(message.contains("safe mode"), "{message}");
+    let (_, error) = script(&conn, "select 1").await;
+    assert!(error.is_some(), "the session ended with sqlite3");
+}
+
+#[tokio::test]
+async fn sqlite_on_a_server_says_what_is_wrong() {
+    let Ok(addr) = std::env::var("SPELUNK_TEST_SSH") else {
+        eprintln!("SPELUNK_TEST_SSH not set: test skipped");
+        return;
+    };
+    let ws = Workspace::new("sqlite-remote-errors");
+    sqlite_server(&ws, &addr, "sqlitehost");
+    ws.write(
+        ".spelunk/connections/missing.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"/home/spelunk/missing.db\"\ntunnel = \"server\"\n",
+    );
+    ws.write(
+        ".spelunk/connections/readonly.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"/home/spelunk/other.db\"\ntunnel = \"server\"\nread_only = true\n",
+    );
+    match ws.open("missing", None, Arc::new(AcceptHosts)).await {
+        Err(e) => assert!(
+            e.to_string().contains("does not exist on the server"),
+            "{e}"
+        ),
+        Ok(_) => panic!("a missing file must not open (nor be created)"),
+    }
+    let conn = ws
+        .open("readonly", None, Arc::new(AcceptHosts))
+        .await
+        .unwrap();
+    let (_, error) = script(&conn, "insert into product (name) values ('x')").await;
+    let message = error.unwrap().message;
+    assert!(message.to_lowercase().contains("readonly"), "{message}");
+
+    // A last hop that only forwards ports (bastion2 runs no commands).
+    let ws = Workspace::new("sqlite-remote-noshell");
+    sqlite_server(&ws, &addr, "bastion2");
+    ws.write(
+        ".spelunk/connections/shop.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"/home/spelunk/shop.db\"\ntunnel = \"server\"\n",
+    );
+    match ws.open("shop", None, Arc::new(AcceptHosts)).await {
+        Err(e) => {
+            let message = e.to_string();
+            assert!(
+                message.contains("sqlite3 on the server ended") || message.contains("refused"),
+                "{message}"
+            )
+        }
+        Ok(_) => panic!("a bastion that runs no commands cannot open a file"),
+    }
+}
+
+/// A newcomer who must not be asked about any host: the team's file answers for them.
+struct RefuseHosts;
+
+#[async_trait]
+impl Interaction for RefuseHosts {
+    async fn confirm_unknown_host(&self, host: &HostInfo) -> bool {
+        panic!("the team's known_hosts should have verified {host:?}");
+    }
+
+    async fn ask_secret(&self, _request: &SecretRequest) -> Option<Secret> {
+        None
+    }
+}
+
+/// ADR-022: `.spelunk/known_hosts` in the repository verifies a newcomer's first connection.
+#[tokio::test]
+async fn the_teams_known_hosts_verifies_a_newcomers_first_connection() {
+    let Ok(addr) = std::env::var("SPELUNK_TEST_SSH") else {
+        eprintln!("SPELUNK_TEST_SSH not set: test skipped");
+        return;
+    };
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let identity = toml_path(&keys().join("id_ed25519"));
+    let setup = |ws: &Workspace| {
+        ws.write(
+            ".spelunk/tunnels/bastions.toml",
+            &format!(
+                "schema_version = 1\n\n[[hops]]\nhost = \"{host}\"\nport = {port}\nuser = \"spelunk\"\nauth = [\"key\"]\nidentity_file = {identity}\n\n[[hops]]\nhost = \"bastion2\"\nuser = \"spelunk\"\nauth = [\"key\"]\nidentity_file = {identity}\n"
+            ),
+        );
+        ws.write(
+            ".spelunk/connections/orders.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"postgres\"\ndatabase = \"spelunk\"\nuser = \"spelunk\"\npassword = { secret = \"prompt\" }\ntunnel = \"bastions\"\n",
+        );
+    };
+
+    // Someone on the team connects once and commits the keys they checked.
+    let veteran = Workspace::new("team-hosts-veteran");
+    setup(&veteran);
+    let conn = veteran
+        .open(
+            "orders",
+            Some(Secret::new("spelunk")),
+            Arc::new(AcceptHosts),
+        )
+        .await
+        .unwrap();
+    conn.close().await;
+    let learnt = std::fs::read_to_string(veteran.base.join("user/known_hosts")).unwrap();
+
+    // A newcomer clones the repository with that file and has nothing of their own.
+    let newcomer = Workspace::new("team-hosts-newcomer");
+    setup(&newcomer);
+    newcomer.write(".spelunk/known_hosts", &learnt);
+    let conn = newcomer
+        .open(
+            "orders",
+            Some(Secret::new("spelunk")),
+            Arc::new(RefuseHosts),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        conn.resolved.tunnel.as_ref().unwrap().known_hosts,
+        Some(newcomer.base.join("repo/.spelunk/known_hosts"))
+    );
+    assert_eq!(first_value(&conn, "select 1").await, "1");
+    conn.close().await;
+    assert!(
+        !newcomer.base.join("user/known_hosts").exists(),
+        "nothing was asked or learnt"
+    );
 }

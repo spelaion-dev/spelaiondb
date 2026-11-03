@@ -57,6 +57,24 @@ pub enum ResolveError {
     #[error("you must trust the repository {} before its secrets or commands can be used", root.display())]
     Untrusted { root: PathBuf },
 
+    /// A repository connection or tunnel is new or changed since the user trusted the
+    /// repository (ADR-022): nothing was resolved.
+    #[error("{change}. Review the change in SpelunkDB or with `spelunk trust` before using it")]
+    Changed {
+        root: PathBuf,
+        change: crate::trust::ItemChange,
+    },
+
+    /// The connection (or its tunnel) uses `${user.…}` variables the user has not defined:
+    /// all of them, so they can be asked for at once (ADR-022). Nothing was resolved.
+    #[error(
+        "this connection needs {}: add {} to the [vars] section of your user.toml, or open SpelunkDB to fill {} in",
+        names.iter().map(|n| format!("${{user.{n}}}")).collect::<Vec<_>>().join(", "),
+        if names.len() == 1 { "it" } else { "them" },
+        if names.len() == 1 { "it" } else { "them" }
+    )]
+    MissingVariables { names: Vec<String> },
+
     #[error("{0}")]
     Config(#[from] ConfigError),
 

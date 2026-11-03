@@ -187,13 +187,17 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
         ("mysql", d) if d.contains("maria") => Ok(Engine::Mariadb),
         ("mysql", _) => Ok(Engine::Mysql),
         ("sqlite", _) | ("generic", "sqlite_jdbc") => Ok(Engine::Sqlite),
+        ("duckdb", _) | ("generic", "duckdb_jdbc") => Ok(Engine::Duckdb),
+        ("sqlserver", _) | ("mssql", _) => Ok(Engine::Sqlserver),
         (p, d) => Err(format!("{p}/{d} is not supported yet")),
     };
     let saved = credentials.and_then(|c| c.get("#connection"));
     let mut database = text(config.get("database"));
-    if engine == Ok(Engine::Sqlite) && database.is_empty() {
-        database = text(config.get("url"))
+    if engine.as_ref().is_ok_and(|e| e.is_file()) && database.is_empty() {
+        let url = text(config.get("url"));
+        database = url
             .strip_prefix("jdbc:sqlite:")
+            .or_else(|| url.strip_prefix("jdbc:duckdb:"))
             .unwrap_or_default()
             .to_string();
     }
@@ -301,7 +305,7 @@ pub fn import_plan(
             vec![keep(&ssh.password)],
         )
     });
-    let sqlite = engine == Engine::Sqlite;
+    let sqlite = engine.is_file();
     ImportPlan {
         connection: ConnectionDraft {
             source,
@@ -328,14 +332,18 @@ pub fn import_plan(
             },
             tls_mode: TlsModeConfig::default(),
             tls_ca: String::new(),
+            tls_cert: String::new(),
+            tls_key: String::new(),
             tunnel: if tunnel.is_some() {
                 tunnel_name.to_string()
             } else {
                 String::new()
             },
             kubernetes: None,
+            sqlite3: String::new(),
             read_only: false,
             mcp_exposed: false,
+            mcp_writes: false,
         },
         password: if sqlite {
             None
@@ -384,6 +392,10 @@ mod tests {
                 "oracle_thin-4": {
                   "provider": "oracle", "driver": "oracle_thin", "name": "Legacy",
                   "configuration": {"host": "ora", "port": "1521"}
+                },
+                "duckdb_jdbc-5": {
+                  "provider": "duckdb", "driver": "duckdb_jdbc", "name": "Analytics",
+                  "configuration": {"url": "jdbc:duckdb:C:\\data\\sales.duckdb", "type": "dev"}
                 }
               }
             }"#,
@@ -440,13 +452,18 @@ mod tests {
         assert!(maria.password.is_none() && maria.ssh.is_none());
         assert_eq!(by_id("sqlite_jdbc-3").database, "C:\\data\\local.db");
         assert!(by_id("oracle_thin-4").engine.is_err());
+        let duck = by_id("duckdb_jdbc-5");
+        assert_eq!(
+            (duck.engine.clone(), duck.database.as_str()),
+            (Ok(Engine::Duckdb), "C:\\data\\sales.duckdb")
+        );
         // The same from the project folder or the `.dbeaver` folder itself.
-        assert_eq!(read_dbeaver(&root.join("General")).unwrap().len(), 4);
+        assert_eq!(read_dbeaver(&root.join("General")).unwrap().len(), 5);
         assert_eq!(
             read_dbeaver(&root.join("General").join(".dbeaver"))
                 .unwrap()
                 .len(),
-            4
+            5
         );
         assert!(matches!(
             read_dbeaver(&root.join("nothing")),

@@ -9,6 +9,7 @@ mod column;
 mod dialect;
 mod error;
 mod introspect;
+mod remote;
 mod secret;
 mod value;
 
@@ -26,6 +27,7 @@ pub use error::DriverError;
 pub use introspect::{
     ColumnInfo, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, SchemaInfo, TableInfo,
 };
+pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use secret::Secret;
 pub use value::{LogicalType, Value};
 
@@ -60,11 +62,18 @@ pub struct ConnectParams {
     /// PEM certificate of the authority that signs the server's certificate, when it is not
     /// in the system store.
     pub ca_certificate: Option<PathBuf>,
+    /// PEM certificate (chain) the client presents to log in without a password (ADR-022),
+    /// with its private key. Both or neither.
+    pub client_certificate: Option<PathBuf>,
+    pub client_key: Option<PathBuf>,
     /// Open read-only when the engine supports it natively (SQLite).
     pub read_only: bool,
     /// Actual address to connect to, if it is not `host:port` (for example, the local end
     /// of an SSH tunnel). `host` is still used to verify the TLS certificate.
     pub connect_addr: Option<SocketAddr>,
+    /// The database is on another machine and is reached by running a program there
+    /// (SQLite on a server, ADR-018); `database` is its path on that machine.
+    pub remote: Option<Remote>,
 }
 
 /// Connection encryption. Same names and meaning as libpq's `sslmode`.
@@ -97,7 +106,9 @@ impl Default for ExecOptions {
 }
 
 /// Event produced while executing a statement, in this order:
-/// `Columns` (only if it returns rows) → `Batch`* → `Notice`* → `Done`.
+/// `Columns` (only if it returns rows) → `Batch`* → `Notice`* → `Done`. A statement that
+/// returns several result sets (a SQL Server batch or procedure) repeats `Columns` →
+/// `Batch`* for each one before `Done`.
 #[derive(Debug, Clone)]
 pub enum ExecEvent {
     Columns(Arc<ResultSchema>),
@@ -135,6 +146,24 @@ pub trait Connection: Send + Sync {
     fn cancel_handle(&self) -> Arc<dyn CancelHandle>;
 
     async fn server_version(&self) -> Result<String>;
+    /// Current database for engines that support changing it within a session.
+    async fn current_database(&self) -> Result<Option<String>> {
+        Err(DriverError::Other(
+            "changing database is not supported".into(),
+        ))
+    }
+    /// Change this session's database without changing the saved connection.
+    async fn select_database(&self, _database: &str) -> Result<()> {
+        Err(DriverError::Other(
+            "changing database is not supported".into(),
+        ))
+    }
+    /// The databases [`Connection::select_database`] can switch to.
+    async fn list_databases(&self) -> Result<Vec<String>> {
+        Err(DriverError::Other(
+            "changing database is not supported".into(),
+        ))
+    }
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>>;
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>>;
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo>;

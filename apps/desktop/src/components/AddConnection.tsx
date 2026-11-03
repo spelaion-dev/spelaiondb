@@ -19,6 +19,7 @@ import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { engineBadge } from "../engines";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath } from "../dialogs";
+import { reviewChanges } from "../connect";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
@@ -27,6 +28,12 @@ const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** File types of the embedded engines, for the open and save dialogs. */
+const DATABASE_FILES: Record<string, { name: string; extensions: string[]; fallback: string }> = {
+  sqlite: { name: "SQLite", extensions: ["sqlite", "db", "sqlite3", "db3"], fallback: "database.sqlite" },
+  duckdb: { name: "DuckDB", extensions: ["duckdb", "db", "ddb"], fallback: "database.duckdb" },
+};
 
 export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const { t } = useTranslation("connections");
@@ -226,7 +233,12 @@ type TestState =
   | { kind: "error"; message: string };
 
 /** How the form asks for credentials, like DBeaver's "Authentication" selector. */
-type AuthMethod = "password" | "env" | "none" | "other";
+type AuthMethod = "password" | "env" | "none" | "other" | "token";
+/** Short-lived tokens from a cloud provider's CLI (ADR-022): the core writes the command. */
+type CloudToken = "awsRds" | "azureAd" | "googleCloudSql";
+const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
+/** Engines that log in with a client certificate or a cloud token. */
+const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
 type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "options";
 
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
@@ -249,6 +261,10 @@ function authFrom(mode: PasswordMode): AuthMethod {
       return "other";
     case "none":
       return "none";
+    case "awsRds":
+    case "azureAd":
+    case "googleCloudSql":
+      return "token";
   }
 }
 
@@ -268,10 +284,17 @@ function ConnectionForm(props: {
   const workspace = useApp((s) => s.workspace);
   const hasWorkspace = Boolean(workspace?.workspace);
   const network = engine.access === "network";
+  // A SQLite file may be on a server, opened there through an SSH tunnel (ADR-018).
+  const remoteFile = engine.id === "sqlite";
+  const tunnelsAllowed = network || remoteFile;
   const [tab, setTab] = useState<FormTab>("main");
   const [tunnels, setTunnels] = useState<TunnelItem[]>([]);
   const { initial, editing, prefill } = props;
   const [auth, setAuth] = useState<AuthMethod>(initial ? authFrom(initial.passwordMode) : network ? "password" : "none");
+  const [cloudToken, setCloudToken] = useState<CloudToken>(
+    initial && (CLOUD_TOKENS as string[]).includes(initial.passwordMode) ? (initial.passwordMode as CloudToken) : "awsRds",
+  );
+  const passwordless = PASSWORDLESS_ENGINES.includes(engine.id);
   const [savePassword, setSavePassword] = useState(initial ? initial.passwordMode !== "prompt" : true);
   const [useTunnel, setUseTunnel] = useState(Boolean(initial?.tunnel));
   // Kubernetes and an SSH tunnel exclude each other (the core rejects both).
@@ -296,8 +319,12 @@ function ConnectionForm(props: {
     passwordOther: "",
     tlsMode: prefill?.tlsMode ?? "prefer",
     tlsCa: "",
+    tlsCert: "",
+    tlsKey: "",
     readOnly: false,
     mcpExposed: false,
+    mcpWrites: false,
+    sqlite3: "",
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
 
@@ -312,7 +339,7 @@ function ConnectionForm(props: {
     }
   }
   useEffect(() => {
-    if (network) void loadTunnels();
+    if (tunnelsAllowed) void loadTunnels();
   }, [network]);
   const selectedTunnel = tunnels.find((item) => item.name === tunnel);
 
@@ -330,40 +357,59 @@ function ConnectionForm(props: {
     setSaveError(null);
   }, []);
 
+  // Agents write only on an exposed connection that is not read-only (ADR-019).
+  const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly;
   // What the core receives: the form's choices mapped to the configuration format.
   const passwordMode: PasswordMode =
-    !network || auth === "none" ? "none" : auth === "env" ? "env" : auth === "other" ? "other" : savePassword ? "keychain" : "prompt";
+    !network || auth === "none"
+      ? "none"
+      : auth === "env"
+        ? "env"
+        : auth === "other"
+          ? "other"
+          : auth === "token"
+            ? cloudToken
+            : savePassword
+              ? "keychain"
+              : "prompt";
   const request: ConnectionDraft = {
     ...draft,
+    mcpWrites: agentsWrite,
     passwordMode,
-    tunnel: network && useTunnel && !useKubernetes ? tunnel : "",
+    tunnel: tunnelsAllowed && useTunnel && !useKubernetes ? tunnel : "",
+    sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
     kubernetes: network && useKubernetes ? kubernetes : null,
   };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.kind === "testing";
 
-  async function browse(field: "database" | "tlsCa") {
+  async function browse(field: "database" | "tlsCa" | "tlsCert" | "tlsKey") {
     const path = await open({
       multiple: false,
       directory: false,
       filters:
         field === "database"
-          ? [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3", "db3"] }, { name: t("allFiles"), extensions: ["*"] }]
-          : [{ name: t("certificates"), extensions: ["pem", "crt", "cer"] }, { name: t("allFiles"), extensions: ["*"] }],
+          ? [...databaseFilters(), { name: t("allFiles"), extensions: ["*"] }]
+          : [{ name: t("certificates"), extensions: ["pem", "crt", "cer", "key"] }, { name: t("allFiles"), extensions: ["*"] }],
     });
     if (typeof path === "string") update({ [field]: path });
   }
 
-  /** A new, empty SQLite file created by the core (never over an existing one). */
+  function databaseFilters() {
+    const files = DATABASE_FILES[engine.id];
+    return files ? [{ name: files.name, extensions: files.extensions }] : [];
+  }
+
+  /** A new, empty database file created by the core (never over an existing one). */
   async function createDatabase() {
     setFileError(null);
     const path = await chooseSavePath({
-      defaultPath: "database.sqlite",
-      filters: [{ name: "SQLite", extensions: ["sqlite", "db", "sqlite3", "db3"] }],
+      defaultPath: DATABASE_FILES[engine.id]?.fallback ?? "database.db",
+      filters: databaseFilters(),
     });
     if (!path) return;
     try {
-      await call(commands.createSqliteDatabase(path));
+      await call(commands.createDatabase(engine.id, path));
       const stem = (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]*$/, "");
       update(draft.name.trim() ? { database: path } : { database: path, name: stem });
     } catch (e) {
@@ -383,6 +429,15 @@ function ConnectionForm(props: {
         useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
         outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
       }
+      // The tunnel this connection uses may have changed in the repository.
+      const reviewed = await reviewChanges(outcome, () =>
+        call(commands.testConnection(request, typedPassword || null, editing ?? null)),
+      );
+      if (!reviewed) {
+        setTest({ kind: "idle" });
+        return;
+      }
+      outcome = reviewed;
       switch (outcome.kind) {
         case "connected":
           setTest({ kind: "ok", version: outcome.serverVersion });
@@ -394,6 +449,8 @@ function ConnectionForm(props: {
           setTest({ kind: "error", message: outcome.message });
           break;
         case "untrusted":
+        case "changed":
+        case "missingVariables":
           setTest({ kind: "idle" });
           break;
       }
@@ -418,7 +475,12 @@ function ConnectionForm(props: {
     }
   }
 
-  const tabs: FormTab[] = network ? ["main", "ssl", "ssh", "kubernetes", "options"] : ["main", "options"];
+  const onServer = remoteFile && useTunnel;
+  const tabs: FormTab[] = network
+    ? ["main", "ssl", "ssh", "kubernetes", "options"]
+    : remoteFile
+      ? ["main", "ssh", "options"]
+      : ["main", "options"];
   return (
     <>
     <form
@@ -475,9 +537,24 @@ function ConnectionForm(props: {
                     <option value="password">{t("auth.password")}</option>
                     <option value="env">{t("auth.env")}</option>
                     <option value="none">{t("auth.none")}</option>
+                    {passwordless && <option value="token">{t("auth.token")}</option>}
                     {initial?.passwordMode === "other" && <option value="other">{t("auth.other")}</option>}
                   </select>
                 </Field>
+                {auth === "token" && (
+                  <>
+                    <Field label={t("fields.cloudToken")}>
+                      <select aria-label={t("fields.cloudToken")} value={cloudToken} onChange={(e) => { setCloudToken(e.target.value as CloudToken); changed(); }}>
+                        {CLOUD_TOKENS.map((token) => (
+                          <option key={token} value={token}>
+                            {t(`cloudToken.${token}`)}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <p className="muted small">{t(`cloudToken.${cloudToken}Hint`)}</p>
+                  </>
+                )}
                 <Field label={t("fields.user")}>
                   <input type="text" value={draft.user} autoComplete="off" onChange={(e) => update({ user: e.target.value })} />
                 </Field>
@@ -521,22 +598,26 @@ function ConnectionForm(props: {
             <fieldset>
               <legend>{t("sections.file")}</legend>
               <div className="form-pair">
-                <Field label={t("fields.file")} className="grow">
-                  <input type="text" value={draft.database} onChange={(e) => update({ database: e.target.value })} />
+                <Field label={onServer ? t("fields.serverFile") : t("fields.file")} className="grow">
+                  <input type="text" value={draft.database} placeholder={onServer ? "/srv/app/data.db" : ""} onChange={(e) => update({ database: e.target.value })} />
                 </Field>
-                <button type="button" onClick={() => void browse("database")}>
-                  {t("browse")}
-                </button>
-                <button type="button" onClick={() => void createDatabase()}>
-                  {t("newDatabase")}
-                </button>
+                {!onServer && (
+                  <>
+                    <button type="button" onClick={() => void browse("database")}>
+                      {t("browse")}
+                    </button>
+                    <button type="button" onClick={() => void createDatabase()}>
+                      {t("newDatabase")}
+                    </button>
+                  </>
+                )}
               </div>
               {fileError && (
                 <p className="error small" role="alert">
                   {fileError}
                 </p>
               )}
-              <p className="muted small">{t("fields.fileHint")}</p>
+              <p className="muted small">{onServer ? t("fields.serverFileHint") : t("fields.fileHint")}</p>
             </fieldset>
           )}
         </div>
@@ -569,11 +650,32 @@ function ConnectionForm(props: {
                 </button>
               </div>
               <p className="muted small">{t("fields.tlsHint")}</p>
+              {passwordless && (
+                <>
+                  <div className="form-pair">
+                    <Field label={t("fields.tlsCert")} className="grow">
+                      <input type="text" value={draft.tlsCert} placeholder={t("fields.tlsCertPlaceholder")} onChange={(e) => update({ tlsCert: e.target.value })} />
+                    </Field>
+                    <button type="button" onClick={() => void browse("tlsCert")}>
+                      {t("browse")}
+                    </button>
+                  </div>
+                  <div className="form-pair">
+                    <Field label={t("fields.tlsKey")} className="grow">
+                      <input type="text" value={draft.tlsKey} placeholder={t("fields.tlsKeyPlaceholder")} onChange={(e) => update({ tlsKey: e.target.value })} />
+                    </Field>
+                    <button type="button" onClick={() => void browse("tlsKey")}>
+                      {t("browse")}
+                    </button>
+                  </div>
+                  <p className="muted small">{t("fields.clientCertHint")}</p>
+                </>
+              )}
             </fieldset>
           </div>
         )}
 
-        {network && (
+        {tunnelsAllowed && (
           <div id="connection-tab-ssh" role="tabpanel" hidden={tab !== "ssh"}>
             <fieldset>
               <legend>{t("sections.ssh")}</legend>
@@ -588,7 +690,7 @@ function ConnectionForm(props: {
                     changed();
                   }}
                 />
-                {t("fields.useTunnel")}
+                {remoteFile ? t("fields.useTunnelForFile") : t("fields.useTunnel")}
               </label>
               <div className="form-pair">
                 <Field label={t("fields.tunnel")} className="grow">
@@ -608,7 +710,14 @@ function ConnectionForm(props: {
                   {t("tunnel.newButton")}
                 </button>
               </div>
-              <p className="muted small">{tunnels.length === 0 ? t("fields.noTunnelsHint") : t("fields.tunnelHint")}</p>
+              <p className="muted small">
+                {tunnels.length === 0 ? t("fields.noTunnelsHint") : remoteFile ? t("fields.tunnelForFileHint") : t("fields.tunnelHint")}
+              </p>
+              {remoteFile && (
+                <Field label={t("fields.sqlite3")}>
+                  <input type="text" value={draft.sqlite3} disabled={!useTunnel} placeholder="sqlite3" onChange={(e) => update({ sqlite3: e.target.value })} />
+                </Field>
+              )}
             </fieldset>
           </div>
         )}
@@ -675,7 +784,21 @@ function ConnectionForm(props: {
               <input type="checkbox" checked={draft.mcpExposed} onChange={(e) => update({ mcpExposed: e.target.checked })} />
               {t("fields.mcpExposed")}
             </label>
-            <p className="muted small">{t("fields.mcpHint")}</p>
+            <Field label={t("fields.mcpAccess")}>
+              <select
+                aria-label={t("fields.mcpAccess")}
+                value={agentsWrite ? "write" : "read"}
+                disabled={!draft.mcpExposed || draft.readOnly}
+                onChange={(e) => update({ mcpWrites: e.target.value === "write" })}
+              >
+                <option value="read">{t("fields.mcpRead")}</option>
+                <option value="write">{t("fields.mcpWrite")}</option>
+              </select>
+            </Field>
+            {agentsWrite && draft.env.trim().toLowerCase() === "prod" && (
+              <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
+            )}
+            <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
           </fieldset>
         </div>
       </div>

@@ -10,6 +10,7 @@
 //! anything is resolved ([`TrustStore`]).
 
 mod accounts;
+mod check;
 mod conn_url;
 mod dbeaver;
 mod draft;
@@ -24,16 +25,17 @@ mod tunnel_draft;
 mod vars;
 
 pub use accounts::{connection_account, tunnel_account};
+pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
 pub use dbeaver::{
     DbeaverConnection, DbeaverError, DbeaverSsh, ImportPlan, dbeaver_workspace, import_plan,
     read_dbeaver,
 };
 pub use draft::{
-    ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection, connections_dir,
+    CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection, connections_dir,
     delete_connection, slug, update_connection,
 };
-pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_value};
+pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_user_vars, set_value};
 pub use error::{ConfigError, ResolveError};
 pub use load::{
     Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, WORKSPACE_DIR, default_user_dir,
@@ -47,7 +49,10 @@ pub use resolve::{
     Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedTunnel, Resolver,
 };
 pub use secrets::{KEYCHAIN_SERVICE, SecretBackend, SecretRef, SystemBackend};
-pub use trust::TrustStore;
+pub use trust::{
+    FieldChange, ItemChange, KNOWN_HOSTS_ITEM, TrustStore, connection_item, team_known_hosts,
+    tunnel_item,
+};
 pub use tunnel_draft::{
     HopDraft, TUNNEL_SCHEMA_URL, TunnelDraft, add_tunnel, delete_tunnel, tunnels_dir, update_tunnel,
 };

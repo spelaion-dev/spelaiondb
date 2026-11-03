@@ -124,6 +124,15 @@ impl TunnelDraft {
                     PasswordChoice::Prompt => Some("prompt".to_string()),
                     PasswordChoice::Env(var) => Some(format!("env:{}", var.trim())),
                     PasswordChoice::Other(reference) => Some(reference.clone()),
+                    PasswordChoice::CloudToken(_) => {
+                        return Err(ConfigError::new(
+                            path,
+                            format!(
+                                "hop {}: cloud tokens are for databases, not SSH hops",
+                                i + 1
+                            ),
+                        ));
+                    }
                 }
             } else {
                 None

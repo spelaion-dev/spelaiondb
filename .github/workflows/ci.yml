@@ -19,12 +19,13 @@ env:
 
 jobs:
   linux:
-    name: Linux · fmt, clippy, tests with PostgreSQL (TLS), SQLite and SSH tunnels
+    name: Linux · fmt, clippy, tests with PostgreSQL (TLS), MySQL, SQL Server, SQLite, DuckDB and SSH tunnels
     runs-on: ubuntu-latest
     env:
       SPELUNK_TEST_PG: 127.0.0.1:15432
       SPELUNK_TEST_MYSQL: 127.0.0.1:13306
       SPELUNK_TEST_MARIADB: 127.0.0.1:13307
+      SPELUNK_TEST_MSSQL: 127.0.0.1:11433
       SPELUNK_TEST_SSH: 127.0.0.1:2221
       SPELUNK_TEST_SSH_AGENT: "1"
     steps:
@@ -73,8 +74,8 @@ jobs:
 
   windows:
     # Windows runners do not run Linux containers: there is no PostgreSQL here and its
-    # tests are skipped (ADR-012). The SQLite ones do run.
-    name: Windows · clippy and tests (SQLite)
+    # tests are skipped (ADR-012). The SQLite and DuckDB ones do run.
+    name: Windows · clippy and tests (SQLite, DuckDB)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

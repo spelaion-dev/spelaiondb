@@ -14,8 +14,25 @@ import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
 
+/** Engines whose sessions can change database with `USE` (a selector per tab). */
+function databaseSwitching(engine: string | undefined): boolean {
+  return engine === "mysql" || engine === "mariadb" || engine === "sqlserver";
+}
+
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function EditorActionIcon({ name }: { name: "run" | "script" | "format" | "save" | "cancel" }) {
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      {name === "run" && <path d="M6.5 3.8v12.4l9-6.2z" fill="currentColor" stroke="none" />}
+      {name === "script" && <><path d="M3.5 4h9M3.5 7.5h6M3.5 11h4M3.5 14.5h4" /><path d="M11 9.5v6l4.5-3z" fill="currentColor" stroke="none" /></>}
+      {name === "format" && <><path d="M4 4.5h12M4 8h8M7 11.5h9M7 15h6" /><path d="M4 11v4" /></>}
+      {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4z" /><path d="M6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
+      {name === "cancel" && <rect x="5" y="5" width="10" height="10" rx="1" fill="currentColor" stroke="none" />}
+    </svg>
+  );
 }
 
 function translated(text: Translation, t: TFunction<"editor">, numbers: Intl.NumberFormat): string {
@@ -46,6 +63,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const historySaving = useApp((s) => tab.connectionId !== null && s.historySaving.includes(tab.connectionId));
   const workspaceChanging = useApp((s) => s.workspaceChanging);
   const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
+  const supportsDatabase = !tab.table && databaseSwitching(connection?.engine);
+  const [databases, setDatabases] = useState<string[]>([]);
+  const [database, setDatabase] = useState<string | null>(null);
+  const [databaseBusy, setDatabaseBusy] = useState(false);
+  const [databaseError, setDatabaseError] = useState(false);
+  const [databaseRefresh, setDatabaseRefresh] = useState(0);
+  const databaseBusyRef = useRef(false);
   const [tables, setTables] = useState<Record<string, string[]>>({});
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
@@ -230,12 +254,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   // A table data tab shows its first page as soon as it opens.
   const opened = useRef(false);
   useEffect(() => {
-    if (opened.current || !tab.table || tab.run) return;
+    if (opened.current || !tab.table || tab.run || tab.status === "connecting") return;
     opened.current = true;
     void loadPage(tab.table);
-    // Only on opening.
+    // Wait for an explorer-created tab's independent session before loading its first page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [tab.status, tab.table, tab.run]);
 
   /** Saves the SQL as a named query in the local store (Ctrl+S). */
   async function saveQuery() {
@@ -276,7 +300,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       for (const schema of schemas) {
         for (const o of await call(commands.listObjects(tab.id, schema.name))) {
           out[`${o.schema}.${o.name}`] = [];
-          if (o.schema === "public" || o.schema === "main") out[o.name] = [];
+          if (o.schema === "public" || o.schema === "main" || o.schema === database) out[o.name] = [];
         }
       }
       if (!cancelled) setTables(out);
@@ -284,12 +308,68 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => {
       cancelled = true;
     };
-  }, [tab.status, tab.id]);
+  }, [tab.status, tab.id, database]);
+
+  // Read the server state after connecting and after each script, including failed scripts:
+  // a USE earlier in a script can succeed even when a later statement fails.
+  useEffect(() => {
+    if (!supportsDatabase || tab.status !== "connected") {
+      setDatabase(null);
+      setDatabases([]);
+      setDatabaseError(false);
+      databaseBusyRef.current = false;
+      setDatabaseBusy(false);
+      return;
+    }
+    if (tab.run?.running) return;
+    let cancelled = false;
+    databaseBusyRef.current = true;
+    setDatabaseBusy(true);
+    Promise.all([call(commands.listDatabases(tab.id)), call(commands.currentDatabase(tab.id))])
+      .then(([names, current]) => {
+        if (cancelled) return;
+        setDatabases(names);
+        setDatabase(current);
+        setDatabaseError(false);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setDatabase(null);
+          setDatabases([]);
+          setDatabaseError(true);
+          setNotice({ text: message(e), error: true });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          databaseBusyRef.current = false;
+          setDatabaseBusy(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [supportsDatabase, tab.id, tab.status, tab.connectionId, tab.run?.running, databaseRefresh]);
+
+  async function changeDatabase(next: string) {
+    if (!next || databaseBusyRef.current) return;
+    databaseBusyRef.current = true;
+    setDatabaseBusy(true);
+    try {
+      await call(commands.selectDatabase(tab.id, next));
+      setDatabase(next);
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    } finally {
+      databaseBusyRef.current = false;
+      setDatabaseBusy(false);
+    }
+  }
 
   async function ensureConnected(): Promise<boolean> {
     // The store, not this render's `tab`: a caller may have just connected (loading a
     // table page connects, then runs its SELECT through `run`).
-    if (useApp.getState().tabs.find((t) => t.id === tab.id)?.status === "connected") return true;
+    const status = useApp.getState().tabs.find((t) => t.id === tab.id)?.status;
+    if (status === "connected") return true;
+    if (status === "connecting") return false;
     if (!tab.connectionId) {
       updateTab(tab.id, { run: errorRun("", { key: "pickConnection" }) });
       return false;
@@ -317,7 +397,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   async function run(request: RunRequest) {
-    if (!request.text.trim() || tab.run?.running || useApp.getState().workspaceChanging ||
+    if (!request.text.trim() || tab.run?.running || databaseBusyRef.current || useApp.getState().workspaceChanging ||
         (tab.connectionId && useApp.getState().historySaving.includes(tab.connectionId))) return;
     if (!(await ensureConnected())) return;
     // `:name` placeholders: the core lists them and writes the values in as literals.
@@ -442,7 +522,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   return (
     <div className="editor-tab">
       <div className="toolbar">
-        <select value={tab.connectionId ?? ""} onChange={(e) => void changeConnection(e.target.value)} aria-label={t("connection")} disabled={running || tab.status === "connecting" || historySaving || workspaceChanging}>
+        <select value={tab.connectionId ?? ""} onChange={(e) => void changeConnection(e.target.value)} aria-label={t("connection")} disabled={running || databaseBusy || tab.status === "connecting" || historySaving || workspaceChanging}>
           <option value="">{t("noConnection")}</option>
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
@@ -451,6 +531,15 @@ export function EditorTab({ tab }: { tab: Tab }) {
             </option>
           ))}
         </select>
+        {supportsDatabase && (tab.status === "connected" ? (
+          <><select aria-label={t("database")} title={t("database")} value={database ?? ""} onChange={(e) => void changeDatabase(e.target.value)} disabled={running || databaseBusy || databaseError || historySaving || workspaceChanging}>
+            <option value="" disabled>{databaseBusy ? t("loadingDatabases") : databaseError ? t("databaseLoadFailed") : t("noDatabase")}</option>
+            {database && !databases.includes(database) && <option value={database}>{database}</option>}
+            {databases.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>{databaseError && <button className="ghost" disabled={running || databaseBusy} onClick={() => setDatabaseRefresh((n) => n + 1)}>{t("retryDatabases")}</button>}</>
+        ) : (
+          <button className="ghost" disabled={tab.status === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
+        ))}
         <span className={`status status-${tab.status}`}>
           {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
         </span>
@@ -461,33 +550,23 @@ export function EditorTab({ tab }: { tab: Tab }) {
           </span>
         )}
         <div className="spacer" />
-        {!tab.table && (
-          <>
-            <button className="ghost" title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
-              {t("snippets.save")}
-            </button>
-            <button className="ghost" title={t("formatHint")} onClick={() => editor.current?.format()}>
-              {t("format")}
-            </button>
-          </>
-        )}
-        {running ? (
+        {tab.table && (running ? (
           <button className="danger" onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
             {t("cancel")}
           </button>
         ) : (
           <button
             className="primary"
-            disabled={historySaving || tab.status === "connecting" || workspaceChanging}
-            title={tab.table ? t("table.refreshHint") : t("runHint")}
+            disabled={historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging}
+            title={t("table.refreshHint")}
             onClick={() => {
-              if (tab.table && pendingCount > 0) setNotice({ text: t("edit.applyFirst"), error: true });
-              else void (tab.table ? loadPage(tab.table) : run({ text: tab.sql, from: 0 }));
+              if (pendingCount > 0) setNotice({ text: t("edit.applyFirst"), error: true });
+              else if (tab.table) void loadPage(tab.table);
             }}
           >
-            {tab.table ? t("table.refresh") : t("run")}
+            {t("table.refresh")}
           </button>
-        )}
+        ))}
       </div>
       <div className="editor-body" ref={body}>
         {tab.table && (
@@ -508,6 +587,27 @@ export function EditorTab({ tab }: { tab: Tab }) {
         {!tab.table && (
         <>
         <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane">
+          <div className="editor-actions" role="toolbar" aria-label={t("editorActions")}>
+            {running ? (
+              <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
+                <EditorActionIcon name="cancel" />
+              </button>
+            ) : (
+              <button className="editor-action editor-action-run" aria-label={t("run")} title={t("runHint")} disabled={historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => editor.current?.runCurrent()}>
+                <EditorActionIcon name="run" />
+              </button>
+            )}
+            <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint")} disabled={running || historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
+              <EditorActionIcon name="script" />
+            </button>
+            <span className="editor-actions-divider" aria-hidden="true" />
+            <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
+              <EditorActionIcon name="format" />
+            </button>
+            <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
+              <EditorActionIcon name="save" />
+            </button>
+          </div>
           <SqlEditor
             handle={editor}
             onFormatError={(reason) => setNotice({ text: t("formatFailed", { reason }), error: true })}

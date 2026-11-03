@@ -24,3 +24,10 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [013](0013-license-and-repo.md) | Apache-2.0 + DCO + trademark policy; monorepo | Accepted |
 | [014](0014-editing-table-data.md) | Editing in table data tabs, by primary key, in one transaction | Accepted |
 | [015](0015-kubernetes-tunnels.md) | Kubernetes connections through `kubectl port-forward` | Accepted |
+| [016](0016-duckdb.md) | DuckDB driver: bundled, one open per file (its MCP part superseded by ADR-020) | Accepted |
+| [017](0017-sql-server.md) | SQL Server driver: tiberius, T-SQL batches, cancel by Attention | Accepted |
+| [018](0018-sqlite-over-ssh.md) | SQLite files on a server, through the server's `sqlite3` over SSH | Accepted |
+| [019](0019-mcp-writes.md) | Agents may write, per connection (supersedes ADR-008's writes) | Accepted |
+| [020](0020-mcp-engines.md) | The MCP serves MySQL, MariaDB, SQL Server and DuckDB, with each engine's barriers | Accepted |
+| [021](0021-automatic-updates.md) | Automatic updates: signed, installed on the user's click, off until there is a public source | Accepted |
+| [022](0022-team-sharing.md) | Sharing connections with a team: trust pinned to content, shared host keys, passwordless logins | Accepted |

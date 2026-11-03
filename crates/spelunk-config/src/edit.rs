@@ -23,6 +23,58 @@ pub(crate) fn read_doc(path: &Path) -> Result<(String, DocumentMut), ConfigError
     Ok((content, doc))
 }
 
+/// Defines `${user.<name>}` variables in the user's `user.toml` (ADR-022), creating it if
+/// needed. Only the `[vars]` entries given are touched: comments and everything else stay.
+pub fn set_user_vars(
+    user_dir: &Path,
+    values: &std::collections::BTreeMap<String, String>,
+) -> Result<(), ConfigError> {
+    let path = user_dir.join("user.toml");
+    for (name, value) in values {
+        if !crate::vars::valid_var_name(name) {
+            return Err(ConfigError::new(
+                &path,
+                format!(
+                    "{name:?} is not a valid variable name (letters, digits, '_', '-' and '.')"
+                ),
+            ));
+        }
+        if value.trim().is_empty() {
+            return Err(ConfigError::new(
+                &path,
+                format!("the value of ${{user.{name}}} cannot be empty"),
+            ));
+        }
+    }
+    let mut doc = if path.is_file() {
+        std::fs::read_to_string(&path)
+            .map_err(|e| ConfigError::new(&path, e.to_string()))?
+            .parse::<DocumentMut>()
+            .map_err(|e| ConfigError::new(&path, e.to_string()))?
+    } else {
+        let mut doc = DocumentMut::new();
+        doc["schema_version"] = toml_edit::value(i64::from(crate::model::SCHEMA_VERSION));
+        doc
+    };
+    if !doc.contains_table("vars") {
+        doc["vars"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let vars = doc["vars"]
+        .as_table_mut()
+        .ok_or_else(|| ConfigError::new(&path, "[vars] is not a table"))?;
+    for (name, value) in values {
+        vars[name.as_str()] = toml_edit::value(value.trim());
+    }
+    // The result must still load before it replaces the file.
+    let edited = doc.to_string();
+    toml::from_str::<crate::model::UserFile>(&edited)
+        .map_err(|e| ConfigError::new(&path, format!("the edited file is not valid: {e}")))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
+    }
+    write_doc(&path, &doc)
+}
+
 pub(crate) fn write_doc(path: &Path, doc: &DocumentMut) -> Result<(), ConfigError> {
     // Write to a temporary file first and then rename: an interruption never leaves a broken file.
     let tmp = path.with_extension("toml.tmp");

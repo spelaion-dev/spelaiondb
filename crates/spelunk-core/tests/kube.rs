@@ -75,6 +75,7 @@ async fn connections_reach_a_database_inside_the_cluster() {
             OpenOptions {
                 tunnels: pool.clone(),
                 known_hosts: KnownHosts {
+                    team_file: None,
                     user_file: None,
                     app_file: user.join("known_hosts"),
                 },

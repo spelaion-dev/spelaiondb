@@ -15,7 +15,7 @@ use crate::load::{
 };
 use crate::model::{
     ConnectionFile, Engine, KubernetesConfig, McpConfig, SCHEMA_VERSION, SecretSpec, TlsConfig,
-    TlsModeConfig,
+    TlsModeConfig, WritePolicy,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::vars::home_dir;
@@ -34,6 +34,68 @@ pub enum PasswordChoice {
     /// Any other reference already in the file (`keychain:<name>`, `op://…`, `cmd:…`): the
     /// form shows it and editing keeps it as is.
     Other(String),
+    /// A short-lived token from a cloud provider's CLI, run on every connection (ADR-022).
+    CloudToken(CloudToken),
+}
+
+/// Cloud providers whose databases take a short-lived token instead of a password (ADR-022).
+/// The token comes from the provider's CLI, signed in on the user's computer, through a
+/// `cmd:` reference the form writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudToken {
+    /// `aws rds generate-db-auth-token` (IAM database authentication).
+    AwsRds,
+    /// `az account get-access-token` for Azure Database for PostgreSQL and MySQL.
+    AzureAd,
+    /// `gcloud sql generate-login-token` (Cloud SQL IAM database authentication).
+    GoogleCloudSql,
+}
+
+impl CloudToken {
+    pub const ALL: [CloudToken; 3] = [
+        CloudToken::AwsRds,
+        CloudToken::AzureAd,
+        CloudToken::GoogleCloudSql,
+    ];
+
+    /// The `cmd:` reference that gets a token for `user` on `host:port`. Only letters,
+    /// digits, `.`, `-`, `_` and `@` reach the command, so nothing can be injected into the
+    /// shell that runs it.
+    pub fn reference(self, host: &str, port: u16, user: &str) -> Result<String, String> {
+        let safe = |what: &str, value: &str| {
+            if !value.is_empty()
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '@'))
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the {what} of a connection with a cloud token can only contain letters, digits, '.', '-', '_' and '@'"
+                ))
+            }
+        };
+        match self {
+            CloudToken::AwsRds => {
+                safe("host", host)?;
+                safe("user", user)?;
+                // `<name>.<id>.<region>.rds.amazonaws.com`: the region the token is for.
+                let labels: Vec<&str> = host.split('.').collect();
+                let region = match labels.as_slice() {
+                    [.., region, "rds", "amazonaws", "com"] => format!(" --region {region}"),
+                    _ => String::new(),
+                };
+                Ok(format!(
+                    "cmd:aws rds generate-db-auth-token --hostname {host} --port {port} --username {user}{region}"
+                ))
+            }
+            CloudToken::AzureAd => Ok(
+                "cmd:az account get-access-token --resource-type oss-rdbms --query accessToken --output tsv"
+                    .into(),
+            ),
+            CloudToken::GoogleCloudSql => Ok("cmd:gcloud sql generate-login-token".into()),
+        }
+    }
 }
 
 /// What the user filled in to create a connection. Empty strings mean "not set".
@@ -49,17 +111,24 @@ pub struct ConnectionDraft {
     pub env: String,
     pub host: String,
     pub port: Option<u16>,
-    /// Database name; for SQLite, the file path.
+    /// Database name; for SQLite and DuckDB, the file path.
     pub database: String,
     pub user: String,
     pub password: PasswordChoice,
     pub tls_mode: TlsModeConfig,
     pub tls_ca: String,
+    /// Client certificate and its private key (ADR-022); empty for none.
+    pub tls_cert: String,
+    pub tls_key: String,
     pub tunnel: String,
     /// Through `kubectl port-forward` instead of a tunnel (ADR-015).
     pub kubernetes: Option<KubernetesDraft>,
+    /// SQLite on a server: the program that opens the file there; empty for `sqlite3`.
+    pub sqlite3: String,
     pub read_only: bool,
     pub mcp_exposed: bool,
+    /// Agents may write through `execute_write` (ADR-019); otherwise they only read.
+    pub mcp_writes: bool,
 }
 
 /// The Kubernetes tab of the connection form; empty fields mean the defaults.
@@ -198,7 +267,7 @@ impl ConnectionDraft {
         if non_empty(&self.name).is_none() {
             return Err(ConfigError::new(path, "the name cannot be empty"));
         }
-        let network = self.engine != Engine::Sqlite;
+        let network = !self.engine.is_file();
         let password = match &self.password {
             PasswordChoice::None => None,
             PasswordChoice::Keychain => Some("keychain".to_string()),
@@ -218,6 +287,26 @@ impl ConnectionDraft {
                     .parse::<SecretRef>()
                     .map_err(|message| ConfigError::new(path, message))?;
                 Some(reference.clone())
+            }
+            PasswordChoice::CloudToken(token) => {
+                match self.engine {
+                    Engine::Postgres | Engine::Mysql | Engine::Mariadb => {}
+                    Engine::Sqlserver | Engine::Sqlite | Engine::Duckdb => {
+                        return Err(ConfigError::new(
+                            path,
+                            format!(
+                                "cloud tokens are for PostgreSQL, MySQL and MariaDB, not {}",
+                                self.engine.as_str()
+                            ),
+                        ));
+                    }
+                }
+                let port = self.port.or(self.engine.default_port()).unwrap_or_default();
+                Some(
+                    token
+                        .reference(self.host.trim(), port, self.user.trim())
+                        .map_err(|message| ConfigError::new(path, message))?,
+                )
             }
         };
         let root = match self.source {
@@ -239,7 +328,10 @@ impl ConnectionDraft {
                 })
             })
             .transpose()?;
-        let tunnel = non_empty(&self.tunnel).filter(|_| network && kubernetes.is_none());
+        // SQLite through a tunnel: the file is on the server (ADR-018).
+        let remote_sqlite = self.engine == Engine::Sqlite && non_empty(&self.tunnel).is_some();
+        let tunnel =
+            non_empty(&self.tunnel).filter(|_| (network || remote_sqlite) && kubernetes.is_none());
         if let Some(name) = &tunnel
             && config.tunnel_for(self.source, name).is_none()
         {
@@ -259,8 +351,10 @@ impl ConnectionDraft {
                 .port
                 .filter(|p| network && Some(*p) != self.engine.default_port()),
             database: non_empty(&self.database).map(|d| match self.engine {
-                Engine::Sqlite => portable_path(&d, root),
-                Engine::Postgres | Engine::Mysql | Engine::Mariadb => d,
+                // A path on the server is the server's: as typed.
+                Engine::Sqlite if remote_sqlite => d,
+                Engine::Sqlite | Engine::Duckdb => portable_path(&d, root),
+                Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => d,
             }),
             user: non_empty(&self.user).filter(|_| network),
             password: password
@@ -268,17 +362,34 @@ impl ConnectionDraft {
                 .map(|secret| SecretSpec { secret }),
             tunnel,
             kubernetes,
+            sqlite3: non_empty(&self.sqlite3).filter(|_| remote_sqlite),
             read_only: self.read_only,
             tls: if network {
                 TlsConfig {
                     mode: self.tls_mode,
                     ca: non_empty(&self.tls_ca).map(|ca| portable_path(&ca, root)),
+                    cert: non_empty(&self.tls_cert).map(|cert| portable_path(&cert, root)),
+                    // `~/…` like other paths, but a key inside the repository stays absolute,
+                    // so resolving refuses it instead of sharing it as a relative path.
+                    key: non_empty(&self.tls_key).map(|key| {
+                        let portable = portable_path(&key, root);
+                        if Path::new(&portable).is_relative() && !portable.starts_with("~/") {
+                            key
+                        } else {
+                            portable
+                        }
+                    }),
                 }
             } else {
                 TlsConfig::default()
             },
             mcp: McpConfig {
                 exposed: self.mcp_exposed,
+                writes: if self.mcp_writes {
+                    WritePolicy::Allow
+                } else {
+                    WritePolicy::Deny
+                },
                 ..McpConfig::default()
             },
         };
@@ -309,7 +420,7 @@ pub fn add_connection(
     let dir = connections_dir(config, draft.source)?;
     let path = create_connection(&dir, &entry.id.path, &entry.file)?;
     if draft.password == PasswordChoice::Keychain
-        && draft.engine != Engine::Sqlite
+        && !draft.engine.is_file()
         && let Some(secret) = password.filter(|s| !s.expose().is_empty())
     {
         let account = connection_account(config, &entry.id);
@@ -336,7 +447,17 @@ impl ConnectionDraft {
             Some("prompt") => PasswordChoice::Prompt,
             Some(other) => match other.strip_prefix("env:") {
                 Some(var) => PasswordChoice::Env(var.to_string()),
-                None => PasswordChoice::Other(other.to_string()),
+                // A command the form wrote for a cloud token is shown as that token again.
+                None => {
+                    let port = file.port.or(file.engine.default_port()).unwrap_or_default();
+                    let host = file.host.clone().unwrap_or_default();
+                    let user = file.user.clone().unwrap_or_default();
+                    CloudToken::ALL
+                        .into_iter()
+                        .find(|token| token.reference(&host, port, &user).as_deref() == Ok(other))
+                        .map(PasswordChoice::CloudToken)
+                        .unwrap_or_else(|| PasswordChoice::Other(other.to_string()))
+                }
             },
         };
         let file_name = entry.id.path.rsplit('/').next().unwrap_or_default();
@@ -353,7 +474,10 @@ impl ConnectionDraft {
             password,
             tls_mode: file.tls.mode,
             tls_ca: file.tls.ca.clone().unwrap_or_default(),
+            tls_cert: file.tls.cert.clone().unwrap_or_default(),
+            tls_key: file.tls.key.clone().unwrap_or_default(),
             tunnel: file.tunnel.clone().unwrap_or_default(),
+            sqlite3: file.sqlite3.clone().unwrap_or_default(),
             kubernetes: file.kubernetes.as_ref().map(|k| KubernetesDraft {
                 context: k.context.clone().unwrap_or_default(),
                 namespace: k.namespace.clone().unwrap_or_default(),
@@ -363,6 +487,7 @@ impl ConnectionDraft {
             }),
             read_only: file.read_only,
             mcp_exposed: file.mcp.exposed,
+            mcp_writes: file.mcp.writes == WritePolicy::Allow,
         }
     }
 }
@@ -494,6 +619,9 @@ pub fn update_connection(
     if old.tunnel != new.tunnel {
         put(&mut doc, &["tunnel"], text(&new.tunnel));
     }
+    if old.sqlite3 != new.sqlite3 {
+        put(&mut doc, &["sqlite3"], text(&new.sqlite3));
+    }
     if old.kubernetes != new.kubernetes {
         match &new.kubernetes {
             None => {
@@ -534,11 +662,26 @@ pub fn update_connection(
     if old.tls.ca != new.tls.ca {
         put(&mut doc, &["tls", "ca"], text(&new.tls.ca));
     }
+    if old.tls.cert != new.tls.cert {
+        put(&mut doc, &["tls", "cert"], text(&new.tls.cert));
+    }
+    if old.tls.key != new.tls.key {
+        put(&mut doc, &["tls", "key"], text(&new.tls.key));
+    }
     if old.mcp.exposed != new.mcp.exposed {
         put(
             &mut doc,
             &["mcp", "exposed"],
             new.mcp.exposed.then(|| Value::from(true)),
+        );
+    }
+    // The form only knows allow and deny: a hand-written `confirm` stays until it is changed.
+    let allows = |file: &ConnectionFile| file.mcp.writes == WritePolicy::Allow;
+    if allows(old) != allows(&new) {
+        put(
+            &mut doc,
+            &["mcp", "writes"],
+            allows(&new).then(|| Value::from("allow")),
         );
     }
 

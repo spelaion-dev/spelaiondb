@@ -49,8 +49,13 @@
     "file": "Fichero",
     "fileHint": "Un fichero existente, o uno nuevo y vacío con «Nueva base de datos…». Dentro del repositorio la ruta se guarda relativa a él.",
     "readOnly": "Solo lectura",
-    "mcpExposed": "Exponer a agentes de IA (solo lectura)",
+    "mcpExposed": "Exponer a agentes de IA",
     "mcpHint": "Los agentes que usan spelunk mcp solo pueden leer, y cada consulta queda auditada.",
+    "mcpAccess": "Los agentes pueden",
+    "mcpRead": "Solo leer",
+    "mcpWrite": "Leer y escribir",
+    "mcpWriteHint": "Los agentes pueden ejecutar una escritura cada vez (INSERT, UPDATE, DELETE con WHERE, CREATE o ALTER de tablas, vistas e índices…), cada una en su propia transacción. DROP, TRUNCATE, los cambios a todas las filas, los procedimientos y los permisos se rechazan siempre, y todo queda auditado.",
+    "mcpProdWarning": "Es una conexión de producción: los agentes podrán cambiar sus datos.",
     "namePlaceholder": "Mi base de datos {{engine}}",
     "authentication": "Método",
     "savePassword": "Guardar contraseña",
@@ -58,7 +63,18 @@
     "useTunnel": "Conectar a través de un túnel SSH",
     "tunnelHint": "Se llega a la base de datos desde el último salto del túnel.",
     "passwordOther": "Referencia de la contraseña",
-    "fixedLocationHint": "Al editarla, la conexión se queda en el mismo fichero y carpeta."
+    "fixedLocationHint": "Al editarla, la conexión se queda en el mismo fichero y carpeta.",
+    "serverFile": "Fichero en el servidor",
+    "serverFileHint": "Su ruta en el último salto del túnel. SpelunkDB ejecuta el sqlite3 de ese servidor (3.37 o posterior, en su modo seguro): el fichero no se copia nunca.",
+    "useTunnelForFile": "El fichero está en un servidor: abrirlo allí a través de un túnel SSH",
+    "tunnelForFileHint": "El último salto debe permitir ejecutar comandos (no solo reenviar puertos) y tener sqlite3 instalado.",
+    "sqlite3": "Programa sqlite3 en el servidor",
+    "tlsCert": "Certificado de cliente (PEM)",
+    "tlsCertPlaceholder": "Vacío: entrar con el método de autenticación",
+    "tlsKey": "Clave del cliente (PEM)",
+    "tlsKeyPlaceholder": "~/.ssl/yo.key",
+    "clientCertHint": "Entra con un certificado en lugar de una contraseña (el servidor debe aceptarlo para este usuario). La clave se queda en tu ordenador: guárdala en tu carpeta personal, nunca en el repositorio.",
+    "cloudToken": "Proveedor"
   },
   "tls": {
     "disable": "Desactivado",
@@ -95,7 +111,8 @@
     "envHint": "Se lee de esta variable al conectar; el fichero solo guarda su nombre.",
     "other": "Definida en el fichero",
     "otherHint": "Esta contraseña viene de una referencia que el formulario no puede editar (1Password, una orden o una entrada con nombre del llavero). Se conserva tal cual; edita el fichero para cambiarla.",
-    "keepPlaceholder": "Déjala vacía para conservar la contraseña guardada"
+    "keepPlaceholder": "Déjala vacía para conservar la contraseña guardada",
+    "token": "Token de la nube (IAM)"
   },
   "cancel": "Cancelar",
   "edit": "Editar…",
@@ -203,5 +220,13 @@
     "hint": "SpelunkDB ejecuta kubectl port-forward con tu kubeconfig. El puerto de la conexión es el de este recurso; el host de la pestaña Principal solo se usa para TLS.",
     "exclusive": "Una conexión va por Kubernetes o por un túnel SSH, no por los dos.",
     "mainHint": "Por Kubernetes: el puerto es el del recurso, elegido en la pestaña Kubernetes."
+  },
+  "cloudToken": {
+    "awsRds": "AWS RDS (autenticación IAM)",
+    "azureAd": "Azure Database (Microsoft Entra ID)",
+    "googleCloudSql": "Google Cloud SQL (autenticación IAM)",
+    "awsRdsHint": "Ejecuta «aws rds generate-db-auth-token» en cada conexión: la CLI de AWS debe tener la sesión iniciada en este ordenador. Los tokens duran 15 minutos y necesitan TLS.",
+    "azureAdHint": "Ejecuta «az account get-access-token» en cada conexión: la CLI de Azure debe tener la sesión iniciada en este ordenador. Usa tu usuario de Entra ID como usuario.",
+    "googleCloudSqlHint": "Ejecuta «gcloud sql generate-login-token» en cada conexión: la CLI de gcloud debe tener la sesión iniciada en este ordenador. Usa tu usuario de IAM como usuario."
   }
 }
