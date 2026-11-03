@@ -1,4 +1,4 @@
-// Modal dialogs: password, repository trust and SSH tunnel questions.
+// Modal dialogs: password, repository trust, risky statements and SSH tunnel questions.
 
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -8,9 +8,11 @@ import { useDialogs } from "../store";
 export function Dialogs() {
   const password = useDialogs((s) => s.password);
   const trust = useDialogs((s) => s.trust);
+  const risk = useDialogs((s) => s.risk);
   const interaction = useDialogs((s) => s.interactions[0]);
   if (interaction) return <InteractionDialog key={interaction.id} />;
   if (trust) return <TrustDialog />;
+  if (risk) return <RiskDialog />;
   if (password) return <PasswordDialog key={password.connectionName + (password.error ?? "")} />;
   return null;
 }
@@ -81,6 +83,39 @@ function TrustDialog() {
         <button onClick={() => request.resolve(false)}>{t("dontTrust")}</button>
         <button className="primary" onClick={() => request.resolve(true)}>
           {t("trust")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Long statements are cut in the list: the reason is what matters. */
+const SHOWN_SQL = 400;
+
+function RiskDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.risk);
+  const cancel = useRef<HTMLButtonElement>(null);
+  // Cancel has the focus: Enter by habit must not run a DROP.
+  useEffect(() => cancel.current?.focus(), []);
+  if (!request) return null;
+  return (
+    <Modal title={t("risk.title")}>
+      <p>{t("risk.explanation", { connection: request.connection })}</p>
+      <ul className="risk-list">
+        {request.statements.map((s, i) => (
+          <li key={i}>
+            <strong>{t(`risk.${s.risk}`)}</strong>
+            <pre className="mono small">{s.sql.length > SHOWN_SQL ? `${s.sql.slice(0, SHOWN_SQL)}…` : s.sql}</pre>
+          </li>
+        ))}
+      </ul>
+      <div className="modal-actions" onKeyDown={(e) => e.key === "Escape" && request.resolve(false)}>
+        <button ref={cancel} onClick={() => request.resolve(false)}>
+          {t("risk.cancel")}
+        </button>
+        <button className="danger" onClick={() => request.resolve(true)}>
+          {t("risk.run")}
         </button>
       </div>
     </Modal>

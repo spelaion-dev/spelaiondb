@@ -2,7 +2,7 @@
 // requested from the core in windows.
 
 import { create } from "zustand";
-import type { ColumnItem, ConnectionItem, InteractionKind, WorkspaceInfo } from "./api";
+import type { ColumnItem, ConnectionItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
 
 export interface ResultMeta {
   id: number;
@@ -173,6 +173,13 @@ export interface TrustRequest {
   resolve(accept: boolean): void;
 }
 
+/** Statements the core wants confirmed before they run. */
+export interface RiskRequest {
+  connection: string;
+  statements: { sql: string; risk: RiskKind }[];
+  resolve(run: boolean): void;
+}
+
 export interface InteractionItem {
   id: number;
   request: InteractionKind;
@@ -181,7 +188,9 @@ export interface InteractionItem {
 interface DialogStore {
   password: PasswordRequest | null;
   trust: TrustRequest | null;
+  risk: RiskRequest | null;
   interactions: InteractionItem[];
+  askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
   askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
   askTrust(workspace: string | null): Promise<boolean>;
   pushInteraction(item: InteractionItem): void;
@@ -191,7 +200,21 @@ interface DialogStore {
 export const useDialogs = create<DialogStore>((set) => ({
   password: null,
   trust: null,
+  risk: null,
   interactions: [],
+  askRisks: (connection, statements) =>
+    new Promise((resolve) =>
+      set({
+        risk: {
+          connection,
+          statements,
+          resolve: (run) => {
+            set({ risk: null });
+            resolve(run);
+          },
+        },
+      }),
+    ),
   askPassword: (connectionName, canRemember, error) =>
     new Promise((resolve) =>
       set({

@@ -7,6 +7,7 @@ mod catalog;
 mod classify;
 mod cursor;
 mod export;
+mod guard;
 mod history;
 mod open;
 mod readonly;
@@ -18,6 +19,7 @@ pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
 pub use cursor::statement_at;
 pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
+pub use guard::{Risk, RiskyStatement, script_risks};
 pub use history::{HistoryError, QueryHistory};
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,

@@ -449,6 +449,24 @@ try {
   await page.keyboard.press("Control+Shift+Enter");
   await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
 
+  step("risky statements: the core asks before a DELETE without WHERE runs");
+  await replaceQuery(panel, "create temp table scratch (x);\ninsert into scratch values (1), (2);\ndelete from scratch;");
+  await run(panel);
+  let risk = page.getByRole("dialog", { name: "Run these statements?" });
+  await risk.getByText("DELETE without WHERE: deletes every row").waitFor();
+  assert.equal(await risk.locator(".risk-list li").count(), 1);
+  assert.equal(await risk.locator(".risk-list pre").innerText(), "delete from scratch");
+  // Cancel has the focus, so a reflex Enter does not run it.
+  await page.keyboard.press("Enter");
+  await risk.waitFor({ state: "detached" });
+  await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  await run(panel);
+  risk = page.getByRole("dialog", { name: "Run these statements?" });
+  await shot("05d-risky-statements");
+  await risk.getByRole("button", { name: "Run anyway" }).click();
+  await risk.waitFor({ state: "detached" });
+  await panel.getByText("Statement 3: 2 rows", { exact: false }).waitFor();
+
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
     "Postgres (Docker)",

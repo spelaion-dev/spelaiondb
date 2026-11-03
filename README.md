@@ -68,6 +68,13 @@ highlighted for a moment. The core finds it with the same dialect splitter that 
 highlighted is exactly what runs. **Ctrl+Shift+Enter** or **Run** runs the whole script,
 statement by statement, stopping at the first error.
 
+Before anything runs, the core looks for statements that are easy to regret: `DELETE` or
+`UPDATE` without `WHERE` (also inside a `WITH`), `DROP` and `TRUNCATE`, and, on connections
+whose environment is `prod`/`production`, every statement that is not a read. They are listed
+in a confirmation dialog where **Cancel** has the focus; nothing runs until you choose
+**Run anyway**. This is a safety net against slips; read-only mode remains the barrier for
+connections that must never change.
+
 ## Working with results
 
 Select cells in the result grid by clicking and dragging, with Shift and the arrow keys, by

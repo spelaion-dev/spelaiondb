@@ -690,6 +690,53 @@ pub fn engine_named(name: &str) -> Result<spelunk_config::Engine, String> {
     })
 }
 
+/// Why a statement asks for confirmation before running (see `spelunk_core::Risk`).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum RiskKind {
+    DeleteAll,
+    UpdateAll,
+    Drop,
+    Truncate,
+    UncheckedWrite,
+    ProductionWrite,
+}
+
+impl From<spelunk_core::Risk> for RiskKind {
+    fn from(risk: spelunk_core::Risk) -> Self {
+        use spelunk_core::Risk;
+        match risk {
+            Risk::DeleteAll => Self::DeleteAll,
+            Risk::UpdateAll => Self::UpdateAll,
+            Risk::Drop => Self::Drop,
+            Risk::Truncate => Self::Truncate,
+            Risk::UncheckedWrite => Self::UncheckedWrite,
+            Risk::ProductionWrite => Self::ProductionWrite,
+        }
+    }
+}
+
+/// A statement of a script that needs confirmation; `start`/`end` in UTF-8 bytes.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct RiskyItem {
+    pub index: u32,
+    pub start: u32,
+    pub end: u32,
+    pub risk: RiskKind,
+}
+
+impl From<spelunk_core::RiskyStatement> for RiskyItem {
+    fn from(r: spelunk_core::RiskyStatement) -> Self {
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        Self {
+            index: n(r.index),
+            start: n(r.span.start),
+            end: n(r.span.end),
+            risk: r.risk.into(),
+        }
+    }
+}
+
 /// A piece of a script, in UTF-8 bytes like every position the core gives.
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct TextSpan {

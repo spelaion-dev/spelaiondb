@@ -40,7 +40,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   the first error) and `ResultStore` (results in the core, served in Arrow IPC windows).
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
-  there needs tests that try to get around them.
+  there needs tests that try to get around them. `guard.rs` lists the statements the app
+  must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, production
+  writes); `run_script` refuses unconfirmed risky scripts. `sort.rs` orders stored results
+  and `cursor.rs` finds the statement under the editor's cursor.
 - `crates/spelunk-store`: local SQLite (audit, query history and personal history settings;
   later snippets and cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.

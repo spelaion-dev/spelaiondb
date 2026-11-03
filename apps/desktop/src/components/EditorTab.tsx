@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type ScriptEvent } from "../api";
 import { openSession } from "../connect";
-import { useApp, type RunState, type SortState, type Tab, type Translation } from "../store";
+import { useApp, useDialogs, type RunState, type SortState, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultGrid } from "./ResultGrid";
@@ -101,6 +101,17 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (!request.text.trim() || tab.run?.running || useApp.getState().workspaceChanging ||
         (tab.connectionId && useApp.getState().historySaving.includes(tab.connectionId))) return;
     if (!(await ensureConnected())) return;
+    // The core says which statements need a confirmation; without it, it refuses the run.
+    const risky = await call(commands.scriptRisks(tab.id, request.text)).catch(() => []);
+    let confirmed = false;
+    if (risky.length > 0) {
+      const statements = risky.map((r) => ({
+        sql: request.text.slice(byteToIndex(request.text, r.start), byteToIndex(request.text, r.end)),
+        risk: r.risk,
+      }));
+      if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
+      confirmed = true;
+    }
     for (const r of tab.run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
     lastRequest.current = request;
     const startedAt = performance.now();
@@ -110,7 +121,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const channel = new Channel<ScriptEvent>();
     channel.onmessage = (event) => handle(event, request, startedAt);
     try {
-      await call(commands.runScript(tab.id, request.text, channel));
+      await call(commands.runScript(tab.id, request.text, confirmed, channel));
     } catch (e) {
       const detail = message(e);
       updateRun(tab.id, (r) => ({ ...r, running: false, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));

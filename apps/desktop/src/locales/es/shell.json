@@ -36,5 +36,17 @@
   "wrongPassphrase": "Frase de contraseña incorrecta. {{path}}",
   "sshPassword": "Contraseña SSH",
   "verificationFor": "Verificación de {{host}}",
-  "ok": "Aceptar"
+  "ok": "Aceptar",
+  "risk": {
+    "title": "¿Ejecutar estas sentencias?",
+    "explanation": "Pueden borrar o cambiar datos en {{connection}}. Todavía no se ha ejecutado nada.",
+    "deleteAll": "DELETE sin WHERE: borra todas las filas",
+    "updateAll": "UPDATE sin WHERE: cambia todas las filas",
+    "drop": "DROP: elimina el objeto y todo lo que contiene",
+    "truncate": "TRUNCATE: vacía la tabla",
+    "uncheckedWrite": "DELETE o UPDATE en el que no se pudo comprobar el WHERE",
+    "productionWrite": "Cambia una base de datos de producción",
+    "cancel": "Cancelar",
+    "run": "Ejecutar de todos modos"
+  }
 }

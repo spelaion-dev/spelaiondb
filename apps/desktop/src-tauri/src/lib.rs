@@ -685,6 +685,7 @@ async fn disconnect(session: String, state: State<'_, AppState>) -> CmdResult<()
 async fn run_script(
     session: String,
     sql: String,
+    confirmed: bool,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
@@ -695,6 +696,11 @@ async fn run_script(
             .ok_or_else(|| format!("there is no open connection for {session}"))?;
         (session.open.clone(), session.history_workspace.clone())
     };
+    // The core decides what needs confirmation; the UI asks first (`script_risks`), and a
+    // run that skipped the question is refused here.
+    if !confirmed && !risks_of(&open, &sql).is_empty() {
+        return Err("this script has statements that need confirmation before running".into());
+    }
     let mut events =
         state
             .history
@@ -709,6 +715,30 @@ async fn run_script(
         }
     });
     Ok(())
+}
+
+fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelunk_core::RiskyStatement> {
+    spelunk_core::script_risks(
+        open.session.dialect().as_ref(),
+        sql,
+        open.resolved.is_production(),
+    )
+}
+
+/// Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
+/// without WHERE, DROP, TRUNCATE, or any write on a production connection.
+#[tauri::command]
+#[specta::specta]
+async fn script_risks(
+    session: String,
+    sql: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<RiskyItem>> {
+    let open = state.session(&session).await?;
+    Ok(risks_of(&open, &sql)
+        .into_iter()
+        .map(RiskyItem::from)
+        .collect())
 }
 
 #[tauri::command]
@@ -1075,6 +1105,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             sort_result,
             statement_at,
             create_sqlite_database,
+            script_risks,
             open_workspace,
             trust_workspace,
             list_connections,

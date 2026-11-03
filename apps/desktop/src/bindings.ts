@@ -79,6 +79,11 @@ export const commands = {
 	 *  existing file.
 	 */
 	createSqliteDatabase: (path: string) => typedError<null, string>(__TAURI_INVOKE("create_sqlite_database", { path })),
+	/**
+	 *  Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
+	 *  without WHERE, DROP, TRUNCATE, or any write on a production connection.
+	 */
+	scriptRisks: (session: string, sql: string) => typedError<RiskyItem[], string>(__TAURI_INVOKE("script_risks", { session, sql })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
@@ -92,7 +97,7 @@ export const commands = {
 	connect: (session: string, connection: string, password: string | null, remember: boolean) => typedError<ConnectOutcome, string>(__TAURI_INVOKE("connect", { session, connection, password, remember })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
-	runScript: (session: string, sql: string, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, onEvent })),
+	runScript: (session: string, sql: string, confirmed: boolean, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, onEvent })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
 	/**  Frees a result the UI no longer shows. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
@@ -345,6 +350,17 @@ export type ObjectItem_Serialize = {
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */
 "other";
+
+/**  Why a statement asks for confirmation before running (see `spelunk_core::Risk`). */
+export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";
+
+/**  A statement of a script that needs confirmation; `start`/`end` in UTF-8 bytes. */
+export type RiskyItem = {
+	index: number,
+	start: number,
+	end: number,
+	risk: RiskKind,
+};
 
 export type SchemaItem = {
 	name: string,

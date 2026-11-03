@@ -36,5 +36,17 @@
   "wrongPassphrase": "Wrong passphrase. {{path}}",
   "sshPassword": "SSH password",
   "verificationFor": "Verification for {{host}}",
-  "ok": "OK"
+  "ok": "OK",
+  "risk": {
+    "title": "Run these statements?",
+    "explanation": "They can lose or change data on {{connection}}. Nothing has run yet.",
+    "deleteAll": "DELETE without WHERE: deletes every row",
+    "updateAll": "UPDATE without WHERE: changes every row",
+    "drop": "DROP: removes the object and everything in it",
+    "truncate": "TRUNCATE: empties the table",
+    "uncheckedWrite": "DELETE or UPDATE that could not be checked for a WHERE",
+    "productionWrite": "Changes a production database",
+    "cancel": "Cancel",
+    "run": "Run anyway"
+  }
 }
