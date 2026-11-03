@@ -7,7 +7,7 @@ import { call, commands, type CellRange, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT } from "../preferences";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta, SortState } from "../store";
-import { CellViewer } from "./CellViewer";
+import { CellViewer, type ViewerMode } from "./CellViewer";
 
 const ROW_H = 26;
 const HEADER_H = 36;
@@ -102,6 +102,7 @@ export function ResultGrid({
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const dragging = useRef(false);
   const [viewer, setViewer] = useState(false);
+  const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
 
   const redraw = useCallback(() => {
     if (frame.current !== null) return;
@@ -675,6 +676,20 @@ export function ResultGrid({
         row={selection.focus.row}
         column={selection.focus.col}
         meta={focusMeta}
+        columns={result.columns}
+        mode={viewerMode}
+        onMode={(mode) => {
+          setViewerMode(mode);
+          // Arrow keys keep moving through the grid.
+          scrollerRef.current?.focus();
+        }}
+        onPickColumn={(col) => {
+          const cell = { row: selection.focus.row, col };
+          setSelection({ anchor: cell, focus: cell });
+          scrollIntoView(cell);
+          setViewerMode("cell");
+          scrollerRef.current?.focus();
+        }}
         onClose={() => {
           setViewer(false);
           scrollerRef.current?.focus();

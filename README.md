@@ -136,7 +136,9 @@ what is left, and copies and exports take only those rows. **Esc** clears it.
 
 **Enter** or a double-click opens the cell viewer beside the grid with the full value of the
 active cell: JSON pretty-printed, binary values as a hex dump and long text with its line
-breaks. The arrow keys move through cells while it stays open; **Esc** closes it.
+breaks. **Row** switches to every column of the active row, one under the other (click a
+field to see that value in full). The arrow keys move through cells while it stays open;
+**Esc** closes it.
 
 ## Saved queries
 

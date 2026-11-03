@@ -74,6 +74,8 @@ export const commands = {
 	 *  `None` shows every row again. The grid then asks for its windows again.
 	 */
 	filterResult: (result: number, text: string | null) => typedError<FilterOutcome, string>(__TAURI_INVOKE("filter_result", { result, text })),
+	/**  Every cell of one row as text (`None` for NULL), for the viewer's row view. */
+	rowValues: (result: number, row: number) => typedError<(string | null)[], string>(__TAURI_INVOKE("row_values", { result, row })),
 	/**
 	 *  SQL for a table written by the core with the engine's quoting (preview, SELECT, INSERT,
 	 *  UPDATE or DELETE with `:named` placeholders), to open in a new tab.

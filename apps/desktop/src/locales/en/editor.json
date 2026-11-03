@@ -142,7 +142,14 @@
     "characters_one": "{{formattedCount}} character",
     "characters_other": "{{formattedCount}} characters",
     "bytes_one": "{{formattedCount}} byte",
-    "bytes_other": "{{formattedCount}} bytes"
+    "bytes_other": "{{formattedCount}} bytes",
+    "mode": "View",
+    "pick": "Show this value in full",
+    "columns_one": "{{count}} column",
+    "columns_other": "{{count}} columns",
+    "rowMode": "Row",
+    "cellMode": "Cell",
+    "rowTitle": "Row {{number}}"
   },
   "format": "Format",
   "formatHint": "Format the selection or the whole script (Shift+Alt+F)",

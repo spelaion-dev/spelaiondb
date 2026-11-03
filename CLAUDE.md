@@ -46,7 +46,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`results.rs` combines the sort and the row filter into one view)
   and `cursor.rs` finds the statement under the editor's cursor.
 - `crates/spelunk-store`: local SQLite (audit, query history, saved queries and personal settings;
-  later snippets and cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
+  later the schema cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelunk-mcp` + `apps/cli`: `spelunk mcp` and utilities (`connections`, `trust`,
   `audit`). In `spelunk mcp`, stdout is the protocol: no `println!`.

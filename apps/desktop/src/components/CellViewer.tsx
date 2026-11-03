@@ -1,6 +1,7 @@
 // Cell viewer: the full value of the active cell beside the grid. JSON is pretty-printed,
-// binary values become a hex dump and long text keeps its line breaks. The value is asked
-// to the core, so it works for rows that are not in the grid's cache.
+// binary values become a hex dump and long text keeps its line breaks. The row view lists
+// every column of the active row instead. Values are asked to the core, so it works for
+// rows that are not in the grid's cache.
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -37,8 +38,24 @@ function view(value: string | null, column: ColumnItem): View {
   return { kind: "text", text: value };
 }
 
-export function CellViewer(props: { resultId: number; row: number; column: number; meta: ColumnItem; onClose(): void }) {
-  const { resultId, row, column, meta } = props;
+export type ViewerMode = "cell" | "row";
+
+/** Longest value shown per field in the row view; the cell view shows it whole. */
+const ROW_VIEW_CHARS = 500;
+
+export function CellViewer(props: {
+  resultId: number;
+  row: number;
+  column: number;
+  meta: ColumnItem;
+  columns: ColumnItem[];
+  mode: ViewerMode;
+  onMode(mode: ViewerMode): void;
+  /** A field of the row view was picked: show that cell. */
+  onPickColumn(column: number): void;
+  onClose(): void;
+}) {
+  const { resultId, row, column, meta, mode } = props;
   const { t, i18n } = useTranslation("editor");
   // Each answer remembers its cell, so moving to another cell never shows the previous
   // value with the new column's type while the new one loads.
@@ -68,8 +85,36 @@ export function CellViewer(props: { resultId: number; row: number; column: numbe
         ? t("viewer.characters", { count: [...value.text].length, formattedCount: [...value.text].length.toLocaleString(i18n.language) })
         : "";
 
+  const modes = (
+    <div className="viewer-modes" role="group" aria-label={t("viewer.mode")}>
+      {(["cell", "row"] as const).map((m) => (
+        <button key={m} className="ghost small" aria-pressed={mode === m} onClick={() => props.onMode(m)}>
+          {t(m === "cell" ? "viewer.cellMode" : "viewer.rowMode")}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (mode === "row") {
+    return (
+      <aside className="cell-viewer" aria-label={t("viewer.title")} onKeyDown={(e) => e.key === "Escape" && props.onClose()}>
+        <header>
+          <div className="cell-viewer-title">
+            <strong>{t("viewer.rowTitle", { number: (row + 1).toLocaleString(i18n.language) })}</strong>
+            <span className="muted small">{t("viewer.columns", { count: props.columns.length })}</span>
+          </div>
+          {modes}
+          <button className="ghost" aria-label={t("viewer.close")} onClick={props.onClose}>
+            ×
+          </button>
+        </header>
+        <RowFields resultId={resultId} row={row} columns={props.columns} active={column} onPick={props.onPickColumn} />
+      </aside>
+    );
+  }
+
   return (
-    <aside className="cell-viewer" aria-label={t("viewer.title")}>
+    <aside className="cell-viewer" aria-label={t("viewer.title")} onKeyDown={(e) => e.key === "Escape" && props.onClose()}>
       <header>
         <div className="cell-viewer-title">
           <strong>{meta.name}</strong>
@@ -78,6 +123,7 @@ export function CellViewer(props: { resultId: number; row: number; column: numbe
             {length ? ` · ${length}` : ""}
           </span>
         </div>
+        {modes}
         <button
           className="ghost small"
           disabled={!value || value.text === null}
@@ -100,5 +146,43 @@ export function CellViewer(props: { resultId: number; row: number; column: numbe
         </pre>
       )}
     </aside>
+  );
+}
+
+function RowFields(props: { resultId: number; row: number; columns: ColumnItem[]; active: number; onPick(column: number): void }) {
+  const { resultId, row } = props;
+  const { t } = useTranslation("editor");
+  const key = `${resultId}:${row}`;
+  const [loaded, setLoaded] = useState<{ key: string; values: (string | null)[] } | { key: string; error: string } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    call(commands.rowValues(resultId, row))
+      .then((values) => active && setLoaded({ key, values }))
+      .catch((e: unknown) => active && setLoaded({ key, error: e instanceof Error ? e.message : String(e) }));
+    return () => {
+      active = false;
+    };
+  }, [key, resultId, row]);
+
+  const current = loaded?.key === key ? loaded : null;
+  if (!current) return <p className="muted small">{t("viewer.loading")}</p>;
+  if ("error" in current) return <p className="error small" role="alert">{current.error}</p>;
+  return (
+    <dl className="row-view">
+      {props.columns.map((c, i) => {
+        const value = current.values[i] ?? null;
+        return (
+          <div key={i} className={`row-field ${i === props.active ? "active" : ""}`} onClick={() => props.onPick(i)} title={t("viewer.pick")}>
+            <dt>
+              {c.name} <span className="muted small">{c.nativeType}</span>
+            </dt>
+            <dd className={value === null ? "muted" : ""}>
+              {value === null ? "NULL" : value.length > ROW_VIEW_CHARS ? `${value.slice(0, ROW_VIEW_CHARS)}…` : value}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
   );
 }

@@ -142,7 +142,14 @@
     "characters_one": "{{formattedCount}} carácter",
     "characters_other": "{{formattedCount}} caracteres",
     "bytes_one": "{{formattedCount}} byte",
-    "bytes_other": "{{formattedCount}} bytes"
+    "bytes_other": "{{formattedCount}} bytes",
+    "mode": "Vista",
+    "pick": "Ver este valor completo",
+    "columns_one": "{{count}} columna",
+    "columns_other": "{{count}} columnas",
+    "rowMode": "Fila",
+    "cellMode": "Celda",
+    "rowTitle": "Fila {{number}}"
   },
   "format": "Formatear",
   "formatHint": "Formatea la selección o todo el script (Mayús+Alt+F)",

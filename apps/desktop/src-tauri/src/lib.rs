@@ -993,6 +993,38 @@ async fn sort_result(
     .map_err(|e| e.to_string())?
 }
 
+/// Every cell of one row as text (`None` for NULL), for the viewer's row view.
+#[tauri::command]
+#[specta::specta]
+async fn row_values(
+    result: u32,
+    row: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<Option<String>>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let batch = stored
+        .window(row as usize, 1)
+        .into_iter()
+        .next()
+        .ok_or("no such row")?;
+    Ok(stored
+        .schema()
+        .columns
+        .iter()
+        .enumerate()
+        .map(
+            |(i, meta)| match Value::from_array(batch.column(i).as_ref(), 0, meta.logical) {
+                Some(Value::Null) | None => None,
+                Some(value) => Some(value.to_string()),
+            },
+        )
+        .collect())
+}
+
 /// Filters a result in the core: rows where some cell contains `text` (ignoring case);
 /// `None` shows every row again. The grid then asks for its windows again.
 #[tauri::command]
@@ -1254,6 +1286,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             cell_value,
             sort_result,
             filter_result,
+            row_values,
             table_sql,
             count_rows,
             save_snippet,

@@ -331,3 +331,13 @@ select, input[type="text"], input[type="password"], input[type="number"], input[
 /* ---------------------------------------------------------------- saved queries */
 .snippet-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .snippet-actions { display: flex; gap: 6px; }
+
+/* ---------------------------------------------------------------- row view */
+.viewer-modes { display: flex; gap: 2px; }
+.viewer-modes button[aria-pressed="true"] { background: var(--accent-soft); }
+.row-view { flex: 1; margin: 0; overflow: auto; padding: 4px 0; }
+.row-field { padding: 6px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.row-field:hover { background: var(--editor-active); }
+.row-field.active { box-shadow: inset 3px 0 0 var(--accent); }
+.row-field dt { font-weight: 600; font-size: 12.5px; }
+.row-field dd { margin: 2px 0 0; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }

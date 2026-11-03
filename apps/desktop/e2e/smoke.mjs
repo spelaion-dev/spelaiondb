@@ -322,6 +322,14 @@ try {
   await page.keyboard.press("ArrowRight");
   await viewer.locator(".cell-viewer-text").waitFor();
   assert.equal(await viewer.locator(".cell-viewer-value").innerText(), "line 1\nline 2");
+  // The row view lists every column; picking one goes back to that cell.
+  await viewer.getByRole("button", { name: "Row", exact: true }).click();
+  await viewer.locator(".row-field").nth(2).waitFor();
+  assert.deepEqual(await viewer.locator(".row-field dt").allInnerTexts(), ["doc TEXT", "raw BLOB", "txt TEXT"]);
+  assert.equal(await viewer.locator(".row-field dd").nth(1).innerText(), "\\x48656c6c6f00ff");
+  await shot("03e-row-view");
+  await viewer.locator(".row-field").first().click();
+  await viewer.locator(".cell-viewer-json").waitFor();
   await page.keyboard.press("Escape");
   await viewer.waitFor({ state: "detached" });
 
