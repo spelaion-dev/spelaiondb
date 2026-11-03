@@ -585,15 +585,56 @@ try {
     "UPDATE orders\nSET\n  customer_id = :customer_id,\n  created = :created,\n  total = :total\nWHERE id = :id;",
   );
   await shot("05f-generated-update");
-  await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).dblclick();
-  await panel.locator(".cm-content", { hasText: "FROM big_orders" }).waitFor();
-  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM big_orders\nLIMIT 100;");
   await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).click({ button: "right" });
   assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE" }).count(), 0);
-  await page.keyboard.press("Escape");
+  await page.getByRole("menuitem", { name: "Open as SQL" }).click();
+  await panel.locator(".cm-content", { hasText: "FROM big_orders" }).waitFor();
+  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM big_orders\nLIMIT 100;");
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   await ordersNode.getByText("50,000", { exact: true }).waitFor();
+
+  step("table data: pages, WHERE and ORDER BY written and checked by the core");
+  await ordersNode.dblclick();
+  await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
+  const range = panel.locator(".table-range");
+  await range.filter({ hasText: "rows 1–500" }).waitFor();
+  await panel.getByRole("textbox", { name: "WHERE" }).fill("total > 1990");
+  await page.keyboard.press("Enter");
+  await range.filter({ hasText: "rows 1–264" }).waitFor();
+  await panel.getByRole("button", { name: "Count", exact: true }).click();
+  await range.filter({ hasText: "rows 1–264 of 264" }).waitFor();
+  assert.ok(await panel.getByRole("button", { name: "Next page" }).isDisabled());
+  await shot("05i-table-data");
+  await panel.getByRole("textbox", { name: "WHERE" }).fill("");
+  await panel.getByRole("button", { name: "Apply", exact: true }).click();
+  await range.filter({ hasText: "rows 1–500" }).waitFor();
+  await panel.getByRole("button", { name: "Next page" }).click();
+  await range.filter({ hasText: "rows 501–1,000" }).waitFor();
+  // A header click sorts in the server: ORDER BY written with the engine's quoting.
+  {
+    // The new page mounts a new grid: wait until it is laid out.
+    let box = null;
+    for (let i = 0; i < 40 && !box; i++) {
+      box = await panel.locator(".grid-scroller").boundingBox();
+      if (!box) await page.waitForTimeout(100);
+    }
+    await page.mouse.click(box.x + 52 + 20, box.y + 18);
+    await page.mouse.click(box.x + 52 + 20, box.y + 18);
+    await panel.locator('.grid-scroller[aria-label$="sorted by id, descending"]').waitFor();
+    assert.equal(await panel.getByRole("textbox", { name: "ORDER BY" }).inputValue(), "id DESC");
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+    await page.keyboard.press("Control+c");
+    assert.equal((await copied(before + 1)).trimEnd(), "50000");
+  }
+  // What is typed cannot turn the page into another statement.
+  await panel.getByRole("textbox", { name: "WHERE" }).fill("1=1); drop table orders; select (1");
+  await page.keyboard.press("Enter");
+  await panel.locator(".error-box", { hasText: "must not change the query" }).waitFor();
+  await page.keyboard.press("Control+w");
+  await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor({ state: "detached" });
 
   step("query parameters: :name values asked once, written in by the core");
   await replaceQuery(panel, "select :name as who, :n + 1 as next, :name || '!' as again;");

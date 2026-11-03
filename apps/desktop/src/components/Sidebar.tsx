@@ -293,7 +293,11 @@ function ObjectNode({ session, connectionId, object }: { session: string; connec
       setError(e instanceof Error ? e.message : String(e));
     }
   }
-  const preview = () => void openSql("preview");
+  /** Pages of the table in a table data tab (double-click or "View rows"). */
+  const preview = () => {
+    setMenu(null);
+    useApp.getState().addTableTab(connectionId, object.schema, object.name);
+  };
   async function countRows() {
     setMenu(null);
     setError(null);
@@ -339,6 +343,9 @@ function ObjectNode({ session, connectionId, object }: { session: string; connec
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
           <button role="menuitem" onClick={preview}>
             {t("sql.preview")}
+          </button>
+          <button role="menuitem" onClick={() => void openSql("preview")}>
+            {t("sql.openAsSql")}
           </button>
           <button role="menuitem" onClick={() => void countRows()}>
             {t("sql.count")}

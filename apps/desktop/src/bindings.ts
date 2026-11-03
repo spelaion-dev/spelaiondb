@@ -89,6 +89,15 @@ export const commands = {
 	/**  The exact row count of a table or view, counted by the core on the explorer's session. */
 	countRows: (session: string, schema: string, name: string) => typedError<number | null, string>(__TAURI_INVOKE("count_rows", { session, schema, name })),
 	/**
+	 *  The SELECT of one page of a table, written and checked by the core: the filter and the
+	 *  order cannot turn it into another query.
+	 */
+	tablePageSql: (session: string, page: TablePageItem) => typedError<string, string>(__TAURI_INVOKE("table_page_sql", { session, page })),
+	/**  How many rows of a table the filter keeps (the table data tab's "Count"). */
+	countTableRows: (session: string, schema: string, name: string, filter: string) => typedError<number | null, string>(__TAURI_INVOKE("count_table_rows", { session, schema, name, filter })),
+	/**  An identifier quoted for the session's engine (for an ORDER BY the UI writes). */
+	quoteIdentifier: (session: string, identifier: string) => typedError<string, string>(__TAURI_INVOKE("quote_identifier", { session, identifier })),
+	/**
 	 *  Saves the query under `name` for the open workspace (or personally outside one),
 	 *  replacing a saved query with that name. Returns its identifier.
 	 */
@@ -466,6 +475,16 @@ export type TableDetails_Serialize = {
 	primaryKey: string[],
 	indexes: string[],
 	foreignKeys: string[],
+};
+
+/**  A page of a table for the table data tab (see `spelunk_core::TablePage`). */
+export type TablePageItem = {
+	schema: string,
+	name: string,
+	filter: string,
+	orderBy: string,
+	limit: number,
+	offset: number,
 };
 
 /**  Text format to copy or export rows in. */

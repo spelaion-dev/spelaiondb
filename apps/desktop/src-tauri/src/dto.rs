@@ -871,6 +871,31 @@ impl From<ColumnFilterItem> for spelunk_core::ColumnFilter {
     }
 }
 
+/// A page of a table for the table data tab (see `spelunk_core::TablePage`).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TablePageItem {
+    pub schema: String,
+    pub name: String,
+    pub filter: String,
+    pub order_by: String,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+impl From<TablePageItem> for spelunk_core::TablePage {
+    fn from(item: TablePageItem) -> Self {
+        Self {
+            schema: item.schema,
+            name: item.name,
+            filter: item.filter,
+            order_by: item.order_by,
+            limit: item.limit.into(),
+            offset: item.offset.into(),
+        }
+    }
+}
+
 /// Rows left after filtering a result, out of all it has.
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct FilterOutcome {

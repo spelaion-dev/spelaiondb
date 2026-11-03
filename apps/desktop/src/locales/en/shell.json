@@ -58,7 +58,8 @@
     "count": "Count rows",
     "counting": "counting…",
     "exactCount": "Exact row count",
-    "estimate": "Estimated rows (from the planner, not counted)"
+    "estimate": "Estimated rows (from the planner, not counted)",
+    "openAsSql": "Open as SQL"
   },
   "params": {
     "title": "Query parameters",

@@ -64,12 +64,7 @@ fn destructive(engine: &str, sql: &str) -> Option<Risk> {
     if first == "drop" {
         return Some(Risk::Drop);
     }
-    let parser: Box<dyn SqlDialect> = match engine {
-        "postgres" => Box::new(PostgreSqlDialect {}),
-        "sqlite" => Box::new(SQLiteDialect {}),
-        "mysql" | "mariadb" => Box::new(MySqlDialect {}),
-        _ => Box::new(GenericDialect {}),
-    };
+    let parser = sql_dialect(engine);
     let Ok(statements) = Parser::parse_sql(parser.as_ref(), sql) else {
         return match first.as_str() {
             "truncate" => Some(Risk::Truncate),
@@ -94,6 +89,16 @@ fn destructive(engine: &str, sql: &str) -> Option<Risk> {
         }
     });
     found
+}
+
+/// sqlparser's dialect for one of our engines (by `Dialect::name`).
+pub(crate) fn sql_dialect(engine: &str) -> Box<dyn SqlDialect> {
+    match engine {
+        "postgres" => Box::new(PostgreSqlDialect {}),
+        "sqlite" => Box::new(SQLiteDialect {}),
+        "mysql" | "mariadb" => Box::new(MySqlDialect {}),
+        _ => Box::new(GenericDialect {}),
+    }
 }
 
 /// The first word of the statement in lower case, after comments and spaces.

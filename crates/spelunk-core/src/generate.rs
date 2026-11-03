@@ -68,7 +68,12 @@ pub async fn count_rows(session: &Session, schema: &str, name: &str) -> Result<i
         "SELECT COUNT(*) FROM {}",
         qualified(session.dialect().as_ref(), schema, name)
     );
-    let mut events = session.run_script(&sql);
+    scalar_count(session, &sql).await
+}
+
+/// Runs a `SELECT COUNT(*)` written by the core and returns the number; the result is freed.
+pub(crate) async fn scalar_count(session: &Session, sql: &str) -> Result<i64, String> {
+    let mut events = session.run_script(sql);
     let mut result = None;
     let mut failure = None;
     while let Some(event) = events.next().await {
@@ -105,7 +110,7 @@ pub async fn count_rows(session: &Session, schema: &str, name: &str) -> Result<i
 }
 
 /// `schema.table`, leaving out SQLite's implicit `main`.
-fn qualified(dialect: &dyn Dialect, schema: &str, name: &str) -> String {
+pub(crate) fn qualified(dialect: &dyn Dialect, schema: &str, name: &str) -> String {
     if schema.is_empty() || (dialect.name() == "sqlite" && schema == "main") {
         dialect.quote_identifier(name)
     } else {

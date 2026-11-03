@@ -6,12 +6,13 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type ColumnFilterItem, type ScriptEvent } from "../api";
 import { openSession } from "../connect";
-import { SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type Tab, type Translation } from "../store";
+import { SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
 import { ResultGrid } from "./ResultGrid";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
+import { TableDataBar } from "./TableDataBar";
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -60,8 +61,89 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => clearTimeout(timer);
   }, [notice]);
 
+  /** The page asked for while another one was loading: it loads when that one ends. */
+  const queuedPage = useRef<TableView | null>(null);
+
+  /** Loads a page of a table data tab: the core writes and checks the SELECT. */
+  async function loadPage(view: TableView) {
+    if (useApp.getState().tabs.find((t) => t.id === tab.id)?.run?.running) {
+      queuedPage.current = view;
+      return;
+    }
+    if (!(await ensureConnected())) return;
+    let sql: string;
+    try {
+      sql = await call(
+        commands.tablePageSql(tab.id, {
+          schema: view.schema,
+          name: view.name,
+          filter: view.filter,
+          orderBy: view.orderBy,
+          limit: view.pageSize,
+          offset: view.page * view.pageSize,
+        }),
+      );
+    } catch (e) {
+      updateTab(tab.id, { run: errorRun(message(e)) });
+      return;
+    }
+    await run({ text: sql, from: 0 });
+  }
+
+  /** Changes what the table data tab shows and loads it again. */
+  function changeView(patch: Partial<TableView>) {
+    if (!tab.table) return;
+    const next = { ...tab.table, ...patch };
+    updateTab(tab.id, { table: next });
+    void loadPage(next);
+  }
+
+  /** A header click in a table data tab: ORDER BY that column, quoted by the core. */
+  async function sortTable(sort: SortState | undefined) {
+    const columns = tab.run?.results[0]?.columns ?? [];
+    const column = sort ? columns[sort.column]?.name : undefined;
+    if (sort && !column) return;
+    try {
+      const orderBy = sort && column ? `${await call(commands.quoteIdentifier(tab.id, column))}${sort.descending ? " DESC" : ""}` : "";
+      changeView({ sort, orderBy, page: 0 });
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    }
+  }
+
+  async function countTable() {
+    const view = tab.table;
+    if (!view || !(await ensureConnected())) return;
+    try {
+      const total = await call(commands.countTableRows(tab.id, view.schema, view.name, view.filter));
+      updateTab(tab.id, { table: { ...view, total: total ?? 0 } });
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    }
+  }
+
+  useEffect(() => {
+    const queued = queuedPage.current;
+    if (tab.run?.running || !queued) return;
+    queuedPage.current = null;
+    void loadPage(queued);
+    // Runs when a load ends.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.run?.running]);
+
+  // A table data tab shows its first page as soon as it opens.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || !tab.table || tab.run) return;
+    opened.current = true;
+    void loadPage(tab.table);
+    // Only on opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /** Saves the SQL as a named query in the local store (Ctrl+S). */
   async function saveQuery() {
+    if (tab.table) return;
     const name = await useDialogs.getState().askText({
       title: t("snippets.saveTitle"),
       label: t("snippets.name"),
@@ -281,12 +363,16 @@ export function EditorTab({ tab }: { tab: Tab }) {
           </span>
         )}
         <div className="spacer" />
-        <button className="ghost" title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
-          {t("snippets.save")}
-        </button>
-        <button className="ghost" title={t("formatHint")} onClick={() => editor.current?.format()}>
-          {t("format")}
-        </button>
+        {!tab.table && (
+          <>
+            <button className="ghost" title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
+              {t("snippets.save")}
+            </button>
+            <button className="ghost" title={t("formatHint")} onClick={() => editor.current?.format()}>
+              {t("format")}
+            </button>
+          </>
+        )}
         {running ? (
           <button className="danger" onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
             {t("cancel")}
@@ -295,14 +381,25 @@ export function EditorTab({ tab }: { tab: Tab }) {
           <button
             className="primary"
             disabled={historySaving || tab.status === "connecting" || workspaceChanging}
-            title={t("runHint")}
-            onClick={() => void run({ text: tab.sql, from: 0 })}
+            title={tab.table ? t("table.refreshHint") : t("runHint")}
+            onClick={() => void (tab.table ? loadPage(tab.table) : run({ text: tab.sql, from: 0 }))}
           >
-            {t("run")}
+            {tab.table ? t("table.refresh") : t("run")}
           </button>
         )}
       </div>
       <div className="editor-body" ref={body}>
+        {tab.table && (
+          <TableDataBar
+            view={tab.table}
+            shown={tab.run?.results[0] ? (tab.run.results[0].total ?? tab.run.results[0].rows) : null}
+            busy={running}
+            onChange={changeView}
+            onCount={() => void countTable()}
+          />
+        )}
+        {!tab.table && (
+        <>
         <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane">
           <SqlEditor
             handle={editor}
@@ -319,10 +416,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
           />
         </div>
         <div className="divider" onPointerDown={startDrag} role="separator" aria-orientation="horizontal" aria-label={t("resizeEditor")} />
-        <div style={{ flex: `${1 - editorShare} 1 0` }} className="results-pane">
+        </>
+        )}
+        <div style={{ flex: tab.table ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
           <Results
             run={tab.run}
             session={tab.id}
+            serverSort={tab.table ? { sort: tab.table.sort, onSort: (sort) => void sortTable(sort) } : undefined}
             onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))}
             onSorted={(result, sort) =>
               updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
@@ -365,6 +465,7 @@ function Results({
   onSorted,
   onFiltered,
   onColumnFiltered,
+  serverSort,
 }: {
   run: RunState | null;
   session: string;
@@ -372,6 +473,7 @@ function Results({
   onSorted(result: number, sort: SortState | undefined): void;
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
   onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
+  serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
@@ -392,12 +494,12 @@ function Results({
         </button>
         {active && (
           <ResultFilter
-            key={active.id}
+            key={`filter-${active.id}`}
             result={active}
             onFiltered={(filter, rows, total) => onFiltered(active.id, filter, rows, total)}
           />
         )}
-        {active && <ExportButton key={active.id} result={active} session={session} />}
+        {active && <ExportButton key={`export-${active.id}`} result={active} session={session} />}
       </div>
       <div className="result-body">
         {active ? (
@@ -406,6 +508,7 @@ function Results({
             session={session}
             onSorted={(sort) => onSorted(active.id, sort)}
             onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
+            serverSort={serverSort}
           />
         ) : (
           <div className="messages">

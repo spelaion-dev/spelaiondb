@@ -98,7 +98,7 @@ export default function App() {
               onClick={() => setActiveTab(tab.id)}
             >
               <span className={`dot dot-${tab.status}`} />
-              <span>{t("shell:queryTab", { number: tab.number })}</span>
+              <span>{tab.table ? tab.table.name : t("shell:queryTab", { number: tab.number })}</span>
               <button
                 className="close"
                 aria-label={t("closeTab", { name: t("shell:queryTab", { number: tab.number }) })}

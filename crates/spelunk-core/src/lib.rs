@@ -17,6 +17,7 @@ mod readonly;
 mod results;
 mod session;
 mod sort;
+mod table_data;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
@@ -36,3 +37,6 @@ pub use session::{CoreEvent, Session, StatementError};
 pub use sort::{SortKey, ViewError};
 pub use spelunk_driver_sqlite::create_database as create_sqlite_database;
 pub use spelunk_store::{HistoryEntry, Snippet};
+pub use table_data::{
+    MAX_PAGE_ROWS, PageError, TablePage, count_table_rows, table_count_sql, table_page_sql,
+};

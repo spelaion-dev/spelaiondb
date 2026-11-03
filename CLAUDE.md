@@ -45,7 +45,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   writes); `run_script` refuses unconfirmed risky scripts. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view)
-  and `cursor.rs` finds the statement under the editor's cursor.
+  and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
+  the paged SELECT of the table data tab (the filter typed by the user cannot change it).
 - `crates/spelunk-store`: local SQLite (audit, query history, saved queries and personal settings;
   later the schema cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.

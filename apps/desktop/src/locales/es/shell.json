@@ -58,7 +58,8 @@
     "count": "Contar filas",
     "counting": "contando…",
     "exactCount": "Número exacto de filas",
-    "estimate": "Filas estimadas (del planificador, sin contar)"
+    "estimate": "Filas estimadas (del planificador, sin contar)",
+    "openAsSql": "Abrir como SQL"
   },
   "params": {
     "title": "Parámetros de la consulta",

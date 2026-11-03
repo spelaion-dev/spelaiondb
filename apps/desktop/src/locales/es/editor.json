@@ -188,5 +188,23 @@
     "saveTitle": "Guardar consulta",
     "name": "Nombre",
     "saved": "Guardada como «{{name}}»"
+  },
+  "table": {
+    "bar": "Filas de {{name}}",
+    "filterPlaceholder": "id > 100 and status = 'paid'",
+    "orderPlaceholder": "created desc",
+    "apply": "Aplicar",
+    "pageSize": "Filas por página",
+    "perPage_one": "{{formattedCount}} fila",
+    "perPage_other": "{{formattedCount}} filas",
+    "previous": "Página anterior",
+    "next": "Página siguiente",
+    "range": "filas {{from}}–{{to}}",
+    "noRows": "sin filas",
+    "ofTotal": "de {{total}}",
+    "count": "Contar",
+    "countHint": "Cuenta las filas que deja el filtro (SELECT COUNT(*))",
+    "refresh": "Recargar",
+    "refreshHint": "Vuelve a cargar la página"
   }
 }

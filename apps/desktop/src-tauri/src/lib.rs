@@ -1218,6 +1218,47 @@ async fn count_rows(
     Ok(spelunk_core::count_rows(&open.session, &schema, &name).await? as f64)
 }
 
+/// The SELECT of one page of a table, written and checked by the core: the filter and the
+/// order cannot turn it into another query.
+#[tauri::command]
+#[specta::specta]
+async fn table_page_sql(
+    session: String,
+    page: TablePageItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    spelunk_core::table_page_sql(open.session.dialect().as_ref(), &page.into())
+        .map_err(|e| e.to_string())
+}
+
+/// How many rows of a table the filter keeps (the table data tab's "Count").
+#[tauri::command]
+#[specta::specta]
+async fn count_table_rows(
+    session: String,
+    schema: String,
+    name: String,
+    filter: String,
+    state: State<'_, AppState>,
+) -> CmdResult<f64> {
+    let open = state.session(&session).await?;
+    // f64 holds every count up to 2^53 exactly, and TypeScript numbers are f64.
+    Ok(spelunk_core::count_table_rows(&open.session, &schema, &name, &filter).await? as f64)
+}
+
+/// An identifier quoted for the session's engine (for an ORDER BY the UI writes).
+#[tauri::command]
+#[specta::specta]
+async fn quote_identifier(
+    session: String,
+    identifier: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    Ok(open.session.dialect().quote_identifier(&identifier))
+}
+
 /// The UI's answer to a tunnel dialog (unknown host, passphrase…).
 #[tauri::command]
 #[specta::specta]
@@ -1319,6 +1360,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             row_values,
             table_sql,
             count_rows,
+            table_page_sql,
+            count_table_rows,
+            quote_identifier,
             save_snippet,
             list_snippets,
             delete_snippet,

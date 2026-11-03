@@ -115,12 +115,16 @@ export function ResultGrid({
   session,
   onSorted,
   onColumnFiltered,
+  serverSort,
 }: {
   result: ResultMeta;
   session: string;
   onSorted(sort: SortState | undefined): void;
   onColumnFiltered(filters: ColumnFilterItem[], rows: number, total: number): void;
+  /** In a table data tab, header clicks sort in the server (ORDER BY) instead. */
+  serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
 }) {
+  const sortShown = serverSort ? serverSort.sort : result.sort;
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -182,14 +186,14 @@ export function ResultGrid({
   const totalH = HEADER_H + result.rows * ROW_H;
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers });
-  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown };
 
   function draw() {
     const canvas = canvasRef.current;
     const scroller = scrollerRef.current;
     if (!canvas || !scroller) return;
-    const { result, cache, widths, offsets, rowNumW, selection, size, numbers } = live.current;
+    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown } = live.current;
     const range = selection ? bounds(selection) : null;
     const dpr = window.devicePixelRatio || 1;
     if (canvas.width !== size.w * dpr || canvas.height !== size.h * dpr) {
@@ -303,12 +307,12 @@ export function ResultGrid({
       if (!meta) continue;
       ctx.font = HEADER_FONT;
       ctx.fillStyle = c.text;
-      const sorted = result.sort?.column === col;
+      const sorted = sortShown?.column === col;
       ctx.fillText(fit(ctx, meta.name, w - PAD * 2 - (sorted ? 14 : 0)), x + PAD, 13);
       if (sorted) {
         ctx.fillStyle = c.accent;
         ctx.textAlign = "right";
-        ctx.fillText(result.sort?.descending ? "▼" : "▲", x + w - PAD, 13);
+        ctx.fillText(sortShown?.descending ? "▼" : "▲", x + w - PAD, 13);
         ctx.textAlign = "left";
       }
       ctx.font = TYPE_FONT;
@@ -451,13 +455,18 @@ export function ResultGrid({
   const requestedSort = useRef(result.sort);
   const sortQueue = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
-    requestedSort.current = result.sort;
+    requestedSort.current = serverSort ? serverSort.sort : result.sort;
     // Only when another result is shown; within one result the ref leads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.id]);
 
   function sortBy(sort: SortState | undefined) {
     setMenu(null);
+    if (serverSort) {
+      requestedSort.current = sort;
+      serverSort.onSort(sort);
+      return;
+    }
     if (!result.complete) {
       setNotice({ text: t("results.sortWhenComplete"), error: true });
       return;
@@ -715,10 +724,10 @@ export function ResultGrid({
         data-column-widths={widths.join(",")}
         aria-label={
           t("results.gridLabel", { count: result.rows, formattedCount: numbers.format(result.rows) }) +
-          (result.sort
+          (sortShown
             ? `, ${t("results.gridSorted", {
-                column: result.columns[result.sort.column]?.name ?? "",
-                direction: t(result.sort.descending ? "results.descending" : "results.ascending"),
+                column: result.columns[sortShown.column]?.name ?? "",
+                direction: t(sortShown.descending ? "results.descending" : "results.ascending"),
               })}`
             : "")
         }
@@ -769,7 +778,7 @@ export function ResultGrid({
               <button role="menuitem" onClick={() => sortBy({ column: selection.focus.col, descending: true })}>
                 {t("results.sortDesc")}
               </button>
-              {result.sort && (
+              {sortShown && (
                 <button role="menuitem" onClick={() => sortBy(undefined)}>
                   {t("results.sortClear")}
                 </button>

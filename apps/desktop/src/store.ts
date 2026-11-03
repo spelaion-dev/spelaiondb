@@ -69,7 +69,28 @@ export interface Tab {
   run: RunState | null;
   /** Name it was saved under (or opened from), offered again by Ctrl+S. */
   snippetName?: string;
+  /** A table data tab (pages of one table) instead of an SQL editor. */
+  table?: TableView;
 }
+
+/** What a table data tab shows: the core writes and checks the page's SELECT. */
+export interface TableView {
+  schema: string;
+  name: string;
+  /** Typed after WHERE / ORDER BY. */
+  filter: string;
+  orderBy: string;
+  /** Set by a header click (shown in the grid); typing an ORDER BY clears it. */
+  sort?: SortState;
+  pageSize: number;
+  /** From 0. */
+  page: number;
+  /** Rows the filter keeps, once counted ("Count"). */
+  total?: number;
+}
+
+/** Rows per page a table data tab starts with. */
+export const DEFAULT_PAGE_SIZE = 500;
 
 let tabCounter = 0;
 
@@ -103,6 +124,8 @@ interface AppStore {
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
   addTab(connectionId: string | null, sql?: string): string;
+  /** Opens a table data tab on a table (its first page loads when it appears). */
+  addTableTab(connectionId: string, schema: string, name: string): string;
   closeTab(id: string): void;
   /** Opens again the last closed query tab (its connection and SQL, not its results). */
   reopenTab(): void;
@@ -154,6 +177,12 @@ export const useApp = create<AppStore>((set) => ({
       run: null,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTab: id }));
+    return id;
+  },
+  addTableTab: (connectionId, schema, name): string => {
+    const app: AppStore = useApp.getState();
+    const id: string = app.addTab(connectionId);
+    app.updateTab(id, { table: { schema, name, filter: "", orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
     return id;
   },
   closedTabs: [],

@@ -67,8 +67,12 @@ Preferences are stored in the personal `state.db` and apply to every workspace.
 
 Expanding a connection in the sidebar lists its schemas (databases in MySQL), tables and
 views with their columns, primary key and estimated rows (**Count rows** in the right-click
-menu gets the exact number). Double-click a table or view to open
-`SELECT * … LIMIT 100` in a new tab; right-click it to generate a `SELECT` with every column
+menu gets the exact number). Double-click a table or view (or **View rows**) to open its
+**table data tab**: pages of 100 to 5,000 rows with ◀ ▶, a `WHERE` and an `ORDER BY` you type,
+header clicks that sort in the server, and **Count** for the exact number of matching rows.
+The core writes `SELECT * … LIMIT n OFFSET m` and checks it is still one plain SELECT of that
+table, so nothing typed in the filter can run another statement or load the whole table.
+**Open as SQL** puts `SELECT * … LIMIT 100` in a new SQL tab instead. Right-click it to generate a `SELECT` with every column
 or, for tables, an `INSERT`, an `UPDATE` (on the primary key) or a `DELETE`. The core writes
 them with the engine's quoting and `:name` placeholders for the values; nothing runs until
 you replace them and run it.

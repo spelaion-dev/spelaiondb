@@ -188,5 +188,23 @@
     "saveTitle": "Save query",
     "name": "Name",
     "saved": "Saved as “{{name}}”"
+  },
+  "table": {
+    "bar": "Rows of {{name}}",
+    "filterPlaceholder": "id > 100 and status = 'paid'",
+    "orderPlaceholder": "created desc",
+    "apply": "Apply",
+    "pageSize": "Rows per page",
+    "perPage_one": "{{formattedCount}} row",
+    "perPage_other": "{{formattedCount}} rows",
+    "previous": "Previous page",
+    "next": "Next page",
+    "range": "rows {{from}}–{{to}}",
+    "noRows": "no rows",
+    "ofTotal": "of {{total}}",
+    "count": "Count",
+    "countHint": "Count the rows the filter keeps (SELECT COUNT(*))",
+    "refresh": "Refresh",
+    "refreshHint": "Load the page again"
   }
 }
