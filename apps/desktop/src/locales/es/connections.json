@@ -45,7 +45,7 @@
     "noTunnel": "Ninguno",
     "noTunnelsHint": "Todavía no hay túneles: crea uno con «Nuevo túnel…».",
     "file": "Fichero",
-    "fileHint": "El fichero tiene que existir; dentro del repositorio la ruta se guarda relativa a él.",
+    "fileHint": "Un fichero existente, o uno nuevo y vacío con «Nueva base de datos…». Dentro del repositorio la ruta se guarda relativa a él.",
     "readOnly": "Solo lectura",
     "mcpExposed": "Exponer a agentes de IA (solo lectura)",
     "mcpHint": "Los agentes que usan spelunk mcp solo pueden leer, y cada consulta queda auditada.",
@@ -146,5 +146,6 @@
     "ok_other": "Túnel correcto · {{count}} saltos",
     "delete": "Borrar túnel",
     "confirmDelete": "Pulsa otra vez para borrar"
-  }
+  },
+  "newDatabase": "Nueva base de datos…"
 }

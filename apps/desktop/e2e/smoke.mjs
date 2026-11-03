@@ -545,6 +545,27 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
+  // A new SQLite database: the core creates the file and never overwrites it.
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "SQLite" }).click();
+  const newDb = join(userDir, "scratch.sqlite");
+  await page.evaluate((target) => (window.__spelunkSavePath = target), newDb);
+  await wizard.getByRole("button", { name: "New database…" }).click();
+  const fileInput = wizard.getByLabel("File", { exact: true });
+  for (let i = 0; i < 40 && (await fileInput.inputValue()) !== newDb; i++) await page.waitForTimeout(100);
+  assert.equal(await fileInput.inputValue(), newDb);
+  assert.equal(await wizard.getByLabel("Name", { exact: true }).inputValue(), "scratch");
+  assert.ok(readFileSync(newDb).subarray(0, 16).equals(Buffer.from("SQLite format 3\0")));
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: /Connected · 3\./ }).waitFor();
+  await wizard.getByRole("button", { name: "New database…" }).click();
+  await wizard.getByRole("alert").filter({ hasText: "already exists: a new database never replaces a file" }).waitFor();
+  await shot("12a2-new-sqlite-database");
+  await page.evaluate(() => delete window.__spelunkSavePath);
+  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard");
   await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();

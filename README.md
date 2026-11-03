@@ -39,6 +39,8 @@ as *coming soon*), fill in its form, **Test connection** and **Save**.
   keychain or are asked when connecting; key paths in project tunnels are stored relative
   to the repository or as `~/…`, so they work for the whole team. A tunnel in use by a
   connection cannot be deleted.
+- **SQLite:** pick an existing file with **Browse…**, or create an empty database with
+  **New database…** (it never replaces an existing file).
 
 Testing a connection writes nothing. Saving never overwrites an existing connection.
 

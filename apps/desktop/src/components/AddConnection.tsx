@@ -17,6 +17,7 @@ import {
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { engineBadge } from "../engines";
 import { refreshConnections } from "./Sidebar";
+import { chooseSavePath } from "../dialogs";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
@@ -192,6 +193,7 @@ function ConnectionForm(props: {
   const [password, setPassword] = useState("");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [saving, setSaving] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Omit<ConnectionDraft, "passwordMode" | "tunnel">>(() => initial ?? {
     personal: !hasWorkspace,
@@ -253,6 +255,23 @@ function ConnectionForm(props: {
           : [{ name: t("certificates"), extensions: ["pem", "crt", "cer"] }, { name: t("allFiles"), extensions: ["*"] }],
     });
     if (typeof path === "string") update({ [field]: path });
+  }
+
+  /** A new, empty SQLite file created by the core (never over an existing one). */
+  async function createDatabase() {
+    setFileError(null);
+    const path = await chooseSavePath({
+      defaultPath: "database.sqlite",
+      filters: [{ name: "SQLite", extensions: ["sqlite", "db", "sqlite3", "db3"] }],
+    });
+    if (!path) return;
+    try {
+      await call(commands.createSqliteDatabase(path));
+      const stem = (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]*$/, "");
+      update(draft.name.trim() ? { database: path } : { database: path, name: stem });
+    } catch (e) {
+      setFileError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   async function runTest() {
@@ -410,7 +429,15 @@ function ConnectionForm(props: {
                 <button type="button" onClick={() => void browse("database")}>
                   {t("browse")}
                 </button>
+                <button type="button" onClick={() => void createDatabase()}>
+                  {t("newDatabase")}
+                </button>
               </div>
+              {fileError && (
+                <p className="error small" role="alert">
+                  {fileError}
+                </p>
+              )}
               <p className="muted small">{t("fields.fileHint")}</p>
             </fieldset>
           )}

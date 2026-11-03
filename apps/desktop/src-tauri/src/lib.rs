@@ -815,6 +815,18 @@ async fn export_result(
     Ok(rows as f64)
 }
 
+/// Creates an empty SQLite database file for a new connection. The core never overwrites an
+/// existing file.
+#[tauri::command]
+#[specta::specta]
+async fn create_sqlite_database(path: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || {
+        spelunk_core::create_sqlite_database(Path::new(&path)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
 /// engine's dialect in the core like a script run, for Ctrl+Enter.
 #[tauri::command]
@@ -1062,6 +1074,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             cell_value,
             sort_result,
             statement_at,
+            create_sqlite_database,
             open_workspace,
             trust_workspace,
             list_connections,

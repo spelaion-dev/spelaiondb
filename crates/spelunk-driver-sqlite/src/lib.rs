@@ -20,6 +20,39 @@ use tokio::sync::{mpsc, oneshot};
 
 pub use dialect::SqliteDialect;
 
+/// Creates an empty SQLite database at `path`. An existing file is never touched: the path
+/// is reserved with an exclusive create before SQLite writes its header, so a race with
+/// another program fails instead of overwriting.
+pub fn create_database(path: &std::path::Path) -> Result<()> {
+    let failed = |e: &dyn std::fmt::Display| {
+        DriverError::Other(format!("could not create {}: {e}", path.display()))
+    };
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| match e.kind() {
+            // Our own words: the system's message comes in the system's language.
+            std::io::ErrorKind::AlreadyExists => DriverError::Other(format!(
+                "{} already exists: a new database never replaces a file",
+                path.display()
+            )),
+            _ => failed(&e),
+        })?;
+    let written = rusqlite::Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    // Setting a header field writes page 1, so the file is a database and not 0 bytes.
+    .and_then(|conn| conn.execute_batch("PRAGMA user_version = 0;"));
+    if let Err(e) = written {
+        // The file is ours and empty: do not leave it behind.
+        let _ = std::fs::remove_file(path);
+        return Err(failed(&e));
+    }
+    Ok(())
+}
+
 /// SQLite driver. `ConnectParams::database` is the file path (or `:memory:`).
 #[derive(Debug, Default, Clone)]
 pub struct SqliteDriver {

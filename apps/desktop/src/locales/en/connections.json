@@ -45,7 +45,7 @@
     "noTunnel": "None",
     "noTunnelsHint": "No tunnels yet: create one with “New tunnel…”.",
     "file": "File",
-    "fileHint": "The file must exist; inside the repository the path is stored relative to it.",
+    "fileHint": "An existing file, or a new empty one from “New database…”. Inside the repository the path is stored relative to it.",
     "readOnly": "Read-only",
     "mcpExposed": "Expose to AI agents (read-only)",
     "mcpHint": "Agents using spelunk mcp can only read, and every query is audited.",
@@ -146,5 +146,6 @@
     "ok_other": "Tunnel OK · {{count}} hops",
     "delete": "Delete tunnel",
     "confirmDelete": "Click again to delete"
-  }
+  },
+  "newDatabase": "New database…"
 }

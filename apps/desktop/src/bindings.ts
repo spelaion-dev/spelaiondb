@@ -74,6 +74,11 @@ export const commands = {
 	 *  engine's dialect in the core like a script run, for Ctrl+Enter.
 	 */
 	statementAt: (engine: string, sql: string, offset: number) => typedError<TextSpan | null, string>(__TAURI_INVOKE("statement_at", { engine, sql, offset })),
+	/**
+	 *  Creates an empty SQLite database file for a new connection. The core never overwrites an
+	 *  existing file.
+	 */
+	createSqliteDatabase: (path: string) => typedError<null, string>(__TAURI_INVOKE("create_sqlite_database", { path })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),

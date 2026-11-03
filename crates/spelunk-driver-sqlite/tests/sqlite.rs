@@ -435,3 +435,26 @@ async fn server_version_is_reported() {
     let version = conn.server_version().await.unwrap();
     assert!(version.starts_with('3'), "{version}");
 }
+
+#[tokio::test]
+async fn new_databases_are_created_once_and_never_overwritten() {
+    let db = TempDb::new("create");
+    spelunk_driver_sqlite::create_database(&db.0).unwrap();
+    let header = std::fs::read(&db.0).unwrap();
+    assert!(header.starts_with(b"SQLite format 3\0"));
+    // The default driver (which never creates files) opens it.
+    let conn = SqliteDriver::default().connect(&db.params()).await.unwrap();
+    run(conn.as_ref(), "create table t (x int)").await.unwrap();
+    run(conn.as_ref(), "insert into t values (1)")
+        .await
+        .unwrap();
+    drop(conn);
+    let before = std::fs::read(&db.0).unwrap();
+    let err = spelunk_driver_sqlite::create_database(&db.0).unwrap_err();
+    assert!(
+        err.to_string()
+            .ends_with("already exists: a new database never replaces a file"),
+        "{err}"
+    );
+    assert_eq!(std::fs::read(&db.0).unwrap(), before);
+}
