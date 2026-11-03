@@ -11,12 +11,44 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "SpelunkDB", "width": 1400, "height": 900, "minWidth": 900, "minHeight": 600 }
+      {
+        "label": "main",
+        "title": "SpelunkDB",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600
+      }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
-    "active": false,
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+    "active": true,
+    "targets": "all",
+    "publisher": "SpelunkDB contributors",
+    "copyright": "Copyright 2026 SpelunkDB contributors. Licensed under Apache-2.0.",
+    "category": "DeveloperTool",
+    "shortDescription": "Desktop database client with first-class SSH tunnels and an MCP server",
+    "longDescription": "SpelunkDB is an open-source desktop client for PostgreSQL, MySQL, MariaDB and SQLite, with SSH tunnels through any number of bastions, a read-only MCP server for AI agents, and configuration you can share through git.",
+    "homepage": "https://github.com/petilolz/spelunkdb",
+    "license": "Apache-2.0",
+    "licenseFile": "../../../LICENSE",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }

@@ -60,6 +60,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
   text). Our own canvas grid (`ResultGrid.tsx`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
+  Installers: `npx tauri build` (NSIS + MSI on Windows). Releases: pushing a tag `vX.Y.Z`
+  runs `.github/workflows/release.yml` (installers for every OS, the `spelunk` CLI, notes from
+  `docs/releases/vX.Y.Z.md`); the tag must match the version in `Cargo.toml` and `tauri.conf.json`.
 
 ## Non-negotiable rules
 - `spelunk-core` does not depend on Tauri. The app, the CLI and the MCP are thin adapters.

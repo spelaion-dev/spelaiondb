@@ -5159,7 +5159,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-cli"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5173,7 +5173,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-config"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "apple-native-keyring-store",
  "dbus-secret-service-keyring-store",
@@ -5191,7 +5191,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-core"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -5211,7 +5211,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-desktop"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5233,7 +5233,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-driver-api"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5243,7 +5243,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-driver-mysql"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5256,7 +5256,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-driver-postgres"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -5275,7 +5275,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-driver-sqlite"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5288,7 +5288,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-mcp"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "rmcp",
  "serde",
@@ -5302,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-ssh"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -5315,7 +5315,7 @@ dependencies = [
 
 [[package]]
 name = "spelunk-store"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",

@@ -1,0 +1,139 @@
+# Releases: pushing a tag `vX.Y.Z` (from a main that passed CI) builds the desktop installers
+# on Windows, macOS (Apple Silicon and Intel) and Linux, plus the `spelunk` CLI with the MCP
+# server, and publishes them as a GitHub pre-release with `docs/releases/vX.Y.Z.md` as notes.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create:
+    name: Draft release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The tag, the app and the crates must agree on the version.
+      - run: |
+          app=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          crates=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "v$app" = "$GITHUB_REF_NAME" -a "$app" = "$crates" || {
+            echo "tag $GITHUB_REF_NAME, app $app and crates $crates must match"; exit 1; }
+          test -f "docs/releases/$GITHUB_REF_NAME.md" || {
+            echo "missing docs/releases/$GITHUB_REF_NAME.md"; exit 1; }
+      - run: |
+          gh release create "$GITHUB_REF_NAME" --draft --prerelease --verify-tag \
+            --title "SpelunkDB ${GITHUB_REF_NAME#v}" --notes-file "docs/releases/$GITHUB_REF_NAME.md"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  app:
+    name: App · ${{ matrix.name }}
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            platform: windows-latest
+            args: ""
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - name: macOS Intel
+            platform: macos-latest
+            args: --target x86_64-apple-darwin
+          - name: Linux
+            platform: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+      # WebKitGTK and friends for the app; libdbus for the keychain (Secret Service).
+      - if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libdbus-1-dev pkg-config libssl-dev libxdo-dev
+      - run: npm ci
+        working-directory: apps/desktop
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: true
+          args: ${{ matrix.args }}
+
+  cli:
+    name: CLI · ${{ matrix.target }}
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.target }}
+      - if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - run: cargo build --release --locked -p spelunk-cli --target ${{ matrix.target }}
+      - name: Package and upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          name="spelunk-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir "$name"
+          cp LICENSE "$name/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/spelunk.exe" "$name/"
+            7z a "$name.zip" "$name" > /dev/null
+            archive="$name.zip"
+          else
+            cp "target/${{ matrix.target }}/release/spelunk" "$name/"
+            tar czf "$name.tar.gz" "$name"
+            archive="$name.tar.gz"
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$archive" --clobber
+
+  publish:
+    name: Publish
+    needs: [app, cli]
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

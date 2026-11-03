@@ -3,11 +3,27 @@
 An open-source desktop database client: fast and lightweight, with first-class SSH tunnels
 and a built-in MCP server for AI agents.
 
-> **Status:** v0.1 under construction. The drivers (PostgreSQL and MySQL/MariaDB with TLS,
-> SQLite), the configuration, SSH tunnels, `spelunk mcp` and a first version of the desktop
-> app work. `spelunk mcp` does not serve MySQL/MariaDB connections yet.
+> **Status:** 0.1.0 preview. The drivers (PostgreSQL and MySQL/MariaDB with TLS, SQLite),
+> the configuration, SSH tunnels, `spelunk mcp` and the desktop app work. `spelunk mcp` does
+> not serve MySQL/MariaDB connections yet.
 
-## Try the app
+## Install
+
+Download the installer for your system from the
+[releases](https://github.com/petilolz/spelunkdb/releases):
+
+- **Windows:** `SpelunkDB_<version>_x64-setup.exe` (current user, no admin rights) or the
+  `.msi`. Not signed yet: SmartScreen may ask, "More info" → "Run anyway".
+- **macOS:** the `.dmg` for Apple Silicon (`aarch64`) or Intel (`x64`). Not notarized yet:
+  right-click → Open the first time.
+- **Linux:** `.deb`, `.rpm` or AppImage.
+- **CLI and MCP server:** the `spelunk-<version>-<target>` archives hold the `spelunk` binary.
+
+Releases are built by CI from a version tag (`.github/workflows/release.yml`): bump the
+version in `Cargo.toml` and `apps/desktop/src-tauri/tauri.conf.json`, write
+`docs/releases/vX.Y.Z.md`, and push the tag `vX.Y.Z`.
+
+## Build from source
 
 With Rust, Node and the [Tauri prerequisites](https://tauri.app/start/prerequisites/):
 
