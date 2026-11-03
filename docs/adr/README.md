@@ -26,3 +26,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [015](0015-kubernetes-tunnels.md) | Kubernetes connections through `kubectl port-forward` | Accepted |
 | [016](0016-duckdb.md) | DuckDB driver: bundled, one open per file, not in the MCP yet | Accepted |
 | [017](0017-sql-server.md) | SQL Server driver: tiberius, T-SQL batches, cancel by Attention | Accepted |
+| [018](0018-sqlite-over-ssh.md) | SQLite files on a server, through the server's `sqlite3` over SSH | Proposed |
