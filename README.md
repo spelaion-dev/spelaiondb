@@ -1,7 +1,7 @@
 # SpelaionDB
 
 An open-source desktop database client: fast and lightweight, with first-class SSH tunnels
-and a built-in MCP server for AI agents.
+and a built-in MCP server for AI agents. Part of the [Spelaion](https://spelaion.dev) family.
 
 > **Status:** 0.3.0 preview. The drivers (PostgreSQL, MySQL/MariaDB and SQL Server with TLS,
 > SQLite, DuckDB), the configuration, SSH tunnels, `spelaiondb mcp` and the desktop app work.
@@ -343,4 +343,16 @@ Every query and write, run or refused, is recorded: `spelaiondb audit`.
 - Decisions: [`docs/adr/`](docs/adr/README.md)
 - Phase 0 experiments: [`spikes/`](spikes/README.md)
 
-License: Apache-2.0.
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md) for
+how to build, test and send changes (against `dev`, with every commit signed off). Report
+security problems privately, as [`SECURITY.md`](SECURITY.md) explains, never in an issue. Taking
+part means following the [code of conduct](CODE_OF_CONDUCT.md).
+
+Most of the code is written by AI coding agents following [`AGENTS.md`](AGENTS.md); the
+compiler, the tests and CI are its reviewers.
+
+## License
+
+[Apache License 2.0](LICENSE).

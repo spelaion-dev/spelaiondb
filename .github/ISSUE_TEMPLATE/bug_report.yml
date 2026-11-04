@@ -1,0 +1,55 @@
+name: Bug report
+description: Something does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. **Security problems go privately** through the Security tab,
+        never here (see SECURITY.md). Never paste passwords, keys or tokens: replace them.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add a PostgreSQL connection through an SSH tunnel with two hops
+        2. Run `select 1`
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: SpelaionDB version
+      placeholder: 0.3.0 (Settings → Updates shows it)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: Database and version
+      placeholder: PostgreSQL 17, MySQL 8.4, SQL Server 2022, SQLite, DuckDB…
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages or logs
+      description: Copy the exact message. Remove any secret first.
+      render: text
