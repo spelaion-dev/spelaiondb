@@ -68,7 +68,7 @@ pub async fn update_check(
 }
 
 /// Downloads and installs the update the last check found, then restarts the app. Open tabs
-/// come back with their SQL, not executed (CLAUDE.md).
+/// come back with their SQL, not executed (AGENTS.md).
 #[tauri::command]
 #[specta::specta]
 pub async fn update_install(app: AppHandle, pending: State<'_, PendingUpdate>) -> CmdResult<()> {

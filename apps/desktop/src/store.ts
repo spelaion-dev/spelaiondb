@@ -1,4 +1,4 @@
-// UI state. Result data does NOT live here (CLAUDE.md): only its metadata; rows are
+// UI state. Result data does NOT live here (AGENTS.md): only its metadata; rows are
 // requested from the core in windows.
 
 import { create } from "zustand";

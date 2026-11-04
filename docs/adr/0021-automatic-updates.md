@@ -25,7 +25,7 @@ public, or a public repository that only holds releases.
   key. `tauri-action` uploads the `.sig` files and `latest.json` to the release.
 - **Never without the user:** the app may check at startup (a personal setting, on by
   default, in Settings → Updates) and shows a notice; downloading and installing happen only
-  when the user clicks "Install and restart". After the restart nothing is re-run (CLAUDE.md:
+  when the user clicks "Install and restart". After the restart nothing is re-run (AGENTS.md:
   open tabs come back with their SQL, not executed).
 - **Off until there is a public source:** the list of endpoints in `src-tauri/src/update.rs`
   is empty, and with no endpoint the app says updates are not available in this build and

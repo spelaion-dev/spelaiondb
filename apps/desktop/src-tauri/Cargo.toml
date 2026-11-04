@@ -47,7 +47,7 @@ async-trait.workspace = true
 futures-util.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# TS types generated from Rust (CLAUDE.md). Still a release candidate: exact version.
+# TS types generated from Rust (AGENTS.md). Still a release candidate: exact version.
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 specta-typescript = "0.0"
 tauri = { version = "2", features = [] }

@@ -17,7 +17,7 @@ export const commands = {
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
-	 *  come back with their SQL, not executed (CLAUDE.md).
+	 *  come back with their SQL, not executed (AGENTS.md).
 	 */
 	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
