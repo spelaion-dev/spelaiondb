@@ -1,8 +1,8 @@
 # ADR-023: Rename SpelunkDB to SpelaionDB, under the Spelaion brand
 
-- **Status:** Proposed. It is accepted once the name is confirmed free (trademarks in the
-  EU, Spain and the US, class 9; the domain; the GitHub organization; the crates.io and npm
-  names).
+- **Status:** Proposed. It is accepted once the trademark search is done (EU, Spain and the
+  US, class 9). The domain `spelaion.dev` is the project's; the crates.io and npm names were
+  free on 2026-11-04 (see "The name").
 - **Date:** 2026-11-04
 
 ## Context
@@ -26,19 +26,37 @@ takes the brand's name; what belongs to this one takes the product's.
 | What | Now | New |
 |---|---|---|
 | Product name (app, installers, docs) | SpelunkDB | SpelaionDB |
-| GitHub | `petilolz/spelunkdb` | `spelaion/spelaiondb`, in a `spelaion` organization |
+| GitHub | `petilolz/spelunkdb` | `spelaion-dev/spelaiondb`, in a `spelaion-dev` organization (named after the domain: `Spelaion` is taken, see "The name") |
 | Rust crates | `spelunk-*` | `spelaion-*` (the SSH and configuration crates may serve SpelaionSSH later) |
 | CLI binary and MCP server | `spelunk`, `spelunk mcp`, server `spelunkdb` | `spelaiondb`, `spelaiondb mcp`, server `spelaiondb` (`spelaion` stays free for a future command shared by the products) |
 | Repository folder | `.spelunk/` | `.spelaion/` (brand: SpelaionSSH would read the same `tunnels/` and `known_hosts`) |
 | Personal folder | `%APPDATA%\spelunkdb`, `~/Library/Application Support/spelunkdb`, `~/.config/spelunkdb` | the same places, named `spelaion` (brand). The product's own state goes in `db/` (`db/state.db`); `user.toml`, `connections/`, `tunnels/`, `known_hosts` and `trusted-workspaces.toml` stay at its root |
 | Keychain service | `SpelunkDB` | `Spelaion` (brand: a tunnel password saved once serves both products; the entry names already tell connections and tunnels apart) |
 | Environment variables | `SPELUNK_USER_DIR`, `SPELUNK_TEST_*` | `SPELAION_USER_DIR`, `SPELAION_TEST_*` |
-| App identifier (Tauri) | `dev.spelunkdb.app` | `com.spelaion.db` (with the `spelaion.com` domain; `dev.spelaion.db` with `.dev`) |
-| Schema URL in new files | the GitHub repository's raw file | `https://spelaion.com/schema/db/connection.schema.json`, published by the website (the new repository's raw file until then) |
+| Website | none | `https://spelaion.dev`, this product at `https://spelaion.dev/db` |
+| App identifier (Tauri) | `dev.spelunkdb.app` | `dev.spelaion.db` (the domain, reversed) |
+| Schema URL in new files | the GitHub repository's raw file | `https://spelaion.dev/schema/db/connection.schema.json`, published by the website (the new repository's raw file until then) |
 | Test environment | Docker project and kind cluster `spelunk-test` | `spelaion-test` |
 
 The update signing key (ADR-021) has no name in it and stays. Earlier ADRs keep their text
 as written: their names read with this table.
+
+### The name
+Checked on 2026-11-04:
+
+- **Meaning:** σπήλαιον, Greek for "cave", in keeping with the old name (to spelunk is to
+  explore caves).
+- **Domain:** `spelaion.dev`, bought by the project.
+- **Package names:** `spelaion`, `spelaiondb` and `spelaion-core` on crates.io, and
+  `spelaion`, `spelaiondb` and `@spelaion/*` on npm, were free.
+- **GitHub:** the `Spelaion` organization exists (created in August 2025, someone else's,
+  with no public repositories). The project uses `spelaion-dev`, which matches the domain.
+  If the brand is registered, GitHub's name-squatting policy is the way to ask for
+  `spelaion` later.
+- **Others using the name:** a Brazilian company, Spelaion, sells work-at-height equipment
+  (it represents Petzl in Brazil). It is another market, but protective equipment is in
+  class 9, like software, so the trademark search must look at Brazil (INPI) too, not only
+  the EU, Spain and the US. No software product by that name turned up.
 
 ### Migration
 Only the team has installs, but the migration is done properly, so nobody loses
