@@ -32,6 +32,126 @@ async fn session() -> Option<Session> {
 }
 
 #[tokio::test]
+async fn process_monitor_cancels_and_ends_postgres_sessions() {
+    let (Some(monitor), Some(target)) = (session().await, session().await) else {
+        return;
+    };
+    let target = Arc::new(target);
+    let target_id = spelunk_core::list_processes(&target).await.unwrap().own_id;
+    let initial = spelunk_core::list_processes(&monitor).await.unwrap();
+    let idle = initial
+        .processes
+        .iter()
+        .find(|p| p.id == target_id)
+        .expect("target session is visible");
+    assert_eq!(idle.activity, "idle");
+    assert!(
+        idle.sql.is_none(),
+        "an idle session's last statement is not a running query"
+    );
+    assert!(idle.identity.is_some());
+
+    let task = tokio::spawn({
+        let target = target.clone();
+        async move {
+            target
+                .run_script("SELECT pg_sleep(30)")
+                .collect::<Vec<_>>()
+                .await
+        }
+    });
+    let mut running = None;
+    for _ in 0..100 {
+        let snapshot = spelunk_core::list_processes(&monitor).await.unwrap();
+        if let Some(p) = snapshot.processes.into_iter().find(|p| {
+            p.id == target_id
+                && p.sql
+                    .as_deref()
+                    .is_some_and(|sql| sql.contains("pg_sleep(30)"))
+        }) {
+            running = Some(p);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let process = running.expect("running query is visible");
+    assert!(matches!(process.activity.as_str(), "active" | "waiting"));
+    let mut target_info = spelunk_core::ProcessTarget {
+        id: process.id,
+        user: process.user,
+        host: process.host,
+        command: process.command,
+        sql: process.sql,
+        identity: Some("outdated session".into()),
+    };
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, false, true)
+            .await
+            .is_err()
+    );
+    target_info.identity = process.identity;
+    let valid_identity = target_info.identity.take();
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, false, true)
+            .await
+            .is_err()
+    );
+    target_info.identity = valid_identity;
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, true, true)
+            .await
+            .is_err()
+    );
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, false, false)
+            .await
+            .is_err()
+    );
+    spelunk_core::control_process(&monitor, &target_info, false, false, true)
+        .await
+        .unwrap();
+    let events = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, CoreEvent::StatementFailed { .. }))
+    );
+    let after: Vec<_> = target.run_script("SELECT 1").collect().await;
+    assert!(matches!(
+        after.last(),
+        Some(CoreEvent::ScriptFinished { failed: false, .. })
+    ));
+    let snapshot = spelunk_core::list_processes(&monitor).await.unwrap();
+    let process = snapshot
+        .processes
+        .into_iter()
+        .find(|p| p.id == target_id)
+        .unwrap();
+    let target_info = spelunk_core::ProcessTarget {
+        id: process.id,
+        user: process.user,
+        host: process.host,
+        command: process.command,
+        sql: process.sql,
+        identity: process.identity,
+    };
+    spelunk_core::control_process(&monitor, &target_info, true, false, true)
+        .await
+        .unwrap();
+    assert!(
+        !spelunk_core::list_processes(&monitor)
+            .await
+            .unwrap()
+            .processes
+            .iter()
+            .any(|p| p.id == target_id)
+    );
+}
+
+#[tokio::test]
 async fn runs_a_script_statement_by_statement() {
     let Some(session) = session().await else {
         return;

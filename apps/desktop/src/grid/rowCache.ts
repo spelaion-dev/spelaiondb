@@ -10,6 +10,7 @@ const MAX_BLOCKS = 80;
 export class RowCache {
   private blocks = new Map<number, Vector[]>();
   private pending = new Set<number>();
+  private revisions = new Map<number, number>();
   private loadedRows = 0;
 
   constructor(
@@ -34,14 +35,17 @@ export class RowCache {
     if (rows === this.loadedRows) return;
     const last = Math.floor(this.loadedRows / BLOCK);
     this.blocks.delete(last);
+    this.revisions.set(last, (this.revisions.get(last) ?? 0) + 1);
     this.loadedRows = rows;
   }
 
   private request(b: number) {
     if (this.pending.has(b)) return;
     this.pending.add(b);
+    const revision = this.revisions.get(b) ?? 0;
     fetchWindow(this.resultId, b * BLOCK, BLOCK)
       .then((table: Table) => {
+        if ((this.revisions.get(b) ?? 0) !== revision) return;
         const columns: Vector[] = [];
         for (let i = 0; i < table.numCols; i++) {
           const child = table.getChildAt(i);
@@ -56,6 +60,9 @@ export class RowCache {
         this.onLoaded();
       })
       .catch((e: unknown) => console.error("fetch_window", e))
-      .finally(() => this.pending.delete(b));
+      .finally(() => {
+        this.pending.delete(b);
+        if ((this.revisions.get(b) ?? 0) !== revision) this.onLoaded();
+      });
   }
 }

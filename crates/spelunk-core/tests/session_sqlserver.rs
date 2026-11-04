@@ -34,6 +34,115 @@ async fn session(database: &str) -> Option<Session> {
     ))
 }
 
+#[tokio::test]
+async fn process_monitor_lists_and_ends_sqlserver_sessions() {
+    let (Some(monitor), Some(target)) = (session("master").await, session("master").await) else {
+        return;
+    };
+    let target_id = spelunk_core::list_processes(&target).await.unwrap().own_id;
+    let snapshot = spelunk_core::list_processes(&monitor).await.unwrap();
+    assert!(!snapshot.limited);
+    let process = snapshot
+        .processes
+        .iter()
+        .find(|p| p.id == target_id)
+        .expect("target session is visible");
+    assert_eq!(process.activity, "idle");
+    assert!(process.identity.is_some());
+    let mut target_info = spelunk_core::ProcessTarget {
+        id: process.id.clone(),
+        user: process.user.clone(),
+        host: process.host.clone(),
+        command: process.command.clone(),
+        sql: process.sql.clone(),
+        identity: Some("outdated session".into()),
+    };
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, true, false, true)
+            .await
+            .is_err()
+    );
+    target_info.identity = process.identity.clone();
+    let valid_identity = target_info.identity.take();
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, true, false, true)
+            .await
+            .is_err()
+    );
+    target_info.identity = valid_identity;
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, false, true)
+            .await
+            .is_err()
+    );
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, true, true, true)
+            .await
+            .is_err()
+    );
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, true, false, false)
+            .await
+            .is_err()
+    );
+    spelunk_core::control_process(&monitor, &target_info, true, false, true)
+        .await
+        .unwrap();
+    assert!(
+        !spelunk_core::list_processes(&monitor)
+            .await
+            .unwrap()
+            .processes
+            .iter()
+            .any(|p| p.id == target_id)
+    );
+}
+
+#[tokio::test]
+async fn process_monitor_shows_the_current_sqlserver_session_without_admin_rights() {
+    let Some(admin) = session("master").await else {
+        return;
+    };
+    let addr = std::env::var("SPELUNK_TEST_MSSQL").unwrap();
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let login = format!("spelunk_monitor_{}", std::process::id());
+    let _: Vec<_> = admin
+        .run_script(&format!(
+            "CREATE LOGIN [{login}] WITH PASSWORD = 'Spelunk-test-1', CHECK_POLICY = OFF"
+        ))
+        .collect()
+        .await;
+    let driver = SqlServerDriver;
+    let connected = driver
+        .connect(&ConnectParams {
+            host: host.into(),
+            port: port.parse().unwrap(),
+            user: login.clone(),
+            password: Some(Secret::new("Spelunk-test-1")),
+            database: "master".into(),
+            tls: TlsMode::Require,
+            ..Default::default()
+        })
+        .await;
+    let result = match connected {
+        Ok(conn) => {
+            let low = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+            let result = spelunk_core::list_processes(&low).await;
+            drop(low);
+            result
+        }
+        Err(error) => Err(error.to_string()),
+    };
+    let _: Vec<_> = admin
+        .run_script(&format!("DROP LOGIN [{login}]"))
+        .collect()
+        .await;
+    let snapshot =
+        result.expect("a login can inspect its own process without server-wide permissions");
+    assert!(snapshot.limited);
+    assert!(snapshot.processes.iter().any(|p| p.id == snapshot.own_id));
+}
+
 /// A session in the `spelunk` database (created if needed, as the driver tests do).
 async fn spelunk() -> Option<Session> {
     let master = session("master").await?;

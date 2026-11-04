@@ -50,6 +50,9 @@ export function CellViewer(props: {
   meta: ColumnItem;
   columns: ColumnItem[];
   mode: ViewerMode;
+  edits?: Record<string, string | null>;
+  editable?: boolean;
+  onEdit?(row: number, column: number, value: string | null | undefined): void;
   onMode(mode: ViewerMode): void;
   /** A field of the row view was picked: show that cell. */
   onPickColumn(column: number): void;
@@ -76,7 +79,9 @@ export function CellViewer(props: {
 
   const current = loaded?.cell === cell ? loaded : null;
   const error = current?.error ?? null;
-  const value = current && !current.error ? { text: current.text } : null;
+  const editKey = `${row}:${column}`;
+  const hasEdit = props.edits != null && editKey in props.edits;
+  const value = current && !current.error ? { text: hasEdit ? props.edits![editKey]! : current.text } : null;
   const shown = value ? view(value.text, meta) : null;
   const length =
     shown?.kind === "hex"
@@ -108,7 +113,7 @@ export function CellViewer(props: {
             ×
           </button>
         </header>
-        <RowFields resultId={resultId} row={row} columns={props.columns} active={column} onPick={props.onPickColumn} />
+        <RowFields resultId={resultId} row={row} columns={props.columns} active={column} edits={props.edits} onPick={props.onPickColumn} />
       </aside>
     );
   }
@@ -139,8 +144,23 @@ export function CellViewer(props: {
       </header>
       {error && <p className="error small" role="alert">{error}</p>}
       {!value && !error && <p className="muted small">{t("viewer.loading")}</p>}
-      {shown?.kind === "null" && <p className="muted cell-viewer-null">NULL</p>}
-      {shown && shown.kind !== "null" && (
+      {value && props.editable && props.onEdit && (
+        <>
+          <textarea
+            className="cell-viewer-value cell-viewer-editor"
+            aria-label={t("edit.cellLabel", { column: meta.name })}
+            spellCheck={false}
+            value={value.text ?? ""}
+            onChange={(e) => props.onEdit?.(row, column, e.target.value === current?.text ? undefined : e.target.value)}
+          />
+          <footer className="viewer-edit-actions" role="toolbar" aria-label={t("viewer.editActions")}>
+            {value.text === null && <span className="muted small">NULL</span>}
+            <button className="ghost small" title={t("edit.setNullHint")} onClick={() => props.onEdit?.(row, column, current?.text === null ? undefined : null)}>{t("edit.setNull")}</button>
+          </footer>
+        </>
+      )}
+      {!props.editable && shown?.kind === "null" && <p className="muted cell-viewer-null">NULL</p>}
+      {!props.editable && shown && shown.kind !== "null" && (
         <pre className={`cell-viewer-value cell-viewer-${shown.kind}`} tabIndex={0}>
           {shown.text}
         </pre>
@@ -149,7 +169,7 @@ export function CellViewer(props: {
   );
 }
 
-function RowFields(props: { resultId: number; row: number; columns: ColumnItem[]; active: number; onPick(column: number): void }) {
+function RowFields(props: { resultId: number; row: number; columns: ColumnItem[]; active: number; edits?: Record<string, string | null>; onPick(column: number): void }) {
   const { resultId, row } = props;
   const { t } = useTranslation("editor");
   const key = `${resultId}:${row}`;
@@ -171,7 +191,8 @@ function RowFields(props: { resultId: number; row: number; columns: ColumnItem[]
   return (
     <dl className="row-view">
       {props.columns.map((c, i) => {
-        const value = current.values[i] ?? null;
+        const key = `${row}:${i}`;
+        const value = props.edits && key in props.edits ? props.edits[key] ?? null : current.values[i] ?? null;
         return (
           <div key={i} className={`row-field ${i === props.active ? "active" : ""}`} onClick={() => props.onPick(i)} title={t("viewer.pick")}>
             <dt>

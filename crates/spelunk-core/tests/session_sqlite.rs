@@ -122,6 +122,56 @@ async fn first_result(session: &Session, sql: &str) -> spelunk_core::ResultId {
         .expect("a result")
 }
 
+#[tokio::test]
+async fn query_pages_append_atomically_and_count_all_matching_rows() {
+    let session = session().await;
+    let _: Vec<CoreEvent> = session.run_script("create table t (id integer primary key, name text); insert into t values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e')").collect().await;
+    let original = "select id, name from t where id > 1 order by id";
+    let first = spelunk_core::query_page_sql(session.dialect().as_ref(), original, 2, 0).unwrap();
+    let id = first_result(&session, &first).await;
+    assert_eq!(session.results().get(id).unwrap().read().unwrap().rows(), 2);
+    assert_eq!(
+        spelunk_core::count_query_rows(&session, original)
+            .await
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        session.results().len(),
+        1,
+        "count releases its temporary result"
+    );
+    assert_eq!(
+        spelunk_core::append_query_page(&session, id, original, 2, 2)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(session.results().get(id).unwrap().read().unwrap().rows(), 4);
+    assert_eq!(
+        session.results().len(),
+        1,
+        "fetch releases its temporary result"
+    );
+    assert!(
+        spelunk_core::append_query_page(&session, id, original, 2, 2)
+            .await
+            .is_err(),
+        "a stale offset cannot append twice"
+    );
+    let result = session.results().get(id).unwrap();
+    assert_eq!(result.read().unwrap().rows(), 4);
+    result.write().unwrap().filter(Some("e")).unwrap();
+    assert!(
+        spelunk_core::append_query_page(&session, id, original, 2, 4)
+            .await
+            .is_err(),
+        "a filtered view cannot be extended"
+    );
+    assert_eq!(result.read().unwrap().total_rows(), 4);
+    assert_eq!(session.results().len(), 1);
+}
+
 async fn texts(session: &Session, sql: &str) -> Vec<String> {
     let id = first_result(session, sql).await;
     let stored = session.results().get(id).unwrap();

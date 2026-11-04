@@ -16,11 +16,12 @@ import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 
 const root = resolve(import.meta.dirname, "../../..");
-const exe = join(root, "target/release/spelunk-desktop" + (process.platform === "win32" ? ".exe" : ""));
+const exe = process.env.SPELUNK_E2E_EXE ?? join(root, "target/release/spelunk-desktop" + (process.platform === "win32" ? ".exe" : ""));
 const demo = join(root, "examples/demo");
 const shots = resolve(process.argv[2] ?? join(import.meta.dirname, "screenshots"));
 const userDir = mkdtempSync(join(tmpdir(), "spelunk-e2e-"));
 const port = 9333;
+const editSmokeComplete = Symbol("edit smoke complete");
 mkdirSync(shots, { recursive: true });
 
 function startApp() {
@@ -201,7 +202,7 @@ try {
   step("connections sidebar: drag, keyboard resizing, limits and reset");
   const sidebar = page.locator(".sidebar");
   const activities = page.getByRole("navigation", { name: "Activity bar" });
-  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Query history", "Saved queries", "Settings"]);
+  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Query history", "Saved queries", "Settings"]);
   for (const button of await activities.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   const connectionsActivity = activities.getByRole("button", { name: "Connections" });
   assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "true");
@@ -342,6 +343,7 @@ try {
   assert.deepEqual(withHeaders[0].split("\t"), ["country", "orders"]);
   assert.equal(withHeaders.length, 4);
   await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
   await panel.getByRole("menuitem", { name: "Copy as JSON" }).waitFor();
   await shot("03b-copy-menu");
   await panel.getByRole("menuitem", { name: "Copy as JSON" }).click();
@@ -352,6 +354,7 @@ try {
   await panel.getByRole("status").filter({ hasText: "Copied 3 rows × 2 columns" }).waitFor();
   await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
   await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
   await panel.getByRole("menuitem", { name: "Copy as Markdown table" }).click();
   const markdown = (await copied(4)).trimEnd().split("\n");
   assert.equal(markdown[0], "| country |");
@@ -362,9 +365,11 @@ try {
   await page.keyboard.press("Shift+ArrowDown");
   await page.keyboard.press("Shift+ArrowDown");
   await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
   await panel.getByRole("menuitem", { name: "Copy as SQL IN list" }).click();
   assert.match(await copied(5), /^\('[^']+', '[^']+', '[^']+'\)$/);
   await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
   await panel.getByRole("menuitem", { name: "Copy as SQL INSERT" }).click();
   const tuples = json.map((row) => `('${row.country.replaceAll("'", "''")}')`).join(",\n  ");
   assert.equal(await copied(6), `INSERT INTO table_name (country) VALUES ${tuples};\n`);
@@ -403,9 +408,36 @@ try {
   );
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-  const viewerGrid = await panel.locator(".grid-scroller").boundingBox();
-  await page.mouse.dblclick(viewerGrid.x + 80, viewerGrid.y + 36 + 13);
+  const viewerToggle = panel.getByRole("button", { name: "Cell value panel" });
+  const closedToggleBox = await viewerToggle.boundingBox();
+  const closedGridBox = await panel.locator(".grid-scroller").boundingBox();
+  assert.ok(closedToggleBox.x >= closedGridBox.x + closedGridBox.width, "the viewer control is to the right of the grid");
+  await viewerToggle.click();
   const viewer = panel.getByRole("complementary", { name: "Cell value" });
+  await viewer.getByText("Select a cell to see its value.").waitFor();
+  assert.ok((await viewerToggle.boundingBox()).x >= (await viewer.boundingBox()).x + (await viewer.boundingBox()).width, "the viewer control stays to the right of the open panel");
+  assert.equal(await viewerToggle.getAttribute("aria-pressed"), "true");
+  const viewerResize = panel.getByRole("separator", { name: "Resize cell value panel" });
+  const beforeWidth = (await viewer.boundingBox()).width;
+  const resizeBox = await viewerResize.boundingBox();
+  await page.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + resizeBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(resizeBox.x - 80, resizeBox.y + resizeBox.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const wider = (await viewer.boundingBox()).width;
+  assert.ok(wider > beforeWidth + 50, `drag should widen the viewer: ${beforeWidth} → ${wider}`);
+  await viewerResize.focus();
+  await page.keyboard.press("ArrowRight");
+  const narrower = (await viewer.boundingBox()).width;
+  assert.ok(narrower < wider, `keyboard should resize the viewer: ${wider} → ${narrower}`);
+  await viewerToggle.click();
+  await viewer.waitFor({ state: "detached" });
+  assert.equal(await viewerToggle.getAttribute("aria-pressed"), "false");
+  await viewerToggle.click();
+  await viewer.getByText("Select a cell to see its value.").waitFor();
+  assert.ok(Math.abs((await viewer.boundingBox()).width - narrower) < 2, "the viewer keeps its width after toggling");
+  const viewerGrid = await panel.locator(".grid-scroller").boundingBox();
+  await page.mouse.click(viewerGrid.x + 80, viewerGrid.y + 36 + 13);
   await viewer.locator(".cell-viewer-json").waitFor();
   assert.equal(await viewer.locator(".cell-viewer-value").innerText(), '{\n  "a": [\n    1,\n    2\n  ]\n}');
   await page.keyboard.press("ArrowRight");
@@ -449,7 +481,11 @@ try {
     return hit !== null && element.contains(hit);
   });
   await withinWindow(edgeMenu);
-  assert.ok(await hitTarget(edgeMenu.getByRole("menuitem", { name: "Copy as SQL INSERT" })));
+  await edgeMenu.getByRole("menuitem", { name: "Copy ▸" }).hover();
+  const edgeCopy = panel.getByRole("menu", { name: "Copy", exact: true });
+  await edgeCopy.waitFor();
+  await withinWindow(edgeCopy);
+  assert.ok(await hitTarget(edgeCopy.getByRole("menuitem", { name: "Copy as SQL INSERT" })));
   await edgeMenu.getByRole("menuitem", { name: "Filter ▸" }).hover();
   const edgeSubmenu = panel.getByRole("menu", { name: "Filter", exact: true });
   await edgeSubmenu.waitFor();
@@ -461,8 +497,52 @@ try {
   await page.keyboard.press("Control+w");
   await setHistorySaving("Shop (SQLite)", true);
 
-  step("SQLite: 50,000 rows and scrolling");
-  panel = await newQuery("Shop (SQLite)", "select * from orders;");
+  step("query pages: limit, count, scroll to fetch more, and navigate");
+  await setHistorySaving("Shop (SQLite)", false);
+  panel = await newQuery("Shop (SQLite)", "select * from orders order by id;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
+  const queryPages = panel.getByRole("group", { name: "Query result pages" });
+  await queryPages.getByText("rows 1–500").waitFor();
+  const countButton = queryPages.getByRole("button", { name: "Count", exact: true });
+  const nextButton = queryPages.getByRole("button", { name: "Next page" });
+  const countBefore = await countButton.boundingBox();
+  const nextBefore = await nextButton.boundingBox();
+  // Reproduce the loading styles separately: the local count can finish before
+  // Playwright can observe it, but its controls must occupy the same space.
+  await countButton.evaluate((button) => {
+    button.querySelector(".query-count-label").classList.add("busy");
+    const spinner = document.createElement("span");
+    spinner.className = "query-count-spinner";
+    button.append(spinner);
+  });
+  const countDuring = await countButton.boundingBox();
+  const nextDuring = await nextButton.boundingBox();
+  assert.ok(Math.abs(countDuring.width - countBefore.width) < 1, "count button keeps its width while loading");
+  assert.ok(Math.abs(nextDuring.x - nextBefore.x) < 1, "count loading does not move adjacent controls");
+  await countButton.evaluate((button) => {
+    button.querySelector(".query-count-label").classList.remove("busy");
+    button.querySelector(".query-count-spinner").remove();
+  });
+  await countButton.click();
+  await queryPages.getByText("rows 1–500 of 50,000").waitFor();
+  await shot("04a-query-pages");
+  const previousPageResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+  await queryPages.getByLabel("Rows per page").selectOption("100");
+  await page.waitForFunction((el) => !el.isConnected, previousPageResult);
+  await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+  await panel.locator(".grid-scroller").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await panel.locator(".statusline", { hasText: "200 rows" }).waitFor();
+  await queryPages.getByRole("button", { name: "Next page" }).click();
+  await queryPages.getByText("rows 101–200").waitFor();
+  await page.waitForFunction((el) => !el.disabled, await queryPages.getByRole("button", { name: "Previous page" }).elementHandle());
+  await queryPages.getByRole("button", { name: "Previous page" }).click();
+  await queryPages.getByText("rows 1–100").waitFor();
+  await page.keyboard.press("Control+w");
+  await setHistorySaving("Shop (SQLite)", true);
+
+  step("SQLite: an explicit LIMIT keeps the original 50,000-row result");
+  panel = await newQuery("Shop (SQLite)", "select * from orders limit 50000;");
   await run(panel);
   await panel.locator(".statusline", { hasText: "50,000 rows" }).waitFor();
   await panel.locator(".grid-scroller").evaluate((el) => (el.scrollTop = 26 * 25_000));
@@ -716,6 +796,100 @@ try {
   await risk.waitFor({ state: "detached" });
   await panel.getByText("Statement 3: 2 rows", { exact: false }).waitFor();
 
+  step("SQL editor: VS Code line and multi-cursor shortcuts");
+  await replaceQuery(panel, "first\nsecond");
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+Alt+ArrowDown");
+  assert.equal(await sqlEditor.innerText(), "first\nfirst\nsecond");
+  await page.keyboard.press("Control+z");
+  assert.equal(await sqlEditor.innerText(), "first\nsecond");
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Control+Alt+ArrowDown");
+  await page.keyboard.insertText("x");
+  assert.equal(await sqlEditor.innerText(), "xfirst\nxsecond");
+
+  await replaceQuery(panel, "word word words word");
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Control+d");
+  await page.keyboard.press("Control+d");
+  await page.keyboard.insertText("item");
+  assert.equal(await sqlEditor.innerText(), "item item words word");
+  await replaceQuery(panel, "word word words word");
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Control+Shift+l");
+  await page.keyboard.insertText("item");
+  assert.equal(await sqlEditor.innerText(), "item item words item");
+  await replaceQuery(panel, "word word words word");
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("Control+Shift+l");
+  await page.keyboard.insertText("X");
+  assert.equal(await sqlEditor.innerText(), "Xord Xord Xords Xord");
+
+  await replaceQuery(panel, "aaaa\nbbbb\ncccc");
+  const linePoint = async (lineIndex, offset) => panel.locator(".cm-line").nth(lineIndex).evaluate((line, index) => {
+    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    let remaining = index;
+    while (node && remaining > node.textContent.length) {
+      remaining -= node.textContent.length;
+      node = walker.nextNode();
+    }
+    const range = document.createRange();
+    range.setStart(node, remaining);
+    range.collapse(true);
+    const box = range.getBoundingClientRect();
+    return { x: box.left, y: (box.top + box.bottom) / 2 };
+  }, offset);
+  let firstPoint = await linePoint(0, 0);
+  let secondPoint = await linePoint(1, 0);
+  await page.mouse.click(firstPoint.x, firstPoint.y);
+  await page.keyboard.down("Alt");
+  await page.mouse.click(secondPoint.x, secondPoint.y);
+  await page.keyboard.up("Alt");
+  await page.keyboard.insertText("X");
+  assert.equal(await sqlEditor.innerText(), "Xaaaa\nXbbbb\ncccc");
+
+  await replaceQuery(panel, "aaaa\nbbbb\ncccc");
+  firstPoint = await linePoint(0, 0);
+  const lastPoint = await linePoint(2, 2);
+  await page.mouse.move(firstPoint.x, firstPoint.y);
+  await page.keyboard.down("Shift");
+  await page.keyboard.down("Alt");
+  await page.mouse.down();
+  await page.mouse.move(lastPoint.x, lastPoint.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Alt");
+  await page.keyboard.up("Shift");
+  await page.keyboard.insertText("X");
+  assert.equal(await sqlEditor.innerText(), "Xaa\nXbb\nXcc");
+
+  // A normal click followed by Shift+Alt+click uses the first position as the anchor.
+  await replaceQuery(panel, "aaaa\nbbbb\ncccc");
+  firstPoint = await linePoint(0, 0);
+  let endPoint = await linePoint(2, 2);
+  await page.mouse.click(firstPoint.x, firstPoint.y);
+  await page.keyboard.down("Shift");
+  await page.keyboard.down("Alt");
+  await page.mouse.click(endPoint.x, endPoint.y);
+  await page.keyboard.up("Alt");
+  await page.keyboard.up("Shift");
+  await page.keyboard.insertText("X");
+  assert.equal(await sqlEditor.innerText(), "Xaa\nXbb\nXcc");
+
+  // Both endpoints can also be clicked while keeping the modifiers pressed.
+  await replaceQuery(panel, "aaaa\nbbbb\ncccc");
+  firstPoint = await linePoint(0, 0);
+  endPoint = await linePoint(2, 2);
+  await page.keyboard.down("Shift");
+  await page.keyboard.down("Alt");
+  await page.mouse.click(firstPoint.x, firstPoint.y);
+  await page.mouse.click(endPoint.x, endPoint.y);
+  await page.keyboard.up("Alt");
+  await page.keyboard.up("Shift");
+  await page.keyboard.insertText("X");
+  assert.equal(await sqlEditor.innerText(), "Xaa\nXbb\nXcc");
+
   step("format: Shift+Alt+F and the Format button, one undo step, errors shown");
   await replaceQuery(panel, "select id, total from orders where total > 100 and id < 5");
   await page.keyboard.press("Shift+Alt+F");
@@ -939,6 +1113,64 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
     await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await database.elementHandle());
   }
+  step("process monitor: independent connection, filtering and SQL details");
+  const currentSqlBeforeMonitor = await panel.locator(".cm-content").innerText();
+  await activities.getByRole("button", { name: "Processes", exact: true }).click();
+  const processSidebar = page.locator("#processes-sidebar");
+  assert.ok(await processSidebar.getByRole("button", { name: /Shop \(SQLite\)/ }).isDisabled());
+  await processSidebar.getByRole("button", { name: "MySQL (Docker)", exact: true }).click();
+  const monitor = page.getByRole("region", { name: "Processes", exact: true });
+  await monitor.locator(".process-table tbody tr").first().waitFor();
+  assert.ok(await monitor.locator(".process-table tbody tr").count() >= 1);
+  await monitor.locator(".process-table tbody tr:has(.process-own)").click();
+  await monitor.getByText("This is the monitoring connection.", { exact: true }).waitFor();
+  assert.ok(await monitor.getByRole("button", { name: "End connection" }).isDisabled());
+  assert.ok(await monitor.getByRole("button", { name: "Cancel query" }).isDisabled());
+  // The process-control command accepts the structured target and must reject calls that
+  // have not passed the confirmation step. This uses an isolated test session.
+  const unconfirmedError = await page.evaluate(async () => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    const connection = (await invoke("list_connections")).find((item) => item.name === "MySQL (Docker)");
+    const session = "e2e-process-confirmation";
+    try {
+      const outcome = await invoke("connect", { session, connection: connection.id, password: "spelunk", remember: false });
+      if (outcome.kind !== "connected") throw new Error(`unexpected connection outcome: ${outcome.kind}`);
+      const snapshot = await invoke("list_processes", { session });
+      const row = snapshot.processes.find((item) => item.id === snapshot.ownId);
+      const target = { id: row.id, user: row.user, host: row.host, command: row.command, sql: row.sql, identity: row.identity };
+      try {
+        await invoke("control_process", { session, target, terminate: true, confirmed: false });
+        return "no error";
+      } catch (error) { return String(error); }
+    } finally {
+      await invoke("disconnect", { session });
+    }
+  });
+  assert.match(unconfirmedError, /confirmation is required/);
+  await monitor.getByLabel("Search processes…").fill("no-such-process-marker");
+  await monitor.getByText("No processes match these filters.").waitFor();
+  await monitor.getByLabel("Search processes…").fill("");
+  await monitor.getByLabel("Database", { exact: true }).selectOption({ label: "No database" });
+  await monitor.getByLabel("Database", { exact: true }).selectOption("");
+  await monitor.getByLabel("Auto refresh").selectOption("5");
+  await monitor.getByLabel("Auto refresh").selectOption("0");
+  await monitor.getByRole("button", { name: "Refresh", exact: true }).click();
+  await monitor.locator(".process-table tbody tr").first().waitFor();
+  await shot("07b-process-monitor");
+  await processSidebar.getByRole("button", { name: "MariaDB (Docker)", exact: true }).click();
+  await monitor.getByRole("heading", { name: "MariaDB (Docker)" }).waitFor();
+  await monitor.locator(".process-table tbody tr:has(.process-own)").waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0, "the monitor reuses the connected tab's credentials");
+  await processSidebar.getByRole("button", { name: "Postgres (Docker)", exact: true }).click();
+  await monitor.getByRole("heading", { name: "Postgres (Docker)" }).waitFor();
+  await monitor.locator(".process-table tbody tr:has(.process-own)").click();
+  await monitor.getByText("PostgreSQL may truncate the SQL it reports.").waitFor();
+  assert.ok(await monitor.getByRole("button", { name: "End connection" }).isDisabled());
+  await monitor.getByLabel("State", { exact: true }).selectOption("idle");
+  await monitor.locator(".process-table tbody tr").first().waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0, "PostgreSQL credentials are reused");
+  await activities.getByRole("button", { name: "Connections", exact: true }).click();
+  assert.equal(await panel.locator(".cm-content").innerText(), currentSqlBeforeMonitor);
   // SQLyog-style column filters on SHOW FULL PROCESSLIST (no WHERE possible there).
   panel = await newQuery("MySQL (Docker)", "show full processlist;");
   await run(panel);
@@ -991,6 +1223,36 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.locator(".filter-chip").first().waitFor({ state: "detached" });
   await panel.locator(".statusline", { hasText: `${processlistTotal} row` }).waitFor();
 
+  step("MySQL query pages: block fetching while there are unsaved edits");
+  const pageValues = Array.from({ length: 230 }, (_, i) => `(${i + 1})`).join(", ");
+  await replaceQuery(panel, `create table if not exists smoke_pages (id int primary key); delete from smoke_pages where id > 0; insert into smoke_pages values ${pageValues};`);
+  await run(panel);
+  await panel.getByText("Statement 3: 230 rows", { exact: false }).waitFor();
+  await replaceQuery(panel, "select * from smoke_pages order by id;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "230 rows" }).waitFor();
+  let mysqlPages = panel.getByRole("group", { name: "Query result pages" });
+  const firstMysqlResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+  await mysqlPages.getByLabel("Rows per page").selectOption("100");
+  await page.waitForFunction((el) => !el.isConnected, firstMysqlResult);
+  await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+  await panel.getByRole("button", { name: "Add row" }).waitFor();
+  const mysqlGrid = panel.locator(".grid-scroller");
+  const mysqlBox = await mysqlGrid.boundingBox();
+  await page.mouse.dblclick(mysqlBox.x + 52 + 20, mysqlBox.y + 36 + 13);
+  await panel.getByRole("textbox", { name: "New value for id" }).fill("901");
+  await panel.getByRole("textbox", { name: "New value for id" }).press("Enter");
+  assert.ok(await mysqlPages.getByLabel("Rows per page").isDisabled());
+  await mysqlGrid.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await page.waitForTimeout(300);
+  await panel.locator(".statusline", { hasText: "100 rows" }).waitFor();
+  await panel.getByRole("button", { name: "Discard" }).click();
+  await mysqlGrid.evaluate((el) => { el.scrollTop = 0; });
+  await mysqlGrid.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await panel.locator(".statusline", { hasText: "200 rows" }).waitFor();
+  await mysqlPages.getByRole("button", { name: "Count", exact: true }).click();
+  await mysqlPages.getByText(/of 230/).waitFor();
+
   // A table of the test server to edit (never the demo database).
   await replaceQuery(
     panel,
@@ -1007,7 +1269,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByLabel("Password", { exact: true }).fill("spelunk");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).waitFor();
-  assert.equal(await page.locator('.connection-row:has-text("MySQL (Docker)") .engine').innerText(), "MY");
+  assert.ok(await page.locator('.connection-row:has-text("MySQL (Docker)") img.engine-icon').evaluate((icon) => icon.complete && icon.naturalWidth > 0));
   await connectionsActivity.click();
   await sidebar.waitFor({ state: "hidden" });
   await connectionsActivity.click();
@@ -1061,44 +1323,128 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const editor = panel.getByRole("textbox", { name: "New value for name" });
     await editor.fill("edited");
     await editor.press("Enter");
-    // qty of row 2 → NULL (context menu).
-    await page.mouse.click(...(await cellAt(1, 270)), { button: "right" });
-    await panel.getByRole("menuitem", { name: "Set NULL" }).click();
-    // row 3 deleted (Del key).
+    // The full value panel edits the same pending cell, and can be undone by row.
+    await page.keyboard.press("Enter");
+    const viewer = panel.locator(".cell-viewer");
+    const fullValue = viewer.getByRole("textbox", { name: "New value for name" });
+    await fullValue.fill("edited from viewer");
+    await viewer.getByRole("button", { name: "Close the cell viewer (Esc)" }).click();
+    // Duplicating a row copies its pending values but leaves the key for the new row.
+    await page.keyboard.press("Control+Alt+Insert");
+    const duplicate = page.getByRole("dialog", { name: "New row" });
+    assert.equal(await duplicate.getByRole("textbox", { name: "name", exact: true }).inputValue(), "edited from viewer");
+    assert.equal(await duplicate.getByRole("textbox", { name: "id", exact: true }).inputValue(), "");
+    await duplicate.getByRole("textbox", { name: "id", exact: true }).fill("5");
+    await duplicate.getByRole("button", { name: "Add", exact: true }).click();
+    await panel.locator(".grid-scroller").focus();
+    await page.keyboard.press("Alt+Insert");
+    await page.getByRole("dialog", { name: "New row" }).getByRole("button", { name: "Add", exact: true }).click();
+    await panel.getByRole("button", { name: "Discard new row 2" }).click();
+    // qty of row 2 → NULL (shortcut).
+    await page.mouse.click(...(await cellAt(1, 270)));
+    await page.keyboard.press("Control+Alt+n");
+    // row 3 deleted (Alt+Del).
     await page.mouse.click(...(await cellAt(2, 0)));
-    await page.keyboard.press("Delete");
+    await page.keyboard.press("Alt+Delete");
     // A new row with id 4; qty takes its default.
     await panel.getByRole("button", { name: "Add row" }).click();
     const newRow = page.getByRole("dialog", { name: "New row" });
     await newRow.getByRole("textbox", { name: "id", exact: true }).fill("4");
     await newRow.getByRole("textbox", { name: "name", exact: true }).fill("four");
     await newRow.getByRole("button", { name: "Add", exact: true }).click();
-    await panel.getByText("4 pending changes").waitFor();
+    await panel.getByText("Inserted: 2 · Deleted: 1 · Updated: 2").waitFor();
     assert.ok(await panel.getByRole("button", { name: "Next page" }).isDisabled());
     await shot("07d-editing-pending");
-    await panel.getByRole("button", { name: "Apply", exact: true }).last().click();
-    await panel.getByRole("status").filter({ hasText: "Applied 4 changes" }).waitFor();
-    await panel.locator(".table-range", { hasText: "rows 1–3" }).waitFor();
+    await panel.getByRole("button", { name: "Save changes" }).click();
+    await panel.getByRole("status").filter({ hasText: "Applied 5 changes" }).waitFor();
+    await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     for (let i = 0; i < 40 && !(box = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
     const before = await page.evaluate(() => window.__copied.length);
     await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Control+c");
-    assert.deepEqual((await copied(before + 1)).trimEnd().split("\n"), ["1\tedited\t1", "2\ttwo\t", "4\tfour\t1"]);
+    assert.deepEqual((await copied(before + 1)).trimEnd().split("\n"), ["1\tedited from viewer\t1", "2\ttwo\t", "4\tfour\t1", "5\tedited from viewer\t1"]);
+  }
+  // Saving directly from an active cell commits its current input as well as other changes.
+  {
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 36 + 13);
+    const editor = panel.getByRole("textbox", { name: "New value for name" });
+    await editor.fill("saved by shortcut");
+    await editor.press("Control+s");
+    await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
+    await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
+    assert.equal(await page.getByRole("dialog", { name: "Save query" }).count(), 0);
+    const after = await panel.locator(".grid-scroller").boundingBox();
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.mouse.click(after.x + 52 + 110 + 20, after.y + 36 + 13);
+    await page.keyboard.press("Control+c");
+    assert.equal((await copied(before + 1)).trimEnd(), "saved by shortcut");
   }
   // A typed value that does not fit the column is refused by the core; nothing is applied.
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 36 + 13);
     const editor = panel.getByRole("textbox", { name: "New value for qty" });
+    await editor.fill("123");
+    await editor.press("Enter");
+    await page.keyboard.press("Control+z");
+    await panel.getByText("Inserted: 0 · Deleted: 0 · Updated: 0").waitFor();
+    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 36 + 13);
     await editor.fill("lots");
     await editor.press("Enter");
-    await panel.getByRole("button", { name: "Apply", exact: true }).last().click();
+    await panel.getByRole("button", { name: "Save changes" }).click();
     await panel.getByRole("alert").filter({ hasText: "is not a whole number" }).waitFor();
-    await panel.getByRole("button", { name: "Discard" }).click();
-    await panel.getByText("pending change").waitFor({ state: "detached" });
+    await page.keyboard.press("Control+r");
+    await panel.getByText("Inserted: 0 · Deleted: 0 · Updated: 0").waitFor();
   }
   await page.keyboard.press("Control+w");
+
+  step("editing a simple query result, while joins stay read-only");
+  await mysqlSchema.dblclick();
+  panel = page.locator(".tab-panel:not([hidden])");
+  await panel.locator(".status-connected").waitFor();
+  const queryDatabase = panel.getByLabel("Database", { exact: true });
+  await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await queryDatabase.elementHandle());
+  await panel.locator(".cm-content").click();
+  await page.keyboard.insertText("select id, name from smoke_edit order by id;");
+  await run(panel);
+  await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+  {
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 36 + 13);
+    const editor = panel.getByRole("textbox", { name: "New value for name" });
+    await editor.fill("query edit");
+    await editor.press("Enter");
+    await page.keyboard.press("Enter");
+    const valueEditor = panel.locator(".cell-viewer").getByRole("textbox", { name: "New value for name" });
+    await valueEditor.fill("viewer shortcut");
+    const valueBar = panel.locator(".cell-viewer").getByRole("toolbar", { name: "Value actions" });
+    assert.ok((await valueBar.boundingBox()).y >= (await valueEditor.boundingBox()).y + (await valueEditor.boundingBox()).height, "the value actions are below the editor");
+    const beforeSave = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+    await valueEditor.press("Control+s");
+    await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
+    await page.waitForFunction((el) => !el.isConnected, beforeSave);
+    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    const updated = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.click(updated.x + 52 + 110 + 20, updated.y + 36 + 13);
+    await page.keyboard.press("Enter");
+    await panel.locator(".cell-viewer").getByRole("textbox", { name: "New value for name" }).waitFor();
+    assert.equal(await panel.locator(".cell-viewer textarea").inputValue(), "viewer shortcut");
+  }
+  await panel.locator(".cm-content").click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText("select * from smoke_edit a join smoke_edit b on a.id = b.id;");
+  const previousEditResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+  await run(panel);
+  await page.waitForFunction((el) => !el.isConnected, previousEditResult);
+  await panel.locator(".statusline", { hasText: "4 rows" }).waitFor();
+  assert.equal(await panel.getByRole("toolbar", { name: "Row actions" }).count(), 0);
+  const joinPages = panel.getByRole("group", { name: "Query result pages" });
+  await joinPages.getByRole("button", { name: "Count", exact: true }).click();
+  await joinPages.getByText("rows 1–4 of 4").waitFor();
+  await page.keyboard.press("Control+w");
+  if (process.env.SPELUNK_E2E_EDIT_ONLY === "1") throw editSmokeComplete;
 
   step("PostgreSQL behind two bastions with TLS verify-full");
   panel = await newQuery(
@@ -1256,6 +1602,16 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await sqlServerDatabase.selectOption("tempdb");
   await page.waitForFunction((el) => !el.disabled && el.value === "tempdb", await sqlServerDatabase.elementHandle());
   await shot("12a4-sqlserver");
+  step("process monitor: SQL Server sessions and supported actions");
+  await activities.getByRole("button", { name: "Processes", exact: true }).click();
+  await page.locator("#processes-sidebar").getByRole("button", { name: "SQL Server (Docker)", exact: true }).click();
+  const sqlServerMonitor = page.getByRole("region", { name: "Processes", exact: true });
+  await sqlServerMonitor.locator(".process-table tbody tr:has(.process-own)").waitFor();
+  await sqlServerMonitor.locator(".process-table tbody tr:not(:has(.process-own))").first().click();
+  assert.ok(await sqlServerMonitor.getByRole("button", { name: "Cancel query" }).isDisabled());
+  assert.equal(await sqlServerMonitor.getByRole("button", { name: "Cancel query" }).getAttribute("title"), "SQL Server can only end another session, not cancel its query separately.");
+  assert.ok(await sqlServerMonitor.getByRole("button", { name: "End connection" }).isEnabled());
+  await activities.getByRole("button", { name: "Connections", exact: true }).click();
   // The query ends in a word, which may open the completion list as it is typed: the next
   // dialog must not find it on top (the editor closes it when it loses focus).
 
@@ -1722,11 +2078,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {
-  failed = true;
-  console.error("\nFAILED:", e);
-  try {
-    await browser.contexts()[0].pages()[0].screenshot({ path: join(shots, "failure.png") });
-  } catch {}
+  if (e === editSmokeComplete) console.log("\nOK. Editing smoke test passed.");
+  else {
+    failed = true;
+    console.error("\nFAILED:", e);
+    try {
+      await browser.contexts()[0].pages()[0].screenshot({ path: join(shots, "failure.png") });
+    } catch {}
+  }
 } finally {
   writeFileSync(shopFile, shopOriginal);
   await browser.close().catch(() => {});

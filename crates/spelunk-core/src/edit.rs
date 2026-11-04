@@ -6,12 +6,84 @@
 
 use futures_util::StreamExt;
 use spelunk_driver_api::{Dialect, LogicalType, TableInfo, Value};
+use sqlparser::ast::{Expr, GroupByExpr, SelectItem, SetExpr, Statement, TableFactor};
+use sqlparser::parser::Parser;
 
 use crate::export::sql_literal;
 use crate::generate::qualified;
+use crate::guard::sql_dialect;
 use crate::params::is_number;
 use crate::results::StoredResult;
 use crate::session::{CoreEvent, Session};
+
+/// Identify only direct columns from one real table. Complex projections, joins and
+/// derived tables are deliberately excluded: their result columns may not identify rows.
+pub fn editable_query_source(dialect: &dyn Dialect, sql: &str) -> Option<(Option<String>, String)> {
+    if dialect.split_statements(sql).len() != 1 {
+        return None;
+    }
+    let statements = Parser::parse_sql(sql_dialect(dialect.name()).as_ref(), sql).ok()?;
+    let [Statement::Query(query)] = statements.as_slice() else {
+        return None;
+    };
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return None;
+    };
+    let projection_is_plain = match select.projection.as_slice() {
+        [SelectItem::Wildcard(options)] => {
+            options.opt_ilike.is_none()
+                && options.opt_exclude.is_none()
+                && options.opt_except.is_none()
+                && options.opt_replace.is_none()
+                && options.opt_rename.is_none()
+                && options.opt_alias.is_none()
+        }
+        items => {
+            !items.is_empty()
+                && items
+                    .iter()
+                    .all(|item| matches!(item, SelectItem::UnnamedExpr(Expr::Identifier(_))))
+        }
+    };
+    if !projection_is_plain
+        || query.with.is_some()
+        || select.distinct.is_some()
+        || select.into.is_some()
+        || select.exclude.is_some()
+        || select.having.is_some()
+        || select.qualify.is_some()
+        || !select.lateral_views.is_empty()
+        || !select.connect_by.is_empty()
+        || !matches!(&select.group_by, GroupByExpr::Expressions(items, _) if items.is_empty())
+    {
+        return None;
+    }
+    let [from] = select.from.as_slice() else {
+        return None;
+    };
+    if !from.joins.is_empty() {
+        return None;
+    }
+    let TableFactor::Table {
+        name,
+        args: None,
+        version: None,
+        ..
+    } = &from.relation
+    else {
+        return None;
+    };
+    let parts: Vec<_> = name
+        .0
+        .iter()
+        .map(|part| part.as_ident().map(|id| id.value.clone()))
+        .collect::<Option<_>>()?;
+    match parts.as_slice() {
+        [name] => Some((None, name.clone())),
+        [schema, name] => Some((Some(schema.clone()), name.clone())),
+        _ => None,
+    }
+}
 
 /// A value typed in the grid (or NULL).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -319,6 +391,38 @@ fn literal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editable_query_requires_one_unambiguous_table_projection() {
+        let dialect = spelunk_driver_sqlite::SqliteDialect;
+        assert_eq!(
+            editable_query_source(
+                &dialect,
+                "select * from main.orders where id > 2 order by id limit 10"
+            ),
+            Some((Some("main".into()), "orders".into()))
+        );
+        assert_eq!(
+            editable_query_source(&dialect, "select * from orders"),
+            Some((None, "orders".into()))
+        );
+        assert_eq!(
+            editable_query_source(&dialect, "select id, name from orders"),
+            Some((None, "orders".into()))
+        );
+        for sql in [
+            "select id + 1 as id from orders",
+            "select distinct * from orders",
+            "select * from orders join other on orders.id = other.id",
+            "select * from (select * from orders) t",
+            "with orders as (select * from other) select * from orders",
+            "select * from orders union select * from other",
+            "select * from orders; select * from other",
+            "delete from orders",
+        ] {
+            assert_eq!(editable_query_source(&dialect, sql), None, "{sql}");
+        }
+    }
 
     #[test]
     fn read_only_refuses_and_production_asks() {

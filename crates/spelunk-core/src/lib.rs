@@ -15,6 +15,8 @@ mod history;
 pub mod kube;
 mod open;
 mod params;
+mod processes;
+mod query_page;
 mod readonly;
 mod results;
 mod session;
@@ -25,7 +27,10 @@ mod write;
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
 pub use cursor::statement_at;
-pub use edit::{CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements};
+pub use edit::{
+    CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements,
+    editable_query_source,
+};
 pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
 pub use filter::{ColumnFilter, FilterOp};
 pub use generate::{SqlTemplate, count_rows, table_sql};
@@ -35,6 +40,8 @@ pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,
 };
 pub use params::{ParamError, bind_params, script_params};
+pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
+pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{CoreEvent, Session, StatementError};

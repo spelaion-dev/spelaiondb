@@ -282,6 +282,33 @@ impl ResultStore {
         Some(r.rows)
     }
 
+    /// Append an independently fetched page only if the target is still the expected view.
+    pub(crate) fn append_page(
+        &self,
+        target: ResultId,
+        source: ResultId,
+        offset: usize,
+    ) -> Result<usize, String> {
+        let page = self.get(source).ok_or("page was freed")?;
+        let page = page.read().map_err(|_| "page lock poisoned")?;
+        let target = self.get(target).ok_or("result was freed")?;
+        let mut target = target.write().map_err(|_| "result lock poisoned")?;
+        if !target.complete || target.view.is_some() || target.rows != offset {
+            return Err("the result changed while fetching more rows".into());
+        }
+        if target.schema.columns != page.schema.columns {
+            return Err("the result columns changed while fetching more rows".into());
+        }
+        let added = page.rows;
+        for batch in &page.batches {
+            let start = target.rows;
+            target.starts.push(start);
+            target.rows += batch.num_rows();
+            target.batches.push(batch.clone());
+        }
+        Ok(added)
+    }
+
     pub(crate) fn complete(&self, id: ResultId) {
         if let Some(result) = self.get(id) {
             result.write().expect("result lock poisoned").complete = true;

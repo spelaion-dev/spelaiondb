@@ -92,6 +92,32 @@ async fn records_each_executed_statement_and_counts_returned_rows_once() {
 }
 
 #[tokio::test]
+async fn paged_queries_keep_the_original_sql_in_history() {
+    let (history, _path) = history("paged");
+    let session = session().await;
+    let _: Vec<_> = session
+        .run_script("create table t (id integer); insert into t values (1), (2), (3)")
+        .collect()
+        .await;
+    let original = "select * from t order by id;";
+    let page = spelunk_core::query_page_sql(session.dialect().as_ref(), original, 2, 0).unwrap();
+    let _: Vec<_> = history
+        .run_script_with_original(
+            &session,
+            &page,
+            "/repo".into(),
+            "shop".into(),
+            Some(original.into()),
+        )
+        .collect()
+        .await;
+    let saved = entries(&history).await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].statement, original);
+    assert_eq!(saved[0].rows, 2);
+}
+
+#[tokio::test]
 async fn records_errors_without_recording_the_unexecuted_remainder() {
     let (history, _) = history("failure");
     let session = session().await;

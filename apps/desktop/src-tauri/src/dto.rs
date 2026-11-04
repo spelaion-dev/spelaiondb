@@ -30,6 +30,41 @@ pub struct ConnectionItem {
     pub tunnel: Option<String>,
     pub mcp_exposed: bool,
     pub history_enabled: bool,
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessItem {
+    pub id: String,
+    pub user: String,
+    pub host: String,
+    pub database: Option<String>,
+    pub command: String,
+    pub seconds: Option<String>,
+    pub state: Option<String>,
+    pub sql: Option<String>,
+    pub identity: Option<String>,
+    pub activity: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessTargetItem {
+    pub id: String,
+    pub user: String,
+    pub host: String,
+    pub command: String,
+    pub sql: Option<String>,
+    pub identity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessSnapshotItem {
+    pub own_id: String,
+    pub processes: Vec<ProcessItem>,
+    pub limited: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -342,6 +377,14 @@ pub struct TableDetails {
     pub primary_key: Vec<String>,
     pub indexes: Vec<String>,
     pub foreign_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditableTableItem {
+    pub schema: String,
+    pub name: String,
+    pub primary_key: Vec<String>,
 }
 
 impl From<TableInfo> for TableDetails {
