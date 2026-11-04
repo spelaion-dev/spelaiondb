@@ -751,6 +751,7 @@ impl Connection for RemoteConnection {
             &self.rows(catalog::columns_sql(schema, name)).await?,
             &self.rows(catalog::indexes_sql(schema, name)).await?,
             &self.rows(catalog::foreign_keys_sql(schema, name)).await?,
+            &self.rows(catalog::unique_columns_sql(schema, name)).await?,
         );
         for i in to_primary_keys {
             let referenced = table.foreign_keys[i].referenced_table.clone();

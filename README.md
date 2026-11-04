@@ -190,8 +190,11 @@ Double-click a function, trigger, sequence or type (or **Open definition** in it
 menu) to open its `CREATE` statement in a new tab; nothing runs. Objects that belong to a
 PostgreSQL extension are not listed: the extension stands for them.
 
-Tables and views show their columns, primary key and estimated rows (**Count rows** in the
-right-click menu gets the exact number). Double-click a table or view (or **View rows**) to open its
+Expanding a table shows its **Columns** (the primary key marked 🔑), and folders of its
+**Constraints** (primary key, unique and check; SQLite keeps check constraints only in its
+`CREATE TABLE` text), **Foreign keys** and **Indexes**; double-click an index to open its
+definition. Tables and views show their estimated rows (**Count rows** in the right-click
+menu gets the exact number). Double-click a table or view (or **View rows**) to open its
 **table data tab**: pages of 100 to 5,000 rows with ◀ ▶, a `WHERE` and an `ORDER BY` you type,
 header clicks that sort in the server, and **Count** for the exact number of matching rows.
 The core writes `SELECT * … LIMIT n OFFSET m` and checks it is still one plain SELECT of that

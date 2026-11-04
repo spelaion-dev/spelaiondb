@@ -40,6 +40,7 @@ pub fn describe_table(conn: &rusqlite::Connection, schema: &str, name: &str) -> 
         &query(conn, &catalog::columns_sql(schema, name))?,
         &query(conn, &catalog::indexes_sql(schema, name))?,
         &query(conn, &catalog::foreign_keys_sql(schema, name))?,
+        &query(conn, &catalog::unique_columns_sql(schema, name))?,
     );
     for i in to_primary_keys {
         let referenced = table.foreign_keys[i].referenced_table.clone();

@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, SchemaObjectKind, Value,
+    ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
+    LogicalType, ObjectKind, SchemaObjectKind, Value,
 };
 use spelaion_driver_duckdb::DuckdbDriver;
 
@@ -460,7 +460,8 @@ async fn introspection_describes_tables() {
     let conn = memory().await;
     exec_all(
         &*conn,
-        "create table customer (id integer primary key, name varchar not null default 'x');
+        "create table customer (id integer primary key, name varchar not null default 'x',
+                                 email varchar unique, check (id > 0));
          create table orders (id integer, line integer, customer_id integer references customer (id),
                               total decimal(12, 2), primary key (id, line));
          create index orders_total on orders (total);
@@ -528,6 +529,29 @@ async fn introspection_describes_tables() {
     assert!(orders.indexes.iter().any(|i| i.primary));
     let customer = conn.describe_table("main", "customer").await.unwrap();
     assert_eq!(customer.columns[1].default.as_deref(), Some("'x'"));
+    assert_eq!(
+        constraints(&customer),
+        [
+            (
+                Some("customer_id_pkey"),
+                ConstraintKind::PrimaryKey,
+                vec!["id"],
+                "PRIMARY KEY(id)"
+            ),
+            (
+                Some("customer_email_key"),
+                ConstraintKind::Unique,
+                vec!["email"],
+                "UNIQUE(email)"
+            ),
+            (
+                Some("customer_id_check"),
+                ConstraintKind::Check,
+                vec![],
+                "CHECK((id > 0))"
+            ),
+        ]
+    );
     assert!(conn.describe_table("main", "missing").await.is_err());
 }
 
@@ -641,4 +665,22 @@ async fn explorer_lists_macros_sequences_and_types() {
     missing.detail = Some("x, y, z".into());
     assert!(conn.object_definition(&missing).await.is_err());
     assert_eq!(conn.list_server_objects().await.unwrap(), []);
+}
+
+/// (name, kind, columns, definition) of each constraint, to compare in one go.
+fn constraints(
+    table: &spelaion_driver_api::TableInfo,
+) -> Vec<(Option<&str>, ConstraintKind, Vec<&str>, &str)> {
+    table
+        .constraints
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_deref(),
+                c.kind,
+                c.columns.iter().map(String::as_str).collect(),
+                c.definition.as_str(),
+            )
+        })
+        .collect()
 }

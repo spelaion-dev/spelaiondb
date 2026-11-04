@@ -3,8 +3,8 @@
 //! only has from 2017.
 
 use spelaion_driver_api::{
-    ColumnInfo, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, Result, SchemaInfo,
-    TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo,
+    ObjectKind, Result, SchemaInfo, TableInfo,
 };
 
 use crate::SqlServerConnection;
@@ -213,7 +213,7 @@ pub async fn describe_table(
              join sys.columns rc on rc.object_id = fkc.referenced_object_id and rc.column_id = fkc.referenced_column_id \
              where fk.parent_object_id = object_id(quotename(@P1) + '.' + quotename(@P2)) \
              order by fk.name, fkc.constraint_column_id",
-            qualified,
+            qualified.clone(),
         )
         .await?;
     let mut foreign_keys: Vec<ForeignKeyInfo> = Vec::new();
@@ -234,12 +234,75 @@ pub async fn describe_table(
         }
     }
 
+    // Primary key and unique constraints (one row per column), then checks.
+    let rows = conn
+        .rows(
+            "select kc.name, kc.type, c.name, null, case kc.type when 'PK' then 0 else 1 end \
+             from sys.key_constraints kc \
+             join sys.index_columns ic \
+               on ic.object_id = kc.parent_object_id and ic.index_id = kc.unique_index_id \
+             join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
+             where kc.parent_object_id = object_id(quotename(@P1) + '.' + quotename(@P2)) \
+               and ic.is_included_column = 0 \
+             union all \
+             select cc.name, 'C', null, cc.definition, 2 from sys.check_constraints cc \
+             where cc.parent_object_id = object_id(quotename(@P1) + '.' + quotename(@P2)) \
+             order by 5, 1",
+            qualified,
+        )
+        .await?;
+    let mut constraints: Vec<ConstraintInfo> = Vec::new();
+    for row in &rows {
+        let constraint = text(row, 0);
+        let kind = match text(row, 1).trim() {
+            "PK" => ConstraintKind::PrimaryKey,
+            "UQ" => ConstraintKind::Unique,
+            _ => ConstraintKind::Check,
+        };
+        match constraints.last_mut() {
+            Some(c)
+                if c.name.as_deref() == Some(constraint.as_str())
+                    && c.kind != ConstraintKind::Check =>
+            {
+                c.columns.push(text(row, 2));
+            }
+            _ => constraints.push(ConstraintInfo {
+                name: Some(constraint),
+                kind,
+                columns: if kind == ConstraintKind::Check {
+                    Vec::new()
+                } else {
+                    vec![text(row, 2)]
+                },
+                definition: if kind == ConstraintKind::Check {
+                    spelaion_driver_api::check_definition(&text(row, 3))
+                } else {
+                    String::new()
+                },
+            }),
+        }
+    }
+    for c in &mut constraints {
+        let list = c
+            .columns
+            .iter()
+            .map(|col| format!("[{col}]"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        match c.kind {
+            ConstraintKind::PrimaryKey => c.definition = format!("PRIMARY KEY ({list})"),
+            ConstraintKind::Unique => c.definition = format!("UNIQUE ({list})"),
+            ConstraintKind::Check => {}
+        }
+    }
+
     Ok(TableInfo {
         object,
         columns,
         primary_key,
         indexes,
         foreign_keys,
+        constraints,
     })
 }
 

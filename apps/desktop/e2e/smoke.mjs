@@ -953,6 +953,22 @@ try {
   await panel.locator(".cm-content", { hasText: "CREATE TRIGGER product_stock_check" }).waitFor();
   assert.match((await panel.locator(".cm-content").innerText()).trimEnd(), /^CREATE TRIGGER product_stock_check before update of stock on product[\s\S]*end;$/);
   await shot("05g-trigger-definition");
+  // A table holds folders of its columns (open), constraints, foreign keys and indexes.
+  await ordersNode.click();
+  const ordersChildren = ordersNode.locator("xpath=..");
+  const columnsFolder = ordersChildren.getByRole("button", { name: "Expand or collapse Columns", exact: true });
+  await columnsFolder.waitFor();
+  assert.equal(await columnsFolder.getAttribute("aria-expanded"), "true");
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Constraints", exact: true }).click();
+  await ordersChildren.locator(".row", { hasText: "PRIMARY KEY (id)" }).waitFor();
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Foreign keys", exact: true }).click();
+  await ordersChildren.locator(".row", { hasText: "(customer_id) → customer (id)" }).waitFor();
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Indexes", exact: true }).click();
+  await ordersChildren.getByRole("button", { name: "orders_customer: open its definition", exact: true }).dblclick();
+  await panel.locator(".cm-content", { hasText: "CREATE INDEX orders_customer" }).waitFor();
+  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "CREATE INDEX orders_customer on orders (customer_id);");
+  await shot("05g-table-folders");
+  await ordersNode.click();
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');

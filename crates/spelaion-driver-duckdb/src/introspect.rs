@@ -4,8 +4,8 @@
 
 use duckdb::{Connection, params};
 use spelaion_driver_api::{
-    ColumnInfo, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, Result, SchemaInfo,
-    TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo,
+    ObjectKind, Result, SchemaInfo, TableInfo,
 };
 
 use crate::exec::map_error;
@@ -148,10 +148,11 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
         .prepare(
             "select constraint_type, constraint_name, \
                     array_to_string(constraint_column_names, chr(1)), \
-                    referenced_table, array_to_string(referenced_column_names, chr(1)) \
+                    referenced_table, array_to_string(referenced_column_names, chr(1)), \
+                    constraint_text \
              from duckdb_constraints() \
              where database_name = ? and schema_name = ? and table_name = ? \
-               and constraint_type in ('PRIMARY KEY', 'FOREIGN KEY') \
+               and constraint_type in ('PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE', 'CHECK') \
              order by constraint_index",
         )
         .map_err(map_error)?;
@@ -163,7 +164,8 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
     let mut primary_key = Vec::new();
     let mut foreign_keys = Vec::new();
     let mut indexes = Vec::new();
-    let constraints = statement
+    let mut constraints = Vec::new();
+    let rows = statement
         .query_map(params![database, schema, name], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -171,13 +173,35 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, Option<String>>(3)?,
                 r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         })
         .map_err(map_error)?;
-    for constraint in constraints {
-        let (kind, constraint_name, columns_text, referenced_table, referenced_columns) =
-            constraint.map_err(map_error)?;
+    for row in rows {
+        let (kind, constraint_name, columns_text, referenced_table, referenced_columns, text) =
+            row.map_err(map_error)?;
         let constraint_columns = split(columns_text);
+        let constraint_kind = match kind.as_str() {
+            "PRIMARY KEY" => Some(ConstraintKind::PrimaryKey),
+            "UNIQUE" => Some(ConstraintKind::Unique),
+            "CHECK" => Some(ConstraintKind::Check),
+            _ => None,
+        };
+        if let Some(kind) = constraint_kind {
+            constraints.push(ConstraintInfo {
+                name: constraint_name.clone(),
+                kind,
+                columns: if kind == ConstraintKind::Check {
+                    Vec::new()
+                } else {
+                    constraint_columns.clone()
+                },
+                definition: text.unwrap_or_default(),
+            });
+        }
+        if kind == "UNIQUE" || kind == "CHECK" {
+            continue;
+        }
         if kind == "PRIMARY KEY" {
             indexes.push(IndexInfo {
                 name: constraint_name
@@ -225,5 +249,6 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
         primary_key,
         indexes,
         foreign_keys,
+        constraints,
     })
 }

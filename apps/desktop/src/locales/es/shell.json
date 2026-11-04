@@ -97,7 +97,16 @@
     "users": "Usuarios",
     "logins": "Inicios de sesión",
     "tablespaces": "Espacios de tablas",
-    "extensions": "Extensiones"
+    "extensions": "Extensiones",
+    "columns": "Columnas",
+    "constraints": "Restricciones",
+    "foreignKeys": "Claves foráneas",
+    "indexes": "Índices"
+  },
+  "constraintKinds": {
+    "primary_key": "Clave primaria",
+    "unique": "Única",
+    "check": "Comprobación"
   },
   "passwordFor": "Contraseña de {{connection}}",
   "password": "Contraseña",

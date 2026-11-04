@@ -25,8 +25,9 @@ pub use column::{ColumnMeta, ResultSchema};
 pub use dialect::{Dialect, StatementSpan};
 pub use error::DriverError;
 pub use introspect::{
-    ColumnInfo, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, SchemaInfo, SchemaObject,
-    SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo, terminated,
+    ColumnInfo, ConstraintInfo, ConstraintKind, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind,
+    SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo,
+    check_definition, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use secret::Secret;

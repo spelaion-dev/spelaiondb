@@ -96,6 +96,74 @@ pub struct TableInfo {
     pub primary_key: Vec<String>,
     pub indexes: Vec<IndexInfo>,
     pub foreign_keys: Vec<ForeignKeyInfo>,
+    /// Primary key, unique and check constraints (foreign keys are in `foreign_keys`).
+    pub constraints: Vec<ConstraintInfo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConstraintKind {
+    PrimaryKey,
+    Unique,
+    Check,
+}
+
+/// `CHECK (expr)` from a check clause, with or without its outer parentheses: engines that
+/// keep them (`(total >= 0)`) are not given a second pair.
+pub fn check_definition(clause: &str) -> String {
+    let clause = clause.trim();
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut wrapped = clause.starts_with('(');
+    for (i, c) in clause.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"' | '`') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => {
+                depth = depth.saturating_sub(1);
+                // The first parenthesis closes before the end: `(a) and (b)`.
+                if depth == 0 && i + 1 < clause.len() {
+                    wrapped = false;
+                }
+            }
+            (None, _) => {}
+        }
+    }
+    if wrapped {
+        format!("CHECK {clause}")
+    } else {
+        format!("CHECK ({clause})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_definition;
+
+    #[test]
+    fn checks_get_one_pair_of_parentheses() {
+        assert_eq!(check_definition("(`total` >= 0)"), "CHECK (`total` >= 0)");
+        assert_eq!(check_definition("`total` >= 0"), "CHECK (`total` >= 0)");
+        assert_eq!(
+            check_definition("(a > 0) and (b > 0)"),
+            "CHECK ((a > 0) and (b > 0))"
+        );
+        assert_eq!(check_definition("([id]>(0))"), "CHECK ([id]>(0))");
+        assert_eq!(check_definition("(note <> ')')"), "CHECK (note <> ')')");
+        assert_eq!(check_definition("(a) = ('(')"), "CHECK ((a) = ('('))");
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstraintInfo {
+    /// None where the engine does not keep a name (SQLite's primary key).
+    pub name: Option<String>,
+    pub kind: ConstraintKind,
+    /// The columns of a primary key or unique constraint, in order; empty for a check.
+    pub columns: Vec<String>,
+    /// As the engine writes it: `PRIMARY KEY (id)`, `UNIQUE (email)`, `CHECK (total >= 0)`.
+    pub definition: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

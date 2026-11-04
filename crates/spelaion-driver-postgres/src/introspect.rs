@@ -1,8 +1,8 @@
 //! PostgreSQL catalog queries for the explorer, autocompletion and the MCP server.
 
 use spelaion_driver_api::{
-    ColumnInfo, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, Result, SchemaInfo,
-    TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo,
+    ObjectKind, Result, SchemaInfo, TableInfo,
 };
 use tokio_postgres::{Client, Row};
 
@@ -166,11 +166,47 @@ pub async fn describe_table(client: &Client, schema: &str, name: &str) -> Result
         })
         .collect();
 
+    let constraints = client
+        .query(
+            "select c.conname::text, c.contype::text, pg_get_constraintdef(c.oid, true),
+                    array(select a.attname::text
+                          from unnest(c.conkey) with ordinality as k(attnum, ord)
+                          join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum
+                          order by k.ord)
+             from pg_constraint c
+             where c.conrelid = $1 and c.contype in ('p', 'u', 'c')
+             order by c.contype <> 'p', c.conname",
+            &[&oid],
+        )
+        .await
+        .map_err(map_error)?
+        .iter()
+        .map(|r| {
+            let kind: String = r.get(1);
+            let kind = match kind.as_str() {
+                "p" => ConstraintKind::PrimaryKey,
+                "u" => ConstraintKind::Unique,
+                _ => ConstraintKind::Check,
+            };
+            ConstraintInfo {
+                name: Some(r.get(0)),
+                kind,
+                columns: if kind == ConstraintKind::Check {
+                    Vec::new()
+                } else {
+                    r.get(3)
+                },
+                definition: r.get(2),
+            }
+        })
+        .collect();
+
     Ok(TableInfo {
         object,
         columns,
         primary_key,
         indexes,
         foreign_keys,
+        constraints,
     })
 }

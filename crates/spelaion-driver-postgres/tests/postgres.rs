@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
+    ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
+    LogicalType, ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
 };
 use spelaion_driver_postgres::PostgresDriver;
 
@@ -403,6 +403,7 @@ async fn introspection_describes_tables() {
              created timestamptz
          );
          create index orders_created on {schema}.orders (created);
+         alter table {schema}.orders add constraint orders_total_positive check (total >= 0);
          create view {schema}.big_orders as select * from {schema}.orders where total > 100"
     );
     for stmt in ddl.split(';') {
@@ -456,6 +457,41 @@ async fn introspection_describes_tables() {
         assert_eq!(orders.foreign_keys[0].columns, ["customer_id"]);
         assert_eq!(orders.foreign_keys[0].referenced_table, "customer");
         assert_eq!(orders.foreign_keys[0].referenced_columns, ["id"]);
+        assert_eq!(
+            constraints(&orders),
+            [
+                (
+                    Some("orders_pkey"),
+                    ConstraintKind::PrimaryKey,
+                    vec!["id"],
+                    "PRIMARY KEY (id)"
+                ),
+                (
+                    Some("orders_total_positive"),
+                    ConstraintKind::Check,
+                    vec![],
+                    "CHECK (total >= 0::numeric)"
+                ),
+            ]
+        );
+        let customer = conn.describe_table(&schema, "customer").await.unwrap();
+        assert_eq!(
+            constraints(&customer),
+            [
+                (
+                    Some("customer_pkey"),
+                    ConstraintKind::PrimaryKey,
+                    vec!["id"],
+                    "PRIMARY KEY (id)"
+                ),
+                (
+                    Some("customer_email_key"),
+                    ConstraintKind::Unique,
+                    vec!["email"],
+                    "UNIQUE (email)"
+                ),
+            ]
+        );
     };
     let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
     run(&*conn, &format!("drop schema {schema} cascade"))
@@ -872,4 +908,22 @@ async fn client_certificates_log_in_without_a_password() {
         .to_string();
     assert!(message.contains("no-such.key"), "{message}");
     assert!(!message.contains("PRIVATE KEY"), "{message}");
+}
+
+/// (name, kind, columns, definition) of each constraint, to compare in one go.
+fn constraints(
+    table: &spelaion_driver_api::TableInfo,
+) -> Vec<(Option<&str>, ConstraintKind, Vec<&str>, &str)> {
+    table
+        .constraints
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_deref(),
+                c.kind,
+                c.columns.iter().map(String::as_str).collect(),
+                c.definition.as_str(),
+            )
+        })
+        .collect()
 }

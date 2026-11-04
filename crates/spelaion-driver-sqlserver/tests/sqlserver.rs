@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
+    ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
+    LogicalType, ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
 };
 use spelaion_driver_sqlserver::SqlServerDriver;
 
@@ -564,7 +564,7 @@ async fn introspection_describes_tables() {
          drop table if exists zoo.orders;
          drop table if exists zoo.customer;
          if schema_id('zoo') is null exec('create schema zoo');
-         create table zoo.customer (id int primary key, name nvarchar(80) not null default N'x');
+         create table zoo.customer (id int constraint customer_pk primary key, name nvarchar(80) not null default N'x' constraint customer_name unique, constraint customer_id_positive check (id > 0));
          create table zoo.orders (id int, line int, customer_id int references zoo.customer (id),
                                   total decimal(12, 2), note varchar(max), primary key (id, line));
          create index orders_total on zoo.orders (total desc);
@@ -589,6 +589,30 @@ async fn introspection_describes_tables() {
             ("big_orders", ObjectKind::View),
             ("customer", ObjectKind::Table),
             ("orders", ObjectKind::Table)
+        ]
+    );
+    let customer = conn.describe_table("zoo", "customer").await.unwrap();
+    assert_eq!(
+        constraints(&customer),
+        [
+            (
+                Some("customer_pk"),
+                ConstraintKind::PrimaryKey,
+                vec!["id"],
+                "PRIMARY KEY ([id])"
+            ),
+            (
+                Some("customer_name"),
+                ConstraintKind::Unique,
+                vec!["name"],
+                "UNIQUE ([name])"
+            ),
+            (
+                Some("customer_id_positive"),
+                ConstraintKind::Check,
+                vec![],
+                "CHECK ([id]>(0))"
+            ),
         ]
     );
     let orders = conn.describe_table("zoo", "orders").await.unwrap();
@@ -738,4 +762,22 @@ async fn explorer_lists_routines_sequences_triggers_synonyms_and_types() {
     for sql in cleanup {
         run(&*conn, sql).await.unwrap();
     }
+}
+
+/// (name, kind, columns, definition) of each constraint, to compare in one go.
+fn constraints(
+    table: &spelaion_driver_api::TableInfo,
+) -> Vec<(Option<&str>, ConstraintKind, Vec<&str>, &str)> {
+    table
+        .constraints
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_deref(),
+                c.kind,
+                c.columns.iter().map(String::as_str).collect(),
+                c.definition.as_str(),
+            )
+        })
+        .collect()
 }

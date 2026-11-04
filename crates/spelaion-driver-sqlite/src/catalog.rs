@@ -5,8 +5,9 @@
 
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
-    ColumnInfo, Dialect, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, Result,
-    SchemaInfo, SchemaObject, SchemaObjectKind, TableInfo, terminated,
+    ColumnInfo, ConstraintInfo, ConstraintKind, Dialect, DriverError, ForeignKeyInfo, IndexInfo,
+    ObjectInfo, ObjectKind, Result, SchemaInfo, SchemaObject, SchemaObjectKind, TableInfo,
+    terminated,
 };
 
 use crate::dialect::SqliteDialect;
@@ -153,6 +154,16 @@ pub(crate) fn indexes_sql(schema: &str, name: &str) -> String {
     )
 }
 
+/// The columns of the indexes behind UNIQUE constraints (`origin = 'u'`), in order.
+pub(crate) fn unique_columns_sql(schema: &str, name: &str) -> String {
+    format!(
+        "select il.name, ii.name from pragma_index_list({table}, {schema}) il, \
+         pragma_index_info(il.name, {schema}) ii where il.origin = 'u' order by il.name, ii.seqno",
+        table = literal(name),
+        schema = literal(schema)
+    )
+}
+
 pub(crate) fn foreign_keys_sql(schema: &str, name: &str) -> String {
     format!(
         r#"select id, "table", "from", "to" from pragma_foreign_key_list({}, {}) order by id, seq"#,
@@ -182,6 +193,7 @@ pub(crate) fn table(
     column_rows: &[Row],
     index_rows: &[Row],
     foreign_key_rows: &[Row],
+    unique_rows: &[Row],
 ) -> (TableInfo, Vec<usize>) {
     let schema = object.schema.clone();
     let mut pk: Vec<(i64, String)> = column_rows
@@ -249,13 +261,53 @@ pub(crate) fn table(
         .map(|(i, _)| i)
         .collect();
 
+    let primary_key: Vec<String> = pk.into_iter().map(|(_, n)| n).collect();
+    let quoted = |columns: &[String]| {
+        columns
+            .iter()
+            .map(|c| SqliteDialect.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut constraints = Vec::new();
+    if !primary_key.is_empty() {
+        constraints.push(ConstraintInfo {
+            name: None,
+            kind: ConstraintKind::PrimaryKey,
+            definition: format!("PRIMARY KEY ({})", quoted(&primary_key)),
+            columns: primary_key.clone(),
+        });
+    }
+    for row in unique_rows {
+        let index = text(row, 0);
+        match constraints.last_mut() {
+            Some(ConstraintInfo {
+                name: Some(name),
+                columns,
+                ..
+            }) if *name == index => columns.push(text(row, 1)),
+            _ => constraints.push(ConstraintInfo {
+                name: Some(index),
+                kind: ConstraintKind::Unique,
+                columns: vec![text(row, 1)],
+                definition: String::new(),
+            }),
+        }
+    }
+    for c in &mut constraints {
+        if c.kind == ConstraintKind::Unique {
+            c.definition = format!("UNIQUE ({})", quoted(&c.columns));
+        }
+    }
+
     (
         TableInfo {
             object,
             columns,
-            primary_key: pk.into_iter().map(|(_, n)| n).collect(),
+            primary_key,
             indexes,
             foreign_keys,
+            constraints,
         },
         to_primary_keys,
     )

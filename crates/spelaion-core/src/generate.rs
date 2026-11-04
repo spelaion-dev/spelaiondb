@@ -223,6 +223,7 @@ mod tests {
             primary_key: primary_key.iter().map(|k| k.to_string()).collect(),
             indexes: Vec::new(),
             foreign_keys: Vec::new(),
+            constraints: Vec::new(),
         }
     }
 

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_core::CoreEvent;
 use spelaion_driver_api::{
-    ObjectInfo, ObjectKind, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind,
-    TableInfo,
+    ConstraintKind, ObjectInfo, ObjectKind, SchemaObject, SchemaObjectKind, ServerObject,
+    ServerObjectKind, TableInfo,
 };
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -500,8 +500,47 @@ pub struct ColumnDetails {
 pub struct TableDetails {
     pub columns: Vec<ColumnDetails>,
     pub primary_key: Vec<String>,
-    pub indexes: Vec<String>,
-    pub foreign_keys: Vec<String>,
+    pub constraints: Vec<ConstraintDetails>,
+    pub foreign_keys: Vec<ForeignKeyDetails>,
+    pub indexes: Vec<IndexDetails>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintKindItem {
+    PrimaryKey,
+    Unique,
+    Check,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConstraintDetails {
+    /// None where the engine keeps no name (SQLite's primary key).
+    pub name: Option<String>,
+    pub kind: ConstraintKindItem,
+    pub columns: Vec<String>,
+    pub definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKeyDetails {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub referenced_schema: String,
+    pub referenced_table: String,
+    pub referenced_columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexDetails {
+    pub name: String,
+    pub unique: bool,
+    pub primary: bool,
+    /// `CREATE INDEX …` as the engine writes it (or a comment for SQLite's automatic ones).
+    pub definition: String,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -527,18 +566,39 @@ impl From<TableInfo> for TableDetails {
                 })
                 .collect(),
             primary_key: t.primary_key,
-            indexes: t.indexes.into_iter().map(|i| i.definition).collect(),
+            constraints: t
+                .constraints
+                .into_iter()
+                .map(|c| ConstraintDetails {
+                    name: c.name,
+                    kind: match c.kind {
+                        ConstraintKind::PrimaryKey => ConstraintKindItem::PrimaryKey,
+                        ConstraintKind::Unique => ConstraintKindItem::Unique,
+                        ConstraintKind::Check => ConstraintKindItem::Check,
+                    },
+                    columns: c.columns,
+                    definition: c.definition,
+                })
+                .collect(),
             foreign_keys: t
                 .foreign_keys
                 .into_iter()
-                .map(|fk| {
-                    format!(
-                        "({}) → {}.{} ({})",
-                        fk.columns.join(", "),
-                        fk.referenced_schema,
-                        fk.referenced_table,
-                        fk.referenced_columns.join(", ")
-                    )
+                .map(|fk| ForeignKeyDetails {
+                    name: fk.name,
+                    columns: fk.columns,
+                    referenced_schema: fk.referenced_schema,
+                    referenced_table: fk.referenced_table,
+                    referenced_columns: fk.referenced_columns,
+                })
+                .collect(),
+            indexes: t
+                .indexes
+                .into_iter()
+                .map(|i| IndexDetails {
+                    name: i.name,
+                    unique: i.unique,
+                    primary: i.primary,
+                    definition: i.definition,
                 })
                 .collect(),
         }

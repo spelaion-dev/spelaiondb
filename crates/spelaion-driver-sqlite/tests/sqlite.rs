@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, SchemaObjectKind, Value,
+    ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
+    LogicalType, ObjectKind, SchemaObjectKind, Value,
 };
 use spelaion_driver_sqlite::SqliteDriver;
 
@@ -454,6 +454,25 @@ async fn introspection_describes_tables() {
 
     let customer = conn.describe_table("main", "customer").await.unwrap();
     assert!(customer.indexes.iter().any(|i| i.unique && !i.primary));
+    // SQLite keeps no name for the primary key, and check constraints only in the CREATE text.
+    assert_eq!(
+        constraints(&customer),
+        [
+            (
+                None,
+                ConstraintKind::PrimaryKey,
+                vec!["id"],
+                "PRIMARY KEY (id)"
+            ),
+            (
+                Some("sqlite_autoindex_customer_1"),
+                ConstraintKind::Unique,
+                vec!["email"],
+                "UNIQUE (email)"
+            ),
+        ]
+    );
+    assert_eq!(constraints(&line)[0].3, "PRIMARY KEY (order_id, n)");
 }
 
 #[tokio::test]
@@ -484,4 +503,22 @@ async fn new_databases_are_created_once_and_never_overwritten() {
         "{err}"
     );
     assert_eq!(std::fs::read(&db.0).unwrap(), before);
+}
+
+/// (name, kind, columns, definition) of each constraint, to compare in one go.
+fn constraints(
+    table: &spelaion_driver_api::TableInfo,
+) -> Vec<(Option<&str>, ConstraintKind, Vec<&str>, &str)> {
+    table
+        .constraints
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_deref(),
+                c.kind,
+                c.columns.iter().map(String::as_str).collect(),
+                c.definition.as_str(),
+            )
+        })
+        .collect()
 }

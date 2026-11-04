@@ -429,6 +429,26 @@ export type ConnectionItem_Serialize = {
 	readOnly: boolean,
 };
 
+export type ConstraintDetails = ConstraintDetails_Serialize | ConstraintDetails_Deserialize;
+
+export type ConstraintDetails_Deserialize = {
+	/**  None where the engine keeps no name (SQLite's primary key). */
+	name?: string | null,
+	kind: ConstraintKindItem,
+	columns: string[],
+	definition: string,
+};
+
+export type ConstraintDetails_Serialize = {
+	/**  None where the engine keeps no name (SQLite's primary key). */
+	name: string | null,
+	kind: ConstraintKindItem,
+	columns: string[],
+	definition: string,
+};
+
+export type ConstraintKindItem = "primary_key" | "unique" | "check";
+
 /**
  *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
  *  a password.
@@ -560,6 +580,14 @@ export type FilterOutcome = {
 	total: number,
 };
 
+export type ForeignKeyDetails = {
+	name: string,
+	columns: string[],
+	referencedSchema: string,
+	referencedTable: string,
+	referencedColumns: string[],
+};
+
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
 
 export type HistoryItem_Deserialize = {
@@ -627,6 +655,14 @@ export type ImportReport = {
 export type ImportSkip = {
 	name: string,
 	reason: string,
+};
+
+export type IndexDetails = {
+	name: string,
+	unique: boolean,
+	primary: boolean,
+	/**  `CREATE INDEX …` as the engine writes it (or a comment for SQLite's automatic ones). */
+	definition: string,
 };
 
 export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; port: number; algorithm: string; fingerprint: string } | { kind: "secret"; title: string; prompt: string; echo: boolean; label: SecretLabel };
@@ -868,15 +904,17 @@ export type TableDetails = TableDetails_Serialize | TableDetails_Deserialize;
 export type TableDetails_Deserialize = {
 	columns: ColumnDetails_Deserialize[],
 	primaryKey: string[],
-	indexes: string[],
-	foreignKeys: string[],
+	constraints: ConstraintDetails_Deserialize[],
+	foreignKeys: ForeignKeyDetails[],
+	indexes: IndexDetails[],
 };
 
 export type TableDetails_Serialize = {
 	columns: ColumnDetails_Serialize[],
 	primaryKey: string[],
-	indexes: string[],
-	foreignKeys: string[],
+	constraints: ConstraintDetails_Serialize[],
+	foreignKeys: ForeignKeyDetails[],
+	indexes: IndexDetails[],
 };
 
 /**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */

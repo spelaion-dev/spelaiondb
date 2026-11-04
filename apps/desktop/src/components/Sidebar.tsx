@@ -7,6 +7,7 @@ import {
   call,
   commands,
   type ConnectionItem,
+  type IndexDetails,
   type ObjectItem,
   type SchemaItem,
   type SchemaObjectItem,
@@ -132,9 +133,19 @@ function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[numbe
 }
 
 /** A folder of the explorer, closed until clicked, with how many items it holds. */
-function Folder({ label, count, children }: { label: string; count: number; children: ReactNode }) {
+function Folder({
+  label,
+  count,
+  initiallyOpen = false,
+  children,
+}: {
+  label: string;
+  count: number;
+  initiallyOpen?: boolean;
+  children: ReactNode;
+}) {
   const { t, i18n } = useTranslation("shell");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   return (
     <div className="node">
       <div
@@ -698,22 +709,113 @@ function ObjectNode({
       )}
       {open && details && (
         <div className="children">
-          {details.columns.map((c) => (
-            <div
-              key={c.name}
-              className="row column-row"
-              title={c.comment ?? ""}
-            >
-              <span className="label">
-                {details.primaryKey.includes(c.name) ? "🔑 " : ""}
-                {c.name}
-              </span>
-              <span className="muted small">
-                {c.nativeType}
-                {c.nullable ? "" : " not null"}
-              </span>
-            </div>
-          ))}
+          <Folder label={t("folders.columns")} count={details.columns.length} initiallyOpen>
+            {details.columns.map((c) => (
+              <div key={c.name} className="row leaf-row" title={c.comment ?? ""}>
+                <span className="label">
+                  {details.primaryKey.includes(c.name) ? "🔑 " : ""}
+                  {c.name}
+                </span>
+                <span className="muted small">
+                  {c.nativeType}
+                  {c.nullable ? "" : " not null"}
+                </span>
+              </div>
+            ))}
+          </Folder>
+          {details.constraints.length > 0 && (
+            <Folder label={t("folders.constraints")} count={details.constraints.length}>
+              {details.constraints.map((c, i) => (
+                <div key={c.name ?? `${c.kind}:${i}`} className="row leaf-row" title={c.definition}>
+                  <span className="label">{c.name ?? t(`constraintKinds.${c.kind}`)}</span>
+                  <span className="muted small">{c.definition}</span>
+                </div>
+              ))}
+            </Folder>
+          )}
+          {details.foreignKeys.length > 0 && (
+            <Folder label={t("folders.foreignKeys")} count={details.foreignKeys.length}>
+              {details.foreignKeys.map((fk) => {
+                const target = `(${fk.columns.join(", ")}) → ${fk.referencedSchema === object.schema ? "" : `${fk.referencedSchema}.`}${fk.referencedTable} (${fk.referencedColumns.join(", ")})`;
+                return (
+                  <div key={fk.name} className="row leaf-row" title={target}>
+                    <span className="label">{fk.name}</span>
+                    <span className="muted small">{target}</span>
+                  </div>
+                );
+              })}
+            </Folder>
+          )}
+          {details.indexes.length > 0 && (
+            <Folder label={t("folders.indexes")} count={details.indexes.length}>
+              {details.indexes.map((index) => (
+                <IndexNode
+                  key={index.name}
+                  session={session}
+                  connectionId={connectionId}
+                  schema={object.schema}
+                  index={index}
+                />
+              ))}
+            </Folder>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** An index: double-click or its menu opens its definition in a new tab (nothing runs). */
+function IndexNode({
+  session,
+  connectionId,
+  schema,
+  index,
+}: {
+  session: string;
+  connectionId: string;
+  schema: string;
+  index: IndexDetails;
+}) {
+  const { t } = useTranslation("shell");
+  const addTab = useApp((s) => s.addTab);
+  const [menu, setMenu] = useContextMenu();
+  const openDefinition = () => {
+    setMenu(null);
+    const sql = index.definition.startsWith("--") ? index.definition : `${index.definition.trimEnd().replace(/;$/, "")};`;
+    const tab = addTab(connectionId, sql);
+    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, schema));
+  };
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        onDoubleClick={openDefinition}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        title={index.definition}
+        role="button"
+        tabIndex={0}
+        aria-label={t("openObject", { name: index.name })}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            openDefinition();
+          }
+        }}
+      >
+        <span className="label">{index.name}</span>
+        {(index.primary || index.unique) && (
+          <span className="muted small">{index.primary ? "PRIMARY KEY" : "UNIQUE"}</span>
+        )}
+      </div>
+      {menu && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <button role="menuitem" onClick={openDefinition}>
+            {t("openDefinition")}
+          </button>
         </div>
       )}
     </div>

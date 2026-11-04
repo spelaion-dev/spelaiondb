@@ -97,7 +97,16 @@
     "users": "Users",
     "logins": "Logins",
     "tablespaces": "Tablespaces",
-    "extensions": "Extensions"
+    "extensions": "Extensions",
+    "columns": "Columns",
+    "constraints": "Constraints",
+    "foreignKeys": "Foreign keys",
+    "indexes": "Indexes"
+  },
+  "constraintKinds": {
+    "primary_key": "Primary key",
+    "unique": "Unique",
+    "check": "Check"
   },
   "passwordFor": "Password for {{connection}}",
   "password": "Password",

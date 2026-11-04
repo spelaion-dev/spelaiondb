@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 use futures_util::TryStreamExt;
 use mysql_async::prelude::Queryable;
 use spelaion_driver_api::{
-    ColumnMeta, ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions,
-    LogicalType, ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
+    ColumnMeta, ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent,
+    ExecOptions, LogicalType, ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode,
+    Value,
 };
 use spelaion_driver_mysql::MysqlDriver;
 
@@ -491,6 +492,7 @@ async fn introspection_lists_tables_columns_keys_and_indexes() {
             "create table purchase (id int primary key, customer varchar(40) not null default 'anon' comment 'who', total decimal(10,2), unique key purchase_customer (customer, id)) comment 'purchases'",
             "create table line_item (purchase_id int, n int, primary key (purchase_id, n), constraint line_purchase foreign key (purchase_id) references purchase (id))",
             "create view big_purchase as select * from purchase where total > 100",
+            "alter table purchase add constraint purchase_total check (total >= 0)",
         ] {
             run(&*conn, sql).await.unwrap();
         }
@@ -525,6 +527,32 @@ async fn introspection_lists_tables_columns_keys_and_indexes() {
         );
         assert!(purchase.indexes.iter().any(|i| i.name == "purchase_customer" && i.unique
             && i.definition == "CREATE UNIQUE INDEX `purchase_customer` ON `purchase` (`customer`, `id`)"));
+
+        assert_eq!(
+            constraints(&purchase),
+            [
+                (
+                    Some("PRIMARY"),
+                    ConstraintKind::PrimaryKey,
+                    vec!["id"],
+                    "PRIMARY KEY (`id`)"
+                ),
+                (
+                    Some("purchase_customer"),
+                    ConstraintKind::Unique,
+                    vec!["customer", "id"],
+                    "UNIQUE (`customer`, `id`)"
+                ),
+                (
+                    Some("purchase_total"),
+                    ConstraintKind::Check,
+                    vec![],
+                    "CHECK (`total` >= 0)"
+                ),
+            ],
+            "{}",
+            server.label
+        );
 
         let line = conn.describe_table("spelaion", "line_item").await.unwrap();
         assert_eq!(line.primary_key, ["purchase_id", "n"]);
@@ -722,4 +750,22 @@ async fn client_certificates_log_in_without_a_password() {
             server.label
         );
     }
+}
+
+/// (name, kind, columns, definition) of each constraint, to compare in one go.
+fn constraints(
+    table: &spelaion_driver_api::TableInfo,
+) -> Vec<(Option<&str>, ConstraintKind, Vec<&str>, &str)> {
+    table
+        .constraints
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_deref(),
+                c.kind,
+                c.columns.iter().map(String::as_str).collect(),
+                c.definition.as_str(),
+            )
+        })
+        .collect()
 }

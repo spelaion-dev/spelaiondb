@@ -2,8 +2,8 @@
 //! server. In MySQL a "schema" is a database.
 
 use spelaion_driver_api::{
-    ColumnInfo, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, Result, SchemaInfo,
-    TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo,
+    ObjectKind, Result, SchemaInfo, TableInfo,
 };
 
 use crate::{Flavor, MysqlConnection};
@@ -190,11 +190,72 @@ pub(crate) async fn describe_table(
         }
     }
 
+    // Check constraints: MySQL names them per schema, MariaDB per table.
+    let same_table = match flavor {
+        Flavor::Mariadb => " and cc.table_name = tc.table_name",
+        Flavor::Mysql => "",
+    };
+    let constraint_rows = conn
+        .rows(
+            &format!(
+                "select tc.constraint_name, tc.constraint_type, k.column_name, cc.check_clause
+                 from information_schema.table_constraints tc
+                 left join information_schema.key_column_usage k
+                   on k.constraint_schema = tc.constraint_schema and k.table_name = tc.table_name
+                  and k.constraint_name = tc.constraint_name
+                 left join information_schema.check_constraints cc
+                   on cc.constraint_schema = tc.constraint_schema
+                  and cc.constraint_name = tc.constraint_name{same_table}
+                 where tc.table_schema = ? and tc.table_name = ?
+                   and tc.constraint_type in ('PRIMARY KEY', 'UNIQUE', 'CHECK')
+                 order by tc.constraint_type <> 'PRIMARY KEY', tc.constraint_name,
+                          k.ordinal_position"
+            ),
+            params(),
+        )
+        .await?;
+    let mut constraints: Vec<ConstraintInfo> = Vec::new();
+    for row in &constraint_rows {
+        let constraint = text(row, 0);
+        let kind = match text(row, 1).as_str() {
+            "PRIMARY KEY" => ConstraintKind::PrimaryKey,
+            "UNIQUE" => ConstraintKind::Unique,
+            _ => ConstraintKind::Check,
+        };
+        match constraints.last_mut() {
+            Some(c) if c.name.as_deref() == Some(constraint.as_str()) && c.kind == kind => {
+                c.columns.extend(opt(row, 2));
+            }
+            _ => constraints.push(ConstraintInfo {
+                name: Some(constraint),
+                kind,
+                columns: opt(row, 2).into_iter().collect(),
+                definition: opt(row, 3)
+                    .map(|clause| spelaion_driver_api::check_definition(&clause))
+                    .unwrap_or_default(),
+            }),
+        }
+    }
+    for c in &mut constraints {
+        let list = c
+            .columns
+            .iter()
+            .map(|col| quote(col))
+            .collect::<Vec<_>>()
+            .join(", ");
+        match c.kind {
+            ConstraintKind::PrimaryKey => c.definition = format!("PRIMARY KEY ({list})"),
+            ConstraintKind::Unique => c.definition = format!("UNIQUE ({list})"),
+            ConstraintKind::Check => {}
+        }
+    }
+
     Ok(TableInfo {
         object,
         columns,
         primary_key,
         indexes,
         foreign_keys,
+        constraints,
     })
 }
