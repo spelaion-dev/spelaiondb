@@ -3,7 +3,8 @@
 use futures_util::StreamExt;
 use spelunk_driver_api::Value;
 
-use crate::{CoreEvent, Session, generate::scalar_count};
+use crate::generate::{scalar_count, scalar_value};
+use crate::{CoreEvent, Session};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Process {
@@ -116,7 +117,12 @@ async fn read_processes(session: &Session, sql: &str) -> Result<Vec<Process>, St
         match event {
             CoreEvent::ResultStarted { result: id, .. } => result = Some(id),
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
-            _ => {}
+            CoreEvent::StatementStarted { .. }
+            | CoreEvent::Rows { .. }
+            | CoreEvent::Notice { .. }
+            | CoreEvent::StatementFinished { .. }
+            | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::HistoryWarning { .. } => {}
         }
     }
     let store = session.results();
@@ -266,32 +272,7 @@ pub async fn control_process(
     }) {
         return Err("the process has changed or is no longer visible; refresh the list".into());
     }
-    let mut events = session.run_script(&sql);
-    let mut result_id = None;
-    let mut failure = None;
-    while let Some(event) = events.next().await {
-        match event {
-            CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
-            CoreEvent::ResultStarted { result, .. } => result_id = Some(result),
-            _ => {}
-        }
-    }
-    let result = result_id.and_then(|id| {
-        let value = session.results().get(id).and_then(|stored| {
-            let stored = stored.read().ok()?;
-            let batch = stored.window(0, 1).into_iter().next()?;
-            Value::from_array(
-                batch.column(0).as_ref(),
-                0,
-                stored.schema().columns.first()?.logical,
-            )
-        });
-        session.results().remove(id);
-        value
-    });
-    if let Some(error) = failure {
-        return Err(error);
-    }
+    let result = scalar_value(session, &sql).await?;
     if engine == "postgres" && result != Some(Value::Bool(true)) {
         return Err("the server did not signal the process; it may have already ended".into());
     }

@@ -169,7 +169,12 @@ pub async fn append_query_page(
         match event {
             CoreEvent::ResultStarted { result, .. } => results.push(result),
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
-            _ => {}
+            CoreEvent::StatementStarted { .. }
+            | CoreEvent::Rows { .. }
+            | CoreEvent::Notice { .. }
+            | CoreEvent::StatementFinished { .. }
+            | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::HistoryWarning { .. } => {}
         }
     }
     let outcome = if let Some(error) = failure {

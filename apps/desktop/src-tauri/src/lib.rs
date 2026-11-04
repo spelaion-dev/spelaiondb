@@ -1752,8 +1752,7 @@ async fn describe_table(
     Ok(TableDetails::from(table))
 }
 
-/// Resolve a simple query to one unambiguous physical table whose columns and key are
-/// present in the stored result. Ambiguous or complex queries stay read-only.
+/// The table a query's result can be edited as, or none: the core decides (ADR-014).
 #[tauri::command]
 #[specta::specta]
 async fn editable_query_table(
@@ -1763,85 +1762,16 @@ async fn editable_query_table(
     state: State<'_, AppState>,
 ) -> CmdResult<Option<EditableTableItem>> {
     let open = state.session(&session).await?;
-    if open.resolved.params.read_only {
-        return Ok(None);
-    }
-    let Some((schema, name)) =
-        spelunk_core::editable_query_source(open.session.dialect().as_ref(), &sql)
-    else {
-        return Ok(None);
-    };
-    let columns = {
-        let stored = state
-            .results
-            .get(ResultId(result.into()))
-            .ok_or("result freed")?;
-        let stored = stored.read().map_err(|_| "result lock poisoned")?;
-        stored
-            .schema()
-            .columns
-            .iter()
-            .map(|c| c.name.clone())
-            .collect::<Vec<_>>()
-    };
-    let conn = open.session.connection();
-    let schemas = if let Some(schema) = schema {
-        vec![schema]
-    } else if matches!(open.session.dialect().name(), "mysql" | "mariadb") {
-        match conn.current_database().await.map_err(|e| e.to_string())? {
-            Some(database) => vec![database],
-            None => return Ok(None),
-        }
-    } else {
-        conn.list_schemas()
-            .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|s| s.name)
-            .collect()
-    };
-    let mut matches = Vec::new();
-    for schema in schemas {
-        let objects = conn
-            .list_objects(&schema)
-            .await
-            .map_err(|e| e.to_string())?;
-        for object in objects.into_iter().filter(|o| o.name == name) {
-            matches.push((schema.clone(), object.kind));
-        }
-    }
-    let [(schema, kind)] = matches.as_slice() else {
-        return Ok(None);
-    };
-    if !matches!(
-        kind,
-        spelunk_driver_api::ObjectKind::Table | spelunk_driver_api::ObjectKind::PartitionedTable
-    ) {
-        return Ok(None);
-    }
-    let table = conn
-        .describe_table(schema, &name)
-        .await
-        .map_err(|e| e.to_string())?;
-    if table.primary_key.is_empty()
-        || !table.primary_key.iter().all(|key| columns.contains(key))
-        || columns
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            != columns.len()
-        || !columns.iter().all(|column| {
-            table
-                .columns
-                .iter()
-                .any(|expected| expected.name == *column)
-        })
-    {
-        return Ok(None);
-    }
-    Ok(Some(EditableTableItem {
-        schema: schema.clone(),
-        name,
+    let table = spelunk_core::editable_query_table(
+        &open.session,
+        ResultId(result.into()),
+        &sql,
+        open.resolved.params.read_only,
+    )
+    .await?;
+    Ok(table.map(|table| EditableTableItem {
+        schema: table.object.schema,
+        name: table.object.name,
         primary_key: table.primary_key,
     }))
 }

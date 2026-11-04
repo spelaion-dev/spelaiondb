@@ -210,10 +210,7 @@ export const commands = {
 	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
 	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),
 	describeTable: (session: string, schema: string, name: string) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name })),
-	/**
-	 *  Resolve a simple query to one unambiguous physical table whose columns and key are
-	 *  present in the stored result. Ambiguous or complex queries stay read-only.
-	 */
+	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),

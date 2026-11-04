@@ -5,6 +5,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
+import type { EditableTableItem } from "../bindings";
 import { openSession } from "../connect";
 import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
@@ -97,7 +98,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const clearPending = () => setPending({ cells: {}, deleted: [], inserts: [] });
   /** The table's primary key (`null` until known): editing needs one. */
   const [primaryKey, setPrimaryKey] = useState<string[] | null>(null);
-  const [queryTable, setQueryTable] = useState<{ result: number; schema: string; name: string; primaryKey: string[] } | null>(null);
+  const [queryTable, setQueryTable] = useState<(EditableTableItem & { result: number }) | null>(null);
   const [queryChecked, setQueryChecked] = useState<number | null>(null);
   const [savingEdits, setSavingEdits] = useState(false);
   const [pageLoading, setPageLoading] = useState(false);

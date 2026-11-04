@@ -351,3 +351,40 @@ async fn table_data_pages_and_edits_in_one_transaction() {
     assert_eq!(texts(&session, "select @@trancount").await, ["0"]);
     run(&session, "drop table [line item]").await;
 }
+
+async fn editable(session: &Session, sql: &str) -> Option<(String, String)> {
+    let id = results(&run(session, sql).await)[0];
+    spelunk_core::editable_query_table(session, id, sql, false)
+        .await
+        .unwrap()
+        .map(|t| (t.object.schema, t.object.name))
+}
+
+#[tokio::test]
+async fn query_results_resolve_their_table_as_the_server_does() {
+    let Some(session) = spelunk().await else {
+        return;
+    };
+    run(
+        &session,
+        "if schema_id('core_eq') is null exec('create schema core_eq')
+         drop synonym if exists dbo.core_eq_syn
+         drop table if exists dbo.core_eq_orders, core_eq.core_eq_syn
+         create table dbo.core_eq_orders (id int primary key, item nvarchar(20))
+         insert into dbo.core_eq_orders values (1, N'pen')
+         create table core_eq.core_eq_syn (id int primary key, item nvarchar(20))
+         create synonym dbo.core_eq_syn for dbo.core_eq_orders",
+    )
+    .await;
+    assert_eq!(
+        editable(&session, "select * from core_eq_orders").await,
+        Some(("dbo".to_string(), "core_eq_orders".to_string()))
+    );
+    // The name reaches the synonym in `dbo` (the default schema), not the table with the
+    // same name in another schema: editing it there would change the wrong rows.
+    assert_eq!(editable(&session, "select * from core_eq_syn").await, None);
+    assert_eq!(
+        editable(&session, "select * from core_eq.core_eq_syn").await,
+        Some(("core_eq".to_string(), "core_eq_syn".to_string()))
+    );
+}

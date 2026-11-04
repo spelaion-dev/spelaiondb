@@ -29,7 +29,7 @@ pub use classify::{ReadKind, classify_read_only};
 pub use cursor::statement_at;
 pub use edit::{
     CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements,
-    editable_query_source,
+    editable_query_source, editable_query_table,
 };
 pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
 pub use filter::{ColumnFilter, FilterOp};

@@ -4,16 +4,18 @@
 //! result; what the user typed is converted by column type and every identifier is quoted
 //! for the engine.
 
+use std::collections::HashSet;
+
 use futures_util::StreamExt;
-use spelunk_driver_api::{Dialect, LogicalType, TableInfo, Value};
+use spelunk_driver_api::{Dialect, LogicalType, ObjectKind, TableInfo, Value};
 use sqlparser::ast::{Expr, GroupByExpr, SelectItem, SetExpr, Statement, TableFactor};
 use sqlparser::parser::Parser;
 
 use crate::export::sql_literal;
-use crate::generate::qualified;
+use crate::generate::{qualified, scalar_count, scalar_value};
 use crate::guard::sql_dialect;
 use crate::params::is_number;
-use crate::results::StoredResult;
+use crate::results::{ResultId, StoredResult};
 use crate::session::{CoreEvent, Session};
 
 /// Identify only direct columns from one real table. Complex projections, joins and
@@ -83,6 +85,153 @@ pub fn editable_query_source(dialect: &dyn Dialect, sql: &str) -> Option<(Option
         [schema, name] => Some((Some(schema.clone()), name.clone())),
         _ => None,
     }
+}
+
+/// The table whose rows a query's `result` shows, so it can be edited like a table data tab
+/// (ADR-014), or `None` when the result must stay read-only: the connection is read-only, the
+/// query is not a plain SELECT of one table ([`editable_query_source`]), its table name may
+/// not be the one the engine used to run it, the object is not a table, or the result lacks
+/// the primary key or holds a column the table does not have (or one column twice).
+pub async fn editable_query_table(
+    session: &Session,
+    result: ResultId,
+    sql: &str,
+    read_only: bool,
+) -> Result<Option<TableInfo>, String> {
+    if read_only {
+        return Ok(None);
+    }
+    let Some((schema, name)) = editable_query_source(session.dialect().as_ref(), sql) else {
+        return Ok(None);
+    };
+    let columns: Vec<String> = {
+        let stored = session
+            .results()
+            .get(result)
+            .ok_or("the result was freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        stored
+            .schema()
+            .columns
+            .iter()
+            .map(|c| c.name.clone())
+            .collect()
+    };
+    let Some(schema) = query_table_schema(session, schema, &name).await? else {
+        return Ok(None);
+    };
+    let conn = session.connection();
+    let objects = conn
+        .list_objects(&schema)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut named = objects.iter().filter(|o| o.name == name);
+    let (Some(object), None) = (named.next(), named.next()) else {
+        return Ok(None);
+    };
+    match object.kind {
+        ObjectKind::Table | ObjectKind::PartitionedTable => {}
+        ObjectKind::View | ObjectKind::MaterializedView | ObjectKind::ForeignTable => {
+            return Ok(None);
+        }
+    }
+    let table = conn
+        .describe_table(&schema, &name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let distinct = columns.iter().collect::<HashSet<_>>().len() == columns.len();
+    let has_key =
+        !table.primary_key.is_empty() && table.primary_key.iter().all(|k| columns.contains(k));
+    let all_of_table = columns
+        .iter()
+        .all(|c| table.columns.iter().any(|t| t.name == *c));
+    Ok((distinct && has_key && all_of_table).then_some(table))
+}
+
+/// The schema of the table a query names, exactly as the engine resolved it when it ran the
+/// query, or `None` when that is not certain. The edits are written with the qualified name,
+/// so an unqualified name must not reach a different table: a temporary table shadows a
+/// permanent one of the same name in PostgreSQL, SQLite and DuckDB, and the search path or
+/// the user's default schema decide the rest.
+async fn query_table_schema(
+    session: &Session,
+    schema: Option<String>,
+    name: &str,
+) -> Result<Option<String>, String> {
+    let engine = session.dialect().name();
+    let quoted = session.dialect().quote_identifier(name);
+    let literal = |text: &str| sql_literal(&Value::Text(text.to_string()), engine);
+    let conn = session.connection();
+    match (engine, schema) {
+        // `pg_temp` is not a listed schema, so a qualified temporary table finds no object.
+        ("postgres", Some(schema)) => Ok(Some(schema)),
+        ("postgres", None) => {
+            // The search path, as the server resolves it (temporary schema first).
+            let sql = format!(
+                "SELECT n.nspname::text FROM pg_catalog.pg_class c \
+                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE c.oid = pg_catalog.to_regclass({})",
+                literal(&quoted)
+            );
+            let schema = text(scalar_value(session, &sql).await?);
+            Ok(schema.filter(|schema| !schema.starts_with("pg_temp")))
+        }
+        // Temporary tables shadow `db.table` too, so reads and edits reach the same table.
+        ("mysql" | "mariadb", Some(schema)) => Ok(Some(schema)),
+        ("mysql" | "mariadb", None) => conn.current_database().await.map_err(|e| e.to_string()),
+        ("sqlserver", Some(schema)) => Ok(Some(schema)),
+        ("sqlserver", None) => {
+            // The user's default schema, then `dbo`; a synonym resolves to its own schema,
+            // where no table has its name.
+            let sql = format!("SELECT OBJECT_SCHEMA_NAME(OBJECT_ID({}))", literal(&quoted));
+            Ok(text(scalar_value(session, &sql).await?))
+        }
+        ("sqlite", Some(schema)) => Ok(Some(schema)),
+        // `temp` is listed once it holds anything, so a shadowed table is found twice.
+        ("sqlite", None) => unique_schema(session, name).await,
+        // `a.b` is a database or a schema; temporary tables shadow unqualified names.
+        ("duckdb", Some(_)) => Ok(None),
+        ("duckdb", None) => {
+            let sql = format!(
+                "SELECT (SELECT COUNT(*) FROM duckdb_tables() WHERE temporary AND table_name = {0}) \
+                 + (SELECT COUNT(*) FROM duckdb_views() WHERE temporary AND view_name = {0})",
+                literal(name)
+            );
+            if scalar_count(session, &sql).await? > 0 {
+                return Ok(None);
+            }
+            unique_schema(session, name).await
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The text of a scalar (`NULL` and other types are none).
+fn text(value: Option<Value>) -> Option<String> {
+    if let Some(Value::Text(text)) = value {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+/// The only listed schema with an object called `name`, if there is exactly one.
+async fn unique_schema(session: &Session, name: &str) -> Result<Option<String>, String> {
+    let conn = session.connection();
+    let mut found = None;
+    for schema in conn.list_schemas().await.map_err(|e| e.to_string())? {
+        let objects = conn
+            .list_objects(&schema.name)
+            .await
+            .map_err(|e| e.to_string())?;
+        if objects.iter().any(|o| o.name == name) {
+            if found.is_some() {
+                return Ok(None);
+            }
+            found = Some(schema.name);
+        }
+    }
+    Ok(found)
 }
 
 /// A value typed in the grid (or NULL).
