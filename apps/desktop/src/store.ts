@@ -102,7 +102,7 @@ let tabCounter = 0;
 export type ConnectionDialog = { kind: "add" } | { kind: "edit"; id: string };
 
 /** Window event asking the editor tab whose id is in `detail` to save its query (Ctrl+S). */
-export const SAVE_QUERY_EVENT = "spelunk:save-query";
+export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** How many closed tabs Ctrl+Shift+T can bring back. */
 const MAX_CLOSED_TABS = 20;

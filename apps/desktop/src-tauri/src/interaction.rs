@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use spelunk_driver_api::Secret;
-use spelunk_ssh::{HostInfo, Interaction, SecretRequest};
+use spelaion_driver_api::Secret;
+use spelaion_ssh::{HostInfo, Interaction, SecretRequest};
 use tauri::AppHandle;
 use tauri_specta::Event;
 use tokio::sync::oneshot;

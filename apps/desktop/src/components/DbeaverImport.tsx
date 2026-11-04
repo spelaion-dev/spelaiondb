@@ -13,14 +13,14 @@ import { refreshConnections } from "./Sidebar";
 declare global {
   interface Window {
     /** The smoke test points the import at its own DBeaver files, never the user's. */
-    __spelunkDbeaverDir?: string;
+    __spelaionDbeaverDir?: string;
   }
 }
 
 export function DbeaverImport(props: { onBack(): void; onDone(): void }) {
   const { t } = useTranslation("connections");
   const hasWorkspace = useApp((s) => Boolean(s.workspace?.workspace));
-  const [dir, setDir] = useState<string | null>(window.__spelunkDbeaverDir ?? null);
+  const [dir, setDir] = useState<string | null>(window.__spelaionDbeaverDir ?? null);
   const [found, setFound] = useState<{ dir: string; items: DbeaverItem[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());

@@ -1,4 +1,4 @@
-# SpelunkDB — rules for agents
+# SpelaionDB — rules for agents
 
 An open-source (Apache-2.0) desktop database client, with first-class SSH tunnels and an
 MCP server. **All the code is written by an agent and nobody reviews it line by line**:
@@ -8,57 +8,57 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - Read `docs/architecture.md` and the ADRs in `docs/adr/`. ADRs rule: if a change
   contradicts them, do not make it; propose a new ADR that supersedes the old one.
 - Current state: **v0.3**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQL Server, SQLite
-  and DuckDB drivers, configuration, SSH tunnels, core, local store, `spelunk mcp` (read-only, writes per connection) and the
-  `spelunk` binary, and the first version of the desktop app (`apps/desktop`).
+  and DuckDB drivers, configuration, SSH tunnels, core, local store, `spelaiondb mcp` (read-only, writes per connection) and the
+  `spelaiondb` binary, and the first version of the desktop app (`apps/desktop`).
   `spikes/` is throwaway phase 0 code: it is never imported from `crates/`.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and
   commit messages.
 
 ## Workspace map
-- `crates/spelunk-driver-api`: driver contract (ADR-005). Results in Arrow with
-  `spelunk.logical` / `spelunk.native_type` metadata per column; `Value` for single cells.
-- `crates/spelunk-driver-postgres`: extended protocol + our own binary decoding
+- `crates/spelaion-driver-api`: driver contract (ADR-005). Results in Arrow with
+  `spelaion.logical` / `spelaion.native_type` metadata per column; `Value` for single cells.
+- `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
-- `crates/spelunk-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
+- `crates/spelaion-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
   per connection). `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
   name check (read its `PATCHED.md` before upgrading). Its type zoo (`tests/mysql.rs`) compares every type with the server's
   text, on both servers.
-- `crates/spelunk-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
+- `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
   `remote.rs` opens a file on a server (ADR-018) by running that server's `sqlite3 -safe`
   through `ConnectParams::remote` (an SSH exec channel on the tunnel's last hop,
-  `spelunk-ssh::Tunnel::exec`): it must never let a dot-command or an incomplete statement
+  `spelaion-ssh::Tunnel::exec`): it must never let a dot-command or an incomplete statement
   reach the shell. Catalog queries are shared in `catalog.rs`. Tests against
-  `testing/docker/sqlitehost` with `SPELUNK_TEST_SSH`.
-- `crates/spelunk-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
+  `testing/docker/sqlitehost` with `SPELAION_TEST_SSH`.
+- `crates/spelaion-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
   (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a batch may return
   several result sets. Cancel is a TDS Attention through a patched tiberius in
   `vendor/tiberius` (read its `PATCHED.md` before upgrading). Tests against the Docker SQL
-  Server with `SPELUNK_TEST_MSSQL=127.0.0.1:11433`.
-- `crates/spelunk-driver-duckdb`: `duckdb` (bundled) in one thread per connection, one open
+  Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`.
+- `crates/spelaion-driver-duckdb`: `duckdb` (bundled) in one thread per connection, one open
   per file shared by clones (ADR-016). Arrow from DuckDB converted in `exec.rs`; nested types
   written as DuckDB's text in `format.rs`. Its type zoo (`tests/duckdb.rs`) compares every
   type with `CAST(… AS VARCHAR)`; it needs nothing external.
-- `crates/spelunk-config`: TOML files from `.spelunk/` and the personal directory,
+- `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
   change there needs tests that try to get around it). If you change `model.rs`,
-  regenerate the schema: `SPELUNK_UPDATE_SCHEMA=1 cargo test -p spelunk-config`.
+  regenerate the schema: `SPELAION_UPDATE_SCHEMA=1 cargo test -p spelaion-config`.
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server). `dbeaver.rs` reads DBeaver's
   connections and saved credentials for the import (passwords only as `Secret`, to the keychain).
-- `crates/spelunk-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
-  it receives a `TunnelSpec`. `KnownHosts` checks the team's `.spelunk/known_hosts` first
+- `crates/spelaion-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
+  it receives a `TunnelSpec`. `KnownHosts` checks the team's `.spelaion/known_hosts` first
   (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Dialogs go through the `Interaction` trait. Tests against the
-  Docker bastions with `SPELUNK_TEST_SSH=127.0.0.1:2221`.
+  Docker bastions with `SPELAION_TEST_SSH=127.0.0.1:2221`.
   Kubernetes (ADR-015) is not a tunnel file but a connection's `[kubernetes]` section:
-  `spelunk-core::kube` runs `kubectl port-forward` and lists contexts, namespaces, names and
+  `spelaion-core::kube` runs `kubectl port-forward` and lists contexts, namespaces, names and
   ports for the form's Kubernetes tab; tests against a kind cluster with
-  `SPELUNK_TEST_K8S=<kubeconfig>` (see `testing/k8s`).
-- `crates/spelunk-core`: `open_connection` (resolved configuration → tunnel from the
+  `SPELAION_TEST_K8S=<kubeconfig>` (see `testing/k8s`).
+- `crates/spelaion-core`: `open_connection` (resolved configuration → tunnel from the
   `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts, stops at
   the first error) and `ResultStore` (results in the core, served in Arrow IPC windows).
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included).
@@ -76,15 +76,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
   `classify.rs`, any change there needs tests that try to get around it.
-- `crates/spelunk-store`: local SQLite (audit, query history, saved queries and personal settings;
-  later the schema cache). `spelunk-core::QueryHistory` owns its desktop actor and wraps
+- `crates/spelaion-store`: local SQLite (audit, query history, saved queries and personal settings;
+  later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
-- `crates/spelunk-mcp` + `apps/cli`: `spelunk mcp` and utilities (`connections`, `trust`,
-  `audit`, `check`: the team repository's CI check, from `spelunk-config::check`, ADR-022). In `spelunk mcp`, stdout is the protocol: no `println!`. Reads and writes
+- `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
+  `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
   (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions.
 - `apps/desktop`: Tauri 2 + React app. `src-tauri` is a thin adapter over the core; the
   command types are generated into `src/bindings.ts`
-  (`cargo run -p spelunk-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
+  (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
   text). Our own canvas grid (`ResultGrid.tsx`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
@@ -93,7 +93,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   unavailable). Update artifacts are signed only in the release workflow
   (`tauri.release.conf.json`, secret `TAURI_SIGNING_PRIVATE_KEY`); never commit a private key.
   Installers: `npx tauri build` (NSIS + MSI on Windows). Releases: pushing a tag `vX.Y.Z`
-  runs `.github/workflows/release.yml` (installers for every OS, the `spelunk` CLI, notes from
+  runs `.github/workflows/release.yml` (installers for every OS, the `spelaiondb` CLI, notes from
   `docs/releases/vX.Y.Z.md` plus every commit since the previous tag, from
   `scripts/release-notes.sh`, so commit subjects must read well in a changelog); the tag must
   match the version in `Cargo.toml` and `tauri.conf.json`.
@@ -106,7 +106,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`gh workflow run CI --ref dev`), for example for a change that touches macOS or Windows.
 
 ## Non-negotiable rules
-- `spelunk-core` does not depend on Tauri. The app, the CLI and the MCP are thin adapters.
+- `spelaion-core` does not depend on Tauri. The app, the CLI and the MCP are thin adapters.
 - All security lives in the core: statement splitting and classification, permissions,
   audit and secrets. Never in React or in a Tauri command.
 - Secrets are never written to logs, config files, history or MCP responses.
@@ -130,9 +130,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - Tests with a real PostgreSQL (without the variable they are skipped, and that does
   **not** count as tested):
   `docker compose -f testing/docker/compose.yaml up -d --wait` and
-  `SPELUNK_TEST_PG=127.0.0.1:15432 SPELUNK_TEST_MYSQL=127.0.0.1:13306
-  SPELUNK_TEST_MARIADB=127.0.0.1:13307 SPELUNK_TEST_MSSQL=127.0.0.1:11433
-  SPELUNK_TEST_SSH=127.0.0.1:2221 cargo test --workspace`.
+  `SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306
+  SPELAION_TEST_MARIADB=127.0.0.1:13307 SPELAION_TEST_MSSQL=127.0.0.1:11433
+  SPELAION_TEST_SSH=127.0.0.1:2221 cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
   the smoke test `node e2e/smoke.mjs` (drives the real app over WebView2 CDP).

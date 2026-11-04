@@ -16,10 +16,10 @@ import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 
 const root = resolve(import.meta.dirname, "../../..");
-const exe = process.env.SPELUNK_E2E_EXE ?? join(root, "target/release/spelunk-desktop" + (process.platform === "win32" ? ".exe" : ""));
+const exe = process.env.SPELAION_E2E_EXE ?? join(root, "target/release/spelaion-desktop" + (process.platform === "win32" ? ".exe" : ""));
 const demo = join(root, "examples/demo");
 const shots = resolve(process.argv[2] ?? join(import.meta.dirname, "screenshots"));
-const userDir = mkdtempSync(join(tmpdir(), "spelunk-e2e-"));
+const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
 const port = 9333;
 const editSmokeComplete = Symbol("edit smoke complete");
 mkdirSync(shots, { recursive: true });
@@ -28,13 +28,13 @@ function startApp() {
   return spawn(exe, [demo], {
     env: {
       ...process.env,
-      SPELUNK_USER_DIR: userDir,
+      SPELAION_USER_DIR: userDir,
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
-      // Its own WebView2 profile: an installed SpelunkDB that is open (same app identifier)
+      // Its own WebView2 profile: an installed SpelaionDB that is open (same app identifier)
       // would otherwise share it and the second webview fails to start.
       WEBVIEW2_USER_DATA_FOLDER: join(userDir, "webview2"),
       // kubectl only ever sees the test cluster (or nothing), never the user's clusters.
-      KUBECONFIG: process.env.SPELUNK_TEST_K8S ?? join(userDir, "no-kubeconfig"),
+      KUBECONFIG: process.env.SPELAION_TEST_K8S ?? join(userDir, "no-kubeconfig"),
     },
     stdio: "inherit",
   });
@@ -64,7 +64,7 @@ function testKubectls() {
     ["-NoProfile", "-Command", "Get-CimInstance Win32_Process -Filter \"Name='kubectl.exe'\" | ForEach-Object { $_.CommandLine }"],
     { encoding: "utf8" },
   );
-  const kubeconfig = process.env.SPELUNK_TEST_K8S.replaceAll("\\", "/").toLowerCase();
+  const kubeconfig = process.env.SPELAION_TEST_K8S.replaceAll("\\", "/").toLowerCase();
   return out.split(/\r?\n/).filter((line) => line.replaceAll("\\", "/").toLowerCase().includes(kubeconfig));
 }
 
@@ -81,7 +81,7 @@ async function connect() {
 
 let failed = false;
 // The demo's shop.toml is changed during the run (ADR-022) and always put back.
-const shopFile = join(demo, ".spelunk", "connections", "shop.toml");
+const shopFile = join(demo, ".spelaion", "connections", "shop.toml");
 const shopOriginal = readFileSync(shopFile, "utf8");
 let browser = await connect();
 try {
@@ -377,7 +377,7 @@ try {
   step("export: the whole result to CSV and JSON files written by the core");
   // The native save dialog cannot be driven: src/dialogs.ts takes this path instead.
   const exportPath = (name) => join(userDir, name);
-  const answerSaveDialog = (path) => page.evaluate((target) => (window.__spelunkSavePath = target), path);
+  const answerSaveDialog = (path) => page.evaluate((target) => (window.__spelaionSavePath = target), path);
   await answerSaveDialog(exportPath("result.csv"));
   await panel.getByRole("button", { name: "Export ▾" }).click();
   await page.getByRole("menuitem", { name: "CSV (Excel)" }).click();
@@ -1069,7 +1069,7 @@ try {
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.getByRole("dialog").getByText("password authentication failed").waitFor();
   await shot("06-wrong-password");
-  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await panel.locator(".statusline", { hasText: "1,000 rows" }).waitFor();
   await shot("07-postgres");
@@ -1088,16 +1088,16 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     );
     await panel.getByRole("button", { name: "Connect to choose database" }).click();
     await page.getByRole("dialog").getByText(`Password for ${connection}`).waitFor();
-    await page.getByLabel("Password", { exact: true }).fill("spelunk");
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     const database = panel.getByLabel("Database", { exact: true });
     await database.locator('option[value="information_schema"]').waitFor({ state: "attached" });
-    await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await database.elementHandle());
+    await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await database.elementHandle());
     await run(panel);
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
     assert.match(await panel.locator(".status-connected").innerText(), version);
     if (connection.startsWith("MySQL")) await shot("07b-mysql");
-    await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await database.elementHandle());
+    await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await database.elementHandle());
     await database.selectOption("information_schema");
     await page.waitForFunction((el) => !el.disabled && el.value === "information_schema", await database.elementHandle());
     await replaceQuery(panel, "select 1 where database() = 'information_schema';");
@@ -1106,12 +1106,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.waitForFunction((el) => !el.isConnected, previousResult);
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
     await page.waitForFunction((el) => !el.disabled, await database.elementHandle());
-    await replaceQuery(panel, "use spelunk; select 1 where database() = 'spelunk';");
+    await replaceQuery(panel, "use spelaion; select 1 where database() = 'spelaion';");
     previousResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
     await run(panel);
     await page.waitForFunction((el) => !el.isConnected, previousResult);
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-    await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await database.elementHandle());
+    await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await database.elementHandle());
   }
   step("process monitor: independent connection, filtering and SQL details");
   const currentSqlBeforeMonitor = await panel.locator(".cm-content").innerText();
@@ -1133,7 +1133,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const connection = (await invoke("list_connections")).find((item) => item.name === "MySQL (Docker)");
     const session = "e2e-process-confirmation";
     try {
-      const outcome = await invoke("connect", { session, connection: connection.id, password: "spelunk", remember: false });
+      const outcome = await invoke("connect", { session, connection: connection.id, password: "spelaion", remember: false });
       if (outcome.kind !== "connected") throw new Error(`unexpected connection outcome: ${outcome.kind}`);
       const snapshot = await invoke("list_processes", { session });
       const row = snapshot.processes.find((item) => item.id === snapshot.ownId);
@@ -1175,7 +1175,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   panel = await newQuery("MySQL (Docker)", "show full processlist;");
   await run(panel);
   await page.getByRole("dialog").getByText("Password for MySQL (Docker)").waitFor();
-  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await panel.locator(".statusline", { hasText: /\d+ rows? ·/ }).waitFor();
   const processlistTotal = Number((await panel.locator(".statusline").innerText()).match(/(\d+) rows?/)[1]);
@@ -1266,28 +1266,28 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // The explorer lists MySQL databases and their tables.
   // Its own session ("ask every time"): the password is asked again.
   await page.locator('.connection-row:has-text("MySQL (Docker)") .twisty').click();
-  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).waitFor();
+  await page.getByRole("button", { name: "Expand or collapse schema spelaion" }).waitFor();
   assert.ok(await page.locator('.connection-row:has-text("MySQL (Docker)") img.engine-icon').evaluate((icon) => icon.complete && icon.naturalWidth > 0));
   await connectionsActivity.click();
   await sidebar.waitFor({ state: "hidden" });
   await connectionsActivity.click();
-  await page.getByRole("button", { name: "Expand or collapse schema spelunk" }).waitFor();
+  await page.getByRole("button", { name: "Expand or collapse schema spelaion" }).waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
 
   step("explorer: open a connected query for the selected database without asking again");
   await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
   await panel.locator(".status-connected").waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
-  const mysqlSchema = page.getByRole("button", { name: "Expand or collapse schema spelunk" });
+  const mysqlSchema = page.getByRole("button", { name: "Expand or collapse schema spelaion" });
   await mysqlSchema.dblclick();
   await panel.locator(".status-connected").waitFor();
   const selectedDatabase = panel.getByLabel("Database", { exact: true });
-  await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await selectedDatabase.elementHandle());
+  await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await selectedDatabase.elementHandle());
   assert.equal(await page.getByRole("dialog").count(), 0);
   await panel.locator(".cm-content").click();
-  await page.keyboard.insertText("select 1 where database() = 'spelunk';");
+  await page.keyboard.insertText("select 1 where database() = 'spelaion';");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
@@ -1405,7 +1405,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   panel = page.locator(".tab-panel:not([hidden])");
   await panel.locator(".status-connected").waitFor();
   const queryDatabase = panel.getByLabel("Database", { exact: true });
-  await page.waitForFunction((el) => !el.disabled && el.value === "spelunk", await queryDatabase.elementHandle());
+  await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await queryDatabase.elementHandle());
   await panel.locator(".cm-content").click();
   await page.keyboard.insertText("select id, name from smoke_edit order by id;");
   await run(panel);
@@ -1444,7 +1444,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await joinPages.getByRole("button", { name: "Count", exact: true }).click();
   await joinPages.getByText("rows 1–4 of 4").waitFor();
   await page.keyboard.press("Control+w");
-  if (process.env.SPELUNK_E2E_EDIT_ONLY === "1") throw editSmokeComplete;
+  if (process.env.SPELAION_E2E_EDIT_ONLY === "1") throw editSmokeComplete;
 
   step("PostgreSQL behind two bastions with TLS verify-full");
   panel = await newQuery(
@@ -1457,7 +1457,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("dialog").getByText("Password for Postgres behind bastions").waitFor();
   // Offered, and left unticked: the smoke test never writes the user's real keychain.
   await page.getByRole("checkbox", { name: "Remember in the system keychain" }).uncheck();
-  await page.getByLabel("Password", { exact: true }).fill("spelunk");
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   for (let hop = 1; hop <= 2; hop++) {
     await page.getByRole("dialog").getByText(`(hop ${hop})`).waitFor();
@@ -1522,7 +1522,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   wizard = page.locator(".modal.wizard");
   await wizard.locator(".engine-card", { hasText: "SQLite" }).click();
   const newDb = join(userDir, "scratch.sqlite");
-  await page.evaluate((target) => (window.__spelunkSavePath = target), newDb);
+  await page.evaluate((target) => (window.__spelaionSavePath = target), newDb);
   await wizard.getByRole("button", { name: "New database…" }).click();
   const fileInput = wizard.getByLabel("File", { exact: true });
   for (let i = 0; i < 40 && (await fileInput.inputValue()) !== newDb; i++) await page.waitForTimeout(100);
@@ -1534,7 +1534,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("button", { name: "New database…" }).click();
   await wizard.getByRole("alert").filter({ hasText: "already exists: a new database never replaces a file" }).waitFor();
   await shot("12a2-new-sqlite-database");
-  await page.evaluate(() => delete window.__spelunkSavePath);
+  await page.evaluate(() => delete window.__spelaionSavePath);
   await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
   await wizard.waitFor({ state: "detached" });
 
@@ -1543,13 +1543,13 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   wizard = page.locator(".modal.wizard");
   await wizard.locator(".engine-card", { hasText: "DuckDB" }).click();
   const duckDb = join(userDir, "analytics.duckdb");
-  await page.evaluate((target) => (window.__spelunkSavePath = target), duckDb);
+  await page.evaluate((target) => (window.__spelaionSavePath = target), duckDb);
   await wizard.getByRole("button", { name: "New database…" }).click();
   const duckFile = wizard.getByLabel("File", { exact: true });
   for (let i = 0; i < 40 && (await duckFile.inputValue()) !== duckDb; i++) await page.waitForTimeout(100);
   assert.equal(await duckFile.inputValue(), duckDb);
   assert.equal(await wizard.getByLabel("Name", { exact: true }).inputValue(), "analytics");
-  await page.evaluate(() => delete window.__spelunkSavePath);
+  await page.evaluate(() => delete window.__spelaionSavePath);
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("button", { name: "Test connection" }).click();
@@ -1580,7 +1580,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("User", { exact: true }).fill("sa");
   // Asked every time: never stored, not even in the keychain.
   await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
-  await wizard.getByLabel("Password", { exact: true }).fill("Spelunk-test-1");
+  await wizard.getByLabel("Password", { exact: true }).fill("Spelaion-test-1");
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("button", { name: "Test connection" }).click();
@@ -1591,7 +1591,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   panel = await newQuery("SQL Server (Docker)", "select name from sys.databases where name = 'master'\nselect 1 as a, N'ñandú' as b");
   await run(panel);
   await page.getByRole("dialog").getByText("Password for SQL Server (Docker)").waitFor();
-  await page.getByLabel("Password", { exact: true }).fill("Spelunk-test-1");
+  await page.getByLabel("Password", { exact: true }).fill("Spelaion-test-1");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   // One batch, two result sets: two result tabs.
   await panel.locator(".result-tabs button", { hasText: /^Result 2/ }).waitFor();
@@ -1622,8 +1622,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("Name", { exact: true }).fill("Docker PG (wizard)");
   await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
   await wizard.getByLabel("Port", { exact: true }).fill("15432");
-  await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
-  await wizard.getByLabel("User", { exact: true }).fill("spelunk");
+  await wizard.getByLabel("Database", { exact: true }).fill("spelaion");
+  await wizard.getByLabel("User", { exact: true }).fill("spelaion");
   // Passwordless logins (ADR-022): a cloud provider's token here, a client certificate in SSL.
   const authMethod = wizard.getByLabel("Method", { exact: true });
   await authMethod.selectOption("token");
@@ -1639,7 +1639,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("Password", { exact: true }).fill("wrong");
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: "password authentication failed" }).waitFor();
-  await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
   await shot("12b-add-connection-main");
   await wizard.getByRole("tab", { name: "SSL" }).click();
   await wizard.getByLabel("TLS", { exact: true }).selectOption("require");
@@ -1670,7 +1670,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.match(saved, /mode = "require"/);
   assert.match(saved, /\[mcp\]\nexposed = true\nwrites = "allow"/);
   assert.doesNotMatch(saved, /wrong|password = "/);
-  assert.ok(!existsSync(join(demo, ".spelunk", "connections", "shop-copy.toml")), "personal connections stay out of the repository");
+  assert.ok(!existsSync(join(demo, ".spelaion", "connections", "shop-copy.toml")), "personal connections stay out of the repository");
 
   step("edit a connection: same file, comments of the form kept, location fixed");
   await (await connectionMenu("Docker PG (wizard)")).getByRole("button", { name: "Edit…" }).click();
@@ -1686,7 +1686,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.ok(await wizard.getByLabel("Folder", { exact: true }).isDisabled());
   assert.ok(await wizard.getByRole("radio", { name: "Project", exact: true }).isDisabled());
   await wizard.getByRole("tab", { name: "Main" }).click();
-  await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
   await shot("13a-edit-connection");
@@ -1695,7 +1695,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.locator(".connection-row", { hasText: "Docker PG (edited)" }).waitFor();
   const edited = readFileSync(join(userDir, "connections", "wizard", "docker-pg-wizard.toml"), "utf8");
   assert.match(edited, /name = "Docker PG \(edited\)"/);
-  assert.doesNotMatch(edited, /\[tls\]|spelunk"\s*\n\s*password = "/);
+  assert.doesNotMatch(edited, /\[tls\]|spelaion"\s*\n\s*password = "/);
 
   step("SSH tunnel editor: two hops with keys, tested, used by a new connection");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
@@ -1703,10 +1703,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
   await wizard.getByLabel("Name", { exact: true }).fill("PG through wizard tunnel");
   await wizard.getByLabel("Host", { exact: true }).fill("postgres");
-  await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
-  await wizard.getByLabel("User", { exact: true }).fill("spelunk");
+  await wizard.getByLabel("Database", { exact: true }).fill("spelaion");
+  await wizard.getByLabel("User", { exact: true }).fill("spelaion");
   await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
-  await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("tab", { name: "SSH" }).click();
@@ -1717,12 +1717,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await editor.getByRole("radio", { name: "Personal", exact: true }).check();
   await editor.getByLabel("Hop 1 Host").fill("127.0.0.1");
   await editor.getByLabel("Hop 1 Port").fill("2221");
-  await editor.getByLabel("Hop 1 User").fill("spelunk");
+  await editor.getByLabel("Hop 1 User").fill("spelaion");
   await editor.getByLabel("Hop 1 Authentication").selectOption("key");
   await editor.getByLabel("Hop 1 Private key file").fill(key);
   await editor.getByRole("button", { name: "+ Add hop" }).click();
   await editor.getByLabel("Hop 2 Host").fill("bastion2");
-  await editor.getByLabel("Hop 2 User").fill("spelunk");
+  await editor.getByLabel("Hop 2 User").fill("spelaion");
   await editor.getByLabel("Hop 2 Authentication").selectOption("key");
   await editor.getByLabel("Hop 2 Private key file").fill(key);
   await editor.getByRole("button", { name: "Test tunnel" }).click();
@@ -1783,12 +1783,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await serverTunnel.getByRole("radio", { name: "Personal", exact: true }).check();
   await serverTunnel.getByLabel("Hop 1 Host").fill("127.0.0.1");
   await serverTunnel.getByLabel("Hop 1 Port").fill("2221");
-  await serverTunnel.getByLabel("Hop 1 User").fill("spelunk");
+  await serverTunnel.getByLabel("Hop 1 User").fill("spelaion");
   await serverTunnel.getByLabel("Hop 1 Authentication").selectOption("key");
   await serverTunnel.getByLabel("Hop 1 Private key file").fill(key);
   await serverTunnel.getByRole("button", { name: "+ Add hop" }).click();
   await serverTunnel.getByLabel("Hop 2 Host").fill("sqlitehost");
-  await serverTunnel.getByLabel("Hop 2 User").fill("spelunk");
+  await serverTunnel.getByLabel("Hop 2 User").fill("spelaion");
   await serverTunnel.getByLabel("Hop 2 Authentication").selectOption("key");
   await serverTunnel.getByLabel("Hop 2 Private key file").fill(key);
   await serverTunnel.getByRole("button", { name: "Test tunnel" }).click();
@@ -1808,42 +1808,42 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("tab", { name: "Main" }).click();
   // On a server, the field is the server's path and the local buttons are gone.
   assert.equal(await wizard.getByRole("button", { name: "Browse…" }).count(), 0);
-  await wizard.getByLabel("File on the server", { exact: true }).fill("/home/spelunk/shop.db");
+  await wizard.getByLabel("File on the server", { exact: true }).fill("/home/spelaion/shop.db");
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: /Connected · 3\./ }).waitFor();
   await wizard.getByRole("button", { name: "Save", exact: true }).click();
   await wizard.waitFor({ state: "detached" });
   const remoteFile = readFileSync(join(userDir, "connections", "shop-on-a-server.toml"), "utf8");
-  assert.match(remoteFile, /database = "\/home\/spelunk\/shop\.db"/);
+  assert.match(remoteFile, /database = "\/home\/spelaion\/shop\.db"/);
   assert.match(remoteFile, /tunnel = "file-server"/);
   panel = await newQuery("Shop on a server", "select id, name, price from product order by id;");
   await run(panel);
   await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
   await shot("14c-sqlite-on-a-server");
 
-  // Only with the test cluster (testing/k8s): SPELUNK_TEST_K8S is its kubeconfig.
-  if (process.env.SPELUNK_TEST_K8S) {
+  // Only with the test cluster (testing/k8s): SPELAION_TEST_K8S is its kubeconfig.
+  if (process.env.SPELAION_TEST_K8S) {
     step("Kubernetes tab: kubectl port-forward to a PostgreSQL inside the test cluster");
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     wizard = page.locator(".modal.wizard").first();
     await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
     await wizard.getByLabel("Name", { exact: true }).fill("PG in Kubernetes");
-    await wizard.getByLabel("Database", { exact: true }).fill("spelunk");
-    await wizard.getByLabel("User", { exact: true }).fill("spelunk");
+    await wizard.getByLabel("Database", { exact: true }).fill("spelaion");
+    await wizard.getByLabel("User", { exact: true }).fill("spelaion");
     await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
-    await wizard.getByLabel("Password", { exact: true }).fill("spelunk");
+    await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
     await wizard.getByRole("tab", { name: "Options" }).click();
     await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
     await wizard.getByRole("tab", { name: "Kubernetes" }).click();
     const kube = wizard.locator("#connection-tab-kubernetes");
     await kube.getByRole("checkbox", { name: "Connect through kubectl port-forward" }).check();
-    await kube.getByLabel("Kubeconfig file").fill(process.env.SPELUNK_TEST_K8S);
+    await kube.getByLabel("Kubeconfig file").fill(process.env.SPELAION_TEST_K8S);
     await kube.getByLabel("Kubeconfig file").blur();
     // Every list comes from kubectl: contexts, namespaces, names of the type, ports.
-    await kube.getByLabel("Context").locator("option", { hasText: "kind-spelunk-test" }).waitFor({ state: "attached" });
-    await kube.getByLabel("Context").selectOption("kind-spelunk-test");
-    await kube.getByLabel("Namespace").locator("option[value='spelunk-test']").waitFor({ state: "attached" });
-    await kube.getByLabel("Namespace").selectOption("spelunk-test");
+    await kube.getByLabel("Context").locator("option", { hasText: "kind-spelaion-test" }).waitFor({ state: "attached" });
+    await kube.getByLabel("Context").selectOption("kind-spelaion-test");
+    await kube.getByLabel("Namespace").locator("option[value='spelaion-test']").waitFor({ state: "attached" });
+    await kube.getByLabel("Namespace").selectOption("spelaion-test");
     await kube.getByLabel("Resource type").selectOption("pod");
     await kube.getByLabel("Resource name").locator("option", { hasText: /^postgres-/ }).first().waitFor({ state: "attached" });
     // A deployment's ports are its containers' ports, named after the container.
@@ -1865,8 +1865,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await wizard.waitFor({ state: "detached" });
     const kubeFile = readFileSync(join(userDir, "connections", "pg-in-kubernetes.toml"), "utf8");
     assert.match(kubeFile, /\[kubernetes\]/);
-    assert.match(kubeFile, /context = "kind-spelunk-test"/);
-    assert.match(kubeFile, /namespace = "spelunk-test"/);
+    assert.match(kubeFile, /context = "kind-spelaion-test"/);
+    assert.match(kubeFile, /namespace = "spelaion-test"/);
     assert.match(kubeFile, /resource = "svc\/postgres"/);
     assert.doesNotMatch(kubeFile, /^tunnel/m);
 
@@ -1876,7 +1876,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await wizard.getByRole("tab", { name: "Kubernetes" }).click();
     const editKube = wizard.locator("#connection-tab-kubernetes");
     assert.equal(await editKube.getByRole("checkbox", { name: "Connect through kubectl port-forward" }).isChecked(), true);
-    assert.equal(await editKube.getByLabel("Namespace").inputValue(), "spelunk-test");
+    assert.equal(await editKube.getByLabel("Namespace").inputValue(), "spelaion-test");
     assert.equal(await editKube.getByLabel("Resource name").inputValue(), "postgres");
     await wizard.getByRole("button", { name: "Cancel" }).click();
     await wizard.waitFor({ state: "detached" });
@@ -1884,7 +1884,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     panel = await newQuery("PG in Kubernetes", "select current_database() as db, inet_server_port() as port;");
     await run(panel);
     await page.getByRole("dialog").getByText("Password for PG in Kubernetes").waitFor();
-    await page.getByLabel("Password", { exact: true }).fill("spelunk");
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   }
@@ -1910,7 +1910,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
         folders: {},
         connections: {
           "sqlite_jdbc-1": { provider: "sqlite", driver: "sqlite_jdbc", name: "Shop via DBeaver", configuration: { database: join(demo, "data", "shop.db"), type: "dev" } },
-          "postgres-jdbc-2": { provider: "postgresql", driver: "postgres-jdbc", name: "Docker PG via DBeaver", configuration: { host: "127.0.0.1", port: "15432", database: "spelunk", type: "dev" } },
+          "postgres-jdbc-2": { provider: "postgresql", driver: "postgres-jdbc", name: "Docker PG via DBeaver", configuration: { host: "127.0.0.1", port: "15432", database: "spelaion", type: "dev" } },
           "postgres-jdbc-3": {
             provider: "postgresql",
             driver: "postgres-jdbc",
@@ -1918,7 +1918,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
             configuration: {
               host: "postgres",
               port: "5432",
-              database: "spelunk",
+              database: "spelaion",
               type: "prod",
               handlers: { ssh_tunnel: { type: "TUNNEL", enabled: true, properties: { host: "127.0.0.1", port: 2221, authType: "PASSWORD" } } },
             },
@@ -1928,14 +1928,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       }),
     );
     const credentials = JSON.stringify({
-      "postgres-jdbc-2": { "#connection": { user: "spelunk", password: "spelunk" } },
-      "postgres-jdbc-3": { "#connection": { user: "spelunk", password: "spelunk" }, "network/ssh_tunnel": { user: "tester", password: "not-saved" } },
+      "postgres-jdbc-2": { "#connection": { user: "spelaion", password: "spelaion" } },
+      "postgres-jdbc-3": { "#connection": { user: "spelaion", password: "spelaion" }, "network/ssh_tunnel": { user: "tester", password: "not-saved" } },
     });
     const key = Buffer.from([0xba, 0xbb, 0x4a, 0x9f, 0x77, 0x4a, 0xb8, 0x53, 0xc9, 0x6c, 0x2d, 0x65, 0x3d, 0xfe, 0x54, 0x4a]);
     const iv = Buffer.alloc(16, 7);
     const cipher = createCipheriv("aes-128-cbc", key, iv);
     writeFileSync(join(dbeaverDir, "credentials-config.json"), Buffer.concat([iv, cipher.update(credentials), cipher.final()]));
-    await page.evaluate((dir) => (window.__spelunkDbeaverDir = dir), join(userDir, "dbeaver"));
+    await page.evaluate((dir) => (window.__spelaionDbeaverDir = dir), join(userDir, "dbeaver"));
 
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     await page.getByRole("button", { name: "Import from DBeaver…" }).click();
@@ -1963,19 +1963,19 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const files = ["shop-via-dbeaver.toml", "docker-pg-via-dbeaver.toml", "pg-behind-bastion-via-dbeaver.toml"].map((f) =>
       readFileSync(join(userDir, "connections", f), "utf8"),
     );
-    assert.ok(files.every((text) => !text.includes("spelunk\"\npassword") && !text.includes("not-saved")));
+    assert.ok(files.every((text) => !text.includes("spelaion\"\npassword") && !text.includes("not-saved")));
     assert.ok(existsSync(join(userDir, "tunnels", "tester-127-0-0-1.toml")));
     panel = await newQuery("Shop via DBeaver", "select count(*) as products from product;");
     await run(panel);
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-    await page.evaluate(() => delete window.__spelunkDbeaverDir);
+    await page.evaluate(() => delete window.__spelaionDbeaverDir);
   }
 
   step("history, theme and per-connection preference survive an app restart");
   await setLanguage("es");
   await setTheme("dark", "dark");
   await browser.close();
-  if (process.env.SPELUNK_TEST_K8S && process.platform === "win32") {
+  if (process.env.SPELAION_TEST_K8S && process.platform === "win32") {
     // The Kubernetes connection is still open: closing the app stops its kubectl.
     assert.ok(testKubectls().length > 0, "the port-forward is running");
     await closeApp();

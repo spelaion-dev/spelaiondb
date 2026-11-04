@@ -31,4 +31,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [020](0020-mcp-engines.md) | The MCP serves MySQL, MariaDB, SQL Server and DuckDB, with each engine's barriers | Accepted |
 | [021](0021-automatic-updates.md) | Automatic updates: signed, installed on the user's click, off until there is a public source | Accepted |
 | [022](0022-team-sharing.md) | Sharing connections with a team: trust pinned to content, shared host keys, passwordless logins | Accepted |
-| [023](0023-spelaion.md) | Rename SpelunkDB to SpelaionDB, under the Spelaion brand | Proposed |
+| [023](0023-spelaion.md) | Rename SpelunkDB to SpelaionDB, under the Spelaion brand | Accepted |

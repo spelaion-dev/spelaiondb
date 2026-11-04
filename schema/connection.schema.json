@@ -145,7 +145,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "A connection: `.spelunk/connections/<folders>/<id>.toml`.",
+  "description": "A connection: `.spelaion/connections/<folders>/<id>.toml`.",
   "properties": {
     "database": {
       "description": "Database; for SQLite and DuckDB, the file path (relative to the repository root).",
@@ -232,7 +232,7 @@
       "$ref": "#/$defs/TlsConfig"
     },
     "tunnel": {
-      "description": "Name of a tunnel in `.spelunk/tunnels/`.",
+      "description": "Name of a tunnel in `.spelaion/tunnels/`.",
       "type": [
         "string",
         "null"

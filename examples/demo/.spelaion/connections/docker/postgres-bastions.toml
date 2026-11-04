@@ -1,0 +1,17 @@
+#:schema https://spelaion.dev/schema/db/connection.schema.json
+
+# The same PostgreSQL, but behind two SSH bastions and with TLS verify-full against its
+# real name ("postgres"), as on a company network.
+schema_version = 1
+name = "Postgres behind bastions"
+engine = "postgres"
+env = "prod"
+host = "postgres"
+database = "spelaion"
+user = "spelaion"
+password = { secret = "keychain" }
+tunnel = "docker-bastions"
+
+[tls]
+mode = "verify-full"
+ca = "../../testing/docker/keys/ca.crt"

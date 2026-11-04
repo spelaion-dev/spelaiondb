@@ -8,21 +8,21 @@ exclude = ["spikes", "vendor"]
 version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/spelunkdb/spelunkdb"
+repository = "https://github.com/spelaion-dev/spelaiondb"
 publish = false
 
 [workspace.dependencies]
-spelunk-driver-api = { path = "crates/spelunk-driver-api" }
-spelunk-driver-postgres = { path = "crates/spelunk-driver-postgres" }
-spelunk-driver-sqlite = { path = "crates/spelunk-driver-sqlite" }
-spelunk-driver-mysql = { path = "crates/spelunk-driver-mysql" }
-spelunk-driver-duckdb = { path = "crates/spelunk-driver-duckdb" }
-spelunk-driver-sqlserver = { path = "crates/spelunk-driver-sqlserver" }
-spelunk-core = { path = "crates/spelunk-core" }
-spelunk-config = { path = "crates/spelunk-config" }
-spelunk-ssh = { path = "crates/spelunk-ssh" }
-spelunk-store = { path = "crates/spelunk-store" }
-spelunk-mcp = { path = "crates/spelunk-mcp" }
+spelaion-driver-api = { path = "crates/spelaion-driver-api" }
+spelaion-driver-postgres = { path = "crates/spelaion-driver-postgres" }
+spelaion-driver-sqlite = { path = "crates/spelaion-driver-sqlite" }
+spelaion-driver-mysql = { path = "crates/spelaion-driver-mysql" }
+spelaion-driver-duckdb = { path = "crates/spelaion-driver-duckdb" }
+spelaion-driver-sqlserver = { path = "crates/spelaion-driver-sqlserver" }
+spelaion-core = { path = "crates/spelaion-core" }
+spelaion-config = { path = "crates/spelaion-config" }
+spelaion-ssh = { path = "crates/spelaion-ssh" }
+spelaion-store = { path = "crates/spelaion-store" }
+spelaion-mcp = { path = "crates/spelaion-mcp" }
 
 anyhow = "1"
 arrow = { version = "60", default-features = false, features = ["ipc"] }

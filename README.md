@@ -1,22 +1,22 @@
-# SpelunkDB
+# SpelaionDB
 
 An open-source desktop database client: fast and lightweight, with first-class SSH tunnels
 and a built-in MCP server for AI agents.
 
 > **Status:** 0.3.0 preview. The drivers (PostgreSQL, MySQL/MariaDB and SQL Server with TLS,
-> SQLite, DuckDB), the configuration, SSH tunnels, `spelunk mcp` and the desktop app work.
+> SQLite, DuckDB), the configuration, SSH tunnels, `spelaiondb mcp` and the desktop app work.
 
 ## Install
 
 Download the installer for your system from the
-[releases](https://github.com/petilolz/spelunkdb/releases):
+[releases](https://github.com/spelaion-dev/spelaiondb/releases):
 
-- **Windows:** `SpelunkDB_<version>_x64-setup.exe` (current user, no admin rights) or the
+- **Windows:** `SpelaionDB_<version>_x64-setup.exe` (current user, no admin rights) or the
   `.msi`. Not signed yet: SmartScreen may ask, "More info" → "Run anyway".
 - **macOS:** the `.dmg` for Apple Silicon (`aarch64`) or Intel (`x64`). Not notarized yet:
   right-click → Open the first time.
 - **Linux:** `.deb`, `.rpm` or AppImage.
-- **CLI and MCP server:** the `spelunk-<version>-<target>` archives hold the `spelunk` binary.
+- **CLI and MCP server:** the `spelaiondb-<version>-<target>` archives hold the `spelaiondb` binary.
 
 Releases are built by CI from a version tag (`.github/workflows/release.yml`): bump the
 version in `Cargo.toml` and `apps/desktop/src-tauri/tauri.conf.json`, write
@@ -56,7 +56,7 @@ connection URL (`postgres://user:pass@host:5432/db?sslmode=require`, `mysql://�
 picks the engine and fills host,
 port, database, user, SSL mode and the password field (which is saved like a typed one).
 
-- **Save in:** *Project* writes `.spelunk/connections/<folder>/<name>.toml` in the
+- **Save in:** *Project* writes `.spelaion/connections/<folder>/<name>.toml` in the
   repository, shared through git; *Personal* keeps it in your personal directory.
 - **Password:** saved in the system keychain, asked every time, or read from an environment
   variable. It is never written to the connection file.
@@ -70,7 +70,7 @@ port, database, user, SSL mode and the password field (which is saved like a typ
 - **SQLite and DuckDB:** pick an existing file with **Browse…**, or create an empty
   database with **New database…** (it never replaces an existing file).
 - **A SQLite file on a server:** in the SSH tab, choose a tunnel whose last hop holds the
-  file, and write its path on that server. SpelunkDB runs that server's `sqlite3` (3.37 or
+  file, and write its path on that server. SpelaionDB runs that server's `sqlite3` (3.37 or
   later, in its safe mode, which refuses commands that touch the server's files) through
   the tunnel: the file is never copied, and the server's own locks keep it safe while its
   application writes. The last hop must allow running commands, not only port forwarding.
@@ -80,7 +80,7 @@ port, database, user, SSL mode and the password field (which is saved like a typ
 **Import from DBeaver…** (in the same window) reads DBeaver's workspace, or a folder you
 choose, and lists its connections: PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB
 ones can be imported,
-with their folder, environment (DBeaver's connection type) and SSH tunnel (one SpelunkDB tunnel
+with their folder, environment (DBeaver's connection type) and SSH tunnel (one SpelaionDB tunnel
 per bastion and user, shared by the connections that use it). The user names and passwords
 DBeaver saved are read from its credentials file; the passwords go to the system keychain only
 if you tick that option, and are asked when connecting otherwise. A name already taken gets
@@ -89,7 +89,7 @@ if you tick that option, and are asked when connecting otherwise. A name already
 - **Kubernetes:** a connection can go through **Kubernetes** instead of an SSH tunnel, in
   its own tab of the form: pick a context of your kubeconfig, a namespace, the resource type
   (service, pod or deployment), its name and its port, every list read from `kubectl` as you
-  go. SpelunkDB runs `kubectl port-forward` with your kubeconfig (so EKS, GKE or AKS
+  go. SpelaionDB runs `kubectl port-forward` with your kubeconfig (so EKS, GKE or AKS
   authentication works as in your terminal). Connections to the same resource and port share
   one `kubectl`, stopped with the last one; if it exits, the connection shows `kubectl`'s
   message and is not restarted on its own. In the file it is a `[kubernetes]` section:
@@ -110,26 +110,26 @@ the password saved in the keychain, and leaves open tabs without a connection.
 
 ### Sharing connections with a team
 
-Project connections and tunnels are plain files in `.spelunk/`: commit them, review them in
+Project connections and tunnels are plain files in `.spelaion/`: commit them, review them in
 pull requests, and every colleague gets them with `git pull`. They never hold a password,
 only where to find one (the keychain, an environment variable, 1Password, any command), and
 personal values such as each person's database user go in `${user.…}` variables.
 
 A repository's connections are not used until you trust it, and trusting is not forever
-(ADR-022): SpelunkDB remembers each connection and tunnel as you trusted it. If a pull
+(ADR-022): SpelaionDB remembers each connection and tunnel as you trusted it. If a pull
 changes one (another server, secret, tunnel or command) or adds a new one, it is not used
 until you have seen what changed, field by field, and accepted it. Changes you make through
-the app's forms are yours and need no review. `spelunk trust <folder>` does the same from a
+the app's forms are yours and need no review. `spelaiondb trust <folder>` does the same from a
 terminal and lists the changes it accepts.
 
 What differs from one administrator to another (their database user, their SSH user, the
 name of their key) goes in `${user.…}` variables, such as `user = "${user.db_user}"`. The
-first time a connection needs one you have not defined, SpelunkDB asks for every missing
+first time a connection needs one you have not defined, SpelaionDB asks for every missing
 value at once and saves it in the `[vars]` section of your `user.toml`, outside the
-repository; `spelunk mcp` says which ones to add instead.
+repository; `spelaiondb mcp` says which ones to add instead.
 
-Commit the team's SSH server keys as `.spelunk/known_hosts` (the usual `known_hosts`
-format; copy the lines from your own `~/.ssh/known_hosts` or SpelunkDB's after checking each
+Commit the team's SSH server keys as `.spelaion/known_hosts` (the usual `known_hosts`
+format; copy the lines from your own `~/.ssh/known_hosts` or SpelaionDB's after checking each
 server once). They are checked before anyone's own files, so a newcomer's first connection
 through a bastion is already verified instead of asking them to accept a fingerprint, and a
 server that shows another key is refused. A change to that file is reviewed like a change to
@@ -138,32 +138,32 @@ a connection before it is used.
 To log in without any password:
 
 - **Client certificates** (PostgreSQL, MySQL, MariaDB): in the SSL tab, the certificate and
-  its private key. The certificate may live in the repository; the key never does (SpelunkDB
+  its private key. The certificate may live in the repository; the key never does (SpelaionDB
   refuses a key inside the repository): keep it in your personal folder (`~/…`) or name it
   with a `${user.…}` variable, so each administrator uses their own.
 - **Cloud tokens** (AWS RDS IAM, Azure Database with Microsoft Entra ID, Google Cloud SQL
-  IAM): choose *Cloud token* as the authentication method and the provider. SpelunkDB writes
+  IAM): choose *Cloud token* as the authentication method and the provider. SpelaionDB writes
   the command that asks the provider's CLI (`aws`, `az`, `gcloud`, signed in on your
   computer) for a short-lived token, and runs it on every connection.
 
-Check the team repository before a change is merged with `spelunk check` (it reads only the
+Check the team repository before a change is merged with `spelaiondb check` (it reads only the
 repository, nothing personal, so it runs in CI). It fails on files that do not load,
 references to tunnels that do not exist, malformed `${…}` variables, passwords written
 inside a `cmd:` (`--password`, `PGPASSWORD=`, `user:pass@` in a URL…) and private keys in
 the repository; it warns about production connections that let agents write or do not
 verify the server's certificate, SSH keys inside the repository and broken
-`.spelunk/known_hosts` lines (`--strict` fails on warnings too). In GitHub Actions, with the
-`spelunk` binary from a release archive on the `PATH`:
+`.spelaion/known_hosts` lines (`--strict` fails on warnings too). In GitHub Actions, with the
+`spelaiondb` binary from a release archive on the `PATH`:
 
 ```yaml
-- run: spelunk check --strict
+- run: spelaiondb check --strict
 ```
 
 And as a git hook, in `.git/hooks/pre-commit`:
 
 ```sh
 #!/bin/sh
-exec spelunk check
+exec spelaiondb check
 ```
 
 ## Settings
@@ -317,7 +317,7 @@ separate.
 
 ## For AI agents (MCP)
 
-`spelunk mcp` gives an agent access to the connections you mark with
+`spelaiondb mcp` gives an agent access to the connections you mark with
 `[mcp] exposed = true` ("Expose to AI agents" in the connection form). Agents only read,
 unless you choose "Agents can: Read and write" (`[mcp] writes = "allow"`, ADR-019): then the
 `execute_write` tool runs one statement at a time in its own transaction: data changes and
@@ -334,10 +334,10 @@ cargo install --path apps/cli
 ```
 
 ```bash
-claude mcp add spelunkdb -- spelunk mcp
+claude mcp add spelaiondb -- spelaiondb mcp
 ```
 
-Every query and write, run or refused, is recorded: `spelunk audit`.
+Every query and write, run or refused, is recorded: `spelaiondb audit`.
 
 - Architecture: [`docs/architecture.md`](docs/architecture.md)
 - Decisions: [`docs/adr/`](docs/adr/README.md)

@@ -1,7 +1,7 @@
 # ADR-023: Rename SpelunkDB to SpelaionDB, under the Spelaion brand
 
-- **Status:** Proposed. It is accepted once the trademark search is done (EU, Spain and the
-  US, class 9). The domain `spelaion.dev` is the project's; the crates.io and npm names were
+- **Status:** Accepted (implemented on `dev`, to be released as 0.4.0). The trademark search
+  (EU, Spain, the US and Brazil, class 9) is still to be done. The domain `spelaion.dev` is the project's; the crates.io and npm names were
   free on 2026-11-04 (see "The name").
 - **Date:** 2026-11-04
 

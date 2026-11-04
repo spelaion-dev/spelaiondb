@@ -193,7 +193,7 @@ export default function App() {
           <div className="editor-workspace" hidden={sidebarSection === "processes"}>
             {tabs.length === 0 ? (
               <div className="welcome">
-                <h1>SpelunkDB</h1>
+                <h1>SpelaionDB</h1>
                 <p>{t("welcome")}</p>
                 <button className="primary" onClick={() => addTab(null)}>
                   {t("newQuery")}

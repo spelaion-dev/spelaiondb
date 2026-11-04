@@ -1,0 +1,18 @@
+[package]
+name = "spelaion-driver-api"
+description = "Common driver contract for SpelaionDB (ADR-005)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+arrow.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+# AsyncRead/AsyncWrite for remote programs (remote.rs).
+tokio.workspace = true
+
+[lints]
+workspace = true

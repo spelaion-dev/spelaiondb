@@ -1,0 +1,20 @@
+[package]
+name = "spelaion-mcp"
+description = "SpelaionDB MCP server: agents query, they do not write (ADR-008)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+spelaion-config.workspace = true
+spelaion-core.workspace = true
+spelaion-driver-api.workspace = true
+spelaion-ssh.workspace = true
+spelaion-store.workspace = true
+rmcp = { version = "3", features = ["server", "transport-io", "macros"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { workspace = true, features = ["sync", "time", "io-std"] }
+
+[lints]
+workspace = true

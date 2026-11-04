@@ -1,7 +1,7 @@
 [package]
-name = "spelunk-desktop"
-default-run = "spelunk-desktop"
-description = "SpelunkDB desktop app (Tauri 2)"
+name = "spelaion-desktop"
+default-run = "spelaion-desktop"
+description = "SpelaionDB desktop app (Tauri 2)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ publish.workspace = true
 
 [lib]
 # The _lib suffix avoids a name clash between lib and bin on Windows.
-name = "spelunk_desktop_lib"
+name = "spelaion_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 # On Windows the test executable of a Tauri crate does not start (it lacks the app
 # manifest). The app is tested with the smoke test (e2e/smoke.mjs) and its logic lives in crates/.
@@ -17,7 +17,7 @@ test = false
 doctest = false
 
 [[bin]]
-name = "spelunk-desktop"
+name = "spelaion-desktop"
 path = "src/main.rs"
 test = false
 
@@ -38,10 +38,10 @@ bindings = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-spelunk-config.workspace = true
-spelunk-core.workspace = true
-spelunk-driver-api.workspace = true
-spelunk-ssh.workspace = true
+spelaion-config.workspace = true
+spelaion-core.workspace = true
+spelaion-driver-api.workspace = true
+spelaion-ssh.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepares Ubuntu (WSL or real Linux) to build the SpelunkDB spikes:
+# Prepares Ubuntu (WSL or real Linux) to build the SpelaionDB spikes:
 # Tauri 2 dependencies (WebKitGTK 4.1) and stable Rust.
 set -euo pipefail
 

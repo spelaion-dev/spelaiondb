@@ -5519,7 +5519,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spelunk-cli"
+name = "spelaion-cli"
 version = "0.3.0"
 dependencies = [
  "anyhow",
@@ -5527,16 +5527,16 @@ dependencies = [
  "futures-util",
  "rusqlite",
  "serde_json",
- "spelunk-config",
- "spelunk-driver-api",
- "spelunk-driver-duckdb",
- "spelunk-mcp",
- "spelunk-store",
+ "spelaion-config",
+ "spelaion-driver-api",
+ "spelaion-driver-duckdb",
+ "spelaion-mcp",
+ "spelaion-store",
  "tokio",
 ]
 
 [[package]]
-name = "spelunk-config"
+name = "spelaion-config"
 version = "0.3.0"
 dependencies = [
  "aes 0.8.4",
@@ -5547,7 +5547,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
- "spelunk-driver-api",
+ "spelaion-driver-api",
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "toml_edit 0.25.17+spec-1.1.0",
@@ -5556,7 +5556,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spelunk-core"
+name = "spelaion-core"
 version = "0.3.0"
 dependencies = [
  "arrow",
@@ -5564,22 +5564,22 @@ dependencies = [
  "async-trait",
  "futures-util",
  "serde_json",
- "spelunk-config",
- "spelunk-driver-api",
- "spelunk-driver-duckdb",
- "spelunk-driver-mysql",
- "spelunk-driver-postgres",
- "spelunk-driver-sqlite",
- "spelunk-driver-sqlserver",
- "spelunk-ssh",
- "spelunk-store",
+ "spelaion-config",
+ "spelaion-driver-api",
+ "spelaion-driver-duckdb",
+ "spelaion-driver-mysql",
+ "spelaion-driver-postgres",
+ "spelaion-driver-sqlite",
+ "spelaion-driver-sqlserver",
+ "spelaion-ssh",
+ "spelaion-store",
  "sqlparser",
  "thiserror 2.0.21",
  "tokio",
 ]
 
 [[package]]
-name = "spelunk-desktop"
+name = "spelaion-desktop"
 version = "0.3.0"
 dependencies = [
  "arrow",
@@ -5589,10 +5589,10 @@ dependencies = [
  "serde_json",
  "specta",
  "specta-typescript",
- "spelunk-config",
- "spelunk-core",
- "spelunk-driver-api",
- "spelunk-ssh",
+ "spelaion-config",
+ "spelaion-core",
+ "spelaion-driver-api",
+ "spelaion-ssh",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -5602,7 +5602,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spelunk-driver-api"
+name = "spelaion-driver-api"
 version = "0.3.0"
 dependencies = [
  "arrow",
@@ -5613,19 +5613,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "spelunk-driver-duckdb"
+name = "spelaion-driver-duckdb"
 version = "0.3.0"
 dependencies = [
  "arrow",
  "async-trait",
  "duckdb",
  "futures-util",
- "spelunk-driver-api",
+ "spelaion-driver-api",
  "tokio",
 ]
 
 [[package]]
-name = "spelunk-driver-mysql"
+name = "spelaion-driver-mysql"
 version = "0.3.0"
 dependencies = [
  "arrow",
@@ -5634,12 +5634,12 @@ dependencies = [
  "insta",
  "mysql_async",
  "rustls",
- "spelunk-driver-api",
+ "spelaion-driver-api",
  "tokio",
 ]
 
 [[package]]
-name = "spelunk-driver-postgres"
+name = "spelaion-driver-postgres"
 version = "0.3.0"
 dependencies = [
  "arrow",
@@ -5651,14 +5651,14 @@ dependencies = [
  "postgres-protocol",
  "rustls",
  "rustls-native-certs",
- "spelunk-driver-api",
+ "spelaion-driver-api",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
 ]
 
 [[package]]
-name = "spelunk-driver-sqlite"
+name = "spelaion-driver-sqlite"
 version = "0.3.0"
 dependencies = [
  "arrow",
@@ -5666,53 +5666,53 @@ dependencies = [
  "futures-util",
  "insta",
  "rusqlite",
- "spelunk-driver-api",
+ "spelaion-driver-api",
  "tokio",
 ]
 
 [[package]]
-name = "spelunk-driver-sqlserver"
+name = "spelaion-driver-sqlserver"
 version = "0.3.0"
 dependencies = [
  "arrow",
  "async-trait",
  "futures-util",
  "rustls",
- "spelunk-driver-api",
+ "spelaion-driver-api",
  "tiberius",
  "tokio",
  "tokio-util",
 ]
 
 [[package]]
-name = "spelunk-mcp"
+name = "spelaion-mcp"
 version = "0.3.0"
 dependencies = [
  "rmcp",
  "serde",
- "spelunk-config",
- "spelunk-core",
- "spelunk-driver-api",
- "spelunk-ssh",
- "spelunk-store",
+ "spelaion-config",
+ "spelaion-core",
+ "spelaion-driver-api",
+ "spelaion-ssh",
+ "spelaion-store",
  "tokio",
 ]
 
 [[package]]
-name = "spelunk-ssh"
+name = "spelaion-ssh"
 version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures-util",
  "russh",
- "spelunk-driver-api",
- "spelunk-driver-postgres",
+ "spelaion-driver-api",
+ "spelaion-driver-postgres",
  "thiserror 2.0.21",
  "tokio",
 ]
 
 [[package]]
-name = "spelunk-store"
+name = "spelaion-store"
 version = "0.3.0"
 dependencies = [
  "rusqlite",

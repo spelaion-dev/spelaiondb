@@ -1,0 +1,35 @@
+[package]
+name = "spelaion-core"
+description = "SpelaionDB core: sessions, execution and results (ADR-002)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Remote programs for drivers (open.rs, ADR-018).
+async-trait.workspace = true
+spelaion-config.workspace = true
+spelaion-driver-api.workspace = true
+spelaion-driver-mysql.workspace = true
+spelaion-driver-postgres.workspace = true
+spelaion-driver-sqlite.workspace = true
+spelaion-driver-duckdb.workspace = true
+spelaion-driver-sqlserver.workspace = true
+spelaion-ssh.workspace = true
+spelaion-store.workspace = true
+arrow.workspace = true
+async-stream = "0.3"
+futures-util.workspace = true
+sqlparser = { version = "0.63", features = ["visitor"] }
+thiserror.workspace = true
+# Port lists from `kubectl get … -o json` (kube.rs).
+serde_json = "1"
+# process + io-util: `kubectl port-forward` for Kubernetes tunnels (kube.rs).
+tokio = { workspace = true, features = ["sync", "time", "process", "io-util"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

@@ -1,4 +1,4 @@
-//! `spelunk mcp` end to end: a fake agent speaks JSON-RPC over stdio with the real binary,
+//! `spelaiondb mcp` end to end: a fake agent speaks JSON-RPC over stdio with the real binary,
 //! as Claude Code would.
 
 use std::io::{BufRead, BufReader, Write};
@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde_json::{Value, json};
 
-const BIN: &str = env!("CARGO_BIN_EXE_spelunk");
+const BIN: &str = env!("CARGO_BIN_EXE_spelaiondb");
 
 struct Fixture {
     base: PathBuf,
@@ -15,9 +15,9 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        let base = std::env::temp_dir().join(format!("spelunk-cli-{name}-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("spelaion-cli-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("repo/.spelunk/connections")).unwrap();
+        std::fs::create_dir_all(base.join("repo/.spelaion/connections")).unwrap();
         std::fs::create_dir_all(base.join("user")).unwrap();
         Self { base }
     }
@@ -30,15 +30,15 @@ impl Fixture {
         self.base.join("user")
     }
 
-    fn spelunk(&self, args: &[&str]) -> String {
+    fn spelaion(&self, args: &[&str]) -> String {
         let out = Command::new(BIN)
             .args(args)
-            .env("SPELUNK_USER_DIR", self.user())
+            .env("SPELAION_USER_DIR", self.user())
             .output()
             .unwrap();
         assert!(
             out.status.success(),
-            "spelunk {args:?}: {}",
+            "spelaion {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8(out.stdout).unwrap()
@@ -64,7 +64,7 @@ impl Agent {
         let mut child = Command::new(BIN)
             .args(["mcp", "--workspace"])
             .arg(fx.repo())
-            .env("SPELUNK_USER_DIR", fx.user())
+            .env("SPELAION_USER_DIR", fx.user())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -86,7 +86,7 @@ impl Agent {
                 "clientInfo": { "name": "test-agent", "version": "1.0" }
             }),
         );
-        assert_eq!(init["serverInfo"]["name"], "spelunkdb", "{init}");
+        assert_eq!(init["serverInfo"]["name"], "spelaiondb", "{init}");
         agent.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
         agent
     }
@@ -132,7 +132,7 @@ impl Agent {
     fn stop(mut self) {
         drop(self.stdin.take());
         let status = self.child.wait().unwrap();
-        assert!(status.success(), "spelunk mcp exited with {status}");
+        assert!(status.success(), "spelaiondb mcp exited with {status}");
     }
 }
 
@@ -150,12 +150,12 @@ fn an_agent_can_read_but_never_write() {
     let fx = Fixture::new("mcp");
     create_db(&fx.repo().join("shop.db"));
     std::fs::write(
-        fx.repo().join(".spelunk/connections/shop.toml"),
+        fx.repo().join(".spelaion/connections/shop.toml"),
         "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\nmax_rows = 2\n",
     )
     .unwrap();
     std::fs::write(
-        fx.repo().join(".spelunk/connections/hidden.toml"),
+        fx.repo().join(".spelaion/connections/hidden.toml"),
         "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n",
     )
     .unwrap();
@@ -169,7 +169,7 @@ fn an_agent_can_read_but_never_write() {
     );
     agent.stop();
 
-    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
     let mut agent = Agent::start(&fx);
 
     // Every tool but execute_write is announced as read-only.
@@ -278,7 +278,7 @@ fn an_agent_can_read_but_never_write() {
     assert_eq!(count, 3, "the database should not change");
 
     // Everything is recorded in the audit log, with the declared client.
-    let audit = fx.spelunk(&["audit", "--limit", "50"]);
+    let audit = fx.spelaion(&["audit", "--limit", "50"]);
     assert!(
         audit.contains("test-agent · shop · REJECTED: delete from products"),
         "{audit}"
@@ -295,11 +295,11 @@ fn an_agent_writes_only_where_the_user_allowed_it() {
     let fx = Fixture::new("mcp-write");
     create_db(&fx.repo().join("shop.db"));
     std::fs::write(
-        fx.repo().join(".spelunk/connections/shop.toml"),
+        fx.repo().join(".spelaion/connections/shop.toml"),
         "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
     )
     .unwrap();
-    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
     let mut agent = Agent::start(&fx);
 
     let (text, _) = agent.call("list_connections", json!({}));
@@ -364,7 +364,7 @@ fn an_agent_writes_only_where_the_user_allowed_it() {
         .unwrap();
     assert_eq!((count, lamp), (5, 10.0));
 
-    let audit = fx.spelunk(&["audit", "--limit", "50"]);
+    let audit = fx.spelaion(&["audit", "--limit", "50"]);
     assert!(
         audit.contains("test-agent · shop · executed: update products set price = 10"),
         "{audit}"
@@ -384,13 +384,13 @@ fn an_agent_writes_only_where_the_user_allowed_it() {
 /// Runs `script` on a DuckDB file, creating it, with the project's own driver.
 fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
     use futures_util::StreamExt;
-    use spelunk_driver_api::{ConnectParams, Driver, ExecEvent, ExecOptions, Value};
+    use spelaion_driver_api::{ConnectParams, Driver, ExecEvent, ExecOptions, Value};
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
     runtime.block_on(async {
-        let driver = spelunk_driver_duckdb::DuckdbDriver {
+        let driver = spelaion_driver_duckdb::DuckdbDriver {
             create_if_missing: true,
         };
         let conn = driver
@@ -437,16 +437,16 @@ fn duckdb_connections_serve_agents_without_files() {
     );
     std::fs::write(fx.repo().join("secret.csv"), "password\nhunter2\n").unwrap();
     std::fs::write(
-        fx.repo().join(".spelunk/connections/shop.toml"),
+        fx.repo().join(".spelaion/connections/shop.toml"),
         "schema_version = 1\nname = \"Shop\"\nengine = \"duckdb\"\ndatabase = \"shop.duckdb\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
     )
     .unwrap();
     std::fs::write(
-        fx.repo().join(".spelunk/connections/archive.toml"),
+        fx.repo().join(".spelaion/connections/archive.toml"),
         "schema_version = 1\nname = \"Archive\"\nengine = \"duckdb\"\ndatabase = \"archive.duckdb\"\n\n[mcp]\nexposed = true\n",
     )
     .unwrap();
-    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
     let mut agent = Agent::start(&fx);
 
     let (text, _) = agent.call("list_connections", json!({}));
@@ -524,10 +524,10 @@ fn a_connection_changed_after_trusting_is_refused_until_reviewed() {
     let fx = Fixture::new("mcp-pinned");
     create_db(&fx.repo().join("shop.db"));
     create_db(&fx.repo().join("other.db"));
-    let file = fx.repo().join(".spelunk/connections/shop.toml");
+    let file = fx.repo().join(".spelaion/connections/shop.toml");
     let content = "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\n";
     std::fs::write(&file, content).unwrap();
-    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
     let query = json!({ "connection": "shop", "sql": "select count(*) as n from products" });
 
     let mut agent = Agent::start(&fx);
@@ -547,8 +547,8 @@ fn a_connection_changed_after_trusting_is_refused_until_reviewed() {
     );
     agent.stop();
 
-    // `spelunk trust` says what it accepts; then it works again.
-    let out = fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    // `spelaiondb trust` says what it accepts; then it works again.
+    let out = fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
     assert!(
         out.contains("Accepted: the connection shop changed")
             && out.contains("database shop.db → other.db"),
@@ -565,11 +565,11 @@ fn a_connection_missing_personal_variables_says_which_ones() {
     let fx = Fixture::new("mcp-vars");
     create_db(&fx.repo().join("shop.db"));
     std::fs::write(
-        fx.repo().join(".spelunk/connections/shop.toml"),
+        fx.repo().join(".spelaion/connections/shop.toml"),
         "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"${user.shop_file}\"\n\n[mcp]\nexposed = true\n",
     )
     .unwrap();
-    fx.spelunk(&["trust", fx.repo().to_str().unwrap()]);
+    fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
     let query = json!({ "connection": "shop", "sql": "select count(*) as n from products" });
 
     let mut agent = Agent::start(&fx);

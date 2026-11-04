@@ -15,7 +15,7 @@ export function DeleteConnection({ connection }: { connection: ConnectionItem })
   const [error, setError] = useState<string | null>(null);
   const file = connection.personal
     ? `connections/${connection.id.replace(/^~\//, "")}.toml`
-    : `.spelunk/connections/${connection.id}.toml`;
+    : `.spelaion/connections/${connection.id}.toml`;
 
   async function remove() {
     setDeleting(true);

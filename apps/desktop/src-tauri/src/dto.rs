@@ -3,8 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use spelunk_core::CoreEvent;
-use spelunk_driver_api::{ObjectInfo, ObjectKind, TableInfo};
+use spelaion_core::CoreEvent;
+use spelaion_driver_api::{ObjectInfo, ObjectKind, TableInfo};
 
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -100,8 +100,8 @@ pub struct SnippetItem {
     pub personal: bool,
 }
 
-impl From<spelunk_core::Snippet> for SnippetItem {
-    fn from(s: spelunk_core::Snippet) -> Self {
+impl From<spelaion_core::Snippet> for SnippetItem {
+    fn from(s: spelaion_core::Snippet) -> Self {
         Self {
             id: s.id,
             personal: s.workspace.is_empty(),
@@ -113,8 +113,8 @@ impl From<spelunk_core::Snippet> for SnippetItem {
     }
 }
 
-impl From<spelunk_core::HistoryEntry> for HistoryItem {
-    fn from(entry: spelunk_core::HistoryEntry) -> Self {
+impl From<spelaion_core::HistoryEntry> for HistoryItem {
+    fn from(entry: spelaion_core::HistoryEntry) -> Self {
         Self {
             id: entry.id,
             at_ms: entry.at_ms,
@@ -174,8 +174,8 @@ pub struct FieldChangeItem {
     pub after: Option<String>,
 }
 
-impl From<spelunk_config::ItemChange> for ConnectOutcome {
-    fn from(change: spelunk_config::ItemChange) -> Self {
+impl From<spelaion_config::ItemChange> for ConnectOutcome {
+    fn from(change: spelaion_config::ItemChange) -> Self {
         ConnectOutcome::Changed {
             item: change.item,
             new: change.new,
@@ -477,15 +477,15 @@ pub struct EngineItem {
     pub available: bool,
 }
 
-impl From<spelunk_core::EngineInfo> for EngineItem {
-    fn from(info: spelunk_core::EngineInfo) -> Self {
+impl From<spelaion_core::EngineInfo> for EngineItem {
+    fn from(info: spelaion_core::EngineInfo) -> Self {
         Self {
             id: info.id.into(),
             name: info.name.into(),
             category: info.category.as_str().into(),
             access: match info.access {
-                spelunk_core::EngineAccess::Network => "network",
-                spelunk_core::EngineAccess::File => "file",
+                spelaion_core::EngineAccess::Network => "network",
+                spelaion_core::EngineAccess::File => "file",
             }
             .into(),
             default_port: info.default_port,
@@ -518,8 +518,8 @@ pub enum PasswordMode {
 }
 
 impl PasswordMode {
-    fn cloud_token(self) -> Option<spelunk_config::CloudToken> {
-        use spelunk_config::CloudToken;
+    fn cloud_token(self) -> Option<spelaion_config::CloudToken> {
+        use spelaion_config::CloudToken;
         match self {
             PasswordMode::AwsRds => Some(CloudToken::AwsRds),
             PasswordMode::AzureAd => Some(CloudToken::AzureAd),
@@ -532,8 +532,8 @@ impl PasswordMode {
         }
     }
 
-    fn from_cloud_token(token: spelunk_config::CloudToken) -> Self {
-        use spelunk_config::CloudToken;
+    fn from_cloud_token(token: spelaion_config::CloudToken) -> Self {
+        use spelaion_config::CloudToken;
         match token {
             CloudToken::AwsRds => PasswordMode::AwsRds,
             CloudToken::AzureAd => PasswordMode::AzureAd,
@@ -552,9 +552,9 @@ pub enum TlsModeItem {
     VerifyFull,
 }
 
-impl From<spelunk_config::TlsModeConfig> for TlsModeItem {
-    fn from(mode: spelunk_config::TlsModeConfig) -> Self {
-        use spelunk_config::TlsModeConfig;
+impl From<spelaion_config::TlsModeConfig> for TlsModeItem {
+    fn from(mode: spelaion_config::TlsModeConfig) -> Self {
+        use spelaion_config::TlsModeConfig;
         match mode {
             TlsModeConfig::Disable => Self::Disable,
             TlsModeConfig::Prefer => Self::Prefer,
@@ -579,8 +579,8 @@ pub struct UrlFields {
     pub tls_mode: Option<TlsModeItem>,
 }
 
-impl From<spelunk_config::UrlConnection> for UrlFields {
-    fn from(c: spelunk_config::UrlConnection) -> Self {
+impl From<spelaion_config::UrlConnection> for UrlFields {
+    fn from(c: spelaion_config::UrlConnection) -> Self {
         Self {
             engine: c.engine.as_str().into(),
             host: c.host,
@@ -627,11 +627,11 @@ pub struct ConnectionDraftItem {
     pub mcp_writes: bool,
 }
 
-impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
+impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
     type Error = String;
 
     fn try_from(item: ConnectionDraftItem) -> Result<Self, String> {
-        use spelunk_config::{PasswordChoice, Source, TlsModeConfig};
+        use spelaion_config::{PasswordChoice, Source, TlsModeConfig};
         let engine = engine_named(&item.engine)?;
         Ok(Self {
             source: if item.personal {
@@ -679,9 +679,9 @@ impl TryFrom<ConnectionDraftItem> for spelunk_config::ConnectionDraft {
     }
 }
 
-impl From<spelunk_config::ConnectionDraft> for ConnectionDraftItem {
-    fn from(draft: spelunk_config::ConnectionDraft) -> Self {
-        use spelunk_config::{PasswordChoice, Source};
+impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
+    fn from(draft: spelaion_config::ConnectionDraft) -> Self {
+        use spelaion_config::{PasswordChoice, Source};
         let (password_mode, password_env, password_other) = match draft.password {
             PasswordChoice::None => (PasswordMode::None, String::new(), String::new()),
             PasswordChoice::Keychain => (PasswordMode::Keychain, String::new(), String::new()),
@@ -767,7 +767,7 @@ pub struct KubernetesDraftItem {
     pub kubectl: String,
 }
 
-impl From<KubernetesDraftItem> for spelunk_config::KubernetesDraft {
+impl From<KubernetesDraftItem> for spelaion_config::KubernetesDraft {
     fn from(k: KubernetesDraftItem) -> Self {
         Self {
             context: k.context,
@@ -788,8 +788,8 @@ pub struct KubePortItem {
     pub container: Option<String>,
 }
 
-impl From<spelunk_core::kube::ResourcePort> for KubePortItem {
-    fn from(p: spelunk_core::kube::ResourcePort) -> Self {
+impl From<spelaion_core::kube::ResourcePort> for KubePortItem {
+    fn from(p: spelaion_core::kube::ResourcePort) -> Self {
         Self {
             port: p.port,
             name: p.name,
@@ -798,8 +798,8 @@ impl From<spelunk_core::kube::ResourcePort> for KubePortItem {
     }
 }
 
-impl From<spelunk_config::KubernetesDraft> for KubernetesDraftItem {
-    fn from(k: spelunk_config::KubernetesDraft) -> Self {
+impl From<spelaion_config::KubernetesDraft> for KubernetesDraftItem {
+    fn from(k: spelaion_config::KubernetesDraft) -> Self {
         Self {
             context: k.context,
             namespace: k.namespace,
@@ -819,7 +819,7 @@ pub enum TunnelTestOutcome {
     Untrusted,
 }
 
-impl From<SshAuthItem> for spelunk_config::SshAuth {
+impl From<SshAuthItem> for spelaion_config::SshAuth {
     fn from(item: SshAuthItem) -> Self {
         match item {
             SshAuthItem::Agent => Self::Agent,
@@ -830,13 +830,13 @@ impl From<SshAuthItem> for spelunk_config::SshAuth {
     }
 }
 
-impl From<spelunk_config::SshAuth> for SshAuthItem {
-    fn from(auth: spelunk_config::SshAuth) -> Self {
+impl From<spelaion_config::SshAuth> for SshAuthItem {
+    fn from(auth: spelaion_config::SshAuth) -> Self {
         match auth {
-            spelunk_config::SshAuth::Agent => Self::Agent,
-            spelunk_config::SshAuth::Key => Self::Key,
-            spelunk_config::SshAuth::Password => Self::Password,
-            spelunk_config::SshAuth::KeyboardInteractive => Self::KeyboardInteractive,
+            spelaion_config::SshAuth::Agent => Self::Agent,
+            spelaion_config::SshAuth::Key => Self::Key,
+            spelaion_config::SshAuth::Password => Self::Password,
+            spelaion_config::SshAuth::KeyboardInteractive => Self::KeyboardInteractive,
         }
     }
 }
@@ -845,8 +845,8 @@ fn password_choice(
     mode: PasswordMode,
     env: String,
     other: String,
-) -> spelunk_config::PasswordChoice {
-    use spelunk_config::PasswordChoice;
+) -> spelaion_config::PasswordChoice {
+    use spelaion_config::PasswordChoice;
     match mode {
         PasswordMode::None => PasswordChoice::None,
         PasswordMode::Keychain => PasswordChoice::Keychain,
@@ -860,8 +860,8 @@ fn password_choice(
     }
 }
 
-fn password_fields(choice: spelunk_config::PasswordChoice) -> (PasswordMode, String, String) {
-    use spelunk_config::PasswordChoice;
+fn password_fields(choice: spelaion_config::PasswordChoice) -> (PasswordMode, String, String) {
+    use spelaion_config::PasswordChoice;
     match choice {
         PasswordChoice::None => (PasswordMode::None, String::new(), String::new()),
         PasswordChoice::Keychain => (PasswordMode::Keychain, String::new(), String::new()),
@@ -876,9 +876,9 @@ fn password_fields(choice: spelunk_config::PasswordChoice) -> (PasswordMode, Str
     }
 }
 
-impl From<TunnelDraftItem> for spelunk_config::TunnelDraft {
+impl From<TunnelDraftItem> for spelaion_config::TunnelDraft {
     fn from(item: TunnelDraftItem) -> Self {
-        use spelunk_config::{HopDraft, Source};
+        use spelaion_config::{HopDraft, Source};
         Self {
             source: if item.personal {
                 Source::User
@@ -906,12 +906,12 @@ impl From<TunnelDraftItem> for spelunk_config::TunnelDraft {
     }
 }
 
-impl From<spelunk_config::TunnelDraft> for TunnelDraftItem {
-    fn from(draft: spelunk_config::TunnelDraft) -> Self {
+impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
+    fn from(draft: spelaion_config::TunnelDraft) -> Self {
         Self {
             personal: match draft.source {
-                spelunk_config::Source::User => true,
-                spelunk_config::Source::Workspace => false,
+                spelaion_config::Source::User => true,
+                spelaion_config::Source::Workspace => false,
             },
             name: draft.name,
             hops: draft
@@ -956,7 +956,7 @@ pub struct DbeaverItem {
     pub id: String,
     pub name: String,
     pub folder: String,
-    /// `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it.
+    /// `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it.
     pub engine: Option<String>,
     /// Why it cannot be imported, if it cannot.
     pub unsupported: Option<String>,
@@ -969,8 +969,8 @@ pub struct DbeaverItem {
     pub ssh: Option<String>,
 }
 
-impl From<&spelunk_config::DbeaverConnection> for DbeaverItem {
-    fn from(c: &spelunk_config::DbeaverConnection) -> Self {
+impl From<&spelaion_config::DbeaverConnection> for DbeaverItem {
+    fn from(c: &spelaion_config::DbeaverConnection) -> Self {
         let file = c.engine.as_ref().is_ok_and(|e| e.is_file());
         Self {
             id: c.id.clone(),
@@ -1024,8 +1024,8 @@ pub struct ImportReport {
 }
 
 /// The engine behind the id the UI uses (`postgres`, `mysql`…).
-pub fn engine_named(name: &str) -> Result<spelunk_config::Engine, String> {
-    use spelunk_config::Engine;
+pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
+    use spelaion_config::Engine;
     Ok(match name {
         "postgres" => Engine::Postgres,
         "sqlite" => Engine::Sqlite,
@@ -1037,7 +1037,7 @@ pub fn engine_named(name: &str) -> Result<spelunk_config::Engine, String> {
     })
 }
 
-/// Why a statement asks for confirmation before running (see `spelunk_core::Risk`).
+/// Why a statement asks for confirmation before running (see `spelaion_core::Risk`).
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum RiskKind {
@@ -1049,9 +1049,9 @@ pub enum RiskKind {
     ProductionWrite,
 }
 
-impl From<spelunk_core::Risk> for RiskKind {
-    fn from(risk: spelunk_core::Risk) -> Self {
-        use spelunk_core::Risk;
+impl From<spelaion_core::Risk> for RiskKind {
+    fn from(risk: spelaion_core::Risk) -> Self {
+        use spelaion_core::Risk;
         match risk {
             Risk::DeleteAll => Self::DeleteAll,
             Risk::UpdateAll => Self::UpdateAll,
@@ -1072,8 +1072,8 @@ pub struct RiskyItem {
     pub risk: RiskKind,
 }
 
-impl From<spelunk_core::RiskyStatement> for RiskyItem {
-    fn from(r: spelunk_core::RiskyStatement) -> Self {
+impl From<spelaion_core::RiskyStatement> for RiskyItem {
+    fn from(r: spelaion_core::RiskyStatement) -> Self {
         let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
         Self {
             index: n(r.index),
@@ -1084,7 +1084,7 @@ impl From<spelunk_core::RiskyStatement> for RiskyItem {
     }
 }
 
-/// SQL the explorer can write for a table (see `spelunk_core::SqlTemplate`).
+/// SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`).
 #[derive(Debug, Clone, Copy, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum SqlTemplateItem {
@@ -1095,7 +1095,7 @@ pub enum SqlTemplateItem {
     Delete,
 }
 
-impl From<SqlTemplateItem> for spelunk_core::SqlTemplate {
+impl From<SqlTemplateItem> for spelaion_core::SqlTemplate {
     fn from(item: SqlTemplateItem) -> Self {
         match item {
             SqlTemplateItem::Preview => Self::Preview,
@@ -1107,7 +1107,7 @@ impl From<SqlTemplateItem> for spelunk_core::SqlTemplate {
     }
 }
 
-/// A column filter operator (see `spelunk_core::FilterOp`).
+/// A column filter operator (see `spelaion_core::FilterOp`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum FilterOpItem {
@@ -1131,9 +1131,9 @@ pub struct ColumnFilterItem {
     pub value: String,
 }
 
-impl From<ColumnFilterItem> for spelunk_core::ColumnFilter {
+impl From<ColumnFilterItem> for spelaion_core::ColumnFilter {
     fn from(item: ColumnFilterItem) -> Self {
-        use spelunk_core::FilterOp;
+        use spelaion_core::FilterOp;
         Self {
             column: item.column as usize,
             op: match item.op {
@@ -1153,7 +1153,7 @@ impl From<ColumnFilterItem> for spelunk_core::ColumnFilter {
     }
 }
 
-/// A page of a table for the table data tab (see `spelunk_core::TablePage`).
+/// A page of a table for the table data tab (see `spelaion_core::TablePage`).
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TablePageItem {
@@ -1165,7 +1165,7 @@ pub struct TablePageItem {
     pub offset: u32,
 }
 
-impl From<TablePageItem> for spelunk_core::TablePage {
+impl From<TablePageItem> for spelaion_core::TablePage {
     fn from(item: TablePageItem) -> Self {
         Self {
             schema: item.schema,
@@ -1194,7 +1194,7 @@ pub enum RowChangeItem {
     Insert { values: Vec<CellEditItem> },
 }
 
-impl From<RowChangeItem> for spelunk_core::RowChange {
+impl From<RowChangeItem> for spelaion_core::RowChange {
     fn from(item: RowChangeItem) -> Self {
         let values = |values: Vec<CellEditItem>| {
             values
@@ -1203,8 +1203,8 @@ impl From<RowChangeItem> for spelunk_core::RowChange {
                     (
                         v.column as usize,
                         match v.value {
-                            Some(text) => spelunk_core::CellInput::Text(text),
-                            None => spelunk_core::CellInput::Null,
+                            Some(text) => spelaion_core::CellInput::Text(text),
+                            None => spelaion_core::CellInput::Null,
                         },
                     )
                 })

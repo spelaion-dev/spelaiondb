@@ -1,4 +1,4 @@
-//! SpelunkDB desktop app: a thin Tauri adapter over `spelunk-core` (ADR-002). There is no
+//! SpelaionDB desktop app: a thin Tauri adapter over `spelaion-core` (ADR-002). There is no
 //! database or security logic here: only translation between UI commands and the core.
 
 mod dto;
@@ -14,16 +14,16 @@ use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::StreamWriter;
 use futures_util::StreamExt;
-use spelunk_config::{
+use spelaion_config::{
     Config, ConnectionDraft, ConnectionId, Resolver, Source, SystemBackend, TrustStore,
     default_user_dir, load,
 };
-use spelunk_core::{
+use spelaion_core::{
     Engines, ExportFormat, ExportOptions, GenericDialect, OpenConnection, OpenError, OpenOptions,
     QueryHistory, ResultId, ResultStore, SortKey, TunnelPool, open_connection, write_result,
 };
-use spelunk_driver_api::{Dialect, DriverError, Secret, Value};
-use spelunk_ssh::KnownHosts;
+use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
+use spelaion_ssh::KnownHosts;
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::{Mutex, RwLock};
@@ -271,7 +271,7 @@ async fn set_user_vars(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let values = values.into_iter().collect();
-    spelunk_config::set_user_vars(&state.user_dir, &values).map_err(|e| e.to_string())?;
+    spelaion_config::set_user_vars(&state.user_dir, &values).map_err(|e| e.to_string())?;
     state.reload().await;
     Ok(())
 }
@@ -406,7 +406,7 @@ async fn set_history_enabled(
 #[tauri::command]
 #[specta::specta]
 fn engine_catalog() -> Vec<EngineItem> {
-    spelunk_core::engine_catalog()
+    spelaion_core::engine_catalog()
         .into_iter()
         .map(EngineItem::from)
         .collect()
@@ -450,13 +450,13 @@ async fn test_connection(
         };
         match resolved {
             Ok(resolved) => resolved,
-            Err(spelunk_config::ResolveError::Untrusted { .. }) => {
+            Err(spelaion_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
             }
-            Err(spelunk_config::ResolveError::Changed { change, .. }) => {
+            Err(spelaion_config::ResolveError::Changed { change, .. }) => {
                 return Ok(change.into());
             }
-            Err(spelunk_config::ResolveError::MissingVariables { names }) => {
+            Err(spelaion_config::ResolveError::MissingVariables { names }) => {
                 return Ok(ConnectOutcome::MissingVariables { names });
             }
             Err(e) => return Err(e.to_string()),
@@ -508,13 +508,13 @@ async fn add_connection(
     let password = password.map(Secret::new);
     let id = {
         let config = state.config.read().await;
-        spelunk_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
+        spelaion_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
             .map_err(|e| e.to_string())?
     };
     state.reload().await;
     if id.source == Source::Workspace {
         state
-            .accept_own(spelunk_config::connection_item(&id))
+            .accept_own(spelaion_config::connection_item(&id))
             .await?;
     }
     Ok(id.to_string())
@@ -548,7 +548,7 @@ async fn update_connection(
     let password = password.map(Secret::new);
     {
         let config = state.config.read().await;
-        spelunk_config::update_connection(
+        spelaion_config::update_connection(
             &config,
             &parse_id(&connection),
             &draft,
@@ -561,7 +561,7 @@ async fn update_connection(
     let id = parse_id(&connection);
     if id.source == Source::Workspace {
         state
-            .accept_own(spelunk_config::connection_item(&id))
+            .accept_own(spelaion_config::connection_item(&id))
             .await?;
     }
     Ok(())
@@ -573,14 +573,14 @@ async fn update_connection(
 async fn delete_connection(connection: String, state: State<'_, AppState>) -> CmdResult<()> {
     {
         let config = state.config.read().await;
-        spelunk_config::delete_connection(&config, &parse_id(&connection), &SystemBackend)
+        spelaion_config::delete_connection(&config, &parse_id(&connection), &SystemBackend)
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
     let id = parse_id(&connection);
     if id.source == Source::Workspace {
         state
-            .accept_own(spelunk_config::connection_item(&id))
+            .accept_own(spelaion_config::connection_item(&id))
             .await?;
     }
     Ok(())
@@ -615,7 +615,7 @@ async fn tunnel_draft(
         .iter()
         .find(|t| t.source == source_of(personal) && t.name == name)
         .ok_or_else(|| format!("tunnel {name} does not exist"))?;
-    Ok(spelunk_config::TunnelDraft::from_entry(entry).into())
+    Ok(spelaion_config::TunnelDraft::from_entry(entry).into())
 }
 
 /// Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
@@ -628,19 +628,19 @@ async fn test_tunnel(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<TunnelTestOutcome> {
-    let draft = spelunk_config::TunnelDraft::from(draft);
+    let draft = spelaion_config::TunnelDraft::from(draft);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let resolved = {
         let config = state.config.read().await;
         match Resolver::new(&config, &trust, &SystemBackend).resolve_tunnel_draft(&draft) {
             Ok(resolved) => resolved,
-            Err(spelunk_config::ResolveError::Untrusted { .. }) => {
+            Err(spelaion_config::ResolveError::Untrusted { .. }) => {
                 return Ok(TunnelTestOutcome::Untrusted);
             }
             Err(e) => return Err(e.to_string()),
         }
     };
-    spelunk_core::test_tunnel(
+    spelaion_core::test_tunnel(
         &resolved,
         secrets(passwords),
         &KnownHosts::for_user(&state.user_dir),
@@ -652,9 +652,9 @@ async fn test_tunnel(
 }
 
 /// What `kubectl` is asked with, from the Kubernetes tab: empty fields mean the defaults.
-fn kube_spec(k: KubernetesDraftItem) -> spelunk_config::ResolvedKubernetes {
+fn kube_spec(k: KubernetesDraftItem) -> spelaion_config::ResolvedKubernetes {
     let text = |v: String| Some(v.trim().to_string()).filter(|v| !v.is_empty());
-    spelunk_config::ResolvedKubernetes {
+    spelaion_config::ResolvedKubernetes {
         context: text(k.context),
         namespace: text(k.namespace),
         resource: k.resource,
@@ -667,7 +667,7 @@ fn kube_spec(k: KubernetesDraftItem) -> spelunk_config::ResolvedKubernetes {
 #[tauri::command]
 #[specta::specta]
 async fn kube_contexts(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
-    spelunk_core::kube::contexts(&kube_spec(form))
+    spelaion_core::kube::contexts(&kube_spec(form))
         .await
         .map_err(|e| e.to_string())
 }
@@ -676,7 +676,7 @@ async fn kube_contexts(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
 #[tauri::command]
 #[specta::specta]
 async fn kube_namespaces(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
-    spelunk_core::kube::namespaces(&kube_spec(form))
+    spelaion_core::kube::namespaces(&kube_spec(form))
         .await
         .map_err(|e| e.to_string())
 }
@@ -685,7 +685,7 @@ async fn kube_namespaces(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
 #[tauri::command]
 #[specta::specta]
 async fn kube_names(form: KubernetesDraftItem, kind: String) -> CmdResult<Vec<String>> {
-    spelunk_core::kube::names(&kube_spec(form), &kind)
+    spelaion_core::kube::names(&kube_spec(form), &kind)
         .await
         .map_err(|e| e.to_string())
 }
@@ -694,7 +694,7 @@ async fn kube_names(form: KubernetesDraftItem, kind: String) -> CmdResult<Vec<St
 #[tauri::command]
 #[specta::specta]
 async fn kube_ports(form: KubernetesDraftItem) -> CmdResult<Vec<KubePortItem>> {
-    spelunk_core::kube::ports(&kube_spec(form))
+    spelaion_core::kube::ports(&kube_spec(form))
         .await
         .map(|ports| ports.into_iter().map(Into::into).collect())
         .map_err(|e| e.to_string())
@@ -709,15 +709,17 @@ async fn add_tunnel(
     state: State<'_, AppState>,
 ) -> CmdResult<TunnelItem> {
     let personal = draft.personal;
-    let draft = spelunk_config::TunnelDraft::from(draft);
+    let draft = spelaion_config::TunnelDraft::from(draft);
     let name = {
         let config = state.config.read().await;
-        spelunk_config::add_tunnel(&config, &draft, &secrets(passwords), &SystemBackend)
+        spelaion_config::add_tunnel(&config, &draft, &secrets(passwords), &SystemBackend)
             .map_err(|e| e.to_string())?
     };
     state.reload().await;
     if !personal {
-        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+        state
+            .accept_own(spelaion_config::tunnel_item(&name))
+            .await?;
     }
     Ok(TunnelItem { name, personal })
 }
@@ -732,10 +734,10 @@ async fn update_tunnel(
     passwords: Vec<Option<String>>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let draft = spelunk_config::TunnelDraft::from(draft);
+    let draft = spelaion_config::TunnelDraft::from(draft);
     {
         let config = state.config.read().await;
-        spelunk_config::update_tunnel(
+        spelaion_config::update_tunnel(
             &config,
             source_of(personal),
             &name,
@@ -747,7 +749,9 @@ async fn update_tunnel(
     }
     state.reload().await;
     if !personal {
-        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+        state
+            .accept_own(spelaion_config::tunnel_item(&name))
+            .await?;
     }
     Ok(())
 }
@@ -758,12 +762,14 @@ async fn update_tunnel(
 async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>) -> CmdResult<()> {
     {
         let config = state.config.read().await;
-        spelunk_config::delete_tunnel(&config, source_of(personal), &name, &SystemBackend)
+        spelaion_config::delete_tunnel(&config, source_of(personal), &name, &SystemBackend)
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
     if !personal {
-        state.accept_own(spelunk_config::tunnel_item(&name)).await?;
+        state
+            .accept_own(spelaion_config::tunnel_item(&name))
+            .await?;
     }
     Ok(())
 }
@@ -790,13 +796,13 @@ async fn connect(
         let config = state.config.read().await;
         let resolved = match Resolver::new(&config, &trust, &SystemBackend).resolve(&id) {
             Ok(resolved) => resolved,
-            Err(spelunk_config::ResolveError::Untrusted { .. }) => {
+            Err(spelaion_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
             }
-            Err(spelunk_config::ResolveError::Changed { change, .. }) => {
+            Err(spelaion_config::ResolveError::Changed { change, .. }) => {
                 return Ok(change.into());
             }
-            Err(spelunk_config::ResolveError::MissingVariables { names }) => {
+            Err(spelaion_config::ResolveError::MissingVariables { names }) => {
                 return Ok(ConnectOutcome::MissingVariables { names });
             }
             Err(e) => return Err(e.to_string()),
@@ -804,8 +810,8 @@ async fn connect(
         (resolved, history_workspace(&config, id.source))
     };
     let save_to = match &resolved.password {
-        spelunk_config::Password::Prompt { save_to } => save_to.clone(),
-        spelunk_config::Password::None | spelunk_config::Password::Value(_) => None,
+        spelaion_config::Password::Prompt { save_to } => save_to.clone(),
+        spelaion_config::Password::None | spelaion_config::Password::Value(_) => None,
     };
     let password = password.map(Secret::new);
     let options = OpenOptions {
@@ -966,7 +972,7 @@ async fn list_processes(
     state: State<'_, AppState>,
 ) -> CmdResult<ProcessSnapshotItem> {
     let open = state.session(&session).await?;
-    let snapshot = spelunk_core::list_processes(&open.session).await?;
+    let snapshot = spelaion_core::list_processes(&open.session).await?;
     Ok(ProcessSnapshotItem {
         own_id: snapshot.own_id,
         limited: snapshot.limited,
@@ -999,7 +1005,7 @@ async fn control_process(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let open = state.session(&session).await?;
-    let target = spelunk_core::ProcessTarget {
+    let target = spelaion_core::ProcessTarget {
         id: target.id,
         user: target.user,
         host: target.host,
@@ -1007,7 +1013,7 @@ async fn control_process(
         sql: target.sql,
         identity: target.identity,
     };
-    spelunk_core::control_process(
+    spelaion_core::control_process(
         &open.session,
         &target,
         terminate,
@@ -1078,7 +1084,7 @@ async fn query_page_supported(
     state: State<'_, AppState>,
 ) -> CmdResult<bool> {
     let open = state.session(&session).await?;
-    Ok(spelunk_core::query_page_sql(open.session.dialect().as_ref(), &sql, 1, 0).is_some())
+    Ok(spelaion_core::query_page_sql(open.session.dialect().as_ref(), &sql, 1, 0).is_some())
 }
 
 /// Run the first page, keeping the original SQL in the user's query history.
@@ -1093,7 +1099,7 @@ async fn run_query_page(
 ) -> CmdResult<()> {
     let open = state.session(&session).await?;
     let paged =
-        spelunk_core::query_page_sql(open.session.dialect().as_ref(), &sql, limit.into(), 0)
+        spelaion_core::query_page_sql(open.session.dialect().as_ref(), &sql, limit.into(), 0)
             .ok_or("this query cannot be paged")?;
     start_script(&state, &session, paged, false, on_event, Some(sql)).await
 }
@@ -1109,7 +1115,7 @@ async fn append_query_page(
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
     let open = state.session(&session).await?;
-    let added = spelunk_core::append_query_page(
+    let added = spelaion_core::append_query_page(
         &open.session,
         ResultId(result.into()),
         &sql,
@@ -1128,7 +1134,7 @@ async fn count_query_rows(
     state: State<'_, AppState>,
 ) -> CmdResult<f64> {
     let open = state.session(&session).await?;
-    Ok(spelunk_core::count_query_rows(&open.session, &sql).await? as f64)
+    Ok(spelaion_core::count_query_rows(&open.session, &sql).await? as f64)
 }
 
 /// The `:name` placeholders of a script, in order, so the UI can ask for their values.
@@ -1140,7 +1146,7 @@ async fn script_params(
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
     let open = state.session(&session).await?;
-    Ok(spelunk_core::script_params(
+    Ok(spelaion_core::script_params(
         open.session.dialect().as_ref(),
         &sql,
     ))
@@ -1157,12 +1163,12 @@ async fn bind_params(
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let open = state.session(&session).await?;
-    spelunk_core::bind_params(open.session.dialect().as_ref(), &sql, &values)
+    spelaion_core::bind_params(open.session.dialect().as_ref(), &sql, &values)
         .map_err(|e| e.to_string())
 }
 
-fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelunk_core::RiskyStatement> {
-    spelunk_core::script_risks(
+fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelaion_core::RiskyStatement> {
+    spelaion_core::script_risks(
         open.session.dialect().as_ref(),
         sql,
         open.resolved.is_production(),
@@ -1288,7 +1294,7 @@ async fn export_result(
             columns: 0..stored.schema().columns.len(),
             header: true,
         };
-        spelunk_core::export_to_file(&stored, &options, dialect.as_ref(), Path::new(&path))
+        spelaion_core::export_to_file(&stored, &options, dialect.as_ref(), Path::new(&path))
             .map_err(|e| format!("could not write {path}: {e}"))
     })
     .await
@@ -1300,7 +1306,7 @@ async fn export_result(
 #[tauri::command]
 #[specta::specta]
 fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
-    spelunk_config::parse_connection_url(&url)
+    spelaion_config::parse_connection_url(&url)
         .map(UrlFields::from)
         .map_err(|e| e.to_string())
 }
@@ -1309,7 +1315,7 @@ fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
 fn dbeaver_dir(path: Option<String>) -> CmdResult<PathBuf> {
     match path.filter(|p| !p.trim().is_empty()) {
         Some(path) => Ok(PathBuf::from(path)),
-        None => spelunk_config::dbeaver_workspace()
+        None => spelaion_config::dbeaver_workspace()
             .ok_or_else(|| "DBeaver's folder is unknown on this system".into()),
     }
 }
@@ -1321,7 +1327,7 @@ async fn scan_dbeaver(path: Option<String>) -> CmdResult<DbeaverScan> {
     let dir = dbeaver_dir(path)?;
     let found = tokio::task::spawn_blocking({
         let dir = dir.clone();
-        move || spelunk_config::read_dbeaver(&dir)
+        move || spelaion_config::read_dbeaver(&dir)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1332,7 +1338,7 @@ async fn scan_dbeaver(path: Option<String>) -> CmdResult<DbeaverScan> {
     })
 }
 
-/// Imports the chosen DBeaver connections (and their SSH tunnels) as SpelunkDB files. The
+/// Imports the chosen DBeaver connections (and their SSH tunnels) as SpelaionDB files. The
 /// folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
 /// DBeaver saved go to the keychain, otherwise they are asked when connecting.
 #[tauri::command]
@@ -1345,7 +1351,7 @@ async fn import_dbeaver(
     state: State<'_, AppState>,
 ) -> CmdResult<ImportReport> {
     let dir = dbeaver_dir(path)?;
-    let found = tokio::task::spawn_blocking(move || spelunk_config::read_dbeaver(&dir))
+    let found = tokio::task::spawn_blocking(move || spelaion_config::read_dbeaver(&dir))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
@@ -1370,7 +1376,7 @@ async fn import_dbeaver(
         let tunnel_name = connection
             .ssh
             .as_ref()
-            .map(|s| spelunk_config::slug(&format!("{} {}", s.user, s.host)))
+            .map(|s| spelaion_config::slug(&format!("{} {}", s.user, s.host)))
             .unwrap_or_default();
         match import_one(
             &state,
@@ -1401,13 +1407,14 @@ async fn import_dbeaver(
 /// `name (DBeaver)`, `name (DBeaver 2)`… when the name is taken.
 async fn import_one(
     state: &AppState,
-    connection: &spelunk_config::DbeaverConnection,
-    engine: spelunk_config::Engine,
+    connection: &spelaion_config::DbeaverConnection,
+    engine: spelaion_config::Engine,
     source: Source,
     save_passwords: bool,
     tunnel_name: &str,
 ) -> Result<(String, bool), String> {
-    let plan = spelunk_config::import_plan(connection, engine, source, save_passwords, tunnel_name);
+    let plan =
+        spelaion_config::import_plan(connection, engine, source, save_passwords, tunnel_name);
     let mut created_tunnel = false;
     if let Some((tunnel, passwords)) = &plan.tunnel {
         let exists = state
@@ -1419,14 +1426,14 @@ async fn import_one(
             .any(|t| t.source == source && t.name == tunnel_name);
         if !exists {
             let config = state.config.read().await;
-            spelunk_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
+            spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
                 .map_err(|e| e.to_string())?;
             created_tunnel = true;
         }
         state.reload().await;
         if created_tunnel && source == Source::Workspace {
             state
-                .accept_own(spelunk_config::tunnel_item(tunnel_name))
+                .accept_own(spelaion_config::tunnel_item(tunnel_name))
                 .await?;
         }
     }
@@ -1440,14 +1447,14 @@ async fn import_one(
         };
         let added = {
             let config = state.config.read().await;
-            spelunk_config::add_connection(&config, &draft, plan.password.as_ref(), &SystemBackend)
+            spelaion_config::add_connection(&config, &draft, plan.password.as_ref(), &SystemBackend)
         };
         match added {
             Ok(id) => {
                 state.reload().await;
                 if id.source == Source::Workspace {
                     state
-                        .accept_own(spelunk_config::connection_item(&id))
+                        .accept_own(spelaion_config::connection_item(&id))
                         .await?;
                 }
                 return Ok((draft.name, created_tunnel));
@@ -1466,7 +1473,7 @@ async fn import_one(
 async fn create_database(engine: String, path: String) -> CmdResult<()> {
     let engine = engine_named(&engine)?;
     tokio::task::spawn_blocking(move || {
-        spelunk_core::create_file_database(engine, Path::new(&path)).map_err(|e| e.to_string())
+        spelaion_core::create_file_database(engine, Path::new(&path)).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1487,7 +1494,7 @@ async fn statement_at(
         .get(engine_named(&engine)?)
         .ok_or("no driver for this engine")?;
     Ok(
-        spelunk_core::statement_at(driver.dialect().as_ref(), &sql, offset as usize).map(|span| {
+        spelaion_core::statement_at(driver.dialect().as_ref(), &sql, offset as usize).map(|span| {
             TextSpan {
                 start: u32::try_from(span.start).unwrap_or(u32::MAX),
                 end: u32::try_from(span.end).unwrap_or(u32::MAX),
@@ -1538,7 +1545,7 @@ async fn filter_columns(
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
-    let filters: Vec<spelunk_core::ColumnFilter> = filters.into_iter().map(Into::into).collect();
+    let filters: Vec<spelaion_core::ColumnFilter> = filters.into_iter().map(Into::into).collect();
     tokio::task::spawn_blocking(move || {
         let mut stored = stored
             .write()
@@ -1762,7 +1769,7 @@ async fn editable_query_table(
     state: State<'_, AppState>,
 ) -> CmdResult<Option<EditableTableItem>> {
     let open = state.session(&session).await?;
-    let table = spelunk_core::editable_query_table(
+    let table = spelaion_core::editable_query_table(
         &open.session,
         ResultId(result.into()),
         &sql,
@@ -1794,7 +1801,7 @@ async fn table_sql(
         .describe_table(&schema, &name)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(spelunk_core::table_sql(
+    Ok(spelaion_core::table_sql(
         open.session.dialect().as_ref(),
         &table,
         template.into(),
@@ -1812,7 +1819,7 @@ async fn count_rows(
 ) -> CmdResult<f64> {
     let open = state.session(&session).await?;
     // f64 holds every count up to 2^53 exactly, and TypeScript numbers are f64.
-    Ok(spelunk_core::count_rows(&open.session, &schema, &name).await? as f64)
+    Ok(spelaion_core::count_rows(&open.session, &schema, &name).await? as f64)
 }
 
 /// The SELECT of one page of a table, written and checked by the core: the filter and the
@@ -1825,7 +1832,7 @@ async fn table_page_sql(
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let open = state.session(&session).await?;
-    spelunk_core::table_page_sql(open.session.dialect().as_ref(), &page.into())
+    spelaion_core::table_page_sql(open.session.dialect().as_ref(), &page.into())
         .map_err(|e| e.to_string())
 }
 
@@ -1841,7 +1848,7 @@ async fn count_table_rows(
 ) -> CmdResult<f64> {
     let open = state.session(&session).await?;
     // f64 holds every count up to 2^53 exactly, and TypeScript numbers are f64.
-    Ok(spelunk_core::count_table_rows(&open.session, &schema, &name, &filter).await? as f64)
+    Ok(spelaion_core::count_table_rows(&open.session, &schema, &name, &filter).await? as f64)
 }
 
 /// An identifier quoted for the session's engine (for an ORDER BY the UI writes).
@@ -1886,14 +1893,14 @@ async fn apply_table_edits(
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
     let open = state.session(&session).await?;
-    spelunk_core::check_edit_policy(
+    spelaion_core::check_edit_policy(
         open.resolved.params.read_only,
         open.resolved.is_production(),
         confirmed,
     )
     .map_err(|e| e.to_string())?;
     let statements = table_edit_statements(&state, &open, result, &schema, &name, changes).await?;
-    let applied = spelunk_core::apply_edits(&open.session, &statements)
+    let applied = spelaion_core::apply_edits(&open.session, &statements)
         .await
         .map_err(|e| e.to_string())?;
     Ok(u32::try_from(applied).unwrap_or(u32::MAX))
@@ -1919,8 +1926,8 @@ async fn table_edit_statements(
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
-    let changes: Vec<spelunk_core::RowChange> = changes.into_iter().map(Into::into).collect();
-    spelunk_core::edit_statements(open.session.dialect().as_ref(), &table, &stored, &changes)
+    let changes: Vec<spelaion_core::RowChange> = changes.into_iter().map(Into::into).collect();
+    spelaion_core::edit_statements(open.session.dialect().as_ref(), &table, &stored, &changes)
         .map_err(|e| e.to_string())
 }
 
@@ -2080,7 +2087,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .events(tauri_specta::collect_events![InteractionRequest])
 }
 
-/// Generates `src/bindings.ts`. Run by `cargo run -p spelunk-desktop --features bindings --bin export-bindings`
+/// Generates `src/bindings.ts`. Run by `cargo run -p spelaion-desktop --features bindings --bin export-bindings`
 /// and, in development, on every app start.
 pub fn export_bindings(path: &std::path::Path) -> Result<(), String> {
     specta_builder()
@@ -2102,11 +2109,21 @@ pub fn run() {
         eprintln!("could not generate the TS types: {e}");
     }
 
-    // SPELUNK_USER_DIR allows another personal directory (tests, profiles), as in the CLI.
-    let user_dir = std::env::var_os("SPELUNK_USER_DIR")
-        .map(PathBuf::from)
-        .or_else(default_user_dir)
-        .expect("user configuration directory");
+    // SPELAION_USER_DIR allows another personal directory (tests, profiles), as in the CLI.
+    let user_dir = match std::env::var_os("SPELAION_USER_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let dir = default_user_dir().expect("user configuration directory");
+            // First start after the rename (ADR-023): the old personal folder is copied,
+            // never moved, so nothing is lost if this version is uninstalled.
+            if let Some(old) = spelaion_config::legacy_user_dir()
+                && let Err(e) = spelaion_config::migrate_user_dir(&old, &dir)
+            {
+                eprintln!("could not copy the old personal folder: {e}");
+            }
+            dir
+        }
+    };
     // Initial folder: command-line argument or the last one opened.
     let workspace = std::env::args()
         .nth(1)
@@ -2118,7 +2135,7 @@ pub fn run() {
         })
         .filter(|p| p.is_dir());
     let config = load(workspace.as_deref(), &user_dir);
-    let history = QueryHistory::open(user_dir.join("state.db"))
+    let history = QueryHistory::open(spelaion_config::state_db(&user_dir))
         .expect("error while opening the local query history");
     let state = AppState {
         user_dir,
@@ -2149,7 +2166,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while starting SpelunkDB")
+        .expect("error while starting SpelaionDB")
         .run(|app, event| {
             // Tauri exits without dropping the state: stop each `kubectl port-forward`
             // first, or it would outlive the app (ADR-015).

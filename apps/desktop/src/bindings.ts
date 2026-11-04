@@ -158,7 +158,7 @@ export const commands = {
 	/**  The ports of the chosen resource: a service's ports or its containers' ports. */
 	kubePorts: (form: KubernetesDraftItem) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form })),
 	/**
-	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelunkDB files. The
+	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelaionDB files. The
 	 *  folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
 	 *  DBeaver saved go to the keychain, otherwise they are asked when connecting.
 	 */
@@ -437,7 +437,7 @@ export type DbeaverItem_Deserialize = {
 	id: string,
 	name: string,
 	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it. */
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it. */
 	engine?: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported?: string | null,
@@ -458,7 +458,7 @@ export type DbeaverItem_Serialize = {
 	id: string,
 	name: string,
 	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it. */
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it. */
 	engine: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported: string | null,
@@ -545,7 +545,7 @@ export type FieldChangeItem_Serialize = {
 	after: string | null,
 };
 
-/**  A column filter operator (see `spelunk_core::FilterOp`). */
+/**  A column filter operator (see `spelaion_core::FilterOp`). */
 export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "isNull" | "isNotNull";
 
 /**  Rows left after filtering a result, out of all it has. */
@@ -745,7 +745,7 @@ export type ProcessTargetItem_Serialize = {
 	identity: string | null,
 };
 
-/**  Why a statement asks for confirmation before running (see `spelunk_core::Risk`). */
+/**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
 export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";
 
 /**  A statement of a script that needs confirmation; `start`/`end` in UTF-8 bytes. */
@@ -798,7 +798,7 @@ export type SnippetItem = {
 	personal: boolean,
 };
 
-/**  SQL the explorer can write for a table (see `spelunk_core::SqlTemplate`). */
+/**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */
 export type SqlTemplateItem = "preview" | "select" | "insert" | "update" | "delete";
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
@@ -819,7 +819,7 @@ export type TableDetails_Serialize = {
 	foreignKeys: string[],
 };
 
-/**  A page of a table for the table data tab (see `spelunk_core::TablePage`). */
+/**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */
 export type TablePageItem = {
 	schema: string,
 	name: string,
