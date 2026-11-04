@@ -1,6 +1,6 @@
 // Side panel: open repository, connections (by folder) and schema explorer.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -9,6 +9,10 @@ import {
   type ConnectionItem,
   type ObjectItem,
   type SchemaItem,
+  type SchemaObjectItem,
+  type SchemaObjectKindItem,
+  type ServerObjectItem,
+  type ServerObjectKindItem,
   type SqlTemplateItem,
   type TableDetails,
 } from "../api";
@@ -31,6 +35,129 @@ function compactCount(value: number, language: string): string {
     compactCounts.set(language, formatter);
   }
   return formatter.format(value);
+}
+
+/** A context menu at the pointer that closes on Escape or a click elsewhere. */
+function useContextMenu() {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (
+        e instanceof MouseEvent &&
+        (e.target as Element | null)?.closest(".object-menu")
+      )
+        return;
+      setMenu(null);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [menu]);
+  return [menu, setMenu] as const;
+}
+
+/** The explorer's folders under a schema, in order (ADR-024). */
+const SCHEMA_FOLDERS = [
+  "tables",
+  "foreignTables",
+  "views",
+  "materializedViews",
+  "functions",
+  "procedures",
+  "aggregates",
+  "sequences",
+  "triggers",
+  "types",
+  "events",
+  "synonyms",
+] as const;
+type SchemaFolder = (typeof SCHEMA_FOLDERS)[number];
+
+function relationFolder(kind: string): SchemaFolder {
+  switch (kind) {
+    case "foreign_table":
+      return "foreignTables";
+    case "view":
+      return "views";
+    case "materialized_view":
+      return "materializedViews";
+    default:
+      return "tables";
+  }
+}
+
+function schemaObjectFolder(kind: SchemaObjectKindItem): SchemaFolder {
+  switch (kind) {
+    case "function":
+      return "functions";
+    case "procedure":
+      return "procedures";
+    case "aggregate":
+      return "aggregates";
+    case "sequence":
+      return "sequences";
+    case "trigger":
+      return "triggers";
+    case "enum":
+    case "domain":
+    case "type":
+      return "types";
+    case "event":
+      return "events";
+    case "synonym":
+      return "synonyms";
+  }
+}
+
+const SERVER_FOLDERS = ["roles", "users", "logins", "tablespaces", "extensions"] as const;
+
+function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[number] {
+  switch (kind) {
+    case "role":
+      return "roles";
+    case "user":
+      return "users";
+    case "login":
+      return "logins";
+    case "tablespace":
+      return "tablespaces";
+    case "extension":
+      return "extensions";
+  }
+}
+
+/** A folder of the explorer, closed until clicked, with how many items it holds. */
+function Folder({ label, count, children }: { label: string; count: number; children: ReactNode }) {
+  const { t, i18n } = useTranslation("shell");
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="node">
+      <div
+        className="row folder-row"
+        onClick={() => setOpen(!open)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={t("toggleFolder", { name: label })}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen(!open);
+          }
+        }}
+      >
+        <span className="twisty">{open ? "▾" : "▸"}</span>
+        <span className="label">{label}</span>
+        <span className="muted small">{count.toLocaleString(i18n.language)}</span>
+      </div>
+      {open && <div className="children">{children}</div>}
+    </div>
+  );
 }
 
 export async function refreshConnections() {
@@ -205,6 +332,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [schemas, setSchemas] = useState<SchemaItem[] | null>(null);
+  const [serverObjects, setServerObjects] = useState<ServerObjectItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const session = `meta:${connection.id}`;
@@ -225,9 +353,16 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
         setOpen(false);
         return;
       }
-      setSchemas(
-        (await call(commands.listSchemas(session))).filter((s) => !s.system),
-      );
+      // Without its roles or logins the connection still shows its schemas.
+      const [all, server] = await Promise.all([
+        call(commands.listSchemas(session)),
+        call(commands.listServerObjects(session)).catch((e: unknown) => {
+          setError(errorText(e));
+          return [];
+        }),
+      ]);
+      setSchemas(all.filter((s) => !s.system));
+      setServerObjects(server);
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -285,6 +420,21 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
               schema={s.name}
             />
           ))}
+          {SERVER_FOLDERS.map((folder) => {
+            const items = serverObjects.filter((o) => serverFolder(o.kind) === folder);
+            return (
+              items.length > 0 && (
+                <Folder key={folder} label={t(`folders.${folder}`)} count={items.length}>
+                  {items.map((o) => (
+                    <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
+                      <span className="label">{o.name}</span>
+                      {o.detail && <span className="muted small">{o.detail}</span>}
+                    </div>
+                  ))}
+                </Folder>
+              )
+            );
+          })}
         </div>
       )}
     </div>
@@ -303,13 +453,23 @@ function SchemaNode({
   const { t, i18n } = useTranslation("shell");
   const [open, setOpen] = useState(false);
   const [objects, setObjects] = useState<ObjectItem[] | null>(null);
+  const [others, setOthers] = useState<SchemaObjectItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   async function toggle() {
     setOpen(!open);
     if (open || objects) return;
     try {
-      setObjects(await call(commands.listObjects(session, schema)));
+      // Without its functions or triggers the schema still shows its tables.
+      const [relations, rest] = await Promise.all([
+        call(commands.listObjects(session, schema)),
+        call(commands.listSchemaObjects(session, schema)).catch((e: unknown) => {
+          setError(errorText(e));
+          return [];
+        }),
+      ]);
+      setOthers(rest);
+      setObjects(relations);
     } catch (e) {
       setError(errorText(e));
     }
@@ -341,26 +501,54 @@ function SchemaNode({
         <span className="label">{schema}</span>
         {objects && (
           <span className="muted small">
-            {objects.length.toLocaleString(i18n.language)}
+            {(objects.length + others.length).toLocaleString(i18n.language)}
           </span>
         )}
       </div>
       {open && (
         <div className="children">
           {error && <div className="error small">{error}</div>}
-          {objects?.map((o) => (
-            <ObjectNode
-              key={o.name}
-              session={session}
-              connectionId={connectionId}
-              object={o}
-            />
-          ))}
+          {objects &&
+            SCHEMA_FOLDERS.map((folder) => {
+              const relations = objects.filter((o) => relationFolder(o.kind) === folder);
+              const rest = others.filter((o) => schemaObjectFolder(o.kind) === folder);
+              const count = relations.length + rest.length;
+              return (
+                count > 0 && (
+                  <Folder key={folder} label={t(`folders.${folder}`)} count={count}>
+                    {relations.map((o) => (
+                      <ObjectNode
+                        key={o.name}
+                        session={session}
+                        connectionId={connectionId}
+                        object={o}
+                      />
+                    ))}
+                    {rest.map((o) => (
+                      <SchemaObjectNode
+                        key={`${o.kind}:${o.name}:${o.detail ?? ""}`}
+                        session={session}
+                        connectionId={connectionId}
+                        object={o}
+                      />
+                    ))}
+                  </Folder>
+                )
+              );
+            })}
         </div>
       )}
     </div>
   );
 }
+
+const KIND_BADGES: Record<string, string> = {
+  table: "T",
+  partitioned_table: "P",
+  foreign_table: "F",
+  view: "V",
+  materialized_view: "M",
+};
 
 function ObjectNode({
   session,
@@ -375,29 +563,10 @@ function ObjectNode({
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useContextMenu();
   /** Exact count asked from the menu ("counting" while it runs). */
   const [count, setCount] = useState<number | "counting" | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = (e: Event) => {
-      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
-      if (
-        e instanceof MouseEvent &&
-        (e.target as Element | null)?.closest(".object-menu")
-      )
-        return;
-      setMenu(null);
-    };
-    window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", close);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", close);
-    };
-  }, [menu]);
 
   async function toggle() {
     setOpen(!open);
@@ -474,8 +643,11 @@ function ObjectNode({
         }}
       >
         <span className="twisty">{open ? "▾" : "▸"}</span>
-        <span className={`kind ${view ? "kind-view" : "kind-table"}`}>
-          {view ? "V" : "T"}
+        <span
+          className={`kind ${view ? "kind-view" : "kind-table"}`}
+          title={t(`kinds.${object.kind}`)}
+        >
+          {KIND_BADGES[object.kind] ?? "T"}
         </span>
         <span className="label">{object.name}</span>
         {count === "counting" ? (
@@ -543,6 +715,93 @@ function ObjectNode({
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** A function, sequence, trigger, type…: double-click or the menu opens its definition. */
+function SchemaObjectNode({
+  session,
+  connectionId,
+  object,
+}: {
+  session: string;
+  connectionId: string;
+  object: SchemaObjectItem;
+}) {
+  const { t } = useTranslation("shell");
+  const addTab = useApp((s) => s.addTab);
+  const [menu, setMenu] = useContextMenu();
+  const [error, setError] = useState<string | null>(null);
+
+  /** The driver writes the DDL; it opens in a new tab and nothing runs. */
+  async function openDefinition() {
+    setMenu(null);
+    setError(null);
+    try {
+      const tab = addTab(connectionId, await call(commands.objectDefinition(session, object)));
+      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  const routine =
+    object.kind === "function" || object.kind === "procedure" || object.kind === "aggregate";
+  const detail =
+    object.kind === "trigger" && object.detail
+      ? t("onTable", { table: object.detail })
+      : object.kind === "enum"
+        ? "ENUM"
+        : object.kind === "domain"
+          ? `DOMAIN ${object.detail ?? ""}`.trim()
+          : routine
+            ? null
+            : object.detail;
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        onDoubleClick={() => void openDefinition()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        title={object.comment ?? t("definitionHint")}
+        role="button"
+        tabIndex={0}
+        aria-label={t("openObject", { name: object.name })}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void openDefinition();
+          }
+        }}
+      >
+        <span className="label">
+          {object.name}
+          {routine && object.detail !== null && (
+            <span className="muted">({object.detail})</span>
+          )}
+        </span>
+        {detail && <span className="muted small">{detail}</span>}
+      </div>
+      {menu && (
+        <div
+          className="grid-menu object-menu"
+          role="menu"
+          style={{ position: "fixed", left: menu.x, top: menu.y }}
+        >
+          <button role="menuitem" onClick={() => void openDefinition()}>
+            {t("openDefinition")}
+          </button>
+        </div>
+      )}
+      {error && (
+        <p className="error small" role="alert">
+          {error}
+        </p>
       )}
     </div>
   );

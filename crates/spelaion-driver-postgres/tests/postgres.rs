@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, Secret, TlsMode, Value,
+    ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
 };
 use spelaion_driver_postgres::PostgresDriver;
 
@@ -456,6 +456,192 @@ async fn introspection_describes_tables() {
         assert_eq!(orders.foreign_keys[0].columns, ["customer_id"]);
         assert_eq!(orders.foreign_keys[0].referenced_table, "customer");
         assert_eq!(orders.foreign_keys[0].referenced_columns, ["id"]);
+    };
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    run(&*conn, &format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[tokio::test]
+async fn explorer_lists_the_other_objects_of_a_schema() {
+    let Some(conn) = connect().await else { return };
+    let schema = format!("spelaion_objects_{}", std::process::id());
+    let ddl = [
+        format!("create schema {schema}"),
+        format!("create table {schema}.t (id int generated always as identity, s serial)"),
+        format!("create table {schema}.p (id int) partition by range (id)"),
+        format!("create materialized view {schema}.m as select 1 as x"),
+        format!(
+            "create function {schema}.add1(a integer) returns integer language sql as 'select a + 1'"
+        ),
+        format!(
+            "create function {schema}.add1(a integer, b text) returns integer language sql as 'select a + 1'"
+        ),
+        format!("comment on function {schema}.add1(integer) is 'adds one'"),
+        format!("create procedure {schema}.noop() language sql as 'select 1'"),
+        format!(
+            "create aggregate {schema}.total(integer) (sfunc = int4pl, stype = integer, initcond = '0')"
+        ),
+        format!("create sequence {schema}.seq1 start 5"),
+        format!(
+            "create function {schema}.trg() returns trigger language plpgsql as 'begin return new; end'"
+        ),
+        format!(
+            "create trigger t_ins before insert on {schema}.t for each row execute function {schema}.trg()"
+        ),
+        format!("create type {schema}.mood as enum ('sad', 'it''s ok')"),
+        format!("create domain {schema}.posint as integer not null default 1 check (value > 0)"),
+        format!("create type {schema}.pair as (a int, b text)"),
+        format!("create type {schema}.floatrange as range (subtype = float8)"),
+    ];
+    for stmt in &ddl {
+        run(&*conn, stmt)
+            .await
+            .unwrap_or_else(|e| panic!("{stmt}: {e:?}"));
+    }
+
+    let result = async {
+        let kinds: Vec<_> = conn
+            .list_objects(&schema)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.name, o.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("m".to_string(), ObjectKind::MaterializedView),
+                ("p".to_string(), ObjectKind::PartitionedTable),
+                ("t".to_string(), ObjectKind::Table),
+            ]
+        );
+
+        let objects = conn.list_schema_objects(&schema).await.unwrap();
+        let listed: Vec<_> = objects
+            .iter()
+            .map(|o| (o.name.as_str(), o.kind, o.detail.as_deref()))
+            .collect();
+        // Neither the identity column's sequence nor the range type's constructors.
+        assert_eq!(
+            listed,
+            [
+                ("add1", SchemaObjectKind::Function, Some("a integer")),
+                (
+                    "add1",
+                    SchemaObjectKind::Function,
+                    Some("a integer, b text")
+                ),
+                ("floatrange", SchemaObjectKind::Type, Some("RANGE")),
+                ("mood", SchemaObjectKind::Enum, None),
+                ("noop", SchemaObjectKind::Procedure, Some("")),
+                ("pair", SchemaObjectKind::Type, None),
+                ("posint", SchemaObjectKind::Domain, Some("integer")),
+                ("seq1", SchemaObjectKind::Sequence, None),
+                ("t_ins", SchemaObjectKind::Trigger, Some("t")),
+                ("t_s_seq", SchemaObjectKind::Sequence, None),
+                ("total", SchemaObjectKind::Aggregate, Some("integer")),
+                ("trg", SchemaObjectKind::Function, Some("")),
+            ]
+        );
+        assert_eq!(objects[0].comment.as_deref(), Some("adds one"));
+
+        let find = |name: &str, kind: SchemaObjectKind| {
+            objects
+                .iter()
+                .find(|o| o.name == name && o.kind == kind)
+                .unwrap_or_else(|| panic!("{name} is not listed"))
+                .clone()
+        };
+        let text = conn.object_definition(&objects[1]).await.unwrap();
+        assert!(
+            text.starts_with(&format!(
+                "CREATE OR REPLACE FUNCTION {schema}.add1(a integer, b text)"
+            )),
+            "{text}"
+        );
+        assert!(text.ends_with(';'), "{text}");
+        let expected = [
+            (
+                "total",
+                SchemaObjectKind::Aggregate,
+                format!(
+                    "CREATE AGGREGATE {schema}.total(integer) (\n    SFUNC = int4pl,\n    STYPE = integer,\n    INITCOND = '0'\n);"
+                ),
+            ),
+            (
+                "seq1",
+                SchemaObjectKind::Sequence,
+                format!(
+                    "CREATE SEQUENCE {schema}.seq1 AS bigint INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 5 CACHE 1 NO CYCLE;"
+                ),
+            ),
+            (
+                "t_ins",
+                SchemaObjectKind::Trigger,
+                format!(
+                    "CREATE TRIGGER t_ins BEFORE INSERT ON {schema}.t FOR EACH ROW EXECUTE FUNCTION {schema}.trg();"
+                ),
+            ),
+            (
+                "mood",
+                SchemaObjectKind::Enum,
+                format!("CREATE TYPE {schema}.mood AS ENUM ('sad', 'it''s ok');"),
+            ),
+            (
+                "posint",
+                SchemaObjectKind::Domain,
+                format!(
+                    "CREATE DOMAIN {schema}.posint AS integer DEFAULT 1 NOT NULL CONSTRAINT posint_check CHECK (VALUE > 0);"
+                ),
+            ),
+            (
+                "pair",
+                SchemaObjectKind::Type,
+                format!("CREATE TYPE {schema}.pair AS (\n    a integer,\n    b text\n);"),
+            ),
+            (
+                "floatrange",
+                SchemaObjectKind::Type,
+                format!("CREATE TYPE {schema}.floatrange AS RANGE (SUBTYPE = double precision);"),
+            ),
+        ];
+        for (name, kind, sql) in expected {
+            assert_eq!(
+                conn.object_definition(&find(name, kind)).await.unwrap(),
+                sql
+            );
+        }
+        let mut missing = find("seq1", SchemaObjectKind::Sequence);
+        missing.name = "nope".into();
+        assert!(conn.object_definition(&missing).await.is_err());
+
+        // What belongs to an extension (citext, in the test database's public schema) is left out.
+        let public = conn.list_schema_objects("public").await.unwrap();
+        assert!(!public.iter().any(|o| o.name == "citext"), "{public:?}");
+
+        let server = conn.list_server_objects().await.unwrap();
+        let has = |name: &str, kind| server.iter().any(|o| o.name == name && o.kind == kind);
+        assert!(has("spelaion", ServerObjectKind::Role), "{server:?}");
+        assert!(
+            has("pg_default", ServerObjectKind::Tablespace),
+            "{server:?}"
+        );
+        assert!(has("citext", ServerObjectKind::Extension), "{server:?}");
+        assert!(
+            !server
+                .iter()
+                .any(|o| o.name.starts_with("pg_") && o.kind == ServerObjectKind::Role)
+        );
+        let role = server.iter().find(|o| o.name == "spelaion").unwrap();
+        assert_eq!(
+            role.detail.as_deref(),
+            Some("SUPERUSER, LOGIN, CREATEDB, CREATEROLE, REPLICATION")
+        );
     };
     let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
     run(&*conn, &format!("drop schema {schema} cascade"))

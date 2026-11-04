@@ -29,6 +29,65 @@ pub struct ObjectInfo {
     pub comment: Option<String>,
 }
 
+/// What a schema holds besides its relations (ADR-024).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SchemaObjectKind {
+    Function,
+    Procedure,
+    Aggregate,
+    Sequence,
+    Trigger,
+    Enum,
+    Domain,
+    /// Any other user-defined data type: composite, range, alias, table type…
+    Type,
+    /// A scheduled event (MySQL, MariaDB).
+    Event,
+    /// Another name for an object (SQL Server).
+    Synonym,
+}
+
+/// `sql` without its trailing blanks and ending in `;`, as [`crate::Connection::object_definition`]
+/// returns definitions.
+pub fn terminated(sql: &str) -> String {
+    let sql = sql.trim_end();
+    if sql.ends_with(';') {
+        sql.to_string()
+    } else {
+        format!("{sql};")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaObject {
+    pub schema: String,
+    pub name: String,
+    pub kind: SchemaObjectKind,
+    /// Shown next to the name, and what tells same-name objects apart: a function's
+    /// arguments (PostgreSQL, DuckDB), a trigger's table. [`crate::Connection::object_definition`]
+    /// uses it to find the object.
+    pub detail: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// What lives outside every schema: on the server, or in the connection's database (ADR-024).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ServerObjectKind {
+    Role,
+    User,
+    Login,
+    Tablespace,
+    Extension,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerObject {
+    pub name: String,
+    pub kind: ServerObjectKind,
+    /// A short description: a role's attributes, an extension's version and schema…
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableInfo {
     pub object: ObjectInfo,

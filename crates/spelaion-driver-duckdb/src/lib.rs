@@ -12,6 +12,7 @@ mod dialect;
 mod exec;
 mod format;
 mod introspect;
+mod objects;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -24,7 +25,7 @@ use async_trait::async_trait;
 use duckdb::{AccessMode, Config, InterruptHandle};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, SchemaInfo, TableInfo,
+    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, SchemaInfo, SchemaObject, TableInfo,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -249,6 +250,8 @@ enum Command {
     Schemas(Reply<Vec<SchemaInfo>>),
     Objects(String, Reply<Vec<ObjectInfo>>),
     Describe(String, String, Reply<TableInfo>),
+    SchemaObjects(String, Reply<Vec<SchemaObject>>),
+    Definition(Box<SchemaObject>, Reply<String>),
 }
 
 /// Loop of the connection thread. Ends when the `DuckdbConnection` is dropped.
@@ -278,6 +281,12 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             }
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(conn, &schema, &name));
+            }
+            Command::SchemaObjects(schema, reply) => {
+                let _ = reply.send(objects::list_schema_objects(conn, &schema));
+            }
+            Command::Definition(object, reply) => {
+                let _ = reply.send(objects::object_definition(conn, &object));
             }
         }
     }
@@ -346,6 +355,17 @@ impl Connection for DuckdbConnection {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Describe(schema, name, reply))
             .await
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        let schema = schema.to_string();
+        self.ask(|reply| Command::SchemaObjects(schema, reply))
+            .await
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        let object = Box::new(object.clone());
+        self.ask(|reply| Command::Definition(object, reply)).await
     }
 }
 

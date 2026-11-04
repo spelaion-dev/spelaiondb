@@ -926,6 +926,11 @@ try {
   step("explorer: view rows and generate SQL written by the core");
   await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
   await page.getByRole("button", { name: "Expand or collapse schema main" }).click();
+  // Objects are in folders by type (ADR-024), with how many each holds.
+  const tablesFolder = page.getByRole("button", { name: "Expand or collapse Tables", exact: true });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  await tablesFolder.click();
+  await page.getByRole("button", { name: "Expand or collapse Views", exact: true }).click();
   const ordersNode = page.getByRole("button", { name: "Expand or collapse orders", exact: true });
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Generate UPDATE" }).click();
@@ -940,6 +945,14 @@ try {
   await page.getByRole("menuitem", { name: "Open as SQL" }).click();
   await panel.locator(".cm-content", { hasText: "FROM big_orders" }).waitFor();
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM big_orders\nLIMIT 100;");
+  // A trigger's definition, as SQLite keeps it, opens in a new tab and does not run.
+  await page.getByRole("button", { name: "Expand or collapse Triggers", exact: true }).click();
+  const triggerNode = page.getByRole("button", { name: "product_stock_check: open its definition", exact: true });
+  assert.equal(await triggerNode.locator(".muted").innerText(), "on product");
+  await triggerNode.dblclick();
+  await panel.locator(".cm-content", { hasText: "CREATE TRIGGER product_stock_check" }).waitFor();
+  assert.match((await panel.locator(".cm-content").innerText()).trimEnd(), /^CREATE TRIGGER product_stock_check before update of stock on product[\s\S]*end;$/);
+  await shot("05g-trigger-definition");
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');
@@ -1296,6 +1309,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
 
   step("editing table data: cells, NULL, delete and insert applied in one transaction");
   if ((await mysqlSchema.getAttribute("aria-expanded")) !== "true") await mysqlSchema.click();
+  const mysqlTables = mysqlSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Tables", exact: true });
+  if ((await mysqlTables.getAttribute("aria-expanded")) !== "true") await mysqlTables.click();
   const smokeEditNode = page.getByRole("button", { name: "Expand or collapse smoke_edit", exact: true });
   const estimate = smokeEditNode.locator('[title^="Estimated rows (from the planner, not counted): "]');
   await estimate.waitFor();

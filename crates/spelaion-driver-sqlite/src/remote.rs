@@ -18,7 +18,7 @@ use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, Connection, Dialect, DriverError, EventStream,
     ExecEvent, ExecOptions, ObjectInfo, Remote, RemoteControl, RemoteProcess, Result, ResultSchema,
-    SchemaInfo, TableInfo,
+    SchemaInfo, SchemaObject, TableInfo,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -761,6 +761,18 @@ impl Connection for RemoteConnection {
             );
         }
         Ok(table)
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        Ok(catalog::schema_objects(
+            schema,
+            &self.rows(catalog::schema_objects_sql(schema)).await?,
+        ))
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        let rows = self.rows(catalog::definition_sql(object)?).await?;
+        catalog::definition(object, &rows)
     }
 }
 

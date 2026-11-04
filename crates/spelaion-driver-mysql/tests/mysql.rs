@@ -13,7 +13,7 @@ use futures_util::TryStreamExt;
 use mysql_async::prelude::Queryable;
 use spelaion_driver_api::{
     ColumnMeta, ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions,
-    LogicalType, ObjectKind, Secret, TlsMode, Value,
+    LogicalType, ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
 };
 use spelaion_driver_mysql::MysqlDriver;
 
@@ -538,6 +538,120 @@ async fn introspection_lists_tables_columns_keys_and_indexes() {
             "drop table purchase",
         ] {
             run(&*conn, sql).await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn explorer_lists_routines_triggers_events_and_accounts() {
+    for server in servers() {
+        let conn = server.connect().await;
+        let mariadb = server.label == "mariadb";
+        let mut ddl = vec![
+            "drop function if exists explorer_add1",
+            "drop procedure if exists explorer_noop",
+            "drop event if exists explorer_daily",
+            "drop table if exists explorer_t",
+            "drop sequence if exists explorer_seq",
+            "create function explorer_add1(a int) returns int deterministic no sql comment 'adds one' return a + 1",
+            "create procedure explorer_noop() select 1",
+            "create table explorer_t (id int)",
+            "create trigger explorer_t_ins before insert on explorer_t for each row set new.id = new.id",
+            "create event explorer_daily on schedule every 1 day do select 1",
+        ];
+        if !mariadb {
+            ddl.retain(|sql| !sql.contains("sequence"));
+        } else {
+            ddl.push("create sequence explorer_seq start with 5");
+        }
+        for sql in ddl {
+            run(&*conn, sql)
+                .await
+                .unwrap_or_else(|e| panic!("{}: {sql}: {e}", server.label));
+        }
+
+        let objects: Vec<_> = conn
+            .list_schema_objects("spelaion")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|o| o.name.starts_with("explorer_"))
+            .collect();
+        let listed: Vec<_> = objects
+            .iter()
+            .map(|o| (o.name.as_str(), o.kind, o.detail.as_deref()))
+            .collect();
+        let mut expected = vec![
+            ("explorer_add1", SchemaObjectKind::Function, None),
+            ("explorer_daily", SchemaObjectKind::Event, None),
+            ("explorer_noop", SchemaObjectKind::Procedure, None),
+        ];
+        if mariadb {
+            expected.push(("explorer_seq", SchemaObjectKind::Sequence, None));
+        }
+        expected.push((
+            "explorer_t_ins",
+            SchemaObjectKind::Trigger,
+            Some("explorer_t"),
+        ));
+        assert_eq!(listed, expected, "{}", server.label);
+        assert_eq!(objects[0].comment.as_deref(), Some("adds one"));
+        // A sequence is not a table.
+        let relations = conn.list_objects("spelaion").await.unwrap();
+        assert!(!relations.iter().any(|o| o.name == "explorer_seq"));
+
+        for object in &objects {
+            let definition = conn
+                .object_definition(object)
+                .await
+                .unwrap_or_else(|e| panic!("{}: {}: {e}", server.label, object.name));
+            let keyword = match object.kind {
+                SchemaObjectKind::Sequence => "CREATE SEQUENCE",
+                _ => "CREATE DEFINER=",
+            };
+            assert!(
+                definition.starts_with(keyword),
+                "{}: {definition}",
+                server.label
+            );
+            assert!(
+                definition.contains(&object.name),
+                "{}: {definition}",
+                server.label
+            );
+            assert!(definition.ends_with(';'), "{}: {definition}", server.label);
+        }
+        let mut missing = objects[0].clone();
+        missing.name = "explorer_nope".into();
+        assert!(conn.object_definition(&missing).await.is_err());
+
+        // The test user cannot read mysql.user: no accounts, and no error.
+        assert_eq!(conn.list_server_objects().await.unwrap(), []);
+        let root = ConnectParams {
+            user: "root".into(),
+            password: Some(Secret::new("spelaion-root")),
+            ..server.params()
+        };
+        let admin = server.driver.connect(&root).await.unwrap();
+        let accounts = admin.list_server_objects().await.unwrap();
+        assert!(
+            accounts
+                .iter()
+                .any(|a| a.name == "'spelaion'@'%'" && a.kind == ServerObjectKind::User),
+            "{}: {accounts:?}",
+            server.label
+        );
+
+        for sql in [
+            "drop event explorer_daily",
+            "drop table explorer_t",
+            "drop procedure explorer_noop",
+            "drop function explorer_add1",
+            "drop sequence if exists explorer_seq",
+        ] {
+            if mariadb || !sql.contains("sequence") {
+                run(&*conn, sql).await.unwrap();
+            }
         }
     }
 }

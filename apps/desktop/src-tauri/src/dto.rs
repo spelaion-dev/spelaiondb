@@ -4,7 +4,10 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_core::CoreEvent;
-use spelaion_driver_api::{ObjectInfo, ObjectKind, TableInfo};
+use spelaion_driver_api::{
+    ObjectInfo, ObjectKind, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind,
+    TableInfo,
+};
 
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -356,6 +359,128 @@ impl From<ObjectInfo> for ObjectItem {
             kind: kind.into(),
             estimated_rows: o.estimated_rows.map(|n| n as f64),
             comment: o.comment,
+        }
+    }
+}
+
+/// The kinds of `list_schema_objects` (ADR-024): the explorer has a folder for each.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaObjectKindItem {
+    Function,
+    Procedure,
+    Aggregate,
+    Sequence,
+    Trigger,
+    Enum,
+    Domain,
+    Type,
+    Event,
+    Synonym,
+}
+
+impl From<SchemaObjectKind> for SchemaObjectKindItem {
+    fn from(kind: SchemaObjectKind) -> Self {
+        match kind {
+            SchemaObjectKind::Function => Self::Function,
+            SchemaObjectKind::Procedure => Self::Procedure,
+            SchemaObjectKind::Aggregate => Self::Aggregate,
+            SchemaObjectKind::Sequence => Self::Sequence,
+            SchemaObjectKind::Trigger => Self::Trigger,
+            SchemaObjectKind::Enum => Self::Enum,
+            SchemaObjectKind::Domain => Self::Domain,
+            SchemaObjectKind::Type => Self::Type,
+            SchemaObjectKind::Event => Self::Event,
+            SchemaObjectKind::Synonym => Self::Synonym,
+        }
+    }
+}
+
+impl From<SchemaObjectKindItem> for SchemaObjectKind {
+    fn from(kind: SchemaObjectKindItem) -> Self {
+        match kind {
+            SchemaObjectKindItem::Function => Self::Function,
+            SchemaObjectKindItem::Procedure => Self::Procedure,
+            SchemaObjectKindItem::Aggregate => Self::Aggregate,
+            SchemaObjectKindItem::Sequence => Self::Sequence,
+            SchemaObjectKindItem::Trigger => Self::Trigger,
+            SchemaObjectKindItem::Enum => Self::Enum,
+            SchemaObjectKindItem::Domain => Self::Domain,
+            SchemaObjectKindItem::Type => Self::Type,
+            SchemaObjectKindItem::Event => Self::Event,
+            SchemaObjectKindItem::Synonym => Self::Synonym,
+        }
+    }
+}
+
+/// A function, sequence, trigger, type… of a schema. The UI sends it back unchanged to ask
+/// for its definition.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaObjectItem {
+    pub schema: String,
+    pub name: String,
+    pub kind: SchemaObjectKindItem,
+    /// A function's arguments, a trigger's table…
+    pub detail: Option<String>,
+    pub comment: Option<String>,
+}
+
+impl From<SchemaObject> for SchemaObjectItem {
+    fn from(o: SchemaObject) -> Self {
+        Self {
+            schema: o.schema,
+            name: o.name,
+            kind: o.kind.into(),
+            detail: o.detail,
+            comment: o.comment,
+        }
+    }
+}
+
+impl From<SchemaObjectItem> for SchemaObject {
+    fn from(o: SchemaObjectItem) -> Self {
+        Self {
+            schema: o.schema,
+            name: o.name,
+            kind: o.kind.into(),
+            detail: o.detail,
+            comment: o.comment,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerObjectKindItem {
+    Role,
+    User,
+    Login,
+    Tablespace,
+    Extension,
+}
+
+/// A role, login, tablespace or extension: outside every schema (ADR-024).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerObjectItem {
+    pub name: String,
+    pub kind: ServerObjectKindItem,
+    pub detail: Option<String>,
+}
+
+impl From<ServerObject> for ServerObjectItem {
+    fn from(o: ServerObject) -> Self {
+        Self {
+            name: o.name,
+            kind: match o.kind {
+                ServerObjectKind::Role => ServerObjectKindItem::Role,
+                ServerObjectKind::User => ServerObjectKindItem::User,
+                ServerObjectKind::Login => ServerObjectKindItem::Login,
+                ServerObjectKind::Tablespace => ServerObjectKindItem::Tablespace,
+                ServerObjectKind::Extension => ServerObjectKindItem::Extension,
+            },
+            detail: o.detail,
         }
     }
 }

@@ -7,6 +7,7 @@
 mod decode;
 mod dialect;
 mod introspect;
+mod objects;
 mod tls;
 
 use std::sync::{Arc, Mutex};
@@ -18,7 +19,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, Notice, ObjectInfo, Result, ResultSchema,
-    SchemaInfo, TableInfo,
+    SchemaInfo, SchemaObject, ServerObject, TableInfo,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -214,6 +215,18 @@ impl Connection for PgConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(&self.client, schema, name).await
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        objects::list_schema_objects(&self.client, schema).await
+    }
+
+    async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
+        objects::list_server_objects(&self.client).await
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        objects::object_definition(&self.client, object).await
     }
 }
 

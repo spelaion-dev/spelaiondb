@@ -179,9 +179,19 @@ Preferences are stored in the personal `state.db` and apply to every workspace.
 
 ## Schema explorer
 
-Expanding a connection in the sidebar lists its schemas (databases in MySQL), tables and
-views with their columns, primary key and estimated rows (**Count rows** in the right-click
-menu gets the exact number). Double-click a table or view (or **View rows**) to open its
+Expanding a connection in the sidebar lists its schemas (databases in MySQL) and, inside each,
+folders by type: **Tables** (partitioned ones marked P), **Foreign tables**, **Views**,
+**Materialized views**, **Functions**, **Procedures**, **Aggregate functions**,
+**Sequences**, **Triggers**, **Data types** (enums, domains and other types), **Events**
+(MySQL) and **Synonyms** (SQL Server); only the folders with something in them appear. After
+the schemas come **Roles**, **Users**, **Logins**, **Tablespaces** and **Extensions**, as
+the engine has them (MySQL's accounts only for users that may read `mysql.user`).
+Double-click a function, trigger, sequence or type (or **Open definition** in its right-click
+menu) to open its `CREATE` statement in a new tab; nothing runs. Objects that belong to a
+PostgreSQL extension are not listed: the extension stands for them.
+
+Tables and views show their columns, primary key and estimated rows (**Count rows** in the
+right-click menu gets the exact number). Double-click a table or view (or **View rows**) to open its
 **table data tab**: pages of 100 to 5,000 rows with ◀ ▶, a `WHERE` and an `ORDER BY` you type,
 header clicks that sort in the server, and **Count** for the exact number of matching rows.
 The core writes `SELECT * … LIMIT n OFFSET m` and checks it is still one plain SELECT of that

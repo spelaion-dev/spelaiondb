@@ -25,7 +25,8 @@ pub use column::{ColumnMeta, ResultSchema};
 pub use dialect::{Dialect, StatementSpan};
 pub use error::DriverError;
 pub use introspect::{
-    ColumnInfo, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, SchemaInfo, TableInfo,
+    ColumnInfo, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, SchemaInfo, SchemaObject,
+    SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use secret::Secret;
@@ -167,6 +168,21 @@ pub trait Connection: Send + Sync {
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>>;
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>>;
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo>;
+    /// Functions, sequences, triggers, types… of a schema (ADR-024), ordered by name. Engines
+    /// without any return none.
+    async fn list_schema_objects(&self, _schema: &str) -> Result<Vec<SchemaObject>> {
+        Ok(Vec::new())
+    }
+    /// Roles, logins, tablespaces, extensions… (ADR-024). Engines without any return none.
+    async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
+        Ok(Vec::new())
+    }
+    /// The DDL of an object from [`Connection::list_schema_objects`], ending in `;`.
+    async fn object_definition(&self, _object: &SchemaObject) -> Result<String> {
+        Err(DriverError::Other(
+            "this engine has no object definitions".into(),
+        ))
+    }
 }
 
 #[async_trait]

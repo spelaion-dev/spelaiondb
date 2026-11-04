@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use rusqlite::{InterruptHandle, OpenFlags};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, SchemaInfo, TableInfo,
+    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, SchemaInfo, SchemaObject, TableInfo,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -140,6 +140,8 @@ enum Command {
     Schemas(Reply<Vec<SchemaInfo>>),
     Objects(String, Reply<Vec<ObjectInfo>>),
     Describe(String, String, Reply<TableInfo>),
+    /// A catalog query from `catalog.rs`.
+    Catalog(String, Reply<Vec<catalog::Row>>),
 }
 
 /// Loop of the connection thread. Ends when the `SqliteConnection` is dropped.
@@ -169,6 +171,9 @@ fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>
             }
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(&conn, &schema, &name));
+            }
+            Command::Catalog(sql, reply) => {
+                let _ = reply.send(introspect::query(&conn, &sql));
             }
         }
     }
@@ -235,6 +240,18 @@ impl Connection for SqliteConnection {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Describe(schema, name, reply))
             .await
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        let sql = catalog::schema_objects_sql(schema);
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        Ok(catalog::schema_objects(schema, &rows))
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        let sql = catalog::definition_sql(object)?;
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        catalog::definition(object, &rows)
     }
 }
 

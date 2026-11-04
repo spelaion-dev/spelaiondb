@@ -79,7 +79,7 @@ pub async fn list_objects(conn: &SqlServerConnection, schema: &str) -> Result<Ve
 }
 
 /// The type as written in `CREATE TABLE`: `nvarchar(80)`, `varchar(max)`, `decimal(12,2)`.
-fn native_type(name: &str, max_length: i64, precision: i64, scale: i64) -> String {
+pub(crate) fn native_type(name: &str, max_length: i64, precision: i64, scale: i64) -> String {
     match name {
         "varchar" | "char" | "varbinary" | "binary" => {
             if max_length < 0 {

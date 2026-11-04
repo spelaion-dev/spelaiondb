@@ -17,6 +17,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 ## Workspace map
 - `crates/spelaion-driver-api`: driver contract (ADR-005). Results in Arrow with
   `spelaion.logical` / `spelaion.native_type` metadata per column; `Value` for single cells.
+  The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
+  `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
+  (SQLite's in `catalog.rs`); each driver's test file checks them against its engine.
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.

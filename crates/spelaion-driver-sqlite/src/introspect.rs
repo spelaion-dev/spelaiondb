@@ -6,7 +6,7 @@ use spelaion_driver_api::{DriverError, ObjectInfo, Result, SchemaInfo, TableInfo
 use crate::catalog::{self, Row};
 use crate::exec::map_error;
 
-fn query(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<Row>> {
+pub(crate) fn query(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<Row>> {
     let mut stmt = conn.prepare(sql).map_err(map_error)?;
     let width = stmt.column_count();
     stmt.query_map([], |r| {

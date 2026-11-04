@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, Secret, TlsMode, Value,
+    ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
 };
 use spelaion_driver_sqlserver::SqlServerDriver;
 
@@ -634,4 +634,108 @@ async fn introspection_describes_tables() {
     assert!(conn.describe_table("zoo", "missing").await.is_err());
     let version = conn.server_version().await.unwrap();
     assert!(version.starts_with("16."), "{version}");
+}
+
+#[tokio::test]
+async fn explorer_lists_routines_sequences_triggers_synonyms_and_types() {
+    let Some(conn) = connect().await else { return };
+    let cleanup = [
+        "drop synonym if exists explorer.syn",
+        "drop table if exists explorer.t",
+        "drop function if exists explorer.add1",
+        "drop function if exists explorer.rows",
+        "drop procedure if exists explorer.noop",
+        "drop sequence if exists explorer.seq1",
+        "drop type if exists explorer.posint",
+        "drop type if exists explorer.pairs",
+    ];
+    for sql in cleanup {
+        run(&*conn, sql).await.unwrap();
+    }
+    for sql in [
+        "if schema_id('explorer') is null exec('create schema explorer')",
+        "create function explorer.add1(@a int) returns int as begin return @a + 1 end",
+        "exec sp_addextendedproperty 'MS_Description', 'adds one', 'SCHEMA', 'explorer', 'FUNCTION', 'add1'",
+        "create function explorer.rows() returns table as return select 1 as x",
+        "create procedure explorer.noop as select 1",
+        "create sequence explorer.seq1 as bigint start with 5 increment by 2",
+        "create table explorer.t (id int)",
+        "create trigger explorer.t_ins on explorer.t after insert as select 1",
+        "create synonym explorer.syn for explorer.t",
+        "create type explorer.posint from int not null",
+        "create type explorer.pairs as table (id int not null, name nvarchar(50))",
+    ] {
+        run(&*conn, sql)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+
+    let objects = conn.list_schema_objects("explorer").await.unwrap();
+    let listed: Vec<_> = objects
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind, o.detail.as_deref()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("add1", SchemaObjectKind::Function, None),
+            ("noop", SchemaObjectKind::Procedure, None),
+            ("pairs", SchemaObjectKind::Type, Some("TABLE")),
+            ("posint", SchemaObjectKind::Type, Some("int")),
+            ("rows", SchemaObjectKind::Function, None),
+            ("seq1", SchemaObjectKind::Sequence, None),
+            ("syn", SchemaObjectKind::Synonym, Some("[explorer].[t]")),
+            ("t_ins", SchemaObjectKind::Trigger, Some("t")),
+        ]
+    );
+    assert_eq!(objects[0].comment.as_deref(), Some("adds one"));
+
+    let definition = |i: usize| conn.object_definition(&objects[i]);
+    assert_eq!(
+        definition(0).await.unwrap(),
+        "create function explorer.add1(@a int) returns int as begin return @a + 1 end;"
+    );
+    assert_eq!(
+        definition(1).await.unwrap(),
+        "create procedure explorer.noop as select 1;"
+    );
+    assert_eq!(
+        definition(2).await.unwrap(),
+        "CREATE TYPE explorer.pairs AS TABLE (\n    id int NOT NULL,\n    name nvarchar(50) NULL\n);"
+    );
+    assert_eq!(
+        definition(3).await.unwrap(),
+        "CREATE TYPE explorer.posint FROM int NOT NULL;"
+    );
+    assert_eq!(
+        definition(5).await.unwrap(),
+        "CREATE SEQUENCE [explorer].[seq1] AS bigint START WITH 5 INCREMENT BY 2 \
+         MINVALUE -9223372036854775808 MAXVALUE 9223372036854775807 NO CYCLE;"
+    );
+    assert_eq!(
+        definition(6).await.unwrap(),
+        "CREATE SYNONYM [explorer].[syn] FOR [explorer].[t];"
+    );
+    assert_eq!(
+        definition(7).await.unwrap(),
+        "create trigger explorer.t_ins on explorer.t after insert as select 1;"
+    );
+    let mut missing = objects[0].clone();
+    missing.name = "nope".into();
+    assert!(conn.object_definition(&missing).await.is_err());
+
+    let server = conn.list_server_objects().await.unwrap();
+    let has = |name: &str, kind| server.iter().any(|o| o.name == name && o.kind == kind);
+    assert!(has("sa", ServerObjectKind::Login), "{server:?}");
+    assert!(has("dbo", ServerObjectKind::User), "{server:?}");
+    // Neither the fixed roles nor the internal logins.
+    assert!(!has("db_owner", ServerObjectKind::Role), "{server:?}");
+    assert!(
+        !server.iter().any(|o| o.name.starts_with("##")),
+        "{server:?}"
+    );
+
+    for sql in cleanup {
+        run(&*conn, sql).await.unwrap();
+    }
 }

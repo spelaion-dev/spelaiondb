@@ -210,6 +210,12 @@ export const commands = {
 	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
 	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),
 	describeTable: (session: string, schema: string, name: string) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name })),
+	/**  Functions, sequences, triggers, types… of a schema, for its folders (ADR-024). */
+	listSchemaObjects: (session: string, schema: string) => typedError<SchemaObjectItem_Serialize[], string>(__TAURI_INVOKE("list_schema_objects", { session, schema })),
+	/**  Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024). */
+	listServerObjects: (session: string) => typedError<ServerObjectItem_Serialize[], string>(__TAURI_INVOKE("list_server_objects", { session })),
+	/**  The DDL of an object, to open in a new tab (nothing runs). */
+	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
@@ -770,6 +776,41 @@ export type SchemaItem = {
 	system: boolean,
 };
 
+/**
+ *  A function, sequence, trigger, type… of a schema. The UI sends it back unchanged to ask
+ *  for its definition.
+ */
+export type SchemaObjectItem = SchemaObjectItem_Serialize | SchemaObjectItem_Deserialize;
+
+/**
+ *  A function, sequence, trigger, type… of a schema. The UI sends it back unchanged to ask
+ *  for its definition.
+ */
+export type SchemaObjectItem_Deserialize = {
+	schema: string,
+	name: string,
+	kind: SchemaObjectKindItem,
+	/**  A function's arguments, a trigger's table… */
+	detail?: string | null,
+	comment?: string | null,
+};
+
+/**
+ *  A function, sequence, trigger, type… of a schema. The UI sends it back unchanged to ask
+ *  for its definition.
+ */
+export type SchemaObjectItem_Serialize = {
+	schema: string,
+	name: string,
+	kind: SchemaObjectKindItem,
+	/**  A function's arguments, a trigger's table… */
+	detail: string | null,
+	comment: string | null,
+};
+
+/**  The kinds of `list_schema_objects` (ADR-024): the explorer has a folder for each. */
+export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
+
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
 export type ScriptEvent_Deserialize = 
@@ -786,6 +827,25 @@ scriptOffset: number | null; cancelled: boolean } | { kind: "scriptFinished"; ex
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
+
+/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+export type ServerObjectItem = ServerObjectItem_Serialize | ServerObjectItem_Deserialize;
+
+/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+export type ServerObjectItem_Deserialize = {
+	name: string,
+	kind: ServerObjectKindItem,
+	detail?: string | null,
+};
+
+/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+export type ServerObjectItem_Serialize = {
+	name: string,
+	kind: ServerObjectKindItem,
+	detail: string | null,
+};
+
+export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension";
 
 /**  A saved query; `connection` is empty when it was saved without one. */
 export type SnippetItem = {

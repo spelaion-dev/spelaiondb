@@ -8,6 +8,7 @@
 mod decode;
 mod dialect;
 mod introspect;
+mod objects;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,8 +18,8 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, ResultSchema, SchemaInfo, TableInfo,
-    TlsMode,
+    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, ResultSchema, SchemaInfo,
+    SchemaObject, ServerObject, TableInfo, TlsMode,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -466,6 +467,18 @@ impl Connection for SqlServerConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, schema, name).await
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        objects::list_schema_objects(self, schema).await
+    }
+
+    async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
+        objects::list_server_objects(self).await
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        objects::object_definition(self, object).await
     }
 }
 

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, Value,
+    ObjectKind, SchemaObjectKind, Value,
 };
 use spelaion_driver_sqlite::SqliteDriver;
 
@@ -364,6 +364,12 @@ async fn introspection_describes_tables() {
          attach ':memory:' as aux",
     )
     .await;
+    run(
+        &*conn,
+        "create trigger orders_total after update of total on orders begin select 1; end",
+    )
+    .await
+    .unwrap();
 
     let schemas: Vec<String> = conn
         .list_schemas()
@@ -385,6 +391,27 @@ async fn introspection_describes_tables() {
             ("orders", ObjectKind::Table),
         ]
     );
+
+    // Triggers are what the explorer lists besides tables and views (ADR-024).
+    let others = conn.list_schema_objects("main").await.unwrap();
+    assert_eq!(others.len(), 1);
+    assert_eq!(
+        (
+            others[0].name.as_str(),
+            others[0].kind,
+            others[0].detail.as_deref()
+        ),
+        ("orders_total", SchemaObjectKind::Trigger, Some("orders"))
+    );
+    assert_eq!(
+        conn.object_definition(&others[0]).await.unwrap(),
+        "CREATE TRIGGER orders_total after update of total on orders begin select 1; end;"
+    );
+    let mut sequence = others[0].clone();
+    sequence.kind = SchemaObjectKind::Sequence;
+    assert!(conn.object_definition(&sequence).await.is_err());
+    assert_eq!(conn.list_schema_objects("aux").await.unwrap(), []);
+    assert_eq!(conn.list_server_objects().await.unwrap(), []);
 
     let orders = conn.describe_table("main", "orders").await.unwrap();
     let cols: Vec<_> = orders

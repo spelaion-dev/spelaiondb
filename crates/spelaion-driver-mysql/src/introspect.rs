@@ -39,13 +39,14 @@ pub(crate) async fn list_schemas(conn: &MysqlConnection) -> Result<Vec<SchemaInf
     Ok(schemas)
 }
 
+/// MariaDB's sequences are tables to `information_schema`; they have a folder of their own.
 const OBJECTS_SQL: &str = "select table_schema, table_name, table_type, table_rows, table_comment
-     from information_schema.tables where table_schema = ?";
+     from information_schema.tables where table_schema = ? and table_type <> 'SEQUENCE'";
 
 fn object(row: &[Option<String>]) -> ObjectInfo {
     let kind = match text(row, 2).as_str() {
         "VIEW" | "SYSTEM VIEW" => ObjectKind::View,
-        // BASE TABLE, SYSTEM VERSIONED (MariaDB), SEQUENCE (MariaDB)…
+        // BASE TABLE, SYSTEM VERSIONED (MariaDB)…
         _ => ObjectKind::Table,
     };
     ObjectInfo {

@@ -1759,6 +1759,57 @@ async fn describe_table(
     Ok(TableDetails::from(table))
 }
 
+/// Functions, sequences, triggers, types… of a schema, for its folders (ADR-024).
+#[tauri::command]
+#[specta::specta]
+async fn list_schema_objects(
+    session: String,
+    schema: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<SchemaObjectItem>> {
+    let open = state.session(&session).await?;
+    let objects = open
+        .session
+        .connection()
+        .list_schema_objects(&schema)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(objects.into_iter().map(SchemaObjectItem::from).collect())
+}
+
+/// Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024).
+#[tauri::command]
+#[specta::specta]
+async fn list_server_objects(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<ServerObjectItem>> {
+    let open = state.session(&session).await?;
+    let objects = open
+        .session
+        .connection()
+        .list_server_objects()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(objects.into_iter().map(ServerObjectItem::from).collect())
+}
+
+/// The DDL of an object, to open in a new tab (nothing runs).
+#[tauri::command]
+#[specta::specta]
+async fn object_definition(
+    session: String,
+    object: SchemaObjectItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .object_definition(&object.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The table a query's result can be edited as, or none: the core decides (ADR-014).
 #[tauri::command]
 #[specta::specta]
@@ -2081,6 +2132,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_schemas,
             list_objects,
             describe_table,
+            list_schema_objects,
+            list_server_objects,
+            object_definition,
             editable_query_table,
             answer_interaction,
         ])

@@ -10,7 +10,7 @@ use spelaion_driver_api::{
 
 use crate::exec::map_error;
 
-fn current_database(conn: &Connection) -> Result<String> {
+pub(crate) fn current_database(conn: &Connection) -> Result<String> {
     conn.query_row("select current_database()", [], |r| r.get(0))
         .map_err(map_error)
 }
@@ -50,7 +50,7 @@ pub fn list_schemas(conn: &Connection) -> Result<Vec<SchemaInfo>> {
 }
 
 /// `schema` as shown by [`list_schemas`] → (database, schema).
-fn locate(conn: &Connection, schema: &str) -> Result<(String, String)> {
+pub(crate) fn locate(conn: &Connection, schema: &str) -> Result<(String, String)> {
     let current = current_database(conn)?;
     if let Some((database, rest)) = schema.split_once('.') {
         let attached: bool = conn

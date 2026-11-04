@@ -9,6 +9,7 @@
 mod decode;
 mod dialect;
 mod introspect;
+mod objects;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +22,7 @@ use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, LogicalType, ObjectInfo, Result,
-    ResultSchema, SchemaInfo, TableInfo, TlsMode,
+    ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -461,6 +462,18 @@ impl Connection for MysqlConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, self.flavor, schema, name).await
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        objects::list_schema_objects(self, schema).await
+    }
+
+    async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
+        objects::list_server_objects(self, self.flavor).await
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        objects::object_definition(self, object).await
     }
 }
 

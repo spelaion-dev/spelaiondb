@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, Value,
+    ObjectKind, SchemaObjectKind, Value,
 };
 use spelaion_driver_duckdb::DuckdbDriver;
 
@@ -581,4 +581,64 @@ async fn new_databases_are_created_once_and_never_overwritten() {
     assert!(spelaion_driver_duckdb::create_database(&db.0).is_err());
     let conn = DuckdbDriver::default().connect(&db.params()).await.unwrap();
     assert_eq!(conn.list_objects("main").await.unwrap()[0].name, "kept");
+}
+
+#[tokio::test]
+async fn explorer_lists_macros_sequences_and_types() {
+    let conn = memory().await;
+    exec_all(
+        &*conn,
+        "create schema s;
+         create macro s.both(a) as a, (a, b) as a + b;
+         create macro s.series(n) as table select * from range(n);
+         create sequence s.seq1 start 5 increment by 2;
+         create type s.mood as enum ('sad', 'it''s ok');
+         create type s.money2 as decimal(12, 2);
+         create type s.pt as struct(x int, y int)",
+    )
+    .await;
+    let objects = conn.list_schema_objects("s").await.unwrap();
+    let listed: Vec<_> = objects
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind, o.detail.as_deref()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("both", SchemaObjectKind::Function, Some("a")),
+            ("both", SchemaObjectKind::Function, Some("a, b")),
+            ("money2", SchemaObjectKind::Type, Some("DECIMAL")),
+            ("mood", SchemaObjectKind::Enum, None),
+            ("pt", SchemaObjectKind::Type, Some("STRUCT")),
+            ("seq1", SchemaObjectKind::Sequence, None),
+            ("series", SchemaObjectKind::Function, Some("n")),
+        ]
+    );
+    let definitions = [
+        "CREATE MACRO s.\"both\"(a) AS a;",
+        "CREATE MACRO s.\"both\"(a, b) AS (a + b);",
+        "CREATE TYPE s.money2 AS DECIMAL(12,2);",
+        "CREATE TYPE s.mood AS ENUM ('sad', 'it''s ok');",
+        "CREATE TYPE s.pt AS STRUCT(x INTEGER, y INTEGER);",
+        "CREATE SEQUENCE s.seq1 INCREMENT BY 2 MINVALUE 1 MAXVALUE 9223372036854775807 START 5 NO CYCLE;",
+        "CREATE MACRO s.series(n) AS TABLE SELECT * FROM \"range\"(n);",
+    ];
+    for (i, (object, expected)) in objects.iter().zip(definitions).enumerate() {
+        let definition = conn.object_definition(object).await.unwrap();
+        assert_eq!(definition, expected);
+        // What the explorer opens can be run: in another schema it creates the same object
+        // (one overload of a macro per definition: the second would replace the first).
+        if i != 1 {
+            let elsewhere = definition.replacen("s.", "main.", 1);
+            exec_all(&*conn, elsewhere.trim_end_matches(';')).await;
+        }
+    }
+    assert_eq!(
+        conn.list_schema_objects("main").await.unwrap().len(),
+        objects.len() - 1
+    );
+    let mut missing = objects[0].clone();
+    missing.detail = Some("x, y, z".into());
+    assert!(conn.object_definition(&missing).await.is_err());
+    assert_eq!(conn.list_server_objects().await.unwrap(), []);
 }

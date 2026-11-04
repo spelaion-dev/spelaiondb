@@ -397,6 +397,16 @@ input[type="search"] {
 .column-row {
   padding-left: 34px;
 }
+.folder-row .label {
+  color: var(--muted);
+}
+/* Rows without children line up with the labels of rows that have a twisty. */
+.leaf-row {
+  padding-left: 30px;
+}
+.leaf-row .label .muted {
+  margin-left: 1px;
+}
 .empty {
   color: var(--muted);
   padding: 24px;

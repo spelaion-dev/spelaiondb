@@ -5,7 +5,8 @@
 
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
-    ColumnInfo, Dialect, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, SchemaInfo, TableInfo,
+    ColumnInfo, Dialect, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, Result,
+    SchemaInfo, SchemaObject, SchemaObjectKind, TableInfo, terminated,
 };
 
 use crate::dialect::SqliteDialect;
@@ -79,6 +80,58 @@ pub(crate) fn objects(schema: &str, rows: &[Row]) -> Vec<ObjectInfo> {
             comment: None,
         })
         .collect()
+}
+
+/// Triggers are all a SQLite schema holds besides its tables and views (ADR-024).
+pub(crate) fn schema_objects_sql(schema: &str) -> String {
+    format!(
+        "select name, tbl_name from {} where type = 'trigger' order by name",
+        schema_table(schema)
+    )
+}
+
+pub(crate) fn schema_objects(schema: &str, rows: &[Row]) -> Vec<SchemaObject> {
+    rows.iter()
+        .map(|row| SchemaObject {
+            schema: schema.to_string(),
+            name: text(row, 0),
+            kind: SchemaObjectKind::Trigger,
+            detail: optional_text(row, 1),
+            comment: None,
+        })
+        .collect()
+}
+
+/// The `CREATE TRIGGER` SQLite keeps, or an error for kinds SQLite does not have.
+pub(crate) fn definition_sql(object: &SchemaObject) -> Result<String> {
+    match object.kind {
+        SchemaObjectKind::Trigger => Ok(format!(
+            "select sql from {} where type = 'trigger' and name = {}",
+            schema_table(&object.schema),
+            literal(&object.name)
+        )),
+        SchemaObjectKind::Function
+        | SchemaObjectKind::Procedure
+        | SchemaObjectKind::Aggregate
+        | SchemaObjectKind::Sequence
+        | SchemaObjectKind::Enum
+        | SchemaObjectKind::Domain
+        | SchemaObjectKind::Type
+        | SchemaObjectKind::Event
+        | SchemaObjectKind::Synonym => Err(DriverError::Other(format!(
+            "SQLite has no {:?} objects",
+            object.kind
+        ))),
+    }
+}
+
+pub(crate) fn definition(object: &SchemaObject, rows: &[Row]) -> Result<String> {
+    rows.first()
+        .and_then(|row| optional_text(row, 0))
+        .map(|sql| terminated(&sql))
+        .ok_or_else(|| {
+            DriverError::Other(format!("{}.{} does not exist", object.schema, object.name))
+        })
 }
 
 /// hidden = 1: hidden columns of virtual tables; 2 and 3: generated (shown).

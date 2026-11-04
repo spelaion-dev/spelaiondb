@@ -20,6 +20,10 @@ import {
   type InteractionKind,
   type HistoryItem_Serialize,
   type ObjectItem_Serialize,
+  type SchemaObjectItem_Serialize,
+  type SchemaObjectKindItem,
+  type ServerObjectItem_Serialize,
+  type ServerObjectKindItem,
   type SchemaItem,
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
@@ -60,6 +64,9 @@ export type CellEditItem = CellEditItem_Deserialize;
 export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
 export type ObjectItem = ObjectItem_Serialize;
+export type SchemaObjectItem = SchemaObjectItem_Serialize;
+export type ServerObjectItem = ServerObjectItem_Serialize;
+export type { SchemaObjectKindItem, ServerObjectKindItem };
 // The channel delivers the deserialization variant (optional fields).
 export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;

@@ -17,6 +17,8 @@ db.executescript(
     );
     create index orders_customer on orders (customer_id);
     create view big_orders as select * from orders where total > 500;
+    create trigger product_stock_check before update of stock on product when new.stock < 0
+    begin select raise(abort, 'stock cannot be negative'); end;
     """
 )
 random.seed(7)
