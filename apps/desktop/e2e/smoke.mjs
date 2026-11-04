@@ -139,7 +139,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, history: 3 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, history: 4 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -1307,6 +1307,22 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await connectionsActivity.click();
   await page.getByRole("button", { name: "Expand or collapse schema spelaion" }).waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
+  // System schemas only when asked for, in Settings → Explorer (a personal preference).
+  const systemSchema = page.getByRole("button", { name: "Expand or collapse schema information_schema" });
+  assert.equal(await systemSchema.count(), 0);
+  const setShowSystem = (checked) =>
+    withSettings("explorer", async (settings) => {
+      const box = settings.locator('input[name="showSystem"]');
+      await box.setChecked(checked);
+      await page.waitForFunction(([want]) => {
+        const input = document.querySelector('input[name="showSystem"]');
+        return input?.checked === want && !input.disabled;
+      }, [checked]);
+    });
+  await setShowSystem(true);
+  await systemSchema.first().waitFor();
+  await setShowSystem(false);
+  await systemSchema.first().waitFor({ state: "detached" });
 
   step("explorer: open a connected query for the selected database without asking again");
   await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();

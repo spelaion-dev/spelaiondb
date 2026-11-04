@@ -60,6 +60,14 @@ pub(crate) async fn list_schema_objects(
         .collect()
 }
 
+/// Accounts the server creates for itself.
+const INTERNAL_ACCOUNTS: &[&str] = &[
+    "mysql.sys",
+    "mysql.session",
+    "mysql.infoschema",
+    "mariadb.sys",
+];
+
 /// Accounts from `mysql.user`, which only privileged users may read: for the others there are
 /// none to show, not an error.
 pub(crate) async fn list_server_objects(
@@ -83,17 +91,20 @@ pub(crate) async fn list_server_objects(
         .iter()
         .map(|row| {
             let (user, host) = (text(row, 0), text(row, 1));
+            let system = INTERNAL_ACCOUNTS.contains(&user.as_str());
             if text(row, 2) == "Y" {
                 ServerObject {
                     name: user,
                     kind: ServerObjectKind::Role,
                     detail: None,
+                    system,
                 }
             } else {
                 ServerObject {
                     name: format!("{}@{}", quote_account(&user), quote_account(&host)),
                     kind: ServerObjectKind::User,
                     detail: None,
+                    system,
                 }
             }
         })

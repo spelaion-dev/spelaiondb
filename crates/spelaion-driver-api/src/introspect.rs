@@ -86,6 +86,9 @@ pub struct ServerObject {
     pub kind: ServerObjectKind,
     /// A short description: a role's attributes, an extension's version and schema…
     pub detail: Option<String>,
+    /// Built into the engine (PostgreSQL's `pg_*` roles, SQL Server's fixed roles, MySQL's
+    /// internal accounts): the explorer hides it unless asked to show system objects.
+    pub system: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

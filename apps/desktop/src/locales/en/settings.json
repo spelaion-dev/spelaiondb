@@ -19,6 +19,11 @@
     "system": "Same as the system",
     "hint": "Messages from databases and SSH servers are shown as they arrive."
   },
+  "explorer": {
+    "title": "Explorer",
+    "showSystem": "Show system objects",
+    "showSystemHint": "System schemas (pg_catalog, information_schema, sys…) and the roles, users and logins built into each engine."
+  },
   "history": {
     "title": "History",
     "stored": "Every query you run from the app is saved on this computer with its connection, time, duration, row count and error. Opening a saved query never runs it.",

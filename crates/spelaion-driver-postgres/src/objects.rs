@@ -84,13 +84,14 @@ pub async fn list_server_objects(client: &Client) -> Result<Vec<ServerObject>> {
                                      case when rolcanlogin then 'LOGIN' end, \
                                      case when rolcreatedb then 'CREATEDB' end, \
                                      case when rolcreaterole then 'CREATEROLE' end, \
-                                     case when rolreplication then 'REPLICATION' end), '') \
-             from pg_roles where rolname !~ '^pg_' \
+                                     case when rolreplication then 'REPLICATION' end), ''), \
+                    rolname ~ '^pg_' \
+             from pg_roles \
              union all \
-             select spcname::text, 'tablespace', nullif(pg_tablespace_location(oid), '') \
+             select spcname::text, 'tablespace', nullif(pg_tablespace_location(oid), ''), false \
              from pg_tablespace \
              union all \
-             select e.extname::text, 'extension', e.extversion || ' · ' || n.nspname \
+             select e.extname::text, 'extension', e.extversion || ' · ' || n.nspname, false \
              from pg_extension e join pg_namespace n on n.oid = e.extnamespace \
              order by 2, 1",
             &[],
@@ -109,6 +110,7 @@ pub async fn list_server_objects(client: &Client) -> Result<Vec<ServerObject>> {
                     other => return Err(DriverError::Other(format!("unexpected kind {other}"))),
                 },
                 detail: r.get(2),
+                system: r.get(3),
             })
         })
         .collect()

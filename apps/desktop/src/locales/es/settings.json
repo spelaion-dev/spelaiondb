@@ -19,6 +19,11 @@
     "system": "Igual que el sistema",
     "hint": "Los mensajes de las bases de datos y de los servidores SSH se muestran tal como llegan."
   },
+  "explorer": {
+    "title": "Explorador",
+    "showSystem": "Mostrar objetos del sistema",
+    "showSystemHint": "Esquemas del sistema (pg_catalog, information_schema, sys…) y los roles, usuarios e inicios de sesión que trae cada motor."
+  },
   "history": {
     "title": "Historial",
     "stored": "Cada consulta que ejecutas desde la app se guarda en este equipo con su conexión, hora, duración, número de filas y error. Abrir una consulta guardada nunca la ejecuta.",

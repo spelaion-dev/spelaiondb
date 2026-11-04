@@ -18,6 +18,7 @@ import {
   type TableDetails,
 } from "../api";
 import { connectTabFromExplorer, explorerDatabase, openSession } from "../connect";
+import { usePreferences } from "../preferences";
 import { useApp, useDialogs } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { EngineIcon } from "./EngineIcon";
@@ -372,7 +373,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
           return [];
         }),
       ]);
-      setSchemas(all.filter((s) => !s.system));
+      setSchemas(all);
       setServerObjects(server);
     } catch (e) {
       setError(errorText(e));
@@ -381,6 +382,9 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
     }
   }
 
+  const showSystem = usePreferences((s) => s.explorer.showSystem);
+  const shownSchemas = schemas?.filter((s) => showSystem || !s.system);
+  const shownServerObjects = serverObjects.filter((o) => showSystem || !o.system);
   const prod = connection.env?.toLowerCase().startsWith("prod");
   return (
     <div className="node">
@@ -423,7 +427,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
         <div className="children">
           {busy && <div className="muted small">{t("connecting")}</div>}
           {error && <div className="error small">{error}</div>}
-          {schemas?.map((s) => (
+          {shownSchemas?.map((s) => (
             <SchemaNode
               key={s.name}
               session={session}
@@ -432,7 +436,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
             />
           ))}
           {SERVER_FOLDERS.map((folder) => {
-            const items = serverObjects.filter((o) => serverFolder(o.kind) === folder);
+            const items = shownServerObjects.filter((o) => serverFolder(o.kind) === folder);
             return (
               items.length > 0 && (
                 <Folder key={folder} label={t(`folders.${folder}`)} count={items.length}>

@@ -7,7 +7,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
-use spelaion_store::{HistoryEntry, NewHistoryEntry, Snippet, Store, StoreError};
+use spelaion_store::{
+    ExplorerPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store, StoreError,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{CoreEvent, ResultId, Session};
@@ -50,6 +52,13 @@ enum Request {
     },
     GetUpdateCheck {
         reply: Reply<bool>,
+    },
+    GetExplorer {
+        reply: Reply<ExplorerPreferences>,
+    },
+    SetExplorer {
+        preferences: ExplorerPreferences,
+        reply: Reply<()>,
     },
     SetUpdateCheck {
         enabled: bool,
@@ -125,6 +134,12 @@ impl QueryHistory {
                         }
                         Request::GetUpdateCheck { reply } => {
                             let _ = reply.send(store.get_update_check());
+                        }
+                        Request::GetExplorer { reply } => {
+                            let _ = reply.send(store.get_explorer_preferences());
+                        }
+                        Request::SetExplorer { preferences, reply } => {
+                            let _ = reply.send(store.set_explorer_preferences(&preferences));
                         }
                         Request::SetUpdateCheck { enabled, reply } => {
                             let _ = reply.send(store.set_update_check(enabled));
@@ -234,6 +249,19 @@ impl QueryHistory {
     /// Whether the app checks for updates when it starts (ADR-021), defaulting to on.
     pub async fn update_check(&self) -> Result<bool, HistoryError> {
         self.request(|reply| Request::GetUpdateCheck { reply })
+            .await
+    }
+
+    /// How the explorer shows its tree (system objects, sorting).
+    pub async fn explorer_preferences(&self) -> Result<ExplorerPreferences, HistoryError> {
+        self.request(|reply| Request::GetExplorer { reply }).await
+    }
+
+    pub async fn set_explorer_preferences(
+        &self,
+        preferences: ExplorerPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetExplorer { preferences, reply })
             .await
     }
 

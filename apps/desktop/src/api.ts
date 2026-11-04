@@ -20,6 +20,7 @@ import {
   type InteractionKind,
   type HistoryItem_Serialize,
   type ObjectItem_Serialize,
+  type ExplorerPreferencesItem,
   type SchemaObjectItem_Serialize,
   type SchemaObjectKindItem,
   type ServerObjectItem_Serialize,
@@ -64,6 +65,7 @@ export type CellEditItem = CellEditItem_Deserialize;
 export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
 export type ObjectItem = ObjectItem_Serialize;
+export type ExplorerPreferences = ExplorerPreferencesItem;
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
 export type { SchemaObjectKindItem, ServerObjectKindItem };

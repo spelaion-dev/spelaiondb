@@ -9,6 +9,27 @@ use spelaion_driver_api::{
     ServerObjectKind, TableInfo,
 };
 
+/// How the explorer shows its tree; personal, like the theme.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplorerPreferencesItem {
+    pub show_system: bool,
+}
+
+impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
+    fn from(p: spelaion_core::ExplorerPreferences) -> Self {
+        let spelaion_core::ExplorerPreferences { show_system } = p;
+        Self { show_system }
+    }
+}
+
+impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
+    fn from(p: ExplorerPreferencesItem) -> Self {
+        let ExplorerPreferencesItem { show_system } = p;
+        Self { show_system }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
@@ -467,6 +488,8 @@ pub struct ServerObjectItem {
     pub name: String,
     pub kind: ServerObjectKindItem,
     pub detail: Option<String>,
+    /// Built into the engine: shown only with "Show system objects".
+    pub system: bool,
 }
 
 impl From<ServerObject> for ServerObjectItem {
@@ -481,6 +504,7 @@ impl From<ServerObject> for ServerObjectItem {
                 ServerObjectKind::Extension => ServerObjectKindItem::Extension,
             },
             detail: o.detail,
+            system: o.system,
         }
     }
 }

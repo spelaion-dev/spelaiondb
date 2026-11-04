@@ -203,6 +203,14 @@ impl AuditEntry {
 }
 
 /// Local database. Used by the app and `spelaiondb mcp` at the same time: WAL mode and waiting on locks.
+/// How the explorer shows its tree, shared by every workspace in this user directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ExplorerPreferences {
+    /// System schemas (`pg_catalog`, `information_schema`, `sys`…) and built-in roles and
+    /// logins. Off by default.
+    pub show_system: bool,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -448,6 +456,42 @@ impl Store {
 
     pub fn set_update_check(&self, enabled: bool) -> Result<(), StoreError> {
         self.set_personal_setting("update_check", if enabled { "on" } else { "off" })
+    }
+
+    /// The explorer's preferences, each one at its default until it is changed.
+    pub fn get_explorer_preferences(&self) -> Result<ExplorerPreferences, StoreError> {
+        let defaults = ExplorerPreferences::default();
+        Ok(ExplorerPreferences {
+            show_system: self.get_flag("explorer.show_system", defaults.show_system)?,
+        })
+    }
+
+    pub fn set_explorer_preferences(
+        &self,
+        preferences: &ExplorerPreferences,
+    ) -> Result<(), StoreError> {
+        let ExplorerPreferences { show_system } = *preferences;
+        self.set_flag("explorer.show_system", show_system)
+    }
+
+    fn get_flag(&self, key: &str, default: bool) -> Result<bool, StoreError> {
+        let value = self
+            .conn
+            .query_row(
+                "select value from personal_settings where key = ?1",
+                [key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(match value.as_deref() {
+            Some("on") => true,
+            Some("off") => false,
+            _ => default,
+        })
+    }
+
+    fn set_flag(&self, key: &str, value: bool) -> Result<(), StoreError> {
+        self.set_personal_setting(key, if value { "on" } else { "off" })
     }
 
     fn set_personal_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
@@ -1011,6 +1055,24 @@ mod tests {
             Store::open(&second_path).unwrap().get_language().unwrap(),
             "en"
         );
+    }
+
+    #[test]
+    fn explorer_preferences_start_at_their_defaults_and_persist() {
+        let path = temp("explorer");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.get_explorer_preferences().unwrap(),
+            ExplorerPreferences::default()
+        );
+        let changed = ExplorerPreferences { show_system: true };
+        store.set_explorer_preferences(&changed).unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.get_explorer_preferences().unwrap(), changed);
+        // Another setting does not touch them.
+        reopened.set_theme("light").unwrap();
+        assert_eq!(reopened.get_explorer_preferences().unwrap(), changed);
     }
 
     #[test]

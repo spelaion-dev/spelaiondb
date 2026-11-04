@@ -179,7 +179,9 @@ Preferences are stored in the personal `state.db` and apply to every workspace.
 
 ## Schema explorer
 
-Expanding a connection in the sidebar lists its schemas (databases in MySQL) and, inside each,
+Expanding a connection in the sidebar lists its schemas (databases in MySQL; system schemas
+and the roles, users and logins built into each engine only with **Settings → Explorer → Show
+system objects**) and, inside each,
 folders by type: **Tables** (partitioned ones marked P), **Foreign tables**, **Views**,
 **Materialized views**, **Functions**, **Procedures**, **Aggregate functions**,
 **Sequences**, **Triggers**, **Data types** (enums, domains and other types), **Events**

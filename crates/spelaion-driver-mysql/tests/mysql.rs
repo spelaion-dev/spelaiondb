@@ -663,9 +663,19 @@ async fn explorer_lists_routines_triggers_events_and_accounts() {
         let admin = server.driver.connect(&root).await.unwrap();
         let accounts = admin.list_server_objects().await.unwrap();
         assert!(
-            accounts
-                .iter()
-                .any(|a| a.name == "'spelaion'@'%'" && a.kind == ServerObjectKind::User),
+            accounts.iter().any(|a| a.name == "'spelaion'@'%'"
+                && a.kind == ServerObjectKind::User
+                && !a.system),
+            "{}: {accounts:?}",
+            server.label
+        );
+        let internal = if mariadb {
+            "'mariadb.sys'@'localhost'"
+        } else {
+            "'mysql.sys'@'localhost'"
+        };
+        assert!(
+            accounts.iter().any(|a| a.name == internal && a.system),
             "{}: {accounts:?}",
             server.label
         );

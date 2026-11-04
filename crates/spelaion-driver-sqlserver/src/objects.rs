@@ -111,20 +111,24 @@ pub async fn list_schema_objects(
 }
 
 /// The server's logins (those a user without `VIEW ANY DEFINITION` sees: their own and a few
-/// more), and the users and roles of the connection's database, without the fixed roles.
+/// more), and the users and roles of the connection's database. The internal `##…##`
+/// logins, the fixed roles and the built-in users are marked as system objects.
 pub async fn list_server_objects(conn: &SqlServerConnection) -> Result<Vec<ServerObject>> {
     let rows = conn
         .rows(
             "select name, 'login', \
-                    type_desc + case when is_disabled = 1 then ', DISABLED' else '' end \
+                    type_desc + case when is_disabled = 1 then ', DISABLED' else '' end, \
+                    case when name like '##%' then 1 else 0 end \
              from sys.server_principals \
-             where type in ('S', 'U', 'G', 'E', 'X', 'C', 'K') and name not like '##%' \
+             where type in ('S', 'U', 'G', 'E', 'X', 'C', 'K') \
              union all \
              select name, case type when 'R' then 'role' else 'user' end, \
-                    case when type <> 'R' then type_desc end \
+                    case when type <> 'R' then type_desc end, \
+                    case when is_fixed_role = 1 \
+                           or name in ('sys', 'INFORMATION_SCHEMA', 'guest', 'public') \
+                         then 1 else 0 end \
              from sys.database_principals \
-             where type in ('S', 'U', 'G', 'E', 'X', 'C', 'K', 'R') and is_fixed_role = 0 \
-               and name not in ('sys', 'INFORMATION_SCHEMA', 'guest', 'public') \
+             where type in ('S', 'U', 'G', 'E', 'X', 'C', 'K', 'R') \
              order by 2, 1",
             vec![],
         )
@@ -140,6 +144,7 @@ pub async fn list_server_objects(conn: &SqlServerConnection) -> Result<Vec<Serve
                     other => return Err(DriverError::Other(format!("unexpected kind {other}"))),
                 },
                 detail: opt(row, 2),
+                system: flag(row, 3),
             })
         })
         .collect()

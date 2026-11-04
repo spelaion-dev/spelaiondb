@@ -192,6 +192,32 @@ async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
 
 #[tauri::command]
 #[specta::specta]
+async fn get_explorer_preferences(
+    state: State<'_, AppState>,
+) -> CmdResult<ExplorerPreferencesItem> {
+    state
+        .history
+        .explorer_preferences()
+        .await
+        .map(ExplorerPreferencesItem::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_explorer_preferences(
+    preferences: ExplorerPreferencesItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_explorer_preferences(preferences.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
     state
         .history
@@ -2064,6 +2090,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_theme,
             get_update_check,
             set_update_check,
+            get_explorer_preferences,
+            set_explorer_preferences,
             update::update_check,
             update::update_install,
             engine_catalog,

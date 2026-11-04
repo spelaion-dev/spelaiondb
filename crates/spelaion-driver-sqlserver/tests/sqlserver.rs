@@ -752,11 +752,17 @@ async fn explorer_lists_routines_sequences_triggers_synonyms_and_types() {
     let has = |name: &str, kind| server.iter().any(|o| o.name == name && o.kind == kind);
     assert!(has("sa", ServerObjectKind::Login), "{server:?}");
     assert!(has("dbo", ServerObjectKind::User), "{server:?}");
-    // Neither the fixed roles nor the internal logins.
-    assert!(!has("db_owner", ServerObjectKind::Role), "{server:?}");
+    // The fixed roles, built-in users and internal logins are marked as system objects.
+    let system = |name: &str| server.iter().find(|o| o.name == name).map(|o| o.system);
+    assert_eq!(system("db_owner"), Some(true), "{server:?}");
+    assert_eq!(system("guest"), Some(true), "{server:?}");
+    assert_eq!(system("dbo"), Some(false), "{server:?}");
+    assert_eq!(system("sa"), Some(false), "{server:?}");
     assert!(
-        !server.iter().any(|o| o.name.starts_with("##")),
-        "{server:?}"
+        server
+            .iter()
+            .filter(|o| o.name.starts_with("##"))
+            .all(|o| o.system)
     );
 
     for sql in cleanup {

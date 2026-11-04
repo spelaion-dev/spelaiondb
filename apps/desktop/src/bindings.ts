@@ -14,6 +14,8 @@ export const commands = {
 	setTheme: (theme: string) => typedError<null, string>(__TAURI_INVOKE("set_theme", { theme })),
 	getUpdateCheck: () => typedError<boolean, string>(__TAURI_INVOKE("get_update_check")),
 	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
+	getExplorerPreferences: () => typedError<ExplorerPreferencesItem, string>(__TAURI_INVOKE("get_explorer_preferences")),
+	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
@@ -545,6 +547,11 @@ export type EngineItem_Serialize = {
 	available: boolean,
 };
 
+/**  How the explorer shows its tree; personal, like the theme. */
+export type ExplorerPreferencesItem = {
+	showSystem: boolean,
+};
+
 /**
  *  One field of a changed repository item. Repository files hold secret references, never
  *  secrets.
@@ -872,6 +879,8 @@ export type ServerObjectItem_Deserialize = {
 	name: string,
 	kind: ServerObjectKindItem,
 	detail?: string | null,
+	/**  Built into the engine: shown only with "Show system objects". */
+	system: boolean,
 };
 
 /**  A role, login, tablespace or extension: outside every schema (ADR-024). */
@@ -879,6 +888,8 @@ export type ServerObjectItem_Serialize = {
 	name: string,
 	kind: ServerObjectKindItem,
 	detail: string | null,
+	/**  Built into the engine: shown only with "Show system objects". */
+	system: boolean,
 };
 
 export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension";

@@ -1,8 +1,8 @@
-// Personal interface preferences (theme and language). They are stored by the core in the
+// Personal interface preferences (theme, language and the explorer). They are stored by the core in the
 // personal state.db; this module only applies them to the document and keeps the UI state.
 
 import { create } from "zustand";
-import { call, commands } from "./api";
+import { call, commands, type ExplorerPreferences } from "./api";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -28,7 +28,7 @@ export function applyTheme(preference: ThemePreference): void {
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export interface PreferenceError {
-  setting: "language" | "theme";
+  setting: "language" | "theme" | "explorer";
   phase: "load" | "save";
   detail: string;
 }
@@ -36,24 +36,34 @@ export interface PreferenceError {
 interface PreferencesStore {
   language: LanguagePreference;
   theme: ThemePreference;
+  /** How the explorer shows its tree. */
+  explorer: ExplorerPreferences;
   loading: boolean;
-  saving: "language" | "theme" | null;
+  saving: "language" | "theme" | "explorer" | null;
   error: PreferenceError | null;
   load(): Promise<void>;
   setLanguage(next: LanguagePreference): Promise<void>;
   setTheme(next: ThemePreference): Promise<void>;
+  setExplorer(next: ExplorerPreferences): Promise<void>;
   clearError(): void;
 }
 
 export const usePreferences = create<PreferencesStore>((set, get) => ({
   language: "system",
   theme: "system",
+  explorer: { showSystem: false },
   loading: true,
   saving: null,
   error: null,
   async load() {
-    const [language, theme] = await Promise.allSettled([call(commands.getLanguage()), call(commands.getTheme())]);
+    const [language, theme, explorer] = await Promise.allSettled([
+      call(commands.getLanguage()),
+      call(commands.getTheme()),
+      call(commands.getExplorerPreferences()),
+    ]);
     let error: PreferenceError | null = null;
+    if (explorer.status === "fulfilled") set({ explorer: explorer.value });
+    else error = { setting: "explorer", phase: "load", detail: errorText(explorer.reason) };
     if (theme.status === "fulfilled") {
       const selected: ThemePreference = theme.value === "light" || theme.value === "dark" ? theme.value : "system";
       set({ theme: selected });
@@ -92,6 +102,19 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
       applyTheme(next);
     } catch (e) {
       set({ error: { setting: "theme", phase: "save", detail: errorText(e) } });
+    } finally {
+      set({ saving: null });
+    }
+  },
+  async setExplorer(next) {
+    if (get().saving) return;
+    // The tree follows at once; if saving fails it goes back to what was saved.
+    const previous = get().explorer;
+    set({ explorer: next, saving: "explorer", error: null });
+    try {
+      await call(commands.setExplorerPreferences(next));
+    } catch (e) {
+      set({ explorer: previous, error: { setting: "explorer", phase: "save", detail: errorText(e) } });
     } finally {
       set({ saving: null });
     }

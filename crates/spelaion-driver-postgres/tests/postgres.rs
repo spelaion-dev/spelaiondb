@@ -673,10 +673,12 @@ async fn explorer_lists_the_other_objects_of_a_schema() {
             "{server:?}"
         );
         assert!(has("plpgsql", ServerObjectKind::Extension), "{server:?}");
+        // The predefined roles are there, marked as system objects; ours are not.
+        assert!(has("pg_monitor", ServerObjectKind::Role), "{server:?}");
         assert!(
-            !server
-                .iter()
-                .any(|o| o.name.starts_with("pg_") && o.kind == ServerObjectKind::Role)
+            server.iter().all(
+                |o| o.system == (o.kind == ServerObjectKind::Role && o.name.starts_with("pg_"))
+            )
         );
         let role = server.iter().find(|o| o.name == "spelaion").unwrap();
         assert_eq!(
