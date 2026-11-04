@@ -31,6 +31,13 @@ public, or a public repository that only holds releases.
   is empty, and with no endpoint the app says updates are not available in this build and
   never makes a request. Turning them on is one change: the URL of the public `latest.json`.
   Installs made before that change cannot update themselves; they need one manual install.
+- **On since 0.4.0 (2026-11-04):** the repository is public (ADR-023), so the endpoint is
+  `https://github.com/spelaion-dev/spelaiondb/releases/latest/download/latest.json`.
+  GitHub's `/releases/latest` skips pre-releases, so releases are published as normal ones
+  (marked "latest"); the version number (0.x) and the notes still say it is a preview.
+  `SPELAION_NO_UPDATES` switches updates off for one run (tests, packaged builds updated by
+  their own channel): it can only switch them off, never point them elsewhere. 0.4.0 is the
+  first version that updates itself; earlier ones are installed by hand once.
 - **What the updater can replace:** Windows (NSIS, run passively), macOS (`.app.tar.gz`) and
   Linux AppImage. `.deb`/`.rpm` installs are updated by their package manager, not by the app.
 

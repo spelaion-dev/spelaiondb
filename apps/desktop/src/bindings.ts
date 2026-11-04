@@ -868,11 +868,11 @@ export type TunnelTestOutcome = { kind: "connected" } |
 export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
 
 export type UpdateStatus_Deserialize = 
-/**  This build has nowhere to look for updates. */
+/**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
 { kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null };
 
 export type UpdateStatus_Serialize = 
-/**  This build has nowhere to look for updates. */
+/**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
 { kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null };
 
 /**

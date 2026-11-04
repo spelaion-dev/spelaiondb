@@ -35,6 +35,8 @@ function startApp() {
       WEBVIEW2_USER_DATA_FOLDER: join(userDir, "webview2"),
       // kubectl only ever sees the test cluster (or nothing), never the user's clusters.
       KUBECONFIG: process.env.SPELAION_TEST_K8S ?? join(userDir, "no-kubeconfig"),
+      // No request to GitHub for updates: the run must not depend on the network (ADR-021).
+      SPELAION_NO_UPDATES: "1",
     },
     stdio: "inherit",
   });
@@ -249,7 +251,8 @@ try {
   await settingsDialog.getByRole("heading", { name: "Appearance" }).waitFor();
   assert.equal(await page.locator(".tabbar [role=tab]").count(), tabsWithoutSettings, "no settings tab");
   assert.equal(await page.locator(".activity-bar .settings-button").getAttribute("aria-pressed"), "true");
-  // Updates (ADR-021): this build has no public source yet, so it says so and asks nothing.
+  // Updates (ADR-021): switched off for this run (SPELAION_NO_UPDATES), so it says so and
+  // asks nothing.
   await settingsDialog.getByRole("button", { name: "Updates", exact: true }).click();
   await settingsDialog.getByRole("heading", { name: "Updates" }).waitFor();
   await settingsDialog.getByText(/^Version \d+\.\d+\.\d+$/).waitFor();

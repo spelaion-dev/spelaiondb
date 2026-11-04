@@ -3,7 +3,7 @@
 An open-source desktop database client: fast and lightweight, with first-class SSH tunnels
 and a built-in MCP server for AI agents. Part of the [Spelaion](https://spelaion.dev) family.
 
-> **Status:** 0.3.0 preview. The drivers (PostgreSQL, MySQL/MariaDB and SQL Server with TLS,
+> **Status:** 0.4.0 preview. The drivers (PostgreSQL, MySQL/MariaDB and SQL Server with TLS,
 > SQLite, DuckDB), the configuration, SSH tunnels, `spelaiondb mcp` and the desktop app work.
 
 ## Install
@@ -22,10 +22,10 @@ Releases are built by CI from a version tag (`.github/workflows/release.yml`): b
 version in `Cargo.toml` and `apps/desktop/src-tauri/tauri.conf.json`, write
 `docs/releases/vX.Y.Z.md`, and push the tag `vX.Y.Z`.
 
-Automatic updates (ADR-021) are prepared but off: the app can check, download a signed
-update and install it when you click "Install and restart", but it has no public place to
-look yet, so for now Settings → Updates says they are not available and new versions are
-installed by hand.
+Automatic updates (ADR-021, from 0.4.0): the app checks for a new version when it starts
+(you can turn that off in Settings → Updates) and shows a notice. The signed update is
+downloaded and installed only when you click "Install and restart". Versions before 0.4.0
+cannot update themselves: install 0.4.0 by hand once.
 
 ## Build from source
 
