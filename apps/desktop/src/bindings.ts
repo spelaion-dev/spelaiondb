@@ -550,6 +550,9 @@ export type EngineItem_Serialize = {
 /**  How the explorer shows its tree; personal, like the theme. */
 export type ExplorerPreferencesItem = {
 	showSystem: boolean,
+	sortAlphabetically: boolean,
+	sortIgnoreCase: boolean,
+	foldersFirst: boolean,
 };
 
 /**

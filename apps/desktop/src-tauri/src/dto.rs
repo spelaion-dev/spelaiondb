@@ -14,19 +14,42 @@ use spelaion_driver_api::{
 #[serde(rename_all = "camelCase")]
 pub struct ExplorerPreferencesItem {
     pub show_system: bool,
+    pub sort_alphabetically: bool,
+    pub sort_ignore_case: bool,
+    pub folders_first: bool,
 }
 
 impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
     fn from(p: spelaion_core::ExplorerPreferences) -> Self {
-        let spelaion_core::ExplorerPreferences { show_system } = p;
-        Self { show_system }
+        let spelaion_core::ExplorerPreferences {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+        } = p;
+        Self {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+        }
     }
 }
 
 impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
     fn from(p: ExplorerPreferencesItem) -> Self {
-        let ExplorerPreferencesItem { show_system } = p;
-        Self { show_system }
+        let ExplorerPreferencesItem {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+        } = p;
+        Self {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+        }
     }
 }
 

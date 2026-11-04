@@ -204,11 +204,29 @@ impl AuditEntry {
 
 /// Local database. Used by the app and `spelaiondb mcp` at the same time: WAL mode and waiting on locks.
 /// How the explorer shows its tree, shared by every workspace in this user directory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExplorerPreferences {
     /// System schemas (`pg_catalog`, `information_schema`, `sys`…) and built-in roles and
     /// logins. Off by default.
     pub show_system: bool,
+    /// Names in alphabetical order rather than the database's; on by default. Columns always
+    /// keep their table's order.
+    pub sort_alphabetically: bool,
+    /// Alphabetical order ignores case (`b` between `A` and `C`); on by default.
+    pub sort_ignore_case: bool,
+    /// Folders (roles, tablespaces…) before the schemas next to them; off by default.
+    pub folders_first: bool,
+}
+
+impl Default for ExplorerPreferences {
+    fn default() -> Self {
+        Self {
+            show_system: false,
+            sort_alphabetically: true,
+            sort_ignore_case: true,
+            folders_first: false,
+        }
+    }
 }
 
 pub struct Store {
@@ -463,6 +481,11 @@ impl Store {
         let defaults = ExplorerPreferences::default();
         Ok(ExplorerPreferences {
             show_system: self.get_flag("explorer.show_system", defaults.show_system)?,
+            sort_alphabetically: self
+                .get_flag("explorer.sort_alphabetically", defaults.sort_alphabetically)?,
+            sort_ignore_case: self
+                .get_flag("explorer.sort_ignore_case", defaults.sort_ignore_case)?,
+            folders_first: self.get_flag("explorer.folders_first", defaults.folders_first)?,
         })
     }
 
@@ -470,8 +493,16 @@ impl Store {
         &self,
         preferences: &ExplorerPreferences,
     ) -> Result<(), StoreError> {
-        let ExplorerPreferences { show_system } = *preferences;
-        self.set_flag("explorer.show_system", show_system)
+        let ExplorerPreferences {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+        } = *preferences;
+        self.set_flag("explorer.show_system", show_system)?;
+        self.set_flag("explorer.sort_alphabetically", sort_alphabetically)?;
+        self.set_flag("explorer.sort_ignore_case", sort_ignore_case)?;
+        self.set_flag("explorer.folders_first", folders_first)
     }
 
     fn get_flag(&self, key: &str, default: bool) -> Result<bool, StoreError> {
@@ -1065,7 +1096,16 @@ mod tests {
             store.get_explorer_preferences().unwrap(),
             ExplorerPreferences::default()
         );
-        let changed = ExplorerPreferences { show_system: true };
+        let defaults = ExplorerPreferences::default();
+        assert!(defaults.sort_alphabetically && defaults.sort_ignore_case);
+        assert!(!defaults.show_system && !defaults.folders_first);
+        // Every field is saved on its own: each one flipped from its default.
+        let changed = ExplorerPreferences {
+            show_system: true,
+            sort_alphabetically: false,
+            sort_ignore_case: false,
+            folders_first: true,
+        };
         store.set_explorer_preferences(&changed).unwrap();
         drop(store);
         let reopened = Store::open(&path).unwrap();

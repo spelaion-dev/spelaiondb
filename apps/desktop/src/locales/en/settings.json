@@ -22,7 +22,12 @@
   "explorer": {
     "title": "Explorer",
     "showSystem": "Show system objects",
-    "showSystemHint": "System schemas (pg_catalog, information_schema, sys…) and the roles, users and logins built into each engine."
+    "showSystemHint": "System schemas (pg_catalog, information_schema, sys…) and the roles, users and logins built into each engine.",
+    "sorting": "Order",
+    "sortAlphabetically": "Sort alphabetically",
+    "sortIgnoreCase": "Ignore case",
+    "foldersFirst": "Folders first",
+    "sortingHint": "Without alphabetical order, names keep the order the database returns. Columns always keep their table's order. Folders first puts roles, users and the like before the schemas."
   },
   "history": {
     "title": "History",

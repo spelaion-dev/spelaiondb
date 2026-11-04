@@ -188,6 +188,9 @@ folders by type: **Tables** (partitioned ones marked P), **Foreign tables**, **V
 (MySQL) and **Synonyms** (SQL Server); only the folders with something in them appear. After
 the schemas come **Roles**, **Users**, **Logins**, **Tablespaces** and **Extensions**, as
 the engine has them (MySQL's accounts only for users that may read `mysql.user`).
+Names are sorted alphabetically, ignoring case; **Settings → Explorer** can keep the
+database's order instead, sort with case (upper case first), or put the folders before the
+schemas. Columns always keep their table's order.
 Double-click a function, trigger, sequence or type (or **Open definition** in its right-click
 menu) to open its `CREATE` statement in a new tab; nothing runs. Objects that belong to a
 PostgreSQL extension are not listed: the extension stands for them.

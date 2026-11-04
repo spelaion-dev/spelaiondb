@@ -172,6 +172,38 @@ function ExplorerSettings() {
         {t("explorer.showSystem")}
       </label>
       <p className="muted small">{t("explorer.showSystemHint")}</p>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("explorer.sorting")}</legend>
+        <label className="check">
+          <input
+            type="checkbox"
+            name="sortAlphabetically"
+            checked={explorer.sortAlphabetically}
+            onChange={(e) => void setExplorer({ ...explorer, sortAlphabetically: e.target.checked })}
+          />
+          {t("explorer.sortAlphabetically")}
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            name="sortIgnoreCase"
+            checked={explorer.sortIgnoreCase}
+            disabled={!explorer.sortAlphabetically}
+            onChange={(e) => void setExplorer({ ...explorer, sortIgnoreCase: e.target.checked })}
+          />
+          {t("explorer.sortIgnoreCase")}
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            name="foldersFirst"
+            checked={explorer.foldersFirst}
+            onChange={(e) => void setExplorer({ ...explorer, foldersFirst: e.target.checked })}
+          />
+          {t("explorer.foldersFirst")}
+        </label>
+      </fieldset>
+      <p className="muted small">{t("explorer.sortingHint")}</p>
       <SaveError setting="explorer" />
     </>
   );

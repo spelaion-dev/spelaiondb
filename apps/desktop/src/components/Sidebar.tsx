@@ -18,6 +18,7 @@ import {
   type TableDetails,
 } from "../api";
 import { connectTabFromExplorer, explorerDatabase, openSession } from "../connect";
+import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
@@ -61,6 +62,15 @@ function useContextMenu() {
     };
   }, [menu]);
   return [menu, setMenu] as const;
+}
+
+/** Sorts names as Settings → Explorer says (columns are never sorted). */
+function useSortByName() {
+  const { i18n } = useTranslation();
+  const sortAlphabetically = usePreferences((s) => s.explorer.sortAlphabetically);
+  const sortIgnoreCase = usePreferences((s) => s.explorer.sortIgnoreCase);
+  return <T,>(items: readonly T[], name: (item: T) => string) =>
+    sortByName(items, name, { sortAlphabetically, sortIgnoreCase }, i18n.language);
 }
 
 /** The explorer's folders under a schema, in order (ADR-024). */
@@ -383,8 +393,16 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
   }
 
   const showSystem = usePreferences((s) => s.explorer.showSystem);
-  const shownSchemas = schemas?.filter((s) => showSystem || !s.system);
-  const shownServerObjects = serverObjects.filter((o) => showSystem || !o.system);
+  const foldersFirst = usePreferences((s) => s.explorer.foldersFirst);
+  const sort = useSortByName();
+  const shownSchemas = schemas && sort(schemas.filter((s) => showSystem || !s.system), (s) => s.name);
+  const shownServerObjects = sort(
+    serverObjects.filter((o) => showSystem || !o.system),
+    (o) => o.name,
+  );
+  const schemaNodes = shownSchemas?.map((s) => (
+    <SchemaNode key={s.name} session={session} connectionId={connection.id} schema={s.name} />
+  ));
   const prod = connection.env?.toLowerCase().startsWith("prod");
   return (
     <div className="node">
@@ -427,14 +445,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
         <div className="children">
           {busy && <div className="muted small">{t("connecting")}</div>}
           {error && <div className="error small">{error}</div>}
-          {shownSchemas?.map((s) => (
-            <SchemaNode
-              key={s.name}
-              session={session}
-              connectionId={connection.id}
-              schema={s.name}
-            />
-          ))}
+          {!foldersFirst && schemaNodes}
           {SERVER_FOLDERS.map((folder) => {
             const items = shownServerObjects.filter((o) => serverFolder(o.kind) === folder);
             return (
@@ -450,6 +461,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
               )
             );
           })}
+          {foldersFirst && schemaNodes}
         </div>
       )}
     </div>
@@ -470,6 +482,7 @@ function SchemaNode({
   const [objects, setObjects] = useState<ObjectItem[] | null>(null);
   const [others, setOthers] = useState<SchemaObjectItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const sort = useSortByName();
 
   async function toggle() {
     setOpen(!open);
@@ -525,8 +538,14 @@ function SchemaNode({
           {error && <div className="error small">{error}</div>}
           {objects &&
             SCHEMA_FOLDERS.map((folder) => {
-              const relations = objects.filter((o) => relationFolder(o.kind) === folder);
-              const rest = others.filter((o) => schemaObjectFolder(o.kind) === folder);
+              const relations = sort(
+                objects.filter((o) => relationFolder(o.kind) === folder),
+                (o) => o.name,
+              );
+              const rest = sort(
+                others.filter((o) => schemaObjectFolder(o.kind) === folder),
+                (o) => o.name,
+              );
               const count = relations.length + rest.length;
               return (
                 count > 0 && (
@@ -579,6 +598,7 @@ function ObjectNode({
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
   const [menu, setMenu] = useContextMenu();
+  const sort = useSortByName();
   /** Exact count asked from the menu ("counting" while it runs). */
   const [count, setCount] = useState<number | "counting" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -729,7 +749,7 @@ function ObjectNode({
           </Folder>
           {details.constraints.length > 0 && (
             <Folder label={t("folders.constraints")} count={details.constraints.length}>
-              {details.constraints.map((c, i) => (
+              {sort(details.constraints, (c) => c.name ?? "").map((c, i) => (
                 <div key={c.name ?? `${c.kind}:${i}`} className="row leaf-row" title={c.definition}>
                   <span className="label">{c.name ?? t(`constraintKinds.${c.kind}`)}</span>
                   <span className="muted small">{c.definition}</span>
@@ -739,7 +759,7 @@ function ObjectNode({
           )}
           {details.foreignKeys.length > 0 && (
             <Folder label={t("folders.foreignKeys")} count={details.foreignKeys.length}>
-              {details.foreignKeys.map((fk) => {
+              {sort(details.foreignKeys, (fk) => fk.name).map((fk) => {
                 const target = `(${fk.columns.join(", ")}) → ${fk.referencedSchema === object.schema ? "" : `${fk.referencedSchema}.`}${fk.referencedTable} (${fk.referencedColumns.join(", ")})`;
                 return (
                   <div key={fk.name} className="row leaf-row" title={target}>
@@ -752,7 +772,7 @@ function ObjectNode({
           )}
           {details.indexes.length > 0 && (
             <Folder label={t("folders.indexes")} count={details.indexes.length}>
-              {details.indexes.map((index) => (
+              {sort(details.indexes, (index) => index.name).map((index) => (
                 <IndexNode
                   key={index.name}
                   session={session}

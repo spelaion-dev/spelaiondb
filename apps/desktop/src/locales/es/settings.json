@@ -22,7 +22,12 @@
   "explorer": {
     "title": "Explorador",
     "showSystem": "Mostrar objetos del sistema",
-    "showSystemHint": "Esquemas del sistema (pg_catalog, information_schema, sys…) y los roles, usuarios e inicios de sesión que trae cada motor."
+    "showSystemHint": "Esquemas del sistema (pg_catalog, information_schema, sys…) y los roles, usuarios e inicios de sesión que trae cada motor.",
+    "sorting": "Orden",
+    "sortAlphabetically": "Ordenar alfabéticamente",
+    "sortIgnoreCase": "Ignorar mayúsculas",
+    "foldersFirst": "Carpetas primero",
+    "sortingHint": "Sin orden alfabético, los nombres siguen el orden que devuelve la base de datos. Las columnas mantienen siempre el orden de su tabla. Carpetas primero pone los roles, usuarios y similares antes de los esquemas."
   },
   "history": {
     "title": "Historial",

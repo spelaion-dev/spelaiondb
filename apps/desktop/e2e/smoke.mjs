@@ -1321,6 +1321,25 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     });
   await setShowSystem(true);
   await systemSchema.first().waitFor();
+  // Alphabetical by default; without it, the database's order (MySQL's system schemas last).
+  // The test user only sees the schemas it has privileges on.
+  const mysqlNode = page.locator(".node", { has: page.locator('.connection-row:has-text("MySQL (Docker)")') }).first();
+  const schemaOrder = () =>
+    mysqlNode.locator('[aria-label^="Expand or collapse schema "]').evaluateAll((rows) =>
+      rows.map((row) => row.getAttribute("aria-label").replace("Expand or collapse schema ", "")),
+    );
+  assert.deepEqual(await schemaOrder(), ["information_schema", "performance_schema", "spelaion"]);
+  const setExplorerBox = (name, checked) =>
+    withSettings("explorer", async (settings) => {
+      await settings.locator(`input[name="${name}"]`).setChecked(checked);
+      await page.waitForFunction(([n, want]) => {
+        const input = document.querySelector(`input[name="${n}"]`);
+        return input?.checked === want && !input.closest("fieldset").disabled;
+      }, [name, checked]);
+    });
+  await setExplorerBox("sortAlphabetically", false);
+  assert.deepEqual(await schemaOrder(), ["spelaion", "information_schema", "performance_schema"]);
+  await setExplorerBox("sortAlphabetically", true);
   await setShowSystem(false);
   await systemSchema.first().waitFor({ state: "detached" });
 
