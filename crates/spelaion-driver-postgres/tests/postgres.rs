@@ -620,9 +620,14 @@ async fn explorer_lists_the_other_objects_of_a_schema() {
         missing.name = "nope".into();
         assert!(conn.object_definition(&missing).await.is_err());
 
-        // What belongs to an extension (citext, in the test database's public schema) is left out.
-        let public = conn.list_schema_objects("public").await.unwrap();
-        assert!(!public.iter().any(|o| o.name == "citext"), "{public:?}");
+        // What belongs to an extension is left out: plpgsql (always there) puts its handlers in
+        // pg_catalog, next to the built-in functions, which are listed.
+        let catalog = conn.list_schema_objects("pg_catalog").await.unwrap();
+        assert!(catalog.iter().any(|o| o.name == "now"));
+        assert!(
+            !catalog.iter().any(|o| o.name == "plpgsql_call_handler"),
+            "{catalog:?}"
+        );
 
         let server = conn.list_server_objects().await.unwrap();
         let has = |name: &str, kind| server.iter().any(|o| o.name == name && o.kind == kind);
@@ -631,7 +636,7 @@ async fn explorer_lists_the_other_objects_of_a_schema() {
             has("pg_default", ServerObjectKind::Tablespace),
             "{server:?}"
         );
-        assert!(has("citext", ServerObjectKind::Extension), "{server:?}");
+        assert!(has("plpgsql", ServerObjectKind::Extension), "{server:?}");
         assert!(
             !server
                 .iter()
