@@ -15,7 +15,7 @@ It applies in the repository (issues, pull requests, discussions) and wherever s
 represents the project.
 
 ## Reporting
-Write to **hola@spelaion.dev**. Reports are read only by the maintainers and kept confidential.
+Write to **contact@spelaion.dev**. Reports are read only by the maintainers and kept confidential.
 The maintainers may remove comments, commits or contributions that break this code, and
 temporarily or permanently ban those who do, as the Contributor Covenant's enforcement
 guidelines describe.
