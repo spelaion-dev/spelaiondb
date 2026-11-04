@@ -1,13 +1,34 @@
 # CI is the code reviewer (ADR-012): nothing gets into main without passing through here.
 # It runs on every push to `dev` and `main` and on every pull request (the repository is
-# public, so Actions minutes are free), and it can be started by hand on any branch.
+# public, so Actions minutes are free), and it can be started by hand on any branch. A change
+# that only touches documentation does not run it.
+#
+# Speed: the Rust caches are saved only by pushes to `dev` and `main` (pull requests read
+# them): GitHub keeps 10 GB per repository, and one copy per pull request and release pushed
+# the useful ones out, so runs started from scratch (30 minutes instead of 12).
 name: CI
 
 on:
   push:
     branches: [main, dev]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
   workflow_dispatch:
+
+# A newer push to the same branch or pull request replaces a run still going; on `main`
+# every run finishes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,7 +40,7 @@ env:
 
 jobs:
   linux:
-    name: Linux · fmt, clippy, tests with PostgreSQL (TLS), MySQL, SQL Server, SQLite, DuckDB and SSH tunnels
+    name: Linux · fmt, clippy, tests with PostgreSQL (TLS), MySQL, SQL Server, SQLite, DuckDB, SSH tunnels and Kubernetes
     runs-on: ubuntu-latest
     env:
       SPELAION_TEST_PG: 127.0.0.1:15432
@@ -28,6 +49,8 @@ jobs:
       SPELAION_TEST_MSSQL: 127.0.0.1:11433
       SPELAION_TEST_SSH: 127.0.0.1:2221
       SPELAION_TEST_SSH_AGENT: "1"
+      # Kubernetes connections (ADR-015) against kind, in this job so they reuse its build.
+      SPELAION_TEST_K8S: /home/runner/.kube/config
     steps:
       # The runner ships tools this build never uses; their space is needed (Docker images,
       # a Rust target directory with Tauri and every driver).
@@ -37,6 +60,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
       # libdbus: Linux keychain (Secret Service). WebKitGTK and friends: the Tauri app.
       - run: |
           sudo apt-get update
@@ -44,6 +69,12 @@ jobs:
       # The same environment as locally: PostgreSQL with TLS and test certificates.
       - run: bash testing/docker/gen-keys.sh
       - run: docker compose -f testing/docker/compose.yaml up -d --build --wait
+      # A Kubernetes cluster in Docker (kind) with a PostgreSQL inside.
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: spelaion-test
+      - run: kubectl apply -f testing/k8s/postgres.yaml
+      - run: kubectl -n spelaion-test rollout status deployment/postgres --timeout=180s
       # A real SSH agent with the test key, for the agent authentication test.
       - run: |
           ssh-agent -a /tmp/ssh-agent.sock > /dev/null
@@ -83,30 +114,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-
-  kubernetes:
-    # Kubernetes connections (ADR-015) against a real cluster: kind in Docker, a PostgreSQL inside.
-    name: Kubernetes (kind)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: kubernetes
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
-      - uses: helm/kind-action@v1
-        with:
-          cluster_name: spelaion-test
-      - run: kubectl apply -f testing/k8s/postgres.yaml
-      - run: kubectl -n spelaion-test rollout status deployment/postgres --timeout=180s
-      - run: cargo test -p spelaion-core --test kube
-        env:
-          SPELAION_TEST_K8S: /home/runner/.kube/config
 
   deny:
     name: Licenses and vulnerabilities

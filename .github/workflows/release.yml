@@ -70,7 +70,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      # Read only: each release is a new tag, so a cache saved here would never be used again
+      # and would only push CI's useful caches out of the 10 GB GitHub keeps.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
       # WebKitGTK and friends for the app; libdbus for the keychain (Secret Service).
       - if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -118,6 +122,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: cli-${{ matrix.target }}
+          save-if: false
       - if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
