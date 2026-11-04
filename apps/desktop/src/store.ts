@@ -1,4 +1,4 @@
-// UI state. Result data does NOT live here (CLAUDE.md): only its metadata; rows are
+// UI state. Result data does NOT live here (AGENTS.md): only its metadata; rows are
 // requested from the core in windows.
 
 import { create } from "zustand";
@@ -17,6 +17,8 @@ export interface ResultMeta {
   /** Column conditions the core filtered the rows by (all must hold). */
   columnFilters?: ColumnFilterItem[];
   total?: number;
+  /** Pages fetched from one safe SELECT, appended to this result. */
+  paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number };
 }
 
 export interface SortState {
@@ -71,6 +73,9 @@ export interface Tab {
   snippetName?: string;
   /** A table data tab (pages of one table) instead of an SQL editor. */
   table?: TableView;
+  /** Pending row changes are kept in the mounted editor until saved or discarded. */
+  pendingEdits?: boolean;
+  savingEdits?: boolean;
 }
 
 /** What a table data tab shows: the core writes and checks the page's SELECT. */
@@ -97,7 +102,7 @@ let tabCounter = 0;
 export type ConnectionDialog = { kind: "add" } | { kind: "edit"; id: string };
 
 /** Window event asking the editor tab whose id is in `detail` to save its query (Ctrl+S). */
-export const SAVE_QUERY_EVENT = "spelunk:save-query";
+export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** How many closed tabs Ctrl+Shift+T can bring back. */
 const MAX_CLOSED_TABS = 20;

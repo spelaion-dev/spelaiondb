@@ -23,7 +23,7 @@
     "title": "Historial",
     "stored": "Cada consulta que ejecutas desde la app se guarda en este equipo con su conexión, hora, duración, número de filas y error. Abrir una consulta guardada nunca la ejecuta.",
     "perConnection": "El guardado se configura por conexión: abre el menú «⋯» junto a la conexión en la barra lateral. Desactívalo antes de ejecutar SQL con contraseñas u otros secretos. Al desactivarlo se conservan las consultas ya guardadas.",
-    "audit": "Este historial es de la app de escritorio. Las consultas de los agentes de IA (spelunk mcp) van a un registro de auditoría aparte.",
+    "audit": "Este historial es de la app de escritorio. Las consultas de los agentes de IA (spelaiondb mcp) van a un registro de auditoría aparte.",
     "open": "Abrir el historial de consultas"
   },
   "updates": {

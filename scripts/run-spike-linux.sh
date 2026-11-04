@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Outside /mnt/c: building on the Windows disk from WSL is very slow and would also
 # overwrite the Windows target/.
-export CARGO_TARGET_DIR="$HOME/.cache/spelunk-spike-target"
+export CARGO_TARGET_DIR="$HOME/.cache/spelaion-spike-target"
 # shellcheck disable=SC1091
 source "$HOME/.cargo/env"
 
@@ -25,7 +25,7 @@ cargo build --release -p grid-stream --features tauri/custom-protocol
 export SPIKE_AUTORUN=1
 export SPIKE_RESULTS_DIR="$ROOT/spikes/results"
 if (exec 3<>/dev/tcp/127.0.0.1/15432) 2>/dev/null; then
-  export SPIKE_PG="host=127.0.0.1 port=15432 user=spelunk password=spelunk dbname=spelunk"
+  export SPIKE_PG="host=127.0.0.1 port=15432 user=spelaion password=spelaion dbname=spelaion"
 else
   echo "WARNING: Postgres is not reachable on 127.0.0.1:15432 from Linux; only the synthetic grid is measured." >&2
 fi

@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { CellEditItem, ColumnItem } from "../api";
 import type { TableView } from "../store";
 
-const PAGE_SIZES = [100, 500, 1000, 5000];
+export const PAGE_SIZES = [100, 500, 1000, 5000];
 
 export function TableDataBar(props: {
   view: TableView;
@@ -17,11 +17,8 @@ export function TableDataBar(props: {
   onCount(): void;
   /** Editing (ADR-014): `null` while the primary key is unknown, `false` without one. */
   editable: boolean | null;
+  readOnlyConnection: boolean;
   pending: number;
-  columns: ColumnItem[];
-  onInsert(values: CellEditItem[]): void;
-  onApply(): void;
-  onDiscard(): void;
 }) {
   const { view, shown, busy } = props;
   const { t, i18n } = useTranslation("editor");
@@ -32,7 +29,6 @@ export function TableDataBar(props: {
   useEffect(() => setOrderBy(view.orderBy), [view.orderBy]);
   useEffect(() => setFilter(view.filter), [view.filter]);
 
-  const [inserting, setInserting] = useState(false);
   const locked = busy || props.pending > 0;
   const first = view.page * view.pageSize;
   const full = shown !== null && shown >= view.pageSize;
@@ -93,45 +89,20 @@ export function TableDataBar(props: {
       <button type="button" className="ghost" disabled={busy} title={t("table.countHint")} onClick={props.onCount}>
         {t("table.count")}
       </button>
-      {props.editable === false && <span className="muted small" title={t("edit.readOnlyHint")}>{t("edit.readOnly")}</span>}
-      {props.editable && (
-        <button type="button" className="ghost" disabled={busy || props.columns.length === 0} onClick={() => setInserting(true)}>
-          {t("edit.addRow")}
-        </button>
-      )}
-      {props.pending > 0 && (
-        <span className="pending-changes">
-          <span className="small">{t("edit.pending", { count: props.pending })}</span>
-          <button type="button" className="primary" disabled={busy} onClick={props.onApply}>
-            {t("edit.apply")}
-          </button>
-          <button type="button" className="ghost" disabled={busy} onClick={props.onDiscard}>
-            {t("edit.discard")}
-          </button>
-        </span>
-      )}
-      {inserting && (
-        <InsertRowDialog
-          columns={props.columns}
-          onAdd={(values) => {
-            setInserting(false);
-            props.onInsert(values);
-          }}
-          onCancel={() => setInserting(false)}
-        />
-      )}
+      {props.editable === false && <span className="muted small" title={t(props.readOnlyConnection ? "edit.readOnlyConnection" : "edit.readOnlyHint")}>{t("edit.readOnly")}</span>}
     </form>
   );
 }
 
 /** A new row: only the columns filled in are sent; the others take their default. */
-function InsertRowDialog(props: { columns: ColumnItem[]; onAdd(values: CellEditItem[]): void; onCancel(): void }) {
+export function InsertRowDialog(props: { columns: ColumnItem[]; initial?: CellEditItem[]; onAdd(values: CellEditItem[]): void; onCancel(): void }) {
   const { t } = useTranslation("editor");
-  const [values, setValues] = useState<Record<number, { text: string; isNull: boolean }>>({});
+  const [values, setValues] = useState<Record<number, { text: string; isNull: boolean }>>(() =>
+    Object.fromEntries((props.initial ?? []).map(({ column, value }) => [column, { text: value ?? "", isNull: value === null }])),
+  );
   const add = () =>
     props.onAdd(
       Object.entries(values)
-        .filter(([, v]) => v.isNull || v.text !== "")
         .map(([column, v]) => ({ column: Number(column), value: v.isNull ? null : v.text })),
     );
   return (

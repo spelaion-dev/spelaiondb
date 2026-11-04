@@ -4,15 +4,15 @@
 
 import { useEffect, useImperativeHandle, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { basicSetup } from "codemirror";
-import { Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
+import { Compartment, countColumn, EditorSelection, EditorState, findColumn, Prec, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
 import { MariaSQL, MSSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@codemirror/lang-sql";
-import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { tags } from "@lezer/highlight";
-import { closeLintPanel, openLintPanel, setDiagnostics } from "@codemirror/lint";
-import { closeSearchPanel, gotoLine, openSearchPanel, searchPanelOpen } from "@codemirror/search";
-import { closeCompletion, completionStatus, startCompletion } from "@codemirror/autocomplete";
+import { closeLintPanel, lintKeymap, openLintPanel, setDiagnostics } from "@codemirror/lint";
+import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, SearchCursor, searchKeymap, searchPanelOpen } from "@codemirror/search";
+import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion } from "@codemirror/autocomplete";
 import type { SqlLanguage } from "sql-formatter";
 import { call, commands } from "../api";
 import { byteToIndex, indexToByte, wordEnd } from "../text";
@@ -57,6 +57,96 @@ const theme = EditorView.theme({
   ".cm-ran": { backgroundColor: "var(--accent-soft)", transition: "background-color 0.3s" },
   ".cm-tooltip": { backgroundColor: "var(--panel)", color: "var(--fg)", border: "1px solid var(--line)" },
 });
+
+// Retain the previous modified click so two Shift+Alt clicks define a rectangle.
+// A normal click (or moving/typing with the keyboard) starts a new gesture.
+const rectangleAnchors = new WeakMap<EditorView, { pos: number; doc: EditorState["doc"] }>();
+const rectangleGesture = [
+  EditorView.domEventObservers({
+    mousedown: (event, view) => {
+      if (!(event.button === 0 && event.shiftKey && event.altKey && !event.ctrlKey && !event.metaKey)) rectangleAnchors.delete(view);
+    },
+    keydown: (event, view) => {
+      if (event.key !== "Alt" && event.key !== "Shift") rectangleAnchors.delete(view);
+    },
+  }),
+  EditorView.mouseSelectionStyle.of((view, event) => {
+    if (event.button !== 0 || !event.shiftKey || !event.altKey || event.ctrlKey || event.metaKey) return null;
+    const clicked = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (clicked === null) return null;
+    const previous = rectangleAnchors.get(view);
+    let clickAnchor = previous?.doc === view.state.doc ? previous.pos : view.state.selection.main.head;
+    let dragAnchor = clicked;
+    rectangleAnchors.set(view, { pos: clicked, doc: view.state.doc });
+    return {
+      get(current) {
+        const dragging = Math.abs(current.clientX - event.clientX) > 2 || Math.abs(current.clientY - event.clientY) > 2;
+        if (dragging) rectangleAnchors.delete(view);
+        const end = view.posAtCoords({ x: current.clientX, y: current.clientY }, false);
+        if (end === null) return view.state.selection;
+        const state = view.state;
+        const start = dragging ? dragAnchor : clickAnchor;
+        const first = state.doc.lineAt(start);
+        const last = state.doc.lineAt(end);
+        const startColumn = countColumn(first.text, state.tabSize, start - first.from);
+        const endColumn = countColumn(last.text, state.tabSize, end - last.from);
+        const ranges = [];
+        const low = Math.min(first.number, last.number);
+        const high = Math.max(first.number, last.number);
+        for (let number = low; number <= high; number++) {
+          const line = state.doc.line(number);
+          const from = line.from + findColumn(line.text, Math.min(startColumn, endColumn), state.tabSize);
+          const to = line.from + findColumn(line.text, Math.max(startColumn, endColumn), state.tabSize);
+          ranges.push(startColumn <= endColumn ? EditorSelection.range(from, to) : EditorSelection.range(to, from));
+        }
+        return EditorSelection.create(ranges, last.number - low);
+      },
+      update(update) {
+        if (update.docChanged) {
+          clickAnchor = update.changes.mapPos(clickAnchor);
+          dragAnchor = update.changes.mapPos(dragAnchor);
+          rectangleAnchors.delete(view);
+        }
+      },
+    };
+  }),
+];
+
+// The same extensions as CodeMirror's basic setup, with VS Code's mouse gestures.
+const editorSetup = [
+  lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(), foldGutter(),
+  drawSelection(), dropCursor(), EditorState.allowMultipleSelections.of(true), indentOnInput(),
+  syntaxHighlighting(defaultHighlightStyle, { fallback: true }), bracketMatching(), closeBrackets(),
+  autocompletion(),
+  rectangleGesture,
+  EditorView.clickAddsSelectionRange.of((event) => (event.altKey && !event.shiftKey) || event.ctrlKey || event.metaKey),
+  highlightActiveLine(), highlightSelectionMatches(),
+  keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, ...lintKeymap]),
+];
+
+/** Select the current word, or the selected text, everywhere in the document. */
+function selectAllOccurrences(view: EditorView) {
+  const { state } = view;
+  const selected = state.selection.main;
+  const word = selected.empty ? state.wordAt(selected.head) : null;
+  const match = word ?? (selected.empty ? null : selected);
+  if (!match) return false;
+  const text = state.sliceDoc(match.from, match.to);
+  const ranges = [];
+  let main = 0;
+  for (const cursor = new SearchCursor(state.doc, text); !cursor.next().done;) {
+    const { from, to } = cursor.value;
+    if (word) {
+      const found = state.wordAt(from);
+      if (!found || found.from !== from || found.to !== to) continue;
+    }
+    if (from === match.from && to === match.to) main = ranges.length;
+    ranges.push(EditorSelection.range(from, to));
+  }
+  if (!ranges.length) return false;
+  view.dispatch({ selection: EditorSelection.create(ranges, main), userEvent: "select.search.matches" });
+  return true;
+}
 
 // Keep CodeMirror's existing colors and attach a stable class to keywords so the dark
 // theme can override just their color, including when the theme changes at runtime.
@@ -194,10 +284,11 @@ export function SqlEditor({ handle, onFormatError, value, onChange, engine, tabl
               { key: "Mod-Shift-Enter", run: runAll },
               { key: "Mod-Enter", run },
               { key: "Shift-Alt-f", run: format },
+              { key: "Mod-Shift-l", run: selectAllOccurrences },
             ]),
           ),
           ranField,
-          basicSetup,
+          editorSetup,
           syntaxHighlighting(defaultHighlightStyle),
           syntaxHighlighting(sqlKeywords),
           lang.current.of(language(engine, tables)),

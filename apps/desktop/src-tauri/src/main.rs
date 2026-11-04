@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    spelunk_desktop_lib::run()
+    spelaion_desktop_lib::run()
 }

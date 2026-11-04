@@ -1,6 +1,6 @@
 # Releases: pushing a tag `vX.Y.Z` (from a main that passed CI) builds the desktop installers
-# on Windows, macOS (Apple Silicon and Intel) and Linux, plus the `spelunk` CLI with the MCP
-# server, and publishes them as a GitHub pre-release. Its notes are `docs/releases/vX.Y.Z.md`
+# on Windows, macOS (Apple Silicon and Intel) and Linux, plus the `spelaiondb` CLI with the MCP
+# server, and publishes them as the latest GitHub release. Its notes are `docs/releases/vX.Y.Z.md`
 # followed by every commit since the previous tag (`scripts/release-notes.sh`). The app's
 # update artifacts (`.sig` files and `latest.json`) are signed with the repository secret
 # `TAURI_SIGNING_PRIVATE_KEY` (ADR-021).
@@ -35,8 +35,8 @@ jobs:
             echo "missing docs/releases/$GITHUB_REF_NAME.md"; exit 1; }
       - run: |
           scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
-          gh release create "$GITHUB_REF_NAME" --draft --prerelease --verify-tag \
-            --title "SpelunkDB ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "SpelaionDB ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -88,7 +88,9 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseDraft: true
-          prerelease: true
+          # Not a pre-release: the app's updater follows /releases/latest, which skips them
+          # (ADR-021).
+          prerelease: false
           # Update artifacts only here: local builds need no signing key.
           args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }}
 
@@ -120,21 +122,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
-      - run: cargo build --release --locked -p spelunk-cli --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p spelaion-cli --target ${{ matrix.target }}
       - name: Package and upload
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          name="spelunk-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="spelaiondb-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$name"
           cp LICENSE "$name/"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/spelunk.exe" "$name/"
+            cp "target/${{ matrix.target }}/release/spelaiondb.exe" "$name/"
             7z a "$name.zip" "$name" > /dev/null
             archive="$name.zip"
           else
-            cp "target/${{ matrix.target }}/release/spelunk" "$name/"
+            cp "target/${{ matrix.target }}/release/spelaiondb" "$name/"
             tar czf "$name.tar.gz" "$name"
             archive="$name.tar.gz"
           fi
@@ -145,6 +147,6 @@ jobs:
     needs: [app, cli]
     runs-on: ubuntu-latest
     steps:
-      - run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
+      - run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

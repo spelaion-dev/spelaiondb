@@ -1,4 +1,4 @@
-# SpelunkDB test environment: databases behind two SSH hops.
+# SpelaionDB test environment: databases behind two SSH hops.
 #
 #   host ──2221──► bastion1 ──(mid network)──► bastion2 ──(data network)──► postgres:5432
 #                                                                          mysql:3306
@@ -10,7 +10,7 @@
 # Each hop only sees the next one: "bastion2" and "postgres" do not resolve from the host.
 # Postgres is also published on 127.0.0.1:15432, MySQL on 13306, MariaDB on 13307 and SQL
 # Server on 11433, for tests without SSH.
-name: spelunk-test
+name: spelaion-test
 
 services:
   bastion1:
@@ -18,21 +18,21 @@ services:
     ports:
       - "127.0.0.1:2221:22"
     volumes:
-      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelunk:ro
+      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
     networks: [public, mid]
 
   bastion2:
     build: ./bastion
     volumes:
-      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelunk:ro
+      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
     networks: [mid, data]
 
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: spelunk
-      POSTGRES_PASSWORD: spelunk
-      POSTGRES_DB: spelunk
+      POSTGRES_USER: spelaion
+      POSTGRES_PASSWORD: spelaion
+      POSTGRES_DB: spelaion
     ports:
       - "127.0.0.1:15432:5432"
     volumes:
@@ -43,7 +43,7 @@ services:
       - ./postgres/pg_hba.conf:/certs/pg_hba.conf:ro
     # TLS enabled (without requiring it): PostgreSQL rejects keys mounted from Windows because
     # of their permissions, so they are copied inside with the owner and permissions it wants.
-    # The user "spelunk_cert" logs in only with a client certificate from the test authority
+    # The user "spelaion_cert" logs in only with a client certificate from the test authority
     # (ADR-022; see postgres/pg_hba.conf).
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -54,7 +54,7 @@ services:
         install -o postgres -g postgres -m 644 /certs/pg_hba.conf /var/lib/postgresql/pg_hba.conf
         exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key -c ssl_ca_file=/var/lib/postgresql/ca.crt -c hba_file=/var/lib/postgresql/pg_hba.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U spelunk -d spelunk"]
+      test: ["CMD-SHELL", "pg_isready -U spelaion -d spelaion"]
       interval: 2s
       retries: 30
     # "direct" only exists to publish the port: Docker does not publish ports of containers
@@ -66,10 +66,10 @@ services:
   mysql:
     image: mysql:8.4
     environment:
-      MYSQL_ROOT_PASSWORD: spelunk-root
-      MYSQL_DATABASE: spelunk
-      MYSQL_USER: spelunk
-      MYSQL_PASSWORD: spelunk
+      MYSQL_ROOT_PASSWORD: spelaion-root
+      MYSQL_DATABASE: spelaion
+      MYSQL_USER: spelaion
+      MYSQL_PASSWORD: spelaion
     ports:
       - "127.0.0.1:13306:3306"
     volumes:
@@ -85,7 +85,7 @@ services:
         install -o mysql -g mysql -m 644 /certs/ca.crt /etc/mysql-tls/ca.crt
         exec docker-entrypoint.sh mysqld --ssl-ca=/etc/mysql-tls/ca.crt --ssl-cert=/etc/mysql-tls/server.crt --ssl-key=/etc/mysql-tls/server.key --log-bin-trust-function-creators=1
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uspelunk -pspelunk --silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uspelaion -pspelaion --silent"]
       interval: 2s
       retries: 60
     networks: [data, direct]
@@ -93,10 +93,10 @@ services:
   mariadb:
     image: mariadb:11.4
     environment:
-      MARIADB_ROOT_PASSWORD: spelunk-root
-      MARIADB_DATABASE: spelunk
-      MARIADB_USER: spelunk
-      MARIADB_PASSWORD: spelunk
+      MARIADB_ROOT_PASSWORD: spelaion-root
+      MARIADB_DATABASE: spelaion
+      MARIADB_USER: spelaion
+      MARIADB_PASSWORD: spelaion
     ports:
       - "127.0.0.1:13307:3306"
     volumes:
@@ -122,17 +122,17 @@ services:
   sqlitehost:
     build: ./sqlitehost
     volumes:
-      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelunk:ro
+      - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
     networks: [mid]
 
   # SQL Server 2022 (Developer edition, free for development and testing). It encrypts with a
-  # self-signed certificate of its own. Tests log in as `sa` and create the `spelunk` database.
+  # self-signed certificate of its own. Tests log in as `sa` and create the `spelaion` database.
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_PID: Developer
-      MSSQL_SA_PASSWORD: Spelunk-test-1
+      MSSQL_SA_PASSWORD: Spelaion-test-1
     ports:
       - "127.0.0.1:11433:1433"
     healthcheck:

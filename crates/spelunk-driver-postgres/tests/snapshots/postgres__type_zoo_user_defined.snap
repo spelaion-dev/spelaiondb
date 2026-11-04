@@ -1,9 +1,0 @@
----
-source: crates/spelunk-driver-postgres/tests/postgres.rs
-expression: table
----
-enum             text         mood           happy
-enum_arr         array        _mood          {sad,happy}
-domain           int          int4           42
-composite        native       pair           (1,"x y",)
-composite_arr    array        _pair          {"(2,z,2026-01-01)"}

@@ -1,0 +1,16 @@
+---
+source: crates/spelaion-driver-sqlite/tests/sqlite.rs
+expression: out
+---
+i        int      INTEGER            1                          NULL
+big      int      bigint             9223372036854775807        NULL
+r        float    REAL               1.5                        NULL
+d        float    double precision   2                          NULL
+n        int      numeric            7                          NULL
+dec      float    decimal(10, 2)     12.5                       NULL
+t        text     TEXT               text ñ €                   NULL
+v        text     varchar(10)        v                          NULL
+b        bytes    BLOB               \xdeadbeef                 NULL
+flag     int      boolean            1                          NULL
+day      text     date               2026-01-31                 NULL
+untyped  text     TEXT               NULL                       x

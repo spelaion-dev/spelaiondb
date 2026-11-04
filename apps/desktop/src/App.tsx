@@ -7,6 +7,7 @@ import { DeleteConnection } from "./components/DeleteConnection";
 import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
 import { SettingsDialog } from "./components/Settings";
 import { SnippetsPanel } from "./components/SnippetsPanel";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
@@ -37,7 +38,12 @@ export default function App() {
   const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarSection, setSidebarSection] = useState<"connections" | "processes" | null>("connections");
+  const [processConnection, setProcessConnection] = useState<string | null>(null);
+  const connections = useApp((s) => s.connections);
+  const workspaceChanging = useApp((s) => s.workspaceChanging);
+  const sidebarOpen = sidebarSection !== null;
+  const selectedProcessConnection = connections.find((connection) => connection.id === processConnection);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
   const maxSidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, windowWidth - EDITOR_MIN - ACTIVITY_WIDTH));
@@ -49,6 +55,10 @@ export default function App() {
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
+
+  useEffect(() => {
+    if (workspaceChanging) setProcessConnection(null);
+  }, [workspaceChanging]);
 
   async function loadConnections() {
     try {
@@ -74,13 +84,14 @@ export default function App() {
         else app.addTab(null);
       } else if (mod && key === "s") {
         e.preventDefault();
-        if (app.activeTab && !app.settingsOpen) {
+        const target = e.target instanceof Element ? e.target : null;
+        if (app.activeTab && !app.settingsOpen && target?.closest(".editor-pane")) {
           window.dispatchEvent(new CustomEvent(SAVE_QUERY_EVENT, { detail: app.activeTab }));
         }
       } else if (mod && key === "w") {
         e.preventDefault();
         if (app.settingsOpen) app.closeSettings();
-        else if (app.activeTab) closeQueryTab(app.activeTab);
+        else if (app.activeTab) void closeQueryTab(app.activeTab);
       } else if (mod && (e.key === "Tab" || e.key === "PageDown" || e.key === "PageUp")) {
         // Next or previous tab, wrapping around.
         const order = app.tabs.map((t) => t.id);
@@ -104,8 +115,9 @@ export default function App() {
 
   return (
     <div className="app" style={{ gridTemplateColumns: `${ACTIVITY_WIDTH}px ${sidebarOpen ? shownSidebarWidth : 0}px 0px minmax(0, 1fr)` }}>
-      <ActivityBar connectionsOpen={sidebarOpen} onToggleConnections={() => setSidebarOpen((open) => !open)} />
-      <Sidebar hidden={!sidebarOpen} />
+      <ActivityBar connectionsOpen={sidebarSection === "connections"} processesOpen={sidebarSection === "processes"} onToggleConnections={() => setSidebarSection((section) => section === "connections" ? null : "connections")} onToggleProcesses={() => setSidebarSection((section) => section === "processes" ? null : "processes")} />
+      <Sidebar hidden={sidebarSection !== "connections"} />
+      {sidebarSection === "processes" && <ProcessSidebar selected={processConnection} onSelect={setProcessConnection} />}
       <div
         className="sidebar-resizer"
         hidden={!sidebarOpen}
@@ -113,7 +125,7 @@ export default function App() {
         tabIndex={0}
         aria-label={t("resizeSidebar")}
         title={t("resizeSidebarHint")}
-        aria-controls="connections-sidebar"
+        aria-controls={sidebarSection === "processes" ? "processes-sidebar" : "connections-sidebar"}
         aria-orientation="vertical"
         aria-valuemin={SIDEBAR_MIN}
         aria-valuemax={maxSidebarWidth}
@@ -148,7 +160,7 @@ export default function App() {
         {loadError && <div className="banner" role="alert">{loadError}<button onClick={() => void loadConnections()}>{t("retryConnections")}</button></div>}
         {preferenceError && <div className="banner" role="alert">{t("preferenceLoadError")} {preferenceError.detail}</div>}
         <UpdateNotice />
-        <div className="tab-strip">
+        <div className="tab-strip" hidden={sidebarSection === "processes"}>
         <div className="tabbar" role="tablist">
           {tabs.map((tab) => (
             <div
@@ -165,7 +177,7 @@ export default function App() {
                 aria-label={t("closeTab", { name: t("shell:queryTab", { number: tab.number }) })}
                 onClick={(e) => {
                   e.stopPropagation();
-                  closeQueryTab(tab.id);
+                  void closeQueryTab(tab.id);
                 }}
               >
                 ×
@@ -178,10 +190,10 @@ export default function App() {
         </div>
         </div>
         <div className="workspace-content">
-          <div className="editor-workspace">
+          <div className="editor-workspace" hidden={sidebarSection === "processes"}>
             {tabs.length === 0 ? (
               <div className="welcome">
-                <h1>SpelunkDB</h1>
+                <h1>SpelaionDB</h1>
                 <p>{t("welcome")}</p>
                 <button className="primary" onClick={() => addTab(null)}>
                   {t("newQuery")}
@@ -196,6 +208,9 @@ export default function App() {
               ))
             )}
           </div>
+          {sidebarSection === "processes" && (selectedProcessConnection
+            ? <ProcessMonitor key={selectedProcessConnection.id} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} />
+            : <div className="process-welcome"><h2>{t("shell:processMonitor.title")}</h2><p>{t("shell:processMonitor.choose")}</p></div>)}
           {historyOpen && <HistoryPanel />}
           {snippetsOpen && <SnippetsPanel />}
         </div>

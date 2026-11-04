@@ -15,7 +15,7 @@ import {
 import { connectTabFromExplorer, explorerDatabase, openSession } from "../connect";
 import { useApp, useDialogs } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
-import { engineBadge } from "../engines";
+import { EngineIcon } from "./EngineIcon";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -168,21 +168,12 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       )}
       <div className="tree">
         {connections.length === 0 && (
-          <div>
-            <div className="empty small">
-              <Trans
-                t={t}
-                i18nKey="noConnections"
-                components={{ code: <code /> }}
-              />
-            </div>
-            <button
-              onClick={() =>
-                useApp.getState().setConnectionDialog({ kind: "add" })
-              }
-            >
-              {t("connections:add")}
-            </button>
+          <div className="empty small">
+            <Trans
+              t={t}
+              i18nKey="noConnections"
+              components={{ code: <code />, strong: <strong /> }}
+            />
           </div>
         )}
         {[...groups.entries()].map(([group, items]) => {
@@ -256,9 +247,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
         >
           {open ? "▾" : "▸"}
         </button>
-        <span className={`engine engine-${connection.engine}`}>
-          {engineBadge(connection.engine)}
-        </span>
+        <EngineIcon engine={connection.engine} />
         <span
           className="label"
           onDoubleClick={newQuery}

@@ -2,9 +2,9 @@
 FROM alpine:3.20
 
 RUN apk add --no-cache openssh-server \
- && adduser -D -s /bin/sh spelunk \
+ && adduser -D -s /bin/sh spelaion \
  # Alpine locks accounts without a password and sshd rejects them even with a key.
- && echo 'spelunk:*' | chpasswd -e \
+ && echo 'spelaion:*' | chpasswd -e \
  && mkdir -p /etc/ssh/authorized_keys \
  # No host keys in the image: each container generates its own at startup.
  && rm -f /etc/ssh/ssh_host_*

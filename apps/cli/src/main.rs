@@ -1,22 +1,26 @@
-//! `spelunk`: MCP server and configuration utilities.
+//! `spelaiondb`: MCP server and configuration utilities.
 //!
-//! For an agent (Claude Code, Claude Desktop…): `{"command": "spelunk", "args": ["mcp"]}`.
+//! For an agent (Claude Code, Claude Desktop…): `{"command": "spelaiondb", "args": ["mcp"]}`.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use spelunk_config::{
+use spelaion_config::{
     Severity, Source, TrustStore, check_workspace, default_user_dir, find_workspace, load,
 };
-use spelunk_store::{Decision, Store};
+use spelaion_store::{Decision, Store};
 
 #[derive(Parser)]
-#[command(name = "spelunk", version, about = "SpelunkDB from the command line")]
+#[command(
+    name = "spelaiondb",
+    version,
+    about = "SpelaionDB from the command line"
+)]
 struct Cli {
     /// Personal configuration directory (defaults to the system one).
-    #[arg(long, global = true, env = "SPELUNK_USER_DIR")]
+    #[arg(long, global = true, env = "SPELAION_USER_DIR")]
     user_dir: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -27,7 +31,7 @@ struct Cli {
 enum Command {
     /// Read-only MCP server over stdio, for AI agents.
     Mcp {
-        /// Directory from which to search for `.spelunk/` (defaults to the current one).
+        /// Directory from which to search for `.spelaion/` (defaults to the current one).
         #[arg(long)]
         workspace: Option<PathBuf>,
         /// Maximum time per query, in seconds.
@@ -39,7 +43,7 @@ enum Command {
         #[arg(long)]
         workspace: Option<PathBuf>,
     },
-    /// Trusts a repository: allows resolving the secrets and commands of its `.spelunk/`.
+    /// Trusts a repository: allows resolving the secrets and commands of its `.spelaion/`.
     Trust {
         /// Repository directory (defaults to the one containing the current directory).
         path: Option<PathBuf>,
@@ -47,7 +51,7 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
-    /// Checks a repository's `.spelunk/` for a team's CI or pre-commit hook: files that do
+    /// Checks a repository's `.spelaion/` for a team's CI or pre-commit hook: files that do
     /// not load, passwords written in commands, private keys in the repository… Exits with 1
     /// when it finds an error (or a warning, with --strict). Reads nothing personal.
     Check {
@@ -64,12 +68,12 @@ enum Command {
     },
 }
 
-/// `spelunk check`: prints each finding and fails when it must (ADR-022).
+/// `spelaiondb check`: prints each finding and fails when it must (ADR-022).
 fn check(path: Option<PathBuf>, strict: bool) -> Result<()> {
     let start = workspace_or_cwd(path)?;
     let root = find_workspace(&start).ok_or_else(|| {
         anyhow!(
-            "{} is not inside a repository with .spelunk/",
+            "{} is not inside a repository with .spelaion/",
             start.display()
         )
     })?;
@@ -91,7 +95,7 @@ fn check(path: Option<PathBuf>, strict: bool) -> Result<()> {
     }
     println!(
         "{}: {errors} error(s), {warnings} warning(s)",
-        root.join(spelunk_config::WORKSPACE_DIR).display()
+        spelaion_config::workspace_dir(&root).display()
     );
     if errors > 0 || (strict && warnings > 0) {
         return Err(anyhow!("the check failed"));
@@ -100,10 +104,18 @@ fn check(path: Option<PathBuf>, strict: bool) -> Result<()> {
 }
 
 fn user_dir(cli: &Cli) -> Result<PathBuf> {
-    cli.user_dir
-        .clone()
-        .or_else(default_user_dir)
-        .ok_or_else(|| anyhow!("the configuration directory cannot be found"))
+    if let Some(dir) = &cli.user_dir {
+        return Ok(dir.clone());
+    }
+    let dir =
+        default_user_dir().ok_or_else(|| anyhow!("the configuration directory cannot be found"))?;
+    // First start after the rename (ADR-023): the old personal folder is copied, not moved.
+    if let Some(old) = spelaion_config::legacy_user_dir()
+        && let Err(e) = spelaion_config::migrate_user_dir(&old, &dir)
+    {
+        eprintln!("could not copy the old personal folder: {e}");
+    }
+    Ok(dir)
 }
 
 fn workspace_or_cwd(path: Option<PathBuf>) -> Result<PathBuf> {
@@ -125,12 +137,12 @@ async fn main() -> Result<()> {
         Command::Check { .. } => unreachable!("handled above"),
         Command::Mcp { workspace, timeout } => {
             // stdout is the protocol channel: notices go to stderr.
-            let options = spelunk_mcp::ServerOptions {
+            let options = spelaion_mcp::ServerOptions {
                 workspace: Some(workspace_or_cwd(workspace)?),
                 user_dir,
                 timeout: Duration::from_secs(timeout),
             };
-            spelunk_mcp::serve_stdio(options)
+            spelaion_mcp::serve_stdio(options)
                 .await
                 .map_err(|e| anyhow!(e))
         }
@@ -141,7 +153,7 @@ async fn main() -> Result<()> {
                 let status = if trust.is_trusted(root) {
                     "trusted"
                 } else {
-                    "NOT TRUSTED (spelunk trust)"
+                    "NOT TRUSTED (spelaiondb trust)"
                 };
                 println!("Repository: {} — {status}", root.display());
             }
@@ -172,7 +184,7 @@ async fn main() -> Result<()> {
             let start = workspace_or_cwd(path)?;
             let root = find_workspace(&start).ok_or_else(|| {
                 anyhow!(
-                    "{} is not inside a repository with .spelunk/",
+                    "{} is not inside a repository with .spelaion/",
                     start.display()
                 )
             })?;
@@ -194,7 +206,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Audit { limit } => {
-            let store = Store::open(&user_dir.join("state.db"))?;
+            let store = Store::open(&spelaion_config::state_db(&user_dir))?;
             for e in store.recent(limit)? {
                 let decision = match e.decision {
                     Decision::Executed => "executed",

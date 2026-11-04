@@ -17,7 +17,7 @@ export const commands = {
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
-	 *  come back with their SQL, not executed (CLAUDE.md).
+	 *  come back with their SQL, not executed (AGENTS.md).
 	 */
 	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
@@ -158,7 +158,7 @@ export const commands = {
 	/**  The ports of the chosen resource: a service's ports or its containers' ports. */
 	kubePorts: (form: KubernetesDraftItem) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form })),
 	/**
-	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelunkDB files. The
+	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelaionDB files. The
 	 *  folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
 	 *  DBeaver saved go to the keychain, otherwise they are asked when connecting.
 	 */
@@ -190,8 +190,16 @@ export const commands = {
 	 */
 	connectFromSession: (source: string, session: string, database: string | null) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
+	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
+	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
 	runScript: (session: string, sql: string, confirmed: boolean, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, onEvent })),
+	/**  Whether a SELECT matches the conservative rules for fetching pages. */
+	queryPageSupported: (session: string, sql: string) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql })),
+	/**  Run the first page, keeping the original SQL in the user's query history. */
+	runQueryPage: (session: string, sql: string, limit: number, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, onEvent })),
+	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset })),
+	countQueryRows: (session: string, sql: string) => typedError<number | null, string>(__TAURI_INVOKE("count_query_rows", { session, sql })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
 	/**  Frees a result the UI no longer shows. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
@@ -202,6 +210,8 @@ export const commands = {
 	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
 	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),
 	describeTable: (session: string, schema: string, name: string) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name })),
+	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
+	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
 };
@@ -396,6 +406,7 @@ export type ConnectionItem_Deserialize = {
 	tunnel?: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
+	readOnly: boolean,
 };
 
 export type ConnectionItem_Serialize = {
@@ -409,6 +420,7 @@ export type ConnectionItem_Serialize = {
 	tunnel: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
+	readOnly: boolean,
 };
 
 /**
@@ -425,7 +437,7 @@ export type DbeaverItem_Deserialize = {
 	id: string,
 	name: string,
 	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it. */
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it. */
 	engine?: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported?: string | null,
@@ -446,7 +458,7 @@ export type DbeaverItem_Serialize = {
 	id: string,
 	name: string,
 	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelunkDB cannot open it. */
+	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it. */
 	engine: string | null,
 	/**  Why it cannot be imported, if it cannot. */
 	unsupported: string | null,
@@ -472,6 +484,12 @@ export type DbeaverScan_Deserialize = {
 export type DbeaverScan_Serialize = {
 	dir: string,
 	connections: DbeaverItem_Serialize[],
+};
+
+export type EditableTableItem = {
+	schema: string,
+	name: string,
+	primaryKey: string[],
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
@@ -527,7 +545,7 @@ export type FieldChangeItem_Serialize = {
 	after: string | null,
 };
 
-/**  A column filter operator (see `spelunk_core::FilterOp`). */
+/**  A column filter operator (see `spelaion_core::FilterOp`). */
 export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "isNull" | "isNotNull";
 
 /**  Rows left after filtering a result, out of all it has. */
@@ -665,7 +683,69 @@ export type PasswordMode = "none" | "keychain" | "prompt" | "env" |
 /**  Short-lived tokens from a cloud provider's CLI (ADR-022). */
 "awsRds" | "azureAd" | "googleCloudSql";
 
-/**  Why a statement asks for confirmation before running (see `spelunk_core::Risk`). */
+export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;
+
+export type ProcessItem_Deserialize = {
+	id: string,
+	user: string,
+	host: string,
+	database?: string | null,
+	command: string,
+	seconds?: string | null,
+	state?: string | null,
+	sql?: string | null,
+	identity?: string | null,
+	activity: string,
+};
+
+export type ProcessItem_Serialize = {
+	id: string,
+	user: string,
+	host: string,
+	database: string | null,
+	command: string,
+	seconds: string | null,
+	state: string | null,
+	sql: string | null,
+	identity: string | null,
+	activity: string,
+};
+
+export type ProcessSnapshotItem = ProcessSnapshotItem_Serialize | ProcessSnapshotItem_Deserialize;
+
+export type ProcessSnapshotItem_Deserialize = {
+	ownId: string,
+	processes: ProcessItem_Deserialize[],
+	limited: boolean,
+};
+
+export type ProcessSnapshotItem_Serialize = {
+	ownId: string,
+	processes: ProcessItem_Serialize[],
+	limited: boolean,
+};
+
+export type ProcessTargetItem = ProcessTargetItem_Serialize | ProcessTargetItem_Deserialize;
+
+export type ProcessTargetItem_Deserialize = {
+	id: string,
+	user: string,
+	host: string,
+	command: string,
+	sql?: string | null,
+	identity?: string | null,
+};
+
+export type ProcessTargetItem_Serialize = {
+	id: string,
+	user: string,
+	host: string,
+	command: string,
+	sql: string | null,
+	identity: string | null,
+};
+
+/**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
 export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";
 
 /**  A statement of a script that needs confirmation; `start`/`end` in UTF-8 bytes. */
@@ -718,7 +798,7 @@ export type SnippetItem = {
 	personal: boolean,
 };
 
-/**  SQL the explorer can write for a table (see `spelunk_core::SqlTemplate`). */
+/**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */
 export type SqlTemplateItem = "preview" | "select" | "insert" | "update" | "delete";
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
@@ -739,7 +819,7 @@ export type TableDetails_Serialize = {
 	foreignKeys: string[],
 };
 
-/**  A page of a table for the table data tab (see `spelunk_core::TablePage`). */
+/**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */
 export type TablePageItem = {
 	schema: string,
 	name: string,
@@ -788,11 +868,11 @@ export type TunnelTestOutcome = { kind: "connected" } |
 export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
 
 export type UpdateStatus_Deserialize = 
-/**  This build has nowhere to look for updates. */
+/**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
 { kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null };
 
 export type UpdateStatus_Serialize = 
-/**  This build has nowhere to look for updates. */
+/**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
 { kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null };
 
 /**

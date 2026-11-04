@@ -1,0 +1,15 @@
+#:schema https://spelaion.dev/schema/db/connection.schema.json
+
+# MySQL from testing/docker, direct and encrypted. The password (spelaion) is asked when connecting.
+schema_version = 1
+name = "MySQL (Docker)"
+engine = "mysql"
+env = "dev"
+host = "127.0.0.1"
+port = 13306
+database = "spelaion"
+user = "spelaion"
+password = { secret = "prompt" }
+
+[tls]
+mode = "require"

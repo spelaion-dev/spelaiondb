@@ -6,21 +6,21 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type DbeaverItem, type ImportReport } from "../api";
 import { chooseFolder } from "../dialogs";
-import { engineBadge } from "../engines";
+import { EngineIcon } from "./EngineIcon";
 import { useApp } from "../store";
 import { refreshConnections } from "./Sidebar";
 
 declare global {
   interface Window {
     /** The smoke test points the import at its own DBeaver files, never the user's. */
-    __spelunkDbeaverDir?: string;
+    __spelaionDbeaverDir?: string;
   }
 }
 
 export function DbeaverImport(props: { onBack(): void; onDone(): void }) {
   const { t } = useTranslation("connections");
   const hasWorkspace = useApp((s) => Boolean(s.workspace?.workspace));
-  const [dir, setDir] = useState<string | null>(window.__spelunkDbeaverDir ?? null);
+  const [dir, setDir] = useState<string | null>(window.__spelaionDbeaverDir ?? null);
   const [found, setFound] = useState<{ dir: string; items: DbeaverItem[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -135,9 +135,7 @@ export function DbeaverImport(props: { onBack(): void; onDone(): void }) {
                   }}
                   aria-label={c.name}
                 />
-                <span className={`engine engine-${c.engine ?? "none"}`} aria-hidden="true">
-                  {c.engine ? engineBadge(c.engine, c.engine) : "?"}
-                </span>
+                <EngineIcon engine={c.engine} />
                 <span className="dbeaver-main">
                   <strong>{c.name}</strong>
                   {c.folder && <span className="muted small"> · {c.folder}</span>}

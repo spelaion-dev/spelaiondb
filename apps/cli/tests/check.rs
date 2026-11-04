@@ -1,4 +1,4 @@
-//! `spelunk check` (ADR-022): the real binary against a repository with every kind of
+//! `spelaiondb check` (ADR-022): the real binary against a repository with every kind of
 //! problem, as a team's CI or pre-commit hook would run it.
 
 use std::path::{Path, PathBuf};
@@ -8,9 +8,10 @@ struct Repo(PathBuf);
 
 impl Repo {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("spelunk-check-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("spelaion-check-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join(".spelunk/connections")).unwrap();
+        std::fs::create_dir_all(dir.join(".spelaion/connections")).unwrap();
         Self(dir)
     }
 
@@ -20,13 +21,13 @@ impl Repo {
         std::fs::write(path, content).unwrap();
     }
 
-    /// Runs `spelunk check` with no personal directory at all: CI has none.
+    /// Runs `spelaiondb check` with no personal directory at all: CI has none.
     fn check(&self, args: &[&str]) -> (bool, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_spelunk"))
+        let out = Command::new(env!("CARGO_BIN_EXE_spelaiondb"))
             .arg("check")
             .arg(&self.0)
             .args(args)
-            .env("SPELUNK_USER_DIR", self.0.join("no-such-user-dir"))
+            .env("SPELAION_USER_DIR", self.0.join("no-such-user-dir"))
             .output()
             .unwrap();
         let text = format!(
@@ -49,13 +50,13 @@ const GOOD: &str = "schema_version = 1\nengine = \"postgres\"\nenv = \"prod\"\nh
 #[test]
 fn a_clean_repository_passes() {
     let repo = Repo::new("clean");
-    repo.write(".spelunk/connections/orders.toml", GOOD);
+    repo.write(".spelaion/connections/orders.toml", GOOD);
     repo.write(
-        ".spelunk/tunnels/bastion.toml",
+        ".spelaion/tunnels/bastion.toml",
         "schema_version = 1\n\n[[hops]]\nhost = \"bastion.internal\"\nuser = \"${user.ssh_user}\"\nauth = [\"agent\"]\nidentity_file = \"~/.ssh/id_ed25519\"\n",
     );
     repo.write(
-        ".spelunk/known_hosts",
+        ".spelaion/known_hosts",
         "# reviewed\nbastion.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC0Cx5aAdFPmIIPx6ZxdIYFKbARZbBbB5NV0QIO3Qdp2\n",
     );
     let (ok, out) = repo.check(&[]);
@@ -68,7 +69,7 @@ fn errors_fail_and_say_where_and_why() {
     let repo = Repo::new("errors");
     let conn = |name: &str, body: &str| {
         repo.write(
-            &format!(".spelunk/connections/{name}.toml"),
+            &format!(".spelaion/connections/{name}.toml"),
             &format!("schema_version = 1\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n{body}"),
         )
     };
@@ -93,7 +94,7 @@ fn errors_fail_and_say_where_and_why() {
     );
     conn("badref", "password = { secret = \"vault://x\" }\n");
     repo.write(
-        ".spelunk/certs/me.key",
+        ".spelaion/certs/me.key",
         "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIA==\n-----END PRIVATE KEY-----\n",
     );
 
@@ -127,14 +128,14 @@ fn errors_fail_and_say_where_and_why() {
 fn warnings_pass_unless_strict() {
     let repo = Repo::new("warnings");
     repo.write(
-        ".spelunk/connections/agents.toml",
+        ".spelaion/connections/agents.toml",
         "schema_version = 1\nengine = \"postgres\"\nenv = \"prod\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n\n[tls]\nmode = \"require\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
     );
     repo.write(
-        ".spelunk/tunnels/keyed.toml",
+        ".spelaion/tunnels/keyed.toml",
         "schema_version = 1\n\n[[hops]]\nhost = \"b\"\nuser = \"u\"\nauth = [\"key\"]\nidentity_file = \"keys/id_ed25519\"\n",
     );
-    repo.write(".spelunk/known_hosts", "bastion.internal ssh-ed25519\n");
+    repo.write(".spelaion/known_hosts", "bastion.internal ssh-ed25519\n");
 
     let (ok, out) = repo.check(&[]);
     assert!(ok, "warnings alone pass: {out}");
@@ -156,9 +157,9 @@ fn warnings_pass_unless_strict() {
 
 #[test]
 fn outside_a_repository_it_says_so() {
-    let dir = std::env::temp_dir().join(format!("spelunk-check-none-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("spelaion-check-none-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_spelunk"))
+    let out = Command::new(env!("CARGO_BIN_EXE_spelaiondb"))
         .args(["check", dir.to_str().unwrap()])
         .output()
         .unwrap();

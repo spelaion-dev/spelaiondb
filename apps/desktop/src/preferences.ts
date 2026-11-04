@@ -8,7 +8,7 @@ import { applyLanguage, type LanguagePreference } from "./i18n";
 export type ThemePreference = "system" | "light" | "dark";
 
 /** Fired on `window` whenever the effective theme changes (the grid repaints its canvas). */
-export const THEME_CHANGE_EVENT = "spelunk-themechange";
+export const THEME_CHANGE_EVENT = "spelaion-themechange";
 
 const darkScheme = window.matchMedia("(prefers-color-scheme: dark)");
 

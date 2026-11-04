@@ -1,4 +1,4 @@
-"""Creates data/shop.db, a small SQLite database to try SpelunkDB without servers."""
+"""Creates data/shop.db, a small SQLite database to try SpelaionDB without servers."""
 import random
 import sqlite3
 from pathlib import Path

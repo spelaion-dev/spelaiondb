@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SpelunkDB",
-  "version": "0.3.0",
-  "identifier": "dev.spelunkdb.app",
+  "productName": "SpelaionDB",
+  "version": "0.4.0",
+  "identifier": "dev.spelaion.db",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "SpelunkDB",
+        "title": "SpelaionDB",
         "width": 1400,
         "height": 900,
         "minWidth": 900,
@@ -27,12 +27,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "publisher": "SpelunkDB contributors",
-    "copyright": "Copyright 2026 SpelunkDB contributors. Licensed under Apache-2.0.",
+    "publisher": "SpelaionDB contributors",
+    "copyright": "Copyright 2026 SpelaionDB contributors. Licensed under Apache-2.0.",
     "category": "DeveloperTool",
     "shortDescription": "Desktop database client with first-class SSH tunnels and an MCP server",
-    "longDescription": "SpelunkDB is an open-source desktop client for PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB, with SSH tunnels through any number of bastions, a read-only MCP server for AI agents, and configuration you can share through git.",
-    "homepage": "https://github.com/petilolz/spelunkdb",
+    "longDescription": "SpelaionDB is an open-source desktop client for PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB, with SSH tunnels through any number of bastions, a read-only MCP server for AI agents, and configuration you can share through git.",
+    "homepage": "https://spelaion.dev",
     "license": "Apache-2.0",
     "licenseFile": "../../../LICENSE",
     "icon": [

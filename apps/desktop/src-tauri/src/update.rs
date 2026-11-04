@@ -10,10 +10,15 @@ use tokio::sync::Mutex;
 
 use crate::CmdResult;
 
-/// Where the app looks for `latest.json`. Empty until the releases have a public home: the
-/// repository is private and no credential may ship in the app (ADR-021). With no endpoint
-/// the app says updates are not available in this build and never makes a request.
-const ENDPOINTS: &[&str] = &[];
+/// Where the app looks for `latest.json`: the latest public release (ADR-021). Releases are
+/// published as "latest" (not as pre-releases), which this address follows.
+const ENDPOINT: &str =
+    "https://github.com/spelaion-dev/spelaiondb/releases/latest/download/latest.json";
+
+/// Set (to anything) to switch updates off: the app says they are not available and makes
+/// no request. For tests and packaged builds whose updates come from elsewhere. It can only
+/// switch them off, never point them somewhere else.
+const SWITCH_OFF: &str = "SPELAION_NO_UPDATES";
 
 /// The update found by the last check, kept for `update_install`.
 #[derive(Default)]
@@ -22,7 +27,7 @@ pub struct PendingUpdate(Mutex<Option<Update>>);
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum UpdateStatus {
-    /// This build has nowhere to look for updates.
+    /// Updates are switched off in this run (`SPELAION_NO_UPDATES`).
     Unavailable,
     UpToDate,
     #[serde(rename_all = "camelCase")]
@@ -39,16 +44,13 @@ pub async fn update_check(
     app: AppHandle,
     pending: State<'_, PendingUpdate>,
 ) -> CmdResult<UpdateStatus> {
-    if ENDPOINTS.is_empty() {
+    if std::env::var_os(SWITCH_OFF).is_some() {
         return Ok(UpdateStatus::Unavailable);
     }
-    let endpoints = ENDPOINTS
-        .iter()
-        .map(|url| url.parse().map_err(|e| format!("{url}: {e}")))
-        .collect::<Result<Vec<_>, _>>()?;
+    let endpoint = ENDPOINT.parse().map_err(|e| format!("{ENDPOINT}: {e}"))?;
     let update = app
         .updater_builder()
-        .endpoints(endpoints)
+        .endpoints(vec![endpoint])
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?
@@ -68,7 +70,7 @@ pub async fn update_check(
 }
 
 /// Downloads and installs the update the last check found, then restarts the app. Open tabs
-/// come back with their SQL, not executed (CLAUDE.md).
+/// come back with their SQL, not executed (AGENTS.md).
 #[tauri::command]
 #[specta::specta]
 pub async fn update_install(app: AppHandle, pending: State<'_, PendingUpdate>) -> CmdResult<()> {

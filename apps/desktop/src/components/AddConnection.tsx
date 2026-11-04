@@ -16,7 +16,7 @@ import {
   type UrlFields,
 } from "../api";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
-import { engineBadge } from "../engines";
+import { EngineIcon } from "./EngineIcon";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath } from "../dialogs";
 import { reviewChanges } from "../connect";
@@ -120,9 +120,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
 
 function EngineBadge({ engine }: { engine: EngineItem }) {
   return (
-    <span className={`engine engine-${engine.id}`} aria-hidden="true">
-      {engineBadge(engine.id, engine.name)}
-    </span>
+    <EngineIcon engine={engine.id} />
   );
 }
 

@@ -1,11 +1,11 @@
 # CI is the code reviewer (ADR-012): nothing gets into main without passing through here.
-# Work branches (`dev`) do not run it on push: a pull request to main does, and it can be
-# started by hand on any branch ("Run workflow").
+# It runs on every push to `dev` and `main` and on every pull request (the repository is
+# public, so Actions minutes are free), and it can be started by hand on any branch.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 
@@ -22,12 +22,12 @@ jobs:
     name: Linux · fmt, clippy, tests with PostgreSQL (TLS), MySQL, SQL Server, SQLite, DuckDB and SSH tunnels
     runs-on: ubuntu-latest
     env:
-      SPELUNK_TEST_PG: 127.0.0.1:15432
-      SPELUNK_TEST_MYSQL: 127.0.0.1:13306
-      SPELUNK_TEST_MARIADB: 127.0.0.1:13307
-      SPELUNK_TEST_MSSQL: 127.0.0.1:11433
-      SPELUNK_TEST_SSH: 127.0.0.1:2221
-      SPELUNK_TEST_SSH_AGENT: "1"
+      SPELAION_TEST_PG: 127.0.0.1:15432
+      SPELAION_TEST_MYSQL: 127.0.0.1:13306
+      SPELAION_TEST_MARIADB: 127.0.0.1:13307
+      SPELAION_TEST_MSSQL: 127.0.0.1:11433
+      SPELAION_TEST_SSH: 127.0.0.1:2221
+      SPELAION_TEST_SSH_AGENT: "1"
     steps:
       # The runner ships tools this build never uses; their space is needed (Docker images,
       # a Rust target directory with Tauri and every driver).
@@ -53,7 +53,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       # The app's TS types are generated from Rust: the file in the repo must be up to date.
-      - run: cargo run -q -p spelunk-desktop --features bindings --bin export-bindings
+      - run: cargo run -q -p spelaion-desktop --features bindings --bin export-bindings
       - run: git diff --exit-code apps/desktop/src/bindings.ts
 
   frontend:
@@ -101,12 +101,12 @@ jobs:
           sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: helm/kind-action@v1
         with:
-          cluster_name: spelunk-test
+          cluster_name: spelaion-test
       - run: kubectl apply -f testing/k8s/postgres.yaml
-      - run: kubectl -n spelunk-test rollout status deployment/postgres --timeout=180s
-      - run: cargo test -p spelunk-core --test kube
+      - run: kubectl -n spelaion-test rollout status deployment/postgres --timeout=180s
+      - run: cargo test -p spelaion-core --test kube
         env:
-          SPELUNK_TEST_K8S: /home/runner/.kube/config
+          SPELAION_TEST_K8S: /home/runner/.kube/config
 
   deny:
     name: Licenses and vulnerabilities

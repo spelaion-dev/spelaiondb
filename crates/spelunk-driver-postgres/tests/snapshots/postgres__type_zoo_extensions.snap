@@ -1,7 +1,0 @@
----
-source: crates/spelunk-driver-postgres/tests/postgres.rs
-expression: table
----
-hstore           native       hstore         "a"=>"1", "b c"=>NULL
-citext           native       citext         MiXeD
-ltree            native       ltree          top.science.astronomy

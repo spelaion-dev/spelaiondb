@@ -1,4 +1,4 @@
-# tiberius 0.13.0, patched for SpelunkDB
+# tiberius 0.13.0, patched for SpelaionDB
 
 The [tiberius](https://crates.io/crates/tiberius) crate (MIT or Apache-2.0, see the licence
 files), copied from its crates.io release with one change, used through `[patch.crates-io]`
@@ -13,7 +13,7 @@ got a DONE token acknowledging the Attention signal" and left the acknowledgemen
 wire: the next query read it as its own (empty) response, and every response after that was
 the previous query's.
 
-`cancel_request` (in `src/client/connection.rs`, marked "SpelunkDB patch") now:
+`cancel_request` (in `src/client/connection.rs`, marked "SpelaionDB patch") now:
 
 1. remembers whether the cancelled response had been read to its end;
 2. if not, discards the partial packet and drains that message on packet boundaries (a
@@ -21,7 +21,7 @@ the previous query's.
    its last token already is the acknowledgement;
 3. reads the next message for the acknowledgement.
 
-`crates/spelunk-driver-sqlserver/tests/sqlserver.rs` checks a cancel while waiting and while
+`crates/spelaion-driver-sqlserver/tests/sqlserver.rs` checks a cancel while waiting and while
 rows stream, and that later queries get their own results.
 
 To upgrade: take the new release, re-apply the change if upstream has not fixed it (or drop
@@ -30,5 +30,5 @@ this folder and the `[patch.crates-io]` entry if it has), and run those tests.
 ## Also: lints allowed (`src/lib.rs`)
 
 A path dependency's warnings are not capped as those of crates.io dependencies are, and with
-the features SpelunkDB leaves out (Windows authentication) some code is unused: CI's
+the features SpelaionDB leaves out (Windows authentication) some code is unused: CI's
 `-D warnings` would fail on code that is not ours. `#![allow(warnings)]` keeps them quiet.

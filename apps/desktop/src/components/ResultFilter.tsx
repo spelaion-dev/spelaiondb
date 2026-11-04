@@ -12,6 +12,7 @@ export function ResultFilter(props: {
   result: ResultMeta;
   /** Pending edits refer to rows by position: the view must not change meanwhile. */
   locked?: boolean;
+  onPending(pending: boolean): void;
   onFiltered(filter: string | undefined, rows: number, total: number): void;
 }) {
   const { result } = props;
@@ -25,7 +26,7 @@ export function ResultFilter(props: {
 
   useEffect(() => {
     const wanted = text.trim();
-    if (wanted === (result.filter ?? "")) return;
+    if (wanted === (result.filter ?? "")) { callbacks.current.onPending(false); return; }
     const request = ++latest.current;
     const timer = setTimeout(() => {
       call(commands.filterResult(result.id, wanted || null))
@@ -33,8 +34,9 @@ export function ResultFilter(props: {
           if (request !== latest.current) return;
           setError(null);
           callbacks.current.onFiltered(wanted || undefined, outcome.rows, outcome.total);
+          callbacks.current.onPending(false);
         })
-        .catch((e: unknown) => request === latest.current && setError(e instanceof Error ? e.message : String(e)));
+        .catch((e: unknown) => { if (request === latest.current) { setError(e instanceof Error ? e.message : String(e)); callbacks.current.onPending(false); } });
     }, DELAY_MS);
     return () => clearTimeout(timer);
   }, [text, result.id, result.filter]);
@@ -45,13 +47,14 @@ export function ResultFilter(props: {
       className={`result-filter ${error ? "invalid" : ""}`}
       placeholder={t("results.filter")}
       aria-label={t("results.filter")}
-      title={error ?? (result.complete ? t("results.filterHint") : t("results.filterWhenComplete"))}
+      title={error ?? (!result.complete ? t("results.filterWhenComplete") : result.paging?.hasMore ? t("queryPaging.filterLoaded") : t("results.filterHint"))}
       disabled={!result.complete || props.locked}
       value={text}
-      onChange={(e) => setText(e.target.value)}
+      onChange={(e) => { callbacks.current.onPending(true); setText(e.target.value); }}
       onKeyDown={(e) => {
         if (e.key === "Escape" && text) {
           e.stopPropagation();
+          callbacks.current.onPending(true);
           setText("");
         }
       }}
