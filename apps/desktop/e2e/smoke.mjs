@@ -969,6 +969,28 @@ try {
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "CREATE INDEX orders_customer on orders (customer_id);");
   await shot("05g-table-folders");
   await ordersNode.click();
+  // Refresh: a table created from a query tab appears with F5 on its schema, and "Refresh all
+  // schemas" sees it go; open folders stay open.
+  const mainSchema = page.getByRole("button", { name: "Expand or collapse schema main" });
+  const probeNode = page.getByRole("button", { name: "Expand or collapse refresh_probe", exact: true });
+  await replaceQuery(panel, "create table refresh_probe (id integer);\ninsert into refresh_probe values (1);");
+  await run(panel);
+  await panel.getByText("Statement 2: 1 row", { exact: false }).waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  await mainSchema.focus();
+  await page.keyboard.press("F5");
+  await probeNode.waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "4");
+  // Two rows: the next step waits for "1 row" in this same tab.
+  await replaceQuery(panel, "drop table refresh_probe;\nselect 1 as dropped union all select 2;");
+  await run(panel);
+  await page.getByRole("button", { name: "Run anyway" }).click();
+  await panel.locator(".statusline", { hasText: "2 rows" }).waitFor();
+  await mainSchema.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Refresh all schemas" }).click();
+  await probeNode.waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  assert.equal(await tablesFolder.getAttribute("aria-expanded"), "true");
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');

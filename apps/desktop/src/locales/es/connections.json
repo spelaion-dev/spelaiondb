@@ -115,6 +115,7 @@
     "token": "Token de la nube (IAM)"
   },
   "cancel": "Cancelar",
+  "refresh": "Refrescar todos los esquemas",
   "edit": "Editar…",
   "delete": "Borrar…",
   "editTitle": "Editar {{name}}",

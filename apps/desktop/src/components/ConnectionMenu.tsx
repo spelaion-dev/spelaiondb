@@ -7,7 +7,14 @@ import type { ConnectionItem } from "../api";
 import { useApp } from "../store";
 import { HistoryPreference } from "./HistoryPreference";
 
-export function ConnectionMenu({ connection }: { connection: ConnectionItem }) {
+export function ConnectionMenu({
+  connection,
+  onRefresh,
+}: {
+  connection: ConnectionItem;
+  /** Reloads everything the explorer shows of this connection; absent until it is opened. */
+  onRefresh?: () => void;
+}) {
   const { t } = useTranslation(["editor", "connections"]);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -42,6 +49,17 @@ export function ConnectionMenu({ connection }: { connection: ConnectionItem }) {
       </button>
       {open && (
         <div className="connection-menu-popup" role="group" aria-label={t("history.menu", { name: connection.name })}>
+          {onRefresh && (
+            <button
+              className="menu-item"
+              onClick={() => {
+                setOpen(false);
+                onRefresh();
+              }}
+            >
+              {t("connections:refresh")}
+            </button>
+          )}
           <button
             className="menu-item"
             onClick={() => {

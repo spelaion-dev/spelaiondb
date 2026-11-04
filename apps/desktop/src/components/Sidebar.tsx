@@ -1,6 +1,6 @@
 // Side panel: open repository, connections (by folder) and schema explorer.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -17,7 +17,12 @@ import {
   type SqlTemplateItem,
   type TableDetails,
 } from "../api";
-import { connectTabFromExplorer, explorerDatabase, openSession } from "../connect";
+import {
+  connectTabFromExplorer,
+  explorerDatabase,
+  openSession,
+  SCHEMAS_REFRESHED_EVENT,
+} from "../connect";
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs } from "../store";
@@ -38,6 +43,30 @@ function compactCount(value: number, language: string): string {
     compactCounts.set(language, formatter);
   }
   return formatter.format(value);
+}
+
+/**
+ * Runs `action` when `value` changes after the first render. Refreshing passes a new
+ * generation down the tree: what a node already loaded is read again, and what is open stays
+ * open.
+ */
+function useOnChange(value: unknown, action: () => void) {
+  const previous = useRef(value);
+  const latest = useRef(action);
+  latest.current = action;
+  useEffect(() => {
+    if (previous.current === value) return;
+    previous.current = value;
+    latest.current();
+  }, [value]);
+}
+
+/** F5 on a row refreshes what that row shows (and not the rows around it). */
+function isRefreshKey(e: React.KeyboardEvent): boolean {
+  if (e.key !== "F5") return false;
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
 }
 
 /** A context menu at the pointer that closes on Escape or a click elsewhere. */
@@ -357,6 +386,8 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
   const [serverObjects, setServerObjects] = useState<ServerObjectItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Bumped by "Refresh all schemas": every schema and table node reads its data again. */
+  const [generation, setGeneration] = useState(0);
   const session = `meta:${connection.id}`;
 
   function newQuery() {
@@ -375,16 +406,36 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
         setOpen(false);
         return;
       }
-      // Without its roles or logins the connection still shows its schemas.
-      const [all, server] = await Promise.all([
-        call(commands.listSchemas(session)),
-        call(commands.listServerObjects(session)).catch((e: unknown) => {
-          setError(errorText(e));
-          return [];
-        }),
-      ]);
-      setSchemas(all);
-      setServerObjects(server);
+      await load();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function load() {
+    // Without its roles or logins the connection still shows its schemas.
+    const [all, server] = await Promise.all([
+      call(commands.listSchemas(session)),
+      call(commands.listServerObjects(session)).catch((e: unknown) => {
+        setError(errorText(e));
+        return [];
+      }),
+    ]);
+    setSchemas(all);
+    setServerObjects(server);
+  }
+
+  /** Schemas, server objects and everything already loaded under them, read again. */
+  async function refreshAll() {
+    if (!schemas || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await load();
+      setGeneration((g) => g + 1);
+      window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: connection.id }));
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -401,11 +452,23 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
     (o) => o.name,
   );
   const schemaNodes = shownSchemas?.map((s) => (
-    <SchemaNode key={s.name} session={session} connectionId={connection.id} schema={s.name} />
+    <SchemaNode
+      key={s.name}
+      session={session}
+      connectionId={connection.id}
+      schema={s.name}
+      generation={generation}
+      onRefreshAll={() => void refreshAll()}
+    />
   ));
   const prod = connection.env?.toLowerCase().startsWith("prod");
   return (
-    <div className="node">
+    <div
+      className="node"
+      onKeyDown={(e) => {
+        if (isRefreshKey(e)) void refreshAll();
+      }}
+    >
       <div className="row connection-row">
         <button
           className="twisty"
@@ -439,11 +502,11 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
         >
           +
         </button>
-        <ConnectionMenu connection={connection} />
+        <ConnectionMenu connection={connection} onRefresh={schemas ? () => void refreshAll() : undefined} />
       </div>
       {open && (
         <div className="children">
-          {busy && <div className="muted small">{t("connecting")}</div>}
+          {busy && <div className="muted small">{t(schemas ? "refreshing" : "connecting")}</div>}
           {error && <div className="error small">{error}</div>}
           {!foldersFirst && schemaNodes}
           {SERVER_FOLDERS.map((folder) => {
@@ -472,21 +535,28 @@ function SchemaNode({
   session,
   connectionId,
   schema,
+  generation,
+  onRefreshAll,
 }: {
   session: string;
   connectionId: string;
   schema: string;
+  /** Changes when the connection refreshes all its schemas. */
+  generation: number;
+  onRefreshAll(): void;
 }) {
   const { t, i18n } = useTranslation("shell");
   const [open, setOpen] = useState(false);
   const [objects, setObjects] = useState<ObjectItem[] | null>(null);
   const [others, setOthers] = useState<SchemaObjectItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useContextMenu();
+  /** Bumped by "Refresh schema": the tables already described read their details again. */
+  const [refreshed, setRefreshed] = useState(0);
   const sort = useSortByName();
 
-  async function toggle() {
-    setOpen(!open);
-    if (open || objects) return;
+  async function load() {
+    setError(null);
     try {
       // Without its functions or triggers the schema still shows its tables.
       const [relations, rest] = await Promise.all([
@@ -503,8 +573,35 @@ function SchemaNode({
     }
   }
 
+  async function toggle() {
+    setOpen(!open);
+    if (open || objects) return;
+    await load();
+  }
+
+  /** Read again what was loaded: now if the schema is open, when it is opened otherwise. */
+  function reload() {
+    if (!objects) return;
+    if (open) void load();
+    else setObjects(null);
+  }
+
+  function refresh() {
+    setMenu(null);
+    reload();
+    setRefreshed((n) => n + 1);
+  }
+
+  useOnChange(generation, reload);
+  const childGeneration = `${generation}.${refreshed}`;
+
   return (
-    <div className="node">
+    <div
+      className="node"
+      onKeyDown={(e) => {
+        if (isRefreshKey(e)) refresh();
+      }}
+    >
       <div
         className="row"
         onClick={(e) => { if (e.detail === 1) void toggle(); }}
@@ -518,6 +615,10 @@ function SchemaNode({
         tabIndex={0}
         aria-expanded={open}
         aria-label={t("toggleSchema", { name: schema })}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -533,6 +634,22 @@ function SchemaNode({
           </span>
         )}
       </div>
+      {menu && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <button role="menuitem" onClick={refresh}>
+            {t("refreshSchema")}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              onRefreshAll();
+            }}
+          >
+            {t("refreshAllSchemas")}
+          </button>
+        </div>
+      )}
       {open && (
         <div className="children">
           {error && <div className="error small">{error}</div>}
@@ -556,6 +673,7 @@ function SchemaNode({
                         session={session}
                         connectionId={connectionId}
                         object={o}
+                        generation={childGeneration}
                       />
                     ))}
                     {rest.map((o) => (
@@ -588,10 +706,13 @@ function ObjectNode({
   session,
   connectionId,
   object,
+  generation,
 }: {
   session: string;
   connectionId: string;
   object: ObjectItem;
+  /** Changes when its schema (or the whole connection) is refreshed. */
+  generation: string;
 }) {
   const { t, i18n } = useTranslation("shell");
   const addTab = useApp((s) => s.addTab);
@@ -603,15 +724,29 @@ function ObjectNode({
   const [count, setCount] = useState<number | "counting" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function toggle() {
-    setOpen(!open);
-    if (open || details) return;
+  async function loadDetails() {
     setDetails(
       await call(
         commands.describeTable(session, object.schema, object.name),
       ).catch(() => null),
     );
   }
+
+  async function toggle() {
+    setOpen(!open);
+    if (open || details) return;
+    await loadDetails();
+  }
+
+  /** Columns, keys and indexes read again (now if open), and the exact count forgotten. */
+  function refresh() {
+    setMenu(null);
+    setCount(null);
+    if (!details) return;
+    if (open) void loadDetails();
+    else setDetails(null);
+  }
+  useOnChange(generation, refresh);
 
   /** The core writes the SQL with the engine's quoting; it opens in a new tab, not run. */
   async function openSql(template: SqlTemplateItem) {
@@ -655,7 +790,12 @@ function ObjectNode({
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
   const countDescription = rowCount == null ? undefined : `${t(typeof count === "number" ? "sql.exactCount" : "sql.estimate")}: ${rowCount.toLocaleString(i18n.language)}`;
   return (
-    <div className="node">
+    <div
+      className="node"
+      onKeyDown={(e) => {
+        if (isRefreshKey(e)) refresh();
+      }}
+    >
       <div
         className="row"
         onClick={() => void toggle()}
@@ -713,6 +853,9 @@ function ObjectNode({
           </button>
           <button role="menuitem" onClick={() => void countRows()}>
             {t("sql.count")}
+          </button>
+          <button role="menuitem" onClick={refresh}>
+            {t("refresh")}
           </button>
           <hr />
           {templates.map((template) => (

@@ -115,6 +115,7 @@
     "token": "Cloud token (IAM)"
   },
   "cancel": "Cancel",
+  "refresh": "Refresh all schemas",
   "edit": "Edit…",
   "delete": "Delete…",
   "editTitle": "Edit {{name}}",

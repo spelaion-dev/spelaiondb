@@ -188,6 +188,10 @@ folders by type: **Tables** (partitioned ones marked P), **Foreign tables**, **V
 (MySQL) and **Synonyms** (SQL Server); only the folders with something in them appear. After
 the schemas come **Roles**, **Users**, **Logins**, **Tablespaces** and **Extensions**, as
 the engine has them (MySQL's accounts only for users that may read `mysql.user`).
+The explorer keeps what it has read until you refresh it: **F5** on a schema or table (or
+**Refresh schema** and **Refresh** in their right-click menus) reads it again, and **Refresh
+all schemas** (in a schema's menu, the connection's "⋯" menu, or F5 on the connection) reads
+everything again, autocompletion included; what is expanded stays expanded.
 Names are sorted alphabetically, ignoring case; **Settings → Explorer** can keep the
 database's order instead, sort with case (upper case first), or put the folders before the
 schemas. Columns always keep their table's order.
