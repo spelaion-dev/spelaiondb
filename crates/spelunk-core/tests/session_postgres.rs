@@ -32,6 +32,126 @@ async fn session() -> Option<Session> {
 }
 
 #[tokio::test]
+async fn process_monitor_cancels_and_ends_postgres_sessions() {
+    let (Some(monitor), Some(target)) = (session().await, session().await) else {
+        return;
+    };
+    let target = Arc::new(target);
+    let target_id = spelunk_core::list_processes(&target).await.unwrap().own_id;
+    let initial = spelunk_core::list_processes(&monitor).await.unwrap();
+    let idle = initial
+        .processes
+        .iter()
+        .find(|p| p.id == target_id)
+        .expect("target session is visible");
+    assert_eq!(idle.activity, "idle");
+    assert!(
+        idle.sql.is_none(),
+        "an idle session's last statement is not a running query"
+    );
+    assert!(idle.identity.is_some());
+
+    let task = tokio::spawn({
+        let target = target.clone();
+        async move {
+            target
+                .run_script("SELECT pg_sleep(30)")
+                .collect::<Vec<_>>()
+                .await
+        }
+    });
+    let mut running = None;
+    for _ in 0..100 {
+        let snapshot = spelunk_core::list_processes(&monitor).await.unwrap();
+        if let Some(p) = snapshot.processes.into_iter().find(|p| {
+            p.id == target_id
+                && p.sql
+                    .as_deref()
+                    .is_some_and(|sql| sql.contains("pg_sleep(30)"))
+        }) {
+            running = Some(p);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let process = running.expect("running query is visible");
+    assert!(matches!(process.activity.as_str(), "active" | "waiting"));
+    let mut target_info = spelunk_core::ProcessTarget {
+        id: process.id,
+        user: process.user,
+        host: process.host,
+        command: process.command,
+        sql: process.sql,
+        identity: Some("outdated session".into()),
+    };
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, false, true)
+            .await
+            .is_err()
+    );
+    target_info.identity = process.identity;
+    let valid_identity = target_info.identity.take();
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, false, true)
+            .await
+            .is_err()
+    );
+    target_info.identity = valid_identity;
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, true, true)
+            .await
+            .is_err()
+    );
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, false, false)
+            .await
+            .is_err()
+    );
+    spelunk_core::control_process(&monitor, &target_info, false, false, true)
+        .await
+        .unwrap();
+    let events = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, CoreEvent::StatementFailed { .. }))
+    );
+    let after: Vec<_> = target.run_script("SELECT 1").collect().await;
+    assert!(matches!(
+        after.last(),
+        Some(CoreEvent::ScriptFinished { failed: false, .. })
+    ));
+    let snapshot = spelunk_core::list_processes(&monitor).await.unwrap();
+    let process = snapshot
+        .processes
+        .into_iter()
+        .find(|p| p.id == target_id)
+        .unwrap();
+    let target_info = spelunk_core::ProcessTarget {
+        id: process.id,
+        user: process.user,
+        host: process.host,
+        command: process.command,
+        sql: process.sql,
+        identity: process.identity,
+    };
+    spelunk_core::control_process(&monitor, &target_info, true, false, true)
+        .await
+        .unwrap();
+    assert!(
+        !spelunk_core::list_processes(&monitor)
+            .await
+            .unwrap()
+            .processes
+            .iter()
+            .any(|p| p.id == target_id)
+    );
+}
+
+#[tokio::test]
 async fn runs_a_script_statement_by_statement() {
     let Some(session) = session().await else {
         return;
@@ -290,4 +410,81 @@ async fn table_edits_write_typed_literals_on_postgres() {
         );
     }
     let _: Vec<CoreEvent> = session.run_script("drop table core_edits").collect().await;
+}
+
+async fn editable(session: &Session, sql: &str) -> Option<(String, String)> {
+    let events: Vec<CoreEvent> = session.run_script(sql).collect().await;
+    let id = events
+        .iter()
+        .find_map(|e| match e {
+            CoreEvent::ResultStarted { result, .. } => Some(*result),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{sql}: {events:#?}"));
+    spelunk_core::editable_query_table(session, id, sql, false)
+        .await
+        .unwrap()
+        .map(|t| (t.object.schema, t.object.name))
+}
+
+#[tokio::test]
+async fn query_results_resolve_their_table_as_the_server_does() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let _: Vec<CoreEvent> = session
+        .run_script(
+            "drop schema if exists core_eq_s cascade; \
+             drop table if exists core_eq_orders; \
+             create table core_eq_orders (id int primary key, item text); \
+             insert into core_eq_orders values (1, 'pen'); \
+             create schema core_eq_s; \
+             create table core_eq_s.core_eq_only (id int primary key); \
+             create table core_eq_s.core_eq_orders (id int primary key, item text)",
+        )
+        .collect()
+        .await;
+    let public = Some(("public".to_string(), "core_eq_orders".to_string()));
+    // `core_eq_orders` exists in two schemas: the search path picks one.
+    assert_eq!(
+        editable(&session, "select * from core_eq_orders").await,
+        public
+    );
+    let _: Vec<CoreEvent> = session
+        .run_script("set search_path = core_eq_s, public")
+        .collect()
+        .await;
+    assert_eq!(
+        editable(&session, "select * from core_eq_orders").await,
+        Some(("core_eq_s".to_string(), "core_eq_orders".to_string()))
+    );
+    assert_eq!(
+        editable(&session, "select * from core_eq_only").await,
+        Some(("core_eq_s".to_string(), "core_eq_only".to_string()))
+    );
+    let _: Vec<CoreEvent> = session
+        .run_script("set search_path = public")
+        .collect()
+        .await;
+
+    // A temporary table shadows `public.core_eq_orders`: never written through the name.
+    let _: Vec<CoreEvent> = session
+        .run_script(
+            "create temp table core_eq_orders (id int primary key, item text); \
+             insert into core_eq_orders values (1, 'shadow')",
+        )
+        .collect()
+        .await;
+    assert_eq!(
+        editable(&session, "select * from core_eq_orders").await,
+        None
+    );
+    assert_eq!(
+        editable(&session, "select * from pg_temp.core_eq_orders").await,
+        None
+    );
+    assert_eq!(
+        editable(&session, "select * from public.core_eq_orders").await,
+        public
+    );
 }

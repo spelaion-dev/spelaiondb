@@ -5,8 +5,9 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
+import type { EditableTableItem } from "../bindings";
 import { openSession } from "../connect";
-import { SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
+import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
@@ -74,6 +75,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   const lastRequest = useRef<RunRequest | null>(null);
+  const executedRequest = useRef<RunRequest | null>(null);
+  const startingRun = useRef(false);
   /** Values given to `:name` placeholders in this tab, offered again next time. */
   const paramValues = useRef<Record<string, string>>({});
   const editor = useRef<SqlEditorHandle>(null);
@@ -95,12 +98,58 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const clearPending = () => setPending({ cells: {}, deleted: [], inserts: [] });
   /** The table's primary key (`null` until known): editing needs one. */
   const [primaryKey, setPrimaryKey] = useState<string[] | null>(null);
+  const [queryTable, setQueryTable] = useState<(EditableTableItem & { result: number }) | null>(null);
+  const [queryChecked, setQueryChecked] = useState<number | null>(null);
+  const [savingEdits, setSavingEdits] = useState(false);
+  const [pageLoading, setPageLoading] = useState(false);
+  const savingEditsRef = useRef(false);
+  const queryPageBusy = useRef(false);
+  const [queryPageSize, setQueryPageSize] = useState(DEFAULT_PAGE_SIZE);
+  useEffect(() => {
+    updateTab(tab.id, { pendingEdits: pendingCount > 0, savingEdits });
+  }, [tab.id, pendingCount, savingEdits, updateTab]);
+
+  // A query is editable only when the core can resolve its entire result to one table.
+  useEffect(() => {
+    if (tab.table || tab.status !== "connected" || tab.run?.running || tab.run?.results.length !== 1) return;
+    const result = tab.run.results[0];
+    const request = executedRequest.current;
+    if (!result?.complete || !request) return;
+    let active = true;
+    call(commands.editableQueryTable(tab.id, result.id, request.text))
+      .then((table) => { if (active) { setQueryTable(table ? { ...table, result: result.id } : null); setQueryChecked(result.id); } })
+      .catch(() => { if (active) setQueryChecked(result.id); });
+    return () => { active = false; };
+  }, [tab.id, tab.table, tab.status, tab.run?.running, tab.run?.results]);
+
+  const activeResult = tab.run?.results.find((result) => result.id === tab.run?.activeResult);
+  const editTarget = tab.table
+    ? (primaryKey?.length && !connection?.readOnly ? { ...tab.table, primaryKey } : null)
+    : (queryTable && queryTable.result === activeResult?.id ? queryTable : null);
 
   const editing: GridEditing | undefined =
-    tab.table && primaryKey && primaryKey.length > 0
+    editTarget && activeResult?.complete && tab.status === "connected"
       ? {
           cells: pending.cells,
           deleted: pending.deleted,
+          inserts: pending.inserts,
+          primaryKey: editTarget.primaryKey,
+          busy: (tab.run?.running ?? false) || savingEdits || pageLoading || (activeResult?.paging?.loading ?? false),
+          onInsert: (values) => setPending((p) => ({ ...p, inserts: [...p.inserts, values] })),
+          onUpdateInsert: (index, values) => setPending((p) => ({ ...p, inserts: p.inserts.map((row, i) => i === index ? values : row) })),
+          onRemoveInsert: (index) => setPending((p) => ({ ...p, inserts: p.inserts.filter((_, i) => i !== index) })),
+          onApply: () => void applyEdits(),
+          onApplyCell: (row, col, value, dirty) => {
+            const cells = { ...pending.cells };
+            if (dirty) {
+              if (value === undefined) delete cells[`${row}:${col}`];
+              else cells[`${row}:${col}`] = value;
+            }
+            const changes = { ...pending, cells };
+            setPending(changes);
+            void applyEdits(changes);
+          },
+          onDiscard: clearPending,
           onEdit: (row, col, value) =>
             setPending((p) => {
               const cells = { ...p.cells };
@@ -119,21 +168,23 @@ export function EditorTab({ tab }: { tab: Tab }) {
       : undefined;
 
   /** Sends the pending changes; the core writes and applies them in one transaction. */
-  async function applyEdits() {
-    const view = tab.table;
-    const result = tab.run?.results[0];
-    if (!view || !result || pendingCount === 0) return;
-    const deleted = new Set(pending.deleted);
+  async function applyEdits(changesToApply = pending) {
+    const view = editTarget;
+    const result = activeResult;
+    if (!view || !result || (Object.keys(changesToApply.cells).length + changesToApply.deleted.length + changesToApply.inserts.length === 0) || savingEditsRef.current) return;
+    savingEditsRef.current = true;
+    setSavingEdits(true);
+    const deleted = new Set(changesToApply.deleted);
     const updates = new Map<number, CellEditItem[]>();
-    for (const [key, value] of Object.entries(pending.cells)) {
+    for (const [key, value] of Object.entries(changesToApply.cells)) {
       const [row = 0, column = 0] = key.split(":").map(Number);
       if (deleted.has(row)) continue;
       updates.set(row, [...(updates.get(row) ?? []), { column, value }]);
     }
     const changes: RowChangeItem[] = [
       ...[...updates].map(([row, values]): RowChangeItem => ({ kind: "update", row, values })),
-      ...pending.deleted.map((row): RowChangeItem => ({ kind: "delete", row })),
-      ...pending.inserts.map((values): RowChangeItem => ({ kind: "insert", values })),
+      ...changesToApply.deleted.map((row): RowChangeItem => ({ kind: "delete", row })),
+      ...changesToApply.inserts.map((values): RowChangeItem => ({ kind: "insert", values })),
     ];
     try {
       let confirmed = false;
@@ -146,9 +197,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
       const applied = await call(commands.applyTableEdits(tab.id, result.id, view.schema, view.name, changes, confirmed));
       clearPending();
       setNotice({ text: t("edit.applied", { count: applied }), error: false });
-      void loadPage(view);
+      if (tab.table) void loadPage(tab.table);
+      else if (executedRequest.current) void run(executedRequest.current, true);
     } catch (e) {
       setNotice({ text: message(e), error: true });
+    } finally {
+      savingEditsRef.current = false;
+      setSavingEdits(false);
     }
   }
 
@@ -166,10 +221,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
     // Set before any await: a second click must queue, not start a race with this load.
     loadingPage.current = true;
+    setPageLoading(true);
     try {
       await loadPageNow(view);
     } finally {
       loadingPage.current = false;
+      setPageLoading(false);
       const queued = queuedPage.current;
       // A load that never started a run (an error, no connection) does not end one either.
       if (queued && !busy()) {
@@ -203,13 +260,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
       updateTab(tab.id, { run: errorRun(message(e)) });
       return;
     }
-    await run({ text: sql, from: 0 });
+    await run({ text: sql, from: 0 }, true);
   }
 
   /** Changes what the table data tab shows and loads it again. */
   function changeView(patch: Partial<TableView>) {
     if (!tab.table) return;
-    if (pendingCount > 0) {
+    if (pendingCount > 0 || savingEditsRef.current) {
       setNotice({ text: t("edit.applyFirst"), error: true });
       return;
     }
@@ -240,6 +297,58 @@ export function EditorTab({ tab }: { tab: Tab }) {
     } catch (e) {
       setNotice({ text: message(e), error: true });
     }
+  }
+
+  /** Fetch the next block of the original SELECT without replacing the rows already shown. */
+  async function loadMoreQueryRows(resultId: number): Promise<number> {
+    const current = useApp.getState().tabs.find((item) => item.id === tab.id);
+    const result = current?.run?.results.find((item) => item.id === resultId);
+    const paging = result?.paging;
+    if (!result || !result.complete || !paging || !paging.hasMore || paging.loading || current?.run?.running ||
+        queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort || result.filter || result.columnFilters?.length ||
+        (paging.total !== undefined && result.rows >= paging.total)) return 0;
+    queryPageBusy.current = true;
+    updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
+      ? { ...item, paging: { ...item.paging, loading: true } } : item) }));
+    try {
+      const added = await call(commands.appendQueryPage(tab.id, resultId, paging.sql, paging.pageSize, result.rows));
+      updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
+        ? { ...item, rows: item.rows + added, paging: { ...item.paging, hasMore: added === paging.pageSize } } : item) }));
+      return added;
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+      return 0;
+    } finally {
+      queryPageBusy.current = false;
+      updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
+        ? { ...item, paging: { ...item.paging, loading: false } } : item) }));
+    }
+  }
+
+  async function countQueryResult(resultId: number) {
+    const result = useApp.getState().tabs.find((item) => item.id === tab.id)?.run?.results.find((item) => item.id === resultId);
+    if (!result?.complete || !result.paging || tab.run?.running || queryPageBusy.current || savingEditsRef.current || pendingCount > 0 || result.sort || result.filter || result.columnFilters?.length) return;
+    queryPageBusy.current = true;
+    updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
+      ? { ...item, paging: { ...item.paging, loading: true } } : item) }));
+    try {
+      const total = await call(commands.countQueryRows(tab.id, result.paging.sql));
+      if (total === null) throw new Error(t("queryPaging.countFailed"));
+      updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
+        ? { ...item, paging: { ...item.paging, total } } : item) }));
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    } finally {
+      queryPageBusy.current = false;
+      updateRun(tab.id, (run) => ({ ...run, results: run.results.map((item) => item.id === resultId && item.paging
+        ? { ...item, paging: { ...item.paging, loading: false } } : item) }));
+    }
+  }
+
+  function changeQueryPageSize(size: number) {
+    if (queryPageBusy.current || pendingCount > 0 || savingEditsRef.current || !executedRequest.current) return;
+    setQueryPageSize(size);
+    void run(executedRequest.current, false, size);
   }
 
   useEffect(() => {
@@ -350,12 +459,14 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }, [supportsDatabase, tab.id, tab.status, tab.connectionId, tab.run?.running, databaseRefresh]);
 
   async function changeDatabase(next: string) {
+    if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!next || databaseBusyRef.current) return;
     databaseBusyRef.current = true;
     setDatabaseBusy(true);
     try {
       await call(commands.selectDatabase(tab.id, next));
       setDatabase(next);
+      updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
     } catch (e) {
       setNotice({ text: message(e), error: true });
     } finally {
@@ -391,14 +502,20 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   async function changeConnection(id: string) {
+    if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     await call(commands.disconnect(tab.id)).catch(() => undefined);
     setTables({});
+    updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
     updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null });
   }
 
-  async function run(request: RunRequest) {
+  async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize) {
+    if (!refreshingEdits && (pendingCount > 0 || savingEditsRef.current)) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (queryPageBusy.current || startingRun.current) return;
     if (!request.text.trim() || tab.run?.running || databaseBusyRef.current || useApp.getState().workspaceChanging ||
         (tab.connectionId && useApp.getState().historySaving.includes(tab.connectionId))) return;
+    startingRun.current = true;
+    try {
     if (!(await ensureConnected())) return;
     // `:name` placeholders: the core lists them and writes the values in as literals.
     let text = request.text;
@@ -429,30 +546,39 @@ export function EditorTab({ tab }: { tab: Tab }) {
       if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
       confirmed = true;
     }
+    const canPage = !tab.table && await call(commands.queryPageSupported(tab.id, sent.text)).catch(() => false);
+    const queryPage = canPage ? { sql: sent.text, pageSize } : null;
     for (const r of tab.run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
     lastRequest.current = request;
+    executedRequest.current = { text: sent.text, from: 0 };
+    setQueryTable(null);
+    setQueryChecked(null);
     const startedAt = performance.now();
     updateTab(tab.id, {
       run: { running: true, results: [], activeResult: null, messages: [], error: null, startedAt, elapsedMs: null },
     });
     const channel = new Channel<ScriptEvent>();
-    channel.onmessage = (event) => handle(event, sent, startedAt);
+    channel.onmessage = (event) => handle(event, sent, startedAt, queryPage);
     try {
-      await call(commands.runScript(tab.id, sent.text, confirmed, channel));
+      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, channel));
+      else await call(commands.runScript(tab.id, sent.text, confirmed, channel));
     } catch (e) {
       const detail = message(e);
       updateRun(tab.id, (r) => ({ ...r, running: false, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));
     }
+    } finally {
+      startingRun.current = false;
+    }
   }
 
-  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number) {
+  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null) {
     switch (event.kind) {
       case "statementStarted":
         break;
       case "resultStarted":
         updateRun(tab.id, (r) => ({
           ...r,
-          results: [...r.results, { id: event.result, statement: event.index, columns: event.columns, rows: 0, complete: false }],
+          results: [...r.results, { id: event.result, statement: event.index, columns: event.columns, rows: 0, complete: false, ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) }],
           activeResult: r.activeResult ?? event.result,
         }));
         break;
@@ -475,7 +601,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           : { key: "messages.statementRows", values: { index: event.index + 1, count: event.rowsAffected, duration: ms } };
         updateRun(tab.id, (r) => ({
           ...r,
-          results: r.results.map((x) => (x.statement === event.index ? { ...x, complete: true } : x)),
+          results: r.results.map((x) => (x.statement === event.index ? { ...x, complete: true, ...(x.paging ? { paging: { ...x.paging, hasMore: x.rows === x.paging.pageSize } } : {}) } : x)),
           messages: [...r.messages, { kind: "info", text: "", translation }],
         }));
         break;
@@ -522,7 +648,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   return (
     <div className="editor-tab">
       <div className="toolbar">
-        <select value={tab.connectionId ?? ""} onChange={(e) => void changeConnection(e.target.value)} aria-label={t("connection")} disabled={running || databaseBusy || tab.status === "connecting" || historySaving || workspaceChanging}>
+        <select value={tab.connectionId ?? ""} onChange={(e) => void changeConnection(e.target.value)} aria-label={t("connection")} disabled={running || databaseBusy || tab.status === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
           <option value="">{t("noConnection")}</option>
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
@@ -532,7 +658,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           ))}
         </select>
         {supportsDatabase && (tab.status === "connected" ? (
-          <><select aria-label={t("database")} title={t("database")} value={database ?? ""} onChange={(e) => void changeDatabase(e.target.value)} disabled={running || databaseBusy || databaseError || historySaving || workspaceChanging}>
+          <><select aria-label={t("database")} title={t("database")} value={database ?? ""} onChange={(e) => void changeDatabase(e.target.value)} disabled={running || databaseBusy || databaseError || historySaving || workspaceChanging || activeResult?.paging?.loading}>
             <option value="" disabled>{databaseBusy ? t("loadingDatabases") : databaseError ? t("databaseLoadFailed") : t("noDatabase")}</option>
             {database && !databases.includes(database) && <option value={database}>{database}</option>}
             {databases.map((name) => <option key={name} value={name}>{name}</option>)}
@@ -557,7 +683,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         ) : (
           <button
             className="primary"
-            disabled={historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging}
+            disabled={historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging || savingEdits}
             title={t("table.refreshHint")}
             onClick={() => {
               if (pendingCount > 0) setNotice({ text: t("edit.applyFirst"), error: true });
@@ -573,15 +699,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
           <TableDataBar
             view={tab.table}
             shown={tab.run?.results[0] ? (tab.run.results[0].total ?? tab.run.results[0].rows) : null}
-            busy={running}
+            busy={running || savingEdits || pageLoading}
             onChange={changeView}
             onCount={() => void countTable()}
-            editable={primaryKey === null ? null : primaryKey.length > 0}
+            editable={primaryKey === null ? null : primaryKey.length > 0 && !connection?.readOnly}
+            readOnlyConnection={connection?.readOnly ?? false}
             pending={pendingCount}
-            columns={tab.run?.results[0]?.columns ?? []}
-            onInsert={(values) => setPending((p) => ({ ...p, inserts: [...p.inserts, values] }))}
-            onApply={() => void applyEdits()}
-            onDiscard={clearPending}
           />
         )}
         {!tab.table && (
@@ -631,6 +754,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
             session={tab.id}
             serverSort={tab.table ? { sort: tab.table.sort, onSort: (sort) => void sortTable(sort) } : undefined}
             editing={editing}
+            readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
+            pendingEdits={pendingCount > 0}
+            onLoadMore={loadMoreQueryRows}
+            onCountQuery={(id) => void countQueryResult(id)}
+            onQueryPageSize={changeQueryPageSize}
             onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))}
             onSorted={(result, sort) =>
               updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
@@ -675,6 +803,11 @@ function Results({
   onColumnFiltered,
   serverSort,
   editing,
+  readOnlyHint,
+  pendingEdits,
+  onLoadMore,
+  onCountQuery,
+  onQueryPageSize,
 }: {
   run: RunState | null;
   session: string;
@@ -684,15 +817,30 @@ function Results({
   onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
   serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
   editing?: GridEditing;
+  readOnlyHint?: boolean;
+  pendingEdits: boolean;
+  onLoadMore(result: number): Promise<number>;
+  onCountQuery(result: number): void;
+  onQueryPageSize(size: number): void;
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
+  const [filteringResult, setFilteringResult] = useState<number | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerWidth, setViewerWidth] = useState(420);
   if (!run) return <div className="empty">{t("results.empty")}</div>;
   const active = run.results.find((r) => r.id === run.activeResult) ?? null;
   const showMessages = active === null;
   const error = run.error ? translatedError(run.error, t, numbers) : null;
   return (
-    <div className="results">
+    <div className="results" onKeyDown={(event) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        event.stopPropagation();
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target?.closest('[role="dialog"]') && active && filteringResult !== active.id && editing && !editing.busy) editing.onApply();
+      }
+    }}>
       <div className="result-tabs">
         {run.results.map((r, i) => (
           <button key={r.id} className={r.id === run.activeResult ? "active" : ""} onClick={() => onSelect(r.id)}>
@@ -707,7 +855,8 @@ function Results({
             key={`filter-${active.id}`}
             result={active}
             onFiltered={(filter, rows, total) => onFiltered(active.id, filter, rows, total)}
-            locked={editing !== undefined && (editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)}
+            onPending={(pending) => setFilteringResult(pending ? active.id : null)}
+            locked={!!active.paging?.loading || (editing !== undefined && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0))}
           />
         )}
         {active && <ExportButton key={`export-${active.id}`} result={active} session={session} />}
@@ -720,7 +869,15 @@ function Results({
             onSorted={(sort) => onSorted(active.id, sort)}
             onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
             serverSort={serverSort}
-            editing={editing}
+            editing={filteringResult === active.id ? undefined : editing}
+            viewerOpen={viewerOpen}
+            onViewerOpen={setViewerOpen}
+            viewerWidth={viewerWidth}
+            onViewerWidth={setViewerWidth}
+            pagingLocked={pendingEdits || run.running || filteringResult === active.id || !!active.paging?.loading || !!editing?.busy}
+            onLoadMore={() => onLoadMore(active.id)}
+            onCountQuery={() => onCountQuery(active.id)}
+            onQueryPageSize={onQueryPageSize}
           />
         ) : (
           <div className="messages">
@@ -749,6 +906,7 @@ function Results({
           </span>
         )}
         {error && !showMessages && <span className="status-error">{t("results.error", { message: error.split("\n")[0] })}</span>}
+        {active && readOnlyHint && <span className="muted" title={t("edit.queryReadOnlyHint")}>{t("edit.readOnly")}</span>}
       </div>
     </div>
   );

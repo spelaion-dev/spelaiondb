@@ -122,6 +122,56 @@ async fn first_result(session: &Session, sql: &str) -> spelunk_core::ResultId {
         .expect("a result")
 }
 
+#[tokio::test]
+async fn query_pages_append_atomically_and_count_all_matching_rows() {
+    let session = session().await;
+    let _: Vec<CoreEvent> = session.run_script("create table t (id integer primary key, name text); insert into t values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e')").collect().await;
+    let original = "select id, name from t where id > 1 order by id";
+    let first = spelunk_core::query_page_sql(session.dialect().as_ref(), original, 2, 0).unwrap();
+    let id = first_result(&session, &first).await;
+    assert_eq!(session.results().get(id).unwrap().read().unwrap().rows(), 2);
+    assert_eq!(
+        spelunk_core::count_query_rows(&session, original)
+            .await
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        session.results().len(),
+        1,
+        "count releases its temporary result"
+    );
+    assert_eq!(
+        spelunk_core::append_query_page(&session, id, original, 2, 2)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(session.results().get(id).unwrap().read().unwrap().rows(), 4);
+    assert_eq!(
+        session.results().len(),
+        1,
+        "fetch releases its temporary result"
+    );
+    assert!(
+        spelunk_core::append_query_page(&session, id, original, 2, 2)
+            .await
+            .is_err(),
+        "a stale offset cannot append twice"
+    );
+    let result = session.results().get(id).unwrap();
+    assert_eq!(result.read().unwrap().rows(), 4);
+    result.write().unwrap().filter(Some("e")).unwrap();
+    assert!(
+        spelunk_core::append_query_page(&session, id, original, 2, 4)
+            .await
+            .is_err(),
+        "a filtered view cannot be extended"
+    );
+    assert_eq!(result.read().unwrap().total_rows(), 4);
+    assert_eq!(session.results().len(), 1);
+}
+
 async fn texts(session: &Session, sql: &str) -> Vec<String> {
     let id = first_result(session, sql).await;
     let stored = session.results().get(id).unwrap();
@@ -274,4 +324,80 @@ async fn table_edits_apply_in_one_transaction_by_primary_key() {
         ),
         Err(EditError::NoPrimaryKey(_))
     ));
+}
+
+/// The table a query's result would be edited as, as `(schema, table)`.
+async fn editable(session: &Session, sql: &str, read_only: bool) -> Option<(String, String)> {
+    let id = first_result(session, sql).await;
+    spelunk_core::editable_query_table(session, id, sql, read_only)
+        .await
+        .unwrap()
+        .map(|t| (t.object.schema, t.object.name))
+}
+
+#[tokio::test]
+async fn query_results_are_editable_only_as_the_table_they_came_from() {
+    let session = session().await;
+    let _: Vec<CoreEvent> = session
+        .run_script(
+            "create table orders (id integer primary key, item text, qty int);
+             create table nokey (a int);
+             create view v_orders as select * from orders;
+             insert into orders values (1, 'pen', 2);
+             insert into nokey values (1)",
+        )
+        .collect()
+        .await;
+    let main = Some(("main".to_string(), "orders".to_string()));
+    assert_eq!(
+        editable(&session, "select * from orders", false).await,
+        main
+    );
+    assert_eq!(
+        editable(&session, "select id, qty from orders where qty > 0", false).await,
+        main
+    );
+    assert_eq!(
+        editable(&session, "select * from main.orders", false).await,
+        main
+    );
+    for sql in [
+        // No primary key in the result, or no primary key at all.
+        "select item, qty from orders",
+        "select * from nokey",
+        // A view, a column twice, a join.
+        "select * from v_orders",
+        "select id, id from orders",
+        "select * from orders join nokey on 1 = 1",
+        // SQLite turns an unknown double-quoted name into a string: not a column.
+        "select id, \"nope\" from orders",
+    ] {
+        assert_eq!(editable(&session, sql, false).await, None, "{sql}");
+    }
+    assert_eq!(
+        editable(&session, "select * from orders", true).await,
+        None,
+        "a read-only connection never edits"
+    );
+
+    // A temporary table shadows `orders`: its rows must never be written to `main.orders`.
+    let _: Vec<CoreEvent> = session
+        .run_script(
+            "create temp table orders (id integer primary key, item text, qty int);
+             insert into temp.orders values (1, 'shadow', 9)",
+        )
+        .collect()
+        .await;
+    assert_eq!(
+        editable(&session, "select * from orders", false).await,
+        None
+    );
+    assert_eq!(
+        editable(&session, "select * from main.orders", false).await,
+        main
+    );
+    assert_eq!(
+        editable(&session, "select * from temp.orders", false).await,
+        Some(("temp".to_string(), "orders".to_string()))
+    );
 }

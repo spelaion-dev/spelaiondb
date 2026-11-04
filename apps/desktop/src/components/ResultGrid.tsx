@@ -3,11 +3,12 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type CellRange, type ColumnFilterItem, type FilterOpItem, type TextFormat } from "../api";
+import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT } from "../preferences";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta, SortState } from "../store";
 import { CellViewer, type ViewerMode } from "./CellViewer";
+import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
 
 const ROW_H = 26;
 const HEADER_H = 36;
@@ -95,6 +96,15 @@ export interface GridEditing {
   /** `"row:col"` → the value typed (`null` is NULL). */
   cells: Record<string, string | null>;
   deleted: number[];
+  inserts: CellEditItem[][];
+  primaryKey: string[];
+  busy: boolean;
+  onInsert(values: CellEditItem[]): void;
+  onUpdateInsert(index: number, values: CellEditItem[]): void;
+  onRemoveInsert(index: number): void;
+  onApply(): void;
+  onApplyCell(row: number, col: number, value: string | undefined, dirty: boolean): void;
+  onDiscard(): void;
   /** `undefined` takes the cell back to its value in the database. */
   onEdit(row: number, col: number, value: string | null | undefined): void;
   onDelete(rows: number[]): void;
@@ -103,6 +113,17 @@ export interface GridEditing {
 
 const EDITED_BG = "rgba(250, 204, 21, 0.30)";
 const DELETED_BG = "rgba(239, 68, 68, 0.20)";
+
+function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "save" | "cancel" }) {
+  return <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {name === "add" && <><rect x="3" y="4" width="14" height="12" rx="1" /><path d="M10 7v6M7 10h6" /></>}
+    {name === "duplicate" && <><rect x="7" y="6" width="10" height="11" rx="1" /><path d="M13 6V3H3v11h4M12 9v5M9.5 11.5h5" /></>}
+    {name === "delete" && <><path d="M4 6h12M7 6V4h6v2M6 6l1 10h6l1-10M9 9v4M11 9v4" /></>}
+    {name === "undo" && <><path d="M7 6 3.5 9.5 7 13M4 9.5h7.5a4 4 0 0 1 0 8H10" /></>}
+    {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4zM6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
+    {name === "cancel" && <><circle cx="10" cy="10" r="7" /><path d="m7 7 6 6M13 7l-6 6" /></>}
+  </svg>;
+}
 
 /** SQL spelling of each column filter operator, as SQLyog shows them. */
 const OPS: { op: FilterOpItem; sql: string }[] = [
@@ -139,6 +160,14 @@ export function ResultGrid({
   onColumnFiltered,
   serverSort,
   editing,
+  viewerOpen: viewer,
+  onViewerOpen: setViewer,
+  viewerWidth,
+  onViewerWidth,
+  pagingLocked,
+  onLoadMore,
+  onCountQuery,
+  onQueryPageSize,
 }: {
   result: ResultMeta;
   session: string;
@@ -148,15 +177,28 @@ export function ResultGrid({
   serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
   /** Editable table data tab: pending changes and how to change them. */
   editing?: GridEditing;
+  viewerOpen: boolean;
+  onViewerOpen(open: boolean): void;
+  viewerWidth: number;
+  onViewerWidth(width: number): void;
+  pagingLocked: boolean;
+  onLoadMore(): Promise<number>;
+  onCountQuery(): void;
+  onQueryPageSize(size: number): void;
 }) {
   const sortShown = serverSort ? serverSort.sort : result.sort;
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [wrapWidth, setWrapWidth] = useState(0);
+  const viewerDrag = useRef<{ startX: number; startWidth: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frame = useRef<number | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [queryPage, setQueryPage] = useState(0);
+  const requestedPageScroll = useRef<number | null>(null);
   /** The context menu, with the cell it was opened on (for the Filter submenu). */
   const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell | null } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -164,26 +206,38 @@ export function ResultGrid({
   const [customFilter, setCustomFilter] = useState<ColumnFilterItem | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const dragging = useRef(false);
-  const [viewer, setViewer] = useState(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
+  const [sorting, setSorting] = useState(false);
+  const sortsPending = useRef(0);
+  const [inserting, setInserting] = useState<{ values: CellEditItem[]; index?: number } | null>(null);
   /** The cell being typed into (table data tabs). */
-  const [cellEditor, setCellEditor] = useState<{ row: number; col: number; value: string } | null>(null);
+  const [cellEditor, setCellEditor] = useState<{ row: number; col: number; value: string; original: string | null; dirty: boolean } | null>(null);
+  const skipEditorBlur = useRef(false);
+  const editRequest = useRef(0);
 
   /** Opens the inline editor on a cell, with its pending value or the one loaded. */
-  function startEdit(cell: Cell) {
-    if (!editing) return;
+  async function startEdit(cell: Cell) {
+    if (!editing || editing.deleted.includes(cell.row) || editing.busy || sorting) return;
+    const request = ++editRequest.current;
     const key = `${cell.row}:${cell.col}`;
-    const current = key in editing.cells ? editing.cells[key] : cache.get(cell.row, cell.col);
     setSelection({ anchor: cell, focus: cell });
     scrollIntoView(cell);
-    setCellEditor({ row: cell.row, col: cell.col, value: current ?? "" });
+    let original = cache.get(cell.row, cell.col);
+    if (original === undefined) {
+      try { original = await call(commands.cellValue(result.id, cell.row, cell.col)); }
+      catch (e) { setNotice({ text: e instanceof Error ? e.message : String(e), error: true }); return; }
+    }
+    if (request !== editRequest.current) return;
+    const current = key in editing.cells ? editing.cells[key] : original;
+    skipEditorBlur.current = false;
+    setCellEditor({ row: cell.row, col: cell.col, value: current ?? "", original, dirty: false });
   }
 
   function commitEdit(value: string) {
     if (!editing || !cellEditor) return;
-    const original = cache.get(cellEditor.row, cellEditor.col);
+    const original = cellEditor.original;
     // Typing back the loaded value takes the cell back to it.
-    editing.onEdit(cellEditor.row, cellEditor.col, original !== undefined && original !== null && value === original ? undefined : value);
+    if (cellEditor.dirty) editing.onEdit(cellEditor.row, cellEditor.col, original !== undefined && original !== null && value === original ? undefined : value);
     setCellEditor(null);
     scrollerRef.current?.focus();
   }
@@ -194,6 +248,30 @@ export function ResultGrid({
     const b = bounds(selection);
     return Array.from({ length: b.r1 - b.r0 + 1 }, (_, i) => b.r0 + i);
   };
+
+  async function duplicateRow() {
+    if (!editing || !selection || editing.deleted.includes(selection.focus.row)) return;
+    try {
+      const row = selection.focus.row;
+      const values = await call(commands.rowValues(result.id, row));
+      const initial = values.flatMap((value, column): CellEditItem[] => {
+        const key = `${row}:${column}`;
+        if (editing.primaryKey.includes(result.columns[column]?.name ?? "")) return [];
+        return [{ column, value: key in editing.cells ? editing.cells[key] ?? null : value }];
+      });
+      setInserting({ values: initial });
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  function setSelectedNull() {
+    if (!editing || !selection || editing.deleted.includes(selection.focus.row)) return;
+    const { row, col } = selection.focus;
+    const original = cache.get(row, col);
+    if (original === undefined) return;
+    editing.onEdit(row, col, original === null ? undefined : null);
+  }
 
   /** Ctrl+Shift+J: the column picker's search text (`null` when closed). */
   const [jump, setJump] = useState<string | null>(null);
@@ -413,13 +491,21 @@ export function ResultGrid({
   }, [redraw]);
 
   useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const observer = new ResizeObserver(() => setWrapWidth(wrap.clientWidth));
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     redraw();
   });
 
   useEffect(() => {
     // Other rows: the selection would point at rows that moved or are gone.
     setSelection(null);
-    setViewer(false);
+    setQueryPage(0);
   }, [result.filter, filtersKey]);
 
   useEffect(() => {
@@ -427,9 +513,18 @@ export function ResultGrid({
     setResized({});
     setSelection(null);
     setMenu(null);
-    setViewer(false);
+    setQueryPage(0);
+    requestedPageScroll.current = null;
     scrollerRef.current?.scrollTo(0, 0);
   }, [result.id]);
+
+  useEffect(() => {
+    const row = requestedPageScroll.current;
+    if (row !== null && result.rows > row) {
+      requestedPageScroll.current = null;
+      scrollerRef.current?.scrollTo({ top: row * ROW_H });
+    }
+  }, [result.rows]);
 
   /** The cell under the pointer; `"row"` as column for the row-number gutter. With `clamp`,
    *  positions outside the data snap to the nearest cell (while dragging). */
@@ -453,6 +548,7 @@ export function ResultGrid({
   async function applyColumnFilters(filters: ColumnFilterItem[]) {
     setMenu(null);
     setCustomFilter(null);
+    if (result.paging?.loading) return;
     if (!result.complete) {
       setNotice({ text: t("results.filterWhenComplete"), error: true });
       return;
@@ -534,6 +630,11 @@ export function ResultGrid({
 
   function sortBy(sort: SortState | undefined) {
     setMenu(null);
+    if (result.paging?.loading) return;
+    if (editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) {
+      setNotice({ text: t("edit.applyFirst"), error: true });
+      return;
+    }
     if (serverSort) {
       requestedSort.current = sort;
       serverSort.onSort(sort);
@@ -545,6 +646,8 @@ export function ResultGrid({
     }
     const previous = requestedSort.current;
     requestedSort.current = sort;
+    sortsPending.current += 1;
+    setSorting(true);
     sortQueue.current = sortQueue.current.then(async () => {
       try {
         await call(commands.sortResult(result.id, sort?.column ?? null, sort?.descending ?? false));
@@ -552,6 +655,9 @@ export function ResultGrid({
       } catch (e) {
         requestedSort.current = previous;
         setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+      } finally {
+        sortsPending.current -= 1;
+        if (sortsPending.current === 0) setSorting(false);
       }
     });
   }
@@ -589,6 +695,7 @@ export function ResultGrid({
   }
 
   function selectAt(e: React.MouseEvent | MouseEvent, extend: boolean) {
+    editRequest.current += 1;
     const cell = cellAt(e.clientX, e.clientY, extend);
     if (!cell) return;
     const last = widths.length - 1;
@@ -666,10 +773,10 @@ export function ResultGrid({
     }
     if (editing && e.key === "F2" && selection) {
       e.preventDefault();
-      startEdit(selection.focus);
+      void startEdit(selection.focus);
       return;
     }
-    if (editing && e.key === "Delete" && selection) {
+    if (editing && !editing.busy && !sorting && e.key === "Delete" && !e.altKey && !mod && selection) {
       e.preventDefault();
       editing.onDelete(selectedRows());
       return;
@@ -731,8 +838,94 @@ export function ResultGrid({
   });
 
   const focusMeta = selection ? result.columns[selection.focus.col] : undefined;
+  const viewerMax = wrapWidth ? Math.max(0, wrapWidth - 36 - 5 - 220) : 1200;
+  const viewerMin = Math.min(200, viewerMax);
+  const shownViewerWidth = Math.max(viewerMin, Math.min(viewerWidth, viewerMax));
+  const resizeViewer = (width: number) => onViewerWidth(Math.round(Math.max(viewerMin, Math.min(width, viewerMax))));
+  const viewerId = `cell-viewer-${session}`;
+  const paging = result.paging;
+  const pageViewChanged = !!(result.sort || result.filter || result.columnFilters?.length);
+  const pageBusy = pagingLocked || !!paging?.loading || !!cellEditor || sorting;
+  const pageCanLoad = !!paging?.hasMore && (paging.total === undefined || result.rows < paging.total);
+  const pageStart = paging ? queryPage * paging.pageSize : 0;
+
+  function onGridScroll() {
+    redraw();
+    setMenu(null);
+    const scroller = scrollerRef.current;
+    if (!paging || !scroller) return;
+    const bottom = Math.max(0, Math.min(result.rows - 1, Math.floor((scroller.scrollTop + scroller.clientHeight - HEADER_H - 1) / ROW_H)));
+    setQueryPage(Math.floor(bottom / paging.pageSize));
+    if (!pageBusy && !pageViewChanged && pageCanLoad && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) {
+      void onLoadMore();
+    }
+  }
+
+  async function nextQueryPage() {
+    if (!paging || pageBusy) return;
+    const next = (queryPage + 1) * paging.pageSize;
+    if (next >= result.rows) {
+      if (pageViewChanged || !pageCanLoad) return;
+      requestedPageScroll.current = next;
+      if (!(await onLoadMore())) requestedPageScroll.current = null;
+      return;
+    }
+    scrollerRef.current?.scrollTo({ top: next * ROW_H });
+  }
+  function onResultShortcut(e: React.KeyboardEvent<HTMLDivElement>) {
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    if (target?.closest('[role="dialog"]')) return;
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    const isTextInput = !!target?.closest('input, textarea, [contenteditable="true"]');
+
+    if (mod && !e.altKey && !e.shiftKey && key === "s") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!editing || editing.busy || sorting) return;
+      if (cellEditor && target?.classList.contains("cell-editor")) {
+        const value = target instanceof HTMLInputElement ? target.value : cellEditor.value;
+        const unchanged = cellEditor.original !== null && value === cellEditor.original;
+        skipEditorBlur.current = true;
+        editing.onApplyCell(cellEditor.row, cellEditor.col, unchanged ? undefined : value, cellEditor.dirty);
+        setCellEditor(null);
+        scrollerRef.current?.focus();
+      } else {
+        editing.onApply();
+      }
+      return;
+    }
+    if (!editing || editing.busy || sorting) return;
+    if (mod && !e.altKey && !e.shiftKey && key === "r") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (cellEditor) { skipEditorBlur.current = true; setCellEditor(null); scrollerRef.current?.focus(); }
+      editing.onDiscard();
+      return;
+    }
+    // Text inputs keep their normal undo and editing keys.
+    if (isTextInput) return;
+    if (e.altKey && !e.shiftKey && key === "insert") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (mod) void duplicateRow();
+      else if (result.complete) setInserting({ values: [] });
+    } else if (e.altKey && !mod && !e.shiftKey && key === "delete") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (selection) editing.onDelete(selectedRows());
+    } else if (mod && !e.altKey && !e.shiftKey && key === "z") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (selection) editing.onRevert(selectedRows());
+    } else if (mod && e.altKey && !e.shiftKey && key === "n") {
+      e.preventDefault();
+      e.stopPropagation();
+      setSelectedNull();
+    }
+  }
   return (
-    <div className="grid-wrap">
+    <div className="grid-wrap" ref={wrapRef} onKeyDown={onResultShortcut}>
     <div className="grid-main">
     {(result.columnFilters?.length ?? 0) > 0 && (
       <div className="filter-bar" role="toolbar" aria-label={t("results.columnFilters")}>
@@ -760,7 +953,7 @@ export function ResultGrid({
         ref={scrollerRef}
         className="grid-scroller"
         tabIndex={0}
-        onScroll={() => { redraw(); setMenu(null); }}
+        onScroll={onGridScroll}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           const edge = edgeAt(e.clientX, e.clientY);
@@ -804,7 +997,7 @@ export function ResultGrid({
           const cell = cellAt(e.clientX, e.clientY);
           if (cell && !cell.gutter) {
             if (editing) {
-              startEdit(cell);
+              void startEdit(cell);
               return;
             }
             setSelection({ anchor: cell, focus: cell });
@@ -827,13 +1020,13 @@ export function ResultGrid({
       </div>
       {menu && (
         <div ref={menuRef} className="grid-menu result-grid-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
-          {editing && menu.cell && (
+          {editing && !editing.busy && !sorting && menu.cell && (
             <>
               <button
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
-                  if (menu.cell) startEdit(menu.cell);
+                  if (menu.cell) void startEdit(menu.cell);
                 }}
               >
                 {t("edit.editCell")}
@@ -842,7 +1035,7 @@ export function ResultGrid({
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
-                  if (menu.cell) editing.onEdit(menu.cell.row, menu.cell.col, null);
+                  if (menu.cell && !editing.deleted.includes(menu.cell.row)) editing.onEdit(menu.cell.row, menu.cell.col, cache.get(menu.cell.row, menu.cell.col) === null ? undefined : null);
                 }}
               >
                 {t("edit.setNull")}
@@ -880,12 +1073,14 @@ export function ResultGrid({
             {t("viewer.open")}
           </button>
           <hr />
-          {COPY_ITEMS.map((item) => (
-            <button key={item.key} role="menuitem" onClick={() => void copy(item.format, item.header)}>
-              {t(`results.${item.key}`)}
-            </button>
-          ))}
-          {menu.cell && !(editing && (editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) && (
+          <GridSubmenu label={t("results.copyMenu")}>
+            {COPY_ITEMS.map((item) => (
+              <button key={item.key} role="menuitem" onClick={() => void copy(item.format, item.header)}>
+                {t(`results.${item.key}`)}
+              </button>
+            ))}
+          </GridSubmenu>
+          {menu.cell && !(editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) && (
             <>
               <hr />
               <FilterSubmenu
@@ -933,12 +1128,13 @@ export function ResultGrid({
             height: ROW_H,
           }}
           value={cellEditor.value}
-          onChange={(e) => setCellEditor({ ...cellEditor, value: e.target.value })}
+          onChange={(e) => setCellEditor({ ...cellEditor, value: e.target.value, dirty: true })}
           onFocus={(e) => e.currentTarget.select()}
-          onBlur={(e) => commitEdit(e.currentTarget.value)}
+          onBlur={(e) => { if (!skipEditorBlur.current) commitEdit(e.currentTarget.value); skipEditorBlur.current = false; }}
           onKeyDown={(e) => {
-            if (e.key === "Enter") commitEdit(e.currentTarget.value);
+            if (e.key === "Enter") { skipEditorBlur.current = true; commitEdit(e.currentTarget.value); }
             else if (e.key === "Escape") {
+              skipEditorBlur.current = true;
               setCellEditor(null);
               scrollerRef.current?.focus();
             } else return;
@@ -976,8 +1172,86 @@ export function ResultGrid({
         />
       )}
     </div>
+    {(editing || paging) && (
+      <div className="result-editing">
+        {editing && editing.inserts.length > 0 && <div className="pending-rows" aria-label={t("edit.newRows")}>
+          {editing.inserts.map((values, index) => <div className="pending-row" key={index}>
+            <span className="pending-row-mark">+</span>
+            <button className="ghost small pending-row-values" title={t("edit.editNewRow")} disabled={editing.busy || sorting} onClick={() => setInserting({ values, index })}>{values.length ? values.map(({ column, value }) => `${result.columns[column]?.name ?? column}: ${value === null ? "NULL" : value}`).join(" · ") : t("edit.defaultRow")}</button>
+            <button className="ghost small" aria-label={t("edit.removeNewRow", { number: index + 1 })} disabled={editing.busy || sorting} onClick={() => editing.onRemoveInsert(index)}>×</button>
+          </div>)}
+        </div>}
+        <div className="result-edit-toolbar" role="toolbar" aria-label={t(editing ? "edit.toolbar" : "queryPaging.label")}>
+          {editing && <>
+          <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !result.complete} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /></button>
+          <button className="ghost" title={t("edit.shortcutDuplicate")} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /></button>
+          <button className="ghost" title={t("edit.shortcutDelete")} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /></button>
+          <button className="ghost" title={t("edit.shortcutRevert")} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="undo" /></button>
+          <span className="result-edit-divider" />
+          <button className="ghost" title={t("edit.shortcutSave")} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !(editing.inserts.length || editing.deleted.length || Object.keys(editing.cells).length)} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /></button>
+          <button className="ghost" title={t("edit.shortcutDiscard")} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !(editing.inserts.length || editing.deleted.length || Object.keys(editing.cells).length)} onClick={editing.onDiscard}><EditIcon name="cancel" /></button>
+          </>}
+          {paging && <>
+            <div className="spacer" />
+            <div className="query-paging" role="group" aria-label={t("queryPaging.label")} title={pageViewChanged ? t("queryPaging.clearView") : t("queryPaging.hint")}>
+              <select aria-label={t("table.pageSize")} value={paging.pageSize} disabled={pageBusy} onChange={(e) => onQueryPageSize(Number(e.target.value))}>
+                {PAGE_SIZES.map((size) => <option key={size} value={size}>{t("table.perPage", { count: size, formattedCount: numbers.format(size) })}</option>)}
+              </select>
+              <button type="button" className="ghost" aria-label={t("table.previous")} disabled={pageBusy || queryPage === 0} onClick={() => scrollerRef.current?.scrollTo({ top: Math.max(0, queryPage - 1) * paging.pageSize * ROW_H })}>◀</button>
+              <span className="small table-range" role="status">
+                {result.rows === 0 ? t("table.noRows") : t("table.range", { from: numbers.format(pageStart + 1), to: numbers.format(Math.min(result.rows, pageStart + paging.pageSize)) })}
+                {paging.total !== undefined && !pageViewChanged ? ` ${t("table.ofTotal", { total: numbers.format(paging.total) })}` : ""}
+              </span>
+              <button type="button" className="ghost" aria-label={t("table.next")} disabled={pageBusy || (pageStart + paging.pageSize >= result.rows && (!pageCanLoad || pageViewChanged))} onClick={() => void nextQueryPage()}>▶</button>
+              <button type="button" className="ghost query-count" disabled={pageBusy || pageViewChanged} aria-label={t("table.count")} aria-busy={paging.loading} title={t(paging.loading ? "queryPaging.loading" : "queryPaging.countHint")} onClick={onCountQuery}>
+                <span className={paging.loading ? "query-count-label busy" : "query-count-label"}>{t("table.count")}</span>
+                {paging.loading && <span className="query-count-spinner" aria-hidden="true" />}
+              </button>
+            </div>
+          </>}
+          {editing &&
+          <span className="muted small result-edit-count" role="status">{t("edit.counts", { inserted: editing.inserts.length, deleted: editing.deleted.length, updated: new Set(Object.keys(editing.cells).map((key) => key.split(":")[0]).filter((row) => !editing.deleted.includes(Number(row)))).size })}</span>
+          }
+        </div>
+        {editing && inserting && <InsertRowDialog columns={result.columns} initial={inserting.values} onAdd={(values) => { if (inserting.index === undefined) editing.onInsert(values); else editing.onUpdateInsert(inserting.index, values); setInserting(null); }} onCancel={() => setInserting(null)} />}
+      </div>
+    )}
     </div>
-    {viewer && selection && focusMeta && (
+    {viewer && <>
+    <div
+      className="viewer-resizer"
+      role="separator"
+      tabIndex={0}
+      aria-label={t("viewer.resize")}
+      aria-orientation="vertical"
+      aria-controls={viewerId}
+      aria-valuemin={viewerMin}
+      aria-valuemax={viewerMax}
+      aria-valuenow={shownViewerWidth}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        viewerDrag.current = { startX: e.clientX, startWidth: shownViewerWidth };
+        e.currentTarget.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      }}
+      onPointerMove={(e) => {
+        const drag = viewerDrag.current;
+        if (drag) resizeViewer(drag.startWidth + drag.startX - e.clientX);
+      }}
+      onPointerUp={() => { viewerDrag.current = null; }}
+      onPointerCancel={() => { viewerDrag.current = null; }}
+      onLostPointerCapture={() => { viewerDrag.current = null; }}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft") resizeViewer(shownViewerWidth + 16);
+        else if (e.key === "ArrowRight") resizeViewer(shownViewerWidth - 16);
+        else if (e.key === "Home") resizeViewer(viewerMin);
+        else if (e.key === "End") resizeViewer(viewerMax);
+        else return;
+        e.preventDefault();
+      }}
+    />
+    <div className="viewer-panel" id={viewerId} style={{ width: shownViewerWidth }}>
+    {selection && focusMeta ? (
       <CellViewer
         key={view}
         resultId={result.id}
@@ -986,6 +1260,9 @@ export function ResultGrid({
         meta={focusMeta}
         columns={result.columns}
         mode={viewerMode}
+        edits={editing?.cells}
+        editable={!!editing && !editing.busy && !sorting && !editing.deleted.includes(selection.focus.row)}
+        onEdit={editing?.onEdit}
         onMode={(mode) => {
           setViewerMode(mode);
           // Arrow keys keep moving through the grid.
@@ -1003,7 +1280,32 @@ export function ResultGrid({
           scrollerRef.current?.focus();
         }}
       />
+    ) : (
+      <aside className="cell-viewer" aria-label={t("viewer.title")}>
+        <header>
+          <div className="cell-viewer-title"><strong>{t("viewer.title")}</strong></div>
+          <button className="ghost" aria-label={t("viewer.close")} onClick={() => setViewer(false)}>×</button>
+        </header>
+        <p className="muted small">{t("viewer.selectCell")}</p>
+      </aside>
     )}
+    </div>
+    </>}
+    <div className="result-side-actions" role="toolbar" aria-label={t("viewer.toolbar")}>
+      <button
+        type="button"
+        className={`result-side-action ${viewer ? "active" : ""}`}
+        aria-label={t("viewer.toggle")}
+        aria-pressed={viewer}
+        aria-controls={viewer ? viewerId : undefined}
+        title={t(viewer ? "viewer.hide" : "viewer.show")}
+        onClick={() => setViewer(!viewer)}
+      >
+        <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="3.5" width="14" height="13" rx="1.5" /><path d="M11.5 4v12M5.5 7h3.5M5.5 10h3.5M5.5 13h2" />
+        </svg>
+      </button>
+    </div>
     </div>
   );
 }
@@ -1067,17 +1369,8 @@ function ColumnJump(props: {
   );
 }
 
-/** "Filter ▸" in the grid's context menu, from the cell it was opened on (like SQLyog). */
-function FilterSubmenu(props: {
-  cell: Cell;
-  value: string | null | undefined;
-  columns: ResultMeta["columns"];
-  active: ColumnFilterItem[];
-  onAdd(filter: ColumnFilterItem): void;
-  onCustom(start: ColumnFilterItem): void;
-  onReset(): void;
-}) {
-  const { t } = useTranslation("editor");
+/** A context submenu that stays inside the window, even near its edges. */
+function GridSubmenu({ label, children }: { label: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const submenu = useRef<HTMLDivElement>(null);
@@ -1098,7 +1391,32 @@ function FilterSubmenu(props: {
       window.removeEventListener("resize", position);
       window.removeEventListener("scroll", position, true);
     };
-  }, [open, props.value, props.active.length, props.columns]);
+  }, [open, children]);
+  return (
+    <div className="grid-submenu" onMouseEnter={() => setOpen(true)} onMouseLeave={(e) => {
+      if (!e.currentTarget.contains(document.activeElement)) setOpen(false);
+    }} onFocus={() => setOpen(true)} onBlur={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
+    }}>
+      <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open}>
+        {label} ▸
+      </button>
+      {open && <div ref={submenu} className="grid-menu grid-child-menu" role="menu" aria-label={label}>{children}</div>}
+    </div>
+  );
+}
+
+/** Filters for the cell on which the context menu was opened. */
+function FilterSubmenu(props: {
+  cell: Cell;
+  value: string | null | undefined;
+  columns: ResultMeta["columns"];
+  active: ColumnFilterItem[];
+  onAdd(filter: ColumnFilterItem): void;
+  onCustom(start: ColumnFilterItem): void;
+  onReset(): void;
+}) {
+  const { t } = useTranslation("editor");
   const column = props.cell.col;
   const value = props.value;
   const items: ColumnFilterItem[] =
@@ -1117,15 +1435,7 @@ function FilterSubmenu(props: {
             { column, op: "isNotNull" as const, value: "" },
           ];
   return (
-    <div className="grid-submenu" onMouseEnter={() => setOpen(true)} onMouseLeave={(e) => {
-      if (!e.currentTarget.contains(document.activeElement)) setOpen(false);
-    }} onFocus={() => setOpen(true)} onBlur={(e) => {
-      if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
-    }}>
-      <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open}>
-        {t("results.filterMenu")} ▸
-      </button>
-      {open && <div ref={submenu} className="grid-menu grid-filter-menu" role="menu" aria-label={t("results.filterMenu")}>
+    <GridSubmenu label={t("results.filterMenu")}>
         {items.map((filter) => (
           <button key={filter.op} role="menuitem" onClick={() => props.onAdd(filter)}>
             <code>{filterLabel(filter, props.columns)}</code>
@@ -1140,8 +1450,7 @@ function FilterSubmenu(props: {
             {t("results.resetFilters")}
           </button>
         )}
-      </div>}
-    </div>
+    </GridSubmenu>
   );
 }
 

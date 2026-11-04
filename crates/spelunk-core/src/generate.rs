@@ -78,14 +78,15 @@ pub async fn count_rows(session: &Session, schema: &str, name: &str) -> Result<i
     scalar_count(session, &sql).await
 }
 
-/// Runs a `SELECT COUNT(*)` written by the core and returns the number; the result is freed.
-pub(crate) async fn scalar_count(session: &Session, sql: &str) -> Result<i64, String> {
+/// Runs one statement written by the core and returns the first cell of its result: `None`
+/// when it returns no result (`KILL`) or no rows. The result is freed, also on failure.
+pub(crate) async fn scalar_value(session: &Session, sql: &str) -> Result<Option<Value>, String> {
     let mut events = session.run_script(sql);
-    let mut result = None;
+    let mut results = Vec::new();
     let mut failure = None;
     while let Some(event) = events.next().await {
         match event {
-            CoreEvent::ResultStarted { result: id, .. } => result = Some(id),
+            CoreEvent::ResultStarted { result: id, .. } => results.push(id),
             CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
             CoreEvent::StatementStarted { .. }
             | CoreEvent::Rows { .. }
@@ -95,23 +96,31 @@ pub(crate) async fn scalar_count(session: &Session, sql: &str) -> Result<i64, St
             | CoreEvent::HistoryWarning { .. } => {}
         }
     }
-    if let Some(message) = failure {
-        return Err(message);
-    }
-    let id = result.ok_or("the count returned no result")?;
     let store = session.results();
-    let count = store.get(id).and_then(|stored| {
+    let value = results.first().and_then(|id| {
+        let stored = store.get(*id)?;
         let stored = stored.read().ok()?;
         let batch = stored.window(0, 1).into_iter().next()?;
         let logical = stored.schema().columns.first()?.logical;
         Value::from_array(batch.column(0).as_ref(), 0, logical)
     });
-    store.remove(id);
-    match count {
+    for id in results {
+        store.remove(id);
+    }
+    match failure {
+        Some(message) => Err(message),
+        None => Ok(value),
+    }
+}
+
+/// Runs a `SELECT COUNT(*)` written by the core and returns the number; the result is freed.
+pub(crate) async fn scalar_count(session: &Session, sql: &str) -> Result<i64, String> {
+    match scalar_value(session, sql).await? {
         Some(Value::Int(n)) => Ok(n),
         Some(Value::Decimal(text) | Value::Text(text)) => text
             .parse()
             .map_err(|_| format!("unexpected count: {text}")),
+        None => Err("the count returned no result".into()),
         other => Err(format!("unexpected count: {other:?}")),
     }
 }

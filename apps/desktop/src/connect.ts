@@ -3,6 +3,8 @@
 // backend; they are never kept in the state.
 
 import { call, commands, type ConnectResult } from "./api";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import i18n from "./i18n";
 import { useApp, useDialogs } from "./store";
 
 /** What must be answered before resolving (ADR-022): a repository connection or tunnel that
@@ -94,9 +96,12 @@ export function explorerDatabase(connectionId: string, schema: string): string |
 
 /** Closes a query tab: its session is disconnected and its results are freed in the core (a
  *  script still running finishes and is recorded). Ctrl+Shift+T reopens it, without results. */
-export function closeQueryTab(id: string) {
+export async function closeQueryTab(id: string) {
   const tab = useApp.getState().tabs.find((t) => t.id === id);
   if (!tab) return;
+  if (tab.savingEdits) return;
+  if (tab.pendingEdits && !(await confirm(i18n.t("editor:edit.closeUnsaved"), { kind: "warning" }))) return;
+  if (useApp.getState().tabs.find((t) => t.id === id)?.savingEdits) return;
   useApp.getState().closeTab(id);
   void call(commands.disconnect(id)).catch(() => undefined);
   for (const r of tab.run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);

@@ -190,8 +190,16 @@ export const commands = {
 	 */
 	connectFromSession: (source: string, session: string, database: string | null) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
+	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
+	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
 	runScript: (session: string, sql: string, confirmed: boolean, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, onEvent })),
+	/**  Whether a SELECT matches the conservative rules for fetching pages. */
+	queryPageSupported: (session: string, sql: string) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql })),
+	/**  Run the first page, keeping the original SQL in the user's query history. */
+	runQueryPage: (session: string, sql: string, limit: number, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, onEvent })),
+	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset })),
+	countQueryRows: (session: string, sql: string) => typedError<number | null, string>(__TAURI_INVOKE("count_query_rows", { session, sql })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
 	/**  Frees a result the UI no longer shows. */
 	releaseResult: (result: number) => typedError<null, string>(__TAURI_INVOKE("release_result", { result })),
@@ -202,6 +210,8 @@ export const commands = {
 	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
 	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),
 	describeTable: (session: string, schema: string, name: string) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name })),
+	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
+	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
 };
@@ -396,6 +406,7 @@ export type ConnectionItem_Deserialize = {
 	tunnel?: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
+	readOnly: boolean,
 };
 
 export type ConnectionItem_Serialize = {
@@ -409,6 +420,7 @@ export type ConnectionItem_Serialize = {
 	tunnel: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
+	readOnly: boolean,
 };
 
 /**
@@ -472,6 +484,12 @@ export type DbeaverScan_Deserialize = {
 export type DbeaverScan_Serialize = {
 	dir: string,
 	connections: DbeaverItem_Serialize[],
+};
+
+export type EditableTableItem = {
+	schema: string,
+	name: string,
+	primaryKey: string[],
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
@@ -664,6 +682,68 @@ export type PasswordMode = "none" | "keychain" | "prompt" | "env" |
 "other" | 
 /**  Short-lived tokens from a cloud provider's CLI (ADR-022). */
 "awsRds" | "azureAd" | "googleCloudSql";
+
+export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;
+
+export type ProcessItem_Deserialize = {
+	id: string,
+	user: string,
+	host: string,
+	database?: string | null,
+	command: string,
+	seconds?: string | null,
+	state?: string | null,
+	sql?: string | null,
+	identity?: string | null,
+	activity: string,
+};
+
+export type ProcessItem_Serialize = {
+	id: string,
+	user: string,
+	host: string,
+	database: string | null,
+	command: string,
+	seconds: string | null,
+	state: string | null,
+	sql: string | null,
+	identity: string | null,
+	activity: string,
+};
+
+export type ProcessSnapshotItem = ProcessSnapshotItem_Serialize | ProcessSnapshotItem_Deserialize;
+
+export type ProcessSnapshotItem_Deserialize = {
+	ownId: string,
+	processes: ProcessItem_Deserialize[],
+	limited: boolean,
+};
+
+export type ProcessSnapshotItem_Serialize = {
+	ownId: string,
+	processes: ProcessItem_Serialize[],
+	limited: boolean,
+};
+
+export type ProcessTargetItem = ProcessTargetItem_Serialize | ProcessTargetItem_Deserialize;
+
+export type ProcessTargetItem_Deserialize = {
+	id: string,
+	user: string,
+	host: string,
+	command: string,
+	sql?: string | null,
+	identity?: string | null,
+};
+
+export type ProcessTargetItem_Serialize = {
+	id: string,
+	user: string,
+	host: string,
+	command: string,
+	sql: string | null,
+	identity: string | null,
+};
 
 /**  Why a statement asks for confirmation before running (see `spelunk_core::Risk`). */
 export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";

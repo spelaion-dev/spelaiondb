@@ -316,6 +316,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             tunnel: c.file.tunnel.clone(),
             mcp_exposed: c.file.mcp.exposed,
             history_enabled,
+            read_only: c.file.read_only,
         });
     }
     Ok(items)
@@ -958,6 +959,64 @@ async fn disconnect(session: String, state: State<'_, AppState>) -> CmdResult<()
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn list_processes(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ProcessSnapshotItem> {
+    let open = state.session(&session).await?;
+    let snapshot = spelunk_core::list_processes(&open.session).await?;
+    Ok(ProcessSnapshotItem {
+        own_id: snapshot.own_id,
+        limited: snapshot.limited,
+        processes: snapshot
+            .processes
+            .into_iter()
+            .map(|p| ProcessItem {
+                id: p.id,
+                user: p.user,
+                host: p.host,
+                database: p.database,
+                command: p.command,
+                seconds: p.seconds,
+                state: p.state,
+                sql: p.sql,
+                identity: p.identity,
+                activity: p.activity,
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn control_process(
+    session: String,
+    target: ProcessTargetItem,
+    terminate: bool,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let open = state.session(&session).await?;
+    let target = spelunk_core::ProcessTarget {
+        id: target.id,
+        user: target.user,
+        host: target.host,
+        command: target.command,
+        sql: target.sql,
+        identity: target.identity,
+    };
+    spelunk_core::control_process(
+        &open.session,
+        &target,
+        terminate,
+        open.resolved.params.read_only,
+        confirmed,
+    )
+    .await
+}
+
 /// Runs a script and keeps sending events through the channel. Returns as soon as it starts.
 #[tauri::command]
 #[specta::specta]
@@ -968,10 +1027,21 @@ async fn run_script(
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
+    start_script(&state, &session, sql, confirmed, on_event, None).await
+}
+
+async fn start_script(
+    state: &AppState,
+    session: &str,
+    sql: String,
+    confirmed: bool,
+    on_event: Channel<ScriptEvent>,
+    original: Option<String>,
+) -> CmdResult<()> {
     let (open, workspace) = {
         let sessions = state.sessions.lock().await;
         let session = sessions
-            .get(&session)
+            .get(session)
             .ok_or_else(|| format!("there is no open connection for {session}"))?;
         (session.open.clone(), session.history_workspace.clone())
     };
@@ -980,10 +1050,13 @@ async fn run_script(
     if !confirmed && !risks_of(&open, &sql).is_empty() {
         return Err("this script has statements that need confirmation before running".into());
     }
-    let mut events =
-        state
-            .history
-            .run_script(&open.session, &sql, workspace, open.resolved.id.to_string());
+    let mut events = state.history.run_script_with_original(
+        &open.session,
+        &sql,
+        workspace,
+        open.resolved.id.to_string(),
+        original,
+    );
     tauri::async_runtime::spawn(async move {
         // `open` lives while the script runs, even if the UI closes the tab halfway.
         let _keep = open;
@@ -994,6 +1067,68 @@ async fn run_script(
         }
     });
     Ok(())
+}
+
+/// Whether a SELECT matches the conservative rules for fetching pages.
+#[tauri::command]
+#[specta::specta]
+async fn query_page_supported(
+    session: String,
+    sql: String,
+    state: State<'_, AppState>,
+) -> CmdResult<bool> {
+    let open = state.session(&session).await?;
+    Ok(spelunk_core::query_page_sql(open.session.dialect().as_ref(), &sql, 1, 0).is_some())
+}
+
+/// Run the first page, keeping the original SQL in the user's query history.
+#[tauri::command]
+#[specta::specta]
+async fn run_query_page(
+    session: String,
+    sql: String,
+    limit: u32,
+    on_event: Channel<ScriptEvent>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let open = state.session(&session).await?;
+    let paged =
+        spelunk_core::query_page_sql(open.session.dialect().as_ref(), &sql, limit.into(), 0)
+            .ok_or("this query cannot be paged")?;
+    start_script(&state, &session, paged, false, on_event, Some(sql)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn append_query_page(
+    session: String,
+    result: u32,
+    sql: String,
+    limit: u32,
+    offset: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    let added = spelunk_core::append_query_page(
+        &open.session,
+        ResultId(result.into()),
+        &sql,
+        limit.into(),
+        offset.into(),
+    )
+    .await?;
+    Ok(u32::try_from(added).unwrap_or(u32::MAX))
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn count_query_rows(
+    session: String,
+    sql: String,
+    state: State<'_, AppState>,
+) -> CmdResult<f64> {
+    let open = state.session(&session).await?;
+    Ok(spelunk_core::count_query_rows(&open.session, &sql).await? as f64)
 }
 
 /// The `:name` placeholders of a script, in order, so the UI can ask for their values.
@@ -1617,6 +1752,30 @@ async fn describe_table(
     Ok(TableDetails::from(table))
 }
 
+/// The table a query's result can be edited as, or none: the core decides (ADR-014).
+#[tauri::command]
+#[specta::specta]
+async fn editable_query_table(
+    session: String,
+    result: u32,
+    sql: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<EditableTableItem>> {
+    let open = state.session(&session).await?;
+    let table = spelunk_core::editable_query_table(
+        &open.session,
+        ResultId(result.into()),
+        &sql,
+        open.resolved.params.read_only,
+    )
+    .await?;
+    Ok(table.map(|table| EditableTableItem {
+        schema: table.object.schema,
+        name: table.object.name,
+        primary_key: table.primary_key,
+    }))
+}
+
 /// SQL for a table written by the core with the engine's quoting (preview, SELECT, INSERT,
 /// UPDATE or DELETE with `:named` placeholders), to open in a new tab.
 #[tauri::command]
@@ -1900,7 +2059,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connect,
             connect_from_session,
             disconnect,
+            list_processes,
+            control_process,
             run_script,
+            query_page_supported,
+            run_query_page,
+            append_query_page,
+            count_query_rows,
             cancel,
             release_result,
             current_database,
@@ -1909,6 +2074,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_schemas,
             list_objects,
             describe_table,
+            editable_query_table,
             answer_interaction,
         ])
         .events(tauri_specta::collect_events![InteractionRequest])

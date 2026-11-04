@@ -17,6 +17,8 @@ export interface ResultMeta {
   /** Column conditions the core filtered the rows by (all must hold). */
   columnFilters?: ColumnFilterItem[];
   total?: number;
+  /** Pages fetched from one safe SELECT, appended to this result. */
+  paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number };
 }
 
 export interface SortState {
@@ -71,6 +73,9 @@ export interface Tab {
   snippetName?: string;
   /** A table data tab (pages of one table) instead of an SQL editor. */
   table?: TableView;
+  /** Pending row changes are kept in the mounted editor until saved or discarded. */
+  pendingEdits?: boolean;
+  savingEdits?: boolean;
 }
 
 /** What a table data tab shows: the core writes and checks the page's SELECT. */

@@ -343,6 +343,18 @@ impl QueryHistory {
         workspace: String,
         connection: String,
     ) -> BoxStream<'static, CoreEvent> {
+        self.run_script_with_original(session, sql, workspace, connection, None)
+    }
+
+    /// Execute generated pagination SQL while recording the user's original SELECT.
+    pub fn run_script_with_original(
+        &self,
+        session: &Session,
+        sql: &str,
+        workspace: String,
+        connection: String,
+        original: Option<String>,
+    ) -> BoxStream<'static, CoreEvent> {
         let mut events = session.run_script(sql);
         let sql = sql.to_string();
         let history = self.clone();
@@ -364,7 +376,7 @@ impl QueryHistory {
                                     at_ms: millis(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()),
                                     workspace: workspace.clone(),
                                     connection: connection.clone(),
-                                    statement: span.text(&sql).to_string(),
+                                    statement: original.clone().unwrap_or_else(|| span.text(&sql).to_string()),
                                     duration_ms: 0,
                                     rows: 0,
                                     error: None,

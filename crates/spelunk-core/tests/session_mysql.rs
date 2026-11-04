@@ -96,6 +96,157 @@ async fn processlist_filtered_by_command_without_a_where() {
 }
 
 #[tokio::test]
+async fn process_monitor_lists_sessions_and_checks_targets_before_closing() {
+    let (Some(monitor), Some(target)) = (session().await, session().await) else {
+        return;
+    };
+    let target_id = spelunk_core::list_processes(&target).await.unwrap().own_id;
+    let snapshot = spelunk_core::list_processes(&monitor).await.unwrap();
+    let process = snapshot
+        .processes
+        .iter()
+        .find(|p| p.id == target_id)
+        .expect("target is visible");
+    assert_eq!(process.command.to_lowercase(), "sleep");
+    let mut target_info = spelunk_core::ProcessTarget {
+        id: target_id.clone(),
+        user: process.user.clone(),
+        host: "incorrect host".into(),
+        command: process.command.clone(),
+        sql: process.sql.clone(),
+        identity: process.identity.clone(),
+    };
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, true, false, true)
+            .await
+            .is_err()
+    );
+    target_info.host = process.host.clone();
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, true, true, true)
+            .await
+            .is_err()
+    );
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, true, false, false)
+            .await
+            .is_err()
+    );
+    target_info.command = "unexpected".into();
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, true, false, true)
+            .await
+            .is_err()
+    );
+    target_info.command = process.command.clone();
+    let own = snapshot
+        .processes
+        .iter()
+        .find(|p| p.id == snapshot.own_id)
+        .expect("monitor is visible");
+    let own_info = spelunk_core::ProcessTarget {
+        id: own.id.clone(),
+        user: own.user.clone(),
+        host: own.host.clone(),
+        command: own.command.clone(),
+        sql: own.sql.clone(),
+        identity: own.identity.clone(),
+    };
+    assert!(
+        spelunk_core::control_process(&monitor, &own_info, true, false, true)
+            .await
+            .is_err()
+    );
+    spelunk_core::control_process(&monitor, &target_info, true, false, true)
+        .await
+        .unwrap();
+    let after = spelunk_core::list_processes(&monitor).await.unwrap();
+    assert!(!after.processes.iter().any(|p| p.id == target_id));
+}
+
+#[tokio::test]
+async fn process_monitor_cancels_a_query_without_closing_its_session() {
+    let (Some(monitor), Some(target)) = (session().await, session().await) else {
+        return;
+    };
+    let target = Arc::new(target);
+    let target_id = spelunk_core::list_processes(&target).await.unwrap().own_id;
+    let task = tokio::spawn({
+        let target = target.clone();
+        async move {
+            target
+                .run_script("SELECT SLEEP(30)")
+                .collect::<Vec<_>>()
+                .await
+        }
+    });
+    let mut found = None;
+    for _ in 0..100 {
+        let snapshot = spelunk_core::list_processes(&monitor).await.unwrap();
+        if let Some(p) = snapshot.processes.into_iter().find(|p| {
+            p.id == target_id
+                && p.sql
+                    .as_deref()
+                    .is_some_and(|sql| sql.contains("SLEEP(30)"))
+        }) {
+            found = Some(p);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let process = found.expect("running query is visible");
+    let mut target_info = spelunk_core::ProcessTarget {
+        id: process.id,
+        user: process.user,
+        host: process.host,
+        command: process.command,
+        sql: Some("a different query".into()),
+        identity: process.identity,
+    };
+    assert!(
+        spelunk_core::control_process(&monitor, &target_info, false, false, true)
+            .await
+            .is_err()
+    );
+    target_info.sql = process.sql;
+    spelunk_core::control_process(&monitor, &target_info, false, false, true)
+        .await
+        .unwrap();
+    let events = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+        .await
+        .unwrap()
+        .unwrap();
+    // MySQL may return SLEEP's interrupted result (1) rather than an error.
+    if !events
+        .iter()
+        .any(|event| matches!(event, CoreEvent::StatementFailed { .. }))
+    {
+        let id = events
+            .iter()
+            .find_map(|event| match event {
+                CoreEvent::ResultStarted { result, .. } => Some(*result),
+                _ => None,
+            })
+            .expect("SLEEP returned a result");
+        let result = target.results().get(id).unwrap();
+        let result = result.read().unwrap();
+        let batch = result.window(0, 1).remove(0);
+        let value = spelunk_driver_api::Value::from_array(
+            batch.column(0).as_ref(),
+            0,
+            result.schema().columns[0].logical,
+        )
+        .unwrap();
+        assert_eq!(value.to_string(), "1");
+    }
+    let after: Vec<_> = target.run_script("SELECT 1").collect().await;
+    assert!(matches!(
+        after.last(),
+        Some(CoreEvent::ScriptFinished { failed: false, .. })
+    ));
+}
+
+#[tokio::test]
 async fn table_pages_and_counts_run_on_mysql() {
     let Some(session) = session().await else {
         return;

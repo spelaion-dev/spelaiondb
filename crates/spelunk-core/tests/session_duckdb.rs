@@ -261,3 +261,35 @@ async fn read_only_mode_never_reads_local_files() {
         "{result:?}"
     );
 }
+
+async fn editable(session: &Session, sql: &str) -> Option<(String, String)> {
+    let id = first_result(session, sql).await;
+    spelunk_core::editable_query_table(session, id, sql, false)
+        .await
+        .unwrap()
+        .map(|t| (t.object.schema, t.object.name))
+}
+
+#[tokio::test]
+async fn query_results_never_edit_a_table_shadowed_by_a_temporary_one() {
+    let session = session().await;
+    run(
+        &session,
+        "create table orders (id integer primary key, item varchar);
+         insert into orders values (1, 'pen')",
+    )
+    .await;
+    assert_eq!(
+        editable(&session, "select * from orders").await,
+        Some(("main".to_string(), "orders".to_string()))
+    );
+    // `a.b` may name a database or a schema: it stays read-only.
+    assert_eq!(editable(&session, "select * from main.orders").await, None);
+    run(
+        &session,
+        "create temp table orders (id integer primary key, item varchar);
+         insert into orders values (1, 'shadow')",
+    )
+    .await;
+    assert_eq!(editable(&session, "select * from orders").await, None);
+}
