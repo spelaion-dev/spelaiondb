@@ -1,8 +1,9 @@
 # ADR-023: Rename SpelunkDB to SpelaionDB, under the Spelaion brand
 
-- **Status:** Accepted (implemented on `dev`, to be released as 0.4.0). The trademark search
-  (EU, Spain, the US and Brazil, class 9) is still to be done. The domain `spelaion.dev` is the project's; the crates.io and npm names were
-  free on 2026-11-04 (see "The name").
+- **Status:** Accepted (implemented on `dev`, to be released as 0.4.0). The domain
+  `spelaion.dev` and the GitHub organization `spelaion-dev` are the project's; the crates.io
+  and npm names were free on 2026-11-04. The brand is not registered as a trademark (see
+  "The name").
 - **Date:** 2026-11-04
 
 ## Context
@@ -57,6 +58,11 @@ Checked on 2026-11-04:
   (it represents Petzl in Brazil). It is another market, but protective equipment is in
   class 9, like software, so the trademark search must look at Brazil (INPI) too, not only
   the EU, Spain and the US. No software product by that name turned up.
+- **Trademark:** the project does not register it (2026-11-04): registering costs money it
+  does not want to spend. The risk accepted is that someone else could register "Spelaion"
+  for software first and ask the project to stop using it; the name would then change again.
+  A search in the free public databases (TMview for the EU and its countries, the USPTO's
+  and Brazil's INPI) costs nothing and lowers that risk.
 
 ### Migration
 Only the team has installs, but the migration is done properly, so nobody loses
