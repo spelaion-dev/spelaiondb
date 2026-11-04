@@ -7,7 +7,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 ## Before touching anything
 - Read `docs/architecture.md` and the ADRs in `docs/adr/`. ADRs rule: if a change
   contradicts them, do not make it; propose a new ADR that supersedes the old one.
-- Current state: **v0.3**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQL Server, SQLite
+- Current state: **v0.4**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQL Server, SQLite
   and DuckDB drivers, configuration, SSH tunnels, core, local store, `spelaiondb mcp` (read-only, writes per connection) and the
   `spelaiondb` binary, and the first version of the desktop app (`apps/desktop`).
   `spikes/` is throwaway phase 0 code: it is never imported from `crates/`.
@@ -88,9 +88,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
   text). Our own canvas grid (`ResultGrid.tsx`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
-  Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin; its
-  `ENDPOINTS` stay empty until releases have a public home, and then the app says updates are
-  unavailable). Update artifacts are signed only in the release workflow
+  Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
+  `latest.json` from the latest GitHub release, so releases are never pre-releases;
+  `SPELAION_NO_UPDATES` switches them off, as the smoke test does). Update artifacts are signed only in the release workflow
   (`tauri.release.conf.json`, secret `TAURI_SIGNING_PRIVATE_KEY`); never commit a private key.
   Installers: `npx tauri build` (NSIS + MSI on Windows). Releases: pushing a tag `vX.Y.Z`
   runs `.github/workflows/release.yml` (installers for every OS, the `spelaiondb` CLI, notes from
@@ -99,11 +99,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   match the version in `Cargo.toml` and `tauri.conf.json`.
 
 ## Branches
-- Day-to-day work goes to `dev` (push freely: CI does not run on its pushes, the repository
-  is private and Actions minutes cost). Run the local checks below before each commit.
+- The repository is public: `spelaion-dev/spelaiondb`. Day-to-day work goes to `dev`; CI runs
+  on every push to it (free for public repositories). Still run the local checks below before
+  each commit: CI confirms them, it does not replace them.
+- Contributors' pull requests target `dev` (see `CONTRIBUTING.md`); merge them when CI is green
+  and they follow these rules, and delete their branch afterwards.
 - To release, open a pull request `dev` → `main`: CI runs on it, and it is merged only when
-  green. Then tag `main` with `vX.Y.Z`. CI can also be started by hand on `dev`
-  (`gh workflow run CI --ref dev`), for example for a change that touches macOS or Windows.
+  green (with a merge commit, so `dev` and `main` stay in step). Then tag `main` with
+  `vX.Y.Z`. Never turn on "delete branch on merge": it would delete `dev`.
 
 ## Non-negotiable rules
 - `spelaion-core` does not depend on Tauri. The app, the CLI and the MCP are thin adapters.

@@ -1,11 +1,11 @@
 # CI is the code reviewer (ADR-012): nothing gets into main without passing through here.
-# Work branches (`dev`) do not run it on push: a pull request to main does, and it can be
-# started by hand on any branch ("Run workflow").
+# It runs on every push to `dev` and `main` and on every pull request (the repository is
+# public, so Actions minutes are free), and it can be started by hand on any branch.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 
