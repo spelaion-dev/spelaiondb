@@ -229,5 +229,12 @@
     "dropMenu": "Borrar…",
     "dropTitle": "Borrar {{name}}",
     "drop": "Borrar"
+  },
+  "create": {
+    "table": "Nueva tabla",
+    "view": "Nueva vista",
+    "materializedView": "Nueva vista materializada",
+    "sequence": "Nueva secuencia",
+    "schema": "Nuevo esquema"
   }
 }

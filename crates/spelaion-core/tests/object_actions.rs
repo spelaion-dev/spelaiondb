@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    CoreEvent, ObjectChange, ObjectError, ObjectTarget, ResultStore, Session, apply_change,
-    object_actions,
+    CoreEvent, CreateKind, ObjectChange, ObjectError, ObjectTarget, ResultStore, Session,
+    apply_change, create_sql, object_actions,
 };
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, ObjectKind, SchemaObject, SchemaObjectKind, Secret,
@@ -620,5 +620,60 @@ async fn schemas_drop_and_cascade_where_the_engine_can() {
         }
         let schemas = session.connection().list_schemas().await.unwrap();
         assert!(schemas.iter().all(|s| s.name != "oa_drop_s"), "{label}");
+    }
+}
+
+#[tokio::test]
+async fn what_create_starts_runs_on_each_engine() {
+    for (label, session, schema) in engines().await {
+        let session = admin_session(label, session).await;
+        let dialect = session.dialect().clone();
+        for kind in object_actions(dialect.as_ref()).create {
+            let (name, cleanup) = match kind {
+                CreateKind::Table => ("new_table", "DROP TABLE new_table"),
+                CreateKind::View => ("new_view", "DROP VIEW new_view"),
+                CreateKind::MaterializedView => (
+                    "new_materialized_view",
+                    "DROP MATERIALIZED VIEW new_materialized_view",
+                ),
+                CreateKind::Sequence => ("new_sequence", "DROP SEQUENCE new_sequence"),
+                CreateKind::Schema if matches!(label, "mysql" | "mariadb") => {
+                    ("new_database", "DROP DATABASE new_database")
+                }
+                CreateKind::Schema => ("new_schema", "DROP SCHEMA new_schema"),
+            };
+            run(label, &session, &[cleanup], true).await;
+            let sql = create_sql(dialect.as_ref(), kind, schema);
+            run(
+                label,
+                &session,
+                &[sql.trim_end().trim_end_matches(';')],
+                false,
+            )
+            .await;
+            let found = match kind {
+                CreateKind::Table | CreateKind::View | CreateKind::MaterializedView => {
+                    relations(&session, schema)
+                        .await
+                        .contains(&name.to_string())
+                }
+                CreateKind::Sequence => session
+                    .connection()
+                    .list_schema_objects(schema)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|o| o.name == name),
+                CreateKind::Schema => session
+                    .connection()
+                    .list_schemas()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|s| s.name == name),
+            };
+            assert!(found, "{label}: {sql}");
+            run(label, &session, &[cleanup], false).await;
+        }
     }
 }
