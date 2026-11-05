@@ -51,6 +51,19 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
       setEngines(catalog);
       if (!editing) return;
       try {
+        let access = await call(commands.connectionEditorAccess(editing));
+        if (access.kind === "untrusted") {
+          if (!(await useDialogs.getState().askTrust(useApp.getState().workspace?.workspace ?? null))) { close(); return; }
+          useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
+          access = await call(commands.connectionEditorAccess(editing));
+        }
+        if (access.kind === "changed") {
+          const accepted = await useDialogs.getState().askChange({ item: access.item, isNew: access.new, fields: access.fields });
+          if (!accepted) { close(); return; }
+          await call(commands.acceptChange(access.item));
+          access = await call(commands.connectionEditorAccess(editing));
+        }
+        if (access.kind !== "ready") { close(); return; }
         // The "Serialize" variant only differs in optional markers: same fields.
         const draft = (await call(commands.connectionDraft(editing))) as ConnectionDraft;
         setInitial(draft);
@@ -380,6 +393,18 @@ function ConnectionForm(props: {
   };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.kind === "testing";
+
+  async function trustForKubernetes(): Promise<boolean> {
+    if (useApp.getState().workspace?.trusted) return true;
+    try {
+      if (!(await useDialogs.getState().askTrust(useApp.getState().workspace?.workspace ?? null))) return false;
+      useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
+      return true;
+    } catch (e) {
+      setSaveError(errorText(e));
+      return false;
+    }
+  }
 
   async function browse(field: "database" | "tlsCa" | "tlsCert" | "tlsKey") {
     const path = await open({
@@ -724,10 +749,16 @@ function ConnectionForm(props: {
           <div id="connection-tab-kubernetes" role="tabpanel" hidden={tab !== "kubernetes"}>
             <KubernetesTab
               enabled={useKubernetes}
+              personal={draft.personal}
+              editing={editing ?? null}
+              trusted={Boolean(workspace?.trusted)}
               onEnabled={(enabled) => {
-                setUseKubernetes(enabled);
-                if (enabled) setUseTunnel(false);
-                changed();
+                void (async () => {
+                  if (enabled && !draft.personal && !(await trustForKubernetes())) return;
+                  setUseKubernetes(enabled);
+                  if (enabled) setUseTunnel(false);
+                  changed();
+                })();
               }}
               value={kubernetes}
               onChange={(next) => {
@@ -747,7 +778,12 @@ function ConnectionForm(props: {
             <div className="form-row" role="radiogroup" aria-label={t("fields.saveIn")}>
               <span>{t("fields.saveIn")}</span>
               <label className="check">
-                <input type="radio" name="save-in" checked={!draft.personal} disabled={!hasWorkspace || Boolean(editing)} onChange={() => update({ personal: false })} />
+                <input type="radio" name="save-in" checked={!draft.personal} disabled={!hasWorkspace || Boolean(editing)} onChange={() => {
+                  void (async () => {
+                    if (useKubernetes && !(await trustForKubernetes())) return;
+                    update({ personal: false });
+                  })();
+                }} />
                 {t("fields.project")}
               </label>
               <label className="check">

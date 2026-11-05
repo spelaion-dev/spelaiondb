@@ -313,6 +313,23 @@ pub enum ConnectOutcome {
     },
 }
 
+/// Trust status of an existing connection before opening its editor.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum EditorAccessOutcome {
+    Ready,
+    Untrusted,
+    Changed {
+        item: String,
+        new: bool,
+        fields: Vec<FieldChangeItem>,
+    },
+}
+
 /// One field of a changed repository item. Repository files hold secret references, never
 /// secrets.
 #[derive(Debug, Clone, Serialize, Type)]

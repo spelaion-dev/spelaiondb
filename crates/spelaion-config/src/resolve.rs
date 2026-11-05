@@ -128,6 +128,31 @@ impl<'a> Resolver<'a> {
         self.resolve_entry(entry)
     }
 
+    /// Checks the provenance of a connection editor before using its command fields.
+    /// Existing entries must still match the snapshot; a new draft is the user's input.
+    pub fn check_editor_access(
+        &self,
+        source: Source,
+        editing: Option<&ConnectionId>,
+    ) -> Result<(), ResolveError> {
+        let source = editing.map_or(source, |id| id.source);
+        if source == Source::Workspace && self.config.workspace_root.is_none() {
+            return Err(ConfigError::new(&self.config.user_dir, "no repository is open").into());
+        }
+        let base = self.base_dir(source)?;
+        if let Some(id) = editing {
+            let entry = self.config.connection(id).ok_or_else(|| {
+                ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
+            })?;
+            if source == Source::Workspace {
+                self.trust
+                    .check_connection(&base, entry)
+                    .map_err(|change| ResolveError::Changed { root: base, change })?;
+            }
+        }
+        Ok(())
+    }
+
     /// Resolves a connection that has not been saved yet (to test it from the UI). The same
     /// trust rules apply: a repository draft can use the repository's tunnels.
     pub fn resolve_draft(
@@ -144,6 +169,7 @@ impl<'a> Resolver<'a> {
         id: &ConnectionId,
         draft: &ConnectionDraft,
     ) -> Result<ResolvedConnection, ResolveError> {
+        self.check_editor_access(id.source, Some(id))?;
         let entry = self.config.connection(id).ok_or_else(|| {
             ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
         })?;

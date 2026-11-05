@@ -62,6 +62,9 @@ function withCurrent(state: Loaded<string>, current: string): string[] {
 
 export function KubernetesTab(props: {
   enabled: boolean;
+  personal: boolean;
+  editing: string | null;
+  trusted: boolean;
   onEnabled(enabled: boolean): void;
   value: KubernetesDraftItem;
   onChange(value: KubernetesDraftItem): void;
@@ -82,13 +85,14 @@ export function KubernetesTab(props: {
   const picked = useRef(false);
 
   const set = (patch: Partial<KubernetesDraftItem>) => onChange({ ...value, ...patch });
-  const contexts = useKubectl(enabled, tools, () => call(commands.kubeContexts(value)));
-  const namespaces = useKubectl(enabled, `${tools}|${value.context}`, () => call(commands.kubeNamespaces(value)));
-  const names = useKubectl(enabled, `${tools}|${value.context}|${value.namespace}|${kind}`, () =>
-    call(commands.kubeNames(value, kind)),
+  const provenance = `${props.personal}|${props.editing}|${props.trusted}`;
+  const contexts = useKubectl(enabled, `${provenance}|${tools}`, () => call(commands.kubeContexts(value, props.personal, props.editing)));
+  const namespaces = useKubectl(enabled, `${provenance}|${tools}|${value.context}`, () => call(commands.kubeNamespaces(value, props.personal, props.editing)));
+  const names = useKubectl(enabled, `${provenance}|${tools}|${value.context}|${value.namespace}|${kind}`, () =>
+    call(commands.kubeNames(value, kind, props.personal, props.editing)),
   );
-  const ports = useKubectl<KubePort>(enabled && Boolean(value.resource), `${tools}|${value.context}|${value.namespace}|${value.resource}`, () =>
-    call(commands.kubePorts(value)),
+  const ports = useKubectl<KubePort>(enabled && Boolean(value.resource), `${provenance}|${tools}|${value.context}|${value.namespace}|${value.resource}`, () =>
+    call(commands.kubePorts(value, props.personal, props.editing)),
   );
 
   const { onPort, port, defaultPort } = props;
