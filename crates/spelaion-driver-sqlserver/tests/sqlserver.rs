@@ -1081,3 +1081,26 @@ async fn procedure_calls_pass_inputs_and_collect_outputs() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn keep_alives_answer_and_say_when_a_transaction_is_open() {
+    use spelaion_driver_api::KeepAlive;
+    let Some(conn) = connect().await else { return };
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::Alive);
+    run(&*conn, "begin transaction").await.unwrap();
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::InTransaction);
+    run(&*conn, "rollback").await.unwrap();
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::Alive);
+}
+
+#[tokio::test]
+async fn a_session_the_server_ended_is_a_connection_error() {
+    let Some(conn) = connect().await else { return };
+    let Some(admin) = connect().await else { return };
+    let spid = tables(&*conn, "select @@spid").await[0].1[0][0].clone();
+    run(&*admin, &format!("kill {spid}")).await.unwrap();
+    match conn.keep_alive().await {
+        Err(DriverError::Connection(_)) => {}
+        other => panic!("expected a connection error: {other:?}"),
+    }
+}

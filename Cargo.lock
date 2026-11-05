@@ -5678,6 +5678,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "rustls",
+ "socket2",
  "spelaion-driver-api",
  "tiberius",
  "tokio",
