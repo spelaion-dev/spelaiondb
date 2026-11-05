@@ -1803,6 +1803,8 @@ pub struct DbeaverItem {
     pub has_password: bool,
     /// `user@host:port` of its SSH tunnel.
     pub ssh: Option<String>,
+    /// `host:port` of its SOCKS proxy.
+    pub proxy: Option<String>,
 }
 
 impl From<&spelaion_config::DbeaverConnection> for DbeaverItem {
@@ -1832,6 +1834,10 @@ impl From<&spelaion_config::DbeaverConnection> for DbeaverItem {
                 let port = s.port.map(|p| format!(":{p}")).unwrap_or_default();
                 format!("{}@{}{port}", s.user, s.host)
             }),
+            proxy: c
+                .proxy
+                .as_ref()
+                .map(|p| format!("{}:{}", p.host, p.port.unwrap_or(1080))),
         }
     }
 }

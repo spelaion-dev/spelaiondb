@@ -2490,7 +2490,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await importer.getByRole("checkbox", { name: "Store the passwords DBeaver saved in the system keychain" }).uncheck();
     await shot("13c-import-dbeaver");
     await importer.getByRole("button", { name: "Import 3 connections" }).click();
-    await importer.getByRole("status").filter({ hasText: "Imported 3 connections. Created 1 SSH tunnel." }).waitFor();
+    await importer.getByRole("status").filter({ hasText: "Imported 3 connections. Created 1 network profile." }).waitFor();
     await shot("13d-import-dbeaver-done");
     await importer.getByRole("button", { name: "Done", exact: true }).click();
     await importer.waitFor({ state: "detached" });
