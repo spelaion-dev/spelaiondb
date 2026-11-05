@@ -330,10 +330,32 @@ fn write_hop(table: &mut Table, old: Option<&HopConfig>, new: &HopConfig) {
     }
 }
 
-/// Saves the edited form over an existing tunnel (same file and name). Hops are matched by
-/// position: changed keys are rewritten, extra hops appended and missing ones removed;
-/// comments and `command` stay. A stored password is forgotten when its hop stops using
-/// the keychain or now points to another server, so it is never sent to the wrong host.
+/// A revision identifies the complete tunnel and the file it was loaded from.
+pub fn tunnel_revision(entry: &TunnelEntry) -> Result<String, ConfigError> {
+    crate::edit::revision(&entry.file_path, &entry.file)
+}
+
+/// Saves only if the item still matches the revision used to open the form.
+pub fn update_tunnel_at_revision(
+    config: &Config,
+    source: Source,
+    name: &str,
+    draft: &TunnelDraft,
+    passwords: &[Option<Secret>],
+    backend: &dyn SecretBackend,
+    revision: &str,
+) -> Result<TunnelFile, ResolveError> {
+    let entry = find(config, source, name)?;
+    if tunnel_revision(entry)? != revision {
+        return Err(
+            ConfigError::new(&entry.file_path, "the tunnel changed; reopen the editor").into(),
+        );
+    }
+    update_tunnel(config, source, name, draft, passwords, backend)
+}
+
+/// Saves edited hops by position, preserving comments and `command`. A stored password is
+/// forgotten when its hop stops using the keychain or points to another server.
 pub fn update_tunnel(
     config: &Config,
     source: Source,
@@ -341,7 +363,7 @@ pub fn update_tunnel(
     draft: &TunnelDraft,
     passwords: &[Option<Secret>],
     backend: &dyn SecretBackend,
-) -> Result<(), ResolveError> {
+) -> Result<TunnelFile, ResolveError> {
     let entry = find(config, source, name)?;
     let path = &entry.file_path;
     let draft = TunnelDraft {
@@ -352,6 +374,11 @@ pub fn update_tunnel(
     let old = &entry.file;
 
     let (original, mut doc) = read_doc(path)?;
+    let on_disk: TunnelFile = toml::from_str(&original)
+        .map_err(|e| ConfigError::new(path, format!("could not read tunnel: {e}")))?;
+    if &validate_tunnel(path, on_disk)? != old {
+        return Err(ConfigError::new(path, "the tunnel changed; reopen the editor").into());
+    }
     {
         let hops = doc
             .entry("hops")
@@ -375,7 +402,7 @@ pub fn update_tunnel(
     let edited = doc.to_string();
     let parsed: TunnelFile = toml::from_str(&edited)
         .map_err(|e| ConfigError::new(path, format!("the edited file is not valid: {e}")))?;
-    validate_tunnel(path, parsed)?;
+    let parsed = validate_tunnel(path, parsed)?;
     write_doc(path, &doc)?;
 
     let mut result = store_passwords(config, source, name, &new, passwords, backend).map(|_| ());
@@ -411,7 +438,7 @@ pub fn update_tunnel(
     if result.is_err() {
         let _ = std::fs::write(path, original);
     }
-    result
+    result.map(|()| parsed)
 }
 
 /// Deletes a tunnel file and its stored passwords. Refused while a connection uses it.

@@ -305,6 +305,7 @@ pub enum ConnectOutcome {
         item: String,
         new: bool,
         fields: Vec<FieldChangeItem>,
+        root: String,
     },
     /// The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
     /// their values, save them with `set_user_vars` and try again.
@@ -332,7 +333,7 @@ pub enum EditorAccessOutcome {
 
 /// One field of a changed repository item. Repository files hold secret references, never
 /// secrets.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldChangeItem {
     pub field: String,
@@ -340,8 +341,8 @@ pub struct FieldChangeItem {
     pub after: Option<String>,
 }
 
-impl From<spelaion_config::ItemChange> for ConnectOutcome {
-    fn from(change: spelaion_config::ItemChange) -> Self {
+impl ConnectOutcome {
+    pub fn changed(root: std::path::PathBuf, change: spelaion_config::ItemChange) -> Self {
         ConnectOutcome::Changed {
             item: change.item,
             new: change.new,
@@ -354,6 +355,7 @@ impl From<spelaion_config::ItemChange> for ConnectOutcome {
                     after: f.after,
                 })
                 .collect(),
+            root: root.to_string_lossy().into_owned(),
         }
     }
 }
