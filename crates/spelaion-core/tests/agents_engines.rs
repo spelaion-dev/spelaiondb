@@ -529,6 +529,95 @@ async fn duckdb(database: &str, read_only: bool) -> Session {
 }
 
 #[tokio::test]
+async fn destructive_table_ddl_preserves_existing_data() {
+    let mut sessions = mysql_sessions().await;
+    sessions.push(("duckdb", duckdb(":memory:", false).await));
+    for (server, session) in sessions {
+        let table = format!("agent_ddl_{}", std::process::id());
+        run(&session, &format!("create table {table} (id int, body varchar(20)); insert into {table} values (1, 'kept'), (2, 'safe')")).await;
+        for sql in [
+            format!("create or replace table {table} (id int)"),
+            format!("alter table {table} drop column body"),
+        ] {
+            assert!(
+                matches!(
+                    session.run_write(&sql, &write_limits()).await,
+                    Err(WriteError::Rejected(_))
+                ),
+                "{server}: {sql}"
+            );
+        }
+        assert_eq!(
+            first(
+                &session,
+                &format!("select count(*) from {table} where body in ('kept', 'safe')")
+            )
+            .await,
+            "2",
+            "{server}"
+        );
+        session
+            .run_write(
+                &format!("alter table {table} add column extra int"),
+                &write_limits(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first(
+                &session,
+                &format!("select count(*) from {table} where extra is null")
+            )
+            .await,
+            "2",
+            "{server}"
+        );
+        run(&session, &format!("drop table {table}")).await;
+    }
+}
+
+#[tokio::test]
+async fn mariadb_schema_replacement_preserves_tables() {
+    let Ok(addr) = std::env::var("SPELAION_TEST_MARIADB") else {
+        eprintln!("SPELAION_TEST_MARIADB not set: test skipped");
+        return;
+    };
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let driver = MysqlDriver::mariadb();
+    let conn = driver
+        .connect(&ConnectParams {
+            host: host.into(),
+            port: port.parse().unwrap(),
+            user: "root".into(),
+            password: Some(Secret::new("spelaion-root")),
+            database: "spelaion".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let schema = format!("agent_ddl_schema_{}", std::process::id());
+    run(&session, &format!("create database {schema}; create table {schema}.t (id int); insert into {schema}.t values (1)")).await;
+    for sql in [
+        format!("create or replace schema {schema}"),
+        format!("create or replace database {schema}"),
+    ] {
+        assert!(
+            matches!(
+                session.run_write(&sql, &write_limits()).await,
+                Err(WriteError::Rejected(_))
+            ),
+            "{sql}"
+        );
+    }
+    assert_eq!(
+        first(&session, &format!("select count(*) from {schema}.t")).await,
+        "1"
+    );
+    run(&session, &format!("drop database {schema}")).await;
+}
+
+#[tokio::test]
 async fn duckdb_reads_reach_no_files_and_roll_back() {
     let session = duckdb(":memory:", false).await;
     let csv = std::env::temp_dir().join(format!("spelaion-agents-{}.csv", std::process::id()));

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use spelaion_driver_api::{Dialect, DriverError, ExecEvent, ExecOptions};
-use sqlparser::ast::{Statement, visit_statements};
+use sqlparser::ast::{AlterTableOperation, Statement, visit_statements};
 use sqlparser::parser::Parser;
 
 use crate::Session;
@@ -100,6 +100,33 @@ pub fn check_write(dialect: &dyn Dialect, sql: &str) -> Result<(), String> {
 /// The allow list, checked on the statement and on every statement nested in it.
 fn allowed(statement: &Statement) -> Result<(), String> {
     match statement {
+        Statement::CreateSchema {
+            or_replace: true, ..
+        } => Err("replacing an existing schema is never run for agents".into()),
+        Statement::CreateTable(table) if table.or_replace => {
+            Err("replacing an existing table is never run for agents".into())
+        }
+        Statement::CreateView(view) if view.materialized && (view.or_replace || view.or_alter) => {
+            Err("replacing a materialized view is never run for agents".into())
+        }
+        Statement::AlterTable(table) => {
+            if table.location.is_some()
+                || table.operations.is_empty()
+                || table.operations.iter().any(|operation| {
+                    !matches!(
+                        operation,
+                        AlterTableOperation::AddColumn { .. }
+                            | AlterTableOperation::AddConstraint { .. }
+                            | AlterTableOperation::RenameColumn { .. }
+                            | AlterTableOperation::RenameTable { .. }
+                    )
+                })
+            {
+                Err("ALTER TABLE operation is not allowed for agents".into())
+            } else {
+                Ok(())
+            }
+        }
         Statement::Insert { .. }
         | Statement::Update { .. }
         | Statement::Delete { .. }
@@ -110,7 +137,6 @@ fn allowed(statement: &Statement) -> Result<(), String> {
         | Statement::CreateIndex { .. }
         | Statement::CreateSchema { .. }
         | Statement::CreateSequence { .. }
-        | Statement::AlterTable { .. }
         | Statement::AlterIndex { .. }
         | Statement::AlterView { .. }
         | Statement::Comment { .. } => Ok(()),
@@ -337,6 +363,54 @@ mod tests {
             "update orders set total = 0 where id = 1",
         ] {
             assert_eq!(check_write(&MysqlDialect, sql), Ok(()), "{sql}");
+        }
+    }
+
+    #[test]
+    fn destructive_table_ddl_is_refused() {
+        for (dialect, sql) in [
+            (
+                &DuckdbDialect as &dyn Dialect,
+                "create or replace table t (id int)",
+            ),
+            (&MysqlDialect, "create or replace table t (id int)"),
+            (&MysqlDialect, "create or replace schema important"),
+            (&MysqlDialect, "create or replace database important"),
+            (&DuckdbDialect, "create or replace schema important"),
+            (&PostgresDialect, "alter table t drop column body"),
+            (&SqliteDialect, "alter table t drop column body"),
+            (&MysqlDialect, "alter table t drop column body"),
+            (&SqlServerDialect, "alter table t drop column body"),
+            (&DuckdbDialect, "alter table t drop column body"),
+            (
+                &PostgresDialect,
+                "alter table t add column a int, drop column body",
+            ),
+            (&MysqlDialect, "alter table t modify column body varchar(1)"),
+            (&MysqlDialect, "alter table t drop partition p0"),
+            (
+                &PostgresDialect,
+                "alter table t alter column body type varchar(1)",
+            ),
+            (&PostgresDialect, "alter table t disable row level security"),
+        ] {
+            assert!(check_write(dialect, sql).is_err(), "must reject: {sql}");
+        }
+        let error = check_write(&MysqlDialect, "create or replace schema important").unwrap_err();
+        assert!(error.contains("replacing an existing schema"), "{error}");
+        for (dialect, sql) in [
+            (
+                &MysqlDialect as &dyn Dialect,
+                "alter table t add column added int",
+            ),
+            (&SqliteDialect, "alter table t add column added int"),
+            (
+                &PostgresDialect,
+                "alter table t rename column body to contents",
+            ),
+            (&DuckdbDialect, "create table t (id int)"),
+        ] {
+            assert_eq!(check_write(dialect, sql), Ok(()), "{sql}");
         }
     }
 
