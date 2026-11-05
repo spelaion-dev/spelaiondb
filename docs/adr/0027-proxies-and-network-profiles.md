@@ -90,8 +90,15 @@ Two questions have to be answered first:
   - The forms call them network profiles. Files and the `tunnel = "…"` key are unchanged.
   - The list reads only the files, so a repository's profiles can be listed before it is
     trusted. Nothing is resolved and no secret is read.
-- Not done: importing DBeaver's proxy handlers. Their file format was not checked against
-  real files.
+- DBeaver import (checked against a real `data-sources.json`):
+  - The SOCKS handler is `handlers.socks_proxy` with `socks-host` and `socks-port`. Its user
+    and password are read from `network/socks_proxy` in the saved credentials, as SSH's are
+    from `network/ssh_tunnel`; the credentials key was not checked against a real file.
+  - It becomes a network profile: the proxy alone, or in front of the SSH hop (named
+    `<user>-<bastion>-via-<proxy>-<port>`, so it is never shared with the profile without the
+    proxy).
+  - DBeaver has no per-connection HTTP proxy, only a global preference, so nothing else is
+    imported.
 - Tests:
   - `testing/docker/proxy` runs Dante (SOCKS5) and tinyproxy (HTTP), both with a password, on
     the networks of the bastions and databases. `SPELAION_TEST_SOCKS=127.0.0.1:11080` and

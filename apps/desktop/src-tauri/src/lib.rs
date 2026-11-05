@@ -1724,12 +1724,9 @@ async fn import_dbeaver(
                 continue;
             }
         };
-        // One tunnel per bastion and user: connections through the same one share it.
-        let tunnel_name = connection
-            .ssh
-            .as_ref()
-            .map(|s| spelaion_config::slug(&format!("{} {}", s.user, s.host)))
-            .unwrap_or_default();
+        // One network profile per bastion and user (and proxy): connections through the same
+        // one share it.
+        let tunnel_name = connection.tunnel_name().unwrap_or_default();
         match import_one(
             &state,
             connection,

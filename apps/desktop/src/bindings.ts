@@ -585,6 +585,8 @@ export type DbeaverItem_Deserialize = {
 	hasPassword: boolean,
 	/**  `user@host:port` of its SSH tunnel. */
 	ssh?: string | null,
+	/**  `host:port` of its SOCKS proxy. */
+	proxy?: string | null,
 };
 
 /**
@@ -606,6 +608,8 @@ export type DbeaverItem_Serialize = {
 	hasPassword: boolean,
 	/**  `user@host:port` of its SSH tunnel. */
 	ssh: string | null,
+	/**  `host:port` of its SOCKS proxy. */
+	proxy: string | null,
 };
 
 /**  What `scan_dbeaver` found, and where. */

@@ -14,10 +14,10 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
-use crate::draft::{ConnectionDraft, PasswordChoice};
+use crate::draft::{ConnectionDraft, PasswordChoice, slug};
 use crate::load::Source;
-use crate::model::{ConnectionFile, Engine, SshAuth, TlsModeConfig, TunnelFile};
-use crate::tunnel_draft::{HopDraft, TunnelDraft, TunnelDraftOptions, TunnelPasswords};
+use crate::model::{ConnectionFile, Engine, ProxyType, SshAuth, TlsModeConfig, TunnelFile};
+use crate::tunnel_draft::{HopDraft, ProxyDraft, TunnelDraft, TunnelDraftOptions, TunnelPasswords};
 
 /// The key DBeaver ships with to obscure `credentials-config.json`.
 const CREDENTIALS_KEY: [u8; 16] = [
@@ -25,7 +25,7 @@ const CREDENTIALS_KEY: [u8; 16] = [
 ];
 
 /// One DBeaver connection, as far as SpelaionDB can use it.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DbeaverConnection {
     /// DBeaver's own identifier (`mysql8-18f…`), to pick connections to import.
     pub id: String,
@@ -43,10 +43,40 @@ pub struct DbeaverConnection {
     /// DBeaver's connection type (`dev`, `test`, `prod` or a custom one).
     pub env: String,
     pub ssh: Option<DbeaverSsh>,
+    /// DBeaver's SOCKS proxy handler (`socks_proxy`), alone or in front of the SSH tunnel.
+    /// DBeaver has no per-connection HTTP proxy: its HTTP proxy is a global preference.
+    pub proxy: Option<DbeaverProxy>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DbeaverProxy {
+    pub host: String,
+    pub port: Option<u16>,
+    pub user: String,
+    pub password: Option<Secret>,
+}
+
+impl DbeaverConnection {
+    /// The name its imported network profile gets: one per SSH bastion and user (and proxy,
+    /// if any), or per proxy alone, so connections that share one in DBeaver share it here.
+    pub fn tunnel_name(&self) -> Option<String> {
+        let proxy = self
+            .proxy
+            .as_ref()
+            .map(|p| format!("{} {}", p.host, p.port.unwrap_or(1080)));
+        match (&self.ssh, proxy) {
+            (Some(ssh), None) => Some(slug(&format!("{} {}", ssh.user, ssh.host))),
+            (Some(ssh), Some(proxy)) => {
+                Some(slug(&format!("{} {} via {proxy}", ssh.user, ssh.host)))
+            }
+            (None, Some(proxy)) => Some(slug(&format!("socks {proxy}"))),
+            (None, None) => None,
+        }
+    }
 }
 
 /// The SSH tunnel of a DBeaver connection.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DbeaverSsh {
     pub host: String,
     pub port: Option<u16>,
@@ -239,7 +269,35 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
         password,
         env: text(config.get("type")),
         ssh: ssh_of(config, credentials),
+        proxy: proxy_of(config, credentials),
     }
+}
+
+fn proxy_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverProxy> {
+    let handler = config.get("handlers")?.get("socks_proxy")?;
+    if handler.get("enabled").and_then(Json::as_bool) != Some(true) {
+        return None;
+    }
+    let properties = handler.get("properties").unwrap_or(&Json::Null);
+    let host = text(properties.get("socks-host"));
+    if host.is_empty() {
+        return None;
+    }
+    let saved = credentials.and_then(|c| c.get("network/socks_proxy"));
+    let user = match text(saved.and_then(|s| s.get("user"))) {
+        user if user.is_empty() => text(properties.get("socks-user")),
+        user => user,
+    };
+    Some(DbeaverProxy {
+        host,
+        port: port(properties.get("socks-port")),
+        user,
+        password: saved
+            .and_then(|s| s.get("password"))
+            .and_then(Json::as_str)
+            .filter(|p| !p.is_empty())
+            .map(Secret::new),
+    })
 }
 
 fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverSsh> {
@@ -311,33 +369,68 @@ pub fn import_plan(
             PasswordChoice::Prompt
         }
     };
-    let tunnel = connection.ssh.as_ref().map(|ssh| {
-        let password = match ssh.auth {
-            SshAuth::Password | SshAuth::KeyboardInteractive => choice(&ssh.password),
-            SshAuth::Agent | SshAuth::Key => PasswordChoice::None,
-        };
-        (
+    let proxy = connection.proxy.as_ref().map(|proxy| ProxyDraft {
+        kind: ProxyType::Socks5,
+        host: proxy.host.clone(),
+        port: Some(proxy.port.unwrap_or(1080)),
+        user: proxy.user.clone(),
+        password: if proxy.user.is_empty() {
+            PasswordChoice::None
+        } else {
+            choice(&proxy.password)
+        },
+    });
+    let proxy_password = connection
+        .proxy
+        .as_ref()
+        .and_then(|proxy| keep(&proxy.password));
+    let tunnel = match (&connection.ssh, proxy) {
+        (None, None) => None,
+        (Some(ssh), proxy) => {
+            let password = match ssh.auth {
+                SshAuth::Password | SshAuth::KeyboardInteractive => choice(&ssh.password),
+                SshAuth::Agent | SshAuth::Key => PasswordChoice::None,
+            };
+            Some((
+                TunnelDraft {
+                    source,
+                    name: tunnel_name.to_string(),
+                    hops: vec![HopDraft {
+                        host: ssh.host.clone(),
+                        port: ssh.port,
+                        user: ssh.user.clone(),
+                        auth: vec![ssh.auth],
+                        identity_file: ssh.key_path.clone(),
+                        password,
+                    }],
+                    options: TunnelDraftOptions {
+                        keepalive_interval: ssh.keepalive_interval,
+                        keepalive_count: ssh.keepalive_count,
+                        connect_timeout: ssh.connect_timeout,
+                    },
+                    proxy,
+                },
+                TunnelPasswords {
+                    hops: vec![keep(&ssh.password)],
+                    proxy: proxy_password,
+                },
+            ))
+        }
+        // The proxy alone reaches the database (ADR-027).
+        (None, Some(proxy)) => Some((
             TunnelDraft {
                 source,
                 name: tunnel_name.to_string(),
-                hops: vec![HopDraft {
-                    host: ssh.host.clone(),
-                    port: ssh.port,
-                    user: ssh.user.clone(),
-                    auth: vec![ssh.auth],
-                    identity_file: ssh.key_path.clone(),
-                    password,
-                }],
-                options: TunnelDraftOptions {
-                    keepalive_interval: ssh.keepalive_interval,
-                    keepalive_count: ssh.keepalive_count,
-                    connect_timeout: ssh.connect_timeout,
-                },
-                proxy: None,
+                hops: Vec::new(),
+                options: TunnelDraftOptions::default(),
+                proxy: Some(proxy),
             },
-            TunnelPasswords::from(vec![keep(&ssh.password)]),
-        )
-    });
+            TunnelPasswords {
+                hops: Vec::new(),
+                proxy: proxy_password,
+            },
+        )),
+    };
     let sqlite = engine.is_file();
     ImportPlan {
         connection: ConnectionDraft {
@@ -434,6 +527,14 @@ mod tests {
                 "duckdb_jdbc-5": {
                   "provider": "duckdb", "driver": "duckdb_jdbc", "name": "Analytics",
                   "configuration": {"url": "jdbc:duckdb:C:\\data\\sales.duckdb", "type": "dev"}
+                },
+                "mysql8-6": {
+                  "provider": "mysql", "driver": "mysql8", "name": "Behind SOCKS", "save-password": true,
+                  "configuration": {
+                    "host": "localhost", "port": "3306", "type": "dev",
+                    "handlers": {"socks_proxy": {"type": "PROXY", "enabled": true, "save-password": true,
+                      "properties": {"socks-host": "proxy.corp", "socks-port": 1080}}}
+                  }
                 }
               }
             }"#,
@@ -442,7 +543,8 @@ mod tests {
         let credentials =
             br##"{"postgres-jdbc-1": {"#connection": {"user": "app", "password": "s3cret"},
             "network/ssh_tunnel": {"user": "jump", "password": "hop-pass"}},
-            "mariaDB-2": {"#connection": {"user": "root"}}}"##;
+            "mariaDB-2": {"#connection": {"user": "root"}},
+            "mysql8-6": {"network/socks_proxy": {"user": "proxy-user", "password": "proxy-secret"}}}"##;
         let iv = [7u8; 16];
         let mut buffer = credentials.to_vec();
         buffer.resize(credentials.len() + 16, 0);
@@ -502,17 +604,80 @@ mod tests {
             (Ok(Engine::Duckdb), "C:\\data\\sales.duckdb")
         );
         // The same from the project folder or the `.dbeaver` folder itself.
-        assert_eq!(read_dbeaver(&root.join("General")).unwrap().len(), 5);
+        assert_eq!(read_dbeaver(&root.join("General")).unwrap().len(), 6);
         assert_eq!(
             read_dbeaver(&root.join("General").join(".dbeaver"))
                 .unwrap()
                 .len(),
-            5
+            6
         );
         assert!(matches!(
             read_dbeaver(&root.join("nothing")),
             Err(DbeaverError::NotFound(_))
         ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn socks_proxies_become_network_profiles() {
+        let root = workspace("socks");
+        let found = read_dbeaver(&root).unwrap();
+        let socks = found.iter().find(|c| c.id == "mysql8-6").unwrap();
+        let proxy = socks.proxy.as_ref().expect("the SOCKS handler");
+        assert_eq!(
+            (proxy.host.as_str(), proxy.port, proxy.user.as_str()),
+            ("proxy.corp", Some(1080), "proxy-user")
+        );
+        assert_eq!(
+            proxy.password.as_ref().map(Secret::expose),
+            Some("proxy-secret")
+        );
+        assert!(socks.ssh.is_none());
+        let name = socks.tunnel_name().unwrap();
+        assert_eq!(name, "socks-proxy-corp-1080");
+
+        // The proxy alone: a profile without hops; its password to the keychain if asked.
+        let plan = import_plan(socks, Engine::Mysql, Source::User, true, &name);
+        assert_eq!(plan.connection.tunnel, name);
+        let (tunnel, secrets) = plan.tunnel.unwrap();
+        assert!(tunnel.hops.is_empty());
+        let draft = tunnel.proxy.clone().unwrap();
+        assert_eq!(
+            (
+                draft.kind,
+                draft.host.as_str(),
+                draft.port,
+                draft.user.as_str()
+            ),
+            (ProxyType::Socks5, "proxy.corp", Some(1080), "proxy-user")
+        );
+        assert_eq!(draft.password, PasswordChoice::Keychain);
+        assert_eq!(
+            secrets.proxy.as_ref().map(Secret::expose),
+            Some("proxy-secret")
+        );
+        let asked = import_plan(socks, Engine::Mysql, Source::User, false, &name);
+        let (tunnel, secrets) = asked.tunnel.unwrap();
+        assert_eq!(tunnel.proxy.unwrap().password, PasswordChoice::Prompt);
+        assert!(secrets.proxy.is_none());
+
+        // With SSH too, the proxy goes in front of the hop, in a profile of its own.
+        let pg = found.iter().find(|c| c.id == "postgres-jdbc-1").unwrap();
+        let mut both = pg.clone();
+        both.proxy = socks.proxy.clone();
+        assert_eq!(
+            both.tunnel_name().unwrap(),
+            "jump-bastion-example-com-via-proxy-corp-1080"
+        );
+        assert_eq!(pg.tunnel_name().unwrap(), "jump-bastion-example-com");
+        let plan = import_plan(&both, Engine::Postgres, Source::User, true, "t");
+        let (tunnel, secrets) = plan.tunnel.unwrap();
+        assert_eq!(tunnel.hops.len(), 1);
+        assert_eq!(tunnel.proxy.unwrap().host, "proxy.corp");
+        assert_eq!(
+            secrets.hops[0].as_ref().map(Secret::expose),
+            Some("hop-pass")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -142,6 +142,7 @@ export function DbeaverImport(props: { onBack(): void; onDone(): void }) {
                   <span className="muted small dbeaver-detail">
                     {c.unsupported ?? [c.user && `${c.user}@`, c.target].filter(Boolean).join("")}
                     {c.ssh ? ` · SSH ${c.ssh}` : ""}
+                    {c.proxy ? ` · SOCKS ${c.proxy}` : ""}
                     {c.env ? ` · ${c.env}` : ""}
                     {c.hasPassword ? ` · ${t("dbeaver.passwordSaved")}` : ""}
                   </span>
