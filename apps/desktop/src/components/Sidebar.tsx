@@ -34,7 +34,7 @@ import {
 } from "../connect";
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
-import { useApp, useDialogs } from "../store";
+import { useApp, useDialogs, type ExplorerReveal } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
@@ -331,6 +331,27 @@ function LeafRow({
   );
 }
 
+/**
+ * Shows a row the explorer was asked to reveal (`matches`): scrolls it into view and outlines
+ * it for a moment, without taking the keyboard from where it is.
+ */
+function useRevealedRow(matches: (reveal: ExplorerReveal) => boolean) {
+  const reveal = useApp((s) => s.explorerReveal);
+  const row = useRef<HTMLDivElement>(null);
+  const [revealed, setRevealed] = useState(false);
+  const hit = reveal !== null && matches(reveal);
+  useEffect(() => {
+    if (!reveal || !hit) return;
+    row.current?.scrollIntoView({ block: "center" });
+    setRevealed(true);
+    useApp.getState().revealDone(reveal.nonce);
+    const timer = window.setTimeout(() => setRevealed(false), 1500);
+    return () => window.clearTimeout(timer);
+    // Once per request.
+  }, [reveal?.nonce, hit]);
+  return { row, revealed: revealed ? " revealed" : "" };
+}
+
 /** F2 renames the focused object, as in DBeaver. */
 function isRenameKey(e: React.KeyboardEvent): boolean {
   if (e.key !== "F2" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
@@ -518,6 +539,7 @@ function Folder({
   filtered = false,
   onConfigureFilter,
   create,
+  reveal,
   children,
 }: {
   label: string;
@@ -531,12 +553,17 @@ function Folder({
   onConfigureFilter?: () => void;
   /** Its right-click menu offers "New …" of what it holds. */
   create?: { label: string; run(): void };
+  /** It holds an object the explorer was asked to show: it opens. */
+  reveal?: number;
   children: ReactNode;
 }) {
   const { t, i18n } = useTranslation("shell");
   const [chosen, setOpen] = useState(initiallyOpen);
   const [menu, setMenu] = useContextMenu();
   const open = chosen || forceOpen;
+  useEffect(() => {
+    if (reveal !== undefined) setOpen(true);
+  }, [reveal]);
   return (
     <div className="node">
       <div
@@ -880,6 +907,15 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   useEffect(() => {
     useApp.getState().setConnectionOpen(connection.id, open);
   }, [connection.id, open]);
+  // Asked to show something here: expand if connected in the explorer (connecting could ask
+  // for a password), else only show the connection.
+  const { row: connectionRow, revealed: connectionRevealed } = useRevealedRow(
+    (r) => r.connectionId === connection.id && (schemas === null || r.schema === undefined),
+  );
+  const reveal = useApp((s) => s.explorerReveal);
+  useEffect(() => {
+    if (reveal?.connectionId === connection.id && schemas !== null) setOpen(true);
+  }, [reveal, connection.id, schemas]);
   useEffect(
     () => () => {
       useApp.getState().setConnectionOpen(connection.id, false);
@@ -977,7 +1013,8 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       }}
     >
       <div
-        className="row connection-row"
+        ref={connectionRow}
+        className={`row connection-row${connectionRevealed}`}
         onContextMenu={(e) => {
           e.preventDefault();
           setRowMenu({ x: e.clientX, y: e.clientY });
@@ -1028,6 +1065,18 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       </div>
       {rowMenu && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: rowMenu.x, top: rowMenu.y }}>
+          {schemas && (
+            <button
+              role="menuitem"
+              title="Ctrl+Shift+D"
+              onClick={() => {
+                setRowMenu(null);
+                useApp.getState().setOpenObject({ connectionId: connection.id });
+              }}
+            >
+              {t("openByName.menu")}
+            </button>
+          )}
           <button role="menuitem" onClick={() => configureFilter("schemas")}>
             {t("configureSchemaFilter")}
           </button>
@@ -1176,6 +1225,35 @@ function SchemaNode({
   useOnChange(generation, reload);
   const childGeneration = `${generation}.${refreshed}`;
 
+  const reveal = useApp((s) => s.explorerReveal);
+  const revealHere = reveal !== null && reveal.connectionId === connectionId && reveal.schema === schema;
+  const { row: schemaRow, revealed: schemaRevealed } = useRevealedRow(
+    (r) => r.connectionId === connectionId && r.schema === schema && r.name === undefined,
+  );
+  useEffect(() => {
+    if (!revealHere || !reveal) return;
+    if (!open) setOpen(true);
+    if (objects === null) {
+      void load();
+      return;
+    }
+    // Not here (filtered out, or gone): nothing more to show.
+    if (reveal.name !== undefined && !objects.some((o) => o.name === reveal.name) && !others.some((o) => o.name === reveal.name)) {
+      useApp.getState().revealDone(reveal.nonce);
+    }
+    // Only when asked, and once the objects are read.
+  }, [reveal?.nonce, revealHere, objects]);
+  /** The folder holding the object to show, which opens. */
+  const revealFolder =
+    revealHere && reveal?.name !== undefined && objects
+      ? (() => {
+          const relation = objects.find((o) => o.name === reveal.name);
+          if (relation) return relationFolder(relation.kind);
+          const other = others.find((o) => o.name === reveal.name);
+          return other ? schemaObjectFolder(other.kind) : undefined;
+        })()
+      : undefined;
+
   // A schema whose name matches the quick filter shows everything in it; otherwise only what
   // matches, and it is hidden if it is closed and nothing loaded in it matches.
   const inner = matchesFilter(schema, filter) ? "" : filter;
@@ -1192,7 +1270,8 @@ function SchemaNode({
       }}
     >
       <div
-        className="row"
+        ref={schemaRow}
+        className={`row${schemaRevealed}`}
         onClick={(e) => { if (e.detail === 1) void toggle(); }}
         onDoubleClick={() => {
           const database = explorerDatabase(connectionId, schema);
@@ -1315,6 +1394,7 @@ function SchemaNode({
                     forceOpen={inner !== ""}
                     filtered={!!objectFilter && (objectFilter.include.length > 0 || objectFilter.exclude.length > 0)}
                     onConfigureFilter={() => onConfigureFilter("objects")}
+                    reveal={revealFolder === folder ? reveal?.nonce : undefined}
                     create={(() => {
                       const kind = CREATE_FOLDERS[folder];
                       return kind && actions?.create.includes(kind)
@@ -1402,6 +1482,9 @@ function ObjectNode({
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
   const actions = useObjectActions(session);
+  const { row: objectRow, revealed: objectRevealed } = useRevealedRow(
+    (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
+  );
   /** Columns chosen with Ctrl+click, in the order chosen: a new index takes them so. */
   const [chosenColumns, setChosenColumns] = useState<string[]>([]);
   const chooseColumn = (name: string, add: boolean) =>
@@ -1530,7 +1613,8 @@ function ObjectNode({
       }}
     >
       <div
-        className={`row${chosen ? " selected" : ""}`}
+        ref={objectRow}
+        className={`row${chosen ? " selected" : ""}${objectRevealed}`}
         aria-selected={chosen}
         onClick={(e) => {
           if (e.ctrlKey || e.metaKey) {
@@ -2052,6 +2136,9 @@ function SchemaObjectNode({
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);
+  const { row, revealed } = useRevealedRow(
+    (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
+  );
 
   /** The driver writes the DDL; it opens in a new tab and nothing runs. */
   async function openDefinition() {
@@ -2091,7 +2178,8 @@ function SchemaObjectNode({
   return (
     <div className="node">
       <div
-        className="row leaf-row"
+        ref={row}
+        className={`row leaf-row${revealed}`}
         onDoubleClick={() => void openDefinition()}
         onContextMenu={(e) => {
           e.preventDefault();

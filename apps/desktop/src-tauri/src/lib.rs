@@ -2323,6 +2323,32 @@ async fn new_index_sql(
     .map_err(|e| e.to_string())
 }
 
+/// "Open object by name": the objects whose name contains `text`, in the schemas and among the
+/// objects the explorer shows (its filter, and system schemas only with `show_system`).
+#[tauri::command]
+#[specta::specta]
+async fn search_objects(
+    session: String,
+    text: String,
+    schema_filter: Option<NameFilterItem>,
+    object_filter: Option<NameFilterItem>,
+    show_system: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<FoundObjectItem>> {
+    let open = state.session(&session).await?;
+    let found = spelaion_core::search_objects(
+        open.session.connection().as_ref(),
+        &text,
+        &schema_filter.map(NameFilter::from).unwrap_or_default(),
+        &object_filter.map(NameFilter::from).unwrap_or_default(),
+        show_system,
+        spelaion_core::SEARCH_LIMIT,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(found.into_iter().map(FoundObjectItem::from).collect())
+}
+
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 /// was shown. The core writes the statements again from the change, and refuses read-only
 /// connections (ADR-026). Returns how many statements ran.
@@ -2532,6 +2558,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             apply_object_change,
             create_sql,
             new_index_sql,
+            search_objects,
             preview_table_edits,
             apply_table_edits,
             save_snippet,

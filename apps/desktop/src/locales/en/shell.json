@@ -99,7 +99,17 @@
     "partitioned_table": "Partitioned table",
     "foreign_table": "Foreign table",
     "view": "View",
-    "materialized_view": "Materialized view"
+    "materialized_view": "Materialized view",
+    "function": "Function",
+    "procedure": "Procedure",
+    "aggregate": "Aggregate function",
+    "sequence": "Sequence",
+    "trigger": "Trigger",
+    "enum": "Enum",
+    "domain": "Domain",
+    "type": "Data type",
+    "event": "Event",
+    "synonym": "Synonym"
   },
   "folders": {
     "tables": "Tables",
@@ -242,5 +252,17 @@
     "uniqueIndex": "New unique index on ({{columns}})",
     "uniqueConstraint": "New unique constraint on ({{columns}})",
     "primaryKey": "New primary key on ({{columns}})"
+  },
+  "openByName": {
+    "title": "Open object by name",
+    "menu": "Open object by name…",
+    "name": "Object name",
+    "placeholder": "Part of a table, view, function… name",
+    "connection": "Connection",
+    "results": "Objects found",
+    "searching": "Searching…",
+    "nothing": "Nothing has that name in what the explorer shows.",
+    "hint": "↑ ↓ to choose, Enter to open it and show it in the explorer.",
+    "noneConnected": "Connect a connection in the explorer first: the search reads its catalog."
   }
 }

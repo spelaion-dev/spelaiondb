@@ -980,6 +980,42 @@ input[type="search"] {
   display: grid;
   gap: 4px;
 }
+.open-object-dialog {
+  width: min(600px, 92vw);
+}
+.open-object-search {
+  display: flex;
+  gap: 8px;
+}
+.open-object-search input {
+  flex: 1;
+}
+.open-object-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.open-object-results:empty {
+  display: none;
+}
+.open-object-results li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.open-object-results li[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+.row.revealed {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .object-change-sql {
   margin: 0;
   max-height: 240px;
