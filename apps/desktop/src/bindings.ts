@@ -552,10 +552,14 @@ export type EditableTableItem = {
 export type EditorAccessOutcome = EditorAccessOutcome_Serialize | EditorAccessOutcome_Deserialize;
 
 /**  Trust status of an existing connection before opening its editor. */
-export type EditorAccessOutcome_Deserialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Deserialize[] };
+export type EditorAccessOutcome_Deserialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
+/**  `connection:<id>`, for `accept_change`. */
+item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string };
 
 /**  Trust status of an existing connection before opening its editor. */
-export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Serialize[] };
+export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
+/**  `connection:<id>`, for `accept_change`. */
+item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
 export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;

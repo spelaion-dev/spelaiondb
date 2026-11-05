@@ -54,14 +54,15 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
       try {
         let access = await call(commands.connectionEditorAccess(editing));
         if (access.kind === "untrusted") {
-          if (!(await useDialogs.getState().askTrust(useApp.getState().workspace?.workspace ?? null))) { close(); return; }
-          useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
+          const shown = useApp.getState().workspace?.workspace ?? null;
+          if (!(await useDialogs.getState().askTrust(shown))) { close(); return; }
+          useApp.getState().setWorkspace(await call(commands.trustWorkspace(shown ?? "")));
           access = await call(commands.connectionEditorAccess(editing));
         }
         if (access.kind === "changed") {
           const accepted = await useDialogs.getState().askChange({ item: access.item, isNew: access.new, fields: access.fields });
           if (!accepted) { close(); return; }
-          await call(commands.acceptChange(access.item));
+          await call(commands.acceptChange(access.root, access.item, access.new, access.fields));
           access = await call(commands.connectionEditorAccess(editing));
         }
         if (access.kind !== "ready") { close(); return; }
@@ -401,8 +402,9 @@ function ConnectionForm(props: {
   async function trustForKubernetes(): Promise<boolean> {
     if (useApp.getState().workspace?.trusted) return true;
     try {
-      if (!(await useDialogs.getState().askTrust(useApp.getState().workspace?.workspace ?? null))) return false;
-      useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
+      const shown = useApp.getState().workspace?.workspace ?? null;
+      if (!(await useDialogs.getState().askTrust(shown))) return false;
+      useApp.getState().setWorkspace(await call(commands.trustWorkspace(shown ?? "")));
       return true;
     } catch (e) {
       setSaveError(errorText(e));

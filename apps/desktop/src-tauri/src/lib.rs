@@ -642,8 +642,9 @@ async fn connection_editor_access(
     match Resolver::new(&config, &trust, &SystemBackend).check_editor_access(id.source, Some(&id)) {
         Ok(()) => Ok(EditorAccessOutcome::Ready),
         Err(spelaion_config::ResolveError::Untrusted { .. }) => Ok(EditorAccessOutcome::Untrusted),
-        Err(spelaion_config::ResolveError::Changed { change, .. }) => {
+        Err(spelaion_config::ResolveError::Changed { root, change }) => {
             Ok(EditorAccessOutcome::Changed {
+                root: root.to_string_lossy().into_owned(),
                 item: change.item,
                 new: change.new,
                 fields: change
