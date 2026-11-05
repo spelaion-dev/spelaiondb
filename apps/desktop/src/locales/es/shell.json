@@ -225,6 +225,9 @@
     "openInEditor": "Abrir en el editor",
     "running": "Ejecutando…",
     "production": "Es una conexión de producción.",
-    "readOnly": "La conexión es de solo lectura: el SQL solo puede abrirse en el editor."
+    "readOnly": "La conexión es de solo lectura: el SQL solo puede abrirse en el editor.",
+    "dropMenu": "Borrar…",
+    "dropTitle": "Borrar {{name}}",
+    "drop": "Borrar"
   }
 }

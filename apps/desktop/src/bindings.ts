@@ -118,15 +118,15 @@ export const commands = {
 	objectActions: (session: string) => typedError<ObjectActionsItem, string>(__TAURI_INVOKE("object_actions", { session })),
 	/**
 	 *  The SQL of a change to an object (rename, drop…), written by the core, to show before it
-	 *  runs or to open in the editor.
+	 *  runs or to open in the editor, and whether its object can be dropped in cascade.
 	 */
-	previewObjectChange: (session: string, change: ObjectChangeItem) => typedError<string, string>(__TAURI_INVOKE("preview_object_change", { session, change })),
+	previewObjectChange: (session: string, change: ObjectChangeItem_Deserialize) => typedError<ObjectChangePreview, string>(__TAURI_INVOKE("preview_object_change", { session, change })),
 	/**
 	 *  Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 	 *  was shown. The core writes the statements again from the change, and refuses read-only
 	 *  connections (ADR-026). Returns how many statements ran.
 	 */
-	applyObjectChange: (session: string, change: ObjectChangeItem, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_object_change", { session, change, confirmed })),
+	applyObjectChange: (session: string, change: ObjectChangeItem_Deserialize, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_object_change", { session, change, confirmed })),
 	/**
 	 *  The statements the core would run for the pending changes of a table data tab, to show
 	 *  before applying them (production asks for confirmation).
@@ -791,10 +791,24 @@ export type NameFilterItem = {
 /**  What the explorer may offer on a session's engine (ADR-026). */
 export type ObjectActionsItem = {
 	renameViews: boolean,
+	dropSchemas: boolean,
+	dropConstraints: boolean,
 };
 
 /**  What to do with an object of the explorer. */
-export type ObjectChangeItem = { action: "rename"; target: ObjectTargetItem; newName: string };
+export type ObjectChangeItem = ObjectChangeItem_Serialize | ObjectChangeItem_Deserialize;
+
+/**  What to do with an object of the explorer. */
+export type ObjectChangeItem_Deserialize = { action: "rename"; target: ObjectTargetItem_Deserialize; newName: string } | { action: "drop"; target: ObjectTargetItem_Deserialize; cascade: boolean };
+
+/**  What to do with an object of the explorer. */
+export type ObjectChangeItem_Serialize = { action: "rename"; target: ObjectTargetItem_Serialize; newName: string } | { action: "drop"; target: ObjectTargetItem_Serialize; cascade: boolean };
+
+/**  The SQL of a change to show, and whether its object can be dropped in cascade. */
+export type ObjectChangePreview = {
+	sql: string,
+	cascade: boolean,
+};
 
 export type ObjectItem = ObjectItem_Serialize | ObjectItem_Deserialize;
 
@@ -829,9 +843,23 @@ export type ObjectPathItem = {
  *  An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
  *  writes the statements.
  */
-export type ObjectTargetItem = 
+export type ObjectTargetItem = ObjectTargetItem_Serialize | ObjectTargetItem_Deserialize;
+
+/**
+ *  An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
+ *  writes the statements.
+ */
+export type ObjectTargetItem_Deserialize = { kind: "schema"; name: string } | 
 /**  `relation` is the `kind` of an `ObjectItem`: `table`, `view`… */
-{ kind: "relation"; schema: string; name: string; relation: string } | { kind: "column"; schema: string; table: string; name: string };
+{ kind: "relation"; schema: string; name: string; relation: string } | { kind: "column"; schema: string; table: string; name: string } | { kind: "index"; schema: string; table: string; name: string; primary: boolean } | { kind: "constraint"; schema: string; table: string; name: string; constraint: ConstraintKindItem } | { kind: "foreignKey"; schema: string; table: string; name: string } | { kind: "schemaObject"; object: SchemaObjectItem_Deserialize };
+
+/**
+ *  An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
+ *  writes the statements.
+ */
+export type ObjectTargetItem_Serialize = { kind: "schema"; name: string } | 
+/**  `relation` is the `kind` of an `ObjectItem`: `table`, `view`… */
+{ kind: "relation"; schema: string; name: string; relation: string } | { kind: "column"; schema: string; table: string; name: string } | { kind: "index"; schema: string; table: string; name: string; primary: boolean } | { kind: "constraint"; schema: string; table: string; name: string; constraint: ConstraintKindItem } | { kind: "foreignKey"; schema: string; table: string; name: string } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
 
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */

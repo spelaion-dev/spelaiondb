@@ -225,6 +225,9 @@
     "openInEditor": "Open in editor",
     "running": "Running…",
     "production": "This is a production connection.",
-    "readOnly": "The connection is read-only: the SQL can only be opened in the editor."
+    "readOnly": "The connection is read-only: the SQL can only be opened in the editor.",
+    "dropMenu": "Drop…",
+    "dropTitle": "Drop {{name}}",
+    "drop": "Drop"
   }
 }

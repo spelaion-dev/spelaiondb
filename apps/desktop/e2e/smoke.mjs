@@ -1088,14 +1088,23 @@ try {
   await columnDialog.getByLabel("SQL that will run").filter({ hasText: "ALTER TABLE renamed_probe RENAME COLUMN a TO amount;" }).waitFor();
   await page.keyboard.press("Enter");
   await columnDialog.waitFor({ state: "detached" });
-  await probeColumns.locator(".leaf-row", { hasText: "amount" }).waitFor();
+  const amountColumn = probeColumns.locator(".leaf-row", { hasText: "amount" });
+  await amountColumn.waitFor();
+  // Drop: the core's SQL first, without "Cascade" on SQLite, which has none.
+  await amountColumn.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Drop…" }).click();
+  const dropColumn = page.getByRole("dialog", { name: "Drop renamed_probe.amount" });
+  await dropColumn.getByLabel("SQL that will run").filter({ hasText: "ALTER TABLE renamed_probe DROP COLUMN amount;" }).waitFor();
+  assert.equal(await dropColumn.locator('input[name="cascade"]').count(), 0);
+  await dropColumn.getByRole("button", { name: "Drop", exact: true }).click();
+  await amountColumn.waitFor({ state: "detached" });
   await renamedProbe.click();
-  await replaceQuery(panel, "drop table renamed_probe;\nselect 1 as dropped union all select 2 union all select 3 union all select 4;");
-  await run(panel);
-  await page.getByRole("button", { name: "Run anyway" }).click();
-  await panel.locator(".statusline", { hasText: "4 rows" }).waitFor();
-  await mainSchema.focus();
-  await page.keyboard.press("F5");
+  await renamedProbe.focus();
+  await page.keyboard.press("Delete");
+  const dropTable = page.getByRole("dialog", { name: "Drop renamed_probe" });
+  await dropTable.getByLabel("SQL that will run").filter({ hasText: "DROP TABLE renamed_probe;" }).waitFor();
+  await shot("05h-drop-dialog");
+  await dropTable.getByRole("button", { name: "Drop", exact: true }).click();
   await renamedProbe.waitFor({ state: "detached" });
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   // Quick filter (Ctrl+Shift+F): only what matches by name, plus the expanded connections.
