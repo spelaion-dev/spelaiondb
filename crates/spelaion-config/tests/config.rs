@@ -1845,6 +1845,69 @@ fn drafts_are_the_users_but_the_tunnels_they_use_are_checked() {
 }
 
 #[test]
+fn editor_access_checks_saved_provenance_before_using_commands() {
+    let fx = Fixture::new("editor-access");
+    let file = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
+    let backend = FakeBackend::default();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let untrusted = TrustStore::load(&fx.user()).unwrap();
+    let r = Resolver::new(&config, &untrusted, &backend);
+    assert!(matches!(
+        r.check_editor_access(Source::User, Some(&ws("orders"))),
+        Err(ResolveError::Untrusted { .. })
+    ));
+    assert!(matches!(
+        r.check_editor_access(Source::Workspace, None),
+        Err(ResolveError::Untrusted { .. })
+    ));
+    r.check_editor_access(Source::User, None).unwrap();
+
+    let trust = fx.trusted();
+    let r = Resolver::new(&config, &trust, &backend);
+    r.check_editor_access(Source::Workspace, None).unwrap();
+    r.check_editor_access(Source::User, Some(&ws("orders")))
+        .unwrap();
+    let draft = ConnectionDraft::from_entry(config.connection(&ws("orders")).unwrap());
+    r.resolve_edit(&ws("orders"), &draft).unwrap();
+
+    std::fs::write(&file, PINNED_DB.replace("db.internal", "attacker.example")).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let r = Resolver::new(&config, &trust, &backend);
+    assert!(matches!(
+        r.check_editor_access(Source::User, Some(&ws("orders"))),
+        Err(ResolveError::Changed { .. })
+    ));
+    assert!(matches!(
+        r.resolve_edit(&ws("orders"), &draft),
+        Err(ResolveError::Changed { .. })
+    ));
+    assert!(
+        r.check_editor_access(Source::Workspace, Some(&ws("missing")))
+            .is_err()
+    );
+    fx.write("repo/.spelaion/connections/new.toml", PINNED_DB);
+    fx.write("user/connections/local.toml", PINNED_DB);
+    let config = load(Some(&fx.repo()), &fx.user());
+    let r = Resolver::new(&config, &trust, &backend);
+    assert!(matches!(
+        r.check_editor_access(Source::User, Some(&ws("new"))),
+        Err(ResolveError::Changed { .. })
+    ));
+    let personal = ConnectionId {
+        source: Source::User,
+        path: "local".into(),
+    };
+    r.check_editor_access(Source::Workspace, Some(&personal))
+        .unwrap();
+    let no_workspace = load(None, &fx.user());
+    let r = Resolver::new(&no_workspace, &trust, &backend);
+    assert!(r.check_editor_access(Source::Workspace, None).is_err());
+    r.check_editor_access(Source::User, Some(&personal))
+        .unwrap();
+}
+
+#[test]
 fn repositories_trusted_before_snapshots_are_adopted_as_they_are() {
     let fx = Fixture::new("pinned-legacy");
     let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
