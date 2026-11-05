@@ -37,6 +37,27 @@ async fn processlist_filtered_by_command_without_a_where() {
     let (Some(session), Some(_idle)) = (session().await, session().await) else {
         return;
     };
+    // Other tests list processes at the same time: ours is told apart by its connection id.
+    let own_id = {
+        let events: Vec<CoreEvent> = session.run_script("select connection_id()").collect().await;
+        let id = events
+            .iter()
+            .find_map(|e| match e {
+                CoreEvent::ResultStarted { result, .. } => Some(*result),
+                _ => None,
+            })
+            .expect("a result");
+        let stored = session.results().get(id).unwrap();
+        let stored = stored.read().unwrap();
+        let batch = &stored.window(0, 1)[0];
+        spelaion_driver_api::Value::from_array(
+            batch.column(0).as_ref(),
+            0,
+            stored.schema().columns[0].logical,
+        )
+        .unwrap()
+        .to_string()
+    };
     let events: Vec<CoreEvent> = session.run_script("show full processlist").collect().await;
     let id = events
         .iter()
@@ -77,9 +98,20 @@ async fn processlist_filtered_by_command_without_a_where() {
         .unwrap();
     assert!(busy >= 1, "our own query is running");
     assert_eq!(sleeping + busy, total);
-    // Only our session runs a statement; NULL Info rows never match LIKE.
+    // Our session runs this statement; NULL Info rows never match LIKE.
+    let process_id = stored
+        .schema()
+        .columns
+        .iter()
+        .position(|c| c.name.eq_ignore_ascii_case("id"))
+        .expect("an Id column");
     let ours = stored
         .filter_columns(vec![
+            ColumnFilter {
+                column: process_id,
+                op: FilterOp::Eq,
+                value: own_id,
+            },
             ColumnFilter {
                 column: command,
                 op: FilterOp::NotEq,
