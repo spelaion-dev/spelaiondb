@@ -49,7 +49,11 @@ SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TE
   request.
 
 ## Pull requests
-- Open them against **`dev`**. `main` only receives releases.
+- Work on a branch of your own, from an up-to-date `dev`, and open the pull request against
+  **`dev`**. Nobody pushes to `dev` or `main`: they are protected, and `main` only receives
+  releases.
+- Assign the issue to yourself before starting, so two people do not do the same work.
+- Rebase on `dev` if it moved while you worked (`git fetch` and `git rebase origin/dev`).
 - One change per pull request, with tests that would fail without it. Changes to the security
   barriers (read-only mode, agents' writes, repository trust) need tests that try to get around
   them.
@@ -58,7 +62,8 @@ SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TE
   [Developer Certificate of Origin](https://developercertificate.org/), that you have the right
   to submit the change under the project's license. There is no CLA.
 - CI runs on every pull request and is the code reviewer: a pull request is merged when it is
-  green and agrees with the rules above.
+  green and agrees with the rules above. One that changes a security file (listed in
+  [`.github/CODEOWNERS`](.github/CODEOWNERS)) also needs a maintainer's approval.
 
 ## Reporting problems
 - **Bugs and ideas:** [open an issue](https://github.com/spelaion-dev/spelaiondb/issues/new/choose).

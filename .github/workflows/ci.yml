@@ -1,7 +1,8 @@
 # CI is the code reviewer (ADR-012): nothing gets into main without passing through here.
 # It runs on every push to `dev` and `main` and on every pull request (the repository is
-# public, so Actions minutes are free), and it can be started by hand on any branch. A change
-# that only touches documentation does not run it.
+# public, so Actions minutes are free), and it can be started by hand on any branch. A push that
+# only touches documentation does not run it; a pull request always does, because its four jobs
+# are required to merge (branch protection) and a pull request without them would wait forever.
 #
 # Speed: the Rust caches are saved only by pushes to `dev` and `main` (pull requests read
 # them): GitHub keeps 10 GB per repository, and one copy per pull request and release pushed
@@ -17,11 +18,6 @@ on:
       - "LICENSE"
       - ".github/ISSUE_TEMPLATE/**"
   pull_request:
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE"
-      - ".github/ISSUE_TEMPLATE/**"
   workflow_dispatch:
 
 # A newer push to the same branch or pull request replaces a run still going; on `main`
