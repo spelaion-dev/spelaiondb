@@ -2110,6 +2110,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Tunnel-wide network settings: written to the file and used when testing.
   await editor.getByLabel("Keep-alive every (seconds)").fill("30");
   await editor.getByLabel("Give up after (unanswered)").fill("5");
+  await editor.getByLabel("Connect timeout (seconds)").fill("20");
   await editor.getByRole("button", { name: "Test tunnel" }).click();
   // The bastions' fingerprints may already be known from the earlier step; accept any new one.
   await Promise.race([
@@ -2136,6 +2137,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.match(tunnelFile, /port = 2221/);
   assert.match(tunnelFile, /keepalive_interval = 30/);
   assert.match(tunnelFile, /keepalive_count = 5/);
+  assert.match(tunnelFile, /connect_timeout = 20/);
   assert.doesNotMatch(tunnelFile, /password/);
 
   // While a connection uses it, the tunnel cannot be deleted.
@@ -2148,6 +2150,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await editTunnel.getByLabel("Hop 2 Host").inputValue(), "bastion2");
   assert.equal(await editTunnel.getByLabel("Keep-alive every (seconds)").inputValue(), "30");
   assert.equal(await editTunnel.getByLabel("Give up after (unanswered)").inputValue(), "5");
+  assert.equal(await editTunnel.getByLabel("Connect timeout (seconds)").inputValue(), "20");
   await editTunnel.getByRole("button", { name: "Delete tunnel" }).click();
   await editTunnel.getByRole("button", { name: "Click again to delete" }).click();
   await editTunnel.locator(".test-result", { hasText: "PG through wizard tunnel" }).waitFor();

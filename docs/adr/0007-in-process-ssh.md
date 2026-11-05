@@ -75,6 +75,10 @@ Rules:
   change both (`keepalive_interval`, `keepalive_count`, like OpenSSH's `ServerAliveInterval`
   and `ServerAliveCountMax`; 0 seconds sends none). Tested with a relay that stops passing
   bytes without closing anything, as a firewall that forgot the session does.
+- Connect timeout (2026-11-05): each hop has 15 s to answer and finish the SSH handshake
+  (before, only the first hop's TCP connection and handshake had a limit; a later hop or a
+  `command` could wait forever). `connect_timeout` in the tunnel file changes it.
+  Authentication is not counted: it may be waiting for a passphrase or a 2FA code.
 
 ## Alternatives
 Delegating to the system `ssh` binary (the VS Code Remote-SSH model).

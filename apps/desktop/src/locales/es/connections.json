@@ -183,6 +183,8 @@
     "keepaliveInterval": "Keep-alive cada (segundos)",
     "keepaliveCount": "Rendirse tras (sin respuesta)",
     "keepaliveHint": "Si un servidor no envía nada durante ese tiempo, se le envía un keep-alive para que un NAT o firewall no corte un túnel inactivo; tras esos sin respuesta, el túnel se muestra caído. Vacío: 15 s y 3. 0 segundos no envía ninguno; 0 sin respuesta no se rinde nunca.",
+    "connectTimeout": "Tiempo máximo de conexión (segundos)",
+    "connectTimeoutHint": "Cuánto puede tardar cada salto en responder antes de rendirse. Vacío: 15 s. El tiempo que pasas escribiendo una passphrase o un código 2FA no cuenta.",
     "addHop": "+ Añadir salto",
     "test": "Probar túnel",
     "ok_one": "Túnel correcto · {{count}} salto",

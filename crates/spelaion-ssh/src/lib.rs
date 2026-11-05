@@ -41,11 +41,15 @@ pub struct TunnelOptions {
     /// Unanswered keep-alives before the session is closed as down (`ServerAliveCountMax`).
     /// 0 never gives up.
     pub keepalive_count: u32,
+    /// How long each hop may take to answer and finish the SSH handshake. Authentication is
+    /// not counted: it may be waiting for the person (a passphrase, a 2FA code).
+    pub connect_timeout: Duration,
 }
 
 impl TunnelOptions {
     pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
     pub const DEFAULT_KEEPALIVE_COUNT: u32 = 3;
+    pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 }
 
 impl Default for TunnelOptions {
@@ -53,6 +57,7 @@ impl Default for TunnelOptions {
         Self {
             keepalive_interval: Some(Self::DEFAULT_KEEPALIVE_INTERVAL),
             keepalive_count: Self::DEFAULT_KEEPALIVE_COUNT,
+            connect_timeout: Self::DEFAULT_CONNECT_TIMEOUT,
         }
     }
 }

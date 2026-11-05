@@ -86,6 +86,15 @@
   "additionalProperties": false,
   "description": "An SSH tunnel: `.spelaion/tunnels/<name>.toml`.",
   "properties": {
+    "connect_timeout": {
+      "description": "Seconds each hop may take to answer and finish the SSH handshake (authentication,\nwhich may wait for the person, is not counted). 15 when absent.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "hops": {
       "description": "Hops in order; the last one is the one that reaches the database.",
       "items": {

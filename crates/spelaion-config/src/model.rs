@@ -190,6 +190,10 @@ pub struct TunnelFile {
     /// when absent; 0 never gives up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keepalive_count: Option<u32>,
+    /// Seconds each hop may take to answer and finish the SSH handshake (authentication,
+    /// which may wait for the person, is not counted). 15 when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_timeout: Option<u32>,
     /// Hops in order; the last one is the one that reaches the database.
     pub hops: Vec<HopConfig>,
 }
@@ -200,6 +204,9 @@ impl TunnelFile {
     /// Longest keep-alive interval accepted: a day.
     pub const MAX_KEEPALIVE_INTERVAL: u32 = 86_400;
     pub const MAX_KEEPALIVE_COUNT: u32 = 1_000;
+    pub const DEFAULT_CONNECT_TIMEOUT: u32 = 15;
+    /// Longest connect timeout accepted: ten minutes.
+    pub const MAX_CONNECT_TIMEOUT: u32 = 600;
 }
 
 /// The cluster resource a connection reaches through `kubectl port-forward` (ADR-015).

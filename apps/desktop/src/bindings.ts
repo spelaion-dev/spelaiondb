@@ -1161,6 +1161,8 @@ export type TunnelDraftItem_Deserialize = {
 	keepaliveInterval?: number | null,
 	/**  Null for the default (3), 0 never gives up. */
 	keepaliveCount?: number | null,
+	/**  Seconds; null for the default (15). */
+	connectTimeout?: number | null,
 };
 
 export type TunnelDraftItem_Serialize = {
@@ -1171,6 +1173,8 @@ export type TunnelDraftItem_Serialize = {
 	keepaliveInterval: number | null,
 	/**  Null for the default (3), 0 never gives up. */
 	keepaliveCount: number | null,
+	/**  Seconds; null for the default (15). */
+	connectTimeout: number | null,
 };
 
 /**  A tunnel that a new connection can use. */

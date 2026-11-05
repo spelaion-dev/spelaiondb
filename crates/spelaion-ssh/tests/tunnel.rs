@@ -729,6 +729,7 @@ async fn keepalives_notice_a_session_a_firewall_dropped() {
     spec.options = TunnelOptions {
         keepalive_interval: Some(Duration::from_secs(1)),
         keepalive_count: 2,
+        ..Default::default()
     };
     let tunnel = Tunnel::open(&spec, postgres(), &known.known(), TestUi::accepting())
         .await
@@ -759,6 +760,7 @@ async fn without_keepalives_a_dropped_session_goes_unnoticed() {
     spec.options = TunnelOptions {
         keepalive_interval: None,
         keepalive_count: 2,
+        ..Default::default()
     };
     let tunnel = Tunnel::open(&spec, postgres(), &known.known(), TestUi::accepting())
         .await
@@ -767,4 +769,29 @@ async fn without_keepalives_a_dropped_session_goes_unnoticed() {
     // What the setting is for: with them off, nothing finds out.
     assert_eq!(down_within(&tunnel, Duration::from_secs(5)).await, None);
     tunnel.close().await;
+}
+
+#[tokio::test]
+async fn a_server_that_never_answers_times_out_as_configured() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("connect-timeout");
+    // Accepts the connection but nothing ever comes back, like a firewall that drops packets.
+    let relay = Relay::to(&host, port).await;
+    relay.freeze();
+    let mut spec = two_hops("127.0.0.1", relay.port);
+    spec.options.connect_timeout = Duration::from_secs(1);
+    let started = std::time::Instant::now();
+    let result = Tunnel::connect(&spec, &known.known(), TestUi::accepting()).await;
+    let elapsed = started.elapsed();
+    match result {
+        Err(SshError::Connect {
+            hop: 0, message, ..
+        }) => {
+            assert!(message.contains("no response in 1 s"), "{message}");
+        }
+        other => panic!("expected a timeout at hop 1: {:?}", other.err()),
+    }
+    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
 }
