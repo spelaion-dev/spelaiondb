@@ -238,6 +238,8 @@ function UpdateSettings() {
   const [version, setVersion] = useState("");
   const status = useUpdate((s) => s.status);
   const checking = useUpdate((s) => s.checking);
+  const installing = useUpdate((s) => s.installing);
+  const install = useUpdate((s) => s.install);
   const checkAtStartup = useUpdate((s) => s.checkAtStartup);
   const error = useUpdate((s) => s.error);
   const check = useUpdate((s) => s.check);
@@ -262,7 +264,7 @@ function UpdateSettings() {
             {t("updates.atStartup")}
           </label>
           <div>
-            <button disabled={checking} onClick={() => void check()}>
+            <button disabled={checking || installing} onClick={() => void check()}>
               {checking ? t("updates.checking") : t("updates.check")}
             </button>
           </div>
@@ -270,6 +272,14 @@ function UpdateSettings() {
             {status?.kind === "upToDate" && t("updates.upToDate")}
             {status?.kind === "available" && t("updates.available", { version: status.version })}
           </p>
+          {/* Installed from here too, without closing the dialog for the notice behind it. */}
+          {status?.kind === "available" && (
+            <div>
+              <button className="primary" disabled={installing} onClick={() => void install()}>
+                {installing ? t("updates.installing") : t("updates.install")}
+              </button>
+            </div>
+          )}
           <p className="muted small">{t("updates.hint")}</p>
         </>
       )}

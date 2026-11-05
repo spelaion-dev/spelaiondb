@@ -46,7 +46,9 @@
     "check": "Check now",
     "checking": "Checking…",
     "upToDate": "You have the latest version.",
-    "available": "Version {{version}} is available: install it from the notice at the top of the window.",
+    "available": "Version {{version}} is available.",
+    "install": "Install and restart",
+    "installing": "Installing…",
     "hint": "Updates are signed and installed only when you click “Install and restart”. Open tabs come back with their SQL, not run.",
     "error": "Could not check for updates:"
   }
