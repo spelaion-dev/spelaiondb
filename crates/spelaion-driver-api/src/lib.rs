@@ -150,6 +150,17 @@ pub trait Connection: Send + Sync {
     fn cancel_handle(&self) -> Arc<dyn CancelHandle>;
 
     async fn server_version(&self) -> Result<String>;
+    /// Keeps an idle session alive with the engine's cheapest round trip (ADR-028), and says
+    /// whether a transaction is open so the core stops sending them. Engines that cannot tell
+    /// do not support it: an idle session in a forgotten transaction must not be kept alive.
+    async fn keep_alive(&self) -> Result<KeepAlive> {
+        Err(DriverError::Other("this engine has no keep-alive".into()))
+    }
+    /// The connection is known to be closed (the server ended it, the network dropped it),
+    /// without asking the server.
+    fn is_closed(&self) -> bool {
+        false
+    }
     /// Current database for engines that support changing it within a session.
     async fn current_database(&self) -> Result<Option<String>> {
         Err(DriverError::Other(
@@ -247,6 +258,15 @@ pub fn parameter_placeholder(name: &str, position: usize) -> String {
     } else {
         format!(":{name}")
     }
+}
+
+/// What [`Connection::keep_alive`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeepAlive {
+    /// The server answered and no transaction is open.
+    Alive,
+    /// A transaction is open: the core sends no more keep-alives until the session is used.
+    InTransaction,
 }
 
 #[async_trait]

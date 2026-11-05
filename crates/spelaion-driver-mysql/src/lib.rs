@@ -21,8 +21,9 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, LikeFilter, LogicalType, NameFilter,
-    ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
+    DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, LogicalType,
+    NameFilter, ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject,
+    TableInfo, TlsMode,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -80,6 +81,9 @@ fn opts(params: &ConnectParams, tls: Option<SslOpts>) -> Opts {
         // Affected rows count the rows matched, as other engines do: an UPDATE that leaves a
         // value as it was still reports its row (ADR-014 checks one row per statement).
         .client_found_rows(true)
+        // TCP keepalive after a minute idle, so a NAT in front of the server does not drop a
+        // direct connection (ADR-028).
+        .tcp_keepalive(Some(Duration::from_secs(60)))
         .ssl_opts(tls)
         .into()
 }
@@ -188,6 +192,10 @@ enum Request {
         params: Vec<String>,
         reply: oneshot::Sender<Result<Rows>>,
     },
+    /// COM_PING unless a transaction is open (ADR-028).
+    KeepAlive {
+        reply: oneshot::Sender<Result<KeepAlive>>,
+    },
 }
 
 /// Owns the connection until every handle is dropped.
@@ -202,9 +210,26 @@ async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>) {
             Request::Rows { sql, params, reply } => {
                 let _ = reply.send(rows(&mut conn, &sql, params).await);
             }
+            Request::KeepAlive { reply } => {
+                let _ = reply.send(keep_alive(&mut conn).await);
+            }
         }
     }
     let _ = conn.disconnect().await;
+}
+
+/// The server reports an open transaction in the status of every OK packet: with one open,
+/// nothing is sent at all.
+async fn keep_alive(conn: &mut Conn) -> Result<KeepAlive> {
+    let open = conn.last_ok_packet().is_some_and(|ok| {
+        ok.status_flags()
+            .contains(mysql_async::consts::StatusFlags::SERVER_STATUS_IN_TRANS)
+    });
+    if open {
+        return Ok(KeepAlive::InTransaction);
+    }
+    conn.ping().await.map_err(map_error)?;
+    Ok(KeepAlive::Alive)
 }
 
 async fn rows(conn: &mut Conn, sql: &str, params: Vec<String>) -> Result<Rows> {
@@ -418,6 +443,21 @@ impl Connection for MysqlConnection {
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
         self.cancel.clone()
+    }
+
+    async fn keep_alive(&self) -> Result<KeepAlive> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::KeepAlive { reply })
+            .await
+            .map_err(|_| DriverError::Connection("the connection is closed".into()))?;
+        response
+            .await
+            .map_err(|_| DriverError::Connection("the connection is closed".into()))?
+    }
+
+    fn is_closed(&self) -> bool {
+        self.requests.is_closed()
     }
 
     async fn server_version(&self) -> Result<String> {

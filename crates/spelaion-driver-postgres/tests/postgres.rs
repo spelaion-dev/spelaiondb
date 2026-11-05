@@ -1256,3 +1256,61 @@ async fn procedure_calls_pass_inputs_and_collect_outputs() {
         std::panic::resume_unwind(panic);
     }
 }
+
+#[tokio::test]
+async fn keep_alives_answer_and_say_when_a_transaction_is_open() {
+    use spelaion_driver_api::KeepAlive;
+    let Some(conn) = connect().await else { return };
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::Alive);
+    run(&*conn, "begin").await.unwrap();
+    run(&*conn, "select 1").await.unwrap();
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::InTransaction);
+    // A failed transaction is still open.
+    assert!(run(&*conn, "select 1/0").await.is_err());
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::InTransaction);
+    run(&*conn, "rollback").await.unwrap();
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::Alive);
+    assert!(!conn.is_closed());
+}
+
+#[tokio::test]
+async fn a_session_the_server_ended_is_a_connection_error() {
+    let Some(conn) = connect().await else { return };
+    let Some(admin) = connect().await else { return };
+    let name = format!("spelaion-ended-{}", std::process::id());
+    run(&*conn, &format!("set application_name = '{name}'"))
+        .await
+        .unwrap();
+    run(
+        &*admin,
+        &format!("select pg_terminate_backend(pid) from pg_stat_activity where application_name = '{name}'"),
+    )
+    .await
+    .unwrap();
+    // `pg_terminate_backend` only signals: wait until the backend is gone.
+    let remaining =
+        format!("select count(*) from pg_stat_activity where application_name = '{name}'");
+    for _ in 0..50 {
+        if first_row(&*admin, &remaining).await[0].3 == "0" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // Either the server's FATAL error (57P01) or the closed socket, depending on timing.
+    match conn.keep_alive().await {
+        Err(DriverError::Connection(_)) => {}
+        Err(DriverError::Database {
+            code: Some(code), ..
+        }) if code == "57P01" => {}
+        other => panic!("expected the session to be gone: {other:?}"),
+    }
+    let mut closed = false;
+    for _ in 0..50 {
+        closed = conn.is_closed();
+        if closed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(closed);
+}

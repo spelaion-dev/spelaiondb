@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, Notice, ObjectInfo,
-    Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
+    DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, Notice,
+    ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -30,6 +30,10 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 pub use dialect::PostgresDialect;
 
 pub struct PostgresDriver;
+
+const TCP_KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
+const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const TCP_KEEPALIVE_RETRIES: u32 = 6;
 
 #[async_trait]
 impl Driver for PostgresDriver {
@@ -51,7 +55,13 @@ impl Driver for PostgresDriver {
             .user(&params.user)
             .dbname(&params.database)
             .application_name(params.application_name.as_deref().unwrap_or("SpelaionDB"))
-            .connect_timeout(Duration::from_secs(15));
+            .connect_timeout(Duration::from_secs(15))
+            // TCP keepalive after a minute idle, so a NAT in front of the server does not drop
+            // a direct connection (ADR-028); tokio-postgres waits two hours by default.
+            .keepalives(true)
+            .keepalives_idle(TCP_KEEPALIVE_IDLE)
+            .keepalives_interval(TCP_KEEPALIVE_INTERVAL)
+            .keepalives_retries(TCP_KEEPALIVE_RETRIES);
         if let Some(password) = &params.password {
             config.password(password.expose());
         }
@@ -195,6 +205,37 @@ impl Connection for PgConnection {
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
         self.cancel.clone()
+    }
+
+    async fn keep_alive(&self) -> Result<KeepAlive> {
+        // Outside a transaction every statement is the first of its own, so both clocks are
+        // the same; inside one, `now()` is when it began. One simple-protocol round trip.
+        let messages = self
+            .client
+            .simple_query("select now() <> statement_timestamp()")
+            .await;
+        match messages {
+            Ok(messages) => {
+                let open = messages.iter().any(|message| match message {
+                    tokio_postgres::SimpleQueryMessage::Row(row) => row.get(0) == Some("t"),
+                    _ => false,
+                });
+                Ok(if open {
+                    KeepAlive::InTransaction
+                } else {
+                    KeepAlive::Alive
+                })
+            }
+            // A failed transaction refuses every statement until it ends: it is still open.
+            Err(e) if e.code() == Some(&SqlState::IN_FAILED_SQL_TRANSACTION) => {
+                Ok(KeepAlive::InTransaction)
+            }
+            Err(e) => Err(map_error(e)),
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.client.is_closed()
     }
 
     async fn server_version(&self) -> Result<String> {
