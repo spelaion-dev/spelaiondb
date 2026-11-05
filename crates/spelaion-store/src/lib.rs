@@ -320,6 +320,9 @@ pub struct ExplorerPreferences {
     /// Filters go into the catalog queries, so big catalogs are not read whole (ADR-025);
     /// on by default. Off, every name is read and filtered on this computer.
     pub server_side_filters: bool,
+    /// The tree follows the active editor tab, showing its connection, schema and table
+    /// ("Link with editor", ADR-026); off by default.
+    pub link_with_editor: bool,
 }
 
 impl Default for ExplorerPreferences {
@@ -331,6 +334,7 @@ impl Default for ExplorerPreferences {
             folders_first: false,
             connected_only: false,
             server_side_filters: true,
+            link_with_editor: false,
         }
     }
 }
@@ -659,6 +663,8 @@ impl Store {
             connected_only: self.get_flag("explorer.connected_only", defaults.connected_only)?,
             server_side_filters: self
                 .get_flag("explorer.server_side_filters", defaults.server_side_filters)?,
+            link_with_editor: self
+                .get_flag("explorer.link_with_editor", defaults.link_with_editor)?,
         })
     }
 
@@ -673,13 +679,15 @@ impl Store {
             folders_first,
             connected_only,
             server_side_filters,
+            link_with_editor,
         } = *preferences;
         self.set_flag("explorer.show_system", show_system)?;
         self.set_flag("explorer.sort_alphabetically", sort_alphabetically)?;
         self.set_flag("explorer.sort_ignore_case", sort_ignore_case)?;
         self.set_flag("explorer.folders_first", folders_first)?;
         self.set_flag("explorer.connected_only", connected_only)?;
-        self.set_flag("explorer.server_side_filters", server_side_filters)
+        self.set_flag("explorer.server_side_filters", server_side_filters)?;
+        self.set_flag("explorer.link_with_editor", link_with_editor)
     }
 
     fn get_flag(&self, key: &str, default: bool) -> Result<bool, StoreError> {
@@ -1336,7 +1344,12 @@ mod tests {
                 && defaults.sort_ignore_case
                 && defaults.server_side_filters
         );
-        assert!(!defaults.show_system && !defaults.folders_first && !defaults.connected_only);
+        assert!(
+            !defaults.show_system
+                && !defaults.folders_first
+                && !defaults.connected_only
+                && !defaults.link_with_editor
+        );
         // Every field is saved on its own: each one flipped from its default.
         let changed = ExplorerPreferences {
             show_system: true,
@@ -1345,6 +1358,7 @@ mod tests {
             folders_first: true,
             connected_only: true,
             server_side_filters: false,
+            link_with_editor: true,
         };
         store.set_explorer_preferences(&changed).unwrap();
         drop(store);

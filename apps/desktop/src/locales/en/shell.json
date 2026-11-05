@@ -266,5 +266,7 @@
     "noneConnected": "Connect a connection in the explorer first: the search reads its catalog."
   },
   "setActiveSchema": "Set as the editor's schema",
-  "activeSchemaHint": "For the active query tab, once it is connected to this connection"
+  "activeSchemaHint": "For the active query tab, once it is connected to this connection",
+  "linkWithEditor": "Link with editor",
+  "linkWithEditorHint": "Link with editor: the tree shows the active tab's connection, schema and table"
 }

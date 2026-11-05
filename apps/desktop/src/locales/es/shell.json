@@ -266,5 +266,7 @@
     "noneConnected": "Conecta primero una conexión en el explorador: la búsqueda lee su catálogo."
   },
   "setActiveSchema": "Usar como esquema del editor",
-  "activeSchemaHint": "Para la pestaña de consulta activa, cuando esté conectada a esta conexión"
+  "activeSchemaHint": "Para la pestaña de consulta activa, cuando esté conectada a esta conexión",
+  "linkWithEditor": "Enlazar con el editor",
+  "linkWithEditorHint": "Enlazar con el editor: el árbol muestra la conexión, el esquema y la tabla de la pestaña activa"
 }
