@@ -19,8 +19,6 @@ use crate::auth::authenticate;
 use crate::hostkeys::{self, KnownHosts};
 use crate::{HopSpec, Interaction, SshError, Target, TunnelSpec};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// A command running on a tunnel's last hop ([`Tunnel::exec`]).
 pub struct RemoteExec {
     pub stdin: std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>,
@@ -171,47 +169,56 @@ impl Tunnel {
                 outcome: outcome.clone(),
                 state: state.clone(),
             };
-            let connected = match (sessions.last(), &hop_spec.command) {
-                (None, Some(command)) => {
-                    let (stream, process, stderr) = spawn_command(command, hop_spec, hop)?;
-                    child = Some(process);
-                    let result = client::connect_stream(config.clone(), stream, handler).await;
-                    result.map_err(|e| {
-                        let stderr = stderr.lock().expect("lock poisoned").trim().to_string();
-                        if stderr.is_empty() {
-                            e.to_string()
-                        } else {
-                            format!("{e} — the command said: {stderr}")
-                        }
-                    })
-                }
-                (None, None) => tokio::time::timeout(
-                    CONNECT_TIMEOUT,
-                    client::connect(
+            let timeout = spec.options.connect_timeout;
+            let handshake = async {
+                match (sessions.last(), &hop_spec.command) {
+                    (None, Some(command)) => {
+                        let (stream, process, stderr) = spawn_command(command, hop_spec, hop)?;
+                        child = Some(process);
+                        let result = client::connect_stream(config.clone(), stream, handler).await;
+                        Ok(result.map_err(|e| {
+                            let stderr = stderr.lock().expect("lock poisoned").trim().to_string();
+                            if stderr.is_empty() {
+                                e.to_string()
+                            } else {
+                                format!("{e} — the command said: {stderr}")
+                            }
+                        }))
+                    }
+                    (None, None) => Ok(client::connect(
                         config.clone(),
                         (hop_spec.host.as_str(), hop_spec.port),
                         handler,
-                    ),
-                )
-                .await
-                .map_err(|_| format!("no response in {} s", CONNECT_TIMEOUT.as_secs()))
-                .and_then(|r| r.map_err(|e| e.to_string())),
-                (Some(previous), _) => match previous
-                    .channel_open_direct_tcpip(
-                        hop_spec.host.clone(),
-                        hop_spec.port.into(),
-                        "127.0.0.1",
-                        0,
                     )
                     .await
-                {
-                    Ok(channel) => {
-                        client::connect_stream(config.clone(), channel.into_stream(), handler)
+                    .map_err(|e| e.to_string())),
+                    (Some(previous), _) => Ok(
+                        match previous
+                            .channel_open_direct_tcpip(
+                                hop_spec.host.clone(),
+                                hop_spec.port.into(),
+                                "127.0.0.1",
+                                0,
+                            )
                             .await
-                            .map_err(|e| e.to_string())
-                    }
-                    Err(e) => Err(format!("the previous hop could not open the channel: {e}")),
-                },
+                        {
+                            Ok(channel) => client::connect_stream(
+                                config.clone(),
+                                channel.into_stream(),
+                                handler,
+                            )
+                            .await
+                            .map_err(|e| e.to_string()),
+                            Err(e) => {
+                                Err(format!("the previous hop could not open the channel: {e}"))
+                            }
+                        },
+                    ),
+                }
+            };
+            let connected = match tokio::time::timeout(timeout, handshake).await {
+                Ok(result) => result?,
+                Err(_) => Err(format!("no response in {}", seconds(timeout))),
             };
             let mut session = match connected {
                 Ok(session) => session,
@@ -413,6 +420,16 @@ async fn forward(
             }
             // If the target refuses the connection, the local one is closed and the driver sees the error.
         });
+    }
+}
+
+/// `15 s`, or `1.5 s` for a fraction.
+fn seconds(duration: Duration) -> String {
+    let secs = duration.as_secs_f64();
+    if secs.fract() == 0.0 {
+        format!("{secs:.0} s")
+    } else {
+        format!("{secs} s")
     }
 }
 

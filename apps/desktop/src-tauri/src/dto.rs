@@ -1465,6 +1465,8 @@ pub struct TunnelDraftItem {
     pub keepalive_interval: Option<u32>,
     /// Null for the default (3), 0 never gives up.
     pub keepalive_count: Option<u32>,
+    /// Seconds; null for the default (15).
+    pub connect_timeout: Option<u32>,
 }
 
 /// The Kubernetes tab of the connection form; empty fields mean the defaults.
@@ -1616,6 +1618,7 @@ impl From<TunnelDraftItem> for spelaion_config::TunnelDraft {
             options: spelaion_config::TunnelDraftOptions {
                 keepalive_interval: item.keepalive_interval,
                 keepalive_count: item.keepalive_count,
+                connect_timeout: item.connect_timeout,
             },
         }
     }
@@ -1649,6 +1652,7 @@ impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
                 .collect(),
             keepalive_interval: draft.options.keepalive_interval,
             keepalive_count: draft.options.keepalive_count,
+            connect_timeout: draft.options.connect_timeout,
         }
     }
 }

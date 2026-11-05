@@ -183,6 +183,8 @@
     "keepaliveInterval": "Keep-alive every (seconds)",
     "keepaliveCount": "Give up after (unanswered)",
     "keepaliveHint": "When a server sends nothing for that long, a keep-alive is sent, so a NAT or firewall does not drop an idle tunnel; after that many unanswered the tunnel is shown as down. Empty: 15 s and 3. 0 seconds sends none; 0 unanswered never gives up.",
+    "connectTimeout": "Connect timeout (seconds)",
+    "connectTimeoutHint": "How long each hop may take to answer before giving up. Empty: 15 s. Time spent typing a passphrase or a 2FA code does not count.",
     "addHop": "+ Add hop",
     "test": "Test tunnel",
     "ok_one": "Tunnel OK · {{count}} hop",
