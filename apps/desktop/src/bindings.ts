@@ -646,6 +646,7 @@ export type ExplorerPreferencesItem = {
 	foldersFirst: boolean,
 	connectedOnly: boolean,
 	serverSideFilters: boolean,
+	linkWithEditor: boolean,
 };
 
 /**

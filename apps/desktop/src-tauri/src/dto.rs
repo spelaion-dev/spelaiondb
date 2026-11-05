@@ -396,6 +396,7 @@ pub struct ExplorerPreferencesItem {
     pub folders_first: bool,
     pub connected_only: bool,
     pub server_side_filters: bool,
+    pub link_with_editor: bool,
 }
 
 impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
@@ -407,6 +408,7 @@ impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
             folders_first,
             connected_only,
             server_side_filters,
+            link_with_editor,
         } = p;
         Self {
             show_system,
@@ -415,6 +417,7 @@ impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
             folders_first,
             connected_only,
             server_side_filters,
+            link_with_editor,
         }
     }
 }
@@ -428,6 +431,7 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
             folders_first,
             connected_only,
             server_side_filters,
+            link_with_editor,
         } = p;
         Self {
             show_system,
@@ -436,6 +440,7 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
             folders_first,
             connected_only,
             server_side_filters,
+            link_with_editor,
         }
     }
 }

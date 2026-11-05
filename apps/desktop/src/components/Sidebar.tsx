@@ -122,6 +122,15 @@ function PlugIcon() {
   );
 }
 
+/** Two chain links: "Link with editor". */
+function LinkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+    </svg>
+  );
+}
+
 /** The magnifying glass of the quick filter. */
 function SearchIcon() {
   return (
@@ -659,6 +668,31 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const tabConnected = tabs.filter((tab) => tab.status === "connected").map((tab) => tab.connectionId);
   /** Opened in the explorer or used by a connected tab. */
   const connected = (c: ConnectionItem) => explorerConnected.includes(c.id) || tabConnected.includes(c.id);
+  // "Link with editor": the active tab's connection, schema and table, shown in the tree.
+  const activeTab = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab) ?? null);
+  const linked = activeTab
+    ? [activeTab.id, activeTab.connectionId, activeTab.status, activeTab.run?.running ?? false, activeTab.table?.schema, activeTab.table?.name].join("|")
+    : "";
+  useEffect(() => {
+    const tab = useApp.getState().tabs.find((t) => t.id === useApp.getState().activeTab);
+    if (!explorer.linkWithEditor || !tab?.connectionId) return;
+    const connectionId = tab.connectionId;
+    const reveal = useApp.getState().revealInExplorer;
+    if (tab.table) return reveal({ connectionId, schema: tab.table.schema, name: tab.table.name });
+    // A query tab: the schema its session is on, asked only while it is idle.
+    if (tab.status !== "connected" || tab.run?.running) return reveal({ connectionId });
+    let current = true;
+    call(commands.activeSchema(tab.id))
+      .then((schema) => {
+        if (current) reveal(schema ? { connectionId, schema } : { connectionId });
+      })
+      .catch(() => {
+        if (current) reveal({ connectionId });
+      });
+    return () => {
+      current = false;
+    };
+  }, [explorer.linkWithEditor, linked]);
   /** With a filter, connections whose name matches, and those already expanded. */
   const shown = (c: ConnectionItem) =>
     (!explorer.connectedOnly || connected(c)) &&
@@ -735,6 +769,15 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           disabled={cannotSwitch}
         >
           {t("openFolder")}
+        </button>
+        <button
+          className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
+          onClick={() => void usePreferences.getState().setExplorer({ ...explorer, linkWithEditor: !explorer.linkWithEditor })}
+          aria-label={t("linkWithEditor")}
+          aria-pressed={explorer.linkWithEditor}
+          title={t("linkWithEditorHint")}
+        >
+          <LinkIcon />
         </button>
         <button
           className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
