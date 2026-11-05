@@ -128,6 +128,11 @@ export const commands = {
 	 */
 	applyObjectChange: (session: string, change: ObjectChangeItem_Deserialize, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_object_change", { session, change, confirmed })),
 	/**
+	 *  The statement that starts a new object (table, view, schema…), written by the core in the
+	 *  engine's types, to finish in a new tab: nothing runs (ADR-026).
+	 */
+	createSql: (session: string, kind: CreateKindItem, schema: string) => typedError<string, string>(__TAURI_INVOKE("create_sql", { session, kind, schema })),
+	/**
 	 *  The statements the core would run for the pending changes of a table data tab, to show
 	 *  before applying them (production asks for confirmation).
 	 */
@@ -497,6 +502,9 @@ export type ConstraintDetails_Serialize = {
 
 export type ConstraintKindItem = "primary_key" | "unique" | "check";
 
+/**  What "Create" in the explorer can start (see `spelaion_core::CreateKind`). */
+export type CreateKindItem = "table" | "view" | "materializedView" | "sequence" | "schema";
+
 /**
  *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
  *  a password.
@@ -793,6 +801,7 @@ export type ObjectActionsItem = {
 	renameViews: boolean,
 	dropSchemas: boolean,
 	dropConstraints: boolean,
+	create: CreateKindItem[],
 };
 
 /**  What to do with an object of the explorer. */

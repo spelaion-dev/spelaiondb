@@ -1,5 +1,6 @@
 //! What the explorer does with an object besides reading it (ADR-026): its name as the engine
-//! writes it, for the clipboard, and the statements that rename or drop it. Statements are written
+//! writes it, for the clipboard, the statements that rename or drop it, and those that create a
+//! new one (opened in the editor, never run from here). Statements are written
 //! here with each engine's syntax and quoting; the UI only says what to change, and a change
 //! runs only once the user has seen its SQL and confirmed it.
 
@@ -98,8 +99,19 @@ pub enum ObjectError {
     },
 }
 
-/// What the explorer may offer on this engine; the UI shows only these.
+/// What "Create" in the explorer can start: the statement opens in a new tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateKind {
+    Table,
+    View,
+    MaterializedView,
+    Sequence,
+    /// A schema; a database on MySQL and MariaDB.
+    Schema,
+}
+
+/// What the explorer may offer on this engine; the UI shows only these.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectActions {
     /// Views (and materialized views) can be renamed: not in SQLite.
     pub rename_views: bool,
@@ -108,14 +120,77 @@ pub struct ObjectActions {
     /// Constraints and foreign keys can be dropped from their table: not in SQLite or DuckDB,
     /// which must create the table again.
     pub drop_constraints: bool,
+    /// What "Create" offers, in menu order.
+    pub create: Vec<CreateKind>,
 }
 
 pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
     let engine = dialect.name();
+    let create = match engine {
+        "postgres" => vec![
+            CreateKind::Table,
+            CreateKind::View,
+            CreateKind::MaterializedView,
+            CreateKind::Sequence,
+            CreateKind::Schema,
+        ],
+        "sqlserver" | "duckdb" => vec![
+            CreateKind::Table,
+            CreateKind::View,
+            CreateKind::Sequence,
+            CreateKind::Schema,
+        ],
+        // MariaDB has sequences and MySQL does not; they share this dialect.
+        "mysql" => vec![CreateKind::Table, CreateKind::View, CreateKind::Schema],
+        _ => vec![CreateKind::Table, CreateKind::View],
+    };
     ObjectActions {
         rename_views: engine != "sqlite",
         drop_schemas: engine != "sqlite",
         drop_constraints: !matches!(engine, "sqlite" | "duckdb"),
+        create,
+    }
+}
+
+/// The statement that starts a new object, to finish in the editor: a placeholder name, and
+/// for a table an identity key and a text column in the engine's types. A schema ignores
+/// `schema`.
+pub fn create_sql(dialect: &dyn Dialect, kind: CreateKind, schema: &str) -> String {
+    let engine = dialect.name();
+    let name = |name: &str| qualified_name(dialect, schema, &[name.to_string()]);
+    match kind {
+        CreateKind::Table => {
+            let (id, text) = match engine {
+                "postgres" => ("bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY", "text"),
+                "mysql" => ("BIGINT AUTO_INCREMENT PRIMARY KEY", "VARCHAR(255)"),
+                "sqlserver" => ("BIGINT IDENTITY(1, 1) PRIMARY KEY", "NVARCHAR(255)"),
+                "sqlite" => ("INTEGER PRIMARY KEY", "TEXT"),
+                _ => ("BIGINT PRIMARY KEY", "VARCHAR"),
+            };
+            format!(
+                "CREATE TABLE {} (\n  id {id},\n  name {text} NOT NULL\n);\n",
+                name("new_table")
+            )
+        }
+        CreateKind::View => format!("CREATE VIEW {} AS\nSELECT 1 AS id;\n", name("new_view")),
+        CreateKind::MaterializedView => format!(
+            "CREATE MATERIALIZED VIEW {} AS\nSELECT 1 AS id;\n",
+            name("new_materialized_view")
+        ),
+        CreateKind::Sequence => format!(
+            "CREATE SEQUENCE {} START WITH 1 INCREMENT BY 1;\n",
+            name("new_sequence")
+        ),
+        CreateKind::Schema if engine == "mysql" => {
+            format!(
+                "CREATE DATABASE {};\n",
+                dialect.quote_identifier("new_database")
+            )
+        }
+        CreateKind::Schema => format!(
+            "CREATE SCHEMA {};\n",
+            dialect.quote_identifier("new_schema")
+        ),
     }
 }
 
@@ -857,5 +932,46 @@ mod tests {
             ),
             Err(ObjectError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn create_starts_from_the_engines_own_types() {
+        assert_eq!(
+            create_sql(&PostgresDialect, CreateKind::Table, "sales"),
+            "CREATE TABLE sales.new_table (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  name text NOT NULL\n);\n"
+        );
+        assert_eq!(
+            create_sql(&SqliteDialect, CreateKind::Table, "main"),
+            "CREATE TABLE new_table (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);\n"
+        );
+        assert_eq!(
+            create_sql(&MysqlDialect, CreateKind::Schema, "shop"),
+            "CREATE DATABASE `new_database`;\n"
+        );
+        assert_eq!(
+            create_sql(&SqlServerDialect, CreateKind::View, "dbo"),
+            "CREATE VIEW dbo.new_view AS\nSELECT 1 AS id;\n"
+        );
+        // Each engine offers only what it has.
+        assert!(
+            !object_actions(&SqliteDialect)
+                .create
+                .contains(&CreateKind::Schema)
+        );
+        assert!(
+            !object_actions(&MysqlDialect)
+                .create
+                .contains(&CreateKind::Sequence)
+        );
+        assert!(
+            object_actions(&PostgresDialect)
+                .create
+                .contains(&CreateKind::MaterializedView)
+        );
+        assert!(
+            !object_actions(&DuckdbDialect)
+                .create
+                .contains(&CreateKind::MaterializedView)
+        );
     }
 }

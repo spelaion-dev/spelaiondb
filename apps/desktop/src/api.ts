@@ -15,6 +15,7 @@ import {
   type SshAuthItem,
   type TunnelDraftItem_Deserialize,
   type ConnectOutcome,
+  type CreateKindItem,
   type ConnectOutcome_Serialize,
   type FieldChangeItem,
   type InteractionKind,
@@ -76,7 +77,7 @@ export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
 export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
-export type { FilterActionItem, FilterKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };
+export type { CreateKindItem, FilterActionItem, FilterKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
 export type { SchemaObjectKindItem, ServerObjectKindItem };

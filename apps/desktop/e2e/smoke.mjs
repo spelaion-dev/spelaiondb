@@ -1106,6 +1106,15 @@ try {
   await shot("05h-drop-dialog");
   await dropTable.getByRole("button", { name: "Drop", exact: true }).click();
   await renamedProbe.waitFor({ state: "detached" });
+  // "New table" on the Tables folder: the core's statement in SQLite's types, opened, not run.
+  await tablesFolder.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New table" }).click();
+  await panel.locator(".cm-content", { hasText: "CREATE TABLE new_table" }).waitFor();
+  assert.equal(
+    (await panel.locator(".cm-content").innerText()).trimEnd(),
+    "CREATE TABLE new_table (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);",
+  );
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   // Quick filter (Ctrl+Shift+F): only what matches by name, plus the expanded connections.
   await page.keyboard.press("Control+Shift+F");

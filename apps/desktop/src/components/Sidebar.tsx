@@ -7,6 +7,7 @@ import {
   call,
   commands,
   type ConnectionItem,
+  type CreateKindItem,
   type ExplorerFilter,
   type FilterActionItem,
   type FilterKindItem,
@@ -168,12 +169,13 @@ function forgetTemplates(session: string) {
   objectActions.delete(session);
 }
 
-/** What the core lets the explorer do on a session's engine (ADR-026), asked once per session. */
+/** What the core lets the explorer do on a session's engine (ADR-026), asked once per session
+ *  (`enabled` once it is open). */
 const objectActions = new Map<string, ObjectActionsItem>();
-function useObjectActions(session: string): ObjectActionsItem | undefined {
+function useObjectActions(session: string, enabled = true): ObjectActionsItem | undefined {
   const [actions, setActions] = useState(() => objectActions.get(session));
   useEffect(() => {
-    if (actions) return;
+    if (actions || !enabled) return;
     let current = true;
     void call(commands.objectActions(session))
       .then((answer) => {
@@ -184,9 +186,30 @@ function useObjectActions(session: string): ObjectActionsItem | undefined {
     return () => {
       current = false;
     };
-  }, [session, actions]);
+  }, [session, actions, enabled]);
   return actions;
 }
+
+/** SQL written by the core, in a new tab of the connection (on the schema's database where the
+ *  engine has one per schema): nothing runs. */
+function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string) {
+  const tab = useApp.getState().addTab(connectionId, sql);
+  connectTabFromExplorer(tab, session, schema === undefined ? undefined : explorerDatabase(connectionId, schema));
+}
+
+/** "New table", "New view"…: the core's statement, to finish in a new tab (ADR-026). */
+async function openCreate(connectionId: string, session: string, kind: CreateKindItem, schema: string) {
+  const sql = await call(commands.createSql(session, kind, schema));
+  openSqlTab(connectionId, session, kind === "schema" ? undefined : schema, sql);
+}
+
+/** The folder whose right-click offers "New …" of a kind. */
+const CREATE_FOLDERS: Partial<Record<SchemaFolder, CreateKindItem>> = {
+  tables: "table",
+  views: "view",
+  materializedViews: "materializedView",
+  sequences: "sequence",
+};
 
 /** Delete drops the focused object (after its dialog), as in DBeaver. */
 function isDropKey(e: React.KeyboardEvent): boolean {
@@ -493,6 +516,7 @@ function Folder({
   forceOpen = false,
   filtered = false,
   onConfigureFilter,
+  create,
   children,
 }: {
   label: string;
@@ -504,6 +528,8 @@ function Folder({
   filtered?: boolean;
   /** Its right-click menu offers "Configure filter…", as DBeaver's folders do. */
   onConfigureFilter?: () => void;
+  /** Its right-click menu offers "New …" of what it holds. */
+  create?: { label: string; run(): void };
   children: ReactNode;
 }) {
   const { t, i18n } = useTranslation("shell");
@@ -515,7 +541,7 @@ function Folder({
       <div
         className="row folder-row"
         onContextMenu={(e) => {
-          if (!onConfigureFilter) return;
+          if (!onConfigureFilter && !create) return;
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
@@ -540,17 +566,30 @@ function Folder({
         )}
         <span className="muted small">{count.toLocaleString(i18n.language)}</span>
       </div>
-      {menu && onConfigureFilter && (
+      {menu && (onConfigureFilter || create) && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
-          <button
-            role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              onConfigureFilter();
-            }}
-          >
-            {t("configureFilter")}
-          </button>
+          {create && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                create.run();
+              }}
+            >
+              {create.label}
+            </button>
+          )}
+          {onConfigureFilter && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                onConfigureFilter();
+              }}
+            >
+              {t("configureFilter")}
+            </button>
+          )}
         </div>
       )}
       {open && <div className="children">{children}</div>}
@@ -830,6 +869,7 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       .catch((e: unknown) => setError(errorText(e)));
   }
   const session = `meta:${connection.id}`;
+  const actions = useObjectActions(session, schemas !== null);
 
   function newQuery() {
     const tab = addTab(connection.id);
@@ -1000,6 +1040,20 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
             >
               {t("refreshAllSchemas")}
             </button>
+          )}
+          {schemas && actions?.create.includes("schema") && (
+            <>
+              <hr />
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setRowMenu(null);
+                  openCreate(connection.id, session, "schema", "").catch((e: unknown) => setError(errorText(e)));
+                }}
+              >
+                {t("create.schema")}
+              </button>
+            </>
           )}
         </div>
       )}
@@ -1195,6 +1249,21 @@ function SchemaNode({
             {t("refreshAllSchemas")}
           </button>
           <FilterMenuItems kind="schemas" names={[schema]} onFilterName={onFilterName} close={() => setMenu(null)} />
+          {actions && actions.create.some((kind) => kind !== "schema") && <hr />}
+          {actions?.create
+            .filter((kind) => kind !== "schema")
+            .map((kind) => (
+              <button
+                key={kind}
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
+                }}
+              >
+                {t(`create.${kind}`)}
+              </button>
+            ))}
           {actions?.dropSchemas && (
             <>
               <hr />
@@ -1245,6 +1314,17 @@ function SchemaNode({
                     forceOpen={inner !== ""}
                     filtered={!!objectFilter && (objectFilter.include.length > 0 || objectFilter.exclude.length > 0)}
                     onConfigureFilter={() => onConfigureFilter("objects")}
+                    create={(() => {
+                      const kind = CREATE_FOLDERS[folder];
+                      return kind && actions?.create.includes(kind)
+                        ? {
+                            label: t(`create.${kind}`),
+                            run: () => {
+                              openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
+                            },
+                          }
+                        : undefined;
+                    })()}
                   >
                     {relations.map((o) => (
                       <ObjectNode
