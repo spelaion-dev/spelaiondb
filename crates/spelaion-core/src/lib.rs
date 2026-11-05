@@ -38,9 +38,9 @@ pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates
 pub use guard::{Risk, RiskyStatement, script_risks};
 pub use history::{HistoryError, QueryHistory};
 pub use objects::{
-    CreateKind, NewIndexKind, ObjectActions, ObjectChange, ObjectError, ObjectTarget, apply_change,
-    can_cascade, change_script, change_statements, create_sql, new_index_sql, object_actions,
-    qualified_name,
+    CreateKind, FoundObject, NewIndexKind, ObjectActions, ObjectChange, ObjectError, ObjectTarget,
+    SEARCH_LIMIT, apply_change, can_cascade, change_script, change_statements, create_sql,
+    new_index_sql, object_actions, qualified_name, search_objects,
 };
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,

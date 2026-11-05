@@ -1,11 +1,14 @@
 //! What the explorer does with an object besides reading it (ADR-026): its name as the engine
 //! writes it, for the clipboard, the statements that rename or drop it, and those that create a
-//! new one or an index on chosen columns (opened in the editor, never run from here). Statements
-//! are written
+//! new one or an index on chosen columns (opened in the editor, never run from here), and the
+//! search behind "Open object by name". Statements are written
 //! here with each engine's syntax and quoting; the UI only says what to change, and a change
 //! runs only once the user has seen its SQL and confirmed it.
 
-use spelaion_driver_api::{ConstraintKind, Dialect, ObjectKind, SchemaObject, SchemaObjectKind};
+use spelaion_driver_api::{
+    Connection, ConstraintKind, Dialect, DriverError, NameFilter, ObjectInfo, ObjectKind,
+    SchemaObject, SchemaObjectKind,
+};
 
 use crate::edit::run_one;
 use crate::session::Session;
@@ -24,6 +27,112 @@ pub fn qualified_name(dialect: &dyn Dialect, schema: &str, names: &[String]) -> 
         .map(|part| dialect.quote_identifier(part))
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// What "Open object by name" found: a relation or another object of a schema.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FoundObject {
+    Relation(ObjectInfo),
+    Other(SchemaObject),
+}
+
+impl FoundObject {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Relation(o) => &o.name,
+            Self::Other(o) => &o.name,
+        }
+    }
+    pub fn schema(&self) -> &str {
+        match self {
+            Self::Relation(o) => &o.schema,
+            Self::Other(o) => &o.schema,
+        }
+    }
+}
+
+/// The most objects one search returns: enough to choose from, small enough to show.
+pub const SEARCH_LIMIT: usize = 100;
+
+/// A pattern of ADR-025 that matches names containing `text` literally, ignoring case.
+fn contains_pattern(text: &str) -> String {
+    let mut pattern = String::from("*");
+    for c in text.chars() {
+        if matches!(c, '\\' | '*' | '%' | '?') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('*');
+    pattern
+}
+
+/// The objects whose name contains `text` (ignoring case) in the schemas the explorer shows:
+/// those `schemas` keeps, system ones only with `show_system`, and among their objects those
+/// `objects` keeps (ADR-025). The name goes into the catalog queries as a pattern, so big
+/// catalogs are narrowed on the server. Exact names come first, then those that start with the
+/// text, then the rest, at most `limit`.
+pub async fn search_objects(
+    connection: &dyn Connection,
+    text: &str,
+    schemas: &NameFilter,
+    objects: &NameFilter,
+    show_system: bool,
+    limit: usize,
+) -> Result<Vec<FoundObject>, DriverError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    let search = NameFilter {
+        include: vec![contains_pattern(text)],
+        exclude: Vec::new(),
+    };
+    let mut found = Vec::new();
+    for schema in connection.list_schemas_matching(schemas).await? {
+        if schema.system && !show_system {
+            continue;
+        }
+        let relations = connection
+            .list_objects_matching(&schema.name, &search)
+            .await?;
+        found.extend(
+            relations
+                .into_iter()
+                .filter(|o| objects.matches(&o.name))
+                .map(FoundObject::Relation),
+        );
+        // Without its functions or triggers a schema still has its tables, as in the tree.
+        let others = connection
+            .list_schema_objects_matching(&schema.name, &search)
+            .await
+            .unwrap_or_default();
+        found.extend(
+            others
+                .into_iter()
+                .filter(|o| objects.matches(&o.name))
+                .map(FoundObject::Other),
+        );
+    }
+    let lower = text.to_lowercase();
+    let rank = |o: &FoundObject| {
+        let name = o.name().to_lowercase();
+        if name == lower {
+            0
+        } else if name.starts_with(&lower) {
+            1
+        } else {
+            2
+        }
+    };
+    found.sort_by(|a, b| {
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| a.name().to_lowercase().cmp(&b.name().to_lowercase()))
+            .then_with(|| a.schema().cmp(b.schema()))
+    });
+    found.truncate(limit);
+    Ok(found)
 }
 
 /// An object of the explorer that can be changed.
@@ -1123,5 +1232,22 @@ mod tests {
             object_actions(&SqliteDialect).new_index,
             [NewIndexKind::Index, NewIndexKind::UniqueIndex]
         );
+    }
+
+    #[test]
+    fn a_search_matches_its_text_literally() {
+        let filter = |text: &str| NameFilter {
+            include: vec![contains_pattern(text)],
+            exclude: Vec::new(),
+        };
+        assert!(filter("ord").matches("big_ORDERS"));
+        assert!(!filter("ord").matches("customer"));
+        // Wildcards typed in the box are only characters.
+        assert!(filter("a*b").matches("xa*by"));
+        assert!(!filter("a*b").matches("axxb"));
+        assert!(filter("50%").matches("rate_50%"));
+        assert!(!filter("50%").matches("rate_500"));
+        assert!(filter("a?").matches("a?"));
+        assert!(!filter("a?").matches("ab"));
     }
 }

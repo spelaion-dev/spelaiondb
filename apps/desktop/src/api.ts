@@ -30,6 +30,7 @@ import {
   type NameFilterItem,
   type NewIndexKindItem,
   type FilterKindItem,
+  type FoundObjectItem_Serialize,
   type FilterActionItem,
   type SchemaObjectItem_Serialize,
   type SchemaObjectKindItem,
@@ -80,6 +81,7 @@ export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
 export type { CreateKindItem, FilterActionItem, FilterKindItem, NewIndexKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
+export type FoundObjectItem = FoundObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
 export type { SchemaObjectKindItem, ServerObjectKindItem };
 // The channel delivers the deserialization variant (optional fields).

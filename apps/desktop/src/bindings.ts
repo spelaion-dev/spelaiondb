@@ -138,6 +138,11 @@ export const commands = {
 	 */
 	newIndexSql: (session: string, schema: string, table: string, columns: string[], kind: NewIndexKindItem) => typedError<string, string>(__TAURI_INVOKE("new_index_sql", { session, schema, table, columns, kind })),
 	/**
+	 *  "Open object by name": the objects whose name contains `text`, in the schemas and among the
+	 *  objects the explorer shows (its filter, and system schemas only with `show_system`).
+	 */
+	searchObjects: (session: string, text: string, schemaFilter: NameFilterItem | null, objectFilter: NameFilterItem | null, showSystem: boolean) => typedError<FoundObjectItem_Serialize[], string>(__TAURI_INVOKE("search_objects", { session, text, schemaFilter, objectFilter, showSystem })),
+	/**
 	 *  The statements the core would run for the pending changes of a table data tab, to show
 	 *  before applying them (production asks for confirmation).
 	 */
@@ -683,6 +688,15 @@ export type ForeignKeyDetails = {
 	referencedTable: string,
 	referencedColumns: string[],
 };
+
+/**  What "Open object by name" found: a relation or another object of a schema. */
+export type FoundObjectItem = FoundObjectItem_Serialize | FoundObjectItem_Deserialize;
+
+/**  What "Open object by name" found: a relation or another object of a schema. */
+export type FoundObjectItem_Deserialize = { kind: "relation"; object: ObjectItem_Deserialize } | { kind: "schemaObject"; object: SchemaObjectItem_Deserialize };
+
+/**  What "Open object by name" found: a relation or another object of a schema. */
+export type FoundObjectItem_Serialize = { kind: "relation"; object: ObjectItem_Serialize } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
 
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
 

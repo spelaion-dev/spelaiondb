@@ -6,12 +6,13 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    CoreEvent, CreateKind, NewIndexKind, ObjectChange, ObjectError, ObjectTarget, ResultStore,
-    Session, apply_change, create_sql, new_index_sql, object_actions,
+    CoreEvent, CreateKind, FoundObject, NewIndexKind, ObjectChange, ObjectError, ObjectTarget,
+    ResultStore, SEARCH_LIMIT, Session, apply_change, create_sql, new_index_sql, object_actions,
+    search_objects,
 };
 use spelaion_driver_api::{
-    ConnectParams, ConstraintKind, Driver, ObjectKind, SchemaObject, SchemaObjectKind, Secret,
-    TlsMode,
+    ConnectParams, ConstraintKind, Driver, NameFilter, ObjectKind, SchemaObject, SchemaObjectKind,
+    Secret, TlsMode,
 };
 
 async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
@@ -735,5 +736,77 @@ async fn indexes_and_constraints_on_chosen_columns_run_on_each_engine() {
             }
         }
         run(label, &session, &["DROP TABLE oa_index_t"], true).await;
+    }
+}
+
+#[tokio::test]
+async fn open_an_object_by_name_on_each_engine() {
+    for (label, session, schema) in engines().await {
+        let cleanup = [
+            "DROP VIEW oa_find_order_view",
+            "DROP TABLE oa_find_orders",
+            "DROP TABLE oa_find_ord",
+        ];
+        run(label, &session, &cleanup, true).await;
+        run(
+            label,
+            &session,
+            &[
+                "CREATE TABLE oa_find_orders (id INT)",
+                "CREATE TABLE oa_find_ord (id INT)",
+                "CREATE VIEW oa_find_order_view AS SELECT 1 AS id",
+            ],
+            false,
+        )
+        .await;
+        let none = NameFilter::default();
+        let connection = session.connection().as_ref();
+        let found = search_objects(connection, "OA_FIND_ORD", &none, &none, false, SEARCH_LIMIT)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let names: Vec<&str> = found.iter().map(FoundObject::name).collect();
+        // The exact name first, then the others in order; nothing else.
+        assert_eq!(
+            names,
+            ["oa_find_ord", "oa_find_order_view", "oa_find_orders"],
+            "{label}"
+        );
+        assert!(found.iter().all(|o| o.schema() == schema), "{label}");
+        assert!(
+            matches!(&found[1], FoundObject::Relation(o) if o.kind == ObjectKind::View),
+            "{label}"
+        );
+        // The explorer's filter applies, and the limit.
+        let hide = NameFilter {
+            include: Vec::new(),
+            exclude: vec!["*view".into()],
+        };
+        let found = search_objects(connection, "oa_find_ord", &none, &hide, false, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            found.iter().map(FoundObject::name).collect::<Vec<_>>(),
+            ["oa_find_ord"],
+            "{label}"
+        );
+        let elsewhere = NameFilter {
+            include: vec!["no_such_schema".into()],
+            exclude: Vec::new(),
+        };
+        assert!(
+            search_objects(
+                connection,
+                "oa_find",
+                &elsewhere,
+                &none,
+                false,
+                SEARCH_LIMIT
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+            "{label}"
+        );
+        run(label, &session, &cleanup, true).await;
     }
 }

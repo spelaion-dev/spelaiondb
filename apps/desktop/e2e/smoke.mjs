@@ -1133,6 +1133,27 @@ try {
     "CREATE TABLE new_table (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);",
   );
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  // Open object by name (Ctrl+Shift+D): found in the catalog, opened, and shown in the tree.
+  const viewsFolder = page.getByRole("button", { name: "Expand or collapse Views", exact: true });
+  await viewsFolder.click();
+  assert.equal(await viewsFolder.getAttribute("aria-expanded"), "false");
+  await page.keyboard.press("Control+Shift+D");
+  const openObject = page.getByRole("dialog", { name: "Open object by name" });
+  await openObject.getByRole("searchbox", { name: "Object name" }).fill("ORDERS");
+  const results = openObject.getByRole("listbox", { name: "Objects found" });
+  await results.getByRole("option").nth(1).waitFor();
+  assert.deepEqual(
+    await results.getByRole("option").locator(".label").allInnerTexts(),
+    ["orders", "big_orders"],
+  );
+  await shot("05i-open-object");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await openObject.waitFor({ state: "detached" });
+  await page.waitForFunction(() =>
+    document.querySelector('[aria-label="Expand or collapse Views"]')?.getAttribute("aria-expanded") === "true",
+  );
+  await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).waitFor();
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   // Quick filter (Ctrl+Shift+F): only what matches by name, plus the expanded connections.
   await page.keyboard.press("Control+Shift+F");

@@ -101,6 +101,16 @@ let tabCounter = 0;
 
 export type ConnectionDialog = { kind: "add" } | { kind: "edit"; id: string };
 
+/** An object to show in the explorer: its connection expands (if it is connected there), then
+ *  its schema and the folder holding the object, which is scrolled into view. */
+export interface ExplorerReveal {
+  connectionId: string;
+  schema?: string;
+  name?: string;
+  /** Tells one request from the next for the same object. */
+  nonce: number;
+}
+
 /** Window event asking the editor tab whose id is in `detail` to save its query (Ctrl+S). */
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
@@ -133,6 +143,10 @@ interface AppStore {
   explorerConnected: string[];
   /** Tables and views chosen with Ctrl+click, in the order they were chosen (one session). */
   explorerSelection: { session: string; schema: string; name: string }[];
+  /** What the explorer is asked to show; the node that shows it clears it. */
+  explorerReveal: ExplorerReveal | null;
+  /** "Open object by name" is open, on this connection first (or the active tab's). */
+  openObject: { connectionId: string | null } | null;
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
   addTab(connectionId: string | null, sql?: string): string;
@@ -164,6 +178,10 @@ interface AppStore {
   /** Ctrl+click: adds or removes one; choosing in another session starts again. */
   toggleExplorerSelection(item: { session: string; schema: string; name: string }): void;
   clearExplorerSelection(): void;
+  revealInExplorer(target: Omit<ExplorerReveal, "nonce">): void;
+  /** The explorer showed it (or cannot): later renders do not scroll to it again. */
+  revealDone(nonce: number): void;
+  setOpenObject(open: { connectionId: string | null } | null): void;
 }
 
 export const useApp = create<AppStore>((set) => ({
@@ -184,6 +202,8 @@ export const useApp = create<AppStore>((set) => ({
   openConnections: [],
   explorerConnected: [],
   explorerSelection: [],
+  explorerReveal: null,
+  openObject: null,
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
   addTab: (connectionId, sql = "") => {
@@ -250,6 +270,9 @@ export const useApp = create<AppStore>((set) => ({
     return { explorerSelection: mine.some(same) ? mine.filter((o) => !same(o)) : [...mine, item] };
   }),
   clearExplorerSelection: () => set((s) => (s.explorerSelection.length === 0 ? s : { explorerSelection: [] })),
+  revealInExplorer: (target) => set((s) => ({ explorerReveal: { ...target, nonce: (s.explorerReveal?.nonce ?? 0) + 1 } })),
+  revealDone: (nonce) => set((s) => (s.explorerReveal?.nonce === nonce ? { explorerReveal: null } : s)),
+  setOpenObject: (openObject) => set({ openObject }),
   setExplorerConnected: (connection, connected) => set((s) => ({
     explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),
   })),
