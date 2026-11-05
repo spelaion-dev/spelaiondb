@@ -451,10 +451,15 @@ fn range_text(elem: &Type, raw: &[u8]) -> DResult<String> {
 
 /// `Kind::Multirange` carries the element type (int4), not the range type (int4range).
 fn multirange_text(elem: &Type, mut raw: &[u8]) -> DResult<String> {
-    let count = read_i32(&mut raw)?;
-    let mut parts = Vec::with_capacity(count.max(0) as usize);
+    let count = usize::try_from(read_i32(&mut raw)?)?;
+    // Each range has at least a four-byte length and a one-byte flags field.
+    if count > raw.len() / 5 {
+        return Err("invalid multirange count".into());
+    }
+    let mut parts = Vec::new();
+    parts.try_reserve(count)?;
     for _ in 0..count {
-        let len = read_i32(&mut raw)? as usize;
+        let len = usize::try_from(read_i32(&mut raw)?)?;
         let (item, rest) = raw.split_at_checked(len).ok_or("truncated multirange")?;
         parts.push(range_text(elem, item)?);
         raw = rest;
@@ -463,21 +468,21 @@ fn multirange_text(elem: &Type, mut raw: &[u8]) -> DResult<String> {
 }
 
 fn composite_text(fields: &[tokio_postgres::types::Field], mut raw: &[u8]) -> DResult<String> {
-    let count = read_i32(&mut raw)?;
-    let mut parts = Vec::with_capacity(count.max(0) as usize);
-    for i in 0..count as usize {
+    let count = usize::try_from(read_i32(&mut raw)?)?;
+    if count != fields.len() || count > raw.len() / 8 {
+        return Err("invalid composite field count".into());
+    }
+    let mut parts = Vec::new();
+    parts.try_reserve(count)?;
+    for field in fields {
         let _oid = read_i32(&mut raw)?;
         let len = read_i32(&mut raw)?;
-        if len < 0 {
+        if len == -1 {
             parts.push(String::new());
             continue;
         }
-        let (value, rest) = raw
-            .split_at_checked(len as usize)
-            .ok_or("truncated composite")?;
-        let field = fields
-            .get(i)
-            .ok_or("composite with more fields than declared")?;
+        let len = usize::try_from(len)?;
+        let (value, rest) = raw.split_at_checked(len).ok_or("truncated composite")?;
         parts.push(quote_element(
             &decode_text(field.type_(), value)?,
             &['(', ')', ','],
@@ -652,6 +657,40 @@ pub fn interval_text(mut raw: &[u8]) -> DResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composite_and_multirange_reject_untrusted_counts() {
+        let fields = vec![tokio_postgres::types::Field::new("n".into(), Type::INT4)];
+        for count in [-1_i32, i32::MAX] {
+            assert!(composite_text(&fields, &count.to_be_bytes()).is_err());
+            assert!(multirange_text(&Type::INT4, &count.to_be_bytes()).is_err());
+        }
+        // A null field still counts towards the declared type's field count.
+        let mut extra_null = 2_i32.to_be_bytes().to_vec();
+        for _ in 0..2 {
+            extra_null.extend_from_slice(&23_i32.to_be_bytes());
+            extra_null.extend_from_slice(&(-1_i32).to_be_bytes());
+        }
+        assert!(composite_text(&fields, &extra_null).is_err());
+        assert!(composite_text(&fields, &0_i32.to_be_bytes()).is_err());
+        let mut one_null = 1_i32.to_be_bytes().to_vec();
+        one_null.extend_from_slice(&23_i32.to_be_bytes());
+        one_null.extend_from_slice(&(-1_i32).to_be_bytes());
+        assert_eq!(composite_text(&fields, &one_null).unwrap(), "()");
+        one_null[8..12].copy_from_slice(&(-2_i32).to_be_bytes());
+        assert!(composite_text(&fields, &one_null).is_err());
+
+        assert_eq!(
+            multirange_text(&Type::INT4, &0_i32.to_be_bytes()).unwrap(),
+            "{}"
+        );
+        let mut one_empty = 1_i32.to_be_bytes().to_vec();
+        one_empty.extend_from_slice(&1_i32.to_be_bytes());
+        one_empty.push(1); // RANGE_EMPTY
+        assert_eq!(multirange_text(&Type::INT4, &one_empty).unwrap(), "{empty}");
+        one_empty[4..8].copy_from_slice(&(-1_i32).to_be_bytes());
+        assert!(multirange_text(&Type::INT4, &one_empty).is_err());
+    }
 
     fn int_array(rank: i32) -> Vec<u8> {
         let mut raw = Vec::new();
