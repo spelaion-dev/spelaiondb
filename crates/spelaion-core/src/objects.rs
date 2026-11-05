@@ -1,16 +1,18 @@
 //! What the explorer does with an object besides reading it (ADR-026): its name as the engine
 //! writes it, for the clipboard, the statements that rename or drop it, and those that create a
 //! new one or an index on chosen columns (opened in the editor, never run from here), and the
-//! search behind "Open object by name". Statements are written
+//! search behind "Open object by name", and an editor session's active schema. Statements are
+//! written
 //! here with each engine's syntax and quoting; the UI only says what to change, and a change
 //! runs only once the user has seen its SQL and confirmed it.
 
 use spelaion_driver_api::{
     Connection, ConstraintKind, Dialect, DriverError, NameFilter, ObjectInfo, ObjectKind,
-    SchemaObject, SchemaObjectKind,
+    SchemaObject, SchemaObjectKind, Value,
 };
 
 use crate::edit::run_one;
+use crate::generate::scalar_value;
 use crate::session::Session;
 
 /// A name as the engine writes it in SQL: `schema.table`, `schema.table.column`…, each part
@@ -135,6 +137,66 @@ pub async fn search_objects(
     Ok(found)
 }
 
+/// Makes `schema` where this session finds unqualified names: `search_path` on PostgreSQL (the
+/// schema, then `public`), the database on MySQL and MariaDB, `SET schema` on DuckDB. Only the
+/// session changes, never the saved connection.
+pub async fn set_active_schema(session: &Session, schema: &str) -> Result<(), ObjectError> {
+    let dialect = session.dialect();
+    let failed = |message: String| ObjectError::Failed {
+        index: 1,
+        total: 1,
+        message,
+    };
+    let statement = match dialect.name() {
+        "mysql" => {
+            return session
+                .connection()
+                .select_database(schema)
+                .await
+                .map_err(|e| failed(e.to_string()));
+        }
+        "postgres" => {
+            let quoted = dialect.quote_identifier(schema);
+            if schema == "public" {
+                format!("SET search_path TO {quoted}")
+            } else {
+                format!("SET search_path TO {quoted}, public")
+            }
+        }
+        "duckdb" => format!("SET schema = '{}'", schema.replace('\'', "''")),
+        _ => {
+            return Err(ObjectError::Unsupported(
+                "this engine has no schema per session: qualify the names with their schema".into(),
+            ));
+        }
+    };
+    run_one(session, &statement)
+        .await
+        .map(|_| ())
+        .map_err(failed)
+}
+
+/// The schema where this session finds unqualified names (for "Link with editor").
+pub async fn active_schema(session: &Session) -> Result<Option<String>, String> {
+    let sql = match session.dialect().name() {
+        "mysql" => {
+            return session
+                .connection()
+                .current_database()
+                .await
+                .map_err(|e| e.to_string());
+        }
+        "sqlite" => return Ok(Some("main".into())),
+        "sqlserver" => "SELECT SCHEMA_NAME()",
+        _ => "SELECT current_schema()",
+    };
+    Ok(match scalar_value(session, sql).await? {
+        None | Some(Value::Null) => None,
+        Some(Value::Text(text)) => Some(text),
+        Some(other) => Some(other.to_string()),
+    })
+}
+
 /// An object of the explorer that can be changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectTarget {
@@ -246,6 +308,9 @@ pub struct ObjectActions {
     /// What can be added on chosen columns: SQLite and DuckDB add constraints only when the
     /// table is created, so they get indexes.
     pub new_index: Vec<NewIndexKind>,
+    /// An editor tab's schema can be set from the tree: not on SQL Server or SQLite, which
+    /// have no schema per session.
+    pub active_schema: bool,
 }
 
 pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
@@ -273,6 +338,7 @@ pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
         drop_schemas: engine != "sqlite",
         drop_constraints: !matches!(engine, "sqlite" | "duckdb"),
         create,
+        active_schema: matches!(engine, "postgres" | "mysql" | "duckdb"),
         new_index: if matches!(engine, "sqlite" | "duckdb") {
             vec![NewIndexKind::Index, NewIndexKind::UniqueIndex]
         } else {

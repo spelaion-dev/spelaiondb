@@ -1618,6 +1618,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.keyboard.insertText("select 1 where database() = 'spelaion';");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  // "Set as the editor's schema" switches the active tab's database back.
+  await selectedDatabase.selectOption("information_schema");
+  await page.waitForFunction((el) => !el.disabled && el.value === "information_schema", await selectedDatabase.elementHandle());
+  await mysqlSchema.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Set as the editor's schema" }).click();
+  await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await selectedDatabase.elementHandle());
   // "Generate CALL" on a procedure: its IN parameter as a placeholder, its OUT one collected.
   await replaceQuery(panel, "create procedure if not exists smoke_call(in a int, out b int) set b = a + 1;\nselect 2 as done union all select 3;");
   await run(panel);
