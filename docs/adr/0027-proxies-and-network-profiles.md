@@ -1,6 +1,6 @@
 # ADR-027: SOCKS and HTTP proxies go in tunnel files, and tunnel files are the network profiles
 
-- **Status:** Proposed (waiting for a decision before it is built)
+- **Status:** Accepted (part 1 implemented; part 2 pending)
 - **Date:** 2026-11-05
 - **Builds on:** ADR-007 (in-process SSH), ADR-009 (configuration and secrets), ADR-022 (trust
   pinned to content)
@@ -53,15 +53,47 @@ Two questions have to be answered first:
    - Repository trust (ADR-022) pins the `[proxy]` table with the rest of the file: a pull
      that points the proxy elsewhere is shown and must be accepted before anything is sent.
    - The code goes in `spelaion-ssh` (it already owns the forward and the first hop's
-     connection), with `tokio-socks` (MIT) for SOCKS5 and a small CONNECT client written here.
-     The tunnel editor gets a "Proxy" section; the DBeaver import maps its `socks_proxy` and
-     `http_proxy` handlers.
+     connection). The tunnel editor gets a "Proxy" section.
 2. **Tunnel files are the network profiles.** A tunnel file already is a named, reusable set of
    network settings that many connections share, stored in the repository or the personal
    directory and pinned by trust. Instead of a second kind of file, the app shows them as
    "network profiles": the forms say so, and Settings → Network lists them with New, Edit and
    Delete, so they can be managed without opening a connection. The file name and the
    `tunnel = "…"` key stay as they are, so no existing configuration changes.
+
+## Implementation (2026-11-05)
+- `spelaion-ssh/src/proxy.rs`:
+  - SOCKS5 (RFC 1928, with RFC 1929 username and password; the target is sent as a name);
+  - HTTP `CONNECT` with `Proxy-Authorization: Basic`. tinyproxy answers a wrong password with
+    401 instead of 407, so both are read as "rejected".
+  - Both are written here instead of adding a crate: together they are under 300 lines, with
+    no new dependency to vet.
+- `TunnelSpec::proxy`:
+  - With hops, the first hop's TCP connection goes through it.
+  - Without hops, every connection accepted on the forward does. A proxy-only tunnel asks for
+    a missing password once when it opens, and checks the proxy then (a SOCKS5 proxy also
+    checks the username and password).
+  - A `command` on the first hop and a proxy are refused together.
+  - A proxy-only tunnel cannot run commands: SQLite on a server needs an SSH hop.
+- `[proxy]` in tunnel files (`type`, `host`, `port`, `user`, `password`); `hops` may be empty
+  with a proxy.
+  - The keychain entry is `…/tunnel/<name>/proxy/password`. The forms pass the typed passwords
+    apart from the draft (`TunnelPasswords`).
+  - The stored password is forgotten when the proxy's type, host, port or user changes, or
+    when the proxy is removed or deleted.
+  - `spelaiondb check` checks the proxy's secret reference like a hop's.
+- Not done: importing DBeaver's proxy handlers (their file format was not checked against
+  real files) and the Settings → Network list of tunnel files (part 2).
+- Tests:
+  - `testing/docker/proxy` runs Dante (SOCKS5) and tinyproxy (HTTP), both with a password, on
+    the networks of the bastions and databases. `SPELAION_TEST_SOCKS=127.0.0.1:11080` and
+    `SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128` turn the tests on.
+  - Through each proxy: alone to PostgreSQL by name, and in front of bastion2 (which the host
+    cannot reach). A wrong password is reported as such, and a missing one is asked once.
+  - From configuration with a `cmd:` password; trust pinning of `proxy.host`; the keychain
+    entry stored and forgotten.
+  - The smoke test builds a proxy-only tunnel in the editor and connects through it,
+    answering the proxy password dialog.
 
 ## Alternatives
 - **A `[proxy]` section in each connection (DBeaver's model).** Easy to explain, but the same

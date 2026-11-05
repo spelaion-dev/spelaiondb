@@ -45,6 +45,9 @@ jobs:
       SPELAION_TEST_MSSQL: 127.0.0.1:11433
       SPELAION_TEST_SSH: 127.0.0.1:2221
       SPELAION_TEST_SSH_AGENT: "1"
+      # The test proxies (ADR-027) from testing/docker/proxy.
+      SPELAION_TEST_SOCKS: 127.0.0.1:11080
+      SPELAION_TEST_HTTP_PROXY: 127.0.0.1:13128
       # Kubernetes connections (ADR-015) against kind, in this job so they reuse its build.
       SPELAION_TEST_K8S: /home/runner/.kube/config
     steps:

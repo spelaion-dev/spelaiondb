@@ -94,6 +94,10 @@ fn errors_fail_and_say_where_and_why() {
     );
     conn("badref", "password = { secret = \"vault://x\" }\n");
     repo.write(
+        ".spelaion/tunnels/proxied.toml",
+        "schema_version = 1\n\n[proxy]\ntype = \"http\"\nhost = \"proxy\"\nport = 3128\nuser = \"ops\"\npassword = { secret = \"cmd:echo --password=hunter2\" }\n",
+    );
+    repo.write(
         ".spelaion/certs/me.key",
         "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIA==\n-----END PRIVATE KEY-----\n",
     );
@@ -112,6 +116,7 @@ fn errors_fail_and_say_where_and_why() {
         ("connections/badvar.toml", "${home} is not a variable"),
         ("connections/keyinside.toml", "inside the repository"),
         ("connections/badref.toml", "password"),
+        ("tunnels/proxied.toml", "proxy password"),
         ("certs/me.key", "holds a private key"),
     ] {
         assert!(

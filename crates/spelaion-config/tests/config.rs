@@ -7,10 +7,10 @@ use std::sync::Mutex;
 
 use spelaion_config::{
     ConnectionDraft, ConnectionFile, ConnectionId, Engine, HopDraft, KubernetesDraft, LocalPort,
-    Password, PasswordChoice, ResolveError, Resolver, SecretBackend, Source, SshAuth,
-    SystemBackend, TlsModeConfig, TrustStore, TunnelDraft, TunnelDraftOptions, TunnelFile,
-    TunnelSettings, WritePolicy, add_connection, add_tunnel, connection_account, create_connection,
-    delete_tunnel, load, set_value, slug, tunnel_account, update_tunnel,
+    Password, PasswordChoice, ProxyDraft, ProxyType, ResolveError, Resolver, SecretBackend, Source,
+    SshAuth, SystemBackend, TlsModeConfig, TrustStore, TunnelDraft, TunnelDraftOptions, TunnelFile,
+    TunnelPasswords, TunnelSettings, WritePolicy, add_connection, add_tunnel, connection_account,
+    create_connection, delete_tunnel, load, set_value, slug, tunnel_account, update_tunnel,
 };
 use spelaion_driver_api::{Secret, TlsMode};
 
@@ -1162,6 +1162,7 @@ fn two_hop_tunnel() -> TunnelDraft {
             ),
         ],
         options: TunnelDraftOptions::default(),
+        proxy: None,
     }
 }
 
@@ -1308,7 +1309,7 @@ fn new_tunnels_are_written_without_secrets_and_load_back() {
     let name = add_tunnel(
         &config,
         &draft,
-        &[None, Some(Secret::new("hop-secret"))],
+        &vec![None, Some(Secret::new("hop-secret"))].into(),
         &backend,
     )
     .unwrap();
@@ -1348,7 +1349,7 @@ fn new_tunnels_are_written_without_secrets_and_load_back() {
     assert_eq!(resolved.hops[1].port, 2222);
 
     assert!(
-        add_tunnel(&config, &draft, &[], &backend).is_err(),
+        add_tunnel(&config, &draft, &TunnelPasswords::default(), &backend).is_err(),
         "never overwrites"
     );
 }
@@ -1407,7 +1408,15 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
     // Same servers, new port on hop 1: comments, `command` and the stored password stay.
     let mut draft = TunnelDraft::from_entry(entry);
     draft.hops[0].port = Some(2200);
-    update_tunnel(&config, Source::Workspace, "prod", &draft, &[], &backend).unwrap();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "prod",
+        &draft,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.starts_with("# Production bastions"), "{content}");
     assert!(
@@ -1433,7 +1442,15 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
     let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
     let mut moved = TunnelDraft::from_entry(entry);
     moved.hops[1].host = "10.0.0.9".into();
-    update_tunnel(&config, Source::Workspace, "prod", &moved, &[], &backend).unwrap();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "prod",
+        &moved,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     assert!(
         !backend
             .keychain
@@ -1452,14 +1469,30 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
         vec![SshAuth::Key],
         PasswordChoice::None,
     ));
-    update_tunnel(&config, Source::Workspace, "prod", &longer, &[], &backend).unwrap();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "prod",
+        &longer,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     assert!(config.problems.is_empty(), "{:?}", config.problems);
     let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
     assert_eq!(entry.file.hops.len(), 3);
     let mut shorter = TunnelDraft::from_entry(entry);
     shorter.hops.truncate(2);
-    update_tunnel(&config, Source::Workspace, "prod", &shorter, &[], &backend).unwrap();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "prod",
+        &shorter,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     assert_eq!(
         config
@@ -1475,7 +1508,17 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
     let before = std::fs::read_to_string(&path).unwrap();
     let mut broken = shorter.clone();
     broken.hops[0].user = String::new();
-    assert!(update_tunnel(&config, Source::Workspace, "prod", &broken, &[], &backend).is_err());
+    assert!(
+        update_tunnel(
+            &config,
+            Source::Workspace,
+            "prod",
+            &broken,
+            &TunnelPasswords::default(),
+            &backend
+        )
+        .is_err()
+    );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
 }
 
@@ -1494,7 +1537,15 @@ fn tunnel_keepalives_are_edited_validated_and_resolved() {
     let mut draft = TunnelDraft::from_entry(entry);
     draft.options.keepalive_interval = Some(30);
     draft.options.keepalive_count = Some(0);
-    update_tunnel(&config, Source::Workspace, "prod", &draft, &[], &backend).unwrap();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "prod",
+        &draft,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.starts_with("# Production bastions"), "{content}");
     assert!(content.contains("keepalive_interval = 30"), "{content}");
@@ -1514,7 +1565,15 @@ fn tunnel_keepalives_are_edited_validated_and_resolved() {
     let mut defaults = TunnelDraft::from_entry(entry);
     defaults.options.keepalive_interval = Some(TunnelFile::DEFAULT_KEEPALIVE_INTERVAL);
     defaults.options.keepalive_count = None;
-    update_tunnel(&config, Source::Workspace, "prod", &defaults, &[], &backend).unwrap();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "prod",
+        &defaults,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(!content.contains("keepalive"), "{content}");
     let config = load(Some(&fx.repo()), &fx.user());
@@ -1529,7 +1588,15 @@ fn tunnel_keepalives_are_edited_validated_and_resolved() {
     // 0 turns them off.
     let mut off = TunnelDraft::from_entry(entry);
     off.options.keepalive_interval = Some(0);
-    update_tunnel(&config, Source::Workspace, "prod", &off, &[], &backend).unwrap();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "prod",
+        &off,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
     assert_eq!(TunnelSettings::of(&entry.file).keepalive_interval, None);
@@ -1537,7 +1604,15 @@ fn tunnel_keepalives_are_edited_validated_and_resolved() {
     // The connect timeout is written and resolved the same way.
     let mut timeout = TunnelDraft::from_entry(entry);
     timeout.options.connect_timeout = Some(40);
-    update_tunnel(&config, Source::Workspace, "prod", &timeout, &[], &backend).unwrap();
+    update_tunnel(
+        &config,
+        Source::Workspace,
+        "prod",
+        &timeout,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     assert!(
         std::fs::read_to_string(&path)
             .unwrap()
@@ -1806,6 +1881,183 @@ fn the_personal_port_range_is_saved_next_to_the_variables() {
     assert!(content.contains("db_user = \"ana\""), "{content}");
 }
 
+fn proxy_draft(host: &str) -> ProxyDraft {
+    ProxyDraft {
+        kind: ProxyType::Socks5,
+        host: host.into(),
+        port: Some(1080),
+        user: "ana".into(),
+        password: PasswordChoice::Keychain,
+    }
+}
+
+#[test]
+fn proxies_are_written_without_their_password_and_resolved() {
+    let fx = Fixture::new("tunnel-proxy");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+    // A proxy alone: no hops.
+    let draft = TunnelDraft {
+        source: Source::User,
+        name: "Corp proxy".into(),
+        hops: Vec::new(),
+        options: TunnelDraftOptions::default(),
+        proxy: Some(proxy_draft("proxy.corp.example")),
+    };
+    let passwords = TunnelPasswords {
+        hops: Vec::new(),
+        proxy: Some(Secret::new("proxy-secret")),
+    };
+    let name = add_tunnel(&config, &draft, &passwords, &backend).unwrap();
+    let path = fx.user().join("tunnels").join(format!("{name}.toml"));
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("[proxy]"), "{content}");
+    assert!(content.contains("type = \"socks5\""), "{content}");
+    assert!(content.contains("secret = \"keychain\""), "{content}");
+    assert!(!content.contains("proxy-secret"), "{content}");
+    assert!(!content.contains("[[hops]]"), "{content}");
+    let account = spelaion_config::proxy_account(&config, Source::User, &name);
+    assert_eq!(
+        backend
+            .keychain
+            .lock()
+            .unwrap()
+            .get(&account)
+            .map(String::as_str),
+        Some("proxy-secret")
+    );
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.tunnel_for(Source::User, &name).unwrap();
+    assert_eq!(TunnelDraft::from_entry(entry).proxy, draft.proxy);
+    let resolved = Resolver::new(&config, &fx.trusted(), &backend)
+        .resolve_tunnel_draft(&TunnelDraft::from_entry(entry))
+        .unwrap();
+    let proxy = resolved.proxy.expect("a proxy");
+    assert_eq!(
+        (proxy.host.as_str(), proxy.port, proxy.user.as_deref()),
+        ("proxy.corp.example", 1080, Some("ana"))
+    );
+    assert_eq!(proxy.password, Password::Value(Secret::new("proxy-secret")));
+
+    // The same proxy with a hop behind it keeps the password…
+    let mut with_hop = TunnelDraft::from_entry(entry);
+    with_hop.hops = vec![hop(
+        "bastion",
+        "ana",
+        vec![SshAuth::Agent],
+        PasswordChoice::None,
+    )];
+    update_tunnel(
+        &config,
+        Source::User,
+        &name,
+        &with_hop,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
+    assert!(backend.keychain.lock().unwrap().contains_key(&account));
+    // …but pointing it elsewhere forgets it: it is never sent to another proxy.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::User, &name).unwrap();
+    let mut moved = TunnelDraft::from_entry(entry);
+    moved.proxy = Some(proxy_draft("evil.example"));
+    update_tunnel(
+        &config,
+        Source::User,
+        &name,
+        &moved,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
+    assert!(!backend.keychain.lock().unwrap().contains_key(&account));
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("host = \"evil.example\""), "{content}");
+
+    // Removing the proxy keeps the hops; deleting the tunnel forgets a stored password.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::User, &name).unwrap();
+    let passwords = TunnelPasswords {
+        hops: Vec::new(),
+        proxy: Some(Secret::new("again")),
+    };
+    update_tunnel(
+        &config,
+        Source::User,
+        &name,
+        &TunnelDraft::from_entry(entry),
+        &passwords,
+        &backend,
+    )
+    .unwrap();
+    assert!(backend.keychain.lock().unwrap().contains_key(&account));
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::User, &name).unwrap();
+    let mut without = TunnelDraft::from_entry(entry);
+    without.proxy = None;
+    update_tunnel(
+        &config,
+        Source::User,
+        &name,
+        &without,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("proxy"));
+    assert!(!backend.keychain.lock().unwrap().contains_key(&account));
+}
+
+#[test]
+fn invalid_proxies_explain_what_is_wrong() {
+    let fx = Fixture::new("tunnel-proxy-invalid");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let error = |draft: TunnelDraft| draft.to_file(&config).unwrap_err().message;
+    let alone = |proxy: Option<ProxyDraft>| TunnelDraft {
+        source: Source::User,
+        name: "p".into(),
+        hops: Vec::new(),
+        options: TunnelDraftOptions::default(),
+        proxy,
+    };
+    assert!(error(alone(None)).contains("[proxy]"));
+    assert!(error(alone(Some(proxy_draft(" ")))).contains("host"));
+    let mut no_port = proxy_draft("p");
+    no_port.port = None;
+    assert!(error(alone(Some(no_port))).contains("port"));
+    for (file, content, expected) in [
+        (
+            "password.toml",
+            "schema_version = 1\n\n[proxy]\ntype = \"http\"\nhost = \"p\"\nport = 3128\npassword = { secret = \"keychain\" }\n",
+            "goes with a user",
+        ),
+        (
+            "command.toml",
+            "schema_version = 1\n\n[proxy]\ntype = \"socks5\"\nhost = \"p\"\nport = 1080\n\n[[hops]]\nhost = \"h\"\nuser = \"u\"\ncommand = \"ssh -W %h:%p jump\"\n",
+            "cannot go through the proxy",
+        ),
+        (
+            "kind.toml",
+            "schema_version = 1\n\n[proxy]\ntype = \"socks4\"\nhost = \"p\"\nport = 1080\n",
+            "socks4",
+        ),
+    ] {
+        fx.write(&format!("user/tunnels/{file}"), content);
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(
+            config
+                .problems
+                .iter()
+                .any(|p| p.file.ends_with(file) && p.message.contains(expected)),
+            "{file}: {:?}",
+            config.problems
+        );
+    }
+}
+
 #[test]
 fn tunnels_in_use_cannot_be_deleted() {
     let fx = Fixture::new("tunnel-delete");
@@ -1938,11 +2190,17 @@ fn personal_and_repository_entries_are_separate() {
     add_tunnel(
         &config,
         &tunnel(Source::User),
-        &[None, Some(Secret::new("personal"))],
+        &vec![None, Some(Secret::new("personal"))].into(),
         &backend,
     )
     .unwrap();
-    add_tunnel(&config, &tunnel(Source::Workspace), &[], &backend).unwrap();
+    add_tunnel(
+        &config,
+        &tunnel(Source::Workspace),
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     let resolved = Resolver::new(&config, &fx.trusted(), &backend)
         .resolve_tunnel_draft(&tunnel(Source::Workspace))
@@ -2081,7 +2339,7 @@ fn stale_connection_and_tunnel_edits_reject_unseen_file_changes() {
             Source::Workspace,
             "bastion",
             &tunnel,
-            &[],
+            &TunnelPasswords::default(),
             &backend
         )
         .is_err()
@@ -2103,7 +2361,7 @@ fn stale_connection_and_tunnel_edits_reject_unseen_file_changes() {
         Source::Workspace,
         "bastion",
         &tunnel,
-        &[],
+        &TunnelPasswords::default(),
         &backend,
     )
     .unwrap();
@@ -2236,7 +2494,7 @@ fn edited_unreviewed_items_do_not_approve_unrelated_changes() {
         Source::Workspace,
         "bastion",
         &tunnel_draft,
-        &[],
+        &TunnelPasswords::default(),
         &backend,
         &tunnel_rev,
     )
@@ -2263,7 +2521,7 @@ fn edited_unreviewed_items_do_not_approve_unrelated_changes() {
             Source::Workspace,
             "bastion",
             &tunnel_draft,
-            &[],
+            &TunnelPasswords::default(),
             &backend,
             &tunnel_rev
         )
@@ -2305,7 +2563,7 @@ fn edited_trusted_items_record_only_the_written_revision() {
         Source::Workspace,
         "bastion",
         &draft,
-        &[],
+        &TunnelPasswords::default(),
         &backend,
         &revision,
     )
@@ -2453,6 +2711,20 @@ fn every_way_around_the_snapshot_is_caught() {
     let change = changed(resolved(&fx, &trust));
     assert_eq!(change.item, "tunnel:bastion");
     assert_eq!(change.fields[0].field, "keepalive_interval");
+    // A proxy added by a pull would see every connection's traffic: reviewed first.
+    std::fs::write(
+        &tunnel,
+        format!(
+            "{PINNED_TUNNEL}\n[proxy]\ntype = \"socks5\"\nhost = \"evil.example\"\nport = 1080\n"
+        ),
+    )
+    .unwrap();
+    let change = changed(resolved(&fx, &trust));
+    assert_eq!(change.item, "tunnel:bastion");
+    assert!(
+        change.fields.iter().any(|f| f.field == "proxy.host"),
+        "{change:?}"
+    );
     std::fs::write(&tunnel, PINNED_TUNNEL).unwrap();
     resolved(&fx, &trust).unwrap();
 

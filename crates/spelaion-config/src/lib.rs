@@ -25,7 +25,7 @@ mod trust;
 mod tunnel_draft;
 mod vars;
 
-pub use accounts::{connection_account, tunnel_account};
+pub use accounts::{connection_account, proxy_account, tunnel_account};
 pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
 pub use dbeaver::{
@@ -48,12 +48,13 @@ pub use load::{
 };
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{
-    ConnectionFile, Engine, HopConfig, KubernetesConfig, McpConfig, SCHEMA_VERSION, SecretSpec,
-    SshAuth, TlsConfig, TlsModeConfig, TunnelFile, TunnelPreferences, UserFile, WritePolicy,
+    ConnectionFile, Engine, HopConfig, KubernetesConfig, McpConfig, ProxyConfig, ProxyType,
+    SCHEMA_VERSION, SecretSpec, SshAuth, TlsConfig, TlsModeConfig, TunnelFile, TunnelPreferences,
+    UserFile, WritePolicy,
 };
 pub use resolve::{
-    LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedTunnel,
-    Resolver, TunnelSettings,
+    LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
+    ResolvedTunnel, Resolver, TunnelSettings,
 };
 pub use secrets::{KEYCHAIN_SERVICE, SecretBackend, SecretRef, SystemBackend};
 pub use trust::{
@@ -61,8 +62,9 @@ pub use trust::{
     tunnel_item,
 };
 pub use tunnel_draft::{
-    HopDraft, TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, add_tunnel, delete_tunnel,
-    tunnel_revision, tunnels_dir, update_tunnel, update_tunnel_at_revision,
+    HopDraft, ProxyDraft, TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, TunnelPasswords,
+    add_tunnel, delete_tunnel, tunnel_revision, tunnels_dir, update_tunnel,
+    update_tunnel_at_revision,
 };
 
 /// JSON Schema of each file type, for validation and autocompletion in the editor.

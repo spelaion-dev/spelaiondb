@@ -210,8 +210,37 @@ pub struct TunnelFile {
     /// which may wait for the person, is not counted). 15 when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connect_timeout: Option<u32>,
-    /// Hops in order; the last one is the one that reaches the database.
+    /// A SOCKS5 or HTTP proxy (ADR-027): the first hop is reached through it or, with no
+    /// hops, it reaches the database itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
+    /// Hops in order; the last one is the one that reaches the database. None with a proxy
+    /// that reaches the database alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hops: Vec<HopConfig>,
+}
+
+/// A tunnel's proxy (ADR-027).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyConfig {
+    /// `socks5` (the proxy resolves the target's name) or `http` (`CONNECT`).
+    #[serde(rename = "type")]
+    pub kind: ProxyType,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// Reference to the secret, never the value, as for hops. Only with `user`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<SecretSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyType {
+    Socks5,
+    Http,
 }
 
 impl TunnelFile {

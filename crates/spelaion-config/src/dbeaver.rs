@@ -17,7 +17,7 @@ use spelaion_driver_api::Secret;
 use crate::draft::{ConnectionDraft, PasswordChoice};
 use crate::load::Source;
 use crate::model::{ConnectionFile, Engine, SshAuth, TlsModeConfig, TunnelFile};
-use crate::tunnel_draft::{HopDraft, TunnelDraft, TunnelDraftOptions};
+use crate::tunnel_draft::{HopDraft, TunnelDraft, TunnelDraftOptions, TunnelPasswords};
 
 /// The key DBeaver ships with to obscure `credentials-config.json`.
 const CREDENTIALS_KEY: [u8; 16] = [
@@ -287,7 +287,7 @@ fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverSsh> {
 pub struct ImportPlan {
     pub connection: ConnectionDraft,
     pub password: Option<Secret>,
-    pub tunnel: Option<(TunnelDraft, Vec<Option<Secret>>)>,
+    pub tunnel: Option<(TunnelDraft, TunnelPasswords)>,
 }
 
 /// The drafts for one DBeaver connection. With `save_passwords`, the passwords DBeaver saved
@@ -333,8 +333,9 @@ pub fn import_plan(
                     keepalive_count: ssh.keepalive_count,
                     connect_timeout: ssh.connect_timeout,
                 },
+                proxy: None,
             },
-            vec![keep(&ssh.password)],
+            TunnelPasswords::from(vec![keep(&ssh.password)]),
         )
     });
     let sqlite = engine.is_file();
@@ -538,11 +539,14 @@ mod tests {
         assert_eq!(tunnel.options.connect_timeout, Some(20));
         assert_eq!(kept.connection.local_port, Some(15432));
         assert_eq!(kept.connection.keepalive, Some(300));
-        assert_eq!(secrets[0].as_ref().map(Secret::expose), Some("hop-pass"));
+        assert_eq!(
+            secrets.hops[0].as_ref().map(Secret::expose),
+            Some("hop-pass")
+        );
         let asked = import_plan(pg, Engine::Postgres, Source::User, false, "t");
         assert_eq!(asked.connection.password, PasswordChoice::Prompt);
         assert!(asked.password.is_none());
-        assert!(asked.tunnel.unwrap().1[0].is_none());
+        assert!(asked.tunnel.unwrap().1.hops[0].is_none());
         let sqlite = found.iter().find(|c| c.id == "sqlite_jdbc-3").unwrap();
         let plan = import_plan(sqlite, Engine::Sqlite, Source::User, true, "t");
         assert_eq!(plan.connection.password, PasswordChoice::None);

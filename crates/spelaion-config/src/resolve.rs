@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use spelaion_driver_api::{ConnectParams, Secret, TlsMode};
 
-use crate::accounts::{connection_account, tunnel_account};
+use crate::accounts::{connection_account, proxy_account, tunnel_account};
 use crate::draft::ConnectionDraft;
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, ConnectionEntry, ConnectionId, Source};
-use crate::model::{Engine, McpConfig, SecretSpec, SshAuth, TlsModeConfig, TunnelFile};
+use crate::model::{Engine, McpConfig, ProxyType, SecretSpec, SshAuth, TlsModeConfig, TunnelFile};
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::trust::TrustStore;
 use crate::tunnel_draft::TunnelDraft;
@@ -89,6 +89,18 @@ pub struct ResolvedTunnel {
     /// only from a trusted repository and only as the user trusted it.
     pub known_hosts: Option<PathBuf>,
     pub options: TunnelSettings,
+    /// The first hop is reached through it; with no hops, it reaches the database (ADR-027).
+    pub proxy: Option<ResolvedProxy>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedProxy {
+    pub kind: ProxyType,
+    pub host: String,
+    pub port: u16,
+    pub user: Option<String>,
+    /// `Prompt`: asked when the tunnel opens, if the proxy needs it.
+    pub password: Password,
 }
 
 /// How a tunnel's sessions behave on the network, with the defaults applied.
@@ -503,11 +515,30 @@ impl<'a> Resolver<'a> {
                 command: hop.command.clone(),
             });
         }
+        let proxy = match &file.proxy {
+            None => None,
+            Some(proxy) => Some(ResolvedProxy {
+                kind: proxy.kind,
+                host: self.expand(errors_at, &proxy.host)?,
+                port: proxy.port,
+                user: proxy
+                    .user
+                    .as_deref()
+                    .map(|user| self.expand(errors_at, user))
+                    .transpose()?,
+                password: self.password(
+                    errors_at,
+                    proxy.password.as_ref(),
+                    &proxy_account(self.config, source, name),
+                )?,
+            }),
+        };
         Ok(ResolvedTunnel {
             name: name.to_string(),
             hops,
             known_hosts: None,
             options: TunnelSettings::of(file),
+            proxy,
         })
     }
 

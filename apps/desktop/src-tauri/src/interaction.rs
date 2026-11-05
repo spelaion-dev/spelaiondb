@@ -103,6 +103,15 @@ impl Interaction for AppInteraction {
                     host: host.clone(),
                 },
             ),
+            SecretRequest::ProxyPassword { user, host } => (
+                "Proxy password".to_string(),
+                format!("{user}@{host}"),
+                false,
+                SecretLabel::ProxyPassword {
+                    user: user.clone(),
+                    host: host.clone(),
+                },
+            ),
             SecretRequest::Challenge {
                 host,
                 instructions,

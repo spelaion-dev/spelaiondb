@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
-import { call, commands, type HopDraft, type PasswordMode, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
+import { call, commands, type HopDraft, type PasswordMode, type ProxyDraft, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
 
 export type TunnelEditorMode = { kind: "add"; personal: boolean } | { kind: "edit"; name: string; personal: boolean };
@@ -81,6 +81,46 @@ function toDraft(hop: HopState): HopDraft {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** The proxy section (ADR-027). Its password, if typed, travels apart from the draft. */
+interface ProxyState {
+  enabled: boolean;
+  kind: "socks5" | "http";
+  host: string;
+  port: number | null;
+  user: string;
+  /** Keychain when true, asked when false. */
+  savePassword: boolean;
+  /** Original reference when it is not keychain/prompt (`env:…`, `op://…`): kept as is. */
+  fixedMode: PasswordMode | null;
+  passwordEnv: string;
+  passwordOther: string;
+  password: string;
+}
+
+const noProxy: ProxyState = { enabled: false, kind: "socks5", host: "", port: null, user: "", savePassword: true, fixedMode: null, passwordEnv: "", passwordOther: "", password: "" };
+
+function proxyFromDraft(proxy: ProxyDraft | null | undefined): ProxyState {
+  if (!proxy) return noProxy;
+  return {
+    enabled: true,
+    kind: proxy.kind,
+    host: proxy.host,
+    port: proxy.port ?? null,
+    user: proxy.user,
+    savePassword: proxy.passwordMode !== "prompt",
+    fixedMode: proxy.passwordMode === "env" || proxy.passwordMode === "other" ? proxy.passwordMode : null,
+    passwordEnv: proxy.passwordEnv,
+    passwordOther: proxy.passwordOther,
+    password: "",
+  };
+}
+
+function proxyToDraft(proxy: ProxyState): ProxyDraft | null {
+  if (!proxy.enabled) return null;
+  const passwordMode: PasswordMode = !proxy.user.trim() ? "none" : (proxy.fixedMode ?? (proxy.savePassword ? "keychain" : "prompt"));
+  return { kind: proxy.kind, host: proxy.host, port: proxy.port, user: proxy.user, passwordMode, passwordEnv: proxy.passwordEnv, passwordOther: proxy.passwordOther };
+}
+
 export function TunnelEditor(props: {
   mode: TunnelEditorMode;
   onClose(): void;
@@ -98,6 +138,7 @@ export function TunnelEditor(props: {
   const [keepaliveInterval, setKeepaliveInterval] = useState<number | null>(null);
   const [keepaliveCount, setKeepaliveCount] = useState<number | null>(null);
   const [connectTimeout, setConnectTimeout] = useState<number | null>(null);
+  const [proxy, setProxy] = useState<ProxyState>(noProxy);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "idle" | "testing" | "ok" } | { kind: "error"; message: string }>({ kind: "idle" });
@@ -114,6 +155,7 @@ export function TunnelEditor(props: {
         setKeepaliveInterval(loaded.keepaliveInterval ?? null);
         setKeepaliveCount(loaded.keepaliveCount ?? null);
         setConnectTimeout(loaded.connectTimeout ?? null);
+        setProxy(proxyFromDraft(loaded.proxy));
       })
       .catch((e: unknown) => setLoadError(errorText(e)));
   }, [mode]);
@@ -144,7 +186,12 @@ export function TunnelEditor(props: {
     setStatus({ kind: "idle" });
   };
 
-  const draft: TunnelDraft = { personal, name, hops: hops.map(toDraft), keepaliveInterval, keepaliveCount, connectTimeout };
+  const draft: TunnelDraft = { personal, name, hops: hops.map(toDraft), keepaliveInterval, keepaliveCount, connectTimeout, proxy: proxyToDraft(proxy) };
+  const proxyPassword = proxy.enabled && proxy.password ? proxy.password : null;
+  const updateProxy = (patch: Partial<ProxyState>) => {
+    setProxy((current) => ({ ...current, ...patch }));
+    setStatus({ kind: "idle" });
+  };
   /** A whole number typed in a field, or null when it is empty. */
   const numberOrNull = (text: string) => (text.trim() === "" ? null : Math.max(0, Math.trunc(Number(text))));
   const passwords = hops.map((hop) => hop.password || null);
@@ -157,14 +204,14 @@ export function TunnelEditor(props: {
   async function test() {
     setStatus({ kind: "testing" });
     try {
-      let outcome = await call(commands.testTunnel(draft, passwords));
+      let outcome = await call(commands.testTunnel(draft, passwords, proxyPassword));
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
           setStatus({ kind: "idle" });
           return;
         }
         useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
-        outcome = await call(commands.testTunnel(draft, passwords));
+        outcome = await call(commands.testTunnel(draft, passwords, proxyPassword));
       }
       setStatus(outcome.kind === "connected" ? { kind: "ok" } : { kind: "idle" });
     } catch (e) {
@@ -176,10 +223,10 @@ export function TunnelEditor(props: {
     setBusy(true);
     try {
       if (mode.kind === "edit") {
-        await call(commands.updateTunnel(mode.name, mode.personal, draft, passwords, revision ?? ""));
+        await call(commands.updateTunnel(mode.name, mode.personal, draft, passwords, proxyPassword, revision ?? ""));
         props.onSaved({ name: mode.name, personal: mode.personal });
       } else {
-        props.onSaved(await call(commands.addTunnel(draft, passwords)));
+        props.onSaved(await call(commands.addTunnel(draft, passwords, proxyPassword)));
       }
     } catch (e) {
       setStatus({ kind: "error", message: errorText(e) });
@@ -264,7 +311,7 @@ export function TunnelEditor(props: {
                     <button type="button" className="ghost small" disabled={i === hops.length - 1} aria-label={t("tunnel.moveDown", { hop: label })} onClick={() => moveHop(i, 1)}>
                       ↓
                     </button>
-                    <button type="button" className="ghost small" disabled={hops.length === 1} aria-label={t("tunnel.removeHop", { hop: label })} onClick={() => setHops((list) => list.filter((_, j) => j !== i))}>
+                    <button type="button" className="ghost small" disabled={hops.length === 1 && !proxy.enabled} aria-label={t("tunnel.removeHop", { hop: label })} onClick={() => setHops((list) => list.filter((_, j) => j !== i))}>
                       ✕
                     </button>
                   </div>
@@ -351,6 +398,66 @@ export function TunnelEditor(props: {
               {t("tunnel.addHop")}
             </button>
 
+            <fieldset aria-label={t("tunnel.proxy")}>
+              <legend>{t("tunnel.proxy")}</legend>
+              <label className="check">
+                <input type="checkbox" checked={proxy.enabled} onChange={(e) => updateProxy({ enabled: e.target.checked })} />
+                {t("tunnel.useProxy")}
+              </label>
+              {proxy.enabled && (
+                <>
+                  <div className="form-pair">
+                    <label className="field">
+                      <span>{t("tunnel.proxyType")}</span>
+                      <select value={proxy.kind} onChange={(e) => updateProxy({ kind: e.target.value as ProxyState["kind"] })}>
+                        <option value="socks5">SOCKS5</option>
+                        <option value="http">HTTP (CONNECT)</option>
+                      </select>
+                    </label>
+                    <label className="field grow">
+                      <span>{t("tunnel.proxyHost")}</span>
+                      <input type="text" value={proxy.host} placeholder="proxy.example.com" onChange={(e) => updateProxy({ host: e.target.value })} />
+                    </label>
+                    <label className="field port">
+                      <span>{t("tunnel.proxyPort")}</span>
+                      <input type="number" min={1} max={65535} value={proxy.port ?? ""} placeholder={proxy.kind === "socks5" ? "1080" : "3128"} onChange={(e) => updateProxy({ port: e.target.value ? Number(e.target.value) : null })} />
+                    </label>
+                  </div>
+                  <div className="form-pair">
+                    <label className="field grow">
+                      <span>{t("tunnel.proxyUser")}</span>
+                      <input type="text" value={proxy.user} autoComplete="off" placeholder={t("tunnel.proxyUserPlaceholder")} onChange={(e) => updateProxy({ user: e.target.value })} />
+                    </label>
+                    {proxy.user.trim() &&
+                      (proxy.fixedMode ? (
+                        <label className="field grow">
+                          <span>{t("tunnel.proxyPassword")}</span>
+                          <input type="text" readOnly value={proxy.fixedMode === "env" ? `env:${proxy.passwordEnv}` : proxy.passwordOther} />
+                        </label>
+                      ) : (
+                        <label className="field grow">
+                          <span>{t("tunnel.proxyPassword")}</span>
+                          <input
+                            type="password"
+                            value={proxy.password}
+                            autoComplete="off"
+                            placeholder={editing && proxy.savePassword ? t("auth.keepPlaceholder") : ""}
+                            onChange={(e) => updateProxy({ password: e.target.value })}
+                          />
+                        </label>
+                      ))}
+                  </div>
+                  {proxy.user.trim() && !proxy.fixedMode && (
+                    <label className="check">
+                      <input type="checkbox" aria-label={t("tunnel.proxySavePassword")} checked={proxy.savePassword} onChange={(e) => updateProxy({ savePassword: e.target.checked })} />
+                      {t("tunnel.proxySavePassword")}
+                    </label>
+                  )}
+                  <p className="muted small">{hops.length === 0 ? t("tunnel.proxyAloneHint") : t("tunnel.proxyHint")}</p>
+                </>
+              )}
+            </fieldset>
+
             <fieldset>
               <legend>{t("tunnel.network")}</legend>
               <div className="form-pair">
@@ -408,7 +515,7 @@ export function TunnelEditor(props: {
             </button>
             <div className="test-result" role="status">
               {status.kind === "testing" && <span className="muted">{t("test.testing")}</span>}
-              {status.kind === "ok" && <span className="ok">{t("tunnel.ok", { count: hops.length })}</span>}
+              {status.kind === "ok" && <span className="ok">{hops.length === 0 ? t("tunnel.okProxy") : t("tunnel.ok", { count: hops.length })}</span>}
               {status.kind === "error" && <span className="error">{status.message}</span>}
             </div>
             {editing && (
