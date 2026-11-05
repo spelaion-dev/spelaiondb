@@ -650,6 +650,12 @@ input[type="search"] {
 .status-connected {
   color: #2ea043;
 }
+.status-lost {
+  color: var(--danger);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .badge-prod {
   font-size: 10.5px;
   font-weight: 700;

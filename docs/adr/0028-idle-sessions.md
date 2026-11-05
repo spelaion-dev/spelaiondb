@@ -1,6 +1,6 @@
 # ADR-028: Idle database sessions: keep them alive, notice when one dies, reconnect only on a click
 
-- **Status:** Proposed (waiting for a decision before it is built)
+- **Status:** Accepted (implemented)
 - **Date:** 2026-11-05
 - **Builds on:** ADR-007 (in-process SSH), ADR-005 (driver model)
 
@@ -41,6 +41,37 @@ A connection left open overnight shows connection errors in the morning. What ha
    to reconnect, and reconnecting opens a new session (and tunnel, if needed) **without running
    anything**: the user runs the statement again. Nothing is ever re-run automatically
    (AGENTS.md).
+
+## Implementation (2026-11-05)
+- Drivers: `Connection::keep_alive()` returns `Alive` or `InTransaction`, and
+  `Connection::is_closed()` says whether the driver already knows the connection is gone.
+  PostgreSQL sends `select now() <> statement_timestamp()` (both clocks agree only on the
+  first statement of a transaction, so it says whether one is open; a failed transaction
+  answers 25P02, also open). MySQL and MariaDB read `SERVER_STATUS_IN_TRANS` from the last
+  OK packet and send nothing when it is set, otherwise `COM_PING`. A plain `SELECT 1` with
+  autocommit off opens no transaction there; touching an InnoDB table does. SQL Server sends
+  `select @@trancount`. SQLite and DuckDB have none.
+- TCP keepalive after 60 s idle: `keepalives_idle` in tokio-postgres (it waited two hours),
+  `tcp_keepalive` in `mysql_async`, and `socket2` on SQL Server's socket.
+- `spelaion-core::health`: every use of a session's connection goes through `Tracked`, which
+  notes the last use and marks the session `Lost` on a connection error. SQLSTATE class 08
+  and PostgreSQL's 57P01/57P02/57P05 count too: they arrive as ordinary errors before the
+  driver sees the close. The keep-alive loop runs only after a whole interval without use
+  and with nothing running. After `InTransaction` it waits until the session is used again.
+  It counts the session lost after 30 s without an answer. A tunnel going down marks its
+  sessions lost.
+- Connection files take `keepalive = <seconds>`. The form fills in 300 for new connections,
+  and imports from DBeaver get 300 too. The desktop starts the loop for editor sessions only
+  (`spelaiondb mcp` does not). A lost session sends `SessionLost` to the UI. The tab then shows
+  "Connection lost" with a Reconnect button, and Run explains instead of running. Reconnecting
+  opens a new session and runs nothing.
+- Tests:
+  - MySQL and MariaDB with `wait_timeout = 3`: the session with keep-alives survives, the one
+    without is lost.
+  - `pg_stat_activity` shows keep-alives stop inside a transaction and resume after it.
+  - A terminated backend is noticed by the keep-alive, and a statement that ends its own
+    session marks it lost.
+  - The smoke test covers the lost tab and the reconnect.
 
 ## Alternatives
 - **Only TCP keepalive everywhere.** Cheap, but through a tunnel it only covers the local hop

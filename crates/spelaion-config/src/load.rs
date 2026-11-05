@@ -362,6 +362,23 @@ pub(crate) fn validate_connection(
             }
         }
     }
+    if let Some(seconds) = file.keepalive {
+        if file.engine.is_file() && seconds > 0 {
+            return Err(ConfigError::new(
+                path,
+                "keepalive is for database servers: a local file has no session to keep alive",
+            ));
+        }
+        if seconds > ConnectionFile::MAX_KEEPALIVE {
+            return Err(ConfigError::new(
+                path,
+                format!(
+                    "keepalive is in seconds, at most {} (0 turns it off)",
+                    ConnectionFile::MAX_KEEPALIVE
+                ),
+            ));
+        }
+    }
     if let Some(port) = file.local_port {
         if file.tunnel.is_none() || remote_sqlite {
             return Err(ConfigError::new(

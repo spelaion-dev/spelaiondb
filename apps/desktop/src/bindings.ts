@@ -310,6 +310,7 @@ export const commands = {
 /** Events */
 export const events = {
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
+	sessionLost: makeEvent<SessionLost, SessionLost>("session-lost"),
 };
 
 /* Types */
@@ -459,6 +460,8 @@ export type ConnectionDraftItem_Deserialize = {
 	/**  SQLite on a server (with a tunnel): the program there; empty for `sqlite3`. */
 	sqlite3: string,
 	readOnly: boolean,
+	/**  Seconds idle before a keep-alive (ADR-028); null or 0 for off. */
+	keepalive?: number | null,
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
@@ -495,6 +498,8 @@ export type ConnectionDraftItem_Serialize = {
 	/**  SQLite on a server (with a tunnel): the program there; empty for `sqlite3`. */
 	sqlite3: string,
 	readOnly: boolean,
+	/**  Seconds idle before a keep-alive (ADR-028); null or 0 for off. */
+	keepalive: number | null,
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
@@ -1100,6 +1105,15 @@ export type ServerObjectItem_Serialize = {
 };
 
 export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension";
+
+/**
+ *  An editor session's connection is gone (ADR-028): the tab shows it and offers to
+ *  reconnect. Nothing was re-run.
+ */
+export type SessionLost = {
+	session: string,
+	reason: string,
+};
 
 /**  A saved query; `connection` is empty when it was saved without one. */
 export type SnippetItem = {

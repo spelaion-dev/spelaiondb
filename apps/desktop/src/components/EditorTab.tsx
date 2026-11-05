@@ -512,7 +512,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function ensureConnected(): Promise<boolean> {
     // The store, not this render's `tab`: a caller may have just connected (loading a
     // table page connects, then runs its SELECT through `run`).
-    const status = useApp.getState().tabs.find((t) => t.id === tab.id)?.status;
+    const current = useApp.getState().tabs.find((t) => t.id === tab.id);
+    // A lost session is reconnected only from its banner, and nothing is run then (ADR-028).
+    if (current?.lost) {
+      updateTab(tab.id, { run: errorRun(current.lost, { key: "messages.connectionLost", values: { detail: current.lost } }) });
+      return false;
+    }
+    const status = current?.status;
     if (status === "connected") return true;
     if (status === "connecting") return false;
     if (!tab.connectionId) {
@@ -526,7 +532,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         updateTab(tab.id, { status: "disconnected" });
         return false;
       }
-      updateTab(tab.id, { status: "connected", serverVersion: version });
+      updateTab(tab.id, { status: "connected", serverVersion: version, lost: undefined });
       return true;
     } catch (e) {
       const detail = message(e);
@@ -535,12 +541,19 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
   }
 
+  /** Opens a new session for a tab whose session was lost. Nothing is run: the user runs
+   *  the statement again. */
+  async function reconnect() {
+    updateTab(tab.id, { lost: undefined });
+    if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
+  }
+
   async function changeConnection(id: string) {
     if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     await call(commands.disconnect(tab.id)).catch(() => undefined);
     setTables({});
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
-    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null });
+    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined });
   }
 
   async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize) {
@@ -700,9 +713,18 @@ export function EditorTab({ tab }: { tab: Tab }) {
         ) : (
           <button className="ghost" disabled={tab.status === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
         ))}
-        <span className={`status status-${tab.status}`}>
-          {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
-        </span>
+        {tab.lost ? (
+          <span className="status status-lost" role="alert" title={tab.lost}>
+            {t("status.lost")}
+            <button className="ghost small" disabled={workspaceChanging} onClick={() => void reconnect()}>
+              {t("reconnect")}
+            </button>
+          </span>
+        ) : (
+          <span className={`status status-${tab.status}`}>
+            {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
+          </span>
+        )}
         {connection?.env?.toLowerCase().startsWith("prod") && <span className="badge badge-prod">{t("production")}</span>}
         {notice && (
           <span className={`small format-error ${notice.error ? "error" : "muted"}`} role={notice.error ? "alert" : "status"}>

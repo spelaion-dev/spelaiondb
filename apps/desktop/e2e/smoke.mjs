@@ -1411,6 +1411,29 @@ try {
   await panel.locator(".statusline", { hasText: "1,000 rows" }).waitFor();
   await shot("07-postgres");
 
+  step("a session the server ended: shown as lost, nothing re-run, reconnected on a click");
+  await replaceQuery(panel, "select pg_terminate_backend(pg_backend_pid());");
+  await run(panel);
+  const lost = panel.locator(".status-lost");
+  await lost.waitFor();
+  assert.match(await lost.innerText(), /Connection lost/);
+  // Running again does not reconnect on its own: it says why.
+  await replaceQuery(panel, "select 'after reconnect' as marker;");
+  await run(panel);
+  await panel.getByText("The connection was lost", { exact: false }).first().waitFor();
+  assert.equal(await panel.locator(".status-lost").count(), 1);
+  await shot("07a-connection-lost");
+  await lost.getByRole("button", { name: "Reconnect" }).click();
+  // The prompted password lived with the lost session: it is asked again.
+  const passwordDialog = page.getByRole("dialog").getByText("Password for Postgres (Docker)");
+  await passwordDialog.waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".status-connected").waitFor();
+  await panel.getByText("Reconnected. Nothing was run again.", { exact: true }).waitFor();
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+
   step("MySQL and MariaDB: password, TLS, types and the schema explorer");
   // Only an encrypted session has a cipher: the row exists only if TLS is on.
   for (const [connection, version, status] of [
@@ -2062,6 +2085,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const saved = readFileSync(join(userDir, "connections", "wizard", "docker-pg-wizard.toml"), "utf8");
   assert.match(saved, /secret = "prompt"/);
   assert.match(saved, /mode = "require"/);
+  // New connections keep idle sessions alive (ADR-028).
+  assert.match(saved, /keepalive = 300/);
   assert.match(saved, /\[mcp\]\nexposed = true\nwrites = "allow"/);
   assert.doesNotMatch(saved, /wrong|password = "/);
   assert.ok(!existsSync(join(demo, ".spelaion", "connections", "shop-copy.toml")), "personal connections stay out of the repository");

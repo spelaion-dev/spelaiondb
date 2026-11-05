@@ -5,13 +5,16 @@
   "loadingDatabases": "Cargando bases de datos…",
   "databaseLoadFailed": "No se pudieron cargar las bases de datos",
   "retryDatabases": "Reintentar",
+  "reconnect": "Reconectar",
+  "reconnected": "Reconectado. No se ha vuelto a ejecutar nada.",
   "connectToChooseDatabase": "Conectar para elegir base de datos",
   "noConnection": "— Sin conexión —",
   "pickConnection": "Elige una conexión para esta pestaña.",
   "status": {
     "connected": "Conectado",
     "connecting": "Conectando…",
-    "disconnected": "Desconectado"
+    "disconnected": "Desconectado",
+    "lost": "Conexión perdida"
   },
   "production": "PRODUCCIÓN",
   "cancel": "Cancelar",
@@ -89,6 +92,7 @@
     "filterMenu": "Filtrar"
   },
   "messages": {
+    "connectionLost": "Se perdió la conexión: {{detail}}. No se ejecutó nada. Reconecta y vuelve a ejecutarlo: nada se repite solo.",
     "connectionFailed": "No se pudo conectar: {{detail}}",
     "runFailed": "No se pudo ejecutar la consulta: {{detail}}",
     "statementOk": "Sentencia {{index}}: OK ({{duration}} ms)",

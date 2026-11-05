@@ -45,6 +45,8 @@ pub struct ResolvedConnection {
     pub sqlite3: Option<String>,
     /// Where the SSH tunnel's local end listens for this connection.
     pub local_port: LocalPort,
+    /// Keep the session alive after this long idle (ADR-028); `None`: off.
+    pub keepalive: Option<Duration>,
     pub mcp: McpConfig,
 }
 
@@ -341,6 +343,10 @@ impl<'a> Resolver<'a> {
                 // An invalid range was already reported when loading.
                 (None, Ok(None) | Err(_)) => LocalPort::Any,
             },
+            keepalive: file
+                .keepalive
+                .filter(|s| *s > 0)
+                .map(|s| Duration::from_secs(s.into())),
             mcp: file.mcp.clone(),
         })
     }

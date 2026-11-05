@@ -506,6 +506,7 @@ fn creates_new_connection_files() {
         kubernetes: None,
         sqlite3: None,
         read_only: true,
+        keepalive: None,
         tls: Default::default(),
         mcp: Default::default(),
     };
@@ -608,6 +609,7 @@ fn postgres_draft() -> ConnectionDraft {
         kubernetes: None,
         sqlite3: String::new(),
         read_only: false,
+        keepalive: None,
         mcp_exposed: true,
         mcp_writes: false,
     }
@@ -1190,6 +1192,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
             kubectl: String::new(),
         }),
         read_only: false,
+        keepalive: None,
         mcp_exposed: false,
         mcp_writes: false,
     }
@@ -1702,6 +1705,79 @@ fn local_ports_come_from_the_connection_or_the_personal_range() {
         );
         assert_eq!(config.user.tunnels, Default::default());
         assert_eq!(config.user.vars["db_user"], "ana");
+    }
+}
+
+#[test]
+fn session_keepalives_are_written_resolved_and_refused_for_files() {
+    let fx = Fixture::new("session-keepalive");
+    let path = fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
+    fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
+    fx.write("user/user.toml", "[vars]\ndb_user = \"ana\"\n");
+    let backend = FakeBackend {
+        env: BTreeMap::from([("REGION".into(), "eu".into())]),
+        ..Default::default()
+    };
+    let id = ws("prod/orders");
+    let resolve = |fx: &Fixture| {
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        Resolver::new(&config, &fx.trusted(), &backend)
+            .resolve(&ws("prod/orders"))
+            .unwrap()
+            .keepalive
+    };
+    assert_eq!(resolve(&fx), None);
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        keepalive: Some(300),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("keepalive = 300")
+    );
+    assert_eq!(resolve(&fx), Some(std::time::Duration::from_secs(300)));
+    // 0 turns it off and leaves the file.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let off = ConnectionDraft {
+        keepalive: Some(0),
+        ..draft
+    };
+    spelaion_config::update_connection(&config, &id, &off, None, &backend).unwrap();
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("keepalive")
+    );
+    assert_eq!(resolve(&fx), None);
+
+    for (file, content, expected) in [
+        (
+            "file.toml",
+            "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"app.db\"\nkeepalive = 60\n",
+            "database servers",
+        ),
+        (
+            "long.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nkeepalive = 100000\n",
+            "at most",
+        ),
+    ] {
+        let written = fx.write(&format!("repo/.spelaion/connections/{file}"), content);
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(
+            config
+                .problems
+                .iter()
+                .any(|p| p.file.ends_with(file) && p.message.contains(expected)),
+            "{file}: {:?}",
+            config.problems
+        );
+        std::fs::remove_file(written).unwrap();
     }
 }
 
