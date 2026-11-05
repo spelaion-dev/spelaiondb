@@ -342,6 +342,10 @@ function InteractionDialog() {
       title = t("sshPassword");
       prompt = `${label.user}@${label.host}`;
       break;
+    case "proxyPassword":
+      title = t("proxyPassword");
+      prompt = `${label.user}@${label.host}`;
+      break;
     case "challenge":
       title = label.instructions || t("verificationFor", { host: label.host });
       prompt = r.prompt;

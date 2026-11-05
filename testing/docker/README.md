@@ -10,6 +10,10 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
 ```
 
 - The bastions only allow port forwarding (`direct-tcpip`): they give no shell.
+- `proxy` (ADR-027): SOCKS5 (Dante) on `127.0.0.1:11080` and HTTP `CONNECT` (tinyproxy) on
+  `127.0.0.1:13128`, user `proxyuser`, password `proxy-pass`. It is on the bastions' and the
+  databases' networks, so it reaches `bastion2` and `postgres` by name. Tests:
+  `SPELAION_TEST_SOCKS=127.0.0.1:11080 SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128`.
 - `bastion2` and `postgres` only resolve from inside the chain.
 - Postgres is also published on `127.0.0.1:15432`, MySQL on `127.0.0.1:13306`, MariaDB
   on `127.0.0.1:13307` and SQL Server on `127.0.0.1:11433`, for tests without SSH.

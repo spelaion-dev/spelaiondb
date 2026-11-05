@@ -13,6 +13,7 @@
 
 mod auth;
 mod hostkeys;
+mod proxy;
 mod tunnel;
 
 use std::path::PathBuf;
@@ -24,11 +25,33 @@ use spelaion_driver_api::Secret;
 pub use hostkeys::KnownHosts;
 pub use tunnel::{RemoteExec, RemoteSignals, Tunnel, TunnelState};
 
-/// A tunnel: hops in order. The last one is the one that reaches the target.
+/// A tunnel: hops in order. The last one is the one that reaches the target. With a proxy,
+/// the first hop is reached through it; with a proxy and no hops, the proxy alone reaches the
+/// target (ADR-027).
 #[derive(Debug, Clone, Default)]
 pub struct TunnelSpec {
     pub hops: Vec<HopSpec>,
+    pub proxy: Option<ProxySpec>,
     pub options: TunnelOptions,
+}
+
+/// A SOCKS5 or HTTP proxy (ADR-027).
+#[derive(Debug, Clone)]
+pub struct ProxySpec {
+    pub kind: ProxyKind,
+    pub host: String,
+    pub port: u16,
+    pub user: Option<String>,
+    /// Asked through [`Interaction`] when there is a user and no password.
+    pub password: Option<Secret>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyKind {
+    /// SOCKS5; the proxy resolves the target's name.
+    Socks5,
+    /// HTTP `CONNECT`.
+    Http,
 }
 
 /// How every session of a tunnel behaves on the network.
@@ -141,6 +164,8 @@ pub enum SecretRequest {
         user: String,
         host: String,
     },
+    /// The password of a tunnel's proxy (ADR-027).
+    ProxyPassword { user: String, host: String },
     /// `keyboard-interactive` question (typically a 2FA code).
     Challenge {
         hop: usize,
@@ -209,6 +234,9 @@ pub enum SshError {
 
     #[error("cancelled")]
     Cancelled,
+
+    #[error("proxy {proxy}: {message}")]
+    Proxy { proxy: String, message: String },
 
     #[error("hop {} ({host}): {message}", hop + 1)]
     Hop {

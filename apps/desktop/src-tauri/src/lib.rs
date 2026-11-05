@@ -833,6 +833,17 @@ fn secrets(passwords: Vec<Option<String>>) -> Vec<Option<Secret>> {
         .collect()
 }
 
+/// Passwords typed in the tunnel editor: one per hop, and the proxy's (ADR-027).
+fn tunnel_passwords(
+    hops: Vec<Option<String>>,
+    proxy: Option<String>,
+) -> spelaion_config::TunnelPasswords {
+    spelaion_config::TunnelPasswords {
+        hops: secrets(hops),
+        proxy: proxy.filter(|p| !p.is_empty()).map(Secret::new),
+    }
+}
+
 /// The form of an existing tunnel, to edit it.
 #[tauri::command]
 #[specta::specta]
@@ -861,6 +872,7 @@ async fn tunnel_draft(
 async fn test_tunnel(
     draft: TunnelDraftItem,
     passwords: Vec<Option<String>>,
+    proxy_password: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<TunnelTestOutcome> {
@@ -878,7 +890,7 @@ async fn test_tunnel(
     };
     spelaion_core::test_tunnel(
         &resolved,
-        secrets(passwords),
+        tunnel_passwords(passwords, proxy_password),
         &KnownHosts::for_user(&state.user_dir),
         Arc::new(AppInteraction::new(app, state.pending.clone())),
     )
@@ -986,6 +998,7 @@ async fn kube_ports(
 async fn add_tunnel(
     draft: TunnelDraftItem,
     passwords: Vec<Option<String>>,
+    proxy_password: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<TunnelItem> {
     let personal = draft.personal;
@@ -993,9 +1006,13 @@ async fn add_tunnel(
     let name = {
         let config = state.config.read().await;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
-        let name =
-            spelaion_config::add_tunnel(&config, &draft, &secrets(passwords), &SystemBackend)
-                .map_err(|e| e.to_string())?;
+        let name = spelaion_config::add_tunnel(
+            &config,
+            &draft,
+            &tunnel_passwords(passwords, proxy_password),
+            &SystemBackend,
+        )
+        .map_err(|e| e.to_string())?;
         if !personal {
             TrustStore::load(&state.user_dir)
                 .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
@@ -1015,6 +1032,7 @@ async fn update_tunnel(
     personal: bool,
     draft: TunnelDraftItem,
     passwords: Vec<Option<String>>,
+    proxy_password: Option<String>,
     revision: String,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
@@ -1026,7 +1044,7 @@ async fn update_tunnel(
             source_of(personal),
             &name,
             &draft,
-            &secrets(passwords),
+            &tunnel_passwords(passwords, proxy_password),
             &SystemBackend,
             &revision,
         )

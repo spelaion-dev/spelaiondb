@@ -26,6 +26,12 @@ pub fn connection_account(config: &Config, id: &ConnectionId) -> String {
     format!("{}/{}/password", scope(config, id.source), id.path)
 }
 
+/// Entry of a tunnel proxy's password (ADR-027): `~/tunnel/<name>/proxy/password` or
+/// `repo:<root>/tunnel/<name>/proxy/password`.
+pub fn proxy_account(config: &Config, source: Source, tunnel: &str) -> String {
+    format!("{}/tunnel/{tunnel}/proxy/password", scope(config, source))
+}
+
 /// Entry of a tunnel hop's password (`hop` counts from 0; the name counts from 1):
 /// `~/tunnel/<name>/<n>/password` or `repo:<root>/tunnel/<name>/<n>/password`.
 pub fn tunnel_account(config: &Config, source: Source, tunnel: &str, hop: usize) -> String {

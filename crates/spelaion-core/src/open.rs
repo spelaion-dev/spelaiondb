@@ -3,7 +3,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use spelaion_config::{Engine, Password, ResolvedConnection, ResolvedHop, ResolvedTunnel, SshAuth};
+use spelaion_config::{
+    Engine, Password, ProxyType, ResolvedConnection, ResolvedHop, ResolvedProxy, ResolvedTunnel,
+    SshAuth, TunnelPasswords,
+};
 use spelaion_driver_api::{
     Driver, DriverError, Remote, RemoteCommand, RemoteControl, RemoteProcess, Secret,
 };
@@ -13,8 +16,8 @@ use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
 use spelaion_ssh::{
-    AuthMethod, HopSpec, Interaction, KnownHosts, LocalPort, RemoteSignals, SshError, Target,
-    Tunnel, TunnelOptions, TunnelSpec, TunnelState,
+    AuthMethod, HopSpec, Interaction, KnownHosts, LocalPort, ProxyKind, ProxySpec, RemoteSignals,
+    SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
 };
 use tokio::sync::watch;
 
@@ -275,15 +278,17 @@ pub async fn open_connection(
         (Some(resolved_tunnel), None) => {
             let spec = TunnelSpec {
                 hops: resolved_tunnel.hops.iter().map(hop_spec).collect(),
+                proxy: resolved_tunnel.proxy.as_ref().map(proxy_spec),
                 options: tunnel_options(resolved_tunnel),
             };
-            // Same layer, name, settings and hops = same tunnel. Secrets are not part of the
-            // key (their Debug is `***`).
+            // Same layer, name, settings, proxy and hops = same tunnel. Secrets are not part of
+            // the key (their Debug is `***`).
             let key = format!(
-                "{:?}|{}|{:?}|{:?}",
+                "{:?}|{}|{:?}|{:?}|{:?}",
                 resolved.id.source,
                 resolved_tunnel.name,
                 resolved_tunnel.options,
+                resolved_tunnel.proxy,
                 resolved_tunnel.hops
             );
             // The team's reviewed server keys come first (ADR-022).
@@ -333,15 +338,27 @@ pub async fn open_connection(
 }
 
 /// Opens a tunnel and closes it again, to check it from the UI before saving. A typed
-/// `passwords[i]` is used for hop `i` when its password would otherwise be asked; unknown
-/// hosts and other questions go through `interaction` as usual. Nothing is reused or kept.
+/// password (`passwords.hops[i]` for hop `i`, `passwords.proxy`) is used when it would
+/// otherwise be asked; unknown hosts and other questions go through `interaction` as usual.
+/// Nothing is reused or kept.
 pub async fn test_tunnel(
     tunnel: &ResolvedTunnel,
-    passwords: Vec<Option<Secret>>,
+    passwords: TunnelPasswords,
     known_hosts: &KnownHosts,
     interaction: Arc<dyn Interaction>,
 ) -> Result<(), OpenError> {
-    let mut typed = passwords.into_iter();
+    let TunnelPasswords {
+        hops: typed_hops,
+        proxy: typed_proxy,
+    } = passwords;
+    let mut typed = typed_hops.into_iter();
+    let proxy = tunnel.proxy.as_ref().map(|proxy| {
+        let mut spec = proxy_spec(proxy);
+        if spec.password.is_none() {
+            spec.password = typed_proxy.filter(|s| !s.expose().is_empty());
+        }
+        spec
+    });
     let spec = TunnelSpec {
         hops: tunnel
             .hops
@@ -355,6 +372,7 @@ pub async fn test_tunnel(
                 spec
             })
             .collect(),
+        proxy,
         options: tunnel_options(tunnel),
     };
     let known_hosts = KnownHosts {
@@ -364,6 +382,23 @@ pub async fn test_tunnel(
     let opened = Tunnel::connect(&spec, &known_hosts, interaction).await?;
     opened.close().await;
     Ok(())
+}
+
+fn proxy_spec(proxy: &ResolvedProxy) -> ProxySpec {
+    ProxySpec {
+        kind: match proxy.kind {
+            ProxyType::Socks5 => ProxyKind::Socks5,
+            ProxyType::Http => ProxyKind::Http,
+        },
+        host: proxy.host.clone(),
+        port: proxy.port,
+        user: proxy.user.clone(),
+        // `Prompt`: the tunnel asks through `Interaction` when the proxy needs it.
+        password: match &proxy.password {
+            Password::Value(secret) => Some(secret.clone()),
+            Password::Prompt { .. } | Password::None => None,
+        },
+    }
 }
 
 fn tunnel_options(tunnel: &ResolvedTunnel) -> TunnelOptions {

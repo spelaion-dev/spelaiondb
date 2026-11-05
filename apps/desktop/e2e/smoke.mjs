@@ -2221,6 +2221,62 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.waitFor({ state: "detached" });
   assert.ok(existsSync(join(userDir, "tunnels", "wizard-bastions.toml")));
 
+  step("a SOCKS5 proxy alone as the tunnel: its password asked, never stored in a file");
+  const answerProxyPassword = async () => {
+    const dialog = page.getByRole("dialog", { name: "Proxy password" });
+    await dialog.waitFor();
+    assert.match(await dialog.innerText(), /proxyuser@127\.0\.0\.1/);
+    await dialog.locator("input").fill("proxy-pass");
+    await dialog.locator("input").press("Enter");
+    await dialog.waitFor({ state: "detached" });
+  };
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard").first();
+  await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("PG through proxy");
+  await wizard.getByLabel("Host", { exact: true }).fill("postgres");
+  await wizard.getByLabel("Database", { exact: true }).fill("spelaion");
+  await wizard.getByLabel("User", { exact: true }).fill("spelaion");
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  await wizard.getByRole("tab", { name: "SSH" }).click();
+  await wizard.getByRole("button", { name: "New tunnel…" }).click();
+  const proxyEditor = page.getByRole("dialog", { name: "New SSH tunnel" });
+  await proxyEditor.getByLabel("Tunnel name").fill("Corp proxy");
+  await proxyEditor.getByRole("radio", { name: "Personal", exact: true }).check();
+  await proxyEditor.getByRole("checkbox", { name: "Go through a SOCKS5 or HTTP proxy" }).check();
+  await proxyEditor.getByLabel("Proxy host").fill("127.0.0.1");
+  await proxyEditor.getByLabel("Port", { exact: true }).last().fill("11080");
+  await proxyEditor.getByLabel("User", { exact: true }).last().fill("proxyuser");
+  await proxyEditor.getByLabel("Proxy password", { exact: true }).fill("proxy-pass");
+  // Not to the keychain: the smoke test never writes to the real one.
+  await proxyEditor.getByRole("checkbox", { name: "Save the proxy password in the keychain" }).uncheck();
+  // With a proxy, the only hop can go: the proxy alone reaches the database.
+  await proxyEditor.getByRole("button", { name: "Remove Hop 1" }).click();
+  await proxyEditor.getByRole("button", { name: "Test tunnel" }).click();
+  await proxyEditor.locator(".test-result", { hasText: "Proxy OK" }).waitFor();
+  await shot("14c-proxy-tunnel");
+  await proxyEditor.getByRole("button", { name: "Save", exact: true }).click();
+  await proxyEditor.waitFor({ state: "detached" });
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await answerProxyPassword();
+  await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
+  await wizard.getByRole("button", { name: "Save", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  const proxyFile = readFileSync(join(userDir, "tunnels", "corp-proxy.toml"), "utf8");
+  assert.match(proxyFile, /\[proxy\]\s*type = "socks5"\s*host = "127\.0\.0\.1"\s*port = 11080\s*user = "proxyuser"/, proxyFile);
+  assert.match(proxyFile, /secret = "prompt"/, proxyFile);
+  assert.doesNotMatch(proxyFile, /proxy-pass|\[\[hops\]\]/, proxyFile);
+  panel = await newQuery("PG through proxy", "select 'through the proxy' as route;");
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for PG through proxy").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await answerProxyPassword();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+
   step("SQLite on a server: the server's sqlite3 through two hops, nothing copied");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard").first();

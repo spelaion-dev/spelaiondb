@@ -156,6 +156,7 @@
   "trustAndRemember": "Confiar y recordar",
   "sshKeyPassphrase": "Frase de contraseña de la clave SSH",
   "wrongPassphrase": "Frase de contraseña incorrecta. {{path}}",
+  "proxyPassword": "Contraseña del proxy",
   "sshPassword": "Contraseña SSH",
   "verificationFor": "Verificación de {{host}}",
   "ok": "Aceptar",

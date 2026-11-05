@@ -1176,6 +1176,7 @@ pub enum InteractionKind {
 pub enum SecretLabel {
     KeyPassphrase { path: String, retry: bool },
     Password { user: String, host: String },
+    ProxyPassword { user: String, host: String },
     Challenge { host: String, instructions: String },
 }
 
@@ -1484,6 +1485,28 @@ pub struct TunnelDraftItem {
     pub keepalive_count: Option<u32>,
     /// Seconds; null for the default (15).
     pub connect_timeout: Option<u32>,
+    /// A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027).
+    pub proxy: Option<ProxyDraftItem>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyTypeItem {
+    Socks5,
+    Http,
+}
+
+/// The proxy section of the tunnel editor. Its password, if typed, travels apart.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyDraftItem {
+    pub kind: ProxyTypeItem,
+    pub host: String,
+    pub port: Option<u16>,
+    pub user: String,
+    pub password_mode: PasswordMode,
+    pub password_env: String,
+    pub password_other: String,
 }
 
 /// The Kubernetes tab of the connection form; empty fields mean the defaults.
@@ -1645,6 +1668,20 @@ impl From<TunnelDraftItem> for spelaion_config::TunnelDraft {
                 keepalive_count: item.keepalive_count,
                 connect_timeout: item.connect_timeout,
             },
+            proxy: item.proxy.map(|proxy| spelaion_config::ProxyDraft {
+                kind: match proxy.kind {
+                    ProxyTypeItem::Socks5 => spelaion_config::ProxyType::Socks5,
+                    ProxyTypeItem::Http => spelaion_config::ProxyType::Http,
+                },
+                host: proxy.host,
+                port: proxy.port,
+                user: proxy.user,
+                password: password_choice(
+                    proxy.password_mode,
+                    proxy.password_env,
+                    proxy.password_other,
+                ),
+            }),
         }
     }
 }
@@ -1678,6 +1715,21 @@ impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
             keepalive_interval: draft.options.keepalive_interval,
             keepalive_count: draft.options.keepalive_count,
             connect_timeout: draft.options.connect_timeout,
+            proxy: draft.proxy.map(|proxy| {
+                let (password_mode, password_env, password_other) = password_fields(proxy.password);
+                ProxyDraftItem {
+                    kind: match proxy.kind {
+                        spelaion_config::ProxyType::Socks5 => ProxyTypeItem::Socks5,
+                        spelaion_config::ProxyType::Http => ProxyTypeItem::Http,
+                    },
+                    host: proxy.host,
+                    port: proxy.port,
+                    user: proxy.user,
+                    password_mode,
+                    password_env,
+                    password_other,
+                }
+            }),
         }
     }
 }

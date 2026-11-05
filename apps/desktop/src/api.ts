@@ -15,6 +15,7 @@ import {
   type HopDraftItem_Deserialize,
   type SshAuthItem,
   type TunnelDraftItem_Deserialize,
+  type ProxyDraftItem_Deserialize,
   type ConnectOutcome,
   type CreateKindItem,
   type ConnectOutcome_Serialize,
@@ -66,6 +67,7 @@ export type { ImportReport, KubernetesDraftItem };
 export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
+export type ProxyDraft = ProxyDraftItem_Deserialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
