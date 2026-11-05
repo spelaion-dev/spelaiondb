@@ -209,5 +209,9 @@
     "explanation": "It uses variables that each person fills in for themselves, such as their own database user. They are asked once and saved in your user.toml, on this computer and outside the repository.",
     "advice": "Not for passwords: those go in the keychain or are asked when connecting.",
     "save": "Save and connect"
-  }
+  },
+  "copyName": "Copy name",
+  "copyNames": "Copy {{count}} names",
+  "copyQualifiedName": "Copy qualified name",
+  "copyQualifiedNames": "Copy {{count}} qualified names"
 }
