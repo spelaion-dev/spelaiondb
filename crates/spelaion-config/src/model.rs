@@ -53,6 +53,11 @@ pub struct ConnectionFile {
     /// Open read-only (native in SQLite).
     #[serde(default, skip_serializing_if = "is_false")]
     pub read_only: bool,
+    /// Seconds of idleness after which the app sends the server a keep-alive (ADR-028), so a
+    /// firewall or the server's own idle timeout does not end an idle session. None while a
+    /// transaction is open. Off when absent or 0; database servers only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive: Option<u32>,
     #[serde(default, skip_serializing_if = "TlsConfig::is_default")]
     pub tls: TlsConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_default")]
@@ -61,6 +66,13 @@ pub struct ConnectionFile {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+impl ConnectionFile {
+    /// What the connection form suggests for new connections.
+    pub const SUGGESTED_KEEPALIVE: u32 = 300;
+    /// Longest keep-alive interval accepted: a day.
+    pub const MAX_KEEPALIVE: u32 = 86_400;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

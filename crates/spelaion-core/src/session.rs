@@ -10,6 +10,7 @@ use spelaion_driver_api::{
     Connection, Dialect, DriverError, ExecEvent, ExecOptions, Notice, ResultSchema, StatementSpan,
 };
 
+use crate::health::{Health, SessionHealth, Tracked};
 use crate::results::{ResultId, ResultStore};
 
 /// What happens while a script runs, in order. `index` is the position of the statement
@@ -101,10 +102,22 @@ impl StatementError {
 }
 
 pub struct Session {
+    /// Every use goes through [`Tracked`] (ADR-028).
     connection: Arc<dyn Connection>,
+    tracked: Arc<Tracked>,
+    health: Health,
+    keep_alive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     dialect: Arc<dyn Dialect>,
     results: Arc<ResultStore>,
     options: ExecOptions,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        if let Some(task) = self.keep_alive.lock().expect("lock poisoned").take() {
+            task.abort();
+        }
+    }
 }
 
 impl Session {
@@ -113,11 +126,41 @@ impl Session {
         dialect: Arc<dyn Dialect>,
         results: Arc<ResultStore>,
     ) -> Self {
+        let tracked = Arc::new(Tracked::new(Arc::from(connection)));
+        let health = tracked.health().clone();
         Self {
-            connection: Arc::from(connection),
+            connection: tracked.clone(),
+            tracked,
+            health,
+            keep_alive: std::sync::Mutex::new(None),
             dialect,
             results,
             options: ExecOptions::default(),
+        }
+    }
+
+    /// Whether the connection still works. Once lost it stays lost: reconnecting means a
+    /// new session, and nothing is re-run (ADR-028).
+    pub fn health(&self) -> tokio::sync::watch::Receiver<SessionHealth> {
+        self.health.subscribe()
+    }
+
+    /// Marks the session lost, for what the session cannot see itself (its tunnel went down).
+    pub fn mark_lost(&self, reason: impl Into<String>) {
+        self.health.lose(reason);
+    }
+
+    pub(crate) fn health_handle(&self) -> &Health {
+        &self.health
+    }
+
+    /// Keeps the session alive while it is idle: the engine's cheapest round trip after every
+    /// `interval` without use, none while something runs or a transaction is open. Replaces
+    /// a previous one. Agents' short sessions do not use it.
+    pub fn start_keep_alive(&self, interval: std::time::Duration) {
+        let task = self.tracked.keep_alive(interval);
+        if let Some(previous) = self.keep_alive.lock().expect("lock poisoned").replace(task) {
+            previous.abort();
         }
     }
 

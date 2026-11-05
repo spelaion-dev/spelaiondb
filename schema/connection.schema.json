@@ -170,6 +170,15 @@
         "null"
       ]
     },
+    "keepalive": {
+      "description": "Seconds of idleness after which the app sends the server a keep-alive (ADR-028), so a\nfirewall or the server's own idle timeout does not end an idle session. None while a\ntransaction is open. Off when absent or 0; database servers only.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "kubernetes": {
       "anyOf": [
         {

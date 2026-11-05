@@ -319,6 +319,12 @@ pub async fn open_connection(
 
     let connection = driver.connect(&params).await?;
     let session = Session::new(connection, driver.dialect(), results);
+    // A tunnel that goes down takes its sessions with it (ADR-028).
+    match &tunnel {
+        Some(ActiveTunnel::Ssh(t)) => session.health_handle().watch_tunnel(t.state()),
+        Some(ActiveTunnel::Kube(t)) => session.health_handle().watch_tunnel(t.state()),
+        None => {}
+    }
     Ok(OpenConnection {
         session,
         resolved,

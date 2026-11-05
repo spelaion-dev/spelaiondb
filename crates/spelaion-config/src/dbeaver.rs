@@ -16,7 +16,7 @@ use spelaion_driver_api::Secret;
 
 use crate::draft::{ConnectionDraft, PasswordChoice};
 use crate::load::Source;
-use crate::model::{Engine, SshAuth, TlsModeConfig, TunnelFile};
+use crate::model::{ConnectionFile, Engine, SshAuth, TlsModeConfig, TunnelFile};
 use crate::tunnel_draft::{HopDraft, TunnelDraft, TunnelDraftOptions};
 
 /// The key DBeaver ships with to obscure `credentials-config.json`.
@@ -375,6 +375,8 @@ pub fn import_plan(
             kubernetes: None,
             sqlite3: String::new(),
             read_only: false,
+            // Like a connection made in the form: idle sessions are kept alive (ADR-028).
+            keepalive: (!sqlite).then_some(ConnectionFile::SUGGESTED_KEEPALIVE),
             mcp_exposed: false,
             mcp_writes: false,
         },
@@ -535,6 +537,7 @@ mod tests {
         assert_eq!(tunnel.options.keepalive_count, Some(5));
         assert_eq!(tunnel.options.connect_timeout, Some(20));
         assert_eq!(kept.connection.local_port, Some(15432));
+        assert_eq!(kept.connection.keepalive, Some(300));
         assert_eq!(secrets[0].as_ref().map(Secret::expose), Some("hop-pass"));
         let asked = import_plan(pg, Engine::Postgres, Source::User, false, "t");
         assert_eq!(asked.connection.password, PasswordChoice::Prompt);

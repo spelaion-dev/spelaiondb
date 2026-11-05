@@ -128,6 +128,8 @@ pub struct ConnectionDraft {
     /// SQLite on a server: the program that opens the file there; empty for `sqlite3`.
     pub sqlite3: String,
     pub read_only: bool,
+    /// Seconds; `None` or 0 for off (ADR-028).
+    pub keepalive: Option<u32>,
     pub mcp_exposed: bool,
     /// Agents may write through `execute_write` (ADR-019); otherwise they only read.
     pub mcp_writes: bool,
@@ -369,6 +371,7 @@ impl ConnectionDraft {
             kubernetes,
             sqlite3: non_empty(&self.sqlite3).filter(|_| remote_sqlite),
             read_only: self.read_only,
+            keepalive: self.keepalive.filter(|s| network && *s > 0),
             tls: if network {
                 TlsConfig {
                     mode: self.tls_mode,
@@ -483,6 +486,7 @@ impl ConnectionDraft {
             tls_key: file.tls.key.clone().unwrap_or_default(),
             tunnel: file.tunnel.clone().unwrap_or_default(),
             local_port: file.local_port,
+            keepalive: file.keepalive,
             sqlite3: file.sqlite3.clone().unwrap_or_default(),
             kubernetes: file.kubernetes.as_ref().map(|k| KubernetesDraft {
                 context: k.context.clone().unwrap_or_default(),
@@ -652,6 +656,13 @@ pub fn update_connection(
     }
     if old.tunnel != new.tunnel {
         put(&mut doc, &["tunnel"], text(&new.tunnel));
+    }
+    if old.keepalive != new.keepalive {
+        put(
+            &mut doc,
+            &["keepalive"],
+            new.keepalive.map(|s| toml_edit::Value::from(i64::from(s))),
+        );
     }
     if old.local_port != new.local_port {
         put(
