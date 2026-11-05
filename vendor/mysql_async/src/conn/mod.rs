@@ -933,8 +933,14 @@ impl Conn {
 
     /// Returns future that reads packets from a server.
     pub(crate) async fn read_packets(&mut self, n: usize) -> Result<Vec<PooledBuf>> {
-        let mut packets = Vec::with_capacity(n);
+        let mut packets = Vec::new();
         for _ in 0..n {
+            packets.try_reserve(1).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::OutOfMemory,
+                    "column metadata allocation failed",
+                )
+            })?;
             packets.push(self.read_packet().await?);
         }
         Ok(packets)

@@ -1,7 +1,7 @@
 # mysql_async 0.37.1, patched for SpelaionDB
 
 The [mysql_async](https://crates.io/crates/mysql_async) crate (MIT or Apache-2.0, see the
-licence files), copied from its crates.io release with one change, used through
+licence files), copied from its crates.io release with the changes below, used through
 `[patch.crates-io]` in the workspace `Cargo.toml`. Only `src/`, the manifest (without its test
 targets), the README and the licences are kept.
 
@@ -31,3 +31,11 @@ this folder and the `[patch.crates-io]` entry if it has), and run that test.
 
 A path dependency is not lint-capped like a crates.io one, so `cargo clippy -- -D warnings`
 would fail on upstream code. `#![allow(warnings)]` keeps the copy as released.
+
+## Result metadata allocation
+
+Result-set column counts are checked against the protocol's 16-bit prepared-statement
+metadata count limit before use, including when metadata is skipped. Packet storage grows
+fallibly as packets arrive instead of reserving a server-supplied count up front. When
+upgrading, reapply these checks unless upstream provides equivalent bounds, and run the
+malformed-count tests and the MySQL and MariaDB integration tests.

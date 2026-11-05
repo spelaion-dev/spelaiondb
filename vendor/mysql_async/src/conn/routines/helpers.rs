@@ -12,6 +12,21 @@ use mysql_common::{
 
 use crate::{error::LocalInfileError, queryable::Protocol, Conn, Error, Statement};
 
+// Prepared-statement metadata counts are u16 in the protocol. Apply the same
+// bound to result-set headers before allocating or following the metadata-skip path.
+fn result_column_count(packet: &mut &[u8]) -> crate::Result<usize> {
+    let count = packet.read_lenenc_int()?;
+    let count = u16::try_from(count).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "too many result columns")
+    })?;
+    if count == 0 {
+        return Err(
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "empty result metadata").into(),
+        );
+    }
+    Ok(usize::from(count))
+}
+
 impl Conn {
     /// Helper, that sends all `Value::Bytes` in the given list of parameters as long data.
     pub(super) async fn send_long_data<'a, I>(
@@ -131,11 +146,11 @@ impl Conn {
     where
         P: Protocol,
     {
-        let column_count = packet.read_lenenc_int()?;
+        let column_count = result_column_count(&mut packet)?;
         // Reading 1st byte only if metadata skip is not possible, otherwise it can be a part of the first column definition.
         // Reading column metadata only if it is not skipped - if skip is not possible or if metadata is present.
         let meta = if !(P::metadata_skip_possible(self) && packet.first() == Some(&0x00)) {
-            let columns = self.read_column_defs(column_count as usize).await?;
+            let columns = self.read_column_defs(column_count).await?;
             // Statement must have latest version of the metadata.
             if let Some(stmt) = stmt {
                 stmt.update_columns_metadata(columns.clone());
@@ -147,5 +162,26 @@ impl Conn {
         };
         self.set_pending_result(Some(meta))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod result_count_tests {
+    use super::result_column_count;
+
+    #[test]
+    fn rejects_malformed_and_unbounded_result_counts() {
+        assert!(result_column_count(
+            &mut &[0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff][..]
+        )
+        .is_err());
+        assert!(result_column_count(&mut &[0xfd, 0, 0, 1][..]).is_err());
+        assert!(result_column_count(&mut &[0xfe, 1][..]).is_err());
+        assert!(result_column_count(&mut &[0][..]).is_err());
+        assert_eq!(result_column_count(&mut &[1][..]).unwrap(), 1);
+        assert_eq!(
+            result_column_count(&mut &[0xfc, 0xff, 0xff][..]).unwrap(),
+            65535
+        );
     }
 }
