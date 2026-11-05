@@ -29,8 +29,8 @@ pub use accounts::{connection_account, proxy_account, tunnel_account};
 pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
 pub use dbeaver::{
-    DbeaverConnection, DbeaverError, DbeaverSsh, ImportPlan, dbeaver_workspace, import_plan,
-    read_dbeaver,
+    DbeaverConnection, DbeaverError, DbeaverProxy, DbeaverSsh, ImportPlan, dbeaver_workspace,
+    import_plan, read_dbeaver,
 };
 pub use draft::{
     CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection,
