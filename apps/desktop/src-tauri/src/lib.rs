@@ -2262,18 +2262,24 @@ async fn object_actions(
 }
 
 /// The SQL of a change to an object (rename, drop…), written by the core, to show before it
-/// runs or to open in the editor.
+/// runs or to open in the editor, and whether its object can be dropped in cascade.
 #[tauri::command]
 #[specta::specta]
 async fn preview_object_change(
     session: String,
     change: ObjectChangeItem,
     state: State<'_, AppState>,
-) -> CmdResult<String> {
+) -> CmdResult<ObjectChangePreview> {
     let open = state.session(&session).await?;
     let change = spelaion_core::ObjectChange::try_from(change)?;
-    spelaion_core::change_script(open.session.dialect().as_ref(), &change)
-        .map_err(|e| e.to_string())
+    let dialect = open.session.dialect();
+    let (spelaion_core::ObjectChange::Rename { target, .. }
+    | spelaion_core::ObjectChange::Drop { target, .. }) = &change;
+    Ok(ObjectChangePreview {
+        sql: spelaion_core::change_script(dialect.as_ref(), &change).map_err(|e| e.to_string())?,
+        cascade: matches!(change, spelaion_core::ObjectChange::Drop { .. })
+            && spelaion_core::can_cascade(dialect.as_ref(), target),
+    })
 }
 
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it

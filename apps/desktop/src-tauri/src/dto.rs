@@ -70,6 +70,9 @@ pub struct ObjectPathItem {
     rename_all_fields = "camelCase"
 )]
 pub enum ObjectTargetItem {
+    Schema {
+        name: String,
+    },
     /// `relation` is the `kind` of an `ObjectItem`: `table`, `view`…
     Relation {
         schema: String,
@@ -81,12 +84,65 @@ pub enum ObjectTargetItem {
         table: String,
         name: String,
     },
+    Index {
+        schema: String,
+        table: String,
+        name: String,
+        primary: bool,
+    },
+    Constraint {
+        schema: String,
+        table: String,
+        name: String,
+        constraint: ConstraintKindItem,
+    },
+    ForeignKey {
+        schema: String,
+        table: String,
+        name: String,
+    },
+    SchemaObject {
+        object: SchemaObjectItem,
+    },
 }
 
 impl TryFrom<ObjectTargetItem> for spelaion_core::ObjectTarget {
     type Error = String;
     fn try_from(item: ObjectTargetItem) -> Result<Self, String> {
         Ok(match item {
+            ObjectTargetItem::Schema { name } => Self::Schema { name },
+            ObjectTargetItem::Index {
+                schema,
+                table,
+                name,
+                primary,
+            } => Self::Index {
+                schema,
+                table,
+                name,
+                primary,
+            },
+            ObjectTargetItem::Constraint {
+                schema,
+                table,
+                name,
+                constraint,
+            } => Self::Constraint {
+                schema,
+                table,
+                name,
+                kind: constraint.into(),
+            },
+            ObjectTargetItem::ForeignKey {
+                schema,
+                table,
+                name,
+            } => Self::ForeignKey {
+                schema,
+                table,
+                name,
+            },
+            ObjectTargetItem::SchemaObject { object } => Self::SchemaObject(object.into()),
             ObjectTargetItem::Relation {
                 schema,
                 name,
@@ -128,6 +184,10 @@ pub enum ObjectChangeItem {
         target: ObjectTargetItem,
         new_name: String,
     },
+    Drop {
+        target: ObjectTargetItem,
+        cascade: bool,
+    },
 }
 
 impl TryFrom<ObjectChangeItem> for spelaion_core::ObjectChange {
@@ -138,6 +198,10 @@ impl TryFrom<ObjectChangeItem> for spelaion_core::ObjectChange {
                 target: target.try_into()?,
                 new_name,
             },
+            ObjectChangeItem::Drop { target, cascade } => Self::Drop {
+                target: target.try_into()?,
+                cascade,
+            },
         })
     }
 }
@@ -147,13 +211,31 @@ impl TryFrom<ObjectChangeItem> for spelaion_core::ObjectChange {
 #[serde(rename_all = "camelCase")]
 pub struct ObjectActionsItem {
     pub rename_views: bool,
+    pub drop_schemas: bool,
+    pub drop_constraints: bool,
 }
 
 impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
     fn from(actions: spelaion_core::ObjectActions) -> Self {
-        let spelaion_core::ObjectActions { rename_views } = actions;
-        Self { rename_views }
+        let spelaion_core::ObjectActions {
+            rename_views,
+            drop_schemas,
+            drop_constraints,
+        } = actions;
+        Self {
+            rename_views,
+            drop_schemas,
+            drop_constraints,
+        }
     }
+}
+
+/// The SQL of a change to show, and whether its object can be dropped in cascade.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectChangePreview {
+    pub sql: String,
+    pub cascade: bool,
 }
 
 /// What "Hide" and "Show only" in the explorer do with one name.
@@ -779,12 +861,22 @@ pub struct TableDetails {
     pub indexes: Vec<IndexDetails>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintKindItem {
     PrimaryKey,
     Unique,
     Check,
+}
+
+impl From<ConstraintKindItem> for ConstraintKind {
+    fn from(kind: ConstraintKindItem) -> Self {
+        match kind {
+            ConstraintKindItem::PrimaryKey => Self::PrimaryKey,
+            ConstraintKindItem::Unique => Self::Unique,
+            ConstraintKindItem::Check => Self::Check,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Type)]

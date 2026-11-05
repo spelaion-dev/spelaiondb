@@ -15,7 +15,6 @@ export function ObjectChangeDialog({
   confirmLabel,
   danger = false,
   rename,
-  cascade = false,
   change,
   onClose,
   onDone,
@@ -30,8 +29,6 @@ export function ObjectChangeDialog({
   danger?: boolean;
   /** Asks for a new name, starting from the current one. */
   rename?: { current: string };
-  /** Offers "Cascade" (only where the engine has it). */
-  cascade?: boolean;
   /** The change for what the dialog holds now. */
   change(fields: { newName: string; cascade: boolean }): ObjectChangeItem;
   onClose(): void;
@@ -42,6 +39,8 @@ export function ObjectChangeDialog({
   const connection = useApp((s) => s.connections.find((c) => c.id === connectionId));
   const [newName, setNewName] = useState(rename?.current ?? "");
   const [cascading, setCascading] = useState(false);
+  /** "Cascade" is offered only where the core says the engine has it. */
+  const [canCascade, setCanCascade] = useState(false);
   const [sql, setSql] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,9 +58,10 @@ export function ObjectChangeDialog({
     let current = true;
     const timer = window.setTimeout(() => {
       call(commands.previewObjectChange(session, latest.current({ newName, cascade: cascading })))
-        .then((text) => {
+        .then((preview) => {
           if (!current) return;
-          setSql(text);
+          setSql(preview.sql);
+          setCanCascade(preview.cascade);
           setPreviewError(null);
         })
         .catch((e: unknown) => {
@@ -129,7 +129,7 @@ export function ObjectChangeDialog({
             />
           </label>
         )}
-        {cascade && (
+        {canCascade && (
           <label className="check">
             <input
               type="checkbox"
