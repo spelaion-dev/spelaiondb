@@ -16,6 +16,7 @@ import {
   type SshAuthItem,
   type TunnelDraftItem_Deserialize,
   type ProxyDraftItem_Deserialize,
+  type NetworkProfileItem_Serialize,
   type ConnectOutcome,
   type CreateKindItem,
   type ConnectOutcome_Serialize,
@@ -68,6 +69,7 @@ export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutc
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ProxyDraft = ProxyDraftItem_Deserialize;
+export type NetworkProfileItem = NetworkProfileItem_Serialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;

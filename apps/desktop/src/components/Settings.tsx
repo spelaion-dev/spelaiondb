@@ -9,7 +9,8 @@ import { usePreferences, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
 import { useUpdate } from "../update";
-import { call, commands } from "../api";
+import { call, commands, type NetworkProfileItem } from "../api";
+import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
 type Category = "appearance" | "language" | "explorer" | "history" | "network" | "updates";
 const CATEGORIES: Category[] = ["appearance", "language", "explorer", "history", "network", "updates"];
@@ -235,8 +236,81 @@ function HistorySettings() {
   );
 }
 
-/** The range of local ports SSH tunnels listen on, for a firewall that only allows some. */
+/** Network profiles (tunnel files, ADR-027) and the range of local ports tunnels use. */
 function NetworkSettings() {
+  return (
+    <>
+      <NetworkProfiles />
+      <PortRange />
+    </>
+  );
+}
+
+/** Every network profile, to create, edit or delete them without opening a connection. */
+function NetworkProfiles() {
+  const { t } = useTranslation("settings");
+  const hasWorkspace = Boolean(useApp((s) => s.workspace)?.workspace);
+  const [profiles, setProfiles] = useState<NetworkProfileItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [editor, setEditor] = useState<TunnelEditorMode | null>(null);
+
+  function refresh() {
+    call(commands.networkProfiles())
+      .then((list) => {
+        setProfiles(list);
+        setError(null);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }
+  useEffect(refresh, []);
+
+  return (
+    <section aria-label={t("network.profiles")}>
+      <h3>{t("network.profiles")}</h3>
+      <p className="muted small">{t("network.profilesIntro")}</p>
+      {error && <p className="error small" role="alert">{error}</p>}
+      {profiles && profiles.length === 0 && <p className="muted">{t("network.noProfiles")}</p>}
+      {profiles && profiles.length > 0 && (
+        <ul className="profile-list">
+          {profiles.map((profile) => {
+            const route = [...(profile.proxy ? [profile.proxy] : []), ...profile.hops].join(" → ");
+            return (
+              <li key={`${profile.personal}:${profile.name}`} className="profile-row" aria-label={profile.name}>
+                <div className="grow">
+                  <strong>{profile.name}</strong>{" "}
+                  <span className="muted small">{profile.personal ? t("network.personal") : t("network.project")}</span>
+                  <div className="mono small">{route}</div>
+                  <div className="muted small">
+                    {profile.usedBy.length === 0 ? t("network.unused") : t("network.usedBy", { names: profile.usedBy.join(", ") })}
+                  </div>
+                </div>
+                <button onClick={() => setEditor({ kind: "edit", name: profile.name, personal: profile.personal })}>{t("network.edit")}</button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <button onClick={() => setEditor({ kind: "add", personal: !hasWorkspace })}>{t("network.newProfile")}</button>
+      {editor && (
+        <TunnelEditor
+          mode={editor}
+          onClose={() => setEditor(null)}
+          onSaved={() => {
+            setEditor(null);
+            refresh();
+          }}
+          onDeleted={() => {
+            setEditor(null);
+            refresh();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+/** The range of local ports SSH tunnels listen on, for a firewall that only allows some. */
+function PortRange() {
   const { t } = useTranslation("settings");
   const [min, setMin] = useState("");
   const [max, setMax] = useState("");
@@ -268,7 +342,8 @@ function NetworkSettings() {
   const typedMin = port(min);
   const typedMax = port(max);
   return (
-    <>
+    <section aria-label={t("network.ports")}>
+      <h3>{t("network.ports")}</h3>
       <p>{t("network.portsIntro")}</p>
       <div className="form-pair">
         <label className="field port">
@@ -291,7 +366,7 @@ function NetworkSettings() {
       {status.kind === "saved" && <p className="small" role="status">{t("network.saved")}</p>}
       {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
       <p className="muted small">{t("network.portsHint")}</p>
-    </>
+    </section>
   );
 }
 

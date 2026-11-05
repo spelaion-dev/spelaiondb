@@ -1571,6 +1571,44 @@ pub struct TunnelPortsItem {
     pub max: u16,
 }
 
+/// A tunnel file shown as a network profile (ADR-027), for Settings → Network. Only what the
+/// file says: nothing is resolved, so a repository's profiles can be listed before trusting it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkProfileItem {
+    pub name: String,
+    pub personal: bool,
+    /// `socks5 host:port` or `http host:port`.
+    pub proxy: Option<String>,
+    /// `user@host:port` per hop, in order.
+    pub hops: Vec<String>,
+    /// Display names of the connections that use it.
+    pub used_by: Vec<String>,
+}
+
+impl NetworkProfileItem {
+    pub fn of(config: &spelaion_config::Config, entry: &spelaion_config::TunnelEntry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            personal: entry.source == spelaion_config::Source::User,
+            proxy: entry.file.proxy.as_ref().map(|proxy| {
+                let kind = match proxy.kind {
+                    spelaion_config::ProxyType::Socks5 => "socks5",
+                    spelaion_config::ProxyType::Http => "http",
+                };
+                format!("{kind} {}:{}", proxy.host, proxy.port)
+            }),
+            hops: entry
+                .file
+                .hops
+                .iter()
+                .map(|hop| format!("{}@{}:{}", hop.user, hop.host, hop.port.unwrap_or(22)))
+                .collect(),
+            used_by: spelaion_config::tunnel_users(config, entry.source, &entry.name),
+        }
+    }
+}
+
 /// Result of testing a tunnel from the editor.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
