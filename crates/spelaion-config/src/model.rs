@@ -181,8 +181,25 @@ pub enum WritePolicy {
 #[serde(deny_unknown_fields)]
 pub struct TunnelFile {
     pub schema_version: u32,
+    /// Seconds without hearing from a server before sending it an SSH keep-alive (OpenSSH's
+    /// `ServerAliveInterval`), so a NAT or firewall does not drop an idle tunnel. 15 when
+    /// absent; 0 sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_interval: Option<u32>,
+    /// Unanswered keep-alives before the tunnel is closed as down (`ServerAliveCountMax`). 3
+    /// when absent; 0 never gives up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_count: Option<u32>,
     /// Hops in order; the last one is the one that reaches the database.
     pub hops: Vec<HopConfig>,
+}
+
+impl TunnelFile {
+    pub const DEFAULT_KEEPALIVE_INTERVAL: u32 = 15;
+    pub const DEFAULT_KEEPALIVE_COUNT: u32 = 3;
+    /// Longest keep-alive interval accepted: a day.
+    pub const MAX_KEEPALIVE_INTERVAL: u32 = 86_400;
+    pub const MAX_KEEPALIVE_COUNT: u32 = 1_000;
 }
 
 /// The cluster resource a connection reaches through `kubectl port-forward` (ADR-015).

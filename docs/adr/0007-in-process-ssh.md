@@ -69,6 +69,12 @@ Rules:
   verifies the certificate against the server's real name, like `hostaddr` in libpq.
   Tested end to end with two bastions and `verify-full`.
 - Pending: automatic reconnection (v0.2) and chaos tests (killing a hop).
+- Keep-alives (2026-11-05): every session sends an SSH keep-alive after 15 s without hearing
+  from its server and is closed as down after 3 unanswered, so an idle tunnel is neither
+  dropped by a NAT nor left looking alive after the network went away. Each tunnel file can
+  change both (`keepalive_interval`, `keepalive_count`, like OpenSSH's `ServerAliveInterval`
+  and `ServerAliveCountMax`; 0 seconds sends none). Tested with a relay that stops passing
+  bytes without closing anything, as a firewall that forgot the session does.
 
 ## Alternatives
 Delegating to the system `ssh` binary (the VS Code Remote-SSH model).

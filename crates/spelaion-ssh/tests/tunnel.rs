@@ -18,7 +18,7 @@ use spelaion_driver_api::{
 use spelaion_driver_postgres::PostgresDriver;
 use spelaion_ssh::{
     AuthMethod, HopSpec, HostInfo, Interaction, KnownHosts, NonInteractive, SecretRequest,
-    SshError, Target, Tunnel, TunnelSpec, TunnelState,
+    SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
 };
 
 fn bastion() -> Option<(String, u16)> {
@@ -130,6 +130,7 @@ fn two_hops(host: &str, port: u16) -> TunnelSpec {
             hop(host, port, "id_ed25519"),
             hop("bastion2", 22, "id_ed25519"),
         ],
+        ..Default::default()
     }
 }
 
@@ -298,6 +299,7 @@ async fn host_pins_cover_different_algorithms_and_all_approved_keys() {
     };
     let spec = TunnelSpec {
         hops: vec![hop(&host, port, "id_ed25519")],
+        ..Default::default()
     };
     let learned = TempKnownHosts::new("algorithms-learned");
     let tunnel = Tunnel::connect(&spec, &learned.known(), TestUi::accepting())
@@ -346,6 +348,7 @@ async fn encrypted_keys_ask_for_the_passphrase() {
     let known = TempKnownHosts::new("passphrase");
     let spec = TunnelSpec {
         hops: vec![hop(&host, port, "id_ed25519_pass")],
+        ..Default::default()
     };
 
     let ui = TestUi::answering(vec![Some("mal"), Some("spelaion-test")]);
@@ -484,7 +487,10 @@ async fn first_hop_can_be_an_external_command() {
     );
     let mut first = hop("bastion2", 22, "id_ed25519");
     first.command = Some(command);
-    let spec = TunnelSpec { hops: vec![first] };
+    let spec = TunnelSpec {
+        hops: vec![first],
+        ..Default::default()
+    };
     let tunnel = Tunnel::open(&spec, postgres(), &known.known(), TestUi::accepting())
         .await
         .unwrap();
@@ -639,4 +645,126 @@ async fn the_teams_known_hosts_verifies_the_first_connection_and_blocks_a_differ
         }
         other => panic!("expected a blocking key change: {:?}", other.map(|_| ())),
     }
+}
+
+/// A TCP relay to the bastion that can be frozen: both sockets stay open but no byte goes
+/// through any more, as when a NAT or firewall forgets an idle session without telling either
+/// side. Tunnels open through it with its address as their first hop.
+struct Relay {
+    port: u16,
+    frozen: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Relay {
+    async fn to(host: &str, port: u16) -> Relay {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local = listener.local_addr().unwrap().port();
+        let frozen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let upstream = format!("{host}:{port}");
+        let flag = frozen.clone();
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let Ok(server) = tokio::net::TcpStream::connect(&upstream).await else {
+                    continue;
+                };
+                let (client_read, client_write) = client.into_split();
+                let (server_read, server_write) = server.into_split();
+                tokio::spawn(pipe(client_read, server_write, flag.clone()));
+                tokio::spawn(pipe(server_read, client_write, flag.clone()));
+            }
+        });
+        Relay {
+            port: local,
+            frozen,
+        }
+    }
+
+    fn freeze(&self) {
+        self.frozen.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Copies until either side closes; frozen, it reads and drops, so neither side sees an error.
+async fn pipe(
+    mut from: tokio::net::tcp::OwnedReadHalf,
+    mut to: tokio::net::tcp::OwnedWriteHalf,
+    frozen: Arc<std::sync::atomic::AtomicBool>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = vec![0u8; 16 * 1024];
+    while let Ok(n) = from.read(&mut buf).await {
+        if n == 0 {
+            break;
+        }
+        if !frozen.load(Ordering::SeqCst) && to.write_all(&buf[..n]).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn down_within(tunnel: &Tunnel, limit: Duration) -> Option<String> {
+    let mut state = tunnel.state();
+    let down = tokio::time::timeout(
+        limit,
+        state.wait_for(|s| matches!(s, TunnelState::Down { .. })),
+    )
+    .await;
+    match down {
+        Ok(Ok(state)) => match &*state {
+            TunnelState::Down { reason } => Some(reason.clone()),
+            TunnelState::Up => None,
+        },
+        Ok(Err(_)) | Err(_) => None,
+    }
+}
+
+#[tokio::test]
+async fn keepalives_notice_a_session_a_firewall_dropped() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("keepalive");
+    let relay = Relay::to(&host, port).await;
+    let mut spec = two_hops("127.0.0.1", relay.port);
+    spec.options = TunnelOptions {
+        keepalive_interval: Some(Duration::from_secs(1)),
+        keepalive_count: 2,
+    };
+    let tunnel = Tunnel::open(&spec, postgres(), &known.known(), TestUi::accepting())
+        .await
+        .unwrap();
+    let conn = pg_through(&tunnel).await;
+    assert_eq!(scalar(&*conn, "select 1").await.unwrap(), "1");
+
+    relay.freeze();
+    let reason = down_within(&tunnel, Duration::from_secs(15))
+        .await
+        .expect("the keep-alives must take the tunnel down");
+    assert!(reason.contains("hop "), "{reason}");
+    // Down means down: the driver sees the error at once instead of hanging.
+    let failed = tokio::time::timeout(Duration::from_secs(10), scalar(&*conn, "select 1"))
+        .await
+        .expect("a query on a dead tunnel must fail, not hang");
+    assert!(failed.is_err());
+}
+
+#[tokio::test]
+async fn without_keepalives_a_dropped_session_goes_unnoticed() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("no-keepalive");
+    let relay = Relay::to(&host, port).await;
+    let mut spec = two_hops("127.0.0.1", relay.port);
+    spec.options = TunnelOptions {
+        keepalive_interval: None,
+        keepalive_count: 2,
+    };
+    let tunnel = Tunnel::open(&spec, postgres(), &known.known(), TestUi::accepting())
+        .await
+        .unwrap();
+    relay.freeze();
+    // What the setting is for: with them off, nothing finds out.
+    assert_eq!(down_within(&tunnel, Duration::from_secs(5)).await, None);
+    tunnel.close().await;
 }

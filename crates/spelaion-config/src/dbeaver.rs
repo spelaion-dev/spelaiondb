@@ -16,8 +16,8 @@ use spelaion_driver_api::Secret;
 
 use crate::draft::{ConnectionDraft, PasswordChoice};
 use crate::load::Source;
-use crate::model::{Engine, SshAuth, TlsModeConfig};
-use crate::tunnel_draft::{HopDraft, TunnelDraft};
+use crate::model::{Engine, SshAuth, TlsModeConfig, TunnelFile};
+use crate::tunnel_draft::{HopDraft, TunnelDraft, TunnelDraftOptions};
 
 /// The key DBeaver ships with to obscure `credentials-config.json`.
 const CREDENTIALS_KEY: [u8; 16] = [
@@ -54,6 +54,9 @@ pub struct DbeaverSsh {
     pub auth: SshAuth,
     pub key_path: String,
     pub password: Option<Secret>,
+    /// Seconds (DBeaver keeps milliseconds); `None` where DBeaver left it unset or 0.
+    pub keepalive_interval: Option<u32>,
+    pub keepalive_count: Option<u32>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -178,6 +181,16 @@ fn port(value: Option<&Json>) -> Option<u16> {
     text(value).parse().ok()
 }
 
+/// A positive number; DBeaver writes 0 for "not set".
+fn positive(value: Option<&Json>) -> Option<u64> {
+    text(value).parse().ok().filter(|n| *n > 0)
+}
+
+/// DBeaver's milliseconds as whole seconds, rounded up so a short interval stays on.
+fn seconds(value: Option<&Json>) -> Option<u32> {
+    positive(value).map(|ms| u32::try_from(ms.div_ceil(1000)).unwrap_or(u32::MAX))
+}
+
 fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverConnection {
     let config = json.get("configuration").unwrap_or(&Json::Null);
     let provider = text(json.get("provider")).to_lowercase();
@@ -252,6 +265,13 @@ fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverSsh> {
             .and_then(Json::as_str)
             .filter(|p| !p.is_empty())
             .map(Secret::new),
+        keepalive_interval: seconds(properties.get("aliveInterval"))
+            .map(|s| s.min(TunnelFile::MAX_KEEPALIVE_INTERVAL)),
+        keepalive_count: positive(properties.get("aliveCount")).map(|n| {
+            u32::try_from(n)
+                .unwrap_or(u32::MAX)
+                .min(TunnelFile::MAX_KEEPALIVE_COUNT)
+        }),
     })
 }
 
@@ -301,6 +321,10 @@ pub fn import_plan(
                     identity_file: ssh.key_path.clone(),
                     password,
                 }],
+                options: TunnelDraftOptions {
+                    keepalive_interval: ssh.keepalive_interval,
+                    keepalive_count: ssh.keepalive_count,
+                },
             },
             vec![keep(&ssh.password)],
         )
@@ -378,7 +402,8 @@ mod tests {
                   "configuration": {
                     "host": "db.internal", "port": "5432", "database": "orders", "type": "prod",
                     "handlers": {"ssh_tunnel": {"type": "TUNNEL", "enabled": true,
-                      "properties": {"host": "bastion.example.com", "port": 22, "authType": "PASSWORD"}}}
+                      "properties": {"host": "bastion.example.com", "port": 22, "authType": "PASSWORD",
+                        "aliveInterval": "29500", "aliveCount": "5"}}}
                   }
                 },
                 "mariaDB-2": {
@@ -444,6 +469,10 @@ mod tests {
         );
         assert_eq!(ssh.auth, SshAuth::Password);
         assert_eq!(ssh.password.as_ref().map(Secret::expose), Some("hop-pass"));
+        assert_eq!(
+            (ssh.keepalive_interval, ssh.keepalive_count),
+            (Some(30), Some(5))
+        );
         let maria = by_id("mariaDB-2");
         assert_eq!(
             (maria.engine.clone(), maria.user.as_str()),
@@ -490,6 +519,8 @@ mod tests {
         assert_eq!(kept.password.as_ref().map(Secret::expose), Some("s3cret"));
         let (tunnel, secrets) = kept.tunnel.unwrap();
         assert_eq!(tunnel.hops[0].password, PasswordChoice::Keychain);
+        assert_eq!(tunnel.options.keepalive_interval, Some(30));
+        assert_eq!(tunnel.options.keepalive_count, Some(5));
         assert_eq!(secrets[0].as_ref().map(Secret::expose), Some("hop-pass"));
         let asked = import_plan(pg, Engine::Postgres, Source::User, false, "t");
         assert_eq!(asked.connection.password, PasswordChoice::Prompt);

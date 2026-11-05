@@ -179,6 +179,10 @@
       "keyboard-interactive": "Para servidores que hacen preguntas, como un código 2FA: se preguntan al conectar.",
       "custom": "Estos métodos se prueban en orden y se conservan tal como están en el fichero."
     },
+    "network": "Red",
+    "keepaliveInterval": "Keep-alive cada (segundos)",
+    "keepaliveCount": "Rendirse tras (sin respuesta)",
+    "keepaliveHint": "Si un servidor no envía nada durante ese tiempo, se le envía un keep-alive para que un NAT o firewall no corte un túnel inactivo; tras esos sin respuesta, el túnel se muestra caído. Vacío: 15 s y 3. 0 segundos no envía ninguno; 0 sin respuesta no se rinde nunca.",
     "addHop": "+ Añadir salto",
     "test": "Probar túnel",
     "ok_one": "Túnel correcto · {{count}} salto",

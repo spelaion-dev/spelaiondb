@@ -41,6 +41,26 @@ pub struct TunnelDraft {
     pub name: String,
     /// In order; the last one reaches the database.
     pub hops: Vec<HopDraft>,
+    pub options: TunnelDraftOptions,
+}
+
+/// Network settings of the whole tunnel. `None` (or the default value) leaves them out of
+/// the file, so the defaults apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TunnelDraftOptions {
+    /// Seconds; 0 turns keep-alives off.
+    pub keepalive_interval: Option<u32>,
+    /// 0 never gives up.
+    pub keepalive_count: Option<u32>,
+}
+
+impl TunnelDraftOptions {
+    fn of(file: &TunnelFile) -> Self {
+        Self {
+            keepalive_interval: file.keepalive_interval,
+            keepalive_count: file.keepalive_count,
+        }
+    }
 }
 
 /// Directory holding the tunnels of a layer.
@@ -151,10 +171,17 @@ impl TunnelDraft {
                 command: None,
             });
         }
+        let options = &self.options;
         validate_tunnel(
             path,
             TunnelFile {
                 schema_version: SCHEMA_VERSION,
+                keepalive_interval: options
+                    .keepalive_interval
+                    .filter(|s| *s != TunnelFile::DEFAULT_KEEPALIVE_INTERVAL),
+                keepalive_count: options
+                    .keepalive_count
+                    .filter(|n| *n != TunnelFile::DEFAULT_KEEPALIVE_COUNT),
                 hops,
             },
         )
@@ -187,6 +214,7 @@ impl TunnelDraft {
             source: entry.source,
             name: entry.name.clone(),
             hops,
+            options: TunnelDraftOptions::of(&entry.file),
         }
     }
 }
@@ -330,6 +358,17 @@ fn write_hop(table: &mut Table, old: Option<&HopConfig>, new: &HopConfig) {
     }
 }
 
+/// Writes the changed tunnel-wide settings (they come before the `[[hops]]` tables).
+fn write_options(table: &mut Table, old: &TunnelFile, new: &TunnelFile) {
+    let number = |v: Option<u32>| v.map(|v| Value::from(i64::from(v)));
+    if old.keepalive_interval != new.keepalive_interval {
+        put(table, "keepalive_interval", number(new.keepalive_interval));
+    }
+    if old.keepalive_count != new.keepalive_count {
+        put(table, "keepalive_count", number(new.keepalive_count));
+    }
+}
+
 /// A revision identifies the complete tunnel and the file it was loaded from.
 pub fn tunnel_revision(entry: &TunnelEntry) -> Result<String, ConfigError> {
     crate::edit::revision(&entry.file_path, &entry.file)
@@ -374,6 +413,7 @@ pub fn update_tunnel(
     let old = &entry.file;
 
     let (original, mut doc) = read_doc(path)?;
+    write_options(doc.as_table_mut(), old, &new);
     let on_disk: TunnelFile = toml::from_str(&original)
         .map_err(|e| ConfigError::new(path, format!("could not read tunnel: {e}")))?;
     if &validate_tunnel(path, on_disk)? != old {

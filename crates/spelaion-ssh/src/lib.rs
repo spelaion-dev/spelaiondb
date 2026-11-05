@@ -16,6 +16,7 @@ mod hostkeys;
 mod tunnel;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use spelaion_driver_api::Secret;
@@ -24,9 +25,36 @@ pub use hostkeys::KnownHosts;
 pub use tunnel::{RemoteExec, RemoteSignals, Tunnel, TunnelState};
 
 /// A tunnel: hops in order. The last one is the one that reaches the target.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TunnelSpec {
     pub hops: Vec<HopSpec>,
+    pub options: TunnelOptions,
+}
+
+/// How every session of a tunnel behaves on the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TunnelOptions {
+    /// Sends an SSH keep-alive when the server has sent nothing for this long (OpenSSH's
+    /// `ServerAliveInterval`), so a NAT or firewall does not drop an idle session. `None`
+    /// sends none.
+    pub keepalive_interval: Option<Duration>,
+    /// Unanswered keep-alives before the session is closed as down (`ServerAliveCountMax`).
+    /// 0 never gives up.
+    pub keepalive_count: u32,
+}
+
+impl TunnelOptions {
+    pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+    pub const DEFAULT_KEEPALIVE_COUNT: u32 = 3;
+}
+
+impl Default for TunnelOptions {
+    fn default() -> Self {
+        Self {
+            keepalive_interval: Some(Self::DEFAULT_KEEPALIVE_INTERVAL),
+            keepalive_count: Self::DEFAULT_KEEPALIVE_COUNT,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
