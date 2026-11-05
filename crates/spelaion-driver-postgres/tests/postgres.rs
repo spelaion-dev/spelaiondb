@@ -224,6 +224,10 @@ async fn type_zoo_builtin() {
             ("box", "box(point(0, 0), point(2, 3))"),
             ("path", "'[(0,0),(1,1)]'::path"),
             ("arr_int", "array[1, 2, null]::int4[]"),
+            (
+                "arr_six_dimensions",
+                "array_fill(42, array[1, 1, 1, 1, 1, 1])",
+            ),
             ("arr_text", "array[['a', 'b c'], ['{', 'null']]::text[]"),
             ("arr_bounds", "'[2:3]={7,8}'::int[]"),
             ("arr_empty", "array[]::int[]"),

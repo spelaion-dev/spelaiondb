@@ -362,6 +362,14 @@ fn quote_element(s: &str, extra_special: &[char], quote_null_word: bool) -> Stri
 }
 
 fn array_text(elem: &Type, raw: &[u8]) -> DResult<String> {
+    // PostgreSQL's MAXDIM is six. Check the untrusted wire header before the protocol
+    // parser scans dimensions and before rendering recurses once per dimension.
+    const MAX_ARRAY_DIMENSIONS: i32 = 6;
+    let mut header = raw;
+    let rank = read_i32(&mut header)?;
+    if !(0..=MAX_ARRAY_DIMENSIONS).contains(&rank) {
+        return Err("invalid PostgreSQL array dimension count".into());
+    }
     let array = pg::array_from_sql(raw)?;
     let dims: Vec<pg::ArrayDimension> = array.dimensions().collect()?;
     let values: Vec<Option<&[u8]>> = array.values().collect()?;
@@ -644,6 +652,39 @@ pub fn interval_text(mut raw: &[u8]) -> DResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn int_array(rank: i32) -> Vec<u8> {
+        let mut raw = Vec::new();
+        for word in [rank, 0, 23] {
+            raw.extend_from_slice(&word.to_be_bytes());
+        }
+        for _ in 0..rank {
+            raw.extend_from_slice(&1_i32.to_be_bytes());
+            raw.extend_from_slice(&1_i32.to_be_bytes());
+        }
+        raw.extend_from_slice(&4_i32.to_be_bytes());
+        raw.extend_from_slice(&42_i32.to_be_bytes());
+        raw
+    }
+
+    #[test]
+    fn array_rank_is_limited_to_postgresql_maximum() {
+        assert!(decode_text(&Type::INT4_ARRAY, &int_array(7)).is_err());
+        assert!(decode_text(&Type::INT4_ARRAY, &i32::MAX.to_be_bytes()).is_err());
+        assert!(decode_text(&Type::INT4_ARRAY, &(-1_i32).to_be_bytes()).is_err());
+        assert!(decode_text(&Type::INT4_ARRAY, &[0, 0, 0]).is_err());
+        let mut empty = int_array(0);
+        empty.truncate(12);
+        assert_eq!(decode_text(&Type::INT4_ARRAY, &empty).unwrap(), "{}");
+        assert_eq!(
+            decode_text(&Type::INT4_ARRAY, &int_array(6)).unwrap(),
+            "{{{{{{42}}}}}}"
+        );
+        assert_eq!(
+            decode_text(&Type::INT4_ARRAY, &int_array(1)).unwrap(),
+            "{42}"
+        );
+    }
 
     fn numeric(ndigits: i16, weight: i16, sign: u16, dscale: i16, digits: &[i16]) -> Vec<u8> {
         let mut v = Vec::new();
