@@ -325,9 +325,11 @@ pub enum EditorAccessOutcome {
     Ready,
     Untrusted,
     Changed {
+        /// `connection:<id>`, for `accept_change`.
         item: String,
         new: bool,
         fields: Vec<FieldChangeItem>,
+        root: String,
     },
 }
 
