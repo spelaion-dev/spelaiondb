@@ -209,13 +209,16 @@ export const commands = {
 	/**  The databases this tab's session can switch to (MySQL, MariaDB, SQL Server). */
 	listDatabases: (session: string) => typedError<string[], string>(__TAURI_INVOKE("list_databases", { session })),
 	selectDatabase: (session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("select_database", { session, database })),
-	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
-	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),
-	describeTable: (session: string, schema: string, name: string) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name })),
+	listSchemas: (session: string, filter: NameFilterItem | null) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session, filter })),
+	listObjects: (session: string, schema: string, filter: NameFilterItem | null) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema, filter })),
+	describeTable: (session: string, schema: string, name: string, columns: NameFilterItem | null) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name, columns })),
 	/**  Functions, sequences, triggers, types… of a schema, for its folders (ADR-024). */
-	listSchemaObjects: (session: string, schema: string) => typedError<SchemaObjectItem_Serialize[], string>(__TAURI_INVOKE("list_schema_objects", { session, schema })),
+	listSchemaObjects: (session: string, schema: string, filter: NameFilterItem | null) => typedError<SchemaObjectItem_Serialize[], string>(__TAURI_INVOKE("list_schema_objects", { session, schema, filter })),
 	/**  Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024). */
 	listServerObjects: (session: string) => typedError<ServerObjectItem_Serialize[], string>(__TAURI_INVOKE("list_server_objects", { session })),
+	/**  A connection's explorer filter (ADR-025), personal and per workspace. */
+	getExplorerFilter: (connection: string) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
+	setExplorerFilter: (connection: string, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
 	/**  The DDL of an object, to open in a new tab (nothing runs). */
 	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
@@ -547,6 +550,13 @@ export type EngineItem_Serialize = {
 	available: boolean,
 };
 
+/**  A connection's explorer filter: personal, per workspace and connection (ADR-025). */
+export type ExplorerFilterItem = {
+	schemas: NameFilterItem,
+	objects: NameFilterItem,
+	columns: NameFilterItem,
+};
+
 /**  How the explorer shows its tree; personal, like the theme. */
 export type ExplorerPreferencesItem = {
 	showSystem: boolean,
@@ -707,6 +717,12 @@ export type KubernetesDraftItem = {
 	resource: string,
 	kubeconfig: string,
 	kubectl: string,
+};
+
+/**  Include and exclude patterns for one kind of name (ADR-025). */
+export type NameFilterItem = {
+	include: string[],
+	exclude: string[],
 };
 
 export type ObjectItem = ObjectItem_Serialize | ObjectItem_Deserialize;

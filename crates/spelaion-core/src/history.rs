@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
-    ExplorerPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store, StoreError,
+    ExplorerFilter, ExplorerPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store, StoreError,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -80,6 +80,17 @@ enum Request {
         workspace: String,
         connection: String,
         enabled: bool,
+        reply: Reply<()>,
+    },
+    GetFilter {
+        workspace: String,
+        connection: String,
+        reply: Reply<ExplorerFilter>,
+    },
+    SetFilter {
+        workspace: String,
+        connection: String,
+        filter: ExplorerFilter,
         reply: Reply<()>,
     },
     Record {
@@ -170,6 +181,25 @@ impl QueryHistory {
                                 &workspace,
                                 &connection,
                                 enabled,
+                            ));
+                        }
+                        Request::GetFilter {
+                            workspace,
+                            connection,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.explorer_filter(&workspace, &connection));
+                        }
+                        Request::SetFilter {
+                            workspace,
+                            connection,
+                            filter,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.set_explorer_filter(
+                                &workspace,
+                                &connection,
+                                &filter,
                             ));
                         }
                         Request::Record { entry, reply } => {
@@ -310,6 +340,35 @@ impl QueryHistory {
             workspace,
             connection,
             enabled,
+            reply,
+        })
+        .await
+    }
+
+    /// A connection's explorer filter (ADR-025), empty if it has none.
+    pub async fn explorer_filter(
+        &self,
+        workspace: String,
+        connection: String,
+    ) -> Result<ExplorerFilter, HistoryError> {
+        self.request(|reply| Request::GetFilter {
+            workspace,
+            connection,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn set_explorer_filter(
+        &self,
+        workspace: String,
+        connection: String,
+        filter: ExplorerFilter,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetFilter {
+            workspace,
+            connection,
+            filter,
             reply,
         })
         .await

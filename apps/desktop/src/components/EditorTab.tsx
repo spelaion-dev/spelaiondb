@@ -239,7 +239,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function loadPageNow(view: TableView) {
     if (!(await ensureConnected())) return;
     if (primaryKey === null) {
-      call(commands.describeTable(tab.id, view.schema, view.name))
+      call(commands.describeTable(tab.id, view.schema, view.name, null))
         .then((details) => setPrimaryKey(details.primaryKey))
         .catch(() => setPrimaryKey([]));
     }
@@ -414,10 +414,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (tab.status !== "connected") return;
     let cancelled = false;
     (async () => {
-      const schemas = (await call(commands.listSchemas(tab.id))).filter((s) => !s.system).slice(0, 20);
+      // Autocompletion sees every name: the explorer's filters (ADR-025) do not apply here.
+      const schemas = (await call(commands.listSchemas(tab.id, null))).filter((s) => !s.system).slice(0, 20);
       const out: Record<string, string[]> = {};
       for (const schema of schemas) {
-        for (const o of await call(commands.listObjects(tab.id, schema.name))) {
+        for (const o of await call(commands.listObjects(tab.id, schema.name, null))) {
           out[`${o.schema}.${o.name}`] = [];
           if (o.schema === "public" || o.schema === "main" || o.schema === database) out[o.name] = [];
         }

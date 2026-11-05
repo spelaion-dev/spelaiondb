@@ -1008,6 +1008,24 @@ try {
   await page.keyboard.press("Escape");
   await quickFilter.waitFor({ state: "detached" });
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  // Filters as in DBeaver: right-click a folder, Configure filter…; the folder says it is filtered.
+  const customerNode = page.getByRole("button", { name: "Expand or collapse customer", exact: true });
+  const filterDialog = page.getByRole("dialog", { name: "Filter of tables, views and other objects for Shop (SQLite)" });
+  await tablesFolder.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Configure filter…" }).click();
+  await filterDialog.locator('input[name="objects.exclude"]').fill("CUST*");
+  await filterDialog.getByRole("button", { name: "Apply" }).click();
+  await filterDialog.waitFor({ state: "detached" });
+  await customerNode.waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "2");
+  await tablesFolder.locator(".tag", { hasText: "filtered" }).waitFor();
+  await shot("05h-filtered-folder");
+  await tablesFolder.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Configure filter…" }).click();
+  assert.equal(await filterDialog.locator('input[name="objects.exclude"]').inputValue(), "CUST*");
+  await filterDialog.getByRole("button", { name: "Show everything" }).click();
+  await customerNode.waitFor();
+  assert.equal(await tablesFolder.locator(".tag").count(), 0);
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');

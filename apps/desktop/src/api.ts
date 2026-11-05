@@ -21,6 +21,8 @@ import {
   type HistoryItem_Serialize,
   type ObjectItem_Serialize,
   type ExplorerPreferencesItem,
+  type ExplorerFilterItem,
+  type NameFilterItem,
   type SchemaObjectItem_Serialize,
   type SchemaObjectKindItem,
   type ServerObjectItem_Serialize,
@@ -66,6 +68,8 @@ export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
 export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
+export type ExplorerFilter = ExplorerFilterItem;
+export type NameFilter = NameFilterItem;
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
 export type { SchemaObjectKindItem, ServerObjectKindItem };

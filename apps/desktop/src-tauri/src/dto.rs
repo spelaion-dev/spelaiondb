@@ -9,6 +9,64 @@ use spelaion_driver_api::{
     ServerObjectKind, TableInfo,
 };
 
+/// Include and exclude patterns for one kind of name (ADR-025).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NameFilterItem {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+impl From<NameFilterItem> for spelaion_driver_api::NameFilter {
+    fn from(f: NameFilterItem) -> Self {
+        Self {
+            include: f.include,
+            exclude: f.exclude,
+        }
+    }
+}
+
+/// A connection's explorer filter: personal, per workspace and connection (ADR-025).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplorerFilterItem {
+    pub schemas: NameFilterItem,
+    pub objects: NameFilterItem,
+    pub columns: NameFilterItem,
+}
+
+impl From<spelaion_core::ExplorerFilter> for ExplorerFilterItem {
+    fn from(f: spelaion_core::ExplorerFilter) -> Self {
+        Self {
+            schemas: NameFilterItem {
+                include: f.schema_include,
+                exclude: f.schema_exclude,
+            },
+            objects: NameFilterItem {
+                include: f.object_include,
+                exclude: f.object_exclude,
+            },
+            columns: NameFilterItem {
+                include: f.column_include,
+                exclude: f.column_exclude,
+            },
+        }
+    }
+}
+
+impl From<ExplorerFilterItem> for spelaion_core::ExplorerFilter {
+    fn from(f: ExplorerFilterItem) -> Self {
+        Self {
+            schema_include: f.schemas.include,
+            schema_exclude: f.schemas.exclude,
+            object_include: f.objects.include,
+            object_exclude: f.objects.exclude,
+            column_include: f.columns.include,
+            column_exclude: f.columns.exclude,
+        }
+    }
+}
+
 /// How the explorer shows its tree; personal, like the theme.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

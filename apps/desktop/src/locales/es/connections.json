@@ -116,6 +116,24 @@
   },
   "cancel": "Cancelar",
   "refresh": "Refrescar todos los esquemas",
+  "configureFilters": "Configurar filtros…",
+  "filterTitle": "Filtros de {{name}}",
+  "filterTitleKind": "Filtro de {{kind}} de {{name}}",
+  "filterHint": "Patrones separados por comas: * es cualquier secuencia de caracteres, ? un carácter, \\ escapa el siguiente; no distingue mayúsculas. Sin patrones de inclusión se incluye todo; los de exclusión ocultan lo que coincida.",
+  "filterKinds": {
+    "schemas": "esquemas",
+    "objects": "tablas, vistas y otros objetos",
+    "columns": "columnas"
+  },
+  "filter": {
+    "include": "Incluir",
+    "exclude": "Excluir"
+  },
+  "filterIncludePlaceholder": "todo",
+  "filterExcludePlaceholder": "nada",
+  "filterPersonal": "Los filtros son tuyos: se guardan en este equipo, no en el fichero de la conexión, y solo cambian lo que muestra el explorador.",
+  "filterClear": "Mostrar todo",
+  "filterApply": "Aplicar",
   "edit": "Editar…",
   "delete": "Borrar…",
   "editTitle": "Editar {{name}}",

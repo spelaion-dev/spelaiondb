@@ -8,6 +8,7 @@
 mod column;
 mod dialect;
 mod error;
+mod filter;
 mod introspect;
 mod remote;
 mod secret;
@@ -24,6 +25,7 @@ use futures_util::stream::BoxStream;
 pub use column::{ColumnMeta, ResultSchema};
 pub use dialect::{Dialect, StatementSpan};
 pub use error::DriverError;
+pub use filter::{NameFilter, literal_pattern, pattern_matches};
 pub use introspect::{
     ColumnInfo, ConstraintInfo, ConstraintKind, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind,
     SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo,
@@ -177,6 +179,33 @@ pub trait Connection: Send + Sync {
     /// Roles, logins, tablespaces, extensions… (ADR-024). Engines without any return none.
     async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
         Ok(Vec::new())
+    }
+    /// [`Connection::list_schemas`] narrowed to what `filter` keeps (ADR-025). Drivers may
+    /// narrow it in their catalog query too; the result must be the same.
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let mut schemas = self.list_schemas().await?;
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+    /// [`Connection::list_objects`] narrowed to what `filter` keeps (ADR-025).
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let mut objects = self.list_objects(schema).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+    /// [`Connection::list_schema_objects`] narrowed to what `filter` keeps (ADR-025).
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let mut objects = self.list_schema_objects(schema).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
     }
     /// The DDL of an object from [`Connection::list_schema_objects`], ending in `;`.
     async fn object_definition(&self, _object: &SchemaObject) -> Result<String> {

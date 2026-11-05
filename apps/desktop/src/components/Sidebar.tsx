@@ -7,7 +7,9 @@ import {
   call,
   commands,
   type ConnectionItem,
+  type ExplorerFilter,
   type IndexDetails,
+  type NameFilter,
   type ObjectItem,
   type SchemaItem,
   type SchemaObjectItem,
@@ -27,6 +29,7 @@ import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
+import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 
 function errorText(e: unknown): string {
@@ -196,6 +199,8 @@ function Folder({
   count,
   initiallyOpen = false,
   forceOpen = false,
+  filtered = false,
+  onConfigureFilter,
   children,
 }: {
   label: string;
@@ -203,15 +208,25 @@ function Folder({
   initiallyOpen?: boolean;
   /** Shown open whatever its state (the quick filter shows what matches inside). */
   forceOpen?: boolean;
+  /** The connection's filter hides some of what it holds (ADR-025). */
+  filtered?: boolean;
+  /** Its right-click menu offers "Configure filter…", as DBeaver's folders do. */
+  onConfigureFilter?: () => void;
   children: ReactNode;
 }) {
   const { t, i18n } = useTranslation("shell");
   const [chosen, setOpen] = useState(initiallyOpen);
+  const [menu, setMenu] = useContextMenu();
   const open = chosen || forceOpen;
   return (
     <div className="node">
       <div
         className="row folder-row"
+        onContextMenu={(e) => {
+          if (!onConfigureFilter) return;
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
         onClick={() => setOpen(!open)}
         role="button"
         tabIndex={0}
@@ -226,8 +241,26 @@ function Folder({
       >
         <span className="twisty">{open ? "▾" : "▸"}</span>
         <span className="label">{label}</span>
+        {filtered && (
+          <span className="tag" title={t("filteredHint")}>
+            {t("filtered")}
+          </span>
+        )}
         <span className="muted small">{count.toLocaleString(i18n.language)}</span>
       </div>
+      {menu && onConfigureFilter && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              onConfigureFilter();
+            }}
+          >
+            {t("configureFilter")}
+          </button>
+        </div>
+      )}
       {open && <div className="children">{children}</div>}
     </div>
   );
@@ -458,6 +491,17 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   const [busy, setBusy] = useState(false);
   /** Bumped by "Refresh all schemas": every schema and table node reads its data again. */
   const [generation, setGeneration] = useState(0);
+  /** This connection's include and exclude patterns (ADR-025), read when it is opened. */
+  const [filters, setFilters] = useState<ExplorerFilter | null>(null);
+  const [editingFilters, setEditingFilters] = useState<{ filter: ExplorerFilter; kind?: FilterKind } | null>(null);
+  const [rowMenu, setRowMenu] = useContextMenu();
+  /** Opens the filter dialog with the saved patterns: one kind from a folder, or all. */
+  function configureFilter(kind?: FilterKind) {
+    setRowMenu(null);
+    void call(commands.getExplorerFilter(connection.id))
+      .then((filter) => setEditingFilters({ filter, kind }))
+      .catch((e: unknown) => setError(errorText(e)));
+  }
   const session = `meta:${connection.id}`;
 
   function newQuery() {
@@ -490,9 +534,11 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   }
 
   async function load() {
+    const filter = await call(commands.getExplorerFilter(connection.id));
+    setFilters(filter);
     // Without its roles or logins the connection still shows its schemas.
     const [all, server] = await Promise.all([
-      call(commands.listSchemas(session)),
+      call(commands.listSchemas(session, filter.schemas)),
       call(commands.listServerObjects(session)).catch((e: unknown) => {
         setError(errorText(e));
         return [];
@@ -537,6 +583,9 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       generation={generation}
       onRefreshAll={() => void refreshAll()}
       filter={inner}
+      objectFilter={filters?.objects ?? null}
+      columnFilter={filters?.columns ?? null}
+      onConfigureFilter={configureFilter}
     />
   ));
   const prod = connection.env?.toLowerCase().startsWith("prod");
@@ -547,7 +596,13 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
         if (isRefreshKey(e)) void refreshAll();
       }}
     >
-      <div className="row connection-row">
+      <div
+        className="row connection-row"
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setRowMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
         <button
           className="twisty"
           onClick={() => void toggle()}
@@ -573,6 +628,11 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
           </span>
         )}
         {prod && <span className="tag tag-prod">prod</span>}
+        {!isFilterEmpty(filters, "schemas") && (
+          <span className="tag" title={t("filteredHint")}>
+            {t("filtered")}
+          </span>
+        )}
         <button
           className="ghost small"
           onClick={newQuery}
@@ -580,8 +640,30 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
         >
           +
         </button>
-        <ConnectionMenu connection={connection} onRefresh={schemas ? () => void refreshAll() : undefined} />
+        <ConnectionMenu
+          connection={connection}
+          onRefresh={schemas ? () => void refreshAll() : undefined}
+          onConfigureFilters={() => configureFilter()}
+        />
       </div>
+      {rowMenu && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: rowMenu.x, top: rowMenu.y }}>
+          <button role="menuitem" onClick={() => configureFilter("schemas")}>
+            {t("configureSchemaFilter")}
+          </button>
+          {schemas && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setRowMenu(null);
+                void refreshAll();
+              }}
+            >
+              {t("refreshAllSchemas")}
+            </button>
+          )}
+        </div>
+      )}
       {open && (
         <div className="children">
           {busy && <div className="muted small">{t(schemas ? "refreshing" : "connecting")}</div>}
@@ -605,6 +687,19 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
           {foldersFirst && schemaNodes}
         </div>
       )}
+      {editingFilters && (
+        <ExplorerFilterDialog
+          connection={connection}
+          filter={editingFilters.filter}
+          kind={editingFilters.kind}
+          onClose={() => setEditingFilters(null)}
+          onSaved={(next) => {
+            setEditingFilters(null);
+            setFilters(next);
+            void refreshAll();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -616,6 +711,9 @@ function SchemaNode({
   generation,
   onRefreshAll,
   filter,
+  objectFilter,
+  columnFilter,
+  onConfigureFilter,
 }: {
   session: string;
   connectionId: string;
@@ -625,6 +723,10 @@ function SchemaNode({
   onRefreshAll(): void;
   /** The quick filter's text ("" when nothing is filtered here). */
   filter: string;
+  /** The connection's object and column patterns (ADR-025), null before they are read. */
+  objectFilter: NameFilter | null;
+  columnFilter: NameFilter | null;
+  onConfigureFilter(kind: FilterKind): void;
 }) {
   const { t, i18n } = useTranslation("shell");
   const [open, setOpen] = useState(false);
@@ -641,8 +743,8 @@ function SchemaNode({
     try {
       // Without its functions or triggers the schema still shows its tables.
       const [relations, rest] = await Promise.all([
-        call(commands.listObjects(session, schema)),
-        call(commands.listSchemaObjects(session, schema)).catch((e: unknown) => {
+        call(commands.listObjects(session, schema, objectFilter)),
+        call(commands.listSchemaObjects(session, schema, objectFilter)).catch((e: unknown) => {
           setError(errorText(e));
           return [];
         }),
@@ -755,7 +857,14 @@ function SchemaNode({
               const count = relations.length + rest.length;
               return (
                 count > 0 && (
-                  <Folder key={folder} label={t(`folders.${folder}`)} count={count} forceOpen={inner !== ""}>
+                  <Folder
+                    key={folder}
+                    label={t(`folders.${folder}`)}
+                    count={count}
+                    forceOpen={inner !== ""}
+                    filtered={!!objectFilter && (objectFilter.include.length > 0 || objectFilter.exclude.length > 0)}
+                    onConfigureFilter={() => onConfigureFilter("objects")}
+                  >
                     {relations.map((o) => (
                       <ObjectNode
                         key={o.name}
@@ -763,6 +872,8 @@ function SchemaNode({
                         connectionId={connectionId}
                         object={o}
                         generation={childGeneration}
+                        columnFilter={columnFilter}
+                        onConfigureFilter={onConfigureFilter}
                       />
                     ))}
                     {rest.map((o) => (
@@ -796,12 +907,17 @@ function ObjectNode({
   connectionId,
   object,
   generation,
+  columnFilter,
+  onConfigureFilter,
 }: {
   session: string;
   connectionId: string;
   object: ObjectItem;
   /** Changes when its schema (or the whole connection) is refreshed. */
   generation: string;
+  /** The connection's column patterns (ADR-025). */
+  columnFilter: NameFilter | null;
+  onConfigureFilter(kind: FilterKind): void;
 }) {
   const { t, i18n } = useTranslation("shell");
   const addTab = useApp((s) => s.addTab);
@@ -816,7 +932,7 @@ function ObjectNode({
   async function loadDetails() {
     setDetails(
       await call(
-        commands.describeTable(session, object.schema, object.name),
+        commands.describeTable(session, object.schema, object.name, columnFilter),
       ).catch(() => null),
     );
   }
@@ -965,7 +1081,13 @@ function ObjectNode({
       )}
       {open && details && (
         <div className="children">
-          <Folder label={t("folders.columns")} count={details.columns.length} initiallyOpen>
+          <Folder
+            label={t("folders.columns")}
+            count={details.columns.length}
+            initiallyOpen
+            filtered={!!columnFilter && (columnFilter.include.length > 0 || columnFilter.exclude.length > 0)}
+            onConfigureFilter={() => onConfigureFilter("columns")}
+          >
             {details.columns.map((c) => (
               <div key={c.name} className="row leaf-row" title={c.comment ?? ""}>
                 <span className="label">

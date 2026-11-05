@@ -193,6 +193,13 @@ the connections, schemas and objects whose name contains the text stay, with the
 that hold them opened, and a connection or schema whose name matches shows everything in it.
 Expanded connections stay; objects of schemas never opened are not searched. **Escape**
 clears the text, and a second **Escape** closes the box.
+Filters, as in DBeaver: right-click a connection (**Configure schema filter…**), a folder of
+objects such as **Tables**, or a table's **Columns** (**Configure filter…**), or open the
+connection's "⋯" menu (**Configure filters…** for all three). Include and exclude patterns
+are separated by commas: `*` is any run of characters, `?` one character, `\` escapes the
+next one, and case is ignored. A filtered folder says **filtered**; **Show everything**
+removes its filter. Filters are personal: they are kept on this computer (not in the
+connection's file) and change only what the explorer shows, not autocompletion (ADR-025).
 The explorer keeps what it has read until you refresh it: **F5** on a schema or table (or
 **Refresh schema** and **Refresh** in their right-click menus) reads it again, and **Refresh
 all schemas** (in a schema's menu, the connection's "⋯" menu, or F5 on the connection) reads

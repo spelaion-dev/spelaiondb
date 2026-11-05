@@ -428,6 +428,47 @@ async fn set_history_enabled(
         .map_err(|e| e.to_string())
 }
 
+/// A connection's explorer filter (ADR-025), personal and per workspace.
+#[tauri::command]
+#[specta::specta]
+async fn get_explorer_filter(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ExplorerFilterItem> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    state
+        .history
+        .explorer_filter(workspace, connection)
+        .await
+        .map(ExplorerFilterItem::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_explorer_filter(
+    connection: String,
+    filter: ExplorerFilterItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    state
+        .history
+        .set_explorer_filter(workspace, connection, filter.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The scope a connection's personal preferences are kept under (see `history_workspace`).
+async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<String> {
+    let id = parse_id(connection);
+    let config = state.config.read().await;
+    if config.connection(&id).is_none() {
+        return Err(format!("unknown connection: {connection}"));
+    }
+    Ok(history_workspace(&config, id.source))
+}
+
 /// Engines shown when adding a connection, including the ones not supported yet.
 #[tauri::command]
 #[specta::specta]
@@ -1733,14 +1774,18 @@ async fn select_database(
 
 #[tauri::command]
 #[specta::specta]
-async fn list_schemas(session: String, state: State<'_, AppState>) -> CmdResult<Vec<SchemaItem>> {
+async fn list_schemas(
+    session: String,
+    filter: Option<NameFilterItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<SchemaItem>> {
     let open = state.session(&session).await?;
-    let schemas = open
-        .session
-        .connection()
-        .list_schemas()
-        .await
-        .map_err(|e| e.to_string())?;
+    let connection = open.session.connection();
+    let schemas = match filter {
+        Some(filter) => connection.list_schemas_matching(&filter.into()).await,
+        None => connection.list_schemas().await,
+    }
+    .map_err(|e| e.to_string())?;
     Ok(schemas
         .into_iter()
         .map(|s| SchemaItem {
@@ -1755,15 +1800,20 @@ async fn list_schemas(session: String, state: State<'_, AppState>) -> CmdResult<
 async fn list_objects(
     session: String,
     schema: String,
+    filter: Option<NameFilterItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<ObjectItem>> {
     let open = state.session(&session).await?;
-    let objects = open
-        .session
-        .connection()
-        .list_objects(&schema)
-        .await
-        .map_err(|e| e.to_string())?;
+    let connection = open.session.connection();
+    let objects = match filter {
+        Some(filter) => {
+            connection
+                .list_objects_matching(&schema, &filter.into())
+                .await
+        }
+        None => connection.list_objects(&schema).await,
+    }
+    .map_err(|e| e.to_string())?;
     Ok(objects.into_iter().map(ObjectItem::from).collect())
 }
 
@@ -1773,15 +1823,21 @@ async fn describe_table(
     session: String,
     schema: String,
     name: String,
+    columns: Option<NameFilterItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<TableDetails> {
     let open = state.session(&session).await?;
-    let table = open
+    let mut table = open
         .session
         .connection()
         .describe_table(&schema, &name)
         .await
         .map_err(|e| e.to_string())?;
+    // The explorer's column filter (ADR-025); editing asks without one, for every column.
+    if let Some(columns) = columns {
+        let columns = spelaion_driver_api::NameFilter::from(columns);
+        table.columns.retain(|c| columns.matches(&c.name));
+    }
     Ok(TableDetails::from(table))
 }
 
@@ -1791,15 +1847,20 @@ async fn describe_table(
 async fn list_schema_objects(
     session: String,
     schema: String,
+    filter: Option<NameFilterItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<SchemaObjectItem>> {
     let open = state.session(&session).await?;
-    let objects = open
-        .session
-        .connection()
-        .list_schema_objects(&schema)
-        .await
-        .map_err(|e| e.to_string())?;
+    let connection = open.session.connection();
+    let objects = match filter {
+        Some(filter) => {
+            connection
+                .list_schema_objects_matching(&schema, &filter.into())
+                .await
+        }
+        None => connection.list_schema_objects(&schema).await,
+    }
+    .map_err(|e| e.to_string())?;
     Ok(objects.into_iter().map(SchemaObjectItem::from).collect())
 }
 
@@ -2162,6 +2223,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             describe_table,
             list_schema_objects,
             list_server_objects,
+            get_explorer_filter,
+            set_explorer_filter,
             object_definition,
             editable_query_table,
             answer_interaction,

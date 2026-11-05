@@ -10,10 +10,13 @@ import { HistoryPreference } from "./HistoryPreference";
 export function ConnectionMenu({
   connection,
   onRefresh,
+  onConfigureFilters,
 }: {
   connection: ConnectionItem;
   /** Reloads everything the explorer shows of this connection; absent until it is opened. */
   onRefresh?: () => void;
+  /** Opens the dialog of the explorer's include and exclude patterns. */
+  onConfigureFilters?: () => void;
 }) {
   const { t } = useTranslation(["editor", "connections"]);
   const [open, setOpen] = useState(false);
@@ -58,6 +61,17 @@ export function ConnectionMenu({
               }}
             >
               {t("connections:refresh")}
+            </button>
+          )}
+          {onConfigureFilters && (
+            <button
+              className="menu-item"
+              onClick={() => {
+                setOpen(false);
+                onConfigureFilters();
+              }}
+            >
+              {t("connections:configureFilters")}
             </button>
           )}
           <button

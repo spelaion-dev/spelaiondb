@@ -33,3 +33,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [022](0022-team-sharing.md) | Sharing connections with a team: trust pinned to content, shared host keys, passwordless logins | Accepted |
 | [023](0023-spelaion.md) | Rename SpelunkDB to SpelaionDB, under the Spelaion brand | Accepted |
 | [024](0024-explorer-folders.md) | The explorer groups objects in folders by type: routines, sequences, triggers, types and server objects | Accepted |
+| [025](0025-explorer-filters.md) | Explorer filters: personal, matched in Rust, narrowed on the server | Accepted |
