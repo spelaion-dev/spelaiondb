@@ -15,6 +15,7 @@ import {
   type ObjectActionsItem,
   type ObjectItem,
   type ObjectPathItem,
+  type ObjectTargetItem,
   type SchemaItem,
   type SchemaObjectItem,
   type SchemaObjectKindItem,
@@ -185,6 +186,125 @@ function useObjectActions(session: string): ObjectActionsItem | undefined {
     };
   }, [session, actions]);
   return actions;
+}
+
+/** Delete drops the focused object (after its dialog), as in DBeaver. */
+function isDropKey(e: React.KeyboardEvent): boolean {
+  if (e.key !== "Delete" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
+}
+
+/** "Drop…" in an object's menu. */
+function DropMenuItem({ onClick }: { onClick(): void }) {
+  const { t } = useTranslation("shell");
+  return (
+    <button role="menuitem" className="danger-text" title="Delete" onClick={onClick}>
+      {t("objectChange.dropMenu")}
+    </button>
+  );
+}
+
+/** Drops an object after showing the core's SQL, with "Cascade" where the engine has it. */
+function DropDialog({
+  session,
+  connectionId,
+  schema,
+  name,
+  target,
+  onClose,
+  onDone,
+}: {
+  session: string;
+  connectionId: string;
+  schema: string;
+  name: string;
+  target: ObjectTargetItem;
+  onClose(): void;
+  onDone(): void;
+}) {
+  const { t } = useTranslation("shell");
+  return (
+    <ObjectChangeDialog
+      session={session}
+      connectionId={connectionId}
+      schema={schema}
+      title={t("objectChange.dropTitle", { name })}
+      confirmLabel={t("objectChange.drop")}
+      danger
+      change={({ cascade }) => ({ action: "drop", target, cascade })}
+      onClose={onClose}
+      onDone={onDone}
+    />
+  );
+}
+
+/** A constraint or foreign key of a table: its menu can drop it, where the engine can. */
+function LeafRow({
+  session,
+  connectionId,
+  schema,
+  label,
+  detail,
+  target,
+  onChanged,
+}: {
+  session: string;
+  connectionId: string;
+  schema: string;
+  label: string;
+  detail: string;
+  /** What "Drop…" drops; none when it cannot be dropped from here. */
+  target: ObjectTargetItem | null;
+  onChanged(): void;
+}) {
+  const [menu, setMenu] = useContextMenu();
+  const [dropping, setDropping] = useState(false);
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        title={detail}
+        tabIndex={target ? 0 : undefined}
+        onKeyDown={(e) => {
+          if (target && isDropKey(e)) setDropping(true);
+        }}
+        onContextMenu={(e) => {
+          if (!target) return;
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        <span className="label">{label}</span>
+        <span className="muted small">{detail}</span>
+      </div>
+      {menu && target && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <DropMenuItem
+            onClick={() => {
+              setMenu(null);
+              setDropping(true);
+            }}
+          />
+        </div>
+      )}
+      {dropping && target && (
+        <DropDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          name={label}
+          target={target}
+          onClose={() => setDropping(false)}
+          onDone={() => {
+            setDropping(false);
+            onChanged();
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 /** F2 renames the focused object, as in DBeaver. */
@@ -958,6 +1078,8 @@ function SchemaNode({
   /** Bumped by "Refresh schema": the tables already described read their details again. */
   const [refreshed, setRefreshed] = useState(0);
   const sort = useSortByName();
+  const actions = useObjectActions(session);
+  const [dropping, setDropping] = useState(false);
 
   async function load() {
     setError(null);
@@ -1033,6 +1155,10 @@ function SchemaNode({
         }}
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => [{ schema: "", names: [schema] }], setError)) return;
+          if (isDropKey(e)) {
+            if (actions?.dropSchemas) setDropping(true);
+            return;
+          }
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             void toggle();
@@ -1069,7 +1195,32 @@ function SchemaNode({
             {t("refreshAllSchemas")}
           </button>
           <FilterMenuItems kind="schemas" names={[schema]} onFilterName={onFilterName} close={() => setMenu(null)} />
+          {actions?.dropSchemas && (
+            <>
+              <hr />
+              <DropMenuItem
+                onClick={() => {
+                  setMenu(null);
+                  setDropping(true);
+                }}
+              />
+            </>
+          )}
         </div>
+      )}
+      {dropping && (
+        <DropDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          name={schema}
+          target={{ kind: "schema", name: schema }}
+          onClose={() => setDropping(false)}
+          onDone={() => {
+            setDropping(false);
+            onRefreshAll();
+          }}
+        />
       )}
       {open && (
         <div className="children">
@@ -1114,6 +1265,7 @@ function SchemaNode({
                         session={session}
                         connectionId={connectionId}
                         object={o}
+                        onSchemaChanged={refresh}
                         onFilterName={onFilterName}
                       />
                     ))}
@@ -1167,6 +1319,7 @@ function ObjectNode({
   const [count, setCount] = useState<number | "counting" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const [dropping, setDropping] = useState(false);
   const actions = useObjectActions(session);
 
   async function loadDetails() {
@@ -1319,6 +1472,10 @@ function ObjectNode({
             if (canRename) setRenaming(true);
             return;
           }
+          if (isDropKey(e)) {
+            setDropping(true);
+            return;
+          }
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             void toggle();
@@ -1379,6 +1536,12 @@ function ObjectNode({
               {t("objectChange.renameMenu")}
             </button>
           )}
+          <DropMenuItem
+            onClick={() => {
+              setMenu(null);
+              setDropping(true);
+            }}
+          />
           <FilterMenuItems
             kind="objects"
             names={chosen ? selection.map((o) => o.name) : [object.name]}
@@ -1435,6 +1598,20 @@ function ObjectNode({
           }}
         />
       )}
+      {dropping && (
+        <DropDialog
+          session={session}
+          connectionId={connectionId}
+          schema={object.schema}
+          name={object.name}
+          target={{ kind: "relation", schema: object.schema, name: object.name, relation: object.kind }}
+          onClose={() => setDropping(false)}
+          onDone={() => {
+            setDropping(false);
+            onSchemaChanged();
+          }}
+        />
+      )}
       {open && details && (
         <div className="children">
           <Folder
@@ -1461,10 +1638,20 @@ function ObjectNode({
           {details.constraints.length > 0 && (
             <Folder label={t("folders.constraints")} count={details.constraints.length}>
               {sort(details.constraints, (c) => c.name ?? "").map((c, i) => (
-                <div key={c.name ?? `${c.kind}:${i}`} className="row leaf-row" title={c.definition}>
-                  <span className="label">{c.name ?? t(`constraintKinds.${c.kind}`)}</span>
-                  <span className="muted small">{c.definition}</span>
-                </div>
+                <LeafRow
+                  key={c.name ?? `${c.kind}:${i}`}
+                  session={session}
+                  connectionId={connectionId}
+                  schema={object.schema}
+                  label={c.name ?? t(`constraintKinds.${c.kind}`)}
+                  detail={c.definition}
+                  target={
+                    c.name != null && actions?.dropConstraints
+                      ? { kind: "constraint", schema: object.schema, table: object.name, name: c.name, constraint: c.kind }
+                      : null
+                  }
+                  onChanged={refresh}
+                />
               ))}
             </Folder>
           )}
@@ -1473,10 +1660,20 @@ function ObjectNode({
               {sort(details.foreignKeys, (fk) => fk.name).map((fk) => {
                 const target = `(${fk.columns.join(", ")}) → ${fk.referencedSchema === object.schema ? "" : `${fk.referencedSchema}.`}${fk.referencedTable} (${fk.referencedColumns.join(", ")})`;
                 return (
-                  <div key={fk.name} className="row leaf-row" title={target}>
-                    <span className="label">{fk.name}</span>
-                    <span className="muted small">{target}</span>
-                  </div>
+                  <LeafRow
+                    key={fk.name}
+                    session={session}
+                    connectionId={connectionId}
+                    schema={object.schema}
+                    label={fk.name}
+                    detail={target}
+                    target={
+                      actions?.dropConstraints
+                        ? { kind: "foreignKey", schema: object.schema, table: object.name, name: fk.name }
+                        : null
+                    }
+                    onChanged={refresh}
+                  />
                 );
               })}
             </Folder>
@@ -1489,7 +1686,9 @@ function ObjectNode({
                   session={session}
                   connectionId={connectionId}
                   schema={object.schema}
+                  table={object.name}
                   index={index}
+                  onTableChanged={refresh}
                 />
               ))}
             </Folder>
@@ -1525,6 +1724,7 @@ function ColumnRow({
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const [dropping, setDropping] = useState(false);
   const paths = [{ schema, names: [table, column.name] }];
   return (
     <div className="node">
@@ -1535,6 +1735,7 @@ function ColumnRow({
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => paths, setError)) return;
           if (isRenameKey(e)) setRenaming(true);
+          if (isDropKey(e)) setDropping(true);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -1563,6 +1764,12 @@ function ColumnRow({
           >
             {t("objectChange.renameMenu")}
           </button>
+          <DropMenuItem
+            onClick={() => {
+              setMenu(null);
+              setDropping(true);
+            }}
+          />
           <FilterMenuItems kind="columns" names={[column.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}
@@ -1586,6 +1793,20 @@ function ColumnRow({
           }}
         />
       )}
+      {dropping && (
+        <DropDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          name={`${table}.${column.name}`}
+          target={{ kind: "column", schema, table, name: column.name }}
+          onClose={() => setDropping(false)}
+          onDone={() => {
+            setDropping(false);
+            onTableChanged();
+          }}
+        />
+      )}
       {error && (
         <p className="error small" role="alert">
           {error}
@@ -1600,17 +1821,23 @@ function IndexNode({
   session,
   connectionId,
   schema,
+  table,
   index,
+  onTableChanged,
 }: {
   session: string;
   connectionId: string;
   schema: string;
+  table: string;
   index: IndexDetails;
+  /** After it was dropped: the table reads its indexes again. */
+  onTableChanged(): void;
 }) {
   const { t } = useTranslation("shell");
   const addTab = useApp((s) => s.addTab);
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
+  const [dropping, setDropping] = useState(false);
   const paths = [{ schema, names: [index.name] }];
   const openDefinition = () => {
     setMenu(null);
@@ -1633,6 +1860,10 @@ function IndexNode({
         aria-label={t("openObject", { name: index.name })}
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => paths, setError)) return;
+          if (isDropKey(e)) {
+            setDropping(true);
+            return;
+          }
           if (e.key === "Enter") {
             e.preventDefault();
             openDefinition();
@@ -1651,7 +1882,27 @@ function IndexNode({
           </button>
           <hr />
           <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
+          <DropMenuItem
+            onClick={() => {
+              setMenu(null);
+              setDropping(true);
+            }}
+          />
         </div>
+      )}
+      {dropping && (
+        <DropDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          name={index.name}
+          target={{ kind: "index", schema, table, name: index.name, primary: index.primary }}
+          onClose={() => setDropping(false)}
+          onDone={() => {
+            setDropping(false);
+            onTableChanged();
+          }}
+        />
       )}
       {error && (
         <p className="error small" role="alert">
@@ -1667,17 +1918,21 @@ function SchemaObjectNode({
   session,
   connectionId,
   object,
+  onSchemaChanged,
   onFilterName,
 }: {
   session: string;
   connectionId: string;
   object: SchemaObjectItem;
+  /** After it was dropped: its schema reads its objects again. */
+  onSchemaChanged(): void;
   onFilterName: FilterName;
 }) {
   const { t } = useTranslation("shell");
   const addTab = useApp((s) => s.addTab);
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
+  const [dropping, setDropping] = useState(false);
 
   /** The driver writes the DDL; it opens in a new tab and nothing runs. */
   async function openDefinition() {
@@ -1729,6 +1984,10 @@ function SchemaObjectNode({
         aria-label={t("openObject", { name: object.name })}
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => [{ schema: object.schema, names: [object.name] }], setError)) return;
+          if (isDropKey(e)) {
+            setDropping(true);
+            return;
+          }
           if (e.key === "Enter") {
             e.preventDefault();
             void openDefinition();
@@ -1764,8 +2023,28 @@ function SchemaObjectNode({
             close={() => setMenu(null)}
             onError={setError}
           />
+          <DropMenuItem
+            onClick={() => {
+              setMenu(null);
+              setDropping(true);
+            }}
+          />
           <FilterMenuItems kind="objects" names={[object.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
+      )}
+      {dropping && (
+        <DropDialog
+          session={session}
+          connectionId={connectionId}
+          schema={object.schema}
+          name={object.name}
+          target={{ kind: "schemaObject", object }}
+          onClose={() => setDropping(false)}
+          onDone={() => {
+            setDropping(false);
+            onSchemaChanged();
+          }}
+        />
       )}
       {error && (
         <p className="error small" role="alert">
