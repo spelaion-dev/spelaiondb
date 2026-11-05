@@ -78,6 +78,51 @@ pub fn set_user_vars(
     write_doc(&path, &doc)
 }
 
+/// Sets (or, with `None`, removes) the personal range of local ports for tunnels in
+/// `user.toml` (`[tunnels]`); the rest of the file stays as it was.
+pub fn set_tunnel_ports(user_dir: &Path, range: Option<(u16, u16)>) -> Result<(), ConfigError> {
+    let path = user_dir.join("user.toml");
+    let preferences = crate::model::TunnelPreferences {
+        port_min: range.map(|(min, _)| min),
+        port_max: range.map(|(_, max)| max),
+    };
+    preferences
+        .range()
+        .map_err(|message| ConfigError::new(&path, message))?;
+    let mut doc = if path.is_file() {
+        std::fs::read_to_string(&path)
+            .map_err(|e| ConfigError::new(&path, e.to_string()))?
+            .parse::<DocumentMut>()
+            .map_err(|e| ConfigError::new(&path, e.to_string()))?
+    } else {
+        let mut doc = DocumentMut::new();
+        doc["schema_version"] = toml_edit::value(i64::from(crate::model::SCHEMA_VERSION));
+        doc
+    };
+    match range {
+        None => {
+            doc.as_table_mut().remove("tunnels");
+        }
+        Some((min, max)) => {
+            if !doc.contains_table("tunnels") {
+                doc["tunnels"] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+            let tunnels = doc["tunnels"]
+                .as_table_mut()
+                .ok_or_else(|| ConfigError::new(&path, "[tunnels] is not a table"))?;
+            tunnels["port_min"] = toml_edit::value(i64::from(min));
+            tunnels["port_max"] = toml_edit::value(i64::from(max));
+        }
+    }
+    let edited = doc.to_string();
+    toml::from_str::<crate::model::UserFile>(&edited)
+        .map_err(|e| ConfigError::new(&path, format!("the edited file is not valid: {e}")))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
+    }
+    write_doc(&path, &doc)
+}
+
 pub(crate) fn write_doc(path: &Path, doc: &DocumentMut) -> Result<(), ConfigError> {
     // Write to a temporary file first and then rename: an interruption never leaves a broken file.
     let tmp = path.with_extension("toml.tmp");

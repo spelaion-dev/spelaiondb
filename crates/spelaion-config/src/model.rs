@@ -38,6 +38,10 @@ pub struct ConnectionFile {
     /// Name of a tunnel in `.spelaion/tunnels/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tunnel: Option<String>,
+    /// A fixed port on 127.0.0.1 for this connection's end of its SSH tunnel, so other tools
+    /// can use it too. A free port when absent (from the personal `[tunnels]` range, if set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_port: Option<u16>,
     /// Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):
     /// `port` is then the resource's port and `host` is only the name TLS checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -272,6 +276,40 @@ pub struct UserFile {
     /// Values for `${user.<name>}` in the repository's connections.
     #[serde(default)]
     pub vars: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "TunnelPreferences::is_default")]
+    pub tunnels: TunnelPreferences,
+}
+
+/// Personal settings of every SSH tunnel on this computer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelPreferences {
+    /// Local ports for tunnels are taken from `port_min` to `port_max` (both included), for
+    /// a firewall that only allows some; any free port when absent. Both or neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_min: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_max: Option<u16>,
+}
+
+impl TunnelPreferences {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The range, if it is a valid one.
+    pub fn range(&self) -> Result<Option<(u16, u16)>, String> {
+        match (self.port_min, self.port_max) {
+            (None, None) => Ok(None),
+            (Some(min), Some(max)) if min >= 1 && min <= max => Ok(Some((min, max))),
+            (Some(_), Some(_)) => {
+                Err("[tunnels] port_min must be at least 1 and not above port_max".into())
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                Err("[tunnels] needs both port_min and port_max, or neither".into())
+            }
+        }
+    }
 }
 
 fn current_version() -> u32 {

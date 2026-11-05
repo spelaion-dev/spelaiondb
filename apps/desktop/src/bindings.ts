@@ -220,6 +220,13 @@ export const commands = {
 	 *  the configuration. Only those entries change; the rest of the file stays as it was.
 	 */
 	setUserVars: (values: { [key in string]: string }) => typedError<null, string>(__TAURI_INVOKE("set_user_vars", { values })),
+	/**  The personal range of local ports for SSH tunnels (`[tunnels]` in `user.toml`), if set. */
+	tunnelPorts: () => typedError<TunnelPortsItem | null, string>(__TAURI_INVOKE("tunnel_ports")),
+	/**
+	 *  Sets (or clears, with null) the personal range of local ports for SSH tunnels. It applies
+	 *  to tunnels opened from then on.
+	 */
+	setTunnelPorts: (range: TunnelPortsItem | null) => typedError<null, string>(__TAURI_INVOKE("set_tunnel_ports", { range })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	setHistoryEnabled: (connection: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
@@ -445,6 +452,8 @@ export type ConnectionDraftItem_Deserialize = {
 	tlsCert: string,
 	tlsKey: string,
 	tunnel: string,
+	/**  Fixed local port of the SSH tunnel; null for a free one. */
+	localPort?: number | null,
 	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
 	kubernetes?: KubernetesDraftItem | null,
 	/**  SQLite on a server (with a tunnel): the program there; empty for `sqlite3`. */
@@ -479,6 +488,8 @@ export type ConnectionDraftItem_Serialize = {
 	tlsCert: string,
 	tlsKey: string,
 	tunnel: string,
+	/**  Fixed local port of the SSH tunnel; null for a free one. */
+	localPort: number | null,
 	/**  Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's. */
 	kubernetes: KubernetesDraftItem | null,
 	/**  SQLite on a server (with a tunnel): the program there; empty for `sqlite3`. */
@@ -1181,6 +1192,12 @@ export type TunnelDraftItem_Serialize = {
 export type TunnelItem = {
 	name: string,
 	personal: boolean,
+};
+
+/**  The personal range of local ports for SSH tunnels, both ends included. */
+export type TunnelPortsItem = {
+	min: number,
+	max: number,
 };
 
 /**  Result of testing a tunnel from the editor. */

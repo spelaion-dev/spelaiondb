@@ -43,7 +43,20 @@ pub struct ResolvedConnection {
     /// A SQLite file on the tunnel's last hop (ADR-018): the program that opens it there.
     /// `params.database` is then its path on that machine.
     pub sqlite3: Option<String>,
+    /// Where the SSH tunnel's local end listens for this connection.
+    pub local_port: LocalPort,
     pub mcp: McpConfig,
+}
+
+/// The local port of a tunnel's forward, on 127.0.0.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LocalPort {
+    /// Any free port.
+    Any,
+    /// This one (`local_port`); it fails if it is taken.
+    Fixed(u16),
+    /// A free one in this range, both ends included (the personal `[tunnels]` setting).
+    Range { min: u16, max: u16 },
 }
 
 impl ResolvedConnection {
@@ -321,6 +334,12 @@ impl<'a> Resolver<'a> {
             sqlite3: match &file.sqlite3 {
                 Some(program) => Some(self.expand(&entry.file_path, program)?),
                 None => None,
+            },
+            local_port: match (file.local_port, self.config.user.tunnels.range()) {
+                (Some(port), _) => LocalPort::Fixed(port),
+                (None, Ok(Some((min, max)))) => LocalPort::Range { min, max },
+                // An invalid range was already reported when loading.
+                (None, Ok(None) | Err(_)) => LocalPort::Any,
             },
             mcp: file.mcp.clone(),
         })

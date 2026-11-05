@@ -9,9 +9,10 @@ import { usePreferences, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
 import { useUpdate } from "../update";
+import { call, commands } from "../api";
 
-type Category = "appearance" | "language" | "explorer" | "history" | "updates";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "history", "updates"];
+type Category = "appearance" | "language" | "explorer" | "history" | "network" | "updates";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "history", "network", "updates"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -59,6 +60,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "language" && <LanguageSettings />}
         {category === "explorer" && <ExplorerSettings />}
         {category === "history" && <HistorySettings />}
+        {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}
       </section>
     </div>
@@ -229,6 +231,66 @@ function HistorySettings() {
       <p>{t("history.perConnection")}</p>
       <p className="muted small">{t("history.audit")}</p>
       <button onClick={() => setHistoryOpen(true)}>{t("history.open")}</button>
+    </>
+  );
+}
+
+/** The range of local ports SSH tunnels listen on, for a firewall that only allows some. */
+function NetworkSettings() {
+  const { t } = useTranslation("settings");
+  const [min, setMin] = useState("");
+  const [max, setMax] = useState("");
+  const [status, setStatus] = useState<{ kind: "idle" | "saved" } | { kind: "error"; message: string }>({ kind: "idle" });
+
+  useEffect(() => {
+    call(commands.tunnelPorts())
+      .then((range) => {
+        setMin(range ? String(range.min) : "");
+        setMax(range ? String(range.max) : "");
+      })
+      .catch((e: unknown) => setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) }));
+  }, []);
+
+  async function save(range: { min: number; max: number } | null) {
+    try {
+      await call(commands.setTunnelPorts(range));
+      if (!range) {
+        setMin("");
+        setMax("");
+      }
+      setStatus({ kind: "saved" });
+    } catch (e) {
+      setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  const port = (text: string) => (text.trim() === "" ? null : Math.trunc(Number(text)));
+  const typedMin = port(min);
+  const typedMax = port(max);
+  return (
+    <>
+      <p>{t("network.portsIntro")}</p>
+      <div className="form-pair">
+        <label className="field port">
+          <span>{t("network.portMin")}</span>
+          <input type="number" min={1} max={65535} value={min} onChange={(e) => { setMin(e.target.value); setStatus({ kind: "idle" }); }} />
+        </label>
+        <label className="field port">
+          <span>{t("network.portMax")}</span>
+          <input type="number" min={1} max={65535} value={max} onChange={(e) => { setMax(e.target.value); setStatus({ kind: "idle" }); }} />
+        </label>
+      </div>
+      <div className="form-row">
+        <button disabled={typedMin === null || typedMax === null} onClick={() => typedMin !== null && typedMax !== null && void save({ min: typedMin, max: typedMax })}>
+          {t("network.save")}
+        </button>
+        <button className="ghost" onClick={() => void save(null)}>
+          {t("network.clear")}
+        </button>
+      </div>
+      {status.kind === "saved" && <p className="small" role="status">{t("network.saved")}</p>}
+      {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
+      <p className="muted small">{t("network.portsHint")}</p>
     </>
   );
 }

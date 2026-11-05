@@ -59,6 +59,8 @@ pub struct DbeaverSsh {
     pub keepalive_count: Option<u32>,
     /// Seconds (DBeaver keeps milliseconds).
     pub connect_timeout: Option<u32>,
+    /// A fixed local port for the tunnel; `None` where DBeaver picks a free one.
+    pub local_port: Option<u16>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -276,6 +278,7 @@ fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverSsh> {
         }),
         connect_timeout: seconds(properties.get("sshConnectTimeout"))
             .map(|s| s.min(TunnelFile::MAX_CONNECT_TIMEOUT)),
+        local_port: port(properties.get("localPort")).filter(|p| *p > 0),
     })
 }
 
@@ -368,6 +371,7 @@ pub fn import_plan(
             } else {
                 String::new()
             },
+            local_port: connection.ssh.as_ref().and_then(|ssh| ssh.local_port),
             kubernetes: None,
             sqlite3: String::new(),
             read_only: false,
@@ -409,7 +413,7 @@ mod tests {
                     "handlers": {"ssh_tunnel": {"type": "TUNNEL", "enabled": true,
                       "properties": {"host": "bastion.example.com", "port": 22, "authType": "PASSWORD",
                         "aliveInterval": "29500", "aliveCount": "5",
-                        "sshConnectTimeout": "20000"}}}
+                        "sshConnectTimeout": "20000", "localPort": "15432"}}}
                   }
                 },
                 "mariaDB-2": {
@@ -480,6 +484,7 @@ mod tests {
             (Some(30), Some(5))
         );
         assert_eq!(ssh.connect_timeout, Some(20));
+        assert_eq!(ssh.local_port, Some(15432));
         let maria = by_id("mariaDB-2");
         assert_eq!(
             (maria.engine.clone(), maria.user.as_str()),
@@ -529,6 +534,7 @@ mod tests {
         assert_eq!(tunnel.options.keepalive_interval, Some(30));
         assert_eq!(tunnel.options.keepalive_count, Some(5));
         assert_eq!(tunnel.options.connect_timeout, Some(20));
+        assert_eq!(kept.connection.local_port, Some(15432));
         assert_eq!(secrets[0].as_ref().map(Secret::expose), Some("hop-pass"));
         let asked = import_plan(pg, Engine::Postgres, Source::User, false, "t");
         assert_eq!(asked.connection.password, PasswordChoice::Prompt);

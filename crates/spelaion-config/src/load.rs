@@ -152,7 +152,14 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
     let user_file = user_dir.join("user.toml");
     if user_file.is_file() {
         match parse_file::<UserFile>(&user_file) {
-            Ok(user) => config.user = user,
+            Ok(mut user) => {
+                // A wrong range is reported and ignored: tunnels then take any free port.
+                if let Err(message) = user.tunnels.range() {
+                    config.problems.push(ConfigError::new(&user_file, message));
+                    user.tunnels = Default::default();
+                }
+                config.user = user;
+            }
             Err(e) => config.problems.push(e),
         }
     }
@@ -353,6 +360,20 @@ pub(crate) fn validate_connection(
                     "a local file has no client certificate",
                 ));
             }
+        }
+    }
+    if let Some(port) = file.local_port {
+        if file.tunnel.is_none() || remote_sqlite {
+            return Err(ConfigError::new(
+                path,
+                "local_port is the local end of an SSH tunnel: it needs a tunnel to a database server",
+            ));
+        }
+        if port == 0 {
+            return Err(ConfigError::new(
+                path,
+                "local_port must be from 1 to 65535; leave it out for a free one",
+            ));
         }
     }
     if file.sqlite3.is_some() && !remote_sqlite {

@@ -17,8 +17,8 @@ use spelaion_driver_api::{
 };
 use spelaion_driver_postgres::PostgresDriver;
 use spelaion_ssh::{
-    AuthMethod, HopSpec, HostInfo, Interaction, KnownHosts, NonInteractive, SecretRequest,
-    SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
+    AuthMethod, HopSpec, HostInfo, Interaction, KnownHosts, LocalPort, NonInteractive,
+    SecretRequest, SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
 };
 
 fn bastion() -> Option<(String, u16)> {
@@ -794,4 +794,116 @@ async fn a_server_that_never_answers_times_out_as_configured() {
         other => panic!("expected a timeout at hop 1: {:?}", other.err()),
     }
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+}
+
+/// Three consecutive free local ports, held open until dropped.
+fn free_ports() -> (u16, Vec<std::net::TcpListener>) {
+    for base in (41_000u16..60_000).step_by(37) {
+        let held: Vec<_> = (base..base + 3)
+            .map_while(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok())
+            .collect();
+        if held.len() == 3 {
+            return (base, held);
+        }
+    }
+    panic!("no three consecutive free ports");
+}
+
+#[tokio::test]
+async fn a_fixed_local_port_is_used_shared_and_refused_when_taken() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("fixed-port");
+    let tunnel = Tunnel::connect(&two_hops(&host, port), &known.known(), TestUi::accepting())
+        .await
+        .unwrap();
+    let (base, held) = free_ports();
+    drop(held);
+    let addr = tunnel
+        .forward_on(postgres(), LocalPort::Fixed(base))
+        .await
+        .unwrap();
+    assert_eq!(addr.to_string(), format!("127.0.0.1:{base}"));
+    let conn = pg_through(&tunnel).await;
+    assert_eq!(scalar(&*conn, "select 1").await.unwrap(), "1");
+    // Asking again, for that port or any, shares the forward.
+    assert_eq!(
+        tunnel
+            .forward_on(postgres(), LocalPort::Fixed(base))
+            .await
+            .unwrap(),
+        addr
+    );
+    assert_eq!(tunnel.forward(postgres()).await.unwrap(), addr);
+    // Another fixed port for the same target is a second forward.
+    let second = tunnel
+        .forward_on(postgres(), LocalPort::Fixed(base + 1))
+        .await
+        .unwrap();
+    assert_eq!(second.port(), base + 1);
+
+    // A port another program holds is an error that names it.
+    let taken = std::net::TcpListener::bind(("127.0.0.1", base + 2)).unwrap();
+    let target = Target {
+        host: "bastion2".into(),
+        port: 22,
+    };
+    match tunnel.forward_on(target, LocalPort::Fixed(base + 2)).await {
+        Err(SshError::Other(message)) => {
+            assert!(
+                message.contains(&format!("local port {}", base + 2)),
+                "{message}"
+            );
+        }
+        other => panic!("a taken port must be refused: {other:?}"),
+    }
+    drop(taken);
+    drop(conn);
+    tunnel.close().await;
+    // Closing frees the fixed port, so reconnecting can take it again.
+    let mut again = None;
+    for _ in 0..50 {
+        if let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", base)).await {
+            again = Some(listener);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(again.is_some(), "port {base} was not freed");
+}
+
+#[tokio::test]
+async fn forwards_take_the_first_free_port_of_a_range() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("port-range");
+    let tunnel = Tunnel::connect(&two_hops(&host, port), &known.known(), TestUi::accepting())
+        .await
+        .unwrap();
+    let (base, mut held) = free_ports();
+    // The first port is busy: the next one is taken.
+    held.truncate(1);
+    let range = LocalPort::Range {
+        min: base,
+        max: base + 1,
+    };
+    let addr = tunnel.forward_on(postgres(), range).await.unwrap();
+    assert_eq!(addr.port(), base + 1);
+    let conn = pg_through(&tunnel).await;
+    assert_eq!(scalar(&*conn, "select 1").await.unwrap(), "1");
+    // The range is full now: another target has nowhere to go.
+    let target = Target {
+        host: "bastion2".into(),
+        port: 22,
+    };
+    match tunnel.forward_on(target, range).await {
+        Err(SshError::Other(message)) => {
+            assert!(message.contains("no free local port"), "{message}")
+        }
+        other => panic!("a full range must be refused: {other:?}"),
+    }
+    tunnel.close().await;
+    drop(held);
 }

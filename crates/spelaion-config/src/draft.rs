@@ -121,6 +121,8 @@ pub struct ConnectionDraft {
     pub tls_cert: String,
     pub tls_key: String,
     pub tunnel: String,
+    /// Fixed local port of the SSH tunnel; `None` for a free one.
+    pub local_port: Option<u16>,
     /// Through `kubectl port-forward` instead of a tunnel (ADR-015).
     pub kubernetes: Option<KubernetesDraft>,
     /// SQLite on a server: the program that opens the file there; empty for `sqlite3`.
@@ -360,6 +362,9 @@ impl ConnectionDraft {
             password: password
                 .filter(|_| network)
                 .map(|secret| SecretSpec { secret }),
+            local_port: self
+                .local_port
+                .filter(|_| tunnel.is_some() && !remote_sqlite),
             tunnel,
             kubernetes,
             sqlite3: non_empty(&self.sqlite3).filter(|_| remote_sqlite),
@@ -477,6 +482,7 @@ impl ConnectionDraft {
             tls_cert: file.tls.cert.clone().unwrap_or_default(),
             tls_key: file.tls.key.clone().unwrap_or_default(),
             tunnel: file.tunnel.clone().unwrap_or_default(),
+            local_port: file.local_port,
             sqlite3: file.sqlite3.clone().unwrap_or_default(),
             kubernetes: file.kubernetes.as_ref().map(|k| KubernetesDraft {
                 context: k.context.clone().unwrap_or_default(),
@@ -646,6 +652,13 @@ pub fn update_connection(
     }
     if old.tunnel != new.tunnel {
         put(&mut doc, &["tunnel"], text(&new.tunnel));
+    }
+    if old.local_port != new.local_port {
+        put(
+            &mut doc,
+            &["local_port"],
+            new.local_port.map(|p| toml_edit::Value::from(i64::from(p))),
+        );
     }
     if old.sqlite3 != new.sqlite3 {
         put(&mut doc, &["sqlite3"], text(&new.sqlite3));
