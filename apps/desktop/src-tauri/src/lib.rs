@@ -459,6 +459,36 @@ async fn set_explorer_filter(
         .map_err(|e| e.to_string())
 }
 
+/// "Hide" or "Show only" on one schema, object or column of the explorer: its name, with its
+/// wildcard characters escaped, goes into the connection's filter. Returns the new filter.
+#[tauri::command]
+#[specta::specta]
+async fn filter_explorer_name(
+    connection: String,
+    kind: FilterKindItem,
+    name: String,
+    action: FilterActionItem,
+    state: State<'_, AppState>,
+) -> CmdResult<ExplorerFilterItem> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    let mut filter = state
+        .history
+        .explorer_filter(workspace.clone(), connection.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let pattern = spelaion_driver_api::literal_pattern(&name);
+    match action {
+        FilterActionItem::Hide => filter.hide(kind.into(), &pattern),
+        FilterActionItem::ShowOnly => filter.show_only(kind.into(), &pattern),
+    }
+    state
+        .history
+        .set_explorer_filter(workspace, connection, filter.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(ExplorerFilterItem::from(filter))
+}
+
 /// The scope a connection's personal preferences are kept under (see `history_workspace`).
 async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<String> {
     let id = parse_id(connection);
@@ -2225,6 +2255,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_server_objects,
             get_explorer_filter,
             set_explorer_filter,
+            filter_explorer_name,
             object_definition,
             editable_query_table,
             answer_interaction,

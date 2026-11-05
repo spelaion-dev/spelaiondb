@@ -8,6 +8,8 @@ import {
   commands,
   type ConnectionItem,
   type ExplorerFilter,
+  type FilterActionItem,
+  type FilterKindItem,
   type IndexDetails,
   type NameFilter,
   type ObjectItem,
@@ -121,6 +123,47 @@ function useSortByName() {
   const sortIgnoreCase = usePreferences((s) => s.explorer.sortIgnoreCase);
   return <T,>(items: readonly T[], name: (item: T) => string) =>
     sortByName(items, name, { sortAlphabetically, sortIgnoreCase }, i18n.language);
+}
+
+/** "Hide" or "Show only" one name: it goes into the connection's filter (ADR-025). */
+type FilterName = (kind: FilterKindItem, name: string, action: FilterActionItem) => void;
+
+/** The two menu items DBeaver calls "Hide selected" and "Show only selected". */
+function FilterMenuItems({
+  kind,
+  name,
+  onFilterName,
+  close,
+}: {
+  kind: FilterKindItem;
+  name: string;
+  onFilterName: FilterName;
+  close(): void;
+}) {
+  const { t } = useTranslation("shell");
+  return (
+    <>
+      <hr />
+      <button
+        role="menuitem"
+        onClick={() => {
+          close();
+          onFilterName(kind, name, "hide");
+        }}
+      >
+        {t("hideName", { name })}
+      </button>
+      <button
+        role="menuitem"
+        onClick={() => {
+          close();
+          onFilterName(kind, name, "showOnly");
+        }}
+      >
+        {t("showOnlyName", { name })}
+      </button>
+    </>
+  );
 }
 
 /** The explorer's folders under a schema, in order (ADR-024). */
@@ -495,6 +538,15 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   const [filters, setFilters] = useState<ExplorerFilter | null>(null);
   const [editingFilters, setEditingFilters] = useState<{ filter: ExplorerFilter; kind?: FilterKind } | null>(null);
   const [rowMenu, setRowMenu] = useContextMenu();
+  /** "Hide" / "Show only": the filter changes and the tree is read again. */
+  const filterName: FilterName = (kind, name, action) => {
+    void call(commands.filterExplorerName(connection.id, kind, name, action))
+      .then((next) => {
+        setFilters(next);
+        void refreshAll();
+      })
+      .catch((e: unknown) => setError(errorText(e)));
+  };
   /** Opens the filter dialog with the saved patterns: one kind from a folder, or all. */
   function configureFilter(kind?: FilterKind) {
     setRowMenu(null);
@@ -586,6 +638,7 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       objectFilter={filters?.objects ?? null}
       columnFilter={filters?.columns ?? null}
       onConfigureFilter={configureFilter}
+      onFilterName={filterName}
     />
   ));
   const prod = connection.env?.toLowerCase().startsWith("prod");
@@ -714,6 +767,7 @@ function SchemaNode({
   objectFilter,
   columnFilter,
   onConfigureFilter,
+  onFilterName,
 }: {
   session: string;
   connectionId: string;
@@ -727,6 +781,7 @@ function SchemaNode({
   objectFilter: NameFilter | null;
   columnFilter: NameFilter | null;
   onConfigureFilter(kind: FilterKind): void;
+  onFilterName: FilterName;
 }) {
   const { t, i18n } = useTranslation("shell");
   const [open, setOpen] = useState(false);
@@ -839,6 +894,7 @@ function SchemaNode({
           >
             {t("refreshAllSchemas")}
           </button>
+          <FilterMenuItems kind="schemas" name={schema} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}
       {open && (
@@ -874,6 +930,7 @@ function SchemaNode({
                         generation={childGeneration}
                         columnFilter={columnFilter}
                         onConfigureFilter={onConfigureFilter}
+                        onFilterName={onFilterName}
                       />
                     ))}
                     {rest.map((o) => (
@@ -882,6 +939,7 @@ function SchemaNode({
                         session={session}
                         connectionId={connectionId}
                         object={o}
+                        onFilterName={onFilterName}
                       />
                     ))}
                   </Folder>
@@ -909,6 +967,7 @@ function ObjectNode({
   generation,
   columnFilter,
   onConfigureFilter,
+  onFilterName,
 }: {
   session: string;
   connectionId: string;
@@ -918,6 +977,7 @@ function ObjectNode({
   /** The connection's column patterns (ADR-025). */
   columnFilter: NameFilter | null;
   onConfigureFilter(kind: FilterKind): void;
+  onFilterName: FilterName;
 }) {
   const { t, i18n } = useTranslation("shell");
   const addTab = useApp((s) => s.addTab);
@@ -1062,6 +1122,7 @@ function ObjectNode({
           <button role="menuitem" onClick={refresh}>
             {t("refresh")}
           </button>
+          <FilterMenuItems kind="objects" name={object.name} onFilterName={onFilterName} close={() => setMenu(null)} />
           <hr />
           {templates.map((template) => (
             <button
@@ -1089,16 +1150,12 @@ function ObjectNode({
             onConfigureFilter={() => onConfigureFilter("columns")}
           >
             {details.columns.map((c) => (
-              <div key={c.name} className="row leaf-row" title={c.comment ?? ""}>
-                <span className="label">
-                  {details.primaryKey.includes(c.name) ? "🔑 " : ""}
-                  {c.name}
-                </span>
-                <span className="muted small">
-                  {c.nativeType}
-                  {c.nullable ? "" : " not null"}
-                </span>
-              </div>
+              <ColumnRow
+                key={c.name}
+                column={c}
+                primary={details.primaryKey.includes(c.name)}
+                onFilterName={onFilterName}
+              />
             ))}
           </Folder>
           {details.constraints.length > 0 && (
@@ -1137,6 +1194,45 @@ function ObjectNode({
               ))}
             </Folder>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A column of a table: its menu can hide it, or show only it (ADR-025). */
+function ColumnRow({
+  column,
+  primary,
+  onFilterName,
+}: {
+  column: TableDetails["columns"][number];
+  primary: boolean;
+  onFilterName: FilterName;
+}) {
+  const [menu, setMenu] = useContextMenu();
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        title={column.comment ?? ""}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        <span className="label">
+          {primary ? "🔑 " : ""}
+          {column.name}
+        </span>
+        <span className="muted small">
+          {column.nativeType}
+          {column.nullable ? "" : " not null"}
+        </span>
+      </div>
+      {menu && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <FilterMenuItems kind="columns" name={column.name} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}
     </div>
@@ -1205,10 +1301,12 @@ function SchemaObjectNode({
   session,
   connectionId,
   object,
+  onFilterName,
 }: {
   session: string;
   connectionId: string;
   object: SchemaObjectItem;
+  onFilterName: FilterName;
 }) {
   const { t } = useTranslation("shell");
   const addTab = useApp((s) => s.addTab);
@@ -1276,6 +1374,7 @@ function SchemaObjectNode({
           <button role="menuitem" onClick={() => void openDefinition()}>
             {t("openDefinition")}
           </button>
+          <FilterMenuItems kind="objects" name={object.name} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}
       {error && (

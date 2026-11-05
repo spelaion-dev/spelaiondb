@@ -67,6 +67,8 @@
   "filteredHint": "El filtro de esta conexión oculta algunos esquemas, objetos o columnas (⋯ → Configurar filtros)",
   "configureFilter": "Configurar filtro…",
   "configureSchemaFilter": "Configurar filtro de esquemas…",
+  "hideName": "Ocultar {{name}}",
+  "showOnlyName": "Mostrar solo {{name}}",
   "newQuery": "Nueva consulta",
   "connecting": "Conectando…",
   "quickFilter": "Filtrar el explorador",

@@ -1026,6 +1026,21 @@ try {
   await filterDialog.getByRole("button", { name: "Show everything" }).click();
   await customerNode.waitFor();
   assert.equal(await tablesFolder.locator(".tag").count(), 0);
+  // "Hide" and "Show only" on one object write its name into the same filter.
+  await customerNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Hide customer" }).click();
+  await customerNode.waitFor({ state: "detached" });
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Show only orders" }).click();
+  await page.getByRole("button", { name: "Expand or collapse product", exact: true }).waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "1");
+  await tablesFolder.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Configure filter…" }).click();
+  assert.equal(await filterDialog.locator('input[name="objects.include"]').inputValue(), "orders");
+  assert.equal(await filterDialog.locator('input[name="objects.exclude"]').inputValue(), "customer");
+  await filterDialog.getByRole("button", { name: "Show everything" }).click();
+  await customerNode.waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');

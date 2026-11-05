@@ -67,6 +67,8 @@
   "filteredHint": "Some schemas, objects or columns are hidden by this connection's filter (⋯ → Configure filters)",
   "configureFilter": "Configure filter…",
   "configureSchemaFilter": "Configure schema filter…",
+  "hideName": "Hide {{name}}",
+  "showOnlyName": "Show only {{name}}",
   "newQuery": "New query",
   "connecting": "Connecting…",
   "quickFilter": "Filter the explorer",

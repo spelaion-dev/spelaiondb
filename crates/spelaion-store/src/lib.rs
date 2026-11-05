@@ -242,6 +242,38 @@ impl ExplorerFilter {
     pub fn is_empty(&self) -> bool {
         self.lists().iter().all(|list| list.is_empty())
     }
+
+    fn lists_of(&mut self, kind: FilterKind) -> (&mut Vec<String>, &mut Vec<String>) {
+        match kind {
+            FilterKind::Schemas => (&mut self.schema_include, &mut self.schema_exclude),
+            FilterKind::Objects => (&mut self.object_include, &mut self.object_exclude),
+            FilterKind::Columns => (&mut self.column_include, &mut self.column_exclude),
+        }
+    }
+
+    /// "Hide": adds a pattern to the excluded ones of a kind.
+    pub fn hide(&mut self, kind: FilterKind, pattern: &str) {
+        let (_, exclude) = self.lists_of(kind);
+        if !exclude.iter().any(|p| p == pattern) {
+            exclude.push(pattern.to_string());
+        }
+    }
+
+    /// "Show only": the pattern becomes the only included one of a kind, and stops being
+    /// excluded.
+    pub fn show_only(&mut self, kind: FilterKind, pattern: &str) {
+        let (include, exclude) = self.lists_of(kind);
+        *include = vec![pattern.to_string()];
+        exclude.retain(|p| p != pattern);
+    }
+}
+
+/// The three kinds of names an explorer filter has patterns for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterKind {
+    Schemas,
+    Objects,
+    Columns,
 }
 
 /// Patterns are kept one per line: blank ones are dropped and none may contain a line break.
@@ -1253,6 +1285,26 @@ mod tests {
             .set_explorer_filter("/repo", "shop", &ExplorerFilter::default())
             .unwrap();
         assert!(store.explorer_filter("/repo", "shop").unwrap().is_empty());
+    }
+
+    #[test]
+    fn hide_and_show_only_edit_one_kind() {
+        let mut filter = ExplorerFilter {
+            object_include: vec!["a*".into(), "b*".into()],
+            object_exclude: vec!["orders".into()],
+            ..ExplorerFilter::default()
+        };
+        filter.hide(FilterKind::Objects, "audit");
+        filter.hide(FilterKind::Objects, "audit");
+        assert_eq!(filter.object_exclude, ["orders", "audit"]);
+        filter.show_only(FilterKind::Objects, "orders");
+        assert_eq!(filter.object_include, ["orders"]);
+        assert_eq!(filter.object_exclude, ["audit"]);
+        filter.hide(FilterKind::Columns, "password");
+        filter.show_only(FilterKind::Schemas, "public");
+        assert_eq!(filter.column_exclude, ["password"]);
+        assert_eq!(filter.schema_include, ["public"]);
+        assert!(filter.schema_exclude.is_empty() && filter.column_include.is_empty());
     }
 
     #[test]

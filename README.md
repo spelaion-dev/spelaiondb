@@ -198,7 +198,8 @@ objects such as **Tables**, or a table's **Columns** (**Configure filter…**), 
 connection's "⋯" menu (**Configure filters…** for all three). Include and exclude patterns
 are separated by commas: `*` is any run of characters, `?` one character, `\` escapes the
 next one, and case is ignored. A filtered folder says **filtered**; **Show everything**
-removes its filter. Filters are personal: they are kept on this computer (not in the
+removes its filter. The right-click menu of a schema, an object or a column also has **Hide**
+(its name joins the excluded ones) and **Show only** (it becomes the only included one). Filters are personal: they are kept on this computer (not in the
 connection's file) and change only what the explorer shows, not autocompletion (ADR-025).
 The explorer keeps what it has read until you refresh it: **F5** on a schema or table (or
 **Refresh schema** and **Refresh** in their right-click menus) reads it again, and **Refresh

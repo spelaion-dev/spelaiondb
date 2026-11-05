@@ -219,6 +219,11 @@ export const commands = {
 	/**  A connection's explorer filter (ADR-025), personal and per workspace. */
 	getExplorerFilter: (connection: string) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
 	setExplorerFilter: (connection: string, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
+	/**
+	 *  "Hide" or "Show only" on one schema, object or column of the explorer: its name, with its
+	 *  wildcard characters escaped, goes into the connection's filter. Returns the new filter.
+	 */
+	filterExplorerName: (connection: string, kind: FilterKindItem, name: string, action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, name, action })),
 	/**  The DDL of an object, to open in a new tab (nothing runs). */
 	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
@@ -590,6 +595,11 @@ export type FieldChangeItem_Serialize = {
 	before: string | null,
 	after: string | null,
 };
+
+/**  What "Hide" and "Show only" in the explorer do with one name. */
+export type FilterActionItem = "hide" | "showOnly";
+
+export type FilterKindItem = "schemas" | "objects" | "columns";
 
 /**  A column filter operator (see `spelaion_core::FilterOp`). */
 export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "isNull" | "isNotNull";

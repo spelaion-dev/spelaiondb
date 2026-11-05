@@ -26,6 +26,32 @@ impl From<NameFilterItem> for spelaion_driver_api::NameFilter {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterKindItem {
+    Schemas,
+    Objects,
+    Columns,
+}
+
+impl From<FilterKindItem> for spelaion_core::FilterKind {
+    fn from(kind: FilterKindItem) -> Self {
+        match kind {
+            FilterKindItem::Schemas => Self::Schemas,
+            FilterKindItem::Objects => Self::Objects,
+            FilterKindItem::Columns => Self::Columns,
+        }
+    }
+}
+
+/// What "Hide" and "Show only" in the explorer do with one name.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterActionItem {
+    Hide,
+    ShowOnly,
+}
+
 /// A connection's explorer filter: personal, per workspace and connection (ADR-025).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

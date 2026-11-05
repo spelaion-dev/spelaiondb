@@ -23,6 +23,8 @@ import {
   type ExplorerPreferencesItem,
   type ExplorerFilterItem,
   type NameFilterItem,
+  type FilterKindItem,
+  type FilterActionItem,
   type SchemaObjectItem_Serialize,
   type SchemaObjectKindItem,
   type ServerObjectItem_Serialize,
@@ -70,6 +72,7 @@ export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
 export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
+export type { FilterActionItem, FilterKindItem };
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
 export type { SchemaObjectKindItem, ServerObjectKindItem };
