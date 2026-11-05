@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   call,
   commands,
+  type BookmarkItem,
   type ConnectionItem,
   type CreateKindItem,
   type ExplorerFilter,
@@ -40,6 +41,7 @@ import { ConnectionMenu } from "./ConnectionMenu";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
+import { openFound } from "./OpenObjectDialog";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -360,6 +362,171 @@ function useRevealedRow(matches: (reveal: ExplorerReveal) => boolean) {
     // Once per request.
   }, [reveal?.nonce, hit]);
   return { row, revealed: revealed ? " revealed" : "" };
+}
+
+/** The bookmarks are read again (after a change, or another workspace). */
+async function reloadBookmarks() {
+  useApp.getState().setBookmarks(await call(commands.listBookmarks()));
+}
+
+const sameBookmark = (a: BookmarkItem, b: BookmarkItem) =>
+  a.connection === b.connection && a.schema === b.schema && a.name === b.name && a.kind === b.kind && a.detail === b.detail;
+
+/** Whether an object is bookmarked (ADR-026). */
+function useBookmarked(bookmark: BookmarkItem): boolean {
+  return useApp((s) => s.bookmarks.some((b) => sameBookmark(b, bookmark)));
+}
+
+/** "Add bookmark" or "Remove bookmark" in an object's menu. */
+function BookmarkMenuItem({ bookmark, close, onError }: { bookmark: BookmarkItem; close(): void; onError(message: string): void }) {
+  const { t } = useTranslation("shell");
+  const bookmarked = useBookmarked(bookmark);
+  return (
+    <button
+      role="menuitem"
+      onClick={() => {
+        close();
+        call(bookmarked ? commands.removeBookmark(bookmark) : commands.addBookmark(bookmark))
+          .then(reloadBookmarks)
+          .catch((e: unknown) => onError(errorText(e)));
+      }}
+    >
+      {t(bookmarked ? "removeBookmark" : "addBookmark")}
+    </button>
+  );
+}
+
+/** A star after a bookmarked object's name. */
+function BookmarkStar({ bookmark }: { bookmark: BookmarkItem }) {
+  const { t } = useTranslation("shell");
+  return useBookmarked(bookmark) ? (
+    <span className="bookmark-star" title={t("bookmarked")} aria-label={t("bookmarked")}>
+      ★
+    </span>
+  ) : null;
+}
+
+const RELATION_KINDS = ["table", "partitioned_table", "view", "materialized_view", "foreign_table"];
+
+/** Shows a bookmark's object in the tree, connecting first if needed: the user asked. */
+function showBookmark(bookmark: BookmarkItem) {
+  useApp.getState().revealInExplorer({
+    connectionId: bookmark.connection,
+    schema: bookmark.schema,
+    name: bookmark.kind === "schema" ? undefined : bookmark.name,
+    connect: true,
+  });
+}
+
+/** Opens a bookmark's object (a table's rows, another object's DDL); a schema, or an object of
+ *  a connection not connected in the explorer yet, is shown in the tree instead. */
+async function openBookmark(bookmark: BookmarkItem) {
+  if (bookmark.kind === "schema" || !useApp.getState().explorerConnected.includes(bookmark.connection)) {
+    showBookmark(bookmark);
+    return;
+  }
+  const { schema, name, kind } = bookmark;
+  await openFound(
+    bookmark.connection,
+    RELATION_KINDS.includes(kind)
+      ? { kind: "relation", object: { schema, name, kind, estimatedRows: null, comment: null } }
+      : {
+          kind: "schemaObject",
+          object: { schema, name, kind: kind as SchemaObjectKindItem, detail: bookmark.detail || null, comment: null },
+        },
+  );
+}
+
+/** The bookmarks, above the connections: a click shows the object, a double-click opens it. */
+function BookmarksSection() {
+  const { t } = useTranslation("shell");
+  const bookmarks = useApp((s) => s.bookmarks);
+  if (bookmarks.length === 0) return null;
+  return (
+    <div className="bookmarks">
+      <Folder label={t("bookmarks")} count={bookmarks.length} initiallyOpen>
+        {bookmarks.map((b) => (
+          <BookmarkRow key={`${b.connection}|${b.schema}|${b.name}|${b.kind}|${b.detail}`} bookmark={b} />
+        ))}
+      </Folder>
+    </div>
+  );
+}
+
+function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
+  const { t } = useTranslation("shell");
+  const connectionName = useApp((s) => s.connections.find((c) => c.id === bookmark.connection)?.name ?? bookmark.connection);
+  const [menu, setMenu] = useContextMenu();
+  const [error, setError] = useState<string | null>(null);
+  const label = bookmark.kind === "schema" ? bookmark.schema : bookmark.name;
+  const where = bookmark.kind === "schema" ? connectionName : `${connectionName} · ${bookmark.schema}`;
+  const open = () => {
+    setMenu(null);
+    setError(null);
+    openBookmark(bookmark).catch((e: unknown) => setError(errorText(e)));
+  };
+  const remove = () => {
+    setMenu(null);
+    call(commands.removeBookmark(bookmark))
+      .then(reloadBookmarks)
+      .catch((e: unknown) => setError(errorText(e)));
+  };
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        role="button"
+        tabIndex={0}
+        aria-label={t("bookmarkOpen", { name: label })}
+        title={t("bookmarkHint")}
+        onClick={(e) => {
+          if (e.detail === 1) showBookmark(bookmark);
+        }}
+        onDoubleClick={open}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            open();
+          } else if (isDropKey(e)) remove();
+        }}
+      >
+        <span className="bookmark-star" aria-hidden="true">
+          ★
+        </span>
+        <span className="label">{label}</span>
+        <span className="muted small">{where}</span>
+      </div>
+      {menu && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <button role="menuitem" onClick={open}>
+            {t("bookmarkOpenMenu")}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              showBookmark(bookmark);
+            }}
+          >
+            {t("showInExplorer")}
+          </button>
+          <hr />
+          <button role="menuitem" title="Delete" onClick={remove}>
+            {t("removeBookmark")}
+          </button>
+        </div>
+      )}
+      {error && (
+        <p className="error small" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** F2 renames the focused object, as in DBeaver. */
@@ -755,6 +922,10 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     groups.set(key, [...(groups.get(key) ?? []), c]);
   }
 
+  useEffect(() => {
+    void reloadBookmarks().catch(() => undefined);
+  }, [workspace?.workspace, connections]);
+
   const folderName = workspace?.workspace?.split(/[\\/]/).filter(Boolean).pop();
   return (
     <aside id="connections-sidebar" className="sidebar" hidden={hidden}>
@@ -864,6 +1035,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         </div>
       )}
       <div className="tree">
+        <BookmarksSection />
         {connections.length > 0 && filterText !== "" && !connections.some(shown) && (
           <div className="empty small">{t("quickFilterNothing")}</div>
         )}
@@ -954,11 +1126,14 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   // Asked to show something here: expand if connected in the explorer (connecting could ask
   // for a password), else only show the connection.
   const { row: connectionRow, revealed: connectionRevealed } = useRevealedRow(
-    (r) => r.connectionId === connection.id && (schemas === null || r.schema === undefined),
+    (r) => r.connectionId === connection.id && (schemas === null ? !r.connect : r.schema === undefined),
   );
   const reveal = useApp((s) => s.explorerReveal);
   useEffect(() => {
-    if (reveal?.connectionId === connection.id && schemas !== null) setOpen(true);
+    if (reveal?.connectionId !== connection.id) return;
+    if (schemas !== null) setOpen(true);
+    // A bookmark was opened: connecting is what the user asked for.
+    else if (reveal.connect) void expand();
   }, [reveal, connection.id, schemas]);
   useEffect(
     () => () => {
@@ -970,8 +1145,13 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
 
   async function toggle() {
     if (open) return setOpen(false);
+    await expand();
+  }
+
+  /** Opens the connection in the tree, connecting first if it is not yet. */
+  async function expand() {
     setOpen(true);
-    if (schemas) return;
+    if (schemas || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -1353,6 +1533,7 @@ function SchemaNode({
       >
         <span className="twisty">{open ? "▾" : "▸"}</span>
         <span className="label">{schema}</span>
+        <BookmarkStar bookmark={{ connection: connectionId, schema, name: "", kind: "schema", detail: "" }} />
         {objects && (
           <span className="muted small">
             {(objects.length + others.length).toLocaleString(i18n.language)}
@@ -1364,6 +1545,11 @@ function SchemaNode({
           <CopyMenuItems
             session={session}
             paths={[{ schema: "", names: [schema] }]}
+            close={() => setMenu(null)}
+            onError={setError}
+          />
+          <BookmarkMenuItem
+            bookmark={{ connection: connectionId, schema, name: "", kind: "schema", detail: "" }}
             close={() => setMenu(null)}
             onError={setError}
           />
@@ -1668,6 +1854,7 @@ function ObjectNode({
   }, [menu, view, session, tableMenu]);
   // Until the engine's list arrives, only what every engine has.
   const templates: SqlTemplateItem[] = view ? ["select"] : (tableMenu ?? ["select", "insert", "update", "delete"]);
+  const bookmark: BookmarkItem = { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind, detail: "" };
   /** What "Copy" takes: every table chosen with Ctrl+click, or this one. */
   const copyPaths: ObjectPathItem[] = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, names: [o.name] }));
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
@@ -1726,6 +1913,7 @@ function ObjectNode({
           {KIND_BADGES[object.kind] ?? "T"}
         </span>
         <span className="label">{object.name}</span>
+        <BookmarkStar bookmark={bookmark} />
         {count === "counting" ? (
           <span className="muted small">{t("sql.counting")}</span>
         ) : count != null ? (
@@ -1760,6 +1948,7 @@ function ObjectNode({
           </button>
           <hr />
           <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
+          <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
           {canRename && (
             <button
               role="menuitem"
@@ -2206,6 +2395,13 @@ function SchemaObjectNode({
   const { row, revealed } = useRevealedRow(
     (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
   );
+  const bookmark: BookmarkItem = {
+    connection: connectionId,
+    schema: object.schema,
+    name: object.name,
+    kind: object.kind,
+    detail: object.detail ?? "",
+  };
 
   /** The driver writes the DDL; it opens in a new tab and nothing runs. */
   async function openDefinition() {
@@ -2274,6 +2470,7 @@ function SchemaObjectNode({
             <span className="muted">({object.detail})</span>
           )}
         </span>
+        <BookmarkStar bookmark={bookmark} />
         {detail && <span className="muted small">{detail}</span>}
       </div>
       {menu && (
@@ -2297,6 +2494,7 @@ function SchemaObjectNode({
             close={() => setMenu(null)}
             onError={setError}
           />
+          <BookmarkMenuItem bookmark={bookmark} close={() => setMenu(null)} onError={setError} />
           <DropMenuItem
             onClick={() => {
               setMenu(null);

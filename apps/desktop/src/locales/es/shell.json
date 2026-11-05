@@ -109,7 +109,8 @@
     "domain": "Dominio",
     "type": "Tipo de datos",
     "event": "Evento",
-    "synonym": "Sinónimo"
+    "synonym": "Sinónimo",
+    "schema": "Esquema"
   },
   "folders": {
     "tables": "Tablas",
@@ -268,5 +269,13 @@
   "setActiveSchema": "Usar como esquema del editor",
   "activeSchemaHint": "Para la pestaña de consulta activa, cuando esté conectada a esta conexión",
   "linkWithEditor": "Enlazar con el editor",
-  "linkWithEditorHint": "Enlazar con el editor: el árbol muestra la conexión, el esquema y la tabla de la pestaña activa"
+  "linkWithEditorHint": "Enlazar con el editor: el árbol muestra la conexión, el esquema y la tabla de la pestaña activa",
+  "addBookmark": "Añadir marcador",
+  "removeBookmark": "Quitar marcador",
+  "bookmarks": "Marcadores",
+  "bookmarked": "En marcadores",
+  "bookmarkOpen": "Marcador {{name}}: abrirlo",
+  "bookmarkOpenMenu": "Abrir",
+  "bookmarkHint": "Clic para mostrarlo en el explorador, doble clic para abrirlo",
+  "showInExplorer": "Mostrar en el explorador"
 }

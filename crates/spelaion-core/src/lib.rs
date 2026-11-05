@@ -52,7 +52,7 @@ pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{CoreEvent, Session, StatementError};
 pub use sort::{SortKey, ViewError};
-pub use spelaion_store::{ExplorerFilter, ExplorerPreferences, FilterKind};
+pub use spelaion_store::{Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind};
 pub use spelaion_store::{HistoryEntry, Snippet};
 pub use table_data::{
     MAX_PAGE_ROWS, PageError, TablePage, count_table_rows, table_count_sql, table_page_sql,

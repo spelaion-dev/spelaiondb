@@ -109,7 +109,8 @@
     "domain": "Domain",
     "type": "Data type",
     "event": "Event",
-    "synonym": "Synonym"
+    "synonym": "Synonym",
+    "schema": "Schema"
   },
   "folders": {
     "tables": "Tables",
@@ -268,5 +269,13 @@
   "setActiveSchema": "Set as the editor's schema",
   "activeSchemaHint": "For the active query tab, once it is connected to this connection",
   "linkWithEditor": "Link with editor",
-  "linkWithEditorHint": "Link with editor: the tree shows the active tab's connection, schema and table"
+  "linkWithEditorHint": "Link with editor: the tree shows the active tab's connection, schema and table",
+  "addBookmark": "Add bookmark",
+  "removeBookmark": "Remove bookmark",
+  "bookmarks": "Bookmarks",
+  "bookmarked": "Bookmarked",
+  "bookmarkOpen": "Bookmark {{name}}: open it",
+  "bookmarkOpenMenu": "Open",
+  "bookmarkHint": "Click to show it in the explorer, double-click to open it",
+  "showInExplorer": "Show in explorer"
 }
