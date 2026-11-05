@@ -1,0 +1,30 @@
+# A pull request that changes one of these files needs the approval of one of its owners, on
+# top of green CI (see "Branches" in AGENTS.md). The author cannot approve their own pull
+# request, so a change by one owner is approved by the other. These are the security barriers,
+# what decides which code runs and how the app updates itself.
+
+# Read-only mode, agents' writes and the confirmations (ADR-008, ADR-019, ADR-020).
+/crates/spelaion-core/src/classify.rs           @petilolz @frglez
+/crates/spelaion-core/src/readonly.rs           @petilolz @frglez
+/crates/spelaion-core/src/write.rs              @petilolz @frglez
+/crates/spelaion-core/src/guard.rs              @petilolz @frglez
+/crates/spelaion-mcp/                           @petilolz @frglez
+
+# Secrets, repository trust and SSH host keys (ADR-009, ADR-022, ADR-007).
+/crates/spelaion-config/src/secrets.rs          @petilolz @frglez
+/crates/spelaion-config/src/trust.rs            @petilolz @frglez
+/crates/spelaion-config/src/resolve.rs          @petilolz @frglez
+/crates/spelaion-ssh/src/hostkeys.rs            @petilolz @frglez
+/crates/spelaion-ssh/src/auth.rs                @petilolz @frglez
+
+# Patched TLS libraries and dependency rules.
+/vendor/                                        @petilolz @frglez
+/deny.toml                                      @petilolz @frglez
+
+# Automatic updates and their signing (ADR-021).
+/apps/desktop/src-tauri/src/update.rs           @petilolz @frglez
+/apps/desktop/src-tauri/tauri.release.conf.json @petilolz @frglez
+
+# CI is the reviewer: weakening it, or this file, needs a person.
+/.github/workflows/                             @petilolz @frglez
+/.github/CODEOWNERS                             @petilolz @frglez
