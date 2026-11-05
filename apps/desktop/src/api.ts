@@ -19,6 +19,8 @@ import {
   type FieldChangeItem,
   type InteractionKind,
   type HistoryItem_Serialize,
+  type ObjectActionsItem,
+  type ObjectChangeItem,
   type ObjectItem_Serialize,
   type ObjectPathItem,
   type ExplorerPreferencesItem,
@@ -73,7 +75,7 @@ export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
 export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
-export type { FilterActionItem, FilterKindItem, ObjectPathItem };
+export type { FilterActionItem, FilterKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem };
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
 export type { SchemaObjectKindItem, ServerObjectKindItem };

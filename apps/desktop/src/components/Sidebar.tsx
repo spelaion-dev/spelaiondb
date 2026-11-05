@@ -12,6 +12,7 @@ import {
   type FilterKindItem,
   type IndexDetails,
   type NameFilter,
+  type ObjectActionsItem,
   type ObjectItem,
   type ObjectPathItem,
   type SchemaItem,
@@ -34,6 +35,7 @@ import { useApp, useDialogs } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
+import { ObjectChangeDialog } from "./ObjectChangeDialog";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -162,6 +164,35 @@ function templatesOf(session: string): Promise<SqlTemplateItem[]> {
 function forgetTemplates(session: string) {
   tableTemplates.delete(session);
   knownTemplates.delete(session);
+  objectActions.delete(session);
+}
+
+/** What the core lets the explorer do on a session's engine (ADR-026), asked once per session. */
+const objectActions = new Map<string, ObjectActionsItem>();
+function useObjectActions(session: string): ObjectActionsItem | undefined {
+  const [actions, setActions] = useState(() => objectActions.get(session));
+  useEffect(() => {
+    if (actions) return;
+    let current = true;
+    void call(commands.objectActions(session))
+      .then((answer) => {
+        objectActions.set(session, answer);
+        if (current) setActions(answer);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [session, actions]);
+  return actions;
+}
+
+/** F2 renames the focused object, as in DBeaver. */
+function isRenameKey(e: React.KeyboardEvent): boolean {
+  if (e.key !== "F2" || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
 }
 
 /**
@@ -1070,6 +1101,7 @@ function SchemaNode({
                         session={session}
                         connectionId={connectionId}
                         object={o}
+                        onSchemaChanged={refresh}
                         generation={childGeneration}
                         columnFilter={columnFilter}
                         onConfigureFilter={onConfigureFilter}
@@ -1107,6 +1139,7 @@ function ObjectNode({
   session,
   connectionId,
   object,
+  onSchemaChanged,
   generation,
   columnFilter,
   onConfigureFilter,
@@ -1115,6 +1148,8 @@ function ObjectNode({
   session: string;
   connectionId: string;
   object: ObjectItem;
+  /** After it was renamed or dropped: its schema reads its objects again. */
+  onSchemaChanged(): void;
   /** Changes when its schema (or the whole connection) is refreshed. */
   generation: string;
   /** The connection's column patterns (ADR-025). */
@@ -1131,6 +1166,8 @@ function ObjectNode({
   /** Exact count asked from the menu ("counting" while it runs). */
   const [count, setCount] = useState<number | "counting" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const actions = useObjectActions(session);
 
   async function loadDetails() {
     setDetails(
@@ -1227,6 +1264,7 @@ function ObjectNode({
     }
   }
   const view = object.kind.includes("view");
+  const canRename = !view || actions?.renameViews === true;
   const [tableMenu, setTableMenu] = useState<SqlTemplateItem[] | undefined>(() => knownTemplates.get(session));
   useEffect(() => {
     if (!menu || view || tableMenu) return;
@@ -1277,6 +1315,10 @@ function ObjectNode({
         aria-description={countDescription}
         onKeyDown={(e) => {
           if (handleCopyKey(e, session, () => copyPaths, setError)) return;
+          if (isRenameKey(e)) {
+            if (canRename) setRenaming(true);
+            return;
+          }
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             void toggle();
@@ -1325,6 +1367,18 @@ function ObjectNode({
           </button>
           <hr />
           <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
+          {canRename && (
+            <button
+              role="menuitem"
+              title="F2"
+              onClick={() => {
+                setMenu(null);
+                setRenaming(true);
+              }}
+            >
+              {t("objectChange.renameMenu")}
+            </button>
+          )}
           <FilterMenuItems
             kind="objects"
             names={chosen ? selection.map((o) => o.name) : [object.name]}
@@ -1361,6 +1415,26 @@ function ObjectNode({
           {error}
         </p>
       )}
+      {renaming && (
+        <ObjectChangeDialog
+          session={session}
+          connectionId={connectionId}
+          schema={object.schema}
+          title={t("objectChange.renameTitle", { name: object.name })}
+          confirmLabel={t("objectChange.rename")}
+          rename={{ current: object.name }}
+          change={({ newName }) => ({
+            action: "rename",
+            target: { kind: "relation", schema: object.schema, name: object.name, relation: object.kind },
+            newName,
+          })}
+          onClose={() => setRenaming(false)}
+          onDone={() => {
+            setRenaming(false);
+            onSchemaChanged();
+          }}
+        />
+      )}
       {open && details && (
         <div className="children">
           <Folder
@@ -1374,8 +1448,10 @@ function ObjectNode({
               <ColumnRow
                 key={c.name}
                 session={session}
+                connectionId={connectionId}
                 schema={object.schema}
                 table={object.name}
+                onTableChanged={refresh}
                 column={c}
                 primary={details.primaryKey.includes(c.name)}
                 onFilterName={onFilterName}
@@ -1427,21 +1503,28 @@ function ObjectNode({
 /** A column of a table: its menu can hide it, or show only it (ADR-025). */
 function ColumnRow({
   session,
+  connectionId,
   schema,
   table,
+  onTableChanged,
   column,
   primary,
   onFilterName,
 }: {
   session: string;
+  connectionId: string;
   schema: string;
   table: string;
+  /** After a column was renamed or dropped: the table reads its columns again. */
+  onTableChanged(): void;
   column: TableDetails["columns"][number];
   primary: boolean;
   onFilterName: FilterName;
 }) {
+  const { t } = useTranslation("shell");
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
   const paths = [{ schema, names: [table, column.name] }];
   return (
     <div className="node">
@@ -1449,7 +1532,10 @@ function ColumnRow({
         className="row leaf-row"
         title={column.comment ?? ""}
         tabIndex={0}
-        onKeyDown={(e) => void handleCopyKey(e, session, () => paths, setError)}
+        onKeyDown={(e) => {
+          if (handleCopyKey(e, session, () => paths, setError)) return;
+          if (isRenameKey(e)) setRenaming(true);
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
@@ -1467,8 +1553,38 @@ function ColumnRow({
       {menu && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
           <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
+          <button
+            role="menuitem"
+            title="F2"
+            onClick={() => {
+              setMenu(null);
+              setRenaming(true);
+            }}
+          >
+            {t("objectChange.renameMenu")}
+          </button>
           <FilterMenuItems kind="columns" names={[column.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
+      )}
+      {renaming && (
+        <ObjectChangeDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          title={t("objectChange.renameColumnTitle", { name: column.name, table })}
+          confirmLabel={t("objectChange.rename")}
+          rename={{ current: column.name }}
+          change={({ newName }) => ({
+            action: "rename",
+            target: { kind: "column", schema, table, name: column.name },
+            newName,
+          })}
+          onClose={() => setRenaming(false)}
+          onDone={() => {
+            setRenaming(false);
+            onTableChanged();
+          }}
+        />
       )}
       {error && (
         <p className="error small" role="alert">

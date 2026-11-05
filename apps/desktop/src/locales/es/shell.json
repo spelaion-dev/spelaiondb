@@ -213,5 +213,18 @@
   "copyName": "Copiar nombre",
   "copyNames": "Copiar {{count}} nombres",
   "copyQualifiedName": "Copiar nombre cualificado",
-  "copyQualifiedNames": "Copiar {{count}} nombres cualificados"
+  "copyQualifiedNames": "Copiar {{count}} nombres cualificados",
+  "objectChange": {
+    "renameMenu": "Renombrar…",
+    "renameTitle": "Renombrar {{name}}",
+    "renameColumnTitle": "Renombrar la columna {{name}} de {{table}}",
+    "rename": "Renombrar",
+    "newName": "Nombre nuevo",
+    "cascade": "En cascada: borrar también lo que depende de ello",
+    "sql": "SQL que se ejecutará",
+    "openInEditor": "Abrir en el editor",
+    "running": "Ejecutando…",
+    "production": "Es una conexión de producción.",
+    "readOnly": "La conexión es de solo lectura: el SQL solo puede abrirse en el editor."
+  }
 }

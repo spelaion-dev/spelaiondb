@@ -1059,6 +1059,45 @@ try {
   await probeNode.waitFor({ state: "detached" });
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   assert.equal(await tablesFolder.getAttribute("aria-expanded"), "true");
+  // Rename (ADR-026): the dialog shows the core's SQL, and it runs only from there.
+  await replaceQuery(panel, "create table rename_probe (id integer, a integer);\nselect 1 as created union all select 2 union all select 3;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+  await mainSchema.focus();
+  await page.keyboard.press("F5");
+  const renameProbe = page.getByRole("button", { name: "Expand or collapse rename_probe", exact: true });
+  await renameProbe.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  const renameDialog = page.getByRole("dialog", { name: "Rename rename_probe" });
+  await renameDialog.locator('input[name="newName"]').fill("renamed_probe");
+  const changeSql = renameDialog.getByLabel("SQL that will run");
+  await changeSql.filter({ hasText: "ALTER TABLE rename_probe RENAME TO renamed_probe;" }).waitFor();
+  await shot("05h-rename-dialog");
+  await renameDialog.getByRole("button", { name: "Rename", exact: true }).click();
+  await renameDialog.waitFor({ state: "detached" });
+  const renamedProbe = page.getByRole("button", { name: "Expand or collapse renamed_probe", exact: true });
+  await renamedProbe.waitFor();
+  assert.equal(await renameProbe.count(), 0);
+  // F2 on a column renames it; its table reads its columns again.
+  await renamedProbe.click();
+  const probeColumns = renamedProbe.locator("xpath=..");
+  await probeColumns.locator(".leaf-row", { hasText: /^a/ }).focus();
+  await page.keyboard.press("F2");
+  const columnDialog = page.getByRole("dialog", { name: "Rename column a of renamed_probe" });
+  await columnDialog.locator('input[name="newName"]').fill("amount");
+  await columnDialog.getByLabel("SQL that will run").filter({ hasText: "ALTER TABLE renamed_probe RENAME COLUMN a TO amount;" }).waitFor();
+  await page.keyboard.press("Enter");
+  await columnDialog.waitFor({ state: "detached" });
+  await probeColumns.locator(".leaf-row", { hasText: "amount" }).waitFor();
+  await renamedProbe.click();
+  await replaceQuery(panel, "drop table renamed_probe;\nselect 1 as dropped union all select 2 union all select 3 union all select 4;");
+  await run(panel);
+  await page.getByRole("button", { name: "Run anyway" }).click();
+  await panel.locator(".statusline", { hasText: "4 rows" }).waitFor();
+  await mainSchema.focus();
+  await page.keyboard.press("F5");
+  await renamedProbe.waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   // Quick filter (Ctrl+Shift+F): only what matches by name, plus the expanded connections.
   await page.keyboard.press("Control+Shift+F");
   const quickFilter = page.getByRole("searchbox", { name: "Filter the explorer" });
