@@ -1011,3 +1011,42 @@ async fn ddl_round_trip(
     assert_eq!(after.object.kind, before.object.kind, "{ddl}");
     ddl
 }
+
+#[tokio::test]
+async fn procedure_calls_pass_inputs_and_collect_outputs() {
+    for server in servers() {
+        let conn = server.connect().await;
+        for sql in [
+            "drop procedure if exists call_calc",
+            "create procedure call_calc(in a int, inout b int, out c varchar(10)) \
+             begin set b = b + a; set c = concat('x', a); end",
+        ] {
+            run(&*conn, sql)
+                .await
+                .unwrap_or_else(|e| panic!("{}: {sql}: {e}", server.label));
+        }
+        let objects = conn.list_schema_objects("spelaion").await.unwrap();
+        let calc = objects.iter().find(|o| o.name == "call_calc").unwrap();
+        let call = conn.procedure_call(calc).await.unwrap();
+        assert_eq!(
+            call,
+            "SET @b = :b;\nCALL `spelaion`.`call_calc`(:a, @b, @c);\nSELECT @b AS `b`, @c AS `c`;",
+            "{}",
+            server.label
+        );
+        let filled = call.replace(":a", "1").replace(":b", "2");
+        let dialect = spelaion_driver_mysql::MysqlDialect;
+        let mut last = Vec::new();
+        for span in spelaion_driver_api::Dialect::split_statements(&dialect, &filled) {
+            last = run(&*conn, span.text(&filled)).await.unwrap();
+        }
+        let (_, rows) = table(&last);
+        assert_eq!(
+            rows,
+            [[Some("3".to_string()), Some("x1".to_string())]],
+            "{}",
+            server.label
+        );
+        run(&*conn, "drop procedure call_calc").await.unwrap();
+    }
+}

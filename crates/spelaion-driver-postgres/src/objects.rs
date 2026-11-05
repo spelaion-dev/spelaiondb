@@ -3,8 +3,8 @@
 //! Definitions quote names on the server (`format('%I')`); names arrive as parameters.
 
 use spelaion_driver_api::{
-    DriverError, LikeFilter, Result, SchemaObject, SchemaObjectKind, ServerObject,
-    ServerObjectKind, terminated,
+    Dialect, DriverError, LikeFilter, Result, SchemaObject, SchemaObjectKind, ServerObject,
+    ServerObjectKind, parameter_placeholder, terminated,
 };
 use tokio_postgres::Client;
 
@@ -182,6 +182,56 @@ const TYPE_SQL: &str = r"select case t.typtype
     end
     from pg_type t join pg_namespace n on n.oid = t.typnamespace
     where n.nspname = $1 and t.typname = $2 and t.typtype in ('e', 'd', 'c', 'r')";
+
+/// `CALL schema.proc(a => :a, b => NULL)`: IN, INOUT and VARIADIC parameters as placeholders,
+/// OUT ones as NULL (the call returns them as a row). Named when every parameter has a name.
+pub async fn procedure_call(client: &Client, object: &SchemaObject) -> Result<String> {
+    if object.kind != SchemaObjectKind::Procedure {
+        return Err(DriverError::Other(format!(
+            "{} is not a procedure",
+            object.name
+        )));
+    }
+    let detail = object.detail.clone().unwrap_or_default();
+    let row = client
+        .query_opt(
+            &format!(
+                "select format('%I.%I', n.nspname, p.proname), \
+                        coalesce(p.proargnames, '{{}}'::text[]), \
+                        coalesce(p.proargmodes::text[], '{{}}'::text[]), \
+                        coalesce(array_length(p.proallargtypes, 1), p.pronargs::int) {ROUTINE}"
+            ),
+            &[&object.schema, &object.name, &detail],
+        )
+        .await
+        .map_err(map_error)?
+        .ok_or_else(|| {
+            DriverError::Other(format!("{}.{} does not exist", object.schema, object.name))
+        })?;
+    let qualified: String = row.get(0);
+    let names: Vec<String> = row.get(1);
+    let modes: Vec<String> = row.get(2);
+    let count: i32 = row.get(3);
+    let count = usize::try_from(count).unwrap_or(0);
+    let named = (0..count).all(|i| names.get(i).is_some_and(|n| !n.is_empty()));
+    let quote = |name: &str| crate::dialect::PostgresDialect.quote_identifier(name);
+    let arguments: Vec<String> = (0..count)
+        .map(|i| {
+            let name = names.get(i).map(String::as_str).unwrap_or("");
+            let value = if modes.get(i).map(String::as_str) == Some("o") {
+                "NULL".to_string()
+            } else {
+                parameter_placeholder(name, i + 1)
+            };
+            if named {
+                format!("{} => {value}", quote(name))
+            } else {
+                value
+            }
+        })
+        .collect();
+    Ok(format!("CALL {qualified}({});", arguments.join(", ")))
+}
 
 pub async fn object_definition(client: &Client, object: &SchemaObject) -> Result<String> {
     let detail = object.detail.clone().unwrap_or_default();

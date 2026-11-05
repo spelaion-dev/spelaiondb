@@ -527,6 +527,10 @@ impl Connection for SqlServerConnection {
     async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
         ddl::relation_definition(self, schema, name).await
     }
+
+    async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
+        objects::procedure_call(self, object).await
+    }
 }
 
 /// Asks the actor to send an Attention for the statement it is running.

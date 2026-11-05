@@ -1493,6 +1493,20 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.keyboard.insertText("select 1 where database() = 'spelaion';");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  // "Generate CALL" on a procedure: its IN parameter as a placeholder, its OUT one collected.
+  await replaceQuery(panel, "create procedure if not exists smoke_call(in a int, out b int) set b = a + 1;\nselect 2 as done union all select 3;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "2 rows" }).waitFor();
+  if ((await mysqlSchema.getAttribute("aria-expanded")) !== "true") await mysqlSchema.click();
+  await mysqlSchema.focus();
+  await page.keyboard.press("F5");
+  const mysqlProcedures = mysqlSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Procedures", exact: true });
+  await mysqlProcedures.click();
+  await page.getByRole("button", { name: "smoke_call: open its definition", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate CALL" }).click();
+  await panel.locator(".cm-content", { hasText: "CALL `spelaion`.`smoke_call`" }).waitFor();
+  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "CALL `spelaion`.`smoke_call`(:a, @b);\nSELECT @b AS `b`;");
+  await mysqlProcedures.click();
 
   step("editing table data: cells, NULL, delete and insert applied in one transaction");
   if ((await mysqlSchema.getAttribute("aria-expanded")) !== "true") await mysqlSchema.click();

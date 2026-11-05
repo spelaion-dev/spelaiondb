@@ -1953,6 +1953,22 @@ async fn relation_definition(
         .map_err(|e| e.to_string())
 }
 
+/// The SQL that calls a procedure (inputs as `:name`, outputs collected), to open in a new tab.
+#[tauri::command]
+#[specta::specta]
+async fn procedure_call(
+    session: String,
+    object: SchemaObjectItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .procedure_call(&object.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The DDL of an object, to open in a new tab (nothing runs).
 #[tauri::command]
 #[specta::specta]
@@ -2348,6 +2364,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             filter_explorer_name,
             object_definition,
             relation_definition,
+            procedure_call,
             table_templates,
             join_sql,
             editable_query_table,

@@ -1036,3 +1036,48 @@ async fn ddl_round_trip(
     assert_eq!(after.object.kind, before.object.kind, "{ddl}");
     ddl
 }
+
+#[tokio::test]
+async fn procedure_calls_pass_inputs_and_collect_outputs() {
+    let Some(conn) = connect().await else { return };
+    for sql in [
+        "drop procedure if exists call_probe.calc",
+        "drop procedure if exists call_probe.nothing",
+        "if schema_id('call_probe') is null exec('create schema call_probe')",
+        "create procedure call_probe.calc @a int, @b int output, @c varchar(10) output \
+         as begin set @b = @b + @a; set @c = concat('x', @a) end",
+        "create procedure call_probe.nothing as select 1 as one",
+    ] {
+        run(&*conn, sql)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+    let objects = conn.list_schema_objects("call_probe").await.unwrap();
+    let find = |name: &str| objects.iter().find(|o| o.name == name).unwrap().clone();
+    let call = conn.procedure_call(&find("calc")).await.unwrap();
+    assert_eq!(
+        call,
+        "DECLARE @b int = :b\nDECLARE @c varchar(10) = :c\n\
+         EXEC call_probe.calc @a = :a, @b = @b OUTPUT, @c = @c OUTPUT\nSELECT @b AS b, @c AS c"
+    );
+    let filled = call
+        .replace(":a", "1")
+        .replace(":b", "2")
+        .replace(":c", "NULL");
+    // One batch: the editor's splitter keeps it whole (no semicolons).
+    let dialect = spelaion_driver_sqlserver::SqlServerDialect;
+    assert_eq!(
+        spelaion_driver_api::Dialect::split_statements(&dialect, &filled).len(),
+        1
+    );
+    let results = tables(&*conn, &filled).await;
+    assert_eq!(results.last().unwrap().1, [["3", "x1"]]);
+    assert_eq!(
+        conn.procedure_call(&find("nothing")).await.unwrap(),
+        "EXEC call_probe.nothing"
+    );
+    run(&*conn, "drop procedure call_probe.calc").await.unwrap();
+    run(&*conn, "drop procedure call_probe.nothing")
+        .await
+        .unwrap();
+}

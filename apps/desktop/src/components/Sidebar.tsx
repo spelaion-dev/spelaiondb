@@ -1475,6 +1475,17 @@ function SchemaObjectNode({
       setError(errorText(e));
     }
   }
+  /** "Generate CALL": the procedure's call, written by the driver, in a new tab. */
+  async function openCall() {
+    setMenu(null);
+    setError(null);
+    try {
+      const tab = addTab(connectionId, await call(commands.procedureCall(session, object)));
+      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
 
   const routine =
     object.kind === "function" || object.kind === "procedure" || object.kind === "aggregate";
@@ -1525,6 +1536,11 @@ function SchemaObjectNode({
           <button role="menuitem" onClick={() => void openDefinition()}>
             {t("openDefinition")}
           </button>
+          {object.kind === "procedure" && (
+            <button role="menuitem" onClick={() => void openCall()}>
+              {t("generateCall")}
+            </button>
+          )}
           <FilterMenuItems kind="objects" names={[object.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}

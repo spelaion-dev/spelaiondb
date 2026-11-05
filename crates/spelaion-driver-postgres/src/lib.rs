@@ -262,6 +262,10 @@ impl Connection for PgConnection {
     async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
         ddl::relation_definition(&self.client, schema, name).await
     }
+
+    async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
+        objects::procedure_call(&self.client, object).await
+    }
 }
 
 /// tokio-postgres also returns `Some(0)` for statements without a row count (`CREATE TABLE`),

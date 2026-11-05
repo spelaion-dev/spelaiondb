@@ -91,6 +91,7 @@
   "openObject": "{{name}}: abrir su definición",
   "openDefinition": "Generar DDL",
   "generateDdl": "Generar DDL",
+  "generateCall": "Generar CALL",
   "definitionHint": "Doble clic: abrir su definición",
   "onTable": "en {{table}}",
   "kinds": {

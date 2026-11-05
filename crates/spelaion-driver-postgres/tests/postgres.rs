@@ -1207,3 +1207,48 @@ async fn ddl_round_trip(
     assert_eq!(after.object.kind, before.object.kind, "{ddl}");
     ddl
 }
+
+#[tokio::test]
+async fn procedure_calls_pass_inputs_and_collect_outputs() {
+    let Some(conn) = connect().await else { return };
+    let schema = format!("spelaion_call_{}", std::process::id());
+    for stmt in [
+        format!("create schema {schema}"),
+        format!(
+            "create procedure {schema}.calc(a integer, inout b integer, out c text) \
+             language plpgsql as $$ begin b := b + a; c := 'x' || a; end $$"
+        ),
+        format!("create procedure {schema}.nothing() language sql as 'select 1'"),
+    ] {
+        run(&*conn, &stmt)
+            .await
+            .unwrap_or_else(|e| panic!("{stmt}: {e:?}"));
+    }
+    let result = async {
+        let objects = conn.list_schema_objects(&schema).await.unwrap();
+        let find = |name: &str| objects.iter().find(|o| o.name == name).unwrap().clone();
+        let call = conn.procedure_call(&find("calc")).await.unwrap();
+        assert_eq!(
+            call,
+            format!("CALL {schema}.calc(a => :a, b => :b, c => NULL);")
+        );
+        let row = first_row(&*conn, &call.replace(":a", "1").replace(":b", "2")).await;
+        let values: Vec<&str> = row.iter().map(|c| c.3.as_str()).collect();
+        assert_eq!(values, ["3", "x1"]);
+        assert_eq!(
+            conn.procedure_call(&find("nothing")).await.unwrap(),
+            format!("CALL {schema}.nothing();")
+        );
+        // A function is not called with CALL.
+        let mut function = find("calc");
+        function.kind = spelaion_driver_api::SchemaObjectKind::Function;
+        assert!(conn.procedure_call(&function).await.is_err());
+    };
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    run(&*conn, &format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}

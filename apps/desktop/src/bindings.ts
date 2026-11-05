@@ -232,6 +232,8 @@ export const commands = {
 	 *  to open in a new tab (nothing runs).
 	 */
 	relationDefinition: (session: string, schema: string, name: string) => typedError<string, string>(__TAURI_INVOKE("relation_definition", { session, schema, name })),
+	/**  The SQL that calls a procedure (inputs as `:name`, outputs collected), to open in a new tab. */
+	procedureCall: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("procedure_call", { session, object })),
 	/**
 	 *  The SQL a table's menu can generate on this connection's engine (the core decides: an
 	 *  upsert or MERGE only where the engine has them).

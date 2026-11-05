@@ -142,6 +142,73 @@ pub(crate) async fn relation_definition(
         .ok_or_else(|| DriverError::Other(format!("{schema}.{name} does not exist")))
 }
 
+/// `CALL schema.proc(:a, @b)`: IN parameters as placeholders; OUT and INOUT ones through
+/// session variables (INOUT set first), shown by a SELECT after the call.
+pub(crate) async fn procedure_call(
+    conn: &MysqlConnection,
+    object: &SchemaObject,
+) -> Result<String> {
+    if object.kind != SchemaObjectKind::Procedure {
+        return Err(DriverError::Other(format!(
+            "{} is not a procedure",
+            object.name
+        )));
+    }
+    let exists = conn
+        .rows(
+            "select 1 from information_schema.routines \
+             where routine_schema = ? and routine_name = ? and routine_type = 'PROCEDURE'",
+            vec![object.schema.clone(), object.name.clone()],
+        )
+        .await?;
+    if exists.is_empty() {
+        return Err(DriverError::Other(format!(
+            "{}.{} does not exist",
+            object.schema, object.name
+        )));
+    }
+    let rows = conn
+        .rows(
+            "select parameter_name, parameter_mode from information_schema.parameters \
+             where specific_schema = ? and specific_name = ? and routine_type = 'PROCEDURE' \
+             order by ordinal_position",
+            vec![object.schema.clone(), object.name.clone()],
+        )
+        .await?;
+    let mut before = Vec::new();
+    let mut arguments = Vec::new();
+    let mut outputs = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let name = text(row, 0);
+        let placeholder = spelaion_driver_api::parameter_placeholder(&name, i + 1);
+        let variable = format!("@{}", &placeholder[1..]);
+        match text(row, 1).as_str() {
+            "IN" => arguments.push(placeholder),
+            mode => {
+                if mode == "INOUT" {
+                    before.push(format!("SET {variable} = {placeholder};"));
+                }
+                outputs.push(format!(
+                    "{variable} AS {}",
+                    MysqlDialect.quote_identifier(&placeholder[1..])
+                ));
+                arguments.push(variable);
+            }
+        }
+    }
+    let mut statements = before;
+    statements.push(format!(
+        "CALL {}.{}({});",
+        MysqlDialect.quote_identifier(&object.schema),
+        MysqlDialect.quote_identifier(&object.name),
+        arguments.join(", ")
+    ));
+    if !outputs.is_empty() {
+        statements.push(format!("SELECT {};", outputs.join(", ")));
+    }
+    Ok(statements.join("\n"))
+}
+
 pub(crate) async fn object_definition(
     conn: &MysqlConnection,
     object: &SchemaObject,

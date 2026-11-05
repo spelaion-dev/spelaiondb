@@ -176,6 +176,73 @@ const SYNONYM_SQL: &str = "select 'CREATE SYNONYM ' + quotename(s.name) + '.' + 
     from sys.synonyms sn join sys.schemas s on s.schema_id = sn.schema_id \
     where s.name = @P1 and sn.name = @P2";
 
+/// `EXEC schema.proc @a = :a, @b = @b OUTPUT`, with the output parameters declared first and
+/// shown after. No semicolons: the variables live in one batch, which the editor sends whole.
+pub async fn procedure_call(conn: &SqlServerConnection, object: &SchemaObject) -> Result<String> {
+    if object.kind != SchemaObjectKind::Procedure {
+        return Err(DriverError::Other(format!(
+            "{} is not a procedure",
+            object.name
+        )));
+    }
+    let rows = conn
+        .rows(
+            "select p.name, p.is_output, type_name(p.user_type_id), p.max_length, p.precision, \
+                    p.scale, o.object_id \
+             from sys.objects o join sys.schemas s on s.schema_id = o.schema_id \
+             left join sys.parameters p on p.object_id = o.object_id \
+             where s.name = @P1 and o.name = @P2 and o.type in ('P', 'PC') \
+             order by p.parameter_id",
+            vec![object.schema.clone(), object.name.clone()],
+        )
+        .await?;
+    if rows.is_empty() {
+        return Err(DriverError::Other(format!(
+            "{}.{} does not exist",
+            object.schema, object.name
+        )));
+    }
+    let mut declares = Vec::new();
+    let mut arguments = Vec::new();
+    let mut outputs = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        // A procedure without parameters still has its row, with no parameter in it.
+        let Some(name) = opt(row, 0) else { continue };
+        let placeholder = spelaion_driver_api::parameter_placeholder(&name, i + 1);
+        if flag(row, 1) {
+            let type_ = native_type(
+                &text(row, 2),
+                number(row, 3),
+                number(row, 4),
+                number(row, 5),
+            );
+            declares.push(format!("DECLARE {name} {type_} = {placeholder}"));
+            arguments.push(format!("{name} = {name} OUTPUT"));
+            outputs.push(format!(
+                "{name} AS {}",
+                SqlServerDialect.quote_identifier(&placeholder[1..])
+            ));
+        } else {
+            arguments.push(format!("{name} = {placeholder}"));
+        }
+    }
+    let mut lines = declares;
+    let target = format!(
+        "{}.{}",
+        SqlServerDialect.quote_identifier(&object.schema),
+        SqlServerDialect.quote_identifier(&object.name)
+    );
+    lines.push(if arguments.is_empty() {
+        format!("EXEC {target}")
+    } else {
+        format!("EXEC {target} {}", arguments.join(", "))
+    });
+    if !outputs.is_empty() {
+        lines.push(format!("SELECT {}", outputs.join(", ")));
+    }
+    Ok(lines.join("\n"))
+}
+
 pub async fn object_definition(
     conn: &SqlServerConnection,
     object: &SchemaObject,

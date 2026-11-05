@@ -237,7 +237,10 @@ one (PostgreSQL, SQL Server, DuckDB), an `UPDATE` or a `DELETE`, and `UPDATE …
 `DELETE … USING` with a source of `:values` (`SELECT :id AS id, …`) to replace by a real table
 (SQLite has no `DELETE … USING`). **Ctrl+click** chooses several tables or views: their menu
 then generates a `JOIN` (`FROM a, b WHERE …`) or an `INNER JOIN` of them on the foreign keys
-between them, and **Hide** / **Show only** act on all of them. The key is the primary key; without one, a unique key
+between them, and **Hide** / **Show only** act on all of them. A procedure's menu has
+**Generate CALL**: its input parameters as `:name` placeholders, its output ones collected
+(`NULL` in PostgreSQL's CALL, `@variables` in MySQL and MariaDB, `DECLARE … OUTPUT` in SQL
+Server) and shown after the call. The key is the primary key; without one, a unique key
 (one whose columns cannot be NULL first); without either, every column, and the SQL says so. The core writes
 them with the engine's quoting and `:name` placeholders for the values; nothing runs until
 you replace them and run it.

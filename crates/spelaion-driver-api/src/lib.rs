@@ -221,6 +221,32 @@ pub trait Connection: Send + Sync {
             "this engine has no table definitions".into(),
         ))
     }
+    /// The SQL that calls a procedure of [`Connection::list_schema_objects`]: its input
+    /// parameters as `:name` placeholders, its output ones collected and shown.
+    async fn procedure_call(&self, _object: &SchemaObject) -> Result<String> {
+        Err(DriverError::Other("this engine has no procedures".into()))
+    }
+}
+
+/// `:name` for a parameter, with anything but letters, digits and `_` turned into `_` (and
+/// SQL Server's leading `@` left out); `:argN` for one without a name.
+pub fn parameter_placeholder(name: &str, position: usize) -> String {
+    let name: String = name
+        .trim_start_matches('@')
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        format!(":arg{position}")
+    } else {
+        format!(":{name}")
+    }
 }
 
 #[async_trait]
