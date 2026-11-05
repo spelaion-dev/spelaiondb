@@ -11,6 +11,7 @@ import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
 import { SettingsDialog } from "./components/Settings";
 import { SnippetsPanel } from "./components/SnippetsPanel";
 import { FOCUS_EXPLORER_FILTER_EVENT, Sidebar, refreshConnections } from "./components/Sidebar";
+import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
 import { useUpdate } from "./update";
@@ -31,6 +32,7 @@ export default function App() {
   const historyOpen = useApp((s) => s.historyOpen);
   const snippetsOpen = useApp((s) => s.snippetsOpen);
   const settingsOpen = useApp((s) => s.settingsOpen);
+  const openObject = useApp((s) => s.openObject);
   const closeSettings = useApp((s) => s.closeSettings);
   const connectionDialog = useApp((s) => s.connectionDialog);
   const deletingConnection = useApp((s) => s.deletingConnection);
@@ -104,6 +106,10 @@ export default function App() {
       } else if (mod && e.key === ",") {
         e.preventDefault();
         app.openSettings();
+      } else if (mod && e.shiftKey && key === "d") {
+        // DBeaver's Open Database Object.
+        e.preventDefault();
+        app.setOpenObject({ connectionId: null });
       } else if (mod && e.shiftKey && key === "f") {
         // Focus the explorer's quick filter, showing the explorer if it is hidden.
         e.preventDefault();
@@ -226,6 +232,9 @@ export default function App() {
       )}
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
+      {openObject && (
+        <OpenObjectDialog initialConnection={openObject.connectionId} onClose={() => useApp.getState().setOpenObject(null)} />
+      )}
       <Dialogs />
     </div>
   );

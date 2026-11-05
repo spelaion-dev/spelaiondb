@@ -206,6 +206,27 @@ impl TryFrom<ObjectChangeItem> for spelaion_core::ObjectChange {
     }
 }
 
+/// What "Open object by name" found: a relation or another object of a schema.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FoundObjectItem {
+    Relation { object: ObjectItem },
+    SchemaObject { object: SchemaObjectItem },
+}
+
+impl From<spelaion_core::FoundObject> for FoundObjectItem {
+    fn from(found: spelaion_core::FoundObject) -> Self {
+        match found {
+            spelaion_core::FoundObject::Relation(o) => Self::Relation { object: o.into() },
+            spelaion_core::FoundObject::Other(o) => Self::SchemaObject { object: o.into() },
+        }
+    }
+}
+
 /// What the explorer may offer on a session's engine (ADR-026).
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
