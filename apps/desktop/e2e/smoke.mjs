@@ -976,6 +976,11 @@ try {
   const ordersDdl = (await panel.locator(".cm-content").innerText()).trimEnd();
   assert.match(ordersDdl, /^CREATE TABLE orders \(/);
   assert.ok(ordersDdl.endsWith("CREATE INDEX orders_customer on orders (customer_id);"), ordersDdl);
+  // Rows by a list of keys.
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate SELECT … WHERE key IN" }).click();
+  await panel.locator(".cm-content", { hasText: "WHERE id IN" }).waitFor();
+  assert.ok((await panel.locator(".cm-content").innerText()).trimEnd().endsWith("FROM orders\nWHERE id IN (:id_1, :id_2, :id_3);"));
   // Refresh: a table created from a query tab appears with F5 on its schema, and "Refresh all
   // schemas" sees it go; open folders stay open.
   const mainSchema = page.getByRole("button", { name: "Expand or collapse schema main" });

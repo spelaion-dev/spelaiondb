@@ -942,7 +942,7 @@ export type SnippetItem = {
 };
 
 /**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */
-export type SqlTemplateItem = "preview" | "select" | "insert" | "update" | "delete";
+export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" | "insert" | "update" | "delete";
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
 

@@ -1109,7 +1109,7 @@ function ObjectNode({
   const view = object.kind.includes("view");
   const templates: SqlTemplateItem[] = view
     ? ["select"]
-    : ["select", "insert", "update", "delete"];
+    : ["select", "selectByKey", "selectIn", "insert", "update", "delete"];
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
   const countDescription = rowCount == null ? undefined : `${t(typeof count === "number" ? "sql.exactCount" : "sql.estimate")}: ${rowCount.toLocaleString(i18n.language)}`;
   return (

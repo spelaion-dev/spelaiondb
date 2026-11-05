@@ -160,6 +160,8 @@
   "sql": {
     "preview": "Ver filas",
     "select": "Generar SELECT",
+    "selectByKey": "Generar SELECT … WHERE clave =",
+    "selectIn": "Generar SELECT … WHERE clave IN",
     "insert": "Generar INSERT",
     "update": "Generar UPDATE",
     "delete": "Generar DELETE",

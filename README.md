@@ -230,7 +230,9 @@ header clicks that sort in the server, and **Count** for the exact number of mat
 The core writes `SELECT * … LIMIT n OFFSET m` and checks it is still one plain SELECT of that
 table, so nothing typed in the filter can run another statement or load the whole table.
 **Open as SQL** puts `SELECT * … LIMIT 100` in a new SQL tab instead. Right-click it to generate a `SELECT` with every column
-or, for tables, an `INSERT`, an `UPDATE` (on the primary key) or a `DELETE`. The core writes
+or, for tables, a `SELECT … WHERE key =` (one row), a `SELECT … WHERE key IN` (several), an
+`INSERT`, an `UPDATE` or a `DELETE`. The key is the primary key; without one, a unique key
+(one whose columns cannot be NULL first); without either, every column, and the SQL says so. The core writes
 them with the engine's quoting and `:name` placeholders for the values; nothing runs until
 you replace them and run it.
 

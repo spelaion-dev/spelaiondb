@@ -1416,6 +1416,8 @@ impl From<spelaion_core::RiskyStatement> for RiskyItem {
 pub enum SqlTemplateItem {
     Preview,
     Select,
+    SelectByKey,
+    SelectIn,
     Insert,
     Update,
     Delete,
@@ -1426,6 +1428,8 @@ impl From<SqlTemplateItem> for spelaion_core::SqlTemplate {
         match item {
             SqlTemplateItem::Preview => Self::Preview,
             SqlTemplateItem::Select => Self::Select,
+            SqlTemplateItem::SelectByKey => Self::SelectByKey,
+            SqlTemplateItem::SelectIn => Self::SelectIn,
             SqlTemplateItem::Insert => Self::Insert,
             SqlTemplateItem::Update => Self::Update,
             SqlTemplateItem::Delete => Self::Delete,

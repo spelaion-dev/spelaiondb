@@ -1,9 +1,10 @@
-//! SQL written for a table from the explorer: preview, SELECT, INSERT, UPDATE and DELETE,
-//! with the engine's identifier quoting. Values are `:named` placeholders to replace before
-//! running; UPDATE and DELETE always carry a WHERE (on the primary key when there is one).
+//! SQL written for a table from the explorer: preview, SELECT (all rows, by key, or by a list of
+//! keys), INSERT, UPDATE and DELETE, with the engine's identifier quoting. Values are `:named`
+//! placeholders to replace before running; UPDATE and DELETE always carry a WHERE on the key
+//! that identifies a row: the primary key, else a unique constraint, else every column.
 
 use futures_util::StreamExt;
-use spelaion_driver_api::{Dialect, TableInfo, Value};
+use spelaion_driver_api::{ConstraintKind, Dialect, TableInfo, Value};
 
 use crate::session::{CoreEvent, Session};
 
@@ -12,10 +13,17 @@ pub enum SqlTemplate {
     /// `SELECT * … LIMIT 100`, what a double-click opens.
     Preview,
     Select,
+    /// `SELECT … WHERE key = :key`: one row by its key.
+    SelectByKey,
+    /// `SELECT … WHERE key IN (…)`: several rows by their keys.
+    SelectIn,
     Insert,
     Update,
     Delete,
 }
+
+/// How many `:key_n` placeholders `SelectIn` writes.
+const IN_LIST: usize = 3;
 
 /// How many rows the preview asks for.
 const PREVIEW_ROWS: u32 = 100;
@@ -37,17 +45,34 @@ pub fn table_sql(dialect: &dyn Dialect, table: &TableInfo, template: SqlTemplate
             "SELECT\n{}\nFROM {name}\nLIMIT {PREVIEW_ROWS};\n",
             list(columns.iter().map(|c| quote(c)), ",\n")
         ),
+        SqlTemplate::SelectByKey => {
+            let key = row_key(table);
+            format!(
+                "SELECT\n{}\nFROM {name}\n{}",
+                list(columns.iter().map(|c| quote(c)), ",\n"),
+                where_clause(dialect, &key)
+            )
+        }
+        SqlTemplate::SelectIn => {
+            let key = row_key(table);
+            format!(
+                "SELECT\n{}\nFROM {name}\n{}{};\n",
+                list(columns.iter().map(|c| quote(c)), ",\n"),
+                key.note(dialect),
+                in_list(dialect, &key.columns)
+            )
+        }
         SqlTemplate::Insert => format!(
             "INSERT INTO {name} (\n{}\n) VALUES (\n{}\n);\n",
             list(columns.iter().map(|c| quote(c)), ",\n"),
             list(columns.iter().map(|c| placeholder(c)), ",\n")
         ),
         SqlTemplate::Update => {
-            let keys = keys(table);
+            let key = row_key(table);
             let set: Vec<&str> = columns
                 .iter()
                 .copied()
-                .filter(|c| !table.primary_key.iter().any(|k| k == c))
+                .filter(|c| !key.columns.contains(c))
                 .collect();
             // A table that is all key still gets a valid statement.
             let set = if set.is_empty() { columns.clone() } else { set };
@@ -58,12 +83,12 @@ pub fn table_sql(dialect: &dyn Dialect, table: &TableInfo, template: SqlTemplate
                         .map(|c| format!("{} = {}", quote(c), placeholder(c))),
                     ",\n"
                 ),
-                where_clause(dialect, &keys, table.primary_key.is_empty())
+                where_clause(dialect, &key)
             )
         }
         SqlTemplate::Delete => format!(
             "DELETE FROM {name}\n{}",
-            where_clause(dialect, &keys(table), table.primary_key.is_empty())
+            where_clause(dialect, &row_key(table))
         ),
     }
 }
@@ -138,27 +163,117 @@ pub(crate) fn qualified(dialect: &dyn Dialect, schema: &str, name: &str) -> Stri
     }
 }
 
-/// The columns that identify a row: the primary key, or every column without one.
-fn keys(table: &TableInfo) -> Vec<&str> {
-    if table.primary_key.is_empty() {
-        table.columns.iter().map(|c| c.name.as_str()).collect()
-    } else {
-        table.primary_key.iter().map(String::as_str).collect()
+/// The columns that identify a row, and where they come from.
+struct RowKey<'a> {
+    columns: Vec<&'a str>,
+    source: KeySource,
+}
+
+enum KeySource {
+    PrimaryKey,
+    Unique,
+    AllColumns,
+}
+
+impl RowKey<'_> {
+    /// A comment line when the key is not the primary key.
+    fn note(&self, dialect: &dyn Dialect) -> String {
+        match self.source {
+            KeySource::PrimaryKey => String::new(),
+            KeySource::Unique => format!(
+                "-- No primary key: the unique key ({}) identifies the row.\n",
+                self.columns
+                    .iter()
+                    .map(|c| dialect.quote_identifier(c))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            KeySource::AllColumns => {
+                "-- No primary or unique key: every column identifies the row.\n".to_string()
+            }
+        }
     }
 }
 
-fn where_clause(dialect: &dyn Dialect, keys: &[&str], no_primary_key: bool) -> String {
-    let conditions = keys
+/// The primary key; without one, the first unique constraint whose columns cannot be NULL
+/// (NULLs are not equal to each other), then any unique constraint; else every column.
+fn row_key(table: &TableInfo) -> RowKey<'_> {
+    if !table.primary_key.is_empty() {
+        return RowKey {
+            columns: table.primary_key.iter().map(String::as_str).collect(),
+            source: KeySource::PrimaryKey,
+        };
+    }
+    let not_null = |column: &String| {
+        table
+            .columns
+            .iter()
+            .any(|c| &c.name == column && !c.nullable)
+    };
+    let unique = || {
+        table
+            .constraints
+            .iter()
+            .filter(|c| c.kind == ConstraintKind::Unique && !c.columns.is_empty())
+    };
+    if let Some(constraint) = unique()
+        .find(|c| c.columns.iter().all(not_null))
+        .or_else(|| unique().next())
+    {
+        return RowKey {
+            columns: constraint.columns.iter().map(String::as_str).collect(),
+            source: KeySource::Unique,
+        };
+    }
+    RowKey {
+        columns: table.columns.iter().map(|c| c.name.as_str()).collect(),
+        source: KeySource::AllColumns,
+    }
+}
+
+fn where_clause(dialect: &dyn Dialect, key: &RowKey) -> String {
+    let conditions = key
+        .columns
         .iter()
         .map(|k| format!("{} = {}", dialect.quote_identifier(k), placeholder(k)))
         .collect::<Vec<_>>()
         .join("\n  AND ");
-    let note = if no_primary_key {
-        "-- No primary key: every column identifies the row.\n"
-    } else {
-        ""
-    };
-    format!("{note}WHERE {conditions};\n")
+    format!("{}WHERE {conditions};\n", key.note(dialect))
+}
+
+/// `WHERE key IN (:key_1, …)`; with a key of several columns, a list of rows, which T-SQL
+/// does not have: there, one condition per row joined by OR.
+fn in_list(dialect: &dyn Dialect, key: &[&str]) -> String {
+    let quote = |c: &str| dialect.quote_identifier(c);
+    let numbered = |c: &str, n: usize| format!("{}_{n}", placeholder(c));
+    if let [column] = key {
+        let values: Vec<String> = (1..=IN_LIST).map(|n| numbered(column, n)).collect();
+        return format!("WHERE {} IN ({})", quote(column), values.join(", "));
+    }
+    if dialect.name() == "sqlserver" {
+        let rows: Vec<String> = (1..=IN_LIST)
+            .map(|n| {
+                let row: Vec<String> = key
+                    .iter()
+                    .map(|c| format!("{} = {}", quote(c), numbered(c, n)))
+                    .collect();
+                format!("({})", row.join(" AND "))
+            })
+            .collect();
+        return format!("WHERE {}", rows.join("\n   OR "));
+    }
+    let columns: Vec<String> = key.iter().map(|c| quote(c)).collect();
+    let rows: Vec<String> = (1..=IN_LIST)
+        .map(|n| {
+            let row: Vec<String> = key.iter().map(|c| numbered(c, n)).collect();
+            format!("({})", row.join(", "))
+        })
+        .collect();
+    format!(
+        "WHERE ({}) IN (\n  {}\n)",
+        columns.join(", "),
+        rows.join(",\n  ")
+    )
 }
 
 /// `:name`, with anything but letters, digits and `_` turned into `_`.
@@ -249,11 +364,59 @@ mod tests {
     }
 
     #[test]
+    fn rows_by_key_and_by_a_list_of_keys() {
+        let t = table("shop", &["id"]);
+        assert_eq!(
+            table_sql(&Backticks, &t, SqlTemplate::SelectByKey),
+            "SELECT\n  `id`,\n  `unit price`,\n  `qty`\nFROM `shop`.`order lines`\nWHERE `id` = :id;\n"
+        );
+        assert_eq!(
+            table_sql(&Backticks, &t, SqlTemplate::SelectIn),
+            "SELECT\n  `id`,\n  `unit price`,\n  `qty`\nFROM `shop`.`order lines`\nWHERE `id` IN (:id_1, :id_2, :id_3);\n"
+        );
+        let pair = table("shop", &["id", "qty"]);
+        assert!(
+            table_sql(&Backticks, &pair, SqlTemplate::SelectIn).ends_with(
+                "WHERE (`id`, `qty`) IN (\n  (:id_1, :qty_1),\n  (:id_2, :qty_2),\n  (:id_3, :qty_3)\n);\n"
+            )
+        );
+    }
+
+    #[test]
+    fn without_a_primary_key_a_unique_key_identifies_the_row() {
+        let mut t = table("shop", &[]);
+        t.constraints = vec![
+            spelaion_driver_api::ConstraintInfo {
+                name: Some("maybe_null".into()),
+                kind: ConstraintKind::Unique,
+                columns: vec!["qty".into()],
+                definition: String::new(),
+            },
+            spelaion_driver_api::ConstraintInfo {
+                name: Some("code".into()),
+                kind: ConstraintKind::Unique,
+                columns: vec!["unit price".into()],
+                definition: String::new(),
+            },
+        ];
+        // A unique key whose columns cannot be NULL comes first.
+        t.columns[1].nullable = false;
+        assert_eq!(
+            table_sql(&Backticks, &t, SqlTemplate::Delete),
+            "DELETE FROM `shop`.`order lines`\n-- No primary key: the unique key (`unit price`) identifies the row.\nWHERE `unit price` = :unit_price;\n"
+        );
+        assert_eq!(
+            table_sql(&Backticks, &t, SqlTemplate::Update),
+            "UPDATE `shop`.`order lines`\nSET\n  `id` = :id,\n  `qty` = :qty\n-- No primary key: the unique key (`unit price`) identifies the row.\nWHERE `unit price` = :unit_price;\n"
+        );
+    }
+
+    #[test]
     fn without_a_primary_key_every_column_identifies_the_row() {
         let sql = table_sql(&Backticks, &table("shop", &[]), SqlTemplate::Delete);
         assert_eq!(
             sql,
-            "DELETE FROM `shop`.`order lines`\n-- No primary key: every column identifies the row.\nWHERE `id` = :id\n  AND `unit price` = :unit_price\n  AND `qty` = :qty;\n"
+            "DELETE FROM `shop`.`order lines`\n-- No primary or unique key: every column identifies the row.\nWHERE `id` = :id\n  AND `unit price` = :unit_price\n  AND `qty` = :qty;\n"
         );
         // Generated writes never trip the "without WHERE" guard.
         assert!(crate::script_risks(&SqliteDialect, &sql.replace('`', "\""), false).is_empty());

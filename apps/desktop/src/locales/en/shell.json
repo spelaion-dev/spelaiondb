@@ -160,6 +160,8 @@
   "sql": {
     "preview": "View rows",
     "select": "Generate SELECT",
+    "selectByKey": "Generate SELECT … WHERE key =",
+    "selectIn": "Generate SELECT … WHERE key IN",
     "insert": "Generate INSERT",
     "update": "Generate UPDATE",
     "delete": "Generate DELETE",
