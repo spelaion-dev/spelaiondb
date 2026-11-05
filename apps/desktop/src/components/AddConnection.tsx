@@ -44,6 +44,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
   const [importing, setImporting] = useState(false);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
+  const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -65,7 +66,9 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         }
         if (access.kind !== "ready") { close(); return; }
         // The "Serialize" variant only differs in optional markers: same fields.
-        const draft = (await call(commands.connectionDraft(editing))) as ConnectionDraft;
+        const [saved, revision] = await call(commands.connectionDraft(editing));
+        const draft = saved as ConnectionDraft;
+        setRevision(revision);
         setInitial(draft);
         setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
       } catch (e) {
@@ -102,7 +105,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         {loadError ? (
           <p className="error wizard-error" role="alert">{loadError}</p>
         ) : editing ? (
-          engine && initial && <ConnectionForm engine={engine} editing={editing} initial={initial} onCancel={close} onSaved={close} />
+          engine && initial && revision !== null && <ConnectionForm engine={engine} editing={editing} initial={initial} revision={revision} onCancel={close} onSaved={close} />
         ) : importing ? (
           <DbeaverImport onBack={() => setImporting(false)} onDone={close} />
         ) : engine ? (
@@ -284,6 +287,7 @@ function ConnectionForm(props: {
   /** Identifier of the connection being edited; absent when adding one. */
   editing?: string;
   initial?: ConnectionDraft;
+  revision?: string;
   /** Values read from a pasted connection URL. */
   prefill?: UrlFields;
   onBack?(): void;
@@ -449,7 +453,7 @@ function ConnectionForm(props: {
           setTest({ kind: "idle" });
           return;
         }
-        useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
+        useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
         outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
       }
       // The tunnel this connection uses may have changed in the repository.
@@ -488,7 +492,7 @@ function ConnectionForm(props: {
     try {
       // Only a saved password reaches the keychain; otherwise it was just for the test.
       const stored = passwordMode === "keychain" && password ? password : null;
-      await call(editing ? commands.updateConnection(editing, request, stored) : commands.addConnection(request, stored));
+      await call(editing ? commands.updateConnection(editing, request, stored, props.revision ?? "") : commands.addConnection(request, stored));
       await refreshConnections();
       props.onSaved();
     } catch (e) {

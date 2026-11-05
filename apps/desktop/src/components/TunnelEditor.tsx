@@ -95,6 +95,7 @@ export function TunnelEditor(props: {
   const [name, setName] = useState(editing ? mode.name : "");
   const [personal, setPersonal] = useState(mode.personal || !hasWorkspace);
   const [hops, setHops] = useState<HopState[]>(editing ? [] : [emptyHop()]);
+  const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "idle" | "testing" | "ok" } | { kind: "error"; message: string }>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
@@ -103,7 +104,7 @@ export function TunnelEditor(props: {
   useEffect(() => {
     if (mode.kind !== "edit") return;
     call(commands.tunnelDraft(mode.name, mode.personal))
-      .then((draft) => setHops((draft as TunnelDraft).hops.map(fromDraft)))
+      .then(([draft, version]) => { setRevision(version); setHops((draft as TunnelDraft).hops.map(fromDraft)); })
       .catch((e: unknown) => setLoadError(errorText(e)));
   }, [mode]);
 
@@ -150,7 +151,7 @@ export function TunnelEditor(props: {
           setStatus({ kind: "idle" });
           return;
         }
-        useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
+        useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
         outcome = await call(commands.testTunnel(draft, passwords));
       }
       setStatus(outcome.kind === "connected" ? { kind: "ok" } : { kind: "idle" });
@@ -163,7 +164,7 @@ export function TunnelEditor(props: {
     setBusy(true);
     try {
       if (mode.kind === "edit") {
-        await call(commands.updateTunnel(mode.name, mode.personal, draft, passwords));
+        await call(commands.updateTunnel(mode.name, mode.personal, draft, passwords, revision ?? ""));
         props.onSaved({ name: mode.name, personal: mode.personal });
       } else {
         props.onSaved(await call(commands.addTunnel(draft, passwords)));

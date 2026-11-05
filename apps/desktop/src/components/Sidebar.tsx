@@ -431,7 +431,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   async function trust() {
     if (!workspace?.workspace) return;
     if (await useDialogs.getState().askTrust(workspace.workspace)) {
-      useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
+      useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace.workspace)));
     }
   }
 

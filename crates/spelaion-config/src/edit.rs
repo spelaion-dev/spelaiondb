@@ -8,6 +8,10 @@ use toml_edit::{DocumentMut, Item, Table, Value};
 use crate::error::ConfigError;
 use crate::model::ConnectionFile;
 
+pub(crate) fn revision(path: &Path, value: &impl serde::Serialize) -> Result<String, ConfigError> {
+    serde_json::to_string(&(path, value)).map_err(|e| ConfigError::new(path, e.to_string()))
+}
+
 /// JSON Schema URL put in the header of new files (for editors with TOML support such as
 /// Taplo/Even Better TOML).
 pub const CONNECTION_SCHEMA_URL: &str = "https://spelaion.dev/schema/db/connection.schema.json";
