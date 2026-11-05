@@ -1154,6 +1154,17 @@ try {
     document.querySelector('[aria-label="Expand or collapse Views"]')?.getAttribute("aria-expanded") === "true",
   );
   await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).waitFor();
+  // Link with editor: the active tab (big_orders' data) is shown in the tree as it changes.
+  await viewsFolder.click();
+  assert.equal(await viewsFolder.getAttribute("aria-expanded"), "false");
+  const linkWithEditor = page.getByRole("button", { name: "Link with editor" });
+  await linkWithEditor.click();
+  assert.equal(await linkWithEditor.getAttribute("aria-pressed"), "true");
+  await page.waitForFunction(() =>
+    document.querySelector('[aria-label="Expand or collapse Views"]')?.getAttribute("aria-expanded") === "true",
+  );
+  await linkWithEditor.click();
+  assert.equal(await linkWithEditor.getAttribute("aria-pressed"), "false");
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   // Quick filter (Ctrl+Shift+F): only what matches by name, plus the expanded connections.
   await page.keyboard.press("Control+Shift+F");
