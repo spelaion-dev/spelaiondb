@@ -2010,6 +2010,23 @@ async fn table_sql(
     ))
 }
 
+/// The SQL a table's menu can generate on this connection's engine (the core decides: an
+/// upsert or MERGE only where the engine has them).
+#[tauri::command]
+#[specta::specta]
+async fn table_templates(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<SqlTemplateItem>> {
+    let open = state.session(&session).await?;
+    Ok(
+        spelaion_core::table_templates(open.session.dialect().as_ref())
+            .into_iter()
+            .map(SqlTemplateItem::from)
+            .collect(),
+    )
+}
+
 /// The exact row count of a table or view, counted by the core on the explorer's session.
 #[tauri::command]
 #[specta::specta]
@@ -2292,6 +2309,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             filter_explorer_name,
             object_definition,
             relation_definition,
+            table_templates,
             editable_query_table,
             answer_interaction,
         ])

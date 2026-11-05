@@ -137,6 +137,20 @@ function useSortByName() {
     sortByName(items, name, { sortAlphabetically, sortIgnoreCase }, i18n.language);
 }
 
+/** What a table's menu can generate, per session: the engine does not change while it is open. */
+const tableTemplates = new Map<string, Promise<SqlTemplateItem[]>>();
+function templatesOf(session: string): Promise<SqlTemplateItem[]> {
+  let templates = tableTemplates.get(session);
+  if (!templates) {
+    templates = call(commands.tableTemplates(session)).catch((e: unknown) => {
+      tableTemplates.delete(session);
+      throw e;
+    });
+    tableTemplates.set(session, templates);
+  }
+  return templates;
+}
+
 /** "Hide" or "Show only" one name: it goes into the connection's filter (ADR-025). */
 type FilterName = (kind: FilterKindItem, name: string, action: FilterActionItem) => void;
 
@@ -629,6 +643,8 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   }
 
   async function load() {
+    // The connection may have been edited to point to another engine.
+    tableTemplates.delete(session);
     const filter = await call(commands.getExplorerFilter(connection.id));
     setFilters(filter);
     // Without its roles or logins the connection still shows its schemas.
@@ -1107,9 +1123,20 @@ function ObjectNode({
     }
   }
   const view = object.kind.includes("view");
-  const templates: SqlTemplateItem[] = view
-    ? ["select"]
-    : ["select", "selectByKey", "selectIn", "insert", "update", "delete"];
+  const [tableMenu, setTableMenu] = useState<SqlTemplateItem[]>(["select", "insert", "update", "delete"]);
+  useEffect(() => {
+    if (!menu || view) return;
+    let current = true;
+    void templatesOf(session)
+      .then((list) => {
+        if (current) setTableMenu(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [menu, view, session]);
+  const templates: SqlTemplateItem[] = view ? ["select"] : tableMenu;
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
   const countDescription = rowCount == null ? undefined : `${t(typeof count === "number" ? "sql.exactCount" : "sql.estimate")}: ${rowCount.toLocaleString(i18n.language)}`;
   return (

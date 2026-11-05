@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use spelaion_core::{CoreEvent, ResultStore, Session, SqlTemplate, table_sql};
+use spelaion_core::{CoreEvent, ResultStore, Session, SqlTemplate, table_sql, table_templates};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
 async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
@@ -273,5 +273,61 @@ async fn selects_by_key_and_writes_by_key_run_everywhere() {
         run(label, &session, &format!("drop table {items}")).await;
         run(label, &session, &format!("drop table {codes}")).await;
         run(label, &session, &format!("drop table {pairs}")).await;
+    }
+}
+
+#[tokio::test]
+async fn upserts_and_merges_insert_then_update() {
+    let pid = std::process::id();
+    let items = format!("gen_upsert_{pid}");
+    for (label, session, schema) in engines().await {
+        let offered = table_templates(session.dialect().as_ref());
+        for template in [SqlTemplate::Upsert, SqlTemplate::Merge] {
+            if !offered.contains(&template) {
+                continue;
+            }
+            for sql in [
+                format!("drop table if exists {items}"),
+                format!("create table {items} (id int primary key, name varchar(40), qty int)"),
+            ] {
+                run(label, &session, &sql).await;
+            }
+            let sql = generated(&session, schema, &items, template).await;
+            // The first time it inserts, the second time it updates the same row.
+            for (name, qty) in [("'a'", "1"), ("'b'", "2")] {
+                run(
+                    label,
+                    &session,
+                    &fill(&sql, &[("id", "7"), ("name", name), ("qty", qty)]),
+                )
+                .await;
+            }
+            assert_eq!(
+                first(label, &session, &format!("select count(*) from {items}")).await,
+                "1",
+                "{label} {template:?}: {sql}"
+            );
+            assert_eq!(
+                first(
+                    label,
+                    &session,
+                    &format!("select name from {items} where id = 7")
+                )
+                .await,
+                "b",
+                "{label} {template:?}: {sql}"
+            );
+            run(label, &session, &format!("drop table {items}")).await;
+        }
+        let expected = match label {
+            "sqlite" | "mysql" | "mariadb" => vec![SqlTemplate::Upsert],
+            "sqlserver" => vec![SqlTemplate::Merge],
+            _ => vec![SqlTemplate::Upsert, SqlTemplate::Merge],
+        };
+        let got: Vec<SqlTemplate> = offered
+            .into_iter()
+            .filter(|t| matches!(t, SqlTemplate::Upsert | SqlTemplate::Merge))
+            .collect();
+        assert_eq!(got, expected, "{label}");
     }
 }

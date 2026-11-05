@@ -1,5 +1,6 @@
 //! SQL written for a table from the explorer: preview, SELECT (all rows, by key, or by a list of
-//! keys), INSERT, UPDATE and DELETE, with the engine's identifier quoting. Values are `:named`
+//! keys), INSERT, an upsert and MERGE where the engine has them, UPDATE and DELETE, with the
+//! engine's identifier quoting. Values are `:named`
 //! placeholders to replace before running; UPDATE and DELETE always carry a WHERE on the key
 //! that identifies a row: the primary key, else a unique constraint, else every column.
 
@@ -18,8 +19,39 @@ pub enum SqlTemplate {
     /// `SELECT … WHERE key IN (…)`: several rows by their keys.
     SelectIn,
     Insert,
+    /// Insert, or update the row with the same key: `INSERT … ON CONFLICT … DO UPDATE`
+    /// (PostgreSQL, SQLite, DuckDB) or `INSERT … ON DUPLICATE KEY UPDATE` (MySQL, MariaDB).
+    Upsert,
+    /// `MERGE INTO … USING (SELECT :values) …` (PostgreSQL, SQL Server, DuckDB).
+    Merge,
     Update,
     Delete,
+}
+
+/// What the explorer offers for a table on this engine (a view only gets `Select`).
+pub fn table_templates(dialect: &dyn Dialect) -> Vec<SqlTemplate> {
+    let mut templates = vec![
+        SqlTemplate::Select,
+        SqlTemplate::SelectByKey,
+        SqlTemplate::SelectIn,
+        SqlTemplate::Insert,
+    ];
+    if has_upsert(dialect) {
+        templates.push(SqlTemplate::Upsert);
+    }
+    if has_merge(dialect) {
+        templates.push(SqlTemplate::Merge);
+    }
+    templates.extend([SqlTemplate::Update, SqlTemplate::Delete]);
+    templates
+}
+
+fn has_upsert(dialect: &dyn Dialect) -> bool {
+    matches!(dialect.name(), "postgres" | "sqlite" | "duckdb" | "mysql")
+}
+
+fn has_merge(dialect: &dyn Dialect) -> bool {
+    matches!(dialect.name(), "postgres" | "sqlserver" | "duckdb")
 }
 
 /// How many `:key_n` placeholders `SelectIn` writes.
@@ -67,6 +99,11 @@ pub fn table_sql(dialect: &dyn Dialect, table: &TableInfo, template: SqlTemplate
             list(columns.iter().map(|c| quote(c)), ",\n"),
             list(columns.iter().map(|c| placeholder(c)), ",\n")
         ),
+        // SQL Server's upsert is MERGE; MySQL, MariaDB and SQLite have no MERGE.
+        SqlTemplate::Upsert if !has_upsert(dialect) => merge(dialect, table),
+        SqlTemplate::Merge if !has_merge(dialect) => upsert(dialect, table),
+        SqlTemplate::Upsert => upsert(dialect, table),
+        SqlTemplate::Merge => merge(dialect, table),
         SqlTemplate::Update => {
             let key = row_key(table);
             let set: Vec<&str> = columns
@@ -91,6 +128,112 @@ pub fn table_sql(dialect: &dyn Dialect, table: &TableInfo, template: SqlTemplate
             where_clause(dialect, &row_key(table))
         ),
     }
+}
+
+/// `INSERT … ON CONFLICT (key) DO UPDATE SET c = EXCLUDED.c`, or MySQL's
+/// `ON DUPLICATE KEY UPDATE c = VALUES(c)` (which MariaDB reads too). Without a key there is no
+/// conflict to update on: a plain INSERT that says so.
+fn upsert(dialect: &dyn Dialect, table: &TableInfo) -> String {
+    let name = qualified(dialect, &table.object.schema, &table.object.name);
+    let quote = |c: &str| dialect.quote_identifier(c);
+    let columns: Vec<&str> = table.columns.iter().map(|c| c.name.as_str()).collect();
+    let insert = format!(
+        "INSERT INTO {name} (\n{}\n) VALUES (\n{}\n)",
+        list(columns.iter().map(|c| quote(c)), ",\n"),
+        list(columns.iter().map(|c| placeholder(c)), ",\n")
+    );
+    let key = row_key(table);
+    if matches!(key.source, KeySource::AllColumns) {
+        return format!(
+            "-- No primary or unique key: there is no conflict to update on.\n{insert};\n"
+        );
+    }
+    let rest: Vec<&str> = columns
+        .iter()
+        .copied()
+        .filter(|c| !key.columns.contains(c))
+        .collect();
+    let note = key.note(dialect);
+    if dialect.name() == "mysql" {
+        // Updating a key column to itself when there is nothing else keeps it a no-op.
+        let set = if rest.is_empty() { &key.columns } else { &rest };
+        return format!(
+            "{note}{insert}\nON DUPLICATE KEY UPDATE\n{};\n",
+            list(
+                set.iter()
+                    .map(|c| format!("{} = VALUES({})", quote(c), quote(c))),
+                ",\n"
+            )
+        );
+    }
+    let target = key
+        .columns
+        .iter()
+        .map(|c| quote(c))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if rest.is_empty() {
+        return format!("{note}{insert}\nON CONFLICT ({target}) DO NOTHING;\n");
+    }
+    format!(
+        "{note}{insert}\nON CONFLICT ({target}) DO UPDATE SET\n{};\n",
+        list(
+            rest.iter()
+                .map(|c| format!("{} = EXCLUDED.{}", quote(c), quote(c))),
+            ",\n"
+        )
+    )
+}
+
+/// `MERGE INTO t AS target USING (SELECT :values) AS source ON target.key = source.key`, then
+/// UPDATE the other columns when it matches and INSERT the row when it does not.
+fn merge(dialect: &dyn Dialect, table: &TableInfo) -> String {
+    let name = qualified(dialect, &table.object.schema, &table.object.name);
+    let quote = |c: &str| dialect.quote_identifier(c);
+    let columns: Vec<&str> = table.columns.iter().map(|c| c.name.as_str()).collect();
+    let key = row_key(table);
+    let on = key
+        .columns
+        .iter()
+        .map(|c| format!("target.{} = source.{}", quote(c), quote(c)))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let rest: Vec<&str> = columns
+        .iter()
+        .copied()
+        .filter(|c| !key.columns.contains(c))
+        .collect();
+    let matched = if rest.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "WHEN MATCHED THEN\n  UPDATE SET\n{}\n",
+            rest.iter()
+                .map(|c| format!("    {} = source.{}", quote(c), quote(c)))
+                .collect::<Vec<_>>()
+                .join(",\n")
+        )
+    };
+    format!(
+        "{}MERGE INTO {name} AS target\nUSING (\n  SELECT\n{}\n) AS source\nON {on}\n{matched}\
+         WHEN NOT MATCHED THEN\n  INSERT ({})\n  VALUES ({});\n",
+        key.note(dialect),
+        columns
+            .iter()
+            .map(|c| format!("    {} AS {}", placeholder(c), quote(c)))
+            .collect::<Vec<_>>()
+            .join(",\n"),
+        columns
+            .iter()
+            .map(|c| quote(c))
+            .collect::<Vec<_>>()
+            .join(", "),
+        columns
+            .iter()
+            .map(|c| format!("source.{}", quote(c)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 /// The exact number of rows of a table or view (`SELECT COUNT(*)`), run on `session`; the

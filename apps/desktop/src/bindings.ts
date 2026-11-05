@@ -231,6 +231,11 @@ export const commands = {
 	 *  to open in a new tab (nothing runs).
 	 */
 	relationDefinition: (session: string, schema: string, name: string) => typedError<string, string>(__TAURI_INVOKE("relation_definition", { session, schema, name })),
+	/**
+	 *  The SQL a table's menu can generate on this connection's engine (the core decides: an
+	 *  upsert or MERGE only where the engine has them).
+	 */
+	tableTemplates: (session: string) => typedError<SqlTemplateItem[], string>(__TAURI_INVOKE("table_templates", { session })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
@@ -942,7 +947,7 @@ export type SnippetItem = {
 };
 
 /**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */
-export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" | "insert" | "update" | "delete";
+export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" | "insert" | "upsert" | "merge" | "update" | "delete";
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
 

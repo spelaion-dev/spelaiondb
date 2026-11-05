@@ -163,6 +163,8 @@
     "selectByKey": "Generate SELECT … WHERE key =",
     "selectIn": "Generate SELECT … WHERE key IN",
     "insert": "Generate INSERT",
+    "upsert": "Generate upsert (INSERT or UPDATE)",
+    "merge": "Generate MERGE",
     "update": "Generate UPDATE",
     "delete": "Generate DELETE",
     "count": "Count rows",

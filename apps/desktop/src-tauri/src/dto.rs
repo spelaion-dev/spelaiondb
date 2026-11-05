@@ -1411,7 +1411,7 @@ impl From<spelaion_core::RiskyStatement> for RiskyItem {
 }
 
 /// SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`).
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum SqlTemplateItem {
     Preview,
@@ -1419,6 +1419,8 @@ pub enum SqlTemplateItem {
     SelectByKey,
     SelectIn,
     Insert,
+    Upsert,
+    Merge,
     Update,
     Delete,
 }
@@ -1431,8 +1433,27 @@ impl From<SqlTemplateItem> for spelaion_core::SqlTemplate {
             SqlTemplateItem::SelectByKey => Self::SelectByKey,
             SqlTemplateItem::SelectIn => Self::SelectIn,
             SqlTemplateItem::Insert => Self::Insert,
+            SqlTemplateItem::Upsert => Self::Upsert,
+            SqlTemplateItem::Merge => Self::Merge,
             SqlTemplateItem::Update => Self::Update,
             SqlTemplateItem::Delete => Self::Delete,
+        }
+    }
+}
+
+impl From<spelaion_core::SqlTemplate> for SqlTemplateItem {
+    fn from(template: spelaion_core::SqlTemplate) -> Self {
+        use spelaion_core::SqlTemplate;
+        match template {
+            SqlTemplate::Preview => Self::Preview,
+            SqlTemplate::Select => Self::Select,
+            SqlTemplate::SelectByKey => Self::SelectByKey,
+            SqlTemplate::SelectIn => Self::SelectIn,
+            SqlTemplate::Insert => Self::Insert,
+            SqlTemplate::Upsert => Self::Upsert,
+            SqlTemplate::Merge => Self::Merge,
+            SqlTemplate::Update => Self::Update,
+            SqlTemplate::Delete => Self::Delete,
         }
     }
 }

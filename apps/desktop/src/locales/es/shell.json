@@ -163,6 +163,8 @@
     "selectByKey": "Generar SELECT … WHERE clave =",
     "selectIn": "Generar SELECT … WHERE clave IN",
     "insert": "Generar INSERT",
+    "upsert": "Generar upsert (INSERT o UPDATE)",
+    "merge": "Generar MERGE",
     "update": "Generar UPDATE",
     "delete": "Generar DELETE",
     "count": "Contar filas",
