@@ -644,15 +644,11 @@ pub fn update_tunnel(
     result.map(|()| parsed)
 }
 
-/// Deletes a tunnel file and its stored passwords. Refused while a connection uses it.
-pub fn delete_tunnel(
-    config: &Config,
-    source: Source,
-    name: &str,
-    backend: &dyn SecretBackend,
-) -> Result<(), ResolveError> {
-    let entry = find(config, source, name)?;
-    let users: Vec<String> = config
+/// The connections that go through a tunnel (a network profile, ADR-027), by display name:
+/// those naming it whose layer finds this one (a repository connection may use a personal
+/// tunnel of the same name only if the repository has none).
+pub fn tunnel_users(config: &Config, source: Source, name: &str) -> Vec<String> {
+    config
         .connections
         .iter()
         .filter(|c| {
@@ -662,7 +658,18 @@ pub fn delete_tunnel(
                     .is_some_and(|t| t.source == source)
         })
         .map(|c| c.name())
-        .collect();
+        .collect()
+}
+
+/// Deletes a tunnel file and its stored passwords. Refused while a connection uses it.
+pub fn delete_tunnel(
+    config: &Config,
+    source: Source,
+    name: &str,
+    backend: &dyn SecretBackend,
+) -> Result<(), ResolveError> {
+    let entry = find(config, source, name)?;
+    let users = tunnel_users(config, source, name);
     if !users.is_empty() {
         return Err(ConfigError::new(
             &entry.file_path,

@@ -1,6 +1,6 @@
 # ADR-027: SOCKS and HTTP proxies go in tunnel files, and tunnel files are the network profiles
 
-- **Status:** Accepted (part 1 implemented; part 2 pending)
+- **Status:** Accepted (implemented)
 - **Date:** 2026-11-05
 - **Builds on:** ADR-007 (in-process SSH), ADR-009 (configuration and secrets), ADR-022 (trust
   pinned to content)
@@ -82,8 +82,16 @@ Two questions have to be answered first:
   - The stored password is forgotten when the proxy's type, host, port or user changes, or
     when the proxy is removed or deleted.
   - `spelaiondb check` checks the proxy's secret reference like a hop's.
-- Not done: importing DBeaver's proxy handlers (their file format was not checked against
-  real files) and the Settings → Network list of tunnel files (part 2).
+- Part 2:
+  - Settings → Network lists every tunnel file as a network profile. Each shows its route
+    (proxy, then hops), whether it is personal or the project's, and the connections that use
+    it (`tunnel_users`, also behind the refusal to delete a profile in use).
+  - New, Edit and Delete there open the same editor as the connection form.
+  - The forms call them network profiles. Files and the `tunnel = "…"` key are unchanged.
+  - The list reads only the files, so a repository's profiles can be listed before it is
+    trusted. Nothing is resolved and no secret is read.
+- Not done: importing DBeaver's proxy handlers. Their file format was not checked against
+  real files.
 - Tests:
   - `testing/docker/proxy` runs Dante (SOCKS5) and tinyproxy (HTTP), both with a password, on
     the networks of the bastions and databases. `SPELAION_TEST_SOCKS=127.0.0.1:11080` and
