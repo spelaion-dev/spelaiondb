@@ -236,6 +236,7 @@ pub struct ObjectActionsItem {
     pub drop_constraints: bool,
     pub create: Vec<CreateKindItem>,
     pub new_index: Vec<NewIndexKindItem>,
+    pub active_schema: bool,
 }
 
 /// What can be added on the columns chosen in the explorer (see `spelaion_core::NewIndexKind`).
@@ -315,6 +316,7 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             drop_constraints,
             create,
             new_index,
+            active_schema,
         } = actions;
         Self {
             rename_views,
@@ -322,6 +324,7 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             drop_constraints,
             create: create.into_iter().map(CreateKindItem::from).collect(),
             new_index: new_index.into_iter().map(NewIndexKindItem::from).collect(),
+            active_schema,
         }
     }
 }

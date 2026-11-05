@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
 import type { EditableTableItem } from "../bindings";
-import { openSession, SCHEMAS_REFRESHED_EVENT } from "../connect";
+import { openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
@@ -485,6 +485,29 @@ export function EditorTab({ tab }: { tab: Tab }) {
       setDatabaseBusy(false);
     }
   }
+
+  // "Set as the editor's schema" in the explorer, for this tab: through the database list where
+  // it has one, so the list shows it; otherwise the core sets the session's schema.
+  const [schemaRequest, setSchemaRequest] = useState<{ schema: string; n: number } | null>(null);
+  useEffect(() => {
+    const onRequest = (e: Event) => {
+      const { tabId, schema } = (e as CustomEvent<{ tabId: string; schema: string }>).detail;
+      if (tabId === tab.id) setSchemaRequest((request) => ({ schema, n: (request?.n ?? 0) + 1 }));
+    };
+    window.addEventListener(SET_ACTIVE_SCHEMA_EVENT, onRequest);
+    return () => window.removeEventListener(SET_ACTIVE_SCHEMA_EVENT, onRequest);
+  }, [tab.id]);
+  useEffect(() => {
+    if (!schemaRequest) return;
+    if (supportsDatabase) {
+      void changeDatabase(schemaRequest.schema);
+      return;
+    }
+    call(commands.setActiveSchema(tab.id, schemaRequest.schema))
+      .then(() => setNotice({ text: t("activeSchemaSet", { schema: schemaRequest.schema }), error: false }))
+      .catch((e: unknown) => setNotice({ text: message(e), error: true }));
+    // Once per request.
+  }, [schemaRequest]);
 
   async function ensureConnected(): Promise<boolean> {
     // The store, not this render's `tab`: a caller may have just connected (loading a

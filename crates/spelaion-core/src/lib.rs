@@ -39,8 +39,8 @@ pub use guard::{Risk, RiskyStatement, script_risks};
 pub use history::{HistoryError, QueryHistory};
 pub use objects::{
     CreateKind, FoundObject, NewIndexKind, ObjectActions, ObjectChange, ObjectError, ObjectTarget,
-    SEARCH_LIMIT, apply_change, can_cascade, change_script, change_statements, create_sql,
-    new_index_sql, object_actions, qualified_name, search_objects,
+    SEARCH_LIMIT, active_schema, apply_change, can_cascade, change_script, change_statements,
+    create_sql, new_index_sql, object_actions, qualified_name, search_objects, set_active_schema,
 };
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,

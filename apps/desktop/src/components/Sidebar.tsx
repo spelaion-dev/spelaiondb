@@ -31,6 +31,7 @@ import {
   explorerDatabase,
   openSession,
   SCHEMAS_REFRESHED_EVENT,
+  SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
@@ -1184,6 +1185,14 @@ function SchemaNode({
   const sort = useSortByName();
   const actions = useObjectActions(session);
   const [dropping, setDropping] = useState(false);
+  /** The editor tab "Set as the editor's schema" applies to: the active query tab, connected to
+   *  this connection and idle. */
+  const editorTab = useApp((s) => {
+    const tab = s.tabs.find((t) => t.id === s.activeTab);
+    return tab && !tab.table && tab.connectionId === connectionId && tab.status === "connected" && !tab.run?.running
+      ? tab.id
+      : null;
+  });
 
   async function load() {
     setError(null);
@@ -1315,6 +1324,21 @@ function SchemaNode({
             close={() => setMenu(null)}
             onError={setError}
           />
+          {actions?.activeSchema && (
+            <button
+              role="menuitem"
+              disabled={editorTab === null}
+              title={editorTab === null ? t("activeSchemaHint") : undefined}
+              onClick={() => {
+                setMenu(null);
+                if (editorTab) {
+                  window.dispatchEvent(new CustomEvent(SET_ACTIVE_SCHEMA_EVENT, { detail: { tabId: editorTab, schema } }));
+                }
+              }}
+            >
+              {t("setActiveSchema")}
+            </button>
+          )}
           <hr />
           <button role="menuitem" onClick={refresh}>
             {t("refreshSchema")}
