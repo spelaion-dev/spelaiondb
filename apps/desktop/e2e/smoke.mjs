@@ -1041,6 +1041,15 @@ try {
   await filterDialog.getByRole("button", { name: "Show everything" }).click();
   await customerNode.waitFor();
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  // Only the connected connections: Shop is open; nothing has connected to the Docker ones yet.
+  const connectedOnly = page.getByRole("button", { name: "Show only connected connections" });
+  await connectedOnly.click();
+  await page.locator('.connection-row:has-text("MariaDB (Docker)")').waitFor({ state: "detached" });
+  assert.equal(await page.locator('.connection-row:has-text("Postgres (Docker)")').count(), 0);
+  assert.equal(await page.locator('.connection-row:has-text("Shop (SQLite)")').count(), 1);
+  assert.equal(await connectedOnly.getAttribute("aria-pressed"), "true");
+  await connectedOnly.click();
+  await page.locator('.connection-row:has-text("MariaDB (Docker)")').waitFor();
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');

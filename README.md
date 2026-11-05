@@ -188,6 +188,8 @@ folders by type: **Tables** (partitioned ones marked P), **Foreign tables**, **V
 (MySQL) and **Synonyms** (SQL Server); only the folders with something in them appear. After
 the schemas come **Roles**, **Users**, **Logins**, **Tablespaces** and **Extensions**, as
 the engine has them (MySQL's accounts only for users that may read `mysql.user`).
+The plug over the explorer shows only the connected connections (those opened in the
+explorer or used by a connected tab); click it again to see all of them.
 The magnifying glass over the explorer (or **Ctrl+Shift+F**) opens its quick filter: only
 the connections, schemas and objects whose name contains the text stay, with the folders
 that hold them opened, and a connection or schema whose name matches shows everything in it.

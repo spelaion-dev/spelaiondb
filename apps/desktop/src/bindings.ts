@@ -568,6 +568,7 @@ export type ExplorerPreferencesItem = {
 	sortAlphabetically: boolean,
 	sortIgnoreCase: boolean,
 	foldersFirst: boolean,
+	connectedOnly: boolean,
 };
 
 /**

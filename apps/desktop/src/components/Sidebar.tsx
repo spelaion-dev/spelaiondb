@@ -106,6 +106,15 @@ function matchesFilter(name: string, filter: string): boolean {
   return filter === "" || name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
 }
 
+/** A plug: "Show only connected connections". */
+function PlugIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5V21" />
+    </svg>
+  );
+}
+
 /** The magnifying glass of the quick filter. */
 function SearchIcon() {
   return (
@@ -336,8 +345,16 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     return () => window.removeEventListener(FOCUS_EXPLORER_FILTER_EVENT, focus);
   }, []);
   const filterText = filter ?? "";
+  const explorer = usePreferences((s) => s.explorer);
+  const explorerConnected = useApp((s) => s.explorerConnected);
+  const tabs = useApp((s) => s.tabs);
+  const tabConnected = tabs.filter((tab) => tab.status === "connected").map((tab) => tab.connectionId);
+  /** Opened in the explorer or used by a connected tab. */
+  const connected = (c: ConnectionItem) => explorerConnected.includes(c.id) || tabConnected.includes(c.id);
   /** With a filter, connections whose name matches, and those already expanded. */
-  const shown = (c: ConnectionItem) => matchesFilter(c.name, filterText) || openConnections.includes(c.id);
+  const shown = (c: ConnectionItem) =>
+    (!explorer.connectedOnly || connected(c)) &&
+    (matchesFilter(c.name, filterText) || openConnections.includes(c.id));
 
   async function openFolder() {
     const path = await open({ directory: true, title: t("openFolderTitle") });
@@ -410,6 +427,15 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           disabled={cannotSwitch}
         >
           {t("openFolder")}
+        </button>
+        <button
+          className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
+          onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: !explorer.connectedOnly })}
+          aria-label={t("connectedOnly")}
+          aria-pressed={explorer.connectedOnly}
+          title={t("connectedOnly")}
+        >
+          <PlugIcon />
         </button>
         <button
           className={`ghost icon-button${filter !== null ? " active" : ""}`}
@@ -490,6 +516,14 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         {connections.length > 0 && filterText !== "" && !connections.some(shown) && (
           <div className="empty small">{t("quickFilterNothing")}</div>
         )}
+        {connections.length > 0 && filterText === "" && explorer.connectedOnly && !connections.some(shown) && (
+          <div className="empty small">
+            {t("noneConnected")}{" "}
+            <button className="link" onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: false })}>
+              {t("showAllConnections")}
+            </button>
+          </div>
+        )}
         {connections.length === 0 && (
           <div className="empty small">
             <Trans
@@ -564,7 +598,13 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   useEffect(() => {
     useApp.getState().setConnectionOpen(connection.id, open);
   }, [connection.id, open]);
-  useEffect(() => () => useApp.getState().setConnectionOpen(connection.id, false), [connection.id]);
+  useEffect(
+    () => () => {
+      useApp.getState().setConnectionOpen(connection.id, false);
+      useApp.getState().setExplorerConnected(connection.id, false);
+    },
+    [connection.id],
+  );
 
   async function toggle() {
     if (open) return setOpen(false);
@@ -598,6 +638,7 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
     ]);
     setSchemas(all);
     setServerObjects(server);
+    useApp.getState().setExplorerConnected(connection.id, true);
   }
 
   /** Schemas, server objects and everything already loaded under them, read again. */

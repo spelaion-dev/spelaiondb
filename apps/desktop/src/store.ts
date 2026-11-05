@@ -129,6 +129,8 @@ interface AppStore {
   explorerFilter: string | null;
   /** Connections expanded in the explorer: the quick filter keeps them shown. */
   openConnections: string[];
+  /** Connections the explorer has a session on (they were opened at least once). */
+  explorerConnected: string[];
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
   addTab(connectionId: string | null, sql?: string): string;
@@ -156,6 +158,7 @@ interface AppStore {
   clearTabConnections(): void;
   setExplorerFilter(filter: string | null): void;
   setConnectionOpen(connection: string, open: boolean): void;
+  setExplorerConnected(connection: string, connected: boolean): void;
 }
 
 export const useApp = create<AppStore>((set) => ({
@@ -174,6 +177,7 @@ export const useApp = create<AppStore>((set) => ({
   workspaceChanging: false,
   explorerFilter: null,
   openConnections: [],
+  explorerConnected: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
   addTab: (connectionId, sql = "") => {
@@ -234,6 +238,9 @@ export const useApp = create<AppStore>((set) => ({
   })),
   setWorkspaceChanging: (workspaceChanging) => set({ workspaceChanging }),
   setExplorerFilter: (explorerFilter) => set({ explorerFilter }),
+  setExplorerConnected: (connection, connected) => set((s) => ({
+    explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),
+  })),
   setConnectionOpen: (connection, open) => set((s) => ({
     openConnections: open ? [...new Set([...s.openConnections, connection])] : s.openConnections.filter((id) => id !== connection),
   })),

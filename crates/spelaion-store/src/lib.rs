@@ -314,6 +314,9 @@ pub struct ExplorerPreferences {
     pub sort_ignore_case: bool,
     /// Folders (roles, tablespaces…) before the schemas next to them; off by default.
     pub folders_first: bool,
+    /// Only the connections that are connected (opened in the explorer or used by a tab);
+    /// off by default.
+    pub connected_only: bool,
 }
 
 impl Default for ExplorerPreferences {
@@ -323,6 +326,7 @@ impl Default for ExplorerPreferences {
             sort_alphabetically: true,
             sort_ignore_case: true,
             folders_first: false,
+            connected_only: false,
         }
     }
 }
@@ -648,6 +652,7 @@ impl Store {
             sort_ignore_case: self
                 .get_flag("explorer.sort_ignore_case", defaults.sort_ignore_case)?,
             folders_first: self.get_flag("explorer.folders_first", defaults.folders_first)?,
+            connected_only: self.get_flag("explorer.connected_only", defaults.connected_only)?,
         })
     }
 
@@ -660,11 +665,13 @@ impl Store {
             sort_alphabetically,
             sort_ignore_case,
             folders_first,
+            connected_only,
         } = *preferences;
         self.set_flag("explorer.show_system", show_system)?;
         self.set_flag("explorer.sort_alphabetically", sort_alphabetically)?;
         self.set_flag("explorer.sort_ignore_case", sort_ignore_case)?;
-        self.set_flag("explorer.folders_first", folders_first)
+        self.set_flag("explorer.folders_first", folders_first)?;
+        self.set_flag("explorer.connected_only", connected_only)
     }
 
     fn get_flag(&self, key: &str, default: bool) -> Result<bool, StoreError> {
@@ -1317,13 +1324,14 @@ mod tests {
         );
         let defaults = ExplorerPreferences::default();
         assert!(defaults.sort_alphabetically && defaults.sort_ignore_case);
-        assert!(!defaults.show_system && !defaults.folders_first);
+        assert!(!defaults.show_system && !defaults.folders_first && !defaults.connected_only);
         // Every field is saved on its own: each one flipped from its default.
         let changed = ExplorerPreferences {
             show_system: true,
             sort_alphabetically: false,
             sort_ignore_case: false,
             folders_first: true,
+            connected_only: true,
         };
         store.set_explorer_preferences(&changed).unwrap();
         drop(store);
