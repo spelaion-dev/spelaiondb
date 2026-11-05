@@ -95,6 +95,8 @@ export function TunnelEditor(props: {
   const [name, setName] = useState(editing ? mode.name : "");
   const [personal, setPersonal] = useState(mode.personal || !hasWorkspace);
   const [hops, setHops] = useState<HopState[]>(editing ? [] : [emptyHop()]);
+  const [keepaliveInterval, setKeepaliveInterval] = useState<number | null>(null);
+  const [keepaliveCount, setKeepaliveCount] = useState<number | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "idle" | "testing" | "ok" } | { kind: "error"; message: string }>({ kind: "idle" });
@@ -104,7 +106,13 @@ export function TunnelEditor(props: {
   useEffect(() => {
     if (mode.kind !== "edit") return;
     call(commands.tunnelDraft(mode.name, mode.personal))
-      .then(([draft, version]) => { setRevision(version); setHops((draft as TunnelDraft).hops.map(fromDraft)); })
+      .then(([draft, version]) => {
+        const loaded = draft as TunnelDraft;
+        setRevision(version);
+        setHops(loaded.hops.map(fromDraft));
+        setKeepaliveInterval(loaded.keepaliveInterval ?? null);
+        setKeepaliveCount(loaded.keepaliveCount ?? null);
+      })
       .catch((e: unknown) => setLoadError(errorText(e)));
   }, [mode]);
 
@@ -134,7 +142,9 @@ export function TunnelEditor(props: {
     setStatus({ kind: "idle" });
   };
 
-  const draft: TunnelDraft = { personal, name, hops: hops.map(toDraft) };
+  const draft: TunnelDraft = { personal, name, hops: hops.map(toDraft), keepaliveInterval, keepaliveCount };
+  /** A whole number typed in a field, or null when it is empty. */
+  const numberOrNull = (text: string) => (text.trim() === "" ? null : Math.max(0, Math.trunc(Number(text))));
   const passwords = hops.map((hop) => hop.password || null);
 
   async function browseKey(i: number) {
@@ -338,6 +348,41 @@ export function TunnelEditor(props: {
             <button type="button" className="add-hop" onClick={() => setHops((list) => [...list, emptyHop()])}>
               {t("tunnel.addHop")}
             </button>
+
+            <fieldset>
+              <legend>{t("tunnel.network")}</legend>
+              <div className="form-pair">
+                <label className="field">
+                  <span>{t("tunnel.keepaliveInterval")}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={86400}
+                    value={keepaliveInterval ?? ""}
+                    placeholder="15"
+                    onChange={(e) => {
+                      setKeepaliveInterval(numberOrNull(e.target.value));
+                      setStatus({ kind: "idle" });
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("tunnel.keepaliveCount")}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000}
+                    value={keepaliveCount ?? ""}
+                    placeholder="3"
+                    onChange={(e) => {
+                      setKeepaliveCount(numberOrNull(e.target.value));
+                      setStatus({ kind: "idle" });
+                    }}
+                  />
+                </label>
+              </div>
+              <p className="muted small">{t("tunnel.keepaliveHint")}</p>
+            </fieldset>
           </div>
 
           <div className="wizard-footer">

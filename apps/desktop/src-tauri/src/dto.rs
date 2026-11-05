@@ -1461,6 +1461,10 @@ pub struct TunnelDraftItem {
     pub personal: bool,
     pub name: String,
     pub hops: Vec<HopDraftItem>,
+    /// Seconds; null for the default (15), 0 for none.
+    pub keepalive_interval: Option<u32>,
+    /// Null for the default (3), 0 never gives up.
+    pub keepalive_count: Option<u32>,
 }
 
 /// The Kubernetes tab of the connection form; empty fields mean the defaults.
@@ -1609,6 +1613,10 @@ impl From<TunnelDraftItem> for spelaion_config::TunnelDraft {
                     ),
                 })
                 .collect(),
+            options: spelaion_config::TunnelDraftOptions {
+                keepalive_interval: item.keepalive_interval,
+                keepalive_count: item.keepalive_count,
+            },
         }
     }
 }
@@ -1639,6 +1647,8 @@ impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
                     }
                 })
                 .collect(),
+            keepalive_interval: draft.options.keepalive_interval,
+            keepalive_count: draft.options.keepalive_count,
         }
     }
 }

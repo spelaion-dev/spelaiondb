@@ -1157,12 +1157,20 @@ export type TunnelDraftItem_Deserialize = {
 	personal: boolean,
 	name: string,
 	hops: HopDraftItem_Deserialize[],
+	/**  Seconds; null for the default (15), 0 for none. */
+	keepaliveInterval?: number | null,
+	/**  Null for the default (3), 0 never gives up. */
+	keepaliveCount?: number | null,
 };
 
 export type TunnelDraftItem_Serialize = {
 	personal: boolean,
 	name: string,
 	hops: HopDraftItem_Serialize[],
+	/**  Seconds; null for the default (15), 0 for none. */
+	keepaliveInterval: number | null,
+	/**  Null for the default (3), 0 never gives up. */
+	keepaliveCount: number | null,
 };
 
 /**  A tunnel that a new connection can use. */

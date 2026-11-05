@@ -18,3 +18,7 @@ ForceCommand /bin/echo "This bastion gives no shell"
 ClientAliveInterval 15
 ClientAliveCountMax 3
 LogLevel VERBOSE
+
+# Tests open many sessions at once: OpenSSH's default (10:30:100) drops some of them at
+# random while they authenticate.
+MaxStartups 200

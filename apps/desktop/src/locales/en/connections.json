@@ -179,6 +179,10 @@
       "keyboard-interactive": "For servers that ask questions such as a 2FA code: they are asked when connecting.",
       "custom": "These methods are tried in order and kept as they are in the file."
     },
+    "network": "Network",
+    "keepaliveInterval": "Keep-alive every (seconds)",
+    "keepaliveCount": "Give up after (unanswered)",
+    "keepaliveHint": "When a server sends nothing for that long, a keep-alive is sent, so a NAT or firewall does not drop an idle tunnel; after that many unanswered the tunnel is shown as down. Empty: 15 s and 3. 0 seconds sends none; 0 unanswered never gives up.",
     "addHop": "+ Add hop",
     "test": "Test tunnel",
     "ok_one": "Tunnel OK · {{count}} hop",
