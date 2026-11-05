@@ -292,6 +292,53 @@ async fn a_changed_host_key_blocks_the_tunnel() {
 }
 
 #[tokio::test]
+async fn host_pins_cover_different_algorithms_and_all_approved_keys() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let spec = TunnelSpec {
+        hops: vec![hop(&host, port, "id_ed25519")],
+    };
+    let learned = TempKnownHosts::new("algorithms-learned");
+    let tunnel = Tunnel::connect(&spec, &learned.known(), TestUi::accepting())
+        .await
+        .unwrap();
+    tunnel.close().await;
+    let correct = std::fs::read_to_string(&learned.known().app_file).unwrap();
+    let other = std::fs::read_to_string(key("id_ed25519.pub")).unwrap();
+    let other = other
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let known = TempKnownHosts::new("algorithms-team");
+    let ecdsa = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHwf2HMM5TRXvo2SQJjsNkiDD5KqiiNjrGVv3UUh+mMT5RHxiRtOnlqvjhQtBq0VpmpCV/PwUdhOig4vkbqAcEc=";
+    let team = format!("[{host}]:{port} {ecdsa}\n");
+    let known_files = KnownHosts {
+        user_file: Some(learned.known().app_file),
+        ..known.with_team(&team)
+    };
+    let ui = TestUi::accepting();
+    match Tunnel::connect(&spec, &known_files, ui.clone()).await {
+        Err(SshError::HostKeyChanged {
+            hop: 0, line: 1, ..
+        }) => {}
+        other => panic!(
+            "a key of another algorithm must be blocked: {:?}",
+            other.map(|_| ())
+        ),
+    }
+    assert_eq!(ui.hosts_asked.load(Ordering::SeqCst), 0);
+    assert!(!known_files.app_file.exists());
+
+    let team = format!("[{host}]:{port} {other}\n{correct}");
+    let tunnel = Tunnel::connect(&spec, &known.with_team(&team), Arc::new(NeverAsked))
+        .await
+        .unwrap();
+    tunnel.close().await;
+}
+
+#[tokio::test]
 async fn encrypted_keys_ask_for_the_passphrase() {
     let Some((host, port)) = bastion() else {
         return;

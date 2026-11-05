@@ -5703,7 +5703,9 @@ name = "spelaion-ssh"
 version = "0.5.0"
 dependencies = [
  "async-trait",
+ "data-encoding",
  "futures-util",
+ "ring",
  "russh",
  "spelaion-driver-api",
  "spelaion-driver-postgres",
