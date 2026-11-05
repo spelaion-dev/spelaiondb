@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use spelaion_config::{
-    ConnectionDraft, ConnectionFile, ConnectionId, Engine, HopDraft, KubernetesDraft, Password,
-    PasswordChoice, ResolveError, Resolver, SecretBackend, Source, SshAuth, SystemBackend,
-    TlsModeConfig, TrustStore, TunnelDraft, TunnelDraftOptions, TunnelFile, TunnelSettings,
-    WritePolicy, add_connection, add_tunnel, connection_account, create_connection, delete_tunnel,
-    load, set_value, slug, tunnel_account, update_tunnel,
+    ConnectionDraft, ConnectionFile, ConnectionId, Engine, HopDraft, KubernetesDraft, LocalPort,
+    Password, PasswordChoice, ResolveError, Resolver, SecretBackend, Source, SshAuth,
+    SystemBackend, TlsModeConfig, TrustStore, TunnelDraft, TunnelDraftOptions, TunnelFile,
+    TunnelSettings, WritePolicy, add_connection, add_tunnel, connection_account, create_connection,
+    delete_tunnel, load, set_value, slug, tunnel_account, update_tunnel,
 };
 use spelaion_driver_api::{Secret, TlsMode};
 
@@ -502,6 +502,7 @@ fn creates_new_connection_files() {
         user: None,
         password: None,
         tunnel: None,
+        local_port: None,
         kubernetes: None,
         sqlite3: None,
         read_only: true,
@@ -603,6 +604,7 @@ fn postgres_draft() -> ConnectionDraft {
         tls_cert: String::new(),
         tls_key: String::new(),
         tunnel: String::new(),
+        local_port: None,
         kubernetes: None,
         sqlite3: String::new(),
         read_only: false,
@@ -1178,6 +1180,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         tls_cert: String::new(),
         tls_key: String::new(),
         tunnel: String::new(),
+        local_port: None,
         sqlite3: String::new(),
         kubernetes: Some(KubernetesDraft {
             context: "kind-orders".into(),
@@ -1561,13 +1564,7 @@ fn tunnel_keepalives_are_edited_validated_and_resolved() {
     assert!(error.contains("keepalive_count"), "{error}");
     fx.write(
         "repo/.spelaion/tunnels/broken.toml",
-        "schema_version = 1
-keepalive_interval = -1
-
-[[hops]]
-host = \"h\"
-user = \"u\"
-",
+        "schema_version = 1\nkeepalive_interval = -1\n\n[[hops]]\nhost = \"h\"\nuser = \"u\"\n",
     );
     let config = load(Some(&fx.repo()), &fx.user());
     assert!(
@@ -1578,6 +1575,159 @@ user = \"u\"
         "{:?}",
         config.problems
     );
+}
+
+#[test]
+fn local_ports_come_from_the_connection_or_the_personal_range() {
+    let fx = Fixture::new("local-ports");
+    let path = fx.write(
+        "repo/.spelaion/connections/prod/orders.toml",
+        &format!("# Pinned for the reporting tool\n{ORDERS}"),
+    );
+    fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
+    fx.write("user/user.toml", "[vars]\ndb_user = \"ana\"\n");
+    let backend = FakeBackend {
+        env: BTreeMap::from([("REGION".into(), "eu".into())]),
+        ..Default::default()
+    };
+    let resolve = |fx: &Fixture| {
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        Resolver::new(&config, &fx.trusted(), &backend)
+            .resolve(&ws("prod/orders"))
+            .unwrap()
+            .local_port
+    };
+    assert_eq!(resolve(&fx), LocalPort::Any);
+
+    // The personal range applies to connections without a port of their own.
+    fx.write(
+        "user/user.toml",
+        "[vars]\ndb_user = \"ana\"\n\n[tunnels]\nport_min = 20000\nport_max = 20010\n",
+    );
+    assert_eq!(
+        resolve(&fx),
+        LocalPort::Range {
+            min: 20000,
+            max: 20010
+        }
+    );
+
+    // The form writes local_port (keeping comments), and the connection's port wins.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let id = ws("prod/orders");
+    let draft = ConnectionDraft {
+        local_port: Some(15432),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.starts_with("# Pinned for the reporting tool"),
+        "{content}"
+    );
+    assert!(content.contains("local_port = 15432"), "{content}");
+    assert_eq!(resolve(&fx), LocalPort::Fixed(15432));
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert_eq!(
+        ConnectionDraft::from_entry(config.connection(&id).unwrap()).local_port,
+        Some(15432)
+    );
+    // Without a tunnel, the form leaves it out.
+    let direct = ConnectionDraft {
+        tunnel: String::new(),
+        ..draft.clone()
+    };
+    assert_eq!(direct.to_file(&config).unwrap().local_port, None);
+    let cleared = ConnectionDraft {
+        local_port: None,
+        ..draft
+    };
+    spelaion_config::update_connection(&config, &id, &cleared, None, &backend).unwrap();
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("local_port")
+    );
+
+    // Hand-written mistakes are reported, not guessed at.
+    for (file, content, expected) in [
+        (
+            "direct.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nlocal_port = 5433\n",
+            "needs a tunnel",
+        ),
+        (
+            "zero.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ntunnel = \"bastion\"\nlocal_port = 0\n",
+            "from 1 to 65535",
+        ),
+        (
+            "remote.toml",
+            "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"/srv/app.db\"\ntunnel = \"bastion\"\nlocal_port = 5433\n",
+            "needs a tunnel",
+        ),
+    ] {
+        let written = fx.write(&format!("repo/.spelaion/connections/{file}"), content);
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(
+            config
+                .problems
+                .iter()
+                .any(|p| p.file.ends_with(file) && p.message.contains(expected)),
+            "{file}: {:?}",
+            config.problems
+        );
+        std::fs::remove_file(written).unwrap();
+    }
+
+    // A wrong personal range is reported and tunnels take any free port.
+    for range in [
+        "port_min = 30000\nport_max = 20000\n",
+        "port_min = 30000\n",
+        "port_min = 0\nport_max = 10\n",
+    ] {
+        fx.write(
+            "user/user.toml",
+            &format!("[vars]\ndb_user = \"ana\"\n\n[tunnels]\n{range}"),
+        );
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(
+            config
+                .problems
+                .iter()
+                .any(|p| p.message.contains("[tunnels]")),
+            "{range}: {:?}",
+            config.problems
+        );
+        assert_eq!(config.user.tunnels, Default::default());
+        assert_eq!(config.user.vars["db_user"], "ana");
+    }
+}
+
+#[test]
+fn the_personal_port_range_is_saved_next_to_the_variables() {
+    let fx = Fixture::new("port-range");
+    let path = fx.write("user/user.toml", "# mine\n[vars]\ndb_user = \"ana\"\n");
+    spelaion_config::set_tunnel_ports(&fx.user(), Some((20000, 20100))).unwrap();
+    let config = load(None, &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    assert_eq!(config.user.tunnels.range(), Ok(Some((20000, 20100))));
+    assert_eq!(config.user.vars["db_user"], "ana");
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("# mine")
+    );
+    // A wrong range never reaches the file.
+    let before = std::fs::read_to_string(&path).unwrap();
+    assert!(spelaion_config::set_tunnel_ports(&fx.user(), Some((300, 200))).is_err());
+    assert!(spelaion_config::set_tunnel_ports(&fx.user(), Some((0, 200))).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    spelaion_config::set_tunnel_ports(&fx.user(), None).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(!content.contains("tunnels"), "{content}");
+    assert!(content.contains("db_user = \"ana\""), "{content}");
 }
 
 #[test]
@@ -2182,6 +2332,13 @@ fn every_way_around_the_snapshot_is_caught() {
             "mcp.writes",
             format!("{PINNED_DB}\n[mcp]\nexposed = true\nwrites = \"allow\"\n"),
         ),
+        (
+            "local_port",
+            PINNED_DB.replace(
+                "tunnel = \"bastion\"\n",
+                "tunnel = \"bastion\"\nlocal_port = 5433\n",
+            ),
+        ),
     ] {
         std::fs::write(&path, &edited).unwrap();
         let change = changed(resolved(&fx, &trust));
@@ -2212,11 +2369,8 @@ fn every_way_around_the_snapshot_is_caught() {
     std::fs::write(
         &tunnel,
         PINNED_TUNNEL.replace(
-            "schema_version = 1
-",
-            "schema_version = 1
-keepalive_interval = 0
-",
+            "schema_version = 1\n",
+            "schema_version = 1\nkeepalive_interval = 0\n",
         ),
     )
     .unwrap();

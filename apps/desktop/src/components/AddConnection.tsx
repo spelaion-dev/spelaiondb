@@ -341,6 +341,7 @@ function ConnectionForm(props: {
     mcpExposed: false,
     mcpWrites: false,
     sqlite3: "",
+    localPort: null,
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
 
@@ -394,6 +395,7 @@ function ConnectionForm(props: {
     passwordMode,
     tunnel: tunnelsAllowed && useTunnel && !useKubernetes ? tunnel : "",
     sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
+    localPort: network && useTunnel && !useKubernetes ? (draft.localPort ?? null) : null,
     kubernetes: network && useKubernetes ? kubernetes : null,
   };
   const typedPassword = auth === "password" ? password : "";
@@ -742,6 +744,22 @@ function ConnectionForm(props: {
               <p className="muted small">
                 {tunnels.length === 0 ? t("fields.noTunnelsHint") : remoteFile ? t("fields.tunnelForFileHint") : t("fields.tunnelHint")}
               </p>
+              {!remoteFile && (
+                <>
+                  <Field label={t("fields.localPort")} className="port">
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={draft.localPort ?? ""}
+                      disabled={!useTunnel || useKubernetes}
+                      placeholder={t("fields.localPortPlaceholder")}
+                      onChange={(e) => update({ localPort: e.target.value ? Math.trunc(Number(e.target.value)) : null })}
+                    />
+                  </Field>
+                  <p className="muted small">{t("fields.localPortHint")}</p>
+                </>
+              )}
               {remoteFile && (
                 <Field label={t("fields.sqlite3")}>
                   <input type="text" value={draft.sqlite3} disabled={!useTunnel} placeholder="sqlite3" onChange={(e) => update({ sqlite3: e.target.value })} />

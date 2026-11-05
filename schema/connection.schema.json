@@ -181,6 +181,16 @@
       ],
       "description": "Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):\n`port` is then the resource's port and `host` is only the name TLS checks."
     },
+    "local_port": {
+      "description": "A fixed port on 127.0.0.1 for this connection's end of its SSH tunnel, so other tools\ncan use it too. A free port when absent (from the personal `[tunnels]` range, if set).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "mcp": {
       "$ref": "#/$defs/McpConfig"
     },

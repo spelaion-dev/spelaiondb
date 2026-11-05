@@ -1,6 +1,5 @@
 //! Opening the tunnel, local port forwarding and lifecycle.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -17,7 +16,7 @@ use tokio::task::JoinHandle;
 
 use crate::auth::authenticate;
 use crate::hostkeys::{self, KnownHosts};
-use crate::{HopSpec, Interaction, SshError, Target, TunnelSpec};
+use crate::{HopSpec, Interaction, LocalPort, SshError, Target, TunnelSpec};
 
 /// A command running on a tunnel's last hop ([`Tunnel::exec`]).
 pub struct RemoteExec {
@@ -111,8 +110,9 @@ impl client::Handler for HopHandler {
 pub struct Tunnel {
     state: Arc<watch::Sender<TunnelState>>,
     sessions: Vec<Arc<Handle<HopHandler>>>,
-    /// One local port per target.
-    forwards: Mutex<HashMap<Target, (SocketAddr, JoinHandle<()>)>>,
+    /// Local ports and the target each leads to. Usually one per target; a connection that
+    /// asks for a fixed port may add another.
+    forwards: Mutex<Vec<(Target, SocketAddr, JoinHandle<()>)>>,
     /// Address of the first forward (the one from [`Tunnel::open`]).
     primary: std::sync::OnceLock<SocketAddr>,
     child: Mutex<Option<Child>>,
@@ -240,7 +240,7 @@ impl Tunnel {
         Ok(Tunnel {
             state,
             sessions,
-            forwards: Mutex::new(HashMap::new()),
+            forwards: Mutex::new(Vec::new()),
             primary: std::sync::OnceLock::new(),
             child: Mutex::new(child),
         })
@@ -299,26 +299,33 @@ the server refused to run a command (it may allow only port forwarding)
         })
     }
 
-    /// Local port that leads to `target` through the last session. Reuses the forward if it
-    /// already exists: several connections to the same target share the port and sessions.
+    /// Local port that leads to `target` through the last session, on any free port.
     pub async fn forward(&self, target: Target) -> Result<SocketAddr, SshError> {
+        self.forward_on(target, LocalPort::Any).await
+    }
+
+    /// Local port that leads to `target` through the last session, where `port` says. Reuses
+    /// a forward to the same target on a port `port` accepts: several connections to the
+    /// same target share the port and sessions.
+    pub async fn forward_on(
+        &self,
+        target: Target,
+        port: LocalPort,
+    ) -> Result<SocketAddr, SshError> {
         if let TunnelState::Down { reason } = &*self.state.borrow() {
             return Err(SshError::Other(format!("the tunnel is down: {reason}")));
         }
-        if let Some((addr, _)) = self.forwards.lock().expect("lock poisoned").get(&target) {
-            return Ok(*addr);
+        if let Some(addr) = self.existing(&target, port) {
+            return Ok(addr);
         }
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|e| SshError::Other(e.to_string()))?;
+        let listener = listen(port).await?;
         let addr = listener
             .local_addr()
             .map_err(|e| SshError::Other(e.to_string()))?;
         let last = self.sessions.last().expect("at least one hop").clone();
-        let mut forwards = self.forwards.lock().expect("lock poisoned");
         // Another task may have created the same forward while the port was being opened.
-        if let Some((existing, _)) = forwards.get(&target) {
-            return Ok(*existing);
+        if let Some(addr) = self.existing(&target, port) {
+            return Ok(addr);
         }
         let task = tokio::spawn(forward(
             listener,
@@ -326,9 +333,21 @@ the server refused to run a command (it may allow only port forwarding)
             target.clone(),
             self.state.subscribe(),
         ));
-        forwards.insert(target, (addr, task));
+        self.forwards
+            .lock()
+            .expect("lock poisoned")
+            .push((target, addr, task));
         let _ = self.primary.set(addr);
         Ok(addr)
+    }
+
+    fn existing(&self, target: &Target, port: LocalPort) -> Option<SocketAddr> {
+        self.forwards
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .find(|(t, addr, _)| t == target && port.accepts(addr.port()))
+            .map(|(_, addr, _)| *addr)
     }
 
     /// Local address of the first forward (the one from [`Tunnel::open`]).
@@ -365,7 +384,7 @@ the server refused to run a command (it may allow only port forwarding)
     }
 
     fn abort_forwards(&self) {
-        for (_, (_, task)) in self.forwards.lock().expect("lock poisoned").drain() {
+        for (_, _, task) in self.forwards.lock().expect("lock poisoned").drain(..) {
             task.abort();
         }
     }
@@ -384,6 +403,28 @@ impl Drop for Tunnel {
             TunnelState::Down { .. } => false,
         });
         // The external command has kill_on_drop; sessions close when their Handle is dropped.
+    }
+}
+
+/// Opens the local end of a forward on 127.0.0.1 (never on another address).
+async fn listen(port: LocalPort) -> Result<TcpListener, SshError> {
+    match port {
+        LocalPort::Any => TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| SshError::Other(format!("could not open a local port: {e}"))),
+        LocalPort::Fixed(port) => TcpListener::bind(("127.0.0.1", port))
+            .await
+            .map_err(|e| SshError::Other(format!("could not use local port {port}: {e}"))),
+        LocalPort::Range { min, max } => {
+            for port in min..=max {
+                if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)).await {
+                    return Ok(listener);
+                }
+            }
+            Err(SshError::Other(format!(
+                "no free local port from {min} to {max} (the range for tunnels in your settings)"
+            )))
+        }
     }
 }
 

@@ -347,6 +347,80 @@ async fn connections_share_one_tunnel() {
     assert_eq!(ws.tunnels.active().await, 0);
 }
 
+/// Two consecutive free local ports.
+fn free_port_pair() -> u16 {
+    (42_000u16..60_000)
+        .step_by(41)
+        .find(|p| {
+            std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok()
+                && std::net::TcpListener::bind(("127.0.0.1", *p + 1)).is_ok()
+        })
+        .expect("two free ports")
+}
+
+/// A connection's `local_port` and the personal `[tunnels]` range decide where the tunnel's
+/// local end listens; the tunnel's network settings are used as written.
+#[tokio::test]
+async fn local_ports_follow_the_connection_and_the_personal_range() {
+    let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
+        eprintln!("SPELAION_TEST_SSH not set: test skipped");
+        return;
+    };
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let ws = Workspace::new("local-ports");
+    let identity = toml_path(&keys().join("id_ed25519"));
+    ws.write(
+        ".spelaion/tunnels/bastions.toml",
+        &format!(
+            "schema_version = 1\nkeepalive_interval = 5\nkeepalive_count = 2\nconnect_timeout = 10\n\n[[hops]]\nhost = \"{host}\"\nport = {port}\nuser = \"spelaion\"\nauth = [\"key\"]\nidentity_file = {identity}\n\n[[hops]]\nhost = \"bastion2\"\nuser = \"spelaion\"\nauth = [\"key\"]\nidentity_file = {identity}\n"
+        ),
+    );
+    let fixed = free_port_pair();
+    let ranged = fixed + 1;
+    let connection = |database: &str, extra: &str| {
+        format!(
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"postgres\"\ndatabase = \"{database}\"\nuser = \"spelaion\"\npassword = {{ secret = \"cmd:echo spelaion\" }}\ntunnel = \"bastions\"\n{extra}"
+        )
+    };
+    ws.write(
+        ".spelaion/connections/fixed.toml",
+        &connection("spelaion", &format!("local_port = {fixed}\n")),
+    );
+    ws.write(
+        ".spelaion/connections/free.toml",
+        &connection("postgres", ""),
+    );
+    std::fs::write(
+        ws.base.join("user/user.toml"),
+        format!("schema_version = 1\n\n[tunnels]\nport_min = {ranged}\nport_max = {ranged}\n"),
+    )
+    .unwrap();
+
+    let ui = Arc::new(AcceptHosts);
+    let pinned = ws.open("fixed", None, ui.clone()).await.unwrap();
+    assert_eq!(
+        first_value(&pinned, "select current_database()").await,
+        "spelaion"
+    );
+    assert!(
+        std::net::TcpListener::bind(("127.0.0.1", fixed)).is_err(),
+        "the tunnel should listen on local_port {fixed}"
+    );
+    // Without local_port: a port from the personal range, on the same tunnel.
+    let free = ws.open("free", None, ui.clone()).await.unwrap();
+    assert_eq!(
+        first_value(&free, "select current_database()").await,
+        "postgres"
+    );
+    assert!(
+        std::net::TcpListener::bind(("127.0.0.1", ranged)).is_err(),
+        "the tunnel should listen on {ranged}, the only port of the range"
+    );
+    assert_eq!(ws.tunnels.active().await, 1);
+    pinned.close().await;
+    free.close().await;
+}
+
 /// A tunnel typed in the editor (not saved) is tested by opening and closing its hops. A
 /// wrong user fails at the hop that rejects it, and nothing is written to disk.
 #[tokio::test]

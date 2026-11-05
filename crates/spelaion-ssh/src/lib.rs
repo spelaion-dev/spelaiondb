@@ -86,6 +86,29 @@ pub enum AuthMethod {
     KeyboardInteractive,
 }
 
+/// Where a forward listens on 127.0.0.1 ([`Tunnel::forward_on`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LocalPort {
+    /// Any free port the system gives.
+    #[default]
+    Any,
+    /// Exactly this one: an error if it is taken.
+    Fixed(u16),
+    /// The first free one in this range, both ends included.
+    Range { min: u16, max: u16 },
+}
+
+impl LocalPort {
+    /// Whether an existing forward on `port` serves a request for `self`.
+    pub(crate) fn accepts(self, port: u16) -> bool {
+        match self {
+            LocalPort::Any => true,
+            LocalPort::Fixed(fixed) => fixed == port,
+            LocalPort::Range { min, max } => (min..=max).contains(&port),
+        }
+    }
+}
+
 /// Final target of the tunnel, as seen from the last hop.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Target {

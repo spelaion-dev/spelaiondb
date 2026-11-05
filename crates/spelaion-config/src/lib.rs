@@ -37,7 +37,10 @@ pub use draft::{
     connection_revision, connections_dir, delete_connection, slug, update_connection,
     update_connection_at_revision,
 };
-pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_user_vars, set_value};
+pub use edit::{
+    CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_vars,
+    set_value,
+};
 pub use error::{ConfigError, ResolveError};
 pub use load::{
     Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, WORKSPACE_DIR, default_user_dir,
@@ -46,11 +49,11 @@ pub use load::{
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{
     ConnectionFile, Engine, HopConfig, KubernetesConfig, McpConfig, SCHEMA_VERSION, SecretSpec,
-    SshAuth, TlsConfig, TlsModeConfig, TunnelFile, UserFile, WritePolicy,
+    SshAuth, TlsConfig, TlsModeConfig, TunnelFile, TunnelPreferences, UserFile, WritePolicy,
 };
 pub use resolve::{
-    Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedTunnel, Resolver,
-    TunnelSettings,
+    LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedTunnel,
+    Resolver, TunnelSettings,
 };
 pub use secrets::{KEYCHAIN_SERVICE, SecretBackend, SecretRef, SystemBackend};
 pub use trust::{

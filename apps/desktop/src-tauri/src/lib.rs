@@ -283,6 +283,34 @@ async fn set_user_vars(
     Ok(())
 }
 
+/// The personal range of local ports for SSH tunnels (`[tunnels]` in `user.toml`), if set.
+#[tauri::command]
+#[specta::specta]
+async fn tunnel_ports(state: State<'_, AppState>) -> CmdResult<Option<TunnelPortsItem>> {
+    let config = state.config.read().await;
+    Ok(config
+        .user
+        .tunnels
+        .range()
+        .ok()
+        .flatten()
+        .map(|(min, max)| TunnelPortsItem { min, max }))
+}
+
+/// Sets (or clears, with null) the personal range of local ports for SSH tunnels. It applies
+/// to tunnels opened from then on.
+#[tauri::command]
+#[specta::specta]
+async fn set_tunnel_ports(
+    range: Option<TunnelPortsItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    spelaion_config::set_tunnel_ports(&state.user_dir, range.map(|r| (r.min, r.max)))
+        .map_err(|e| e.to_string())?;
+    state.reload().await;
+    Ok(())
+}
+
 /// Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
 /// as it is now, and connecting can go on.
 #[tauri::command]
@@ -2663,6 +2691,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             trust_workspace,
             accept_change,
             set_user_vars,
+            tunnel_ports,
+            set_tunnel_ports,
             list_connections,
             list_history,
             set_history_enabled,
