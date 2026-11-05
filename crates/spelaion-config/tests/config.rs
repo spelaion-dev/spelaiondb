@@ -1673,6 +1673,315 @@ fn sqlite_files_on_a_server_go_through_a_tunnel() {
 const PINNED_DB: &str = "schema_version = 1\nname = \"Orders\"\nengine = \"postgres\"\nhost = \"db.internal\"\ndatabase = \"orders\"\nuser = \"app\"\npassword = { secret = \"keychain\" }\ntunnel = \"bastion\"\n";
 const PINNED_TUNNEL: &str = "schema_version = 1\n\n[[hops]]\nhost = \"bastion.internal\"\nuser = \"ops\"\nauth = [\"agent\"]\n";
 
+#[test]
+fn reviewed_changes_must_still_match_the_workspace_and_revision() {
+    let fx = Fixture::new("reviewed-revision");
+    let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
+    let mut trust = fx.trusted();
+    std::fs::write(&path, PINNED_DB.replace("db.internal", "first.example")).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let reviewed = trust.changes(&config).remove(0);
+    std::fs::write(&path, PINNED_DB.replace("db.internal", "second.example")).unwrap();
+    let changed_config = load(Some(&fx.repo()), &fx.user());
+    assert!(
+        trust
+            .accept_reviewed(&changed_config, &fx.repo(), &reviewed)
+            .is_err()
+    );
+    assert!(
+        trust
+            .accept_reviewed(&config, &fx.user(), &reviewed)
+            .is_err()
+    );
+    trust
+        .accept_reviewed(&config, &fx.repo(), &reviewed)
+        .unwrap();
+    assert!(
+        trust
+            .accept_reviewed(&config, &fx.repo(), &reviewed)
+            .is_err()
+    );
+    assert!(
+        trust
+            .changes(&changed_config)
+            .iter()
+            .any(|c| c.item == reviewed.item)
+    );
+}
+
+#[test]
+fn stale_connection_and_tunnel_edits_reject_unseen_file_changes() {
+    let fx = Fixture::new("stale-form-files");
+    let connection_path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
+    let tunnel_path = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
+    let config = load(Some(&fx.repo()), &fx.user());
+    let mut connection = ConnectionDraft::from_entry(config.connection(&ws("orders")).unwrap());
+    connection.name = "Renamed".into();
+    let entry = config.tunnels.iter().find(|t| t.name == "bastion").unwrap();
+    let mut tunnel = TunnelDraft::from_entry(entry);
+    tunnel.hops[0].user = "other".into();
+    let backend = FakeBackend::default();
+
+    std::fs::write(
+        &connection_path,
+        format!("{PINNED_DB}\n[mcp]\nmax_rows = 7\n"),
+    )
+    .unwrap();
+    assert!(
+        spelaion_config::update_connection(&config, &ws("orders"), &connection, None, &backend)
+            .is_err()
+    );
+    assert!(
+        std::fs::read_to_string(&connection_path)
+            .unwrap()
+            .contains("max_rows = 7")
+    );
+    std::fs::write(
+        &tunnel_path,
+        format!("{PINNED_TUNNEL}command = \"malicious\"\n"),
+    )
+    .unwrap();
+    assert!(
+        update_tunnel(
+            &config,
+            Source::Workspace,
+            "bastion",
+            &tunnel,
+            &[],
+            &backend
+        )
+        .is_err()
+    );
+    assert!(
+        std::fs::read_to_string(&tunnel_path)
+            .unwrap()
+            .contains("malicious")
+    );
+
+    std::fs::write(&connection_path, PINNED_DB).unwrap();
+    std::fs::write(&tunnel_path, PINNED_TUNNEL).unwrap();
+    let written =
+        spelaion_config::update_connection(&config, &ws("orders"), &connection, None, &backend)
+            .unwrap();
+    assert_eq!(written.name.as_deref(), Some("Renamed"));
+    let written = update_tunnel(
+        &config,
+        Source::Workspace,
+        "bastion",
+        &tunnel,
+        &[],
+        &backend,
+    )
+    .unwrap();
+    assert_eq!(written.hops[0].user, "other");
+}
+
+#[test]
+fn only_the_exact_written_revision_is_pinned() {
+    let fx = Fixture::new("own-written-revision");
+    let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
+    let tunnel_path = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
+    let mut trust = fx.trusted();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let connection = config.connection(&ws("orders")).unwrap().file.clone();
+    let tunnel = config
+        .tunnels
+        .iter()
+        .find(|t| t.name == "bastion")
+        .unwrap()
+        .file
+        .clone();
+    std::fs::write(&path, PINNED_DB.replace("db.internal", "evil.example")).unwrap();
+    std::fs::write(
+        &tunnel_path,
+        format!("{PINNED_TUNNEL}command = \"malicious\"\n"),
+    )
+    .unwrap();
+    trust
+        .accept_connection_write(&config, &ws("orders"), &connection)
+        .unwrap();
+    trust
+        .accept_tunnel_write(&config, "bastion", &tunnel)
+        .unwrap();
+    let changes = trust.changes(&load(Some(&fx.repo()), &fx.user()));
+    assert!(changes.iter().any(|c| c.item == "connection:orders"));
+    assert!(changes.iter().any(|c| c.item == "tunnel:bastion"));
+}
+
+#[test]
+fn stale_reviews_of_tunnels_and_server_keys_are_rejected() {
+    let fx = Fixture::new("review-tunnel-keys");
+    let tunnel = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
+    let hosts = fx.write("repo/.spelaion/known_hosts", "server ssh-ed25519 key-one\n");
+    let mut trust = fx.trusted();
+    std::fs::write(
+        &tunnel,
+        PINNED_TUNNEL.replace("bastion.internal", "first.example"),
+    )
+    .unwrap();
+    std::fs::write(&hosts, "server ssh-ed25519 key-two\n").unwrap();
+    let first = load(Some(&fx.repo()), &fx.user());
+    let changes = trust.changes(&first);
+    let reviewed_tunnel = changes
+        .iter()
+        .find(|c| c.item == "tunnel:bastion")
+        .unwrap()
+        .clone();
+    let reviewed_hosts = changes
+        .iter()
+        .find(|c| c.item == "known_hosts")
+        .unwrap()
+        .clone();
+    std::fs::write(
+        &tunnel,
+        PINNED_TUNNEL.replace("bastion.internal", "second.example"),
+    )
+    .unwrap();
+    std::fs::write(&hosts, "server ssh-ed25519 key-three\n").unwrap();
+    let latest = load(Some(&fx.repo()), &fx.user());
+    assert!(
+        trust
+            .accept_reviewed(&latest, &fx.repo(), &reviewed_tunnel)
+            .is_err()
+    );
+    assert!(
+        trust
+            .accept_reviewed(&latest, &fx.repo(), &reviewed_hosts)
+            .is_err()
+    );
+    assert_eq!(trust.changes(&latest).len(), 2);
+}
+
+#[test]
+fn stale_initial_trust_prompt_does_not_accept_later_changes() {
+    let fx = Fixture::new("stale-trust-prompt");
+    let path = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
+    let mut trust = fx.trusted();
+    std::fs::write(&path, PINNED_DB.replace("db.internal", "evil.example")).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    trust.trust_if_untrusted(&config).unwrap();
+    assert_eq!(trust.changes(&config).len(), 1);
+}
+
+#[test]
+fn edited_unreviewed_items_do_not_approve_unrelated_changes() {
+    let fx = Fixture::new("edit-unreviewed");
+    let connection = fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
+    let tunnel = fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
+    let mut trust = fx.trusted();
+    std::fs::write(
+        &connection,
+        PINNED_DB.replace("db.internal", "evil.example"),
+    )
+    .unwrap();
+    std::fs::write(&tunnel, format!("{PINNED_TUNNEL}command = \"malicious\"\n")).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let mut draft = ConnectionDraft::from_entry(config.connection(&ws("orders")).unwrap());
+    draft.name = "Edited".into();
+    let entry = config.tunnels.iter().find(|t| t.name == "bastion").unwrap();
+    let mut tunnel_draft = TunnelDraft::from_entry(entry);
+    tunnel_draft.hops[0].user = "edited".into();
+    let backend = FakeBackend::default();
+    let conn_rev =
+        spelaion_config::connection_revision(config.connection(&ws("orders")).unwrap()).unwrap();
+    let tunnel_rev = spelaion_config::tunnel_revision(entry).unwrap();
+    let written = spelaion_config::update_connection_at_revision(
+        &config,
+        &ws("orders"),
+        &draft,
+        None,
+        &backend,
+        &conn_rev,
+    )
+    .unwrap();
+    trust
+        .accept_connection_edit(&config, &ws("orders"), &written)
+        .unwrap();
+    let written = spelaion_config::update_tunnel_at_revision(
+        &config,
+        Source::Workspace,
+        "bastion",
+        &tunnel_draft,
+        &[],
+        &backend,
+        &tunnel_rev,
+    )
+    .unwrap();
+    trust
+        .accept_tunnel_edit(&config, "bastion", &written)
+        .unwrap();
+    let latest = load(Some(&fx.repo()), &fx.user());
+    assert_eq!(trust.changes(&latest).len(), 2);
+    assert!(
+        spelaion_config::update_connection_at_revision(
+            &latest,
+            &ws("orders"),
+            &draft,
+            None,
+            &backend,
+            &conn_rev
+        )
+        .is_err()
+    );
+    assert!(
+        spelaion_config::update_tunnel_at_revision(
+            &latest,
+            Source::Workspace,
+            "bastion",
+            &tunnel_draft,
+            &[],
+            &backend,
+            &tunnel_rev
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn edited_trusted_items_record_only_the_written_revision() {
+    let fx = Fixture::new("edit-trusted");
+    fx.write("repo/.spelaion/connections/orders.toml", PINNED_DB);
+    fx.write("repo/.spelaion/tunnels/bastion.toml", PINNED_TUNNEL);
+    let mut trust = fx.trusted();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.connection(&ws("orders")).unwrap();
+    let mut draft = ConnectionDraft::from_entry(entry);
+    draft.host = "approved.example".into();
+    let backend = FakeBackend::default();
+    let revision = spelaion_config::connection_revision(entry).unwrap();
+    let written = spelaion_config::update_connection_at_revision(
+        &config,
+        &ws("orders"),
+        &draft,
+        None,
+        &backend,
+        &revision,
+    )
+    .unwrap();
+    trust
+        .accept_connection_edit(&config, &ws("orders"), &written)
+        .unwrap();
+    resolved(&fx, &trust).unwrap();
+    let entry = config.tunnels.iter().find(|t| t.name == "bastion").unwrap();
+    let mut draft = TunnelDraft::from_entry(entry);
+    draft.hops[0].host = "approved-bastion.example".into();
+    let revision = spelaion_config::tunnel_revision(entry).unwrap();
+    let written = spelaion_config::update_tunnel_at_revision(
+        &config,
+        Source::Workspace,
+        "bastion",
+        &draft,
+        &[],
+        &backend,
+        &revision,
+    )
+    .unwrap();
+    trust
+        .accept_tunnel_edit(&config, "bastion", &written)
+        .unwrap();
+    resolved(&fx, &trust).unwrap();
+}
+
 fn resolved(fx: &Fixture, trust: &TrustStore) -> Result<(), ResolveError> {
     let config = load(Some(&fx.repo()), &fx.user());
     assert!(config.problems.is_empty(), "{:?}", config.problems);

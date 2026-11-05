@@ -40,16 +40,16 @@ export const commands = {
 	/**  Checks whether an existing connection can be opened in the editor. */
 	connectionEditorAccess: (connection: string) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
 	/**  The form of an existing connection, to edit it. */
-	connectionDraft: (connection: string) => typedError<ConnectionDraftItem_Serialize, string>(__TAURI_INVOKE("connection_draft", { connection })),
+	connectionDraft: (connection: string) => typedError<[ConnectionDraftItem_Serialize, string], string>(__TAURI_INVOKE("connection_draft", { connection })),
 	/**
 	 *  Saves an edited connection (same file; for `keychain`, a typed password replaces the
 	 *  stored one) and reloads the configuration.
 	 */
-	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password })),
+	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
 	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
 	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
 	/**  The form of an existing tunnel, to edit it. */
-	tunnelDraft: (name: string, personal: boolean) => typedError<TunnelDraftItem_Serialize, string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
+	tunnelDraft: (name: string, personal: boolean) => typedError<[TunnelDraftItem_Serialize, string], string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
 	/**
 	 *  Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
 	 *  password typed for hop `i`; stored ones are used when none is typed.
@@ -58,7 +58,7 @@ export const commands = {
 	/**  Saves a new tunnel (and its `keychain` passwords) and reloads the configuration. */
 	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[]) => typedError<TunnelItem, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords })),
 	/**  Saves an edited tunnel (same file and name) and reloads the configuration. */
-	updateTunnel: (name: string, personal: boolean, draft: TunnelDraftItem_Deserialize, passwords: (string | null)[]) => typedError<null, string>(__TAURI_INVOKE("update_tunnel", { name, personal, draft, passwords })),
+	updateTunnel: (name: string, personal: boolean, draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], revision: string) => typedError<null, string>(__TAURI_INVOKE("update_tunnel", { name, personal, draft, passwords, revision })),
 	/**  Deletes a tunnel that no connection uses, with its stored passwords. */
 	deleteTunnel: (name: string, personal: boolean) => typedError<null, string>(__TAURI_INVOKE("delete_tunnel", { name, personal })),
 	/**
@@ -169,12 +169,12 @@ export const commands = {
 	importDbeaver: (path: string | null, ids: string[], personal: boolean, savePasswords: boolean) => typedError<ImportReport, string>(__TAURI_INVOKE("import_dbeaver", { path, ids, personal, savePasswords })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
-	trustWorkspace: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace")),
+	trustWorkspace: (root: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace", { root })),
 	/**
 	 *  Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
 	 *  as it is now, and connecting can go on.
 	 */
-	acceptChange: (item: string) => typedError<null, string>(__TAURI_INVOKE("accept_change", { item })),
+	acceptChange: (root: string, item: string, isNew: boolean, fields: FieldChangeItem_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("accept_change", { root, item, isNew, fields })),
 	/**
 	 *  Saves values for `${user.…}` variables in the user's `user.toml` (ADR-022) and reloads
 	 *  the configuration. Only those entries change; the rest of the file stays as it was.
@@ -328,7 +328,7 @@ export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: str
  */
 { kind: "changed"; 
 /**  `connection:<id>` or `tunnel:<name>`, for `accept_change`. */
-item: string; new: boolean; fields: FieldChangeItem_Deserialize[] } | 
+item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string } | 
 /**
  *  The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
  *  their values, save them with `set_user_vars` and try again.
@@ -348,7 +348,7 @@ export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: strin
  */
 { kind: "changed"; 
 /**  `connection:<id>` or `tunnel:<name>`, for `accept_change`. */
-item: string; new: boolean; fields: FieldChangeItem_Serialize[] } | 
+item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string } | 
 /**
  *  The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
  *  their values, save them with `set_user_vars` and try again.

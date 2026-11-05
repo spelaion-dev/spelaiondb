@@ -33,8 +33,9 @@ pub use dbeaver::{
     read_dbeaver,
 };
 pub use draft::{
-    CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection, connections_dir,
-    delete_connection, slug, update_connection,
+    CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection,
+    connection_revision, connections_dir, delete_connection, slug, update_connection,
+    update_connection_at_revision,
 };
 pub use edit::{CONNECTION_SCHEMA_URL, create_connection, remove_value, set_user_vars, set_value};
 pub use error::{ConfigError, ResolveError};
@@ -56,7 +57,8 @@ pub use trust::{
     tunnel_item,
 };
 pub use tunnel_draft::{
-    HopDraft, TUNNEL_SCHEMA_URL, TunnelDraft, add_tunnel, delete_tunnel, tunnels_dir, update_tunnel,
+    HopDraft, TUNNEL_SCHEMA_URL, TunnelDraft, add_tunnel, delete_tunnel, tunnel_revision,
+    tunnels_dir, update_tunnel, update_tunnel_at_revision,
 };
 
 /// JSON Schema of each file type, for validation and autocompletion in the editor.

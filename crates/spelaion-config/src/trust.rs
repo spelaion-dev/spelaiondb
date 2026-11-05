@@ -289,6 +289,15 @@ impl TrustStore {
         Ok(changes)
     }
 
+    /// An initial trust prompt must not re-approve changes if trust was already granted.
+    pub fn trust_if_untrusted(&mut self, config: &Config) -> Result<(), ConfigError> {
+        let root = workspace_root(config)?;
+        if !self.is_trusted(&root) {
+            self.trust(config)?;
+        }
+        Ok(())
+    }
+
     pub fn revoke(&mut self, root: &Path) -> Result<(), ConfigError> {
         let root = canonical(root);
         self.trusted.remove(&root);
@@ -325,6 +334,98 @@ impl TrustStore {
             }
         }
         self.save()
+    }
+
+    /// Accept exactly the change presented to the user, in the same workspace.
+    pub fn accept_reviewed(
+        &mut self,
+        config: &Config,
+        reviewed_root: &Path,
+        reviewed: &ItemChange,
+    ) -> Result<(), ConfigError> {
+        let root = workspace_root(config)?;
+        if root != canonical(reviewed_root) || !self.is_trusted(&root) {
+            return Err(ConfigError::new(
+                &root,
+                "the workspace changed; review again",
+            ));
+        }
+        let snapshot = current(config, &reviewed.item)
+            .ok_or_else(|| ConfigError::new(&root, "the item changed; review again"))?;
+        let key = (root.clone(), reviewed.item.clone());
+        if diff(reviewed.item.clone(), self.pins.get(&key), &snapshot).as_ref() != Some(reviewed) {
+            return Err(ConfigError::new(&root, "the item changed; review again"));
+        }
+        self.pins.insert(key, snapshot);
+        self.save()
+    }
+
+    /// Pin the exact connection written by the user, not a subsequent disk revision.
+    pub fn accept_connection_write(
+        &mut self,
+        config: &Config,
+        id: &ConnectionId,
+        file: &ConnectionFile,
+    ) -> Result<(), ConfigError> {
+        let root = workspace_root(config)?;
+        if self.is_trusted(&root) {
+            self.pins
+                .insert((root, connection_item(id)), connection_snapshot(file));
+            self.save()?;
+        }
+        Ok(())
+    }
+
+    /// Pin the exact tunnel written by the user, not a subsequent disk revision.
+    pub fn accept_tunnel_write(
+        &mut self,
+        config: &Config,
+        name: &str,
+        file: &TunnelFile,
+    ) -> Result<(), ConfigError> {
+        let root = workspace_root(config)?;
+        if self.is_trusted(&root) {
+            self.pins
+                .insert((root, tunnel_item(name)), tunnel_snapshot(file));
+            self.save()?;
+        }
+        Ok(())
+    }
+
+    /// Record an edit only when its original connection was already trusted.
+    pub fn accept_connection_edit(
+        &mut self,
+        config: &Config,
+        id: &ConnectionId,
+        file: &ConnectionFile,
+    ) -> Result<(), ConfigError> {
+        let root = workspace_root(config)?;
+        let entry = config
+            .connection(id)
+            .ok_or_else(|| ConfigError::new(&root, "the connection no longer exists"))?;
+        if self.is_trusted(&root) && self.check_connection(&root, entry).is_ok() {
+            self.accept_connection_write(config, id, file)?;
+        }
+        Ok(())
+    }
+
+    /// Record an edit only when its original tunnel was already trusted.
+    pub fn accept_tunnel_edit(
+        &mut self,
+        config: &Config,
+        name: &str,
+        file: &TunnelFile,
+    ) -> Result<(), ConfigError> {
+        let root = workspace_root(config)?;
+        let entry = config
+            .tunnels
+            .iter()
+            .find(|t| t.source == Source::Workspace && t.name == name)
+            .ok_or_else(|| ConfigError::new(&root, "the tunnel no longer exists"))?;
+        if self.is_trusted(&root) && self.check_tunnel(&root, entry).is_ok() {
+            self.accept_tunnel_write(config, name, file)?;
+        }
+        Ok(())
     }
 
     /// Every repository item that is new or changed since the repository was trusted.

@@ -72,21 +72,6 @@ impl AppState {
         }
     }
 
-    /// Records a repository item the user just wrote through the app as trusted: their own
-    /// change is not one to review (ADR-022). Personal items and untrusted repositories have
-    /// nothing to record.
-    async fn accept_own(&self, item: String) -> CmdResult<()> {
-        let config = self.config.read().await;
-        let Some(root) = config.workspace_root.as_deref() else {
-            return Ok(());
-        };
-        let mut trust = TrustStore::load(&self.user_dir).map_err(|e| e.to_string())?;
-        if !trust.is_trusted(root) {
-            return Ok(());
-        }
-        trust.accept(&config, &item).map_err(|e| e.to_string())
-    }
-
     async fn info(&self) -> CmdResult<WorkspaceInfo> {
         let config = self.config.read().await;
         let trust = TrustStore::load(&self.user_dir).map_err(|e| e.to_string())?;
@@ -271,20 +256,15 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
 /// Trusts the open repository (ADR-009). The UI asks for it after showing what it implies.
 #[tauri::command]
 #[specta::specta]
-async fn trust_workspace(state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
-    let root = state
-        .config
-        .read()
-        .await
-        .workspace_root
-        .clone()
-        .ok_or("no repository is open")?;
+async fn trust_workspace(root: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
     let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
-    if config.workspace_root.as_deref() != Some(root.as_path()) {
+    if config.workspace_root.as_deref() != Some(Path::new(&root)) {
         return Err("the folder changed; trust it again".into());
     }
-    trust.trust(&config).map_err(|e| e.to_string())?;
+    trust
+        .trust_if_untrusted(&config)
+        .map_err(|e| e.to_string())?;
     drop(config);
     state.info().await
 }
@@ -307,11 +287,31 @@ async fn set_user_vars(
 /// as it is now, and connecting can go on.
 #[tauri::command]
 #[specta::specta]
-async fn accept_change(item: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn accept_change(
+    root: String,
+    item: String,
+    is_new: bool,
+    fields: Vec<FieldChangeItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state.reload().await;
     let config = state.config.read().await;
     let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    trust.accept(&config, &item).map_err(|e| e.to_string())
+    let change = spelaion_config::ItemChange {
+        item,
+        new: is_new,
+        fields: fields
+            .into_iter()
+            .map(|field| spelaion_config::FieldChange {
+                field: field.field,
+                before: field.before,
+                after: field.after,
+            })
+            .collect(),
+    };
+    trust
+        .accept_reviewed(&config, Path::new(&root), &change)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -559,8 +559,8 @@ async fn test_connection(
             Err(spelaion_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
             }
-            Err(spelaion_config::ResolveError::Changed { change, .. }) => {
-                return Ok(change.into());
+            Err(spelaion_config::ResolveError::Changed { root, change }) => {
+                return Ok(ConnectOutcome::changed(root, change));
             }
             Err(spelaion_config::ResolveError::MissingVariables { names }) => {
                 return Ok(ConnectOutcome::MissingVariables { names });
@@ -614,15 +614,18 @@ async fn add_connection(
     let password = password.map(Secret::new);
     let id = {
         let config = state.config.read().await;
-        spelaion_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
-            .map_err(|e| e.to_string())?
+        let file = draft.to_file(&config).map_err(|e| e.to_string())?;
+        let id =
+            spelaion_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
+                .map_err(|e| e.to_string())?;
+        if id.source == Source::Workspace {
+            TrustStore::load(&state.user_dir)
+                .and_then(|mut trust| trust.accept_connection_write(&config, &id, &file))
+                .map_err(|e| e.to_string())?;
+        }
+        id
     };
     state.reload().await;
-    if id.source == Source::Workspace {
-        state
-            .accept_own(spelaion_config::connection_item(&id))
-            .await?;
-    }
     Ok(id.to_string())
 }
 
@@ -664,7 +667,7 @@ async fn connection_editor_access(
 async fn connection_draft(
     connection: String,
     state: State<'_, AppState>,
-) -> CmdResult<ConnectionDraftItem> {
+) -> CmdResult<(ConnectionDraftItem, String)> {
     let config = state.config.read().await;
     let id = parse_id(&connection);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
@@ -674,7 +677,8 @@ async fn connection_draft(
     let entry = config
         .connection(&id)
         .ok_or_else(|| format!("connection {connection} does not exist"))?;
-    Ok(ConnectionDraft::from_entry(entry).into())
+    let revision = spelaion_config::connection_revision(entry).map_err(|e| e.to_string())?;
+    Ok((ConnectionDraft::from_entry(entry).into(), revision))
 }
 
 /// Saves an edited connection (same file; for `keychain`, a typed password replaces the
@@ -685,28 +689,30 @@ async fn update_connection(
     connection: String,
     draft: ConnectionDraftItem,
     password: Option<String>,
+    revision: String,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let draft = ConnectionDraft::try_from(draft)?;
     let password = password.map(Secret::new);
     {
         let config = state.config.read().await;
-        spelaion_config::update_connection(
+        let id = parse_id(&connection);
+        let written = spelaion_config::update_connection_at_revision(
             &config,
             &parse_id(&connection),
             &draft,
             password.as_ref(),
             &SystemBackend,
+            &revision,
         )
         .map_err(|e| e.to_string())?;
+        if id.source == Source::Workspace {
+            TrustStore::load(&state.user_dir)
+                .and_then(|mut trust| trust.accept_connection_edit(&config, &id, &written))
+                .map_err(|e| e.to_string())?;
+        }
     }
     state.reload().await;
-    let id = parse_id(&connection);
-    if id.source == Source::Workspace {
-        state
-            .accept_own(spelaion_config::connection_item(&id))
-            .await?;
-    }
     Ok(())
 }
 
@@ -720,12 +726,6 @@ async fn delete_connection(connection: String, state: State<'_, AppState>) -> Cm
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
-    let id = parse_id(&connection);
-    if id.source == Source::Workspace {
-        state
-            .accept_own(spelaion_config::connection_item(&id))
-            .await?;
-    }
     Ok(())
 }
 
@@ -751,14 +751,18 @@ async fn tunnel_draft(
     name: String,
     personal: bool,
     state: State<'_, AppState>,
-) -> CmdResult<TunnelDraftItem> {
+) -> CmdResult<(TunnelDraftItem, String)> {
     let config = state.config.read().await;
     let entry = config
         .tunnels
         .iter()
         .find(|t| t.source == source_of(personal) && t.name == name)
         .ok_or_else(|| format!("tunnel {name} does not exist"))?;
-    Ok(spelaion_config::TunnelDraft::from_entry(entry).into())
+    let revision = spelaion_config::tunnel_revision(entry).map_err(|e| e.to_string())?;
+    Ok((
+        spelaion_config::TunnelDraft::from_entry(entry).into(),
+        revision,
+    ))
 }
 
 /// Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
@@ -899,15 +903,18 @@ async fn add_tunnel(
     let draft = spelaion_config::TunnelDraft::from(draft);
     let name = {
         let config = state.config.read().await;
-        spelaion_config::add_tunnel(&config, &draft, &secrets(passwords), &SystemBackend)
-            .map_err(|e| e.to_string())?
+        let file = draft.to_file(&config).map_err(|e| e.to_string())?;
+        let name =
+            spelaion_config::add_tunnel(&config, &draft, &secrets(passwords), &SystemBackend)
+                .map_err(|e| e.to_string())?;
+        if !personal {
+            TrustStore::load(&state.user_dir)
+                .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
+                .map_err(|e| e.to_string())?;
+        }
+        name
     };
     state.reload().await;
-    if !personal {
-        state
-            .accept_own(spelaion_config::tunnel_item(&name))
-            .await?;
-    }
     Ok(TunnelItem { name, personal })
 }
 
@@ -919,27 +926,29 @@ async fn update_tunnel(
     personal: bool,
     draft: TunnelDraftItem,
     passwords: Vec<Option<String>>,
+    revision: String,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let draft = spelaion_config::TunnelDraft::from(draft);
     {
         let config = state.config.read().await;
-        spelaion_config::update_tunnel(
+        let written = spelaion_config::update_tunnel_at_revision(
             &config,
             source_of(personal),
             &name,
             &draft,
             &secrets(passwords),
             &SystemBackend,
+            &revision,
         )
         .map_err(|e| e.to_string())?;
+        if !personal {
+            TrustStore::load(&state.user_dir)
+                .and_then(|mut trust| trust.accept_tunnel_edit(&config, &name, &written))
+                .map_err(|e| e.to_string())?;
+        }
     }
     state.reload().await;
-    if !personal {
-        state
-            .accept_own(spelaion_config::tunnel_item(&name))
-            .await?;
-    }
     Ok(())
 }
 
@@ -953,11 +962,6 @@ async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>)
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
-    if !personal {
-        state
-            .accept_own(spelaion_config::tunnel_item(&name))
-            .await?;
-    }
     Ok(())
 }
 
@@ -986,8 +990,8 @@ async fn connect(
             Err(spelaion_config::ResolveError::Untrusted { .. }) => {
                 return Ok(ConnectOutcome::Untrusted);
             }
-            Err(spelaion_config::ResolveError::Changed { change, .. }) => {
-                return Ok(change.into());
+            Err(spelaion_config::ResolveError::Changed { root, change }) => {
+                return Ok(ConnectOutcome::changed(root, change));
             }
             Err(spelaion_config::ResolveError::MissingVariables { names }) => {
                 return Ok(ConnectOutcome::MissingVariables { names });
@@ -1613,16 +1617,17 @@ async fn import_one(
             .any(|t| t.source == source && t.name == tunnel_name);
         if !exists {
             let config = state.config.read().await;
-            spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
+            let file = tunnel.to_file(&config).map_err(|e| e.to_string())?;
+            let name = spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
                 .map_err(|e| e.to_string())?;
+            if source == Source::Workspace {
+                TrustStore::load(&state.user_dir)
+                    .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
+                    .map_err(|e| e.to_string())?;
+            }
             created_tunnel = true;
         }
         state.reload().await;
-        if created_tunnel && source == Source::Workspace {
-            state
-                .accept_own(spelaion_config::tunnel_item(tunnel_name))
-                .await?;
-        }
     }
     let mut draft = plan.connection;
     let base = draft.name.clone();
@@ -1634,16 +1639,25 @@ async fn import_one(
         };
         let added = {
             let config = state.config.read().await;
-            spelaion_config::add_connection(&config, &draft, plan.password.as_ref(), &SystemBackend)
+            let file = draft.to_file(&config).map_err(|e| e.to_string())?;
+            let result = spelaion_config::add_connection(
+                &config,
+                &draft,
+                plan.password.as_ref(),
+                &SystemBackend,
+            );
+            if let Ok(id) = &result
+                && source == Source::Workspace
+            {
+                TrustStore::load(&state.user_dir)
+                    .and_then(|mut trust| trust.accept_connection_write(&config, id, &file))
+                    .map_err(|e| e.to_string())?;
+            }
+            result
         };
         match added {
-            Ok(id) => {
+            Ok(_) => {
                 state.reload().await;
-                if id.source == Source::Workspace {
-                    state
-                        .accept_own(spelaion_config::connection_item(&id))
-                        .await?;
-                }
                 return Ok((draft.name, created_tunnel));
             }
             Err(e) if e.to_string().contains("already exists") => continue,

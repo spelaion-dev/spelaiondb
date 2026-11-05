@@ -561,19 +561,42 @@ fn put(doc: &mut toml_edit::DocumentMut, key: &[&str], value: Option<toml_edit::
     }
 }
 
-/// Saves the edited form over an existing connection. Only the keys the form manages are
-/// touched, and only those that changed: comments, order and settings the form does not
-/// show (such as `mcp.max_rows`) stay as they were. The identifier (the file) never changes.
-///
-/// For `keychain`, a typed password replaces the stored one (empty keeps it); leaving
-/// `keychain` deletes the stored password. If the keychain fails, the file is restored.
+/// A revision identifies the complete connection and the file it was loaded from.
+pub fn connection_revision(entry: &ConnectionEntry) -> Result<String, ConfigError> {
+    crate::edit::revision(&entry.file_path, &entry.file)
+}
+
+/// Saves only if the item still matches the revision used to open the form.
+pub fn update_connection_at_revision(
+    config: &Config,
+    id: &ConnectionId,
+    draft: &ConnectionDraft,
+    password: Option<&Secret>,
+    backend: &dyn SecretBackend,
+    revision: &str,
+) -> Result<ConnectionFile, ResolveError> {
+    let entry = config.connection(id).ok_or_else(|| {
+        ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
+    })?;
+    if connection_revision(entry)? != revision {
+        return Err(ConfigError::new(
+            &entry.file_path,
+            "the connection changed; reopen the editor",
+        )
+        .into());
+    }
+    update_connection(config, id, draft, password, backend)
+}
+
+/// Saves the edited form over an existing connection, preserving unmanaged keys and comments.
+/// A typed keychain password replaces the stored one; a failure restores the file.
 pub fn update_connection(
     config: &Config,
     id: &ConnectionId,
     draft: &ConnectionDraft,
     password: Option<&Secret>,
     backend: &dyn SecretBackend,
-) -> Result<(), ResolveError> {
+) -> Result<ConnectionFile, ResolveError> {
     use toml_edit::{InlineTable, Value};
     let entry = config.connection(id).ok_or_else(|| {
         ConfigError::new(Path::new(&id.to_string()), "the connection does not exist")
@@ -583,6 +606,11 @@ pub fn update_connection(
     let old = &entry.file;
 
     let (original, mut doc) = read_doc(path)?;
+    let on_disk: ConnectionFile = toml::from_str(&original)
+        .map_err(|e| ConfigError::new(path, format!("could not read connection: {e}")))?;
+    if &validate_connection(path, on_disk)? != old {
+        return Err(ConfigError::new(path, "the connection changed; reopen the editor").into());
+    }
     let text = |v: &Option<String>| v.clone().map(Value::from);
     if old.name != new.name {
         put(&mut doc, &["name"], text(&new.name));
@@ -689,7 +717,7 @@ pub fn update_connection(
     let edited = doc.to_string();
     let parsed: ConnectionFile = toml::from_str(&edited)
         .map_err(|e| ConfigError::new(path, format!("the edited file is not valid: {e}")))?;
-    validate_connection(path, parsed)?;
+    let parsed = validate_connection(path, parsed)?;
     write_doc(path, &doc)?;
 
     let account = connection_account(config, &entry.id);
@@ -710,7 +738,7 @@ pub fn update_connection(
             message,
         });
     }
-    Ok(())
+    Ok(parsed)
 }
 
 /// Deletes a connection file, its default keychain entry and the folders it leaves empty.

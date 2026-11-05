@@ -26,7 +26,7 @@ export async function reviewChanges(
     if (outcome.kind === "changed") {
       const accepted = await useDialogs.getState().askChange({ item: outcome.item, isNew: outcome.new, fields: outcome.fields });
       if (!accepted) return null;
-      await call(commands.acceptChange(outcome.item));
+      await call(commands.acceptChange(outcome.root, outcome.item, outcome.new, outcome.fields));
     } else {
       const values = await useDialogs.getState().askVariables(outcome.names);
       if (!values) return null;
@@ -48,7 +48,7 @@ export async function openSession(session: string, connectionId: string): Promis
   if (outcome.kind === "untrusted") {
     const workspace = app.workspace?.workspace ?? null;
     if (!(await dialogs.askTrust(workspace))) return null;
-    useApp.getState().setWorkspace(await call(commands.trustWorkspace()));
+    useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace ?? "")));
     outcome = await connect();
   }
   const reviewed = await reviewChanges(outcome, connect);
