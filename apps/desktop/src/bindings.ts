@@ -37,6 +37,8 @@ export const commands = {
 	 *  configuration. Returns the new connection's identifier.
 	 */
 	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<string, string>(__TAURI_INVOKE("add_connection", { draft, password })),
+	/**  Checks whether an existing connection can be opened in the editor. */
+	connectionEditorAccess: (connection: string) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
 	/**  The form of an existing connection, to edit it. */
 	connectionDraft: (connection: string) => typedError<ConnectionDraftItem_Serialize, string>(__TAURI_INVOKE("connection_draft", { connection })),
 	/**
@@ -152,13 +154,13 @@ export const commands = {
 	/**  The DBeaver connections under a folder (DBeaver's workspace if none), without secrets. */
 	scanDbeaver: (path: string | null) => typedError<DbeaverScan_Serialize, string>(__TAURI_INVOKE("scan_dbeaver", { path })),
 	/**  The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015). */
-	kubeContexts: (form: KubernetesDraftItem) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form })),
+	kubeContexts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form, personal, editing })),
 	/**  The namespaces of the chosen context. */
-	kubeNamespaces: (form: KubernetesDraftItem) => typedError<string[], string>(__TAURI_INVOKE("kube_namespaces", { form })),
+	kubeNamespaces: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_namespaces", { form, personal, editing })),
 	/**  Names of one kind of resource (`svc`, `pod`, `deployment`) in the chosen namespace. */
-	kubeNames: (form: KubernetesDraftItem, kind: string) => typedError<string[], string>(__TAURI_INVOKE("kube_names", { form, kind })),
+	kubeNames: (form: KubernetesDraftItem, kind: string, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_names", { form, kind, personal, editing })),
 	/**  The ports of the chosen resource: a service's ports or its containers' ports. */
-	kubePorts: (form: KubernetesDraftItem) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form })),
+	kubePorts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form, personal, editing })),
 	/**
 	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelaionDB files. The
 	 *  folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
@@ -545,6 +547,15 @@ export type EditableTableItem = {
 	name: string,
 	primaryKey: string[],
 };
+
+/**  Trust status of an existing connection before opening its editor. */
+export type EditorAccessOutcome = EditorAccessOutcome_Serialize | EditorAccessOutcome_Deserialize;
+
+/**  Trust status of an existing connection before opening its editor. */
+export type EditorAccessOutcome_Deserialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Deserialize[] };
+
+/**  Trust status of an existing connection before opening its editor. */
+export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Serialize[] };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
 export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;

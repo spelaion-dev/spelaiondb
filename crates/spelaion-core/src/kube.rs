@@ -10,7 +10,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use spelaion_config::ResolvedKubernetes;
+use spelaion_config::{
+    Config, ConnectionId, ResolveError, ResolvedKubernetes, Resolver, Source, SystemBackend,
+    TrustStore,
+};
 use spelaion_ssh::TunnelState;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -21,6 +24,18 @@ use tokio::task::JoinHandle;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a listing `kubectl` waits for the cluster (`--request-timeout`).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Authorizes the origin of an editor's values before they can launch a listing process.
+pub fn editor_spec(
+    config: &Config,
+    trust: &TrustStore,
+    source: Source,
+    editing: Option<&ConnectionId>,
+    spec: ResolvedKubernetes,
+) -> Result<ResolvedKubernetes, ResolveError> {
+    Resolver::new(config, trust, &SystemBackend).check_editor_access(source, editing)?;
+    Ok(spec)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum KubeError {
@@ -381,6 +396,79 @@ fn ports_of(manifest: &serde_json::Value) -> Vec<ResourcePort> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn editor_listings_check_trust_before_starting_kubectl() {
+        let dir = std::env::temp_dir().join(format!("spelaion-kube-editor-{}", std::process::id()));
+        let repo = dir.join("repo");
+        let user = dir.join("user");
+        let connections = repo.join(".spelaion/connections");
+        std::fs::create_dir_all(&connections).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+        let marker = dir.join("started");
+        #[cfg(windows)]
+        let program = dir.join("kubectl.cmd");
+        #[cfg(not(windows))]
+        let program = dir.join("kubectl");
+        #[cfg(windows)]
+        let script = format!(
+            "@echo off\r\necho started>\"{}\"\r\necho {{\"kind\":\"Service\",\"spec\":{{\"ports\":[]}}}}\r\n",
+            marker.display()
+        );
+        #[cfg(not(windows))]
+        let script = format!(
+            "#!/bin/sh\necho started > '{}'\necho '{{\"kind\":\"Service\",\"spec\":{{\"ports\":[]}}}}'\n",
+            marker.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let file = connections.join("orders.toml");
+        let content = "schema_version = 1\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"db\"\nuser = \"u\"\n[kubernetes]\nresource = \"svc/db\"\n";
+        std::fs::write(&file, content).unwrap();
+        let mut config = spelaion_config::load(Some(&repo), &user);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        let id = ConnectionId {
+            source: Source::Workspace,
+            path: "orders".into(),
+        };
+        let spec = ResolvedKubernetes {
+            context: None,
+            namespace: None,
+            resource: "svc/db".into(),
+            kubeconfig: None,
+            kubectl: program.display().to_string(),
+        };
+        let mut trust = TrustStore::load(&user).unwrap();
+        assert!(matches!(
+            editor_spec(&config, &trust, Source::User, Some(&id), spec.clone()),
+            Err(ResolveError::Untrusted { .. })
+        ));
+        assert!(!marker.exists());
+        trust.trust(&config).unwrap();
+        let allowed =
+            editor_spec(&config, &trust, Source::Workspace, Some(&id), spec.clone()).unwrap();
+        contexts(&allowed).await.unwrap();
+        assert!(marker.exists());
+        std::fs::remove_file(&marker).unwrap();
+        namespaces(&allowed).await.unwrap();
+        std::fs::remove_file(&marker).unwrap();
+        names(&allowed, "svc").await.unwrap();
+        std::fs::remove_file(&marker).unwrap();
+        ports(&allowed).await.unwrap();
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::write(&file, format!("{content}kubeconfig = \"other\"\n")).unwrap();
+        config = spelaion_config::load(Some(&repo), &user);
+        assert!(matches!(
+            editor_spec(&config, &trust, Source::User, Some(&id), spec),
+            Err(ResolveError::Changed { .. })
+        ));
+        assert!(!marker.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn ports_come_from_services_and_containers() {

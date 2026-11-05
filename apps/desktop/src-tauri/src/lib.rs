@@ -626,6 +626,38 @@ async fn add_connection(
     Ok(id.to_string())
 }
 
+/// Checks whether an existing connection can be opened in the editor.
+#[tauri::command]
+#[specta::specta]
+async fn connection_editor_access(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<EditorAccessOutcome> {
+    let id = parse_id(&connection);
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let config = state.config.read().await;
+    match Resolver::new(&config, &trust, &SystemBackend).check_editor_access(id.source, Some(&id)) {
+        Ok(()) => Ok(EditorAccessOutcome::Ready),
+        Err(spelaion_config::ResolveError::Untrusted { .. }) => Ok(EditorAccessOutcome::Untrusted),
+        Err(spelaion_config::ResolveError::Changed { change, .. }) => {
+            Ok(EditorAccessOutcome::Changed {
+                item: change.item,
+                new: change.new,
+                fields: change
+                    .fields
+                    .into_iter()
+                    .map(|f| FieldChangeItem {
+                        field: f.field,
+                        before: f.before,
+                        after: f.after,
+                    })
+                    .collect(),
+            })
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// The form of an existing connection, to edit it.
 #[tauri::command]
 #[specta::specta]
@@ -634,8 +666,13 @@ async fn connection_draft(
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectionDraftItem> {
     let config = state.config.read().await;
+    let id = parse_id(&connection);
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    Resolver::new(&config, &trust, &SystemBackend)
+        .check_editor_access(id.source, Some(&id))
+        .map_err(|e| e.to_string())?;
     let entry = config
-        .connection(&parse_id(&connection))
+        .connection(&id)
         .ok_or_else(|| format!("connection {connection} does not exist"))?;
     Ok(ConnectionDraft::from_entry(entry).into())
 }
@@ -769,11 +806,36 @@ fn kube_spec(k: KubernetesDraftItem) -> spelaion_config::ResolvedKubernetes {
     }
 }
 
+async fn check_kube_editor(
+    form: KubernetesDraftItem,
+    personal: bool,
+    editing: Option<String>,
+    state: &AppState,
+) -> CmdResult<spelaion_config::ResolvedKubernetes> {
+    let id = editing.as_deref().map(parse_id);
+    let config = state.config.read().await;
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    spelaion_core::kube::editor_spec(
+        &config,
+        &trust,
+        source_of(personal),
+        id.as_ref(),
+        kube_spec(form),
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015).
 #[tauri::command]
 #[specta::specta]
-async fn kube_contexts(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
-    spelaion_core::kube::contexts(&kube_spec(form))
+async fn kube_contexts(
+    form: KubernetesDraftItem,
+    personal: bool,
+    editing: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    spelaion_core::kube::contexts(&spec)
         .await
         .map_err(|e| e.to_string())
 }
@@ -781,8 +843,14 @@ async fn kube_contexts(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
 /// The namespaces of the chosen context.
 #[tauri::command]
 #[specta::specta]
-async fn kube_namespaces(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
-    spelaion_core::kube::namespaces(&kube_spec(form))
+async fn kube_namespaces(
+    form: KubernetesDraftItem,
+    personal: bool,
+    editing: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    spelaion_core::kube::namespaces(&spec)
         .await
         .map_err(|e| e.to_string())
 }
@@ -790,8 +858,15 @@ async fn kube_namespaces(form: KubernetesDraftItem) -> CmdResult<Vec<String>> {
 /// Names of one kind of resource (`svc`, `pod`, `deployment`) in the chosen namespace.
 #[tauri::command]
 #[specta::specta]
-async fn kube_names(form: KubernetesDraftItem, kind: String) -> CmdResult<Vec<String>> {
-    spelaion_core::kube::names(&kube_spec(form), &kind)
+async fn kube_names(
+    form: KubernetesDraftItem,
+    kind: String,
+    personal: bool,
+    editing: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    spelaion_core::kube::names(&spec, &kind)
         .await
         .map_err(|e| e.to_string())
 }
@@ -799,8 +874,14 @@ async fn kube_names(form: KubernetesDraftItem, kind: String) -> CmdResult<Vec<St
 /// The ports of the chosen resource: a service's ports or its containers' ports.
 #[tauri::command]
 #[specta::specta]
-async fn kube_ports(form: KubernetesDraftItem) -> CmdResult<Vec<KubePortItem>> {
-    spelaion_core::kube::ports(&kube_spec(form))
+async fn kube_ports(
+    form: KubernetesDraftItem,
+    personal: bool,
+    editing: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<KubePortItem>> {
+    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    spelaion_core::kube::ports(&spec)
         .await
         .map(|ports| ports.into_iter().map(Into::into).collect())
         .map_err(|e| e.to_string())
@@ -2295,6 +2376,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_tunnels,
             test_connection,
             add_connection,
+            connection_editor_access,
             connection_draft,
             update_connection,
             delete_connection,

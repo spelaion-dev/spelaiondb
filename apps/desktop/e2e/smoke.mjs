@@ -201,6 +201,25 @@ try {
   await page.getByText("is not trusted").waitFor();
   await shot("01-start");
 
+  step("Kubernetes editor requires repository trust before listing");
+  await (await connectionMenu("Shop (SQLite)")).getByRole("button", { name: "Edit…" }).click();
+  let trustDialog = page.getByRole("dialog", { name: "Trust this repository?" });
+  await trustDialog.waitFor();
+  await trustDialog.getByRole("button", { name: "Don't trust" }).click();
+  await page.locator(".modal.wizard").waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  const untrustedWizard = page.locator(".modal.wizard");
+  await untrustedWizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+  await untrustedWizard.getByRole("tab", { name: "Kubernetes" }).click();
+  const kubeCheckbox = untrustedWizard.getByRole("checkbox", { name: "Connect through kubectl port-forward" });
+  await kubeCheckbox.click();
+  trustDialog = page.getByRole("dialog", { name: "Trust this repository?" });
+  await trustDialog.waitFor();
+  await trustDialog.getByRole("button", { name: "Don't trust" }).click();
+  assert.equal(await kubeCheckbox.isChecked(), false);
+  await untrustedWizard.getByRole("button", { name: "Cancel" }).click();
+  await untrustedWizard.waitFor({ state: "detached" });
+
   step("connections sidebar: drag, keyboard resizing, limits and reset");
   const sidebar = page.locator(".sidebar");
   const activities = page.getByRole("navigation", { name: "Activity bar" });
