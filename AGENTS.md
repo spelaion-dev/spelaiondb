@@ -102,14 +102,32 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   match the version in `Cargo.toml` and `tauri.conf.json`.
 
 ## Branches
-- The repository is public: `spelaion-dev/spelaiondb`. Day-to-day work goes to `dev`; CI runs
-  on every push to it (free for public repositories). Still run the local checks below before
-  each commit: CI confirms them, it does not replace them.
-- Contributors' pull requests target `dev` (see `CONTRIBUTING.md`); merge them when CI is green
-  and they follow these rules, and delete their branch afterwards.
-- To release, open a pull request `dev` → `main`: CI runs on it, and it is merged only when
-  green (with a merge commit, so `dev` and `main` stay in step). Then tag `main` with
-  `vX.Y.Z`. Never turn on "delete branch on merge": it would delete `dev`.
+Several people and agents work at the same time: nobody pushes to `dev` or `main`.
+- The repository is public: `spelaion-dev/spelaiondb`. `dev` and `main` are protected: they
+  only change through pull requests whose CI is green (the four jobs of `ci.yml`), and they
+  cannot be force-pushed or deleted.
+- **One task, one short branch**, named after who works on it and what (`pablo/filters`,
+  `paco/issue-11`, `claude/…`, `codex/…`), from an up-to-date `dev`. Never work on someone
+  else's branch.
+- **Fetch before starting and before pushing** (`git fetch` and rebase on `origin/dev`):
+  someone else may have merged in the meantime. Never force-push a branch someone else uses,
+  and never rewrite `dev` or `main`.
+- Still run the local checks below before each commit: CI confirms them, it does not replace
+  them.
+- **Pull requests target `dev`** (see `CONTRIBUTING.md`). Merge one when CI is green and it
+  follows these rules, with "Rebase and merge" (one commit per change, as written), and delete
+  its branch. GitHub's auto-merge can merge it as soon as CI passes.
+- **Security files need a person:** a pull request that touches a file listed in
+  `.github/CODEOWNERS` (the read-only and write barriers, secrets, trust, SSH host keys, the
+  patched TLS libraries, updates, CI itself) waits for an owner's approval. The author cannot
+  approve their own: the other owner does.
+- An issue is the unit of work: assign it to yourself before starting, so two people do not
+  change the same thing.
+- To release, open a pull request `dev` → `main` and merge nothing else into `dev` until it is
+  tagged (fixes for the release only). Merge it when green, with a merge commit; a maintainer
+  then fast-forwards `dev` to `main` (`git merge --ff-only origin/main`, the one push to `dev`
+  that is not a pull request), so they stay in step, and tags `main` with `vX.Y.Z`. Never turn
+  on "delete branch on merge": it would delete `dev`.
 
 ## Non-negotiable rules
 - `spelaion-core` does not depend on Tauri. The app, the CLI and the MCP are thin adapters.
