@@ -2282,6 +2282,24 @@ async fn preview_object_change(
     })
 }
 
+/// The statement that starts a new object (table, view, schema…), written by the core in the
+/// engine's types, to finish in a new tab: nothing runs (ADR-026).
+#[tauri::command]
+#[specta::specta]
+async fn create_sql(
+    session: String,
+    kind: CreateKindItem,
+    schema: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    Ok(spelaion_core::create_sql(
+        open.session.dialect().as_ref(),
+        kind.into(),
+        &schema,
+    ))
+}
+
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 /// was shown. The core writes the statements again from the change, and refuses read-only
 /// connections (ADR-026). Returns how many statements ran.
@@ -2489,6 +2507,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             object_actions,
             preview_object_change,
             apply_object_change,
+            create_sql,
             preview_table_edits,
             apply_table_edits,
             save_snippet,

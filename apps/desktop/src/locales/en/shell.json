@@ -229,5 +229,12 @@
     "dropMenu": "Drop…",
     "dropTitle": "Drop {{name}}",
     "drop": "Drop"
+  },
+  "create": {
+    "table": "New table",
+    "view": "New view",
+    "materializedView": "New materialized view",
+    "sequence": "New sequence",
+    "schema": "New schema"
   }
 }

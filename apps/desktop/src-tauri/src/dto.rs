@@ -213,6 +213,43 @@ pub struct ObjectActionsItem {
     pub rename_views: bool,
     pub drop_schemas: bool,
     pub drop_constraints: bool,
+    pub create: Vec<CreateKindItem>,
+}
+
+/// What "Create" in the explorer can start (see `spelaion_core::CreateKind`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum CreateKindItem {
+    Table,
+    View,
+    MaterializedView,
+    Sequence,
+    Schema,
+}
+
+impl From<spelaion_core::CreateKind> for CreateKindItem {
+    fn from(kind: spelaion_core::CreateKind) -> Self {
+        use spelaion_core::CreateKind;
+        match kind {
+            CreateKind::Table => Self::Table,
+            CreateKind::View => Self::View,
+            CreateKind::MaterializedView => Self::MaterializedView,
+            CreateKind::Sequence => Self::Sequence,
+            CreateKind::Schema => Self::Schema,
+        }
+    }
+}
+
+impl From<CreateKindItem> for spelaion_core::CreateKind {
+    fn from(kind: CreateKindItem) -> Self {
+        match kind {
+            CreateKindItem::Table => Self::Table,
+            CreateKindItem::View => Self::View,
+            CreateKindItem::MaterializedView => Self::MaterializedView,
+            CreateKindItem::Sequence => Self::Sequence,
+            CreateKindItem::Schema => Self::Schema,
+        }
+    }
 }
 
 impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
@@ -221,11 +258,13 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             rename_views,
             drop_schemas,
             drop_constraints,
+            create,
         } = actions;
         Self {
             rename_views,
             drop_schemas,
             drop_constraints,
+            create: create.into_iter().map(CreateKindItem::from).collect(),
         }
     }
 }
