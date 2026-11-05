@@ -110,6 +110,11 @@ export const commands = {
 	/**  An identifier quoted for the session's engine (for an ORDER BY the UI writes). */
 	quoteIdentifier: (session: string, identifier: string) => typedError<string, string>(__TAURI_INVOKE("quote_identifier", { session, identifier })),
 	/**
+	 *  Objects' names as the engine writes them (`schema.table`, quoted where it needs to be),
+	 *  for the explorer's "Copy qualified name".
+	 */
+	qualifiedNames: (session: string, paths: ObjectPathItem[]) => typedError<string[], string>(__TAURI_INVOKE("qualified_names", { session, paths })),
+	/**
 	 *  The statements the core would run for the pending changes of a table data tab, to show
 	 *  before applying them (production asks for confirmation).
 	 */
@@ -788,6 +793,15 @@ export type ObjectItem_Serialize = {
 	kind: string,
 	estimatedRows: number | null,
 	comment: string | null,
+};
+
+/**
+ *  An object of the explorer by its path: its schema (empty for a schema itself) and its
+ *  names under it (a table, or a table and one of its columns).
+ */
+export type ObjectPathItem = {
+	schema: string,
+	names: string[],
 };
 
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 

@@ -20,6 +20,7 @@ import {
   type InteractionKind,
   type HistoryItem_Serialize,
   type ObjectItem_Serialize,
+  type ObjectPathItem,
   type ExplorerPreferencesItem,
   type ExplorerFilterItem,
   type NameFilterItem,
@@ -72,7 +73,7 @@ export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
 export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
-export type { FilterActionItem, FilterKindItem };
+export type { FilterActionItem, FilterKindItem, ObjectPathItem };
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
 export type { SchemaObjectKindItem, ServerObjectKindItem };

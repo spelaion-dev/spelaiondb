@@ -34,3 +34,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [023](0023-spelaion.md) | Rename SpelunkDB to SpelaionDB, under the Spelaion brand | Accepted |
 | [024](0024-explorer-folders.md) | The explorer groups objects in folders by type: routines, sequences, triggers, types and server objects | Accepted |
 | [025](0025-explorer-filters.md) | Explorer filters: personal, matched in Rust, narrowed on the server | Accepted |
+| [026](0026-explorer-object-actions.md) | The explorer's object actions: SQL from the core, run only after it is shown | Accepted |
