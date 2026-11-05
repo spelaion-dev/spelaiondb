@@ -2,6 +2,7 @@
 //! resolved and secrets read.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use spelaion_driver_api::{ConnectParams, Secret, TlsMode};
 
@@ -72,6 +73,30 @@ pub struct ResolvedTunnel {
     /// The team's `.spelaion/known_hosts` (ADR-022), checked before the user's own files:
     /// only from a trusted repository and only as the user trusted it.
     pub known_hosts: Option<PathBuf>,
+    pub options: TunnelSettings,
+}
+
+/// How a tunnel's sessions behave on the network, with the defaults applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TunnelSettings {
+    /// `None`: no keep-alives.
+    pub keepalive_interval: Option<Duration>,
+    /// 0 never gives up.
+    pub keepalive_count: u32,
+}
+
+impl TunnelSettings {
+    pub fn of(file: &TunnelFile) -> Self {
+        let interval = file
+            .keepalive_interval
+            .unwrap_or(TunnelFile::DEFAULT_KEEPALIVE_INTERVAL);
+        Self {
+            keepalive_interval: (interval > 0).then(|| Duration::from_secs(interval.into())),
+            keepalive_count: file
+                .keepalive_count
+                .unwrap_or(TunnelFile::DEFAULT_KEEPALIVE_COUNT),
+        }
+    }
 }
 
 /// A connection's Kubernetes resource, ready for `kubectl port-forward` (ADR-015).
@@ -451,6 +476,7 @@ impl<'a> Resolver<'a> {
             name: name.to_string(),
             hops,
             known_hosts: None,
+            options: TunnelSettings::of(file),
         })
     }
 

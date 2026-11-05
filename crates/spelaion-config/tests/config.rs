@@ -8,9 +8,9 @@ use std::sync::Mutex;
 use spelaion_config::{
     ConnectionDraft, ConnectionFile, ConnectionId, Engine, HopDraft, KubernetesDraft, Password,
     PasswordChoice, ResolveError, Resolver, SecretBackend, Source, SshAuth, SystemBackend,
-    TlsModeConfig, TrustStore, TunnelDraft, WritePolicy, add_connection, add_tunnel,
-    connection_account, create_connection, delete_tunnel, load, set_value, slug, tunnel_account,
-    update_tunnel,
+    TlsModeConfig, TrustStore, TunnelDraft, TunnelDraftOptions, TunnelFile, TunnelSettings,
+    WritePolicy, add_connection, add_tunnel, connection_account, create_connection, delete_tunnel,
+    load, set_value, slug, tunnel_account, update_tunnel,
 };
 use spelaion_driver_api::{Secret, TlsMode};
 
@@ -1157,6 +1157,7 @@ fn two_hop_tunnel() -> TunnelDraft {
                 PasswordChoice::Keychain,
             ),
         ],
+        options: TunnelDraftOptions::default(),
     }
 }
 
@@ -1470,6 +1471,91 @@ fn editing_tunnels_keeps_comments_and_commands_and_never_reuses_a_password_elsew
     broken.hops[0].user = String::new();
     assert!(update_tunnel(&config, Source::Workspace, "prod", &broken, &[], &backend).is_err());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
+#[test]
+fn tunnel_keepalives_are_edited_validated_and_resolved() {
+    let fx = Fixture::new("tunnel-keepalive");
+    let path = fx.write("repo/.spelaion/tunnels/prod.toml", HAND_WRITTEN_TUNNEL);
+    let backend = FakeBackend::default();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+    assert_eq!(
+        TunnelDraft::from_entry(entry).options,
+        TunnelDraftOptions::default()
+    );
+
+    let mut draft = TunnelDraft::from_entry(entry);
+    draft.options.keepalive_interval = Some(30);
+    draft.options.keepalive_count = Some(0);
+    update_tunnel(&config, Source::Workspace, "prod", &draft, &[], &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.starts_with("# Production bastions"), "{content}");
+    assert!(content.contains("keepalive_interval = 30"), "{content}");
+    assert!(content.contains("keepalive_count = 0"), "{content}");
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+    assert_eq!(TunnelDraft::from_entry(entry).options, draft.options);
+    let settings = TunnelSettings::of(&entry.file);
+    assert_eq!(
+        settings.keepalive_interval,
+        Some(std::time::Duration::from_secs(30))
+    );
+    assert_eq!(settings.keepalive_count, 0);
+
+    // Back to the defaults: the keys leave the file.
+    let mut defaults = TunnelDraft::from_entry(entry);
+    defaults.options.keepalive_interval = Some(TunnelFile::DEFAULT_KEEPALIVE_INTERVAL);
+    defaults.options.keepalive_count = None;
+    update_tunnel(&config, Source::Workspace, "prod", &defaults, &[], &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(!content.contains("keepalive"), "{content}");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+    let settings = TunnelSettings::of(&entry.file);
+    assert_eq!(
+        settings.keepalive_interval,
+        Some(std::time::Duration::from_secs(15))
+    );
+    assert_eq!(settings.keepalive_count, 3);
+
+    // 0 turns them off.
+    let mut off = TunnelDraft::from_entry(entry);
+    off.options.keepalive_interval = Some(0);
+    update_tunnel(&config, Source::Workspace, "prod", &off, &[], &backend).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+    assert_eq!(TunnelSettings::of(&entry.file).keepalive_interval, None);
+
+    // Out of range: refused, in the form and in a hand-written file.
+    let mut huge = TunnelDraft::from_entry(entry);
+    huge.options.keepalive_interval = Some(100_000);
+    let error = huge.to_file(&config).unwrap_err().message;
+    assert!(error.contains("keepalive_interval"), "{error}");
+    let mut many = TunnelDraft::from_entry(entry);
+    many.options.keepalive_count = Some(5_000);
+    let error = many.to_file(&config).unwrap_err().message;
+    assert!(error.contains("keepalive_count"), "{error}");
+    fx.write(
+        "repo/.spelaion/tunnels/broken.toml",
+        "schema_version = 1
+keepalive_interval = -1
+
+[[hops]]
+host = \"h\"
+user = \"u\"
+",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(
+        config
+            .problems
+            .iter()
+            .any(|p| p.file.ends_with("broken.toml")),
+        "{:?}",
+        config.problems
+    );
 }
 
 #[test]
@@ -2100,6 +2186,21 @@ fn every_way_around_the_snapshot_is_caught() {
     )
     .unwrap();
     assert_eq!(changed(resolved(&fx, &trust)).item, "tunnel:bastion");
+    // Its network settings too: they are part of what the user trusted.
+    std::fs::write(
+        &tunnel,
+        PINNED_TUNNEL.replace(
+            "schema_version = 1
+",
+            "schema_version = 1
+keepalive_interval = 0
+",
+        ),
+    )
+    .unwrap();
+    let change = changed(resolved(&fx, &trust));
+    assert_eq!(change.item, "tunnel:bastion");
+    assert_eq!(change.fields[0].field, "keepalive_interval");
     std::fs::write(&tunnel, PINNED_TUNNEL).unwrap();
     resolved(&fx, &trust).unwrap();
 

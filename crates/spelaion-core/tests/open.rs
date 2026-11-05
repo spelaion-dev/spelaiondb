@@ -376,6 +376,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
             hop(host, Some(port.parse().unwrap()), "spelaion"),
             hop("bastion2", None, "spelaion"),
         ],
+        options: Default::default(),
     };
     let known_hosts = KnownHosts {
         team_file: None,

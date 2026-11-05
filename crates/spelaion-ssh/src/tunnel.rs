@@ -148,8 +148,8 @@ impl Tunnel {
             ));
         }
         let config = Arc::new(client::Config {
-            keepalive_interval: Some(Duration::from_secs(15)),
-            keepalive_max: 3,
+            keepalive_interval: spec.options.keepalive_interval,
+            keepalive_max: usize::try_from(spec.options.keepalive_count).unwrap_or(usize::MAX),
             nodelay: true,
             ..Default::default()
         });

@@ -14,7 +14,7 @@ use spelaion_driver_sqlite::SqliteDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
 use spelaion_ssh::{
     AuthMethod, HopSpec, Interaction, KnownHosts, RemoteSignals, SshError, Target, Tunnel,
-    TunnelSpec, TunnelState,
+    TunnelOptions, TunnelSpec, TunnelState,
 };
 use tokio::sync::watch;
 
@@ -275,12 +275,16 @@ pub async fn open_connection(
         (Some(resolved_tunnel), None) => {
             let spec = TunnelSpec {
                 hops: resolved_tunnel.hops.iter().map(hop_spec).collect(),
+                options: tunnel_options(resolved_tunnel),
             };
-            // Same layer, name and hops = same tunnel. Secrets are not part of the key
-            // (their Debug is `***`).
+            // Same layer, name, settings and hops = same tunnel. Secrets are not part of the
+            // key (their Debug is `***`).
             let key = format!(
-                "{:?}|{}|{:?}",
-                resolved.id.source, resolved_tunnel.name, resolved_tunnel.hops
+                "{:?}|{}|{:?}|{:?}",
+                resolved.id.source,
+                resolved_tunnel.name,
+                resolved_tunnel.options,
+                resolved_tunnel.hops
             );
             // The team's reviewed server keys come first (ADR-022).
             let known_hosts = KnownHosts {
@@ -340,6 +344,7 @@ pub async fn test_tunnel(
                 spec
             })
             .collect(),
+        options: tunnel_options(tunnel),
     };
     let known_hosts = KnownHosts {
         team_file: tunnel.known_hosts.clone(),
@@ -348,6 +353,13 @@ pub async fn test_tunnel(
     let opened = Tunnel::connect(&spec, &known_hosts, interaction).await?;
     opened.close().await;
     Ok(())
+}
+
+fn tunnel_options(tunnel: &ResolvedTunnel) -> TunnelOptions {
+    TunnelOptions {
+        keepalive_interval: tunnel.options.keepalive_interval,
+        keepalive_count: tunnel.options.keepalive_count,
+    }
 }
 
 fn hop_spec(hop: &ResolvedHop) -> HopSpec {

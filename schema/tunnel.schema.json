@@ -93,6 +93,24 @@
       },
       "type": "array"
     },
+    "keepalive_count": {
+      "description": "Unanswered keep-alives before the tunnel is closed as down (`ServerAliveCountMax`). 3\nwhen absent; 0 never gives up.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "keepalive_interval": {
+      "description": "Seconds without hearing from a server before sending it an SSH keep-alive (OpenSSH's\n`ServerAliveInterval`), so a NAT or firewall does not drop an idle tunnel. 15 when\nabsent; 0 sends none.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "schema_version": {
       "format": "uint32",
       "minimum": 0,

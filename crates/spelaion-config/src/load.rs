@@ -381,6 +381,30 @@ pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFil
             "a tunnel needs at least one hop in [[hops]]",
         ));
     }
+    if file
+        .keepalive_interval
+        .is_some_and(|s| s > TunnelFile::MAX_KEEPALIVE_INTERVAL)
+    {
+        return Err(ConfigError::new(
+            path,
+            format!(
+                "keepalive_interval is in seconds, at most {} (0 turns keep-alives off)",
+                TunnelFile::MAX_KEEPALIVE_INTERVAL
+            ),
+        ));
+    }
+    if file
+        .keepalive_count
+        .is_some_and(|n| n > TunnelFile::MAX_KEEPALIVE_COUNT)
+    {
+        return Err(ConfigError::new(
+            path,
+            format!(
+                "keepalive_count is at most {} (0 never gives up)",
+                TunnelFile::MAX_KEEPALIVE_COUNT
+            ),
+        ));
+    }
     Ok(file)
 }
 

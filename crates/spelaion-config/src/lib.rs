@@ -50,6 +50,7 @@ pub use model::{
 };
 pub use resolve::{
     Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedTunnel, Resolver,
+    TunnelSettings,
 };
 pub use secrets::{KEYCHAIN_SERVICE, SecretBackend, SecretRef, SystemBackend};
 pub use trust::{
@@ -57,8 +58,8 @@ pub use trust::{
     tunnel_item,
 };
 pub use tunnel_draft::{
-    HopDraft, TUNNEL_SCHEMA_URL, TunnelDraft, add_tunnel, delete_tunnel, tunnel_revision,
-    tunnels_dir, update_tunnel, update_tunnel_at_revision,
+    HopDraft, TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, add_tunnel, delete_tunnel,
+    tunnel_revision, tunnels_dir, update_tunnel, update_tunnel_at_revision,
 };
 
 /// JSON Schema of each file type, for validation and autocompletion in the editor.
