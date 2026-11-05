@@ -17,8 +17,8 @@ use spelaion_driver_api::{
 };
 use spelaion_driver_postgres::PostgresDriver;
 use spelaion_ssh::{
-    AuthMethod, HopSpec, HostInfo, Interaction, KnownHosts, LocalPort, NonInteractive,
-    SecretRequest, SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
+    AuthMethod, HopSpec, HostInfo, Interaction, KnownHosts, LocalPort, NonInteractive, ProxyKind,
+    ProxySpec, SecretRequest, SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
 };
 
 fn bastion() -> Option<(String, u16)> {
@@ -906,4 +906,172 @@ async fn forwards_take_the_first_free_port_of_a_range() {
     }
     tunnel.close().await;
     drop(held);
+}
+
+fn proxy_from(var: &str, kind: ProxyKind) -> Option<ProxySpec> {
+    let Ok(addr) = std::env::var(var) else {
+        eprintln!("{var} not set: test skipped");
+        return None;
+    };
+    let (host, port) = addr.rsplit_once(':').expect("host:port");
+    Some(ProxySpec {
+        kind,
+        host: host.into(),
+        port: port.parse().expect("port"),
+        user: Some("proxyuser".into()),
+        password: Some(Secret::new("proxy-pass")),
+    })
+}
+
+fn proxies() -> Vec<ProxySpec> {
+    [
+        proxy_from("SPELAION_TEST_SOCKS", ProxyKind::Socks5),
+        proxy_from("SPELAION_TEST_HTTP_PROXY", ProxyKind::Http),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+#[tokio::test]
+async fn a_proxy_alone_reaches_the_database_by_name() {
+    for proxy in proxies() {
+        let known = TempKnownHosts::new("proxy-only");
+        let spec = TunnelSpec {
+            proxy: Some(proxy.clone()),
+            ..Default::default()
+        };
+        // `postgres` only resolves on the proxy's side.
+        let tunnel = Tunnel::open(&spec, postgres(), &known.known(), Arc::new(NeverAsked))
+            .await
+            .unwrap_or_else(|e| panic!("{:?}: {e}", proxy.kind));
+        let conn = pg_through(&tunnel).await;
+        assert_eq!(
+            scalar(&*conn, "select 1").await.unwrap(),
+            "1",
+            "{:?}",
+            proxy.kind
+        );
+        // Several connections share it, each through its own proxy connection.
+        let second = pg_through(&tunnel).await;
+        assert_eq!(scalar(&*second, "select 2").await.unwrap(), "2");
+        // Nothing to run commands on.
+        assert!(tunnel.exec("true").await.is_err());
+        tunnel.close().await;
+    }
+}
+
+#[tokio::test]
+async fn the_first_ssh_hop_goes_through_the_proxy() {
+    if bastion().is_none() {
+        return;
+    }
+    for proxy in proxies() {
+        let known = TempKnownHosts::new("proxy-hop");
+        // bastion2 is not reachable from the host: only through the proxy.
+        let spec = TunnelSpec {
+            hops: vec![hop("bastion2", 22, "id_ed25519")],
+            proxy: Some(proxy.clone()),
+            ..Default::default()
+        };
+        let tunnel = Tunnel::open(&spec, postgres(), &known.known(), TestUi::accepting())
+            .await
+            .unwrap_or_else(|e| panic!("{:?}: {e}", proxy.kind));
+        let conn = pg_through(&tunnel).await;
+        assert_eq!(
+            scalar(&*conn, "select 1").await.unwrap(),
+            "1",
+            "{:?}",
+            proxy.kind
+        );
+        tunnel.close().await;
+    }
+}
+
+#[tokio::test]
+async fn a_wrong_proxy_password_is_reported_as_such() {
+    for mut proxy in proxies() {
+        proxy.password = Some(Secret::new("wrong"));
+        let known = TempKnownHosts::new("proxy-wrong");
+        // SOCKS5 refuses it when the tunnel opens; HTTP on the first CONNECT (the hop's).
+        let spec = TunnelSpec {
+            hops: vec![hop("bastion2", 22, "id_ed25519")],
+            proxy: Some(proxy.clone()),
+            ..Default::default()
+        };
+        match Tunnel::connect(&spec, &known.known(), TestUi::accepting()).await {
+            Err(SshError::Proxy { message, .. }) => {
+                assert!(
+                    message.contains("rejected the username or password"),
+                    "{message}"
+                );
+            }
+            other => panic!(
+                "{:?}: expected a proxy error: {:?}",
+                proxy.kind,
+                other.err()
+            ),
+        }
+        let alone = TunnelSpec {
+            proxy: Some(proxy.clone()),
+            ..Default::default()
+        };
+        if proxy.kind == ProxyKind::Socks5 {
+            assert!(matches!(
+                Tunnel::connect(&alone, &known.known(), TestUi::accepting()).await,
+                Err(SshError::Proxy { .. })
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_missing_proxy_password_is_asked_once() {
+    for mut proxy in proxies() {
+        proxy.password = None;
+        let known = TempKnownHosts::new("proxy-ask");
+        let ui = TestUi::answering(vec![Some("proxy-pass")]);
+        let spec = TunnelSpec {
+            proxy: Some(proxy.clone()),
+            ..Default::default()
+        };
+        let tunnel = Tunnel::open(&spec, postgres(), &known.known(), ui.clone())
+            .await
+            .unwrap();
+        let conn = pg_through(&tunnel).await;
+        assert_eq!(scalar(&*conn, "select 1").await.unwrap(), "1");
+        let _again = pg_through(&tunnel).await;
+        assert_eq!(
+            *ui.questions.lock().unwrap(),
+            vec![SecretRequest::ProxyPassword {
+                user: "proxyuser".into(),
+                host: proxy.host.clone()
+            }],
+            "{:?}",
+            proxy.kind
+        );
+        tunnel.close().await;
+    }
+}
+
+#[tokio::test]
+async fn a_proxy_and_a_command_hop_do_not_mix() {
+    let known = TempKnownHosts::new("proxy-command");
+    let mut first = hop("bastion2", 22, "id_ed25519");
+    first.command = Some("ssh -W %h:%p jump".into());
+    let spec = TunnelSpec {
+        hops: vec![first],
+        proxy: Some(ProxySpec {
+            kind: ProxyKind::Socks5,
+            host: "127.0.0.1".into(),
+            port: 1,
+            user: None,
+            password: None,
+        }),
+        ..Default::default()
+    };
+    assert!(matches!(
+        Tunnel::connect(&spec, &known.known(), Arc::new(NonInteractive)).await,
+        Err(SshError::Other(m)) if m.contains("proxy")
+    ));
 }

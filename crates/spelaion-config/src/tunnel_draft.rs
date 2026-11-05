@@ -7,12 +7,14 @@ use std::path::{Path, PathBuf};
 use spelaion_driver_api::Secret;
 use toml_edit::{Array, ArrayOfTables, InlineTable, Item, Table, Value};
 
-use crate::accounts::tunnel_account;
+use crate::accounts::{proxy_account, tunnel_account};
 use crate::draft::{PasswordChoice, portable_path, slug};
 use crate::edit::{read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, Source, TunnelEntry, validate_tunnel, workspace_dir};
-use crate::model::{HopConfig, SCHEMA_VERSION, SecretSpec, SshAuth, TunnelFile};
+use crate::model::{
+    HopConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec, SshAuth, TunnelFile,
+};
 use crate::secrets::{SecretBackend, SecretRef};
 
 /// JSON Schema URL put in the header of new tunnel files.
@@ -42,6 +44,66 @@ pub struct TunnelDraft {
     /// In order; the last one reaches the database.
     pub hops: Vec<HopDraft>,
     pub options: TunnelDraftOptions,
+    /// A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027).
+    pub proxy: Option<ProxyDraft>,
+}
+
+/// The proxy as typed in the form. Empty strings mean "not set".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyDraft {
+    pub kind: ProxyType,
+    pub host: String,
+    pub port: Option<u16>,
+    pub user: String,
+    /// Only used with a user.
+    pub password: PasswordChoice,
+}
+
+/// Passwords typed in the tunnel form, never part of the draft: `hops[i]` for hop `i`, and
+/// the proxy's. Only those whose reference is `keychain` are stored.
+#[derive(Default)]
+pub struct TunnelPasswords {
+    pub hops: Vec<Option<Secret>>,
+    pub proxy: Option<Secret>,
+}
+
+impl From<Vec<Option<Secret>>> for TunnelPasswords {
+    fn from(hops: Vec<Option<Secret>>) -> Self {
+        Self { hops, proxy: None }
+    }
+}
+
+impl TunnelPasswords {
+    fn hop(&self, i: usize) -> Option<&Secret> {
+        self.hops
+            .get(i)
+            .and_then(Option::as_ref)
+            .filter(|s| !s.expose().is_empty())
+    }
+
+    fn proxy(&self) -> Option<&Secret> {
+        self.proxy.as_ref().filter(|s| !s.expose().is_empty())
+    }
+}
+
+fn proxy_uses_keychain(file: &TunnelFile) -> bool {
+    file.proxy
+        .as_ref()
+        .and_then(|p| p.password.as_ref())
+        .is_some_and(|p| p.secret == "keychain")
+}
+
+/// The form's choice for a password, as the file's reference.
+fn choice_of(spec: Option<&SecretSpec>) -> PasswordChoice {
+    match spec.map(|p| p.secret.as_str()) {
+        None => PasswordChoice::None,
+        Some("keychain") => PasswordChoice::Keychain,
+        Some("prompt") => PasswordChoice::Prompt,
+        Some(other) => match other.strip_prefix("env:") {
+            Some(var) => PasswordChoice::Env(var.to_string()),
+            None => PasswordChoice::Other(other.to_string()),
+        },
+    }
 }
 
 /// Network settings of the whole tunnel. `None` (or the default value) leaves them out of
@@ -174,6 +236,43 @@ impl TunnelDraft {
                 command: None,
             });
         }
+        let proxy = match &self.proxy {
+            None => None,
+            Some(proxy) => {
+                let host = non_empty(&proxy.host)
+                    .ok_or_else(|| ConfigError::new(path, "the proxy's host cannot be empty"))?;
+                let port = proxy
+                    .port
+                    .filter(|p| *p > 0)
+                    .ok_or_else(|| ConfigError::new(path, "the proxy needs a port"))?;
+                let user = non_empty(&proxy.user);
+                let password = match (&user, &proxy.password) {
+                    (None, _) | (Some(_), PasswordChoice::None) => None,
+                    (Some(_), PasswordChoice::Keychain) => Some("keychain".to_string()),
+                    (Some(_), PasswordChoice::Prompt) => Some("prompt".to_string()),
+                    (Some(_), PasswordChoice::Env(var)) => Some(format!("env:{}", var.trim())),
+                    (Some(_), PasswordChoice::Other(reference)) => Some(reference.clone()),
+                    (Some(_), PasswordChoice::CloudToken(_)) => {
+                        return Err(ConfigError::new(
+                            path,
+                            "cloud tokens are for databases, not proxies",
+                        ));
+                    }
+                };
+                if let Some(secret) = &password {
+                    secret
+                        .parse::<SecretRef>()
+                        .map_err(|message| ConfigError::new(path, format!("proxy: {message}")))?;
+                }
+                Some(ProxyConfig {
+                    kind: proxy.kind,
+                    host,
+                    port,
+                    user,
+                    password: password.map(|secret| SecretSpec { secret }),
+                })
+            }
+        };
         let options = &self.options;
         validate_tunnel(
             path,
@@ -188,6 +287,7 @@ impl TunnelDraft {
                 connect_timeout: options
                     .connect_timeout
                     .filter(|s| *s != TunnelFile::DEFAULT_CONNECT_TIMEOUT),
+                proxy,
                 hops,
             },
         )
@@ -221,6 +321,13 @@ impl TunnelDraft {
             name: entry.name.clone(),
             hops,
             options: TunnelDraftOptions::of(&entry.file),
+            proxy: entry.file.proxy.as_ref().map(|proxy| ProxyDraft {
+                kind: proxy.kind,
+                host: proxy.host.clone(),
+                port: Some(proxy.port),
+                user: proxy.user.clone().unwrap_or_default(),
+                password: choice_of(proxy.password.as_ref()),
+            }),
         }
     }
 }
@@ -237,40 +344,46 @@ fn find<'a>(
         .ok_or_else(|| ConfigError::new(Path::new(name), format!("tunnel {name:?} does not exist")))
 }
 
-/// Typed passwords to store: hops whose password is `keychain` and that got a non-empty one.
+/// Typed passwords to store: those whose reference is `keychain` and that got a non-empty one.
 fn store_passwords(
     config: &Config,
     source: Source,
     name: &str,
     file: &TunnelFile,
-    passwords: &[Option<Secret>],
+    passwords: &TunnelPasswords,
     backend: &dyn SecretBackend,
 ) -> Result<Vec<String>, ResolveError> {
+    let set = |account: String, secret: &Secret| {
+        backend
+            .keychain_set(&account, secret.expose())
+            .map_err(|message| ResolveError::Secret {
+                reference: format!("keychain:{account}"),
+                message,
+            })
+            .map(|()| account)
+    };
     let mut stored = Vec::new();
     for (i, hop) in file.hops.iter().enumerate() {
-        let Some(secret) = passwords.get(i).and_then(Option::as_ref) else {
-            continue;
-        };
-        if uses_keychain(hop) && !secret.expose().is_empty() {
-            let account = tunnel_account(config, source, name, i);
-            backend
-                .keychain_set(&account, secret.expose())
-                .map_err(|message| ResolveError::Secret {
-                    reference: format!("keychain:{account}"),
-                    message,
-                })?;
-            stored.push(account);
+        if let Some(secret) = passwords.hop(i)
+            && uses_keychain(hop)
+        {
+            stored.push(set(tunnel_account(config, source, name, i), secret)?);
         }
+    }
+    if let Some(secret) = passwords.proxy()
+        && proxy_uses_keychain(file)
+    {
+        stored.push(set(proxy_account(config, source, name), secret)?);
     }
     Ok(stored)
 }
 
-/// Writes a new tunnel file and stores the typed `keychain` passwords (`passwords[i]` for
-/// hop `i`). Never overwrites an existing tunnel; if the keychain fails, nothing is left.
+/// Writes a new tunnel file and stores the typed `keychain` passwords. Never overwrites an
+/// existing tunnel; if the keychain fails, nothing is left.
 pub fn add_tunnel(
     config: &Config,
     draft: &TunnelDraft,
-    passwords: &[Option<Secret>],
+    passwords: &TunnelPasswords,
     backend: &dyn SecretBackend,
 ) -> Result<String, ResolveError> {
     let name = draft.file_name()?;
@@ -290,6 +403,7 @@ pub fn add_tunnel(
         for i in 0..file.hops.len() {
             let _ = backend.keychain_delete(&tunnel_account(config, draft.source, &name, i));
         }
+        let _ = backend.keychain_delete(&proxy_account(config, draft.source, &name));
         return Err(e);
     }
     Ok(name)
@@ -376,6 +490,30 @@ fn write_options(table: &mut Table, old: &TunnelFile, new: &TunnelFile) {
     if old.connect_timeout != new.connect_timeout {
         put(table, "connect_timeout", number(new.connect_timeout));
     }
+    if old.proxy != new.proxy {
+        match &new.proxy {
+            None => {
+                table.remove("proxy");
+            }
+            Some(proxy) => {
+                let item = table
+                    .entry("proxy")
+                    .or_insert_with(|| Item::Table(Table::new()));
+                if let Some(section) = item.as_table_mut() {
+                    let text = |v: &Option<String>| v.clone().map(Value::from);
+                    let kind = match proxy.kind {
+                        ProxyType::Socks5 => "socks5",
+                        ProxyType::Http => "http",
+                    };
+                    put(section, "type", Some(Value::from(kind)));
+                    put(section, "host", Some(Value::from(proxy.host.as_str())));
+                    put(section, "port", Some(Value::from(i64::from(proxy.port))));
+                    put(section, "user", text(&proxy.user));
+                    put(section, "password", secret_value(&proxy.password));
+                }
+            }
+        }
+    }
 }
 
 /// A revision identifies the complete tunnel and the file it was loaded from.
@@ -389,7 +527,7 @@ pub fn update_tunnel_at_revision(
     source: Source,
     name: &str,
     draft: &TunnelDraft,
-    passwords: &[Option<Secret>],
+    passwords: &TunnelPasswords,
     backend: &dyn SecretBackend,
     revision: &str,
 ) -> Result<TunnelFile, ResolveError> {
@@ -409,7 +547,7 @@ pub fn update_tunnel(
     source: Source,
     name: &str,
     draft: &TunnelDraft,
-    passwords: &[Option<Secret>],
+    passwords: &TunnelPasswords,
     backend: &dyn SecretBackend,
 ) -> Result<TunnelFile, ResolveError> {
     let entry = find(config, source, name)?;
@@ -460,10 +598,7 @@ pub fn update_tunnel(
             if !uses_keychain(old_hop) {
                 continue;
             }
-            let typed = passwords
-                .get(i)
-                .and_then(Option::as_ref)
-                .is_some_and(|s| !s.expose().is_empty());
+            let typed = passwords.hop(i).is_some();
             let keep = new.hops.get(i).is_some_and(|hop| {
                 uses_keychain(hop)
                     && (typed
@@ -481,6 +616,25 @@ pub fn update_tunnel(
                     });
                     break;
                 }
+            }
+        }
+    }
+    // The proxy's stored password is forgotten when it stops using the keychain or the proxy
+    // points elsewhere, as a hop's is.
+    if result.is_ok() && proxy_uses_keychain(old) {
+        let same = |a: &ProxyConfig, b: &ProxyConfig| {
+            a.kind == b.kind && a.host == b.host && a.port == b.port && a.user == b.user
+        };
+        let keep = proxy_uses_keychain(&new)
+            && (passwords.proxy().is_some()
+                || matches!((&old.proxy, &new.proxy), (Some(a), Some(b)) if same(a, b)));
+        if !keep {
+            let account = proxy_account(config, source, name);
+            if let Err(message) = backend.keychain_delete(&account) {
+                result = Err(ResolveError::Secret {
+                    reference: format!("keychain:{account}"),
+                    message,
+                });
             }
         }
     }
@@ -518,16 +672,24 @@ pub fn delete_tunnel(
     }
     std::fs::remove_file(&entry.file_path)
         .map_err(|e| ConfigError::new(&entry.file_path, format!("could not delete: {e}")))?;
-    for (i, hop) in entry.file.hops.iter().enumerate() {
-        if uses_keychain(hop) {
-            let account = tunnel_account(config, source, name, i);
-            backend
-                .keychain_delete(&account)
-                .map_err(|message| ResolveError::Secret {
-                    reference: format!("keychain:{account}"),
-                    message,
-                })?;
-        }
+    let mut accounts: Vec<String> = entry
+        .file
+        .hops
+        .iter()
+        .enumerate()
+        .filter(|(_, hop)| uses_keychain(hop))
+        .map(|(i, _)| tunnel_account(config, source, name, i))
+        .collect();
+    if proxy_uses_keychain(&entry.file) {
+        accounts.push(proxy_account(config, source, name));
+    }
+    for account in accounts {
+        backend
+            .keychain_delete(&account)
+            .map_err(|message| ResolveError::Secret {
+                reference: format!("keychain:{account}"),
+                message,
+            })?;
     }
     Ok(())
 }

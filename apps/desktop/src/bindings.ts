@@ -54,11 +54,11 @@ export const commands = {
 	 *  Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
 	 *  password typed for hop `i`; stored ones are used when none is typed.
 	 */
-	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[]) => typedError<TunnelTestOutcome, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords })),
+	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelTestOutcome, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword })),
 	/**  Saves a new tunnel (and its `keychain` passwords) and reloads the configuration. */
-	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[]) => typedError<TunnelItem, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords })),
+	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelItem, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords, proxyPassword })),
 	/**  Saves an edited tunnel (same file and name) and reloads the configuration. */
-	updateTunnel: (name: string, personal: boolean, draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], revision: string) => typedError<null, string>(__TAURI_INVOKE("update_tunnel", { name, personal, draft, passwords, revision })),
+	updateTunnel: (name: string, personal: boolean, draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_tunnel", { name, personal, draft, passwords, proxyPassword, revision })),
 	/**  Deletes a tunnel that no connection uses, with its stored passwords. */
 	deleteTunnel: (name: string, personal: boolean) => typedError<null, string>(__TAURI_INVOKE("delete_tunnel", { name, personal })),
 	/**
@@ -1006,6 +1006,33 @@ export type ProcessTargetItem_Serialize = {
 	identity: string | null,
 };
 
+/**  The proxy section of the tunnel editor. Its password, if typed, travels apart. */
+export type ProxyDraftItem = ProxyDraftItem_Serialize | ProxyDraftItem_Deserialize;
+
+/**  The proxy section of the tunnel editor. Its password, if typed, travels apart. */
+export type ProxyDraftItem_Deserialize = {
+	kind: ProxyTypeItem,
+	host: string,
+	port?: number | null,
+	user: string,
+	passwordMode: PasswordMode,
+	passwordEnv: string,
+	passwordOther: string,
+};
+
+/**  The proxy section of the tunnel editor. Its password, if typed, travels apart. */
+export type ProxyDraftItem_Serialize = {
+	kind: ProxyTypeItem,
+	host: string,
+	port: number | null,
+	user: string,
+	passwordMode: PasswordMode,
+	passwordEnv: string,
+	passwordOther: string,
+};
+
+export type ProxyTypeItem = "socks5" | "http";
+
 /**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
 export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";
 
@@ -1081,7 +1108,7 @@ export type ScriptEvent_Serialize =
 scriptOffset: number | null; cancelled: boolean } | { kind: "scriptFinished"; executed: number; failed: boolean } | { kind: "historyWarning"; message: string };
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
-export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
+export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
 
 /**  A role, login, tablespace or extension: outside every schema (ADR-024). */
 export type ServerObjectItem = ServerObjectItem_Serialize | ServerObjectItem_Deserialize;
@@ -1188,6 +1215,8 @@ export type TunnelDraftItem_Deserialize = {
 	keepaliveCount?: number | null,
 	/**  Seconds; null for the default (15). */
 	connectTimeout?: number | null,
+	/**  A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027). */
+	proxy?: ProxyDraftItem_Deserialize | null,
 };
 
 export type TunnelDraftItem_Serialize = {
@@ -1200,6 +1229,8 @@ export type TunnelDraftItem_Serialize = {
 	keepaliveCount: number | null,
 	/**  Seconds; null for the default (15). */
 	connectTimeout: number | null,
+	/**  A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027). */
+	proxy: ProxyDraftItem_Serialize | null,
 };
 
 /**  A tunnel that a new connection can use. */

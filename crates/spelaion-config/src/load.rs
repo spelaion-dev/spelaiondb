@@ -413,11 +413,34 @@ pub(crate) fn validate_connection(
 
 pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFile, ConfigError> {
     check_version(path, file.schema_version)?;
-    if file.hops.is_empty() {
+    if file.hops.is_empty() && file.proxy.is_none() {
         return Err(ConfigError::new(
             path,
-            "a tunnel needs at least one hop in [[hops]]",
+            "a tunnel needs at least one hop in [[hops]], or a [proxy]",
         ));
+    }
+    if let Some(proxy) = &file.proxy {
+        if proxy.host.trim().is_empty() {
+            return Err(ConfigError::new(path, "the proxy needs a host"));
+        }
+        if proxy.port == 0 {
+            return Err(ConfigError::new(
+                path,
+                "the proxy's port must be from 1 to 65535",
+            ));
+        }
+        if proxy.password.is_some() && proxy.user.is_none() {
+            return Err(ConfigError::new(
+                path,
+                "the proxy's password goes with a user: add `user` or remove `password`",
+            ));
+        }
+        if file.hops.first().is_some_and(|hop| hop.command.is_some()) {
+            return Err(ConfigError::new(
+                path,
+                "the first hop's command already is the way to it: it cannot go through the proxy too",
+            ));
+        }
     }
     if file
         .keepalive_interval

@@ -135,6 +135,9 @@ fn check_tunnel(root: &Path, tunnel: &TunnelEntry, add: &mut Add<'_>) {
             add(path, Severity::Error, message);
         }
     }
+    if let Some(secret) = tunnel.file.proxy.as_ref().and_then(|p| p.password.as_ref()) {
+        check_secret(path, "proxy password", secret, add);
+    }
     for (i, hop) in tunnel.file.hops.iter().enumerate() {
         if let Some(secret) = &hop.password {
             check_secret(path, &format!("hop {} password", i + 1), secret, add);

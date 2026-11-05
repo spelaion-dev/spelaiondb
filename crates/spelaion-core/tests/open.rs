@@ -347,6 +347,61 @@ async fn connections_share_one_tunnel() {
     assert_eq!(ws.tunnels.active().await, 0);
 }
 
+/// Connections from configuration through each test proxy (ADR-027): the proxy alone, and
+/// the proxy in front of an SSH hop the host cannot reach. The proxy's password comes from a
+/// secret reference, as any other.
+#[tokio::test]
+async fn connections_go_through_a_proxy_from_their_tunnel_file() {
+    let proxies: Vec<(&str, String)> = [
+        ("socks5", "SPELAION_TEST_SOCKS"),
+        ("http", "SPELAION_TEST_HTTP_PROXY"),
+    ]
+    .into_iter()
+    .filter_map(|(kind, var)| match std::env::var(var) {
+        Ok(addr) => Some((kind, addr)),
+        Err(_) => {
+            eprintln!("{var} not set: skipped");
+            None
+        }
+    })
+    .collect();
+    for (kind, addr) in proxies {
+        let (host, port) = addr.rsplit_once(':').unwrap();
+        let ws = Workspace::new(&format!("proxy-{kind}"));
+        let proxy = format!(
+            "[proxy]\ntype = \"{kind}\"\nhost = \"{host}\"\nport = {port}\nuser = \"proxyuser\"\npassword = {{ secret = \"cmd:echo proxy-pass\" }}\n"
+        );
+        ws.write(
+            ".spelaion/tunnels/alone.toml",
+            &format!("schema_version = 1\n\n{proxy}"),
+        );
+        let identity = toml_path(&keys().join("id_ed25519"));
+        ws.write(
+            ".spelaion/tunnels/hop.toml",
+            &format!(
+                "schema_version = 1\n\n{proxy}\n[[hops]]\nhost = \"bastion2\"\nuser = \"spelaion\"\nauth = [\"key\"]\nidentity_file = {identity}\n"
+            ),
+        );
+        for tunnel in ["alone", "hop"] {
+            ws.write(
+                &format!(".spelaion/connections/{tunnel}.toml"),
+                &format!(
+                    "schema_version = 1\nengine = \"postgres\"\nhost = \"postgres\"\ndatabase = \"spelaion\"\nuser = \"spelaion\"\npassword = {{ secret = \"cmd:echo spelaion\" }}\ntunnel = \"{tunnel}\"\n"
+                ),
+            );
+        }
+        let ui = Arc::new(AcceptHosts);
+        let alone = ws.open("alone", None, ui.clone()).await.unwrap();
+        assert_eq!(first_value(&alone, "select 1").await, "1", "{kind}");
+        if std::env::var("SPELAION_TEST_SSH").is_ok() {
+            let hop = ws.open("hop", None, ui.clone()).await.unwrap();
+            assert_eq!(first_value(&hop, "select 2").await, "2", "{kind}");
+            hop.close().await;
+        }
+        alone.close().await;
+    }
+}
+
 /// Two consecutive free local ports.
 fn free_port_pair() -> u16 {
     (42_000u16..60_000)
@@ -451,6 +506,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
             hop("bastion2", None, "spelaion"),
         ],
         options: Default::default(),
+        proxy: None,
     };
     let known_hosts = KnownHosts {
         team_file: None,
@@ -460,15 +516,27 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
     let resolved = Resolver::new(&config, &trust, &SystemBackend)
         .resolve_tunnel_draft(&draft)
         .unwrap();
-    test_tunnel(&resolved, vec![], &known_hosts, Arc::new(AcceptHosts))
-        .await
-        .unwrap();
+    test_tunnel(
+        &resolved,
+        Default::default(),
+        &known_hosts,
+        Arc::new(AcceptHosts),
+    )
+    .await
+    .unwrap();
 
     draft.hops[1].user = "nobody".into();
     let resolved = Resolver::new(&config, &trust, &SystemBackend)
         .resolve_tunnel_draft(&draft)
         .unwrap();
-    match test_tunnel(&resolved, vec![], &known_hosts, Arc::new(AcceptHosts)).await {
+    match test_tunnel(
+        &resolved,
+        Default::default(),
+        &known_hosts,
+        Arc::new(AcceptHosts),
+    )
+    .await
+    {
         Err(OpenError::Tunnel(spelaion_ssh::SshError::Auth { hop: 1, .. })) => {}
         other => panic!("expected an authentication error at hop 2: {other:?}"),
     }

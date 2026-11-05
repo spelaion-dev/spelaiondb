@@ -16,7 +16,9 @@ use tokio::task::JoinHandle;
 
 use crate::auth::authenticate;
 use crate::hostkeys::{self, KnownHosts};
-use crate::{HopSpec, Interaction, LocalPort, SshError, Target, TunnelSpec};
+use crate::{
+    HopSpec, Interaction, LocalPort, ProxySpec, SecretRequest, SshError, Target, TunnelSpec,
+};
 
 /// A command running on a tunnel's last hop ([`Tunnel::exec`]).
 pub struct RemoteExec {
@@ -110,6 +112,9 @@ impl client::Handler for HopHandler {
 pub struct Tunnel {
     state: Arc<watch::Sender<TunnelState>>,
     sessions: Vec<Arc<Handle<HopHandler>>>,
+    /// A tunnel without hops: the proxy reaches the targets (ADR-027), its password already
+    /// asked if it needed one.
+    proxy_only: Option<(Arc<ProxySpec>, Duration)>,
     /// Local ports and the target each leads to. Usually one per target; a connection that
     /// asks for a fixed port may add another.
     forwards: Mutex<Vec<(Target, SocketAddr, JoinHandle<()>)>>,
@@ -137,8 +142,17 @@ impl Tunnel {
         known_hosts: &KnownHosts,
         ui: Arc<dyn Interaction>,
     ) -> Result<Tunnel, SshError> {
-        if spec.hops.is_empty() {
+        if spec.hops.is_empty() && spec.proxy.is_none() {
             return Err(SshError::Other("the tunnel has no hops".into()));
+        }
+        if spec.proxy.is_some() && spec.hops.first().is_some_and(|h| h.command.is_some()) {
+            return Err(SshError::Other(
+                "the first hop's command already is the way to it: it cannot go through a proxy too"
+                    .into(),
+            ));
+        }
+        if spec.hops.is_empty() {
+            return Self::proxy_only(spec, &ui).await;
         }
         if spec.hops.iter().skip(1).any(|h| h.command.is_some()) {
             return Err(SshError::Other(
@@ -185,13 +199,29 @@ impl Tunnel {
                             }
                         }))
                     }
-                    (None, None) => Ok(client::connect(
-                        config.clone(),
-                        (hop_spec.host.as_str(), hop_spec.port),
-                        handler,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())),
+                    (None, None) => match &spec.proxy {
+                        // The first hop through the proxy (ADR-027).
+                        Some(proxy) => {
+                            let stream = crate::proxy::connect(
+                                proxy,
+                                &hop_spec.host,
+                                hop_spec.port,
+                                timeout,
+                                &ui,
+                            )
+                            .await?;
+                            Ok(client::connect_stream(config.clone(), stream, handler)
+                                .await
+                                .map_err(|e| e.to_string()))
+                        }
+                        None => Ok(client::connect(
+                            config.clone(),
+                            (hop_spec.host.as_str(), hop_spec.port),
+                            handler,
+                        )
+                        .await
+                        .map_err(|e| e.to_string())),
+                    },
                     (Some(previous), _) => Ok(
                         match previous
                             .channel_open_direct_tcpip(
@@ -240,9 +270,36 @@ impl Tunnel {
         Ok(Tunnel {
             state,
             sessions,
+            proxy_only: None,
             forwards: Mutex::new(Vec::new()),
             primary: std::sync::OnceLock::new(),
             child: Mutex::new(child),
+        })
+    }
+
+    /// A tunnel that is only a proxy: its password is asked now (once), and the proxy is
+    /// checked, so a wrong address or password shows here rather than in the driver.
+    async fn proxy_only(spec: &TunnelSpec, ui: &Arc<dyn Interaction>) -> Result<Tunnel, SshError> {
+        let mut proxy = spec.proxy.clone().expect("a proxy-only tunnel has a proxy");
+        let timeout = spec.options.connect_timeout;
+        if let (Some(user), None) = (&proxy.user, &proxy.password) {
+            proxy.password = Some(
+                ui.ask_secret(&SecretRequest::ProxyPassword {
+                    user: user.clone(),
+                    host: proxy.host.clone(),
+                })
+                .await
+                .ok_or(SshError::Cancelled)?,
+            );
+        }
+        crate::proxy::check(&proxy, timeout).await?;
+        Ok(Tunnel {
+            state: Arc::new(watch::Sender::new(TunnelState::Up)),
+            sessions: Vec::new(),
+            proxy_only: Some((Arc::new(proxy), timeout)),
+            forwards: Mutex::new(Vec::new()),
+            primary: std::sync::OnceLock::new(),
+            child: Mutex::new(None),
         })
     }
 
@@ -254,7 +311,11 @@ impl Tunnel {
         if let TunnelState::Down { reason } = &*self.state.borrow() {
             return Err(SshError::Other(format!("the tunnel is down: {reason}")));
         }
-        let session = self.sessions.last().expect("a tunnel has at least one hop");
+        let Some(session) = self.sessions.last() else {
+            return Err(SshError::Other(
+                "a tunnel with only a proxy cannot run commands: add an SSH hop".into(),
+            ));
+        };
         let channel = session
             .channel_open_session()
             .await
@@ -322,14 +383,18 @@ the server refused to run a command (it may allow only port forwarding)
         let addr = listener
             .local_addr()
             .map_err(|e| SshError::Other(e.to_string()))?;
-        let last = self.sessions.last().expect("at least one hop").clone();
+        let route = match (&self.proxy_only, self.sessions.last()) {
+            (Some((proxy, timeout)), _) => Route::Proxy(proxy.clone(), *timeout),
+            (None, Some(last)) => Route::Ssh(last.clone()),
+            (None, None) => return Err(SshError::Other("the tunnel has no hops".into())),
+        };
         // Another task may have created the same forward while the port was being opened.
         if let Some(addr) = self.existing(&target, port) {
             return Ok(addr);
         }
         let task = tokio::spawn(forward(
             listener,
-            last,
+            route,
             target.clone(),
             self.state.subscribe(),
         ));
@@ -429,9 +494,18 @@ async fn listen(port: LocalPort) -> Result<TcpListener, SshError> {
 }
 
 /// Accepts local connections and carries them to the target over a new channel of the last session.
+/// How a forward reaches its target.
+#[derive(Clone)]
+enum Route {
+    /// A `direct-tcpip` channel of the last SSH session.
+    Ssh(Arc<Handle<HopHandler>>),
+    /// Through the proxy alone (ADR-027).
+    Proxy(Arc<ProxySpec>, Duration),
+}
+
 async fn forward(
     listener: TcpListener,
-    last: Arc<Handle<HopHandler>>,
+    route: Route,
     target: Target,
     mut state: watch::Receiver<TunnelState>,
 ) {
@@ -444,20 +518,33 @@ async fn forward(
             _ = state.wait_for(|s| matches!(s, TunnelState::Down { .. })) => return,
         };
         let Ok((mut tcp, _)) = accepted else { return };
-        let last = last.clone();
+        let route = route.clone();
         let target = target.clone();
         tokio::spawn(async move {
-            let channel = last
-                .channel_open_direct_tcpip(
-                    target.host,
-                    target.port.into(),
-                    "127.0.0.1",
-                    local_port.into(),
-                )
-                .await;
-            if let Ok(channel) = channel {
-                let mut stream = channel.into_stream();
-                let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+            match route {
+                Route::Ssh(last) => {
+                    let channel = last
+                        .channel_open_direct_tcpip(
+                            target.host,
+                            target.port.into(),
+                            "127.0.0.1",
+                            local_port.into(),
+                        )
+                        .await;
+                    if let Ok(channel) = channel {
+                        let mut stream = channel.into_stream();
+                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                    }
+                }
+                Route::Proxy(proxy, timeout) => {
+                    // The password was asked when the tunnel opened: nothing to ask here.
+                    let ui: Arc<dyn Interaction> = Arc::new(crate::NonInteractive);
+                    if let Ok(mut stream) =
+                        crate::proxy::connect(&proxy, &target.host, target.port, timeout, &ui).await
+                    {
+                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                    }
+                }
             }
             // If the target refuses the connection, the local one is closed and the driver sees the error.
         });
