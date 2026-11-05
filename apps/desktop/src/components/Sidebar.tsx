@@ -93,6 +93,24 @@ function useContextMenu() {
   return [menu, setMenu] as const;
 }
 
+/** Fired on `window` to put the keyboard in the explorer's quick filter (Ctrl+Shift+F). */
+export const FOCUS_EXPLORER_FILTER_EVENT = "spelaion-focus-explorer-filter";
+
+/** Whether a name contains the quick filter's text, ignoring case. An empty filter keeps all. */
+function matchesFilter(name: string, filter: string): boolean {
+  return filter === "" || name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
+}
+
+/** The magnifying glass of the quick filter. */
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false">
+      <circle cx="10.5" cy="10.5" r="6" />
+      <path d="M15 15l5 5" />
+    </svg>
+  );
+}
+
 /** Sorts names as Settings → Explorer says (columns are never sorted). */
 function useSortByName() {
   const { i18n } = useTranslation();
@@ -177,15 +195,19 @@ function Folder({
   label,
   count,
   initiallyOpen = false,
+  forceOpen = false,
   children,
 }: {
   label: string;
   count: number;
   initiallyOpen?: boolean;
+  /** Shown open whatever its state (the quick filter shows what matches inside). */
+  forceOpen?: boolean;
   children: ReactNode;
 }) {
   const { t, i18n } = useTranslation("shell");
-  const [open, setOpen] = useState(initiallyOpen);
+  const [chosen, setOpen] = useState(initiallyOpen);
+  const open = chosen || forceOpen;
   return (
     <div className="node">
       <div
@@ -229,6 +251,17 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   );
   const [showProblems, setShowProblems] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
+  const filter = useApp((s) => s.explorerFilter);
+  const openConnections = useApp((s) => s.openConnections);
+  const filterBox = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const focus = () => requestAnimationFrame(() => filterBox.current?.focus());
+    window.addEventListener(FOCUS_EXPLORER_FILTER_EVENT, focus);
+    return () => window.removeEventListener(FOCUS_EXPLORER_FILTER_EVENT, focus);
+  }, []);
+  const filterText = filter ?? "";
+  /** With a filter, connections whose name matches, and those already expanded. */
+  const shown = (c: ConnectionItem) => matchesFilter(c.name, filterText) || openConnections.includes(c.id);
 
   async function openFolder() {
     const path = await open({ directory: true, title: t("openFolderTitle") });
@@ -282,7 +315,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const groups = new Map<string, ConnectionItem[]>([
     [JSON.stringify([false]), []],
   ]);
-  for (const c of connections) {
+  for (const c of connections.filter(shown)) {
     const key = JSON.stringify([c.personal, ...c.folders]);
     groups.set(key, [...(groups.get(key) ?? []), c]);
   }
@@ -303,6 +336,21 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           {t("openFolder")}
         </button>
         <button
+          className={`ghost icon-button${filter !== null ? " active" : ""}`}
+          onClick={() => {
+            const app = useApp.getState();
+            if (app.explorerFilter === null) {
+              app.setExplorerFilter("");
+              window.dispatchEvent(new Event(FOCUS_EXPLORER_FILTER_EVENT));
+            } else app.setExplorerFilter(null);
+          }}
+          aria-label={t("quickFilter")}
+          aria-pressed={filter !== null}
+          title={t("quickFilterHint")}
+        >
+          <SearchIcon />
+        </button>
+        <button
           className="ghost add-connection"
           onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
           aria-label={t("connections:add")}
@@ -311,6 +359,24 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           +
         </button>
       </div>
+      {filter !== null && (
+        <div className="explorer-filter">
+          <input
+            ref={filterBox}
+            type="search"
+            value={filter}
+            placeholder={t("quickFilterPlaceholder")}
+            aria-label={t("quickFilter")}
+            onChange={(e) => useApp.getState().setExplorerFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                useApp.getState().setExplorerFilter(filter === "" ? null : "");
+              }
+            }}
+          />
+        </div>
+      )}
       {folderError && (
         <div className="banner" role="alert">
           {folderError}
@@ -345,6 +411,9 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         </div>
       )}
       <div className="tree">
+        {connections.length > 0 && filterText !== "" && !connections.some(shown) && (
+          <div className="empty small">{t("quickFilterNothing")}</div>
+        )}
         {connections.length === 0 && (
           <div className="empty small">
             <Trans
@@ -368,6 +437,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
                 <ConnectionNode
                   key={`${workspace?.workspace ?? ""}:${c.id}`}
                   connection={c}
+                  filter={filterText}
                 />
               ))}
             </div>
@@ -378,7 +448,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   );
 }
 
-function ConnectionNode({ connection }: { connection: ConnectionItem }) {
+function ConnectionNode({ connection, filter }: { connection: ConnectionItem; filter: string }) {
   const { t } = useTranslation("shell");
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
@@ -394,6 +464,11 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
     const tab = addTab(connection.id);
     if (schemas) connectTabFromExplorer(tab, session);
   }
+
+  useEffect(() => {
+    useApp.getState().setConnectionOpen(connection.id, open);
+  }, [connection.id, open]);
+  useEffect(() => () => useApp.getState().setConnectionOpen(connection.id, false), [connection.id]);
 
   async function toggle() {
     if (open) return setOpen(false);
@@ -447,8 +522,10 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
   const foldersFirst = usePreferences((s) => s.explorer.foldersFirst);
   const sort = useSortByName();
   const shownSchemas = schemas && sort(schemas.filter((s) => showSystem || !s.system), (s) => s.name);
+  // A connection whose name matches the quick filter shows everything in it.
+  const inner = matchesFilter(connection.name, filter) ? "" : filter;
   const shownServerObjects = sort(
-    serverObjects.filter((o) => showSystem || !o.system),
+    serverObjects.filter((o) => (showSystem || !o.system) && matchesFilter(o.name, inner)),
     (o) => o.name,
   );
   const schemaNodes = shownSchemas?.map((s) => (
@@ -459,6 +536,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
       schema={s.name}
       generation={generation}
       onRefreshAll={() => void refreshAll()}
+      filter={inner}
     />
   ));
   const prod = connection.env?.toLowerCase().startsWith("prod");
@@ -513,7 +591,7 @@ function ConnectionNode({ connection }: { connection: ConnectionItem }) {
             const items = shownServerObjects.filter((o) => serverFolder(o.kind) === folder);
             return (
               items.length > 0 && (
-                <Folder key={folder} label={t(`folders.${folder}`)} count={items.length}>
+                <Folder key={folder} label={t(`folders.${folder}`)} count={items.length} forceOpen={inner !== ""}>
                   {items.map((o) => (
                     <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
                       <span className="label">{o.name}</span>
@@ -537,6 +615,7 @@ function SchemaNode({
   schema,
   generation,
   onRefreshAll,
+  filter,
 }: {
   session: string;
   connectionId: string;
@@ -544,6 +623,8 @@ function SchemaNode({
   /** Changes when the connection refreshes all its schemas. */
   generation: number;
   onRefreshAll(): void;
+  /** The quick filter's text ("" when nothing is filtered here). */
+  filter: string;
 }) {
   const { t, i18n } = useTranslation("shell");
   const [open, setOpen] = useState(false);
@@ -594,6 +675,14 @@ function SchemaNode({
 
   useOnChange(generation, reload);
   const childGeneration = `${generation}.${refreshed}`;
+
+  // A schema whose name matches the quick filter shows everything in it; otherwise only what
+  // matches, and it is hidden if it is closed and nothing loaded in it matches.
+  const inner = matchesFilter(schema, filter) ? "" : filter;
+  const anyMatch =
+    objects !== null &&
+    (objects.some((o) => matchesFilter(o.name, inner)) || others.some((o) => matchesFilter(o.name, inner)));
+  if (inner !== "" && !open && !anyMatch) return null;
 
   return (
     <div
@@ -656,17 +745,17 @@ function SchemaNode({
           {objects &&
             SCHEMA_FOLDERS.map((folder) => {
               const relations = sort(
-                objects.filter((o) => relationFolder(o.kind) === folder),
+                objects.filter((o) => relationFolder(o.kind) === folder && matchesFilter(o.name, inner)),
                 (o) => o.name,
               );
               const rest = sort(
-                others.filter((o) => schemaObjectFolder(o.kind) === folder),
+                others.filter((o) => schemaObjectFolder(o.kind) === folder && matchesFilter(o.name, inner)),
                 (o) => o.name,
               );
               const count = relations.length + rest.length;
               return (
                 count > 0 && (
-                  <Folder key={folder} label={t(`folders.${folder}`)} count={count}>
+                  <Folder key={folder} label={t(`folders.${folder}`)} count={count} forceOpen={inner !== ""}>
                     {relations.map((o) => (
                       <ObjectNode
                         key={o.name}

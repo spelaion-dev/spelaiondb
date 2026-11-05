@@ -188,6 +188,11 @@ folders by type: **Tables** (partitioned ones marked P), **Foreign tables**, **V
 (MySQL) and **Synonyms** (SQL Server); only the folders with something in them appear. After
 the schemas come **Roles**, **Users**, **Logins**, **Tablespaces** and **Extensions**, as
 the engine has them (MySQL's accounts only for users that may read `mysql.user`).
+The magnifying glass over the explorer (or **Ctrl+Shift+F**) opens its quick filter: only
+the connections, schemas and objects whose name contains the text stay, with the folders
+that hold them opened, and a connection or schema whose name matches shows everything in it.
+Expanded connections stay; objects of schemas never opened are not searched. **Escape**
+clears the text, and a second **Escape** closes the box.
 The explorer keeps what it has read until you refresh it: **F5** on a schema or table (or
 **Refresh schema** and **Refresh** in their right-click menus) reads it again, and **Refresh
 all schemas** (in a schema's menu, the connection's "⋯" menu, or F5 on the connection) reads

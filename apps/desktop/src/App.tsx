@@ -10,7 +10,7 @@ import { HistoryPanel } from "./components/HistoryPanel";
 import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
 import { SettingsDialog } from "./components/Settings";
 import { SnippetsPanel } from "./components/SnippetsPanel";
-import { Sidebar, refreshConnections } from "./components/Sidebar";
+import { FOCUS_EXPLORER_FILTER_EVENT, Sidebar, refreshConnections } from "./components/Sidebar";
 import { closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
 import { useUpdate } from "./update";
@@ -104,6 +104,12 @@ export default function App() {
       } else if (mod && e.key === ",") {
         e.preventDefault();
         app.openSettings();
+      } else if (mod && e.shiftKey && key === "f") {
+        // Focus the explorer's quick filter, showing the explorer if it is hidden.
+        e.preventDefault();
+        setSidebarSection("connections");
+        if (app.explorerFilter === null) app.setExplorerFilter("");
+        window.dispatchEvent(new Event(FOCUS_EXPLORER_FILTER_EVENT));
       }
     };
     window.addEventListener("keydown", onKey);

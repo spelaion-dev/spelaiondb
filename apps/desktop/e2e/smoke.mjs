@@ -991,6 +991,23 @@ try {
   await probeNode.waitFor({ state: "detached" });
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   assert.equal(await tablesFolder.getAttribute("aria-expanded"), "true");
+  // Quick filter (Ctrl+Shift+F): only what matches by name, plus the expanded connections.
+  await page.keyboard.press("Control+Shift+F");
+  const quickFilter = page.getByRole("searchbox", { name: "Filter the explorer" });
+  await quickFilter.waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Filter the explorer");
+  await page.keyboard.insertText("ord");
+  await page.getByRole("button", { name: "Expand or collapse customer", exact: true }).waitFor({ state: "detached" });
+  await ordersNode.waitFor();
+  await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "1");
+  assert.equal(await page.locator('.connection-row:has-text("MariaDB (Docker)")').count(), 0);
+  await page.keyboard.press("Escape");
+  assert.equal(await quickFilter.inputValue(), "");
+  await page.locator('.connection-row:has-text("MariaDB (Docker)")').waitFor();
+  await page.keyboard.press("Escape");
+  await quickFilter.waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');
