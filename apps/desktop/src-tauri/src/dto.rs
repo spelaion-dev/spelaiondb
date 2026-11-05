@@ -52,6 +52,58 @@ pub struct TableRefItem {
     pub name: String,
 }
 
+/// An object bookmarked in the explorer (ADR-026).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkItem {
+    pub connection: String,
+    /// The schema the object is in, or the schema itself (with an empty `name`).
+    pub schema: String,
+    pub name: String,
+    /// `table`, `view`… for a relation, `function`, `sequence`… for another object, `schema`.
+    pub kind: String,
+    /// A function's arguments…; empty if nothing tells it apart from others of its name.
+    pub detail: String,
+}
+
+impl From<spelaion_core::Bookmark> for BookmarkItem {
+    fn from(b: spelaion_core::Bookmark) -> Self {
+        let spelaion_core::Bookmark {
+            connection,
+            schema,
+            name,
+            kind,
+            detail,
+        } = b;
+        Self {
+            connection,
+            schema,
+            name,
+            kind,
+            detail,
+        }
+    }
+}
+
+impl From<BookmarkItem> for spelaion_core::Bookmark {
+    fn from(b: BookmarkItem) -> Self {
+        let BookmarkItem {
+            connection,
+            schema,
+            name,
+            kind,
+            detail,
+        } = b;
+        Self {
+            connection,
+            schema,
+            name,
+            kind,
+            detail,
+        }
+    }
+}
+
 /// An object of the explorer by its path: its schema (empty for a schema itself) and its
 /// names under it (a table, or a table and one of its columns).
 #[derive(Debug, Clone, Deserialize, Type)]

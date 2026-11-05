@@ -262,6 +262,14 @@ export const commands = {
 	getExplorerFilter: (connection: string) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
 	setExplorerFilter: (connection: string, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
 	/**
+	 *  The explorer's bookmarks (ADR-026) of the personal connections and of the open workspace's,
+	 *  for the connections that exist now.
+	 */
+	listBookmarks: () => typedError<BookmarkItem[], string>(__TAURI_INVOKE("list_bookmarks")),
+	addBookmark: (bookmark: BookmarkItem) => typedError<null, string>(__TAURI_INVOKE("add_bookmark", { bookmark })),
+	/**  Whether the bookmark was there. */
+	removeBookmark: (bookmark: BookmarkItem) => typedError<boolean, string>(__TAURI_INVOKE("remove_bookmark", { bookmark })),
+	/**
 	 *  "Hide" or "Show only" on the schemas, objects or columns chosen in the explorer: their
 	 *  names, with their wildcard characters escaped, go into the connection's filter. Returns the
 	 *  new filter.
@@ -298,6 +306,18 @@ export const events = {
 };
 
 /* Types */
+/**  An object bookmarked in the explorer (ADR-026). */
+export type BookmarkItem = {
+	connection: string,
+	/**  The schema the object is in, or the schema itself (with an empty `name`). */
+	schema: string,
+	name: string,
+	/**  `table`, `view`… for a relation, `function`, `sequence`… for another object, `schema`. */
+	kind: string,
+	/**  A function's arguments…; empty if nothing tells it apart from others of its name. */
+	detail: string,
+};
+
 /**  A value typed in the grid for a result column (`None` is NULL). */
 export type CellEditItem = CellEditItem_Serialize | CellEditItem_Deserialize;
 

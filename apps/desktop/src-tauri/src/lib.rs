@@ -498,6 +498,64 @@ async fn filter_explorer_name(
     Ok(ExplorerFilterItem::from(filter))
 }
 
+/// The explorer's bookmarks (ADR-026) of the personal connections and of the open workspace's,
+/// for the connections that exist now.
+#[tauri::command]
+#[specta::specta]
+async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkItem>> {
+    let workspaces = {
+        let config = state.config.read().await;
+        let mut scopes = vec![history_workspace(&config, Source::User)];
+        let repository = history_workspace(&config, Source::Workspace);
+        if !repository.is_empty() {
+            scopes.push(repository);
+        }
+        scopes
+    };
+    let mut all = Vec::new();
+    for workspace in workspaces {
+        let bookmarks = state
+            .history
+            .bookmarks(workspace.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        for bookmark in bookmarks {
+            // Kept under this scope only if the connection of that id is still this scope's.
+            if connection_workspace(&state, &bookmark.connection)
+                .await
+                .ok()
+                == Some(workspace.clone())
+            {
+                all.push(BookmarkItem::from(bookmark));
+            }
+        }
+    }
+    Ok(all)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn add_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> CmdResult<()> {
+    let workspace = connection_workspace(&state, &bookmark.connection).await?;
+    state
+        .history
+        .add_bookmark(workspace, bookmark.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Whether the bookmark was there.
+#[tauri::command]
+#[specta::specta]
+async fn remove_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> CmdResult<bool> {
+    let workspace = connection_workspace(&state, &bookmark.connection).await?;
+    state
+        .history
+        .remove_bookmark(workspace, bookmark.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The scope a connection's personal preferences are kept under (see `history_workspace`).
 async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<String> {
     let id = parse_id(connection);
@@ -2630,6 +2688,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_server_objects,
             get_explorer_filter,
             set_explorer_filter,
+            list_bookmarks,
+            add_bookmark,
+            remove_bookmark,
             filter_explorer_name,
             object_definition,
             relation_definition,
