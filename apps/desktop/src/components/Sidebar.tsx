@@ -13,6 +13,7 @@ import {
   type IndexDetails,
   type NameFilter,
   type ObjectItem,
+  type ObjectPathItem,
   type SchemaItem,
   type SchemaObjectItem,
   type SchemaObjectKindItem,
@@ -161,6 +162,62 @@ function templatesOf(session: string): Promise<SqlTemplateItem[]> {
 function forgetTemplates(session: string) {
   tableTemplates.delete(session);
   knownTemplates.delete(session);
+}
+
+/**
+ * Writes names to the clipboard, one per line: as the tree shows them, or as the engine writes
+ * them in SQL (`schema.table`, quoted where needed), which the core decides.
+ */
+async function copyNames(session: string, paths: ObjectPathItem[], qualified: boolean) {
+  const names = qualified
+    ? await call(commands.qualifiedNames(session, paths))
+    : paths.map((path) => path.names[path.names.length - 1] ?? path.schema);
+  await navigator.clipboard.writeText(names.join("\n"));
+}
+
+/** Ctrl+C copies the focused row's names and Ctrl+Shift+C their qualified names, as in DBeaver. */
+function handleCopyKey(
+  e: React.KeyboardEvent,
+  session: string,
+  paths: () => ObjectPathItem[],
+  onError: (message: string) => void,
+): boolean {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== "c") return false;
+  e.preventDefault();
+  e.stopPropagation();
+  copyNames(session, paths(), e.shiftKey).catch((err: unknown) => onError(errorText(err)));
+  return true;
+}
+
+/** "Copy" and DBeaver's "Advanced Copy" (the qualified name), for one name or several. */
+function CopyMenuItems({
+  session,
+  paths,
+  close,
+  onError,
+}: {
+  session: string;
+  paths: ObjectPathItem[];
+  close(): void;
+  onError(message: string): void;
+}) {
+  const { t, i18n } = useTranslation("shell");
+  const several = paths.length > 1;
+  const count = paths.length.toLocaleString(i18n.language);
+  const copy = (qualified: boolean) => {
+    close();
+    copyNames(session, paths, qualified).catch((e: unknown) => onError(errorText(e)));
+  };
+  return (
+    <>
+      <button role="menuitem" onClick={() => copy(false)} title="Ctrl+C">
+        {several ? t("copyNames", { count }) : t("copyName")}
+      </button>
+      <button role="menuitem" onClick={() => copy(true)} title="Ctrl+Shift+C">
+        {several ? t("copyQualifiedNames", { count }) : t("copyQualifiedName")}
+      </button>
+    </>
+  );
 }
 
 /** "Hide" or "Show only" names: they go into the connection's filter (ADR-025). */
@@ -944,6 +1001,7 @@ function SchemaNode({
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         onKeyDown={(e) => {
+          if (handleCopyKey(e, session, () => [{ schema: "", names: [schema] }], setError)) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             void toggle();
@@ -960,6 +1018,13 @@ function SchemaNode({
       </div>
       {menu && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <CopyMenuItems
+            session={session}
+            paths={[{ schema: "", names: [schema] }]}
+            close={() => setMenu(null)}
+            onError={setError}
+          />
+          <hr />
           <button role="menuitem" onClick={refresh}>
             {t("refreshSchema")}
           </button>
@@ -1177,6 +1242,8 @@ function ObjectNode({
   }, [menu, view, session, tableMenu]);
   // Until the engine's list arrives, only what every engine has.
   const templates: SqlTemplateItem[] = view ? ["select"] : (tableMenu ?? ["select", "insert", "update", "delete"]);
+  /** What "Copy" takes: every table chosen with Ctrl+click, or this one. */
+  const copyPaths: ObjectPathItem[] = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, names: [o.name] }));
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
   const countDescription = rowCount == null ? undefined : `${t(typeof count === "number" ? "sql.exactCount" : "sql.estimate")}: ${rowCount.toLocaleString(i18n.language)}`;
   return (
@@ -1209,6 +1276,7 @@ function ObjectNode({
         aria-label={t("toggleObject", { name: object.name })}
         aria-description={countDescription}
         onKeyDown={(e) => {
+          if (handleCopyKey(e, session, () => copyPaths, setError)) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             void toggle();
@@ -1255,6 +1323,8 @@ function ObjectNode({
           <button role="menuitem" onClick={refresh}>
             {t("refresh")}
           </button>
+          <hr />
+          <CopyMenuItems session={session} paths={copyPaths} close={() => setMenu(null)} onError={setError} />
           <FilterMenuItems
             kind="objects"
             names={chosen ? selection.map((o) => o.name) : [object.name]}
@@ -1303,6 +1373,9 @@ function ObjectNode({
             {details.columns.map((c) => (
               <ColumnRow
                 key={c.name}
+                session={session}
+                schema={object.schema}
+                table={object.name}
                 column={c}
                 primary={details.primaryKey.includes(c.name)}
                 onFilterName={onFilterName}
@@ -1353,20 +1426,30 @@ function ObjectNode({
 
 /** A column of a table: its menu can hide it, or show only it (ADR-025). */
 function ColumnRow({
+  session,
+  schema,
+  table,
   column,
   primary,
   onFilterName,
 }: {
+  session: string;
+  schema: string;
+  table: string;
   column: TableDetails["columns"][number];
   primary: boolean;
   onFilterName: FilterName;
 }) {
   const [menu, setMenu] = useContextMenu();
+  const [error, setError] = useState<string | null>(null);
+  const paths = [{ schema, names: [table, column.name] }];
   return (
     <div className="node">
       <div
         className="row leaf-row"
         title={column.comment ?? ""}
+        tabIndex={0}
+        onKeyDown={(e) => void handleCopyKey(e, session, () => paths, setError)}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
@@ -1383,8 +1466,14 @@ function ColumnRow({
       </div>
       {menu && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
           <FilterMenuItems kind="columns" names={[column.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
+      )}
+      {error && (
+        <p className="error small" role="alert">
+          {error}
+        </p>
       )}
     </div>
   );
@@ -1405,6 +1494,8 @@ function IndexNode({
   const { t } = useTranslation("shell");
   const addTab = useApp((s) => s.addTab);
   const [menu, setMenu] = useContextMenu();
+  const [error, setError] = useState<string | null>(null);
+  const paths = [{ schema, names: [index.name] }];
   const openDefinition = () => {
     setMenu(null);
     const sql = index.definition.startsWith("--") ? index.definition : `${index.definition.trimEnd().replace(/;$/, "")};`;
@@ -1425,6 +1516,7 @@ function IndexNode({
         tabIndex={0}
         aria-label={t("openObject", { name: index.name })}
         onKeyDown={(e) => {
+          if (handleCopyKey(e, session, () => paths, setError)) return;
           if (e.key === "Enter") {
             e.preventDefault();
             openDefinition();
@@ -1441,7 +1533,14 @@ function IndexNode({
           <button role="menuitem" onClick={openDefinition}>
             {t("openDefinition")}
           </button>
+          <hr />
+          <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
         </div>
+      )}
+      {error && (
+        <p className="error small" role="alert">
+          {error}
+        </p>
       )}
     </div>
   );
@@ -1513,6 +1612,7 @@ function SchemaObjectNode({
         tabIndex={0}
         aria-label={t("openObject", { name: object.name })}
         onKeyDown={(e) => {
+          if (handleCopyKey(e, session, () => [{ schema: object.schema, names: [object.name] }], setError)) return;
           if (e.key === "Enter") {
             e.preventDefault();
             void openDefinition();
@@ -1541,6 +1641,13 @@ function SchemaObjectNode({
               {t("generateCall")}
             </button>
           )}
+          <hr />
+          <CopyMenuItems
+            session={session}
+            paths={[{ schema: object.schema, names: [object.name] }]}
+            close={() => setMenu(null)}
+            onError={setError}
+          />
           <FilterMenuItems kind="objects" names={[object.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}

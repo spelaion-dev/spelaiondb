@@ -52,6 +52,15 @@ pub struct TableRefItem {
     pub name: String,
 }
 
+/// An object of the explorer by its path: its schema (empty for a schema itself) and its
+/// names under it (a table, or a table and one of its columns).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectPathItem {
+    pub schema: String,
+    pub names: Vec<String>,
+}
+
 /// What "Hide" and "Show only" in the explorer do with one name.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

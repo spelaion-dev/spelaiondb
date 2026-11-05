@@ -2233,6 +2233,23 @@ async fn quote_identifier(
     Ok(open.session.dialect().quote_identifier(&identifier))
 }
 
+/// Objects' names as the engine writes them (`schema.table`, quoted where it needs to be),
+/// for the explorer's "Copy qualified name".
+#[tauri::command]
+#[specta::specta]
+async fn qualified_names(
+    session: String,
+    paths: Vec<ObjectPathItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    Ok(paths
+        .iter()
+        .map(|path| spelaion_core::qualified_name(dialect.as_ref(), &path.schema, &path.names))
+        .collect())
+}
+
 /// The statements the core would run for the pending changes of a table data tab, to show
 /// before applying them (production asks for confirmation).
 #[tauri::command]
@@ -2412,6 +2429,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             table_page_sql,
             count_table_rows,
             quote_identifier,
+            qualified_names,
             preview_table_edits,
             apply_table_edits,
             save_snippet,

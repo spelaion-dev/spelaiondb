@@ -978,6 +978,11 @@ try {
   const columnsFolder = ordersChildren.getByRole("button", { name: "Expand or collapse Columns", exact: true });
   await columnsFolder.waitFor();
   assert.equal(await columnsFolder.getAttribute("aria-expanded"), "true");
+  // DBeaver's Advanced Copy (Ctrl+Shift+C): a column's name qualified as the core writes it.
+  const copiedBeforeColumn = await page.evaluate(() => window.__copied.length);
+  await ordersChildren.locator(".leaf-row", { hasText: "customer_id" }).first().focus();
+  await page.keyboard.press("Control+Shift+c");
+  assert.equal(await copied(copiedBeforeColumn + 1), "orders.customer_id");
   await ordersChildren.getByRole("button", { name: "Expand or collapse Constraints", exact: true }).click();
   await ordersChildren.locator(".row", { hasText: "PRIMARY KEY (id)" }).waitFor();
   await ordersChildren.getByRole("button", { name: "Expand or collapse Foreign keys", exact: true }).click();
@@ -1023,6 +1028,11 @@ try {
   await page.getByRole("menuitem", { name: "Generate INNER JOIN of the 2 chosen tables" }).click();
   await panel.locator(".cm-content", { hasText: "INNER JOIN customer c ON c.id = o.customer_id" }).waitFor();
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM orders o\nINNER JOIN customer c ON c.id = o.customer_id;");
+  // Copy takes every chosen table, one name per line.
+  const copiedBeforeNames = await page.evaluate(() => window.__copied.length);
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy 2 names" }).click();
+  assert.equal(await copied(copiedBeforeNames + 1), "orders\ncustomer");
   // A plain click forgets the choice (and expands the table, collapsed again).
   await ordersNode.click();
   assert.equal(await customerRow.getAttribute("aria-selected"), "false");

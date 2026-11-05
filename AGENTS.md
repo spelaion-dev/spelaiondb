@@ -75,6 +75,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   the paged SELECT of the table data tab (the filter typed by the user cannot change it).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
+  `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
+  create, new index…); `tests/object_actions.rs` runs each engine's statements on that engine.
   `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
