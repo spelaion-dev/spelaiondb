@@ -8,7 +8,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
-    ExplorerFilter, ExplorerPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store, StoreError,
+    Bookmark, ExplorerFilter, ExplorerPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store,
+    StoreError,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -96,6 +97,20 @@ enum Request {
     Record {
         entry: NewHistoryEntry,
         reply: Reply<()>,
+    },
+    AddBookmark {
+        workspace: String,
+        bookmark: Bookmark,
+        reply: Reply<()>,
+    },
+    RemoveBookmark {
+        workspace: String,
+        bookmark: Bookmark,
+        reply: Reply<bool>,
+    },
+    Bookmarks {
+        workspace: String,
+        reply: Reply<Vec<Bookmark>>,
     },
     SaveSnippet {
         workspace: String,
@@ -204,6 +219,23 @@ impl QueryHistory {
                         }
                         Request::Record { entry, reply } => {
                             let _ = reply.send(store.record_history(&entry));
+                        }
+                        Request::AddBookmark {
+                            workspace,
+                            bookmark,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.add_bookmark(&workspace, &bookmark));
+                        }
+                        Request::RemoveBookmark {
+                            workspace,
+                            bookmark,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.remove_bookmark(&workspace, &bookmark));
+                        }
+                        Request::Bookmarks { workspace, reply } => {
+                            let _ = reply.send(store.bookmarks(&workspace));
                         }
                         Request::SaveSnippet {
                             workspace,
@@ -372,6 +404,40 @@ impl QueryHistory {
             reply,
         })
         .await
+    }
+
+    /// Bookmarks an object of the explorer (ADR-026); again changes nothing.
+    pub async fn add_bookmark(
+        &self,
+        workspace: String,
+        bookmark: Bookmark,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::AddBookmark {
+            workspace,
+            bookmark,
+            reply,
+        })
+        .await
+    }
+
+    /// Whether the bookmark was there.
+    pub async fn remove_bookmark(
+        &self,
+        workspace: String,
+        bookmark: Bookmark,
+    ) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::RemoveBookmark {
+            workspace,
+            bookmark,
+            reply,
+        })
+        .await
+    }
+
+    /// A workspace's bookmarks, by connection, schema and name.
+    pub async fn bookmarks(&self, workspace: String) -> Result<Vec<Bookmark>, HistoryError> {
+        self.request(|reply| Request::Bookmarks { workspace, reply })
+            .await
     }
 
     /// Saves a query (replacing one with the same name in the workspace); the name is

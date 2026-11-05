@@ -2,7 +2,7 @@
 // requested from the core in windows.
 
 import { create } from "zustand";
-import type { ColumnFilterItem, ColumnItem, ConnectionItem, FieldChangeItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
+import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FieldChangeItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
 
 export interface ResultMeta {
   id: number;
@@ -107,6 +107,8 @@ export interface ExplorerReveal {
   connectionId: string;
   schema?: string;
   name?: string;
+  /** Asked by the user (a bookmark): the connection connects if it is not yet. */
+  connect?: boolean;
   /** Tells one request from the next for the same object. */
   nonce: number;
 }
@@ -145,6 +147,8 @@ interface AppStore {
   explorerSelection: { session: string; schema: string; name: string }[];
   /** What the explorer is asked to show; the node that shows it clears it. */
   explorerReveal: ExplorerReveal | null;
+  /** The explorer's bookmarks (ADR-026), as the core lists them. */
+  bookmarks: BookmarkItem[];
   /** "Open object by name" is open, on this connection first (or the active tab's). */
   openObject: { connectionId: string | null } | null;
   setWorkspace(info: WorkspaceInfo): void;
@@ -182,6 +186,7 @@ interface AppStore {
   /** The explorer showed it (or cannot): later renders do not scroll to it again. */
   revealDone(nonce: number): void;
   setOpenObject(open: { connectionId: string | null } | null): void;
+  setBookmarks(bookmarks: BookmarkItem[]): void;
 }
 
 export const useApp = create<AppStore>((set) => ({
@@ -204,6 +209,7 @@ export const useApp = create<AppStore>((set) => ({
   explorerSelection: [],
   explorerReveal: null,
   openObject: null,
+  bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
   addTab: (connectionId, sql = "") => {
@@ -273,6 +279,7 @@ export const useApp = create<AppStore>((set) => ({
   revealInExplorer: (target) => set((s) => ({ explorerReveal: { ...target, nonce: (s.explorerReveal?.nonce ?? 0) + 1 } })),
   revealDone: (nonce) => set((s) => (s.explorerReveal?.nonce === nonce ? { explorerReveal: null } : s)),
   setOpenObject: (openObject) => set({ openObject }),
+  setBookmarks: (bookmarks) => set({ bookmarks }),
   setExplorerConnected: (connection, connected) => set((s) => ({
     explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),
   })),

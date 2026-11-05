@@ -101,6 +101,18 @@ const MIGRATIONS: &[&str] = &["create table audit (
         column_include  text not null,
         column_exclude  text not null,
         primary key (workspace, connection)
+    );",
+    // Explorer bookmarks (ADR-026): an object by its schema, name and kind, per workspace and
+    // connection like the filters. `detail` tells apart overloads (a function's arguments).
+    "create table explorer_bookmarks (
+        workspace   text not null,
+        connection  text not null,
+        schema      text not null,
+        name        text not null,
+        kind        text not null,
+        detail      text not null,
+        created_ms  integer not null,
+        primary key (workspace, connection, schema, name, kind, detail)
     );"
 ];
 
@@ -299,6 +311,19 @@ fn patterns_of(lines: &str) -> Vec<String> {
         .filter(|line| !line.is_empty())
         .map(String::from)
         .collect()
+}
+
+/// An object bookmarked in the explorer (ADR-026), personal like the explorer filters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bookmark {
+    pub connection: String,
+    /// The schema the object is in, or the schema itself (with an empty `name`).
+    pub schema: String,
+    pub name: String,
+    /// `table`, `view`… for a relation, `function`, `sequence`… for another object, `schema`.
+    pub kind: String,
+    /// What tells same-name objects apart (a function's arguments); empty if nothing.
+    pub detail: String,
 }
 
 /// How the explorer shows its tree, shared by every workspace in this user directory.
@@ -593,6 +618,65 @@ impl Store {
 
     /// Personal interface language, shared by every workspace in this user directory.
     /// `system` follows the operating system; `en` and `es` are explicit overrides.
+    /// Bookmarks an object; bookmarking it again changes nothing.
+    pub fn add_bookmark(&self, workspace: &str, bookmark: &Bookmark) -> Result<(), StoreError> {
+        self.conn.execute(
+            "insert into explorer_bookmarks (workspace, connection, schema, name, kind, detail,
+                                             created_ms)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             on conflict do nothing",
+            params![
+                workspace,
+                bookmark.connection,
+                bookmark.schema,
+                bookmark.name,
+                bookmark.kind,
+                bookmark.detail,
+                now_ms()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Whether the bookmark was there.
+    pub fn remove_bookmark(
+        &self,
+        workspace: &str,
+        bookmark: &Bookmark,
+    ) -> Result<bool, StoreError> {
+        Ok(self.conn.execute(
+            "delete from explorer_bookmarks
+             where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4
+               and kind = ?5 and detail = ?6",
+            params![
+                workspace,
+                bookmark.connection,
+                bookmark.schema,
+                bookmark.name,
+                bookmark.kind,
+                bookmark.detail
+            ],
+        )? > 0)
+    }
+
+    /// A workspace's bookmarks, by connection, schema and name.
+    pub fn bookmarks(&self, workspace: &str) -> Result<Vec<Bookmark>, StoreError> {
+        let mut statement = self.conn.prepare(
+            "select connection, schema, name, kind, detail from explorer_bookmarks
+             where workspace = ?1 order by connection, schema, name, kind, detail",
+        )?;
+        let rows = statement.query_map([workspace], |r| {
+            Ok(Bookmark {
+                connection: r.get(0)?,
+                schema: r.get(1)?,
+                name: r.get(2)?,
+                kind: r.get(3)?,
+                detail: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     pub fn get_language(&self) -> Result<String, StoreError> {
         let language = self
             .conn
@@ -1367,6 +1451,45 @@ mod tests {
         // Another setting does not touch them.
         reopened.set_theme("light").unwrap();
         assert_eq!(reopened.get_explorer_preferences().unwrap(), changed);
+    }
+
+    #[test]
+    fn bookmarks_are_kept_per_workspace_once_each() {
+        let path = temp("bookmarks");
+        let store = Store::open(&path).unwrap();
+        let orders = Bookmark {
+            connection: "shop".into(),
+            schema: "public".into(),
+            name: "orders".into(),
+            kind: "table".into(),
+            detail: String::new(),
+        };
+        let total = Bookmark {
+            name: "total".into(),
+            kind: "function".into(),
+            detail: "integer".into(),
+            ..orders.clone()
+        };
+        store.add_bookmark("/repo", &orders).unwrap();
+        store.add_bookmark("/repo", &orders).unwrap();
+        store.add_bookmark("/repo", &total).unwrap();
+        store.add_bookmark("", &orders).unwrap();
+        assert_eq!(
+            store.bookmarks("/repo").unwrap(),
+            [orders.clone(), total.clone()]
+        );
+        assert_eq!(store.bookmarks("").unwrap(), std::slice::from_ref(&orders));
+        assert!(store.bookmarks("/other").unwrap().is_empty());
+        // An overload with other arguments is another bookmark.
+        let other = Bookmark {
+            detail: "text".into(),
+            ..total.clone()
+        };
+        assert!(!store.remove_bookmark("/repo", &other).unwrap());
+        assert!(store.remove_bookmark("/repo", &total).unwrap());
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.bookmarks("/repo").unwrap(), [orders]);
     }
 
     #[test]

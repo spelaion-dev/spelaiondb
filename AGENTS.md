@@ -81,8 +81,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
   `classify.rs`, any change there needs tests that try to get around it.
-- `crates/spelaion-store`: local SQLite (audit, query history, saved queries and personal settings;
-  later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
+- `crates/spelaion-store`: local SQLite (audit, query history, saved queries, personal settings,
+  the explorer's filters and bookmarks; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
   `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes

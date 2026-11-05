@@ -1165,6 +1165,27 @@ try {
   );
   await linkWithEditor.click();
   assert.equal(await linkWithEditor.getAttribute("aria-pressed"), "false");
+  // Bookmarks: listed above the connections; a click shows the object in the tree.
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Add bookmark" }).click();
+  const ordersBookmark = page.getByRole("button", { name: "Bookmark orders: open it", exact: true });
+  await ordersBookmark.waitFor();
+  assert.equal(await ordersBookmark.locator(".muted").innerText(), "Shop (SQLite) · main");
+  await ordersNode.locator(".bookmark-star").waitFor();
+  await tablesFolder.click();
+  assert.equal(await tablesFolder.getAttribute("aria-expanded"), "false");
+  await ordersBookmark.click();
+  await page.waitForFunction(() =>
+    document.querySelector('[aria-label="Expand or collapse Tables"]')?.getAttribute("aria-expanded") === "true",
+  );
+  await shot("05j-bookmarks");
+  await ordersBookmark.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove bookmark" }).click();
+  await ordersBookmark.waitFor({ state: "detached" });
+  assert.equal(await ordersNode.locator(".bookmark-star").count(), 0);
+  // big_orders' data tab, opened by name above, is closed: later steps look for "orders" tabs.
+  await page.keyboard.press("Control+w");
+  await page.locator(".tabbar .tab", { hasText: "big_orders" }).waitFor({ state: "detached" });
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   // Quick filter (Ctrl+Shift+F): only what matches by name, plus the expanded connections.
   await page.keyboard.press("Control+Shift+F");

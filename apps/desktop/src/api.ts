@@ -6,6 +6,7 @@ import { tableFromIPC, type Table } from "apache-arrow";
 import {
   commands,
   events,
+  type BookmarkItem,
   type CellRange,
   type ColumnItem,
   type ConnectionDraftItem_Deserialize,
@@ -79,7 +80,7 @@ export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
 export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
-export type { CreateKindItem, FilterActionItem, FilterKindItem, NewIndexKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };
+export type { BookmarkItem, CreateKindItem, FilterActionItem, FilterKindItem, NewIndexKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
 export type FoundObjectItem = FoundObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
