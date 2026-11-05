@@ -2250,6 +2250,56 @@ async fn qualified_names(
         .collect())
 }
 
+/// What the explorer may offer on this session's engine: the core decides (ADR-026).
+#[tauri::command]
+#[specta::specta]
+async fn object_actions(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ObjectActionsItem> {
+    let open = state.session(&session).await?;
+    Ok(spelaion_core::object_actions(open.session.dialect().as_ref()).into())
+}
+
+/// The SQL of a change to an object (rename, drop…), written by the core, to show before it
+/// runs or to open in the editor.
+#[tauri::command]
+#[specta::specta]
+async fn preview_object_change(
+    session: String,
+    change: ObjectChangeItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    let change = spelaion_core::ObjectChange::try_from(change)?;
+    spelaion_core::change_script(open.session.dialect().as_ref(), &change)
+        .map_err(|e| e.to_string())
+}
+
+/// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
+/// was shown. The core writes the statements again from the change, and refuses read-only
+/// connections (ADR-026). Returns how many statements ran.
+#[tauri::command]
+#[specta::specta]
+async fn apply_object_change(
+    session: String,
+    change: ObjectChangeItem,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    let change = spelaion_core::ObjectChange::try_from(change)?;
+    let ran = spelaion_core::apply_change(
+        &open.session,
+        &change,
+        open.resolved.params.read_only,
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
 /// The statements the core would run for the pending changes of a table data tab, to show
 /// before applying them (production asks for confirmation).
 #[tauri::command]
@@ -2430,6 +2480,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             count_table_rows,
             quote_identifier,
             qualified_names,
+            object_actions,
+            preview_object_change,
+            apply_object_change,
             preview_table_edits,
             apply_table_edits,
             save_snippet,
