@@ -30,6 +30,8 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 pub use dialect::SqlServerDialect;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// SQL Server's "chosen as deadlock victim" error.
+const DEADLOCK_VICTIM: &str = "1205";
 
 type SqlClient = Client<Compat<TcpStream>>;
 
@@ -374,17 +376,30 @@ fn closed() -> DriverError {
 }
 
 impl SqlServerConnection {
+    /// A catalog query of the driver's own. They only read, so when SQL Server picks one as the
+    /// victim of a deadlock with other sessions' DDL (error 1205) it is simply run again.
     pub(crate) async fn rows(&self, sql: &str, params: Vec<String>) -> Result<Rows> {
-        let (reply, response) = oneshot::channel();
-        self.requests
-            .send(Request::Rows {
-                sql: sql.to_string(),
-                params,
-                reply,
-            })
-            .await
-            .map_err(|_| closed())?;
-        response.await.map_err(|_| closed())?
+        const ATTEMPTS: usize = 3;
+        let mut attempt = 1;
+        loop {
+            let (reply, response) = oneshot::channel();
+            self.requests
+                .send(Request::Rows {
+                    sql: sql.to_string(),
+                    params: params.clone(),
+                    reply,
+                })
+                .await
+                .map_err(|_| closed())?;
+            match response.await.map_err(|_| closed())? {
+                Err(DriverError::Database { code, .. })
+                    if code.as_deref() == Some(DEADLOCK_VICTIM) && attempt < ATTEMPTS =>
+                {
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
     }
 }
 
