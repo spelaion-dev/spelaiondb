@@ -25,7 +25,8 @@ use async_trait::async_trait;
 use duckdb::{AccessMode, Config, InterruptHandle};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, SchemaInfo, SchemaObject, TableInfo,
+    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, SchemaInfo,
+    SchemaObject, TableInfo,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -247,10 +248,10 @@ enum Command {
         events: mpsc::Sender<Result<ExecEvent>>,
     },
     Version(Reply<String>),
-    Schemas(Reply<Vec<SchemaInfo>>),
-    Objects(String, Reply<Vec<ObjectInfo>>),
+    Schemas(LikeFilter, Reply<Vec<SchemaInfo>>),
+    Objects(String, LikeFilter, Reply<Vec<ObjectInfo>>),
     Describe(String, String, Reply<TableInfo>),
-    SchemaObjects(String, Reply<Vec<SchemaObject>>),
+    SchemaObjects(String, LikeFilter, Reply<Vec<SchemaObject>>),
     Definition(Box<SchemaObject>, Reply<String>),
 }
 
@@ -273,17 +274,17 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
                         .map_err(exec::map_error),
                 );
             }
-            Command::Schemas(reply) => {
-                let _ = reply.send(introspect::list_schemas(conn));
+            Command::Schemas(like, reply) => {
+                let _ = reply.send(introspect::list_schemas(conn, &like));
             }
-            Command::Objects(schema, reply) => {
-                let _ = reply.send(introspect::list_objects(conn, &schema));
+            Command::Objects(schema, like, reply) => {
+                let _ = reply.send(introspect::list_objects(conn, &schema, &like));
             }
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(conn, &schema, &name));
             }
-            Command::SchemaObjects(schema, reply) => {
-                let _ = reply.send(objects::list_schema_objects(conn, &schema));
+            Command::SchemaObjects(schema, like, reply) => {
+                let _ = reply.send(objects::list_schema_objects(conn, &schema, &like));
             }
             Command::Definition(object, reply) => {
                 let _ = reply.send(objects::object_definition(conn, &object));
@@ -343,12 +344,48 @@ impl Connection for DuckdbConnection {
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
-        self.ask(Command::Schemas).await
+        self.ask(|reply| Command::Schemas(LikeFilter::default(), reply))
+            .await
     }
 
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>> {
         let schema = schema.to_string();
-        self.ask(|reply| Command::Objects(schema, reply)).await
+        self.ask(|reply| Command::Objects(schema, LikeFilter::default(), reply))
+            .await
+    }
+
+    // Narrowed in the catalog query, then matched exactly (ADR-025).
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let like = filter.server_side();
+        let mut schemas = self.ask(|reply| Command::Schemas(like, reply)).await?;
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let (schema, like) = (schema.to_string(), filter.server_side());
+        let mut objects = self
+            .ask(|reply| Command::Objects(schema, like, reply))
+            .await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let (schema, like) = (schema.to_string(), filter.server_side());
+        let mut objects = self
+            .ask(|reply| Command::SchemaObjects(schema, like, reply))
+            .await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
     }
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
@@ -359,7 +396,7 @@ impl Connection for DuckdbConnection {
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
         let schema = schema.to_string();
-        self.ask(|reply| Command::SchemaObjects(schema, reply))
+        self.ask(|reply| Command::SchemaObjects(schema, LikeFilter::default(), reply))
             .await
     }
 

@@ -90,6 +90,89 @@ impl NameFilter {
     }
 }
 
+/// `LIKE` patterns for a catalog query, over the lowercased name with `!` as the escape
+/// character (ADR-025): a backslash would need escaping in MySQL's string literals. They narrow what the server sends; [`NameFilter::matches`] still
+/// decides. Whatever case folding the server does, they never drop a name the filter keeps:
+/// an include pattern turns each non-ASCII character into `%`, and an exclude pattern is sent
+/// only when it is plain ASCII without `?`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LikeFilter {
+    /// A name must match one of these (none: no condition).
+    pub include: Vec<String>,
+    /// A name must match none of these.
+    pub exclude: Vec<String>,
+}
+
+/// The escape character of [`LikeFilter`]'s patterns.
+const ESCAPE: char = '!';
+
+fn like_pattern(tokens: &[Token], exact_only: bool) -> Option<String> {
+    let mut out = String::new();
+    for token in tokens {
+        match token {
+            Token::Any => out.push('%'),
+            Token::One if exact_only => return None,
+            Token::One => out.push('_'),
+            Token::Literal(c) if !c.is_ascii() => {
+                if exact_only {
+                    return None;
+                }
+                if !out.ends_with('%') {
+                    out.push('%');
+                }
+            }
+            Token::Literal(c) => {
+                if matches!(*c, '%' | '_' | ESCAPE) {
+                    out.push(ESCAPE);
+                }
+                out.push(*c);
+            }
+        }
+    }
+    Some(out)
+}
+
+impl NameFilter {
+    /// What a driver may put into its catalog query (see [`LikeFilter`]).
+    pub fn server_side(&self) -> LikeFilter {
+        LikeFilter {
+            include: self
+                .include
+                .iter()
+                .filter_map(|p| like_pattern(&tokens(p), false))
+                .collect(),
+            exclude: self
+                .exclude
+                .iter()
+                .filter_map(|p| like_pattern(&tokens(p), true))
+                .collect(),
+        }
+    }
+}
+
+impl LikeFilter {
+    /// ` and (lower(col) like … or …) and not (lower(col) like … or …)`, each pattern written
+    /// by `bind` (a placeholder for a parameter it records, or a quoted literal). Empty when
+    /// there is nothing to narrow.
+    pub fn sql(&self, column: &str, mut bind: impl FnMut(&str) -> String) -> String {
+        let mut any = |patterns: &[String]| {
+            patterns
+                .iter()
+                .map(|p| format!("lower({column}) like {} escape '{ESCAPE}'", bind(p)))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        };
+        let mut out = String::new();
+        if !self.include.is_empty() {
+            out.push_str(&format!(" and ({})", any(&self.include)));
+        }
+        if !self.exclude.is_empty() {
+            out.push_str(&format!(" and not ({})", any(&self.exclude)));
+        }
+        out
+    }
+}
+
 /// A pattern that matches exactly one name: its wildcard characters escaped ("Hide" and
 /// "Show only" in the explorer add these).
 pub fn literal_pattern(name: &str) -> String {
@@ -146,6 +229,41 @@ mod tests {
         }
         assert!(!pattern_matches(&literal_pattern("50%"), "500"));
         assert!(!pattern_matches(&literal_pattern("who?"), "whom"));
+    }
+
+    #[test]
+    fn server_patterns_escape_and_never_narrow_too_much() {
+        let filter = NameFilter {
+            include: vec![
+                "Tenant_*".into(),
+                "50%".into(),
+                r"what\?".into(),
+                "a?c".into(),
+                "ÑAME*".into(),
+            ],
+            exclude: vec!["*_OLD".into(), "x?".into(), "ü*".into()],
+        };
+        let like = filter.server_side();
+        let include = ["tenant!_%", "50%", "what?", "a_c", "%ame%"];
+        assert_eq!(like.include, include);
+        // `?` and non-ASCII exclude patterns stay in Rust only.
+        assert_eq!(like.exclude, ["%!_old"]);
+        assert_eq!(
+            like.sql("name", |p| format!("'{p}'")),
+            format!(
+                " and ({}) and not (lower(name) like '%!_old' escape '!')",
+                include
+                    .map(|p| format!("lower(name) like '{p}' escape '!'"))
+                    .join(" or "),
+            )
+        );
+        // The escape character itself, a literal `%` and a backslash.
+        let odd = NameFilter {
+            include: vec!["wow!\\%\\\\".into()],
+            exclude: vec![],
+        };
+        assert_eq!(odd.server_side().include, ["wow!!!%\\"]);
+        assert_eq!(LikeFilter::default().sql("name", |p| p.to_string()), "");
     }
 
     #[test]

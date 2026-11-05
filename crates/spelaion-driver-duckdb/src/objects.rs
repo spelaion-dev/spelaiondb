@@ -2,21 +2,31 @@
 //! functions. DuckDB keeps no `CREATE` text for them: definitions are composed from the
 //! catalog, with names quoted by our dialect.
 
-use duckdb::{Connection, params};
-use spelaion_driver_api::{Dialect, DriverError, Result, SchemaObject, SchemaObjectKind};
+use duckdb::types::Value;
+use duckdb::{Connection, params, params_from_iter};
+use spelaion_driver_api::{
+    Dialect, DriverError, LikeFilter, Result, SchemaObject, SchemaObjectKind,
+};
 
 use crate::dialect::DuckdbDialect;
 use crate::exec::map_error;
-use crate::introspect::{current_database, locate};
+use crate::introspect::{current_database, like_sql, locate};
 
 /// A macro's parameters as shown and matched (`a, b`): overloads differ in them.
 const PARAMETERS: &str = "array_to_string(parameters, ', ')";
 
-pub fn list_schema_objects(conn: &Connection, shown: &str) -> Result<Vec<SchemaObject>> {
+pub fn list_schema_objects(
+    conn: &Connection,
+    shown: &str,
+    like: &LikeFilter,
+) -> Result<Vec<SchemaObject>> {
     let (database, schema) = locate(conn, shown)?;
+    let mut values = vec![Value::Text(database.clone()), Value::Text(schema.clone())];
+    let narrow = like_sql(like, "o.name", &mut values);
     let mut statement = conn
         .prepare(&format!(
-            "select function_name, 'function', {PARAMETERS}, comment from duckdb_functions() \
+            "select * from (select function_name, 'function', {PARAMETERS}, comment \
+               from duckdb_functions() \
                where database_name = ?1 and schema_name = ?2 and not internal \
                  and function_type in ('macro', 'table_macro') \
              union all \
@@ -26,12 +36,14 @@ pub fn list_schema_objects(conn: &Connection, shown: &str) -> Result<Vec<SchemaO
              select type_name, case logical_type when 'ENUM' then 'enum' else 'type' end, \
                     case when logical_type <> 'ENUM' then logical_type end, comment \
                from duckdb_types() \
-               where database_name = ?1 and schema_name = ?2 and not internal \
+               where database_name = ?1 and schema_name = ?2 and not internal) \
+               as o(name, kind, detail, comment) \
+             where true{narrow} \
              order by 1, 2, 3"
         ))
         .map_err(map_error)?;
     let rows = statement
-        .query_map(params![database, schema], |r| {
+        .query_map(params_from_iter(values), |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,

@@ -3,12 +3,13 @@
 //! triggers keep the text they were created with (`OBJECT_DEFINITION`); the rest is composed.
 
 use spelaion_driver_api::{
-    Dialect, DriverError, Result, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind,
-    terminated,
+    Dialect, DriverError, LikeFilter, Result, SchemaObject, SchemaObjectKind, ServerObject,
+    ServerObjectKind, terminated,
 };
 
 use crate::SqlServerConnection;
 use crate::dialect::SqlServerDialect;
+use crate::introspect::like_sql;
 use crate::introspect::native_type;
 
 fn text(row: &[Option<String>], i: usize) -> String {
@@ -33,7 +34,12 @@ const PROCEDURES: &str = "'P', 'PC', 'X', 'RF'";
 pub async fn list_schema_objects(
     conn: &SqlServerConnection,
     schema: &str,
+    like: &LikeFilter,
 ) -> Result<Vec<SchemaObject>> {
+    let mut module_params = vec![schema.to_string()];
+    let modules_narrow = like_sql(like, "o.name", &mut module_params);
+    let mut type_params = vec![schema.to_string()];
+    let types_narrow = like_sql(like, "t.name", &mut type_params);
     let modules = conn
         .rows(
             &format!(
@@ -53,22 +59,24 @@ pub async fn list_schema_objects(
                    on ep.class = 1 and ep.major_id = o.object_id and ep.minor_id = 0 \
                   and ep.name = 'MS_Description' \
                  where s.name = @P1 and o.is_ms_shipped = 0 \
-                   and o.type in ({FUNCTIONS}, {PROCEDURES}, 'SO', 'TR', 'SN')"
+                   and o.type in ({FUNCTIONS}, {PROCEDURES}, 'SO', 'TR', 'SN'){modules_narrow}"
             ),
-            vec![schema.to_string()],
+            module_params,
         )
         .await?;
     let types = conn
         .rows(
-            "select t.name, t.is_table_type, type_name(t.system_type_id), t.max_length, \
+            &format!(
+                "select t.name, t.is_table_type, type_name(t.system_type_id), t.max_length, \
                     t.precision, t.scale, cast(ep.value as nvarchar(4000)) \
              from sys.types t \
              join sys.schemas s on s.schema_id = t.schema_id \
              left join sys.extended_properties ep \
                on ep.class = 6 and ep.major_id = t.user_type_id and ep.minor_id = 0 \
               and ep.name = 'MS_Description' \
-             where s.name = @P1 and t.is_user_defined = 1",
-            vec![schema.to_string()],
+             where s.name = @P1 and t.is_user_defined = 1{types_narrow}"
+            ),
+            type_params,
         )
         .await?;
     let mut objects = modules

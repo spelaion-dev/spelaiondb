@@ -2,8 +2,8 @@
 //! server. In MySQL a "schema" is a database.
 
 use spelaion_driver_api::{
-    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo,
-    ObjectKind, Result, SchemaInfo, TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
+    ObjectInfo, ObjectKind, Result, SchemaInfo, TableInfo,
 };
 
 use crate::{Flavor, MysqlConnection};
@@ -18,11 +18,27 @@ fn opt(row: &[Option<String>], i: usize) -> Option<String> {
     row.get(i).cloned().flatten().filter(|s| !s.is_empty())
 }
 
-pub(crate) async fn list_schemas(conn: &MysqlConnection) -> Result<Vec<SchemaInfo>> {
+/// `like` as SQL over `column`, its patterns appended to `params` as `?` (ADR-025).
+pub(crate) fn like_sql(like: &LikeFilter, column: &str, params: &mut Vec<String>) -> String {
+    like.sql(column, |pattern| {
+        params.push(pattern.to_string());
+        "?".to_string()
+    })
+}
+
+pub(crate) async fn list_schemas(
+    conn: &MysqlConnection,
+    like: &LikeFilter,
+) -> Result<Vec<SchemaInfo>> {
+    let mut params = Vec::new();
+    let narrow = like_sql(like, "schema_name", &mut params);
     let rows = conn
         .rows(
-            "select schema_name from information_schema.schemata order by schema_name",
-            vec![],
+            &format!(
+                "select schema_name from information_schema.schemata where true{narrow} \
+                 order by schema_name"
+            ),
+            params,
         )
         .await?;
     let mut schemas: Vec<SchemaInfo> = rows
@@ -59,11 +75,17 @@ fn object(row: &[Option<String>]) -> ObjectInfo {
     }
 }
 
-pub(crate) async fn list_objects(conn: &MysqlConnection, schema: &str) -> Result<Vec<ObjectInfo>> {
+pub(crate) async fn list_objects(
+    conn: &MysqlConnection,
+    schema: &str,
+    like: &LikeFilter,
+) -> Result<Vec<ObjectInfo>> {
+    let mut params = vec![schema.to_string()];
+    let narrow = like_sql(like, "table_name", &mut params);
     let rows = conn
         .rows(
-            &format!("{OBJECTS_SQL} order by table_name"),
-            vec![schema.to_string()],
+            &format!("{OBJECTS_SQL}{narrow} order by table_name"),
+            params,
         )
         .await?;
     Ok(rows.iter().map(|row| object(row)).collect())

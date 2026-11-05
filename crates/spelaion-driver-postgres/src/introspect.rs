@@ -1,23 +1,52 @@
 //! PostgreSQL catalog queries for the explorer, autocompletion and the MCP server.
 
 use spelaion_driver_api::{
-    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo,
-    ObjectKind, Result, SchemaInfo, TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
+    ObjectInfo, ObjectKind, Result, SchemaInfo, TableInfo,
 };
+use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, Row};
 
 use crate::map_error;
 
-pub async fn list_schemas(client: &Client) -> Result<Vec<SchemaInfo>> {
+/// `like` as SQL over `column`, its patterns appended to `params` as `$n` after `before`
+/// other parameters (ADR-025).
+pub(crate) fn like_sql(
+    like: &LikeFilter,
+    column: &str,
+    params: &mut Vec<String>,
+    before: usize,
+) -> String {
+    like.sql(column, |pattern| {
+        params.push(pattern.to_string());
+        format!("${}", before + params.len())
+    })
+}
+
+/// Parameters for `client.query`: the fixed ones first, then the patterns.
+pub(crate) fn query_params<'a>(
+    fixed: &'a [&'a str],
+    patterns: &'a [String],
+) -> Vec<&'a (dyn ToSql + Sync)> {
+    fixed
+        .iter()
+        .map(|p| p as &(dyn ToSql + Sync))
+        .chain(patterns.iter().map(|p| p as &(dyn ToSql + Sync)))
+        .collect()
+}
+
+pub async fn list_schemas(client: &Client, like: &LikeFilter) -> Result<Vec<SchemaInfo>> {
+    let mut patterns = Vec::new();
+    let narrow = like_sql(like, "nspname::text", &mut patterns, 0);
+    let sql = format!(
+        r"select nspname::text,
+                 nspname in ('pg_catalog', 'information_schema') or nspname like 'pg\_%' as system
+          from pg_namespace
+          where nspname not like 'pg\_toast%' and nspname not like 'pg\_temp\_%'{narrow}
+          order by system, nspname"
+    );
     let rows = client
-        .query(
-            r"select nspname::text,
-                     nspname in ('pg_catalog', 'information_schema') or nspname like 'pg\_%' as system
-              from pg_namespace
-              where nspname not like 'pg\_toast%' and nspname not like 'pg\_temp\_%'
-              order by system, nspname",
-            &[],
-        )
+        .query(&sql, &query_params(&[], &patterns))
         .await
         .map_err(map_error)?;
     Ok(rows
@@ -55,11 +84,21 @@ fn object_from_row(r: &Row) -> Result<ObjectInfo> {
     })
 }
 
-pub async fn list_objects(client: &Client, schema: &str) -> Result<Vec<ObjectInfo>> {
+pub async fn list_objects(
+    client: &Client,
+    schema: &str,
+    like: &LikeFilter,
+) -> Result<Vec<ObjectInfo>> {
+    let mut patterns = Vec::new();
+    let narrow = like_sql(like, "c.relname::text", &mut patterns, 1);
     // Partitions are skipped: they will appear under their parent table.
-    let sql =
-        format!("{OBJECTS_SQL} and n.nspname = $1 and not c.relispartition order by c.relname");
-    let rows = client.query(&sql, &[&schema]).await.map_err(map_error)?;
+    let sql = format!(
+        "{OBJECTS_SQL} and n.nspname = $1 and not c.relispartition{narrow} order by c.relname"
+    );
+    let rows = client
+        .query(&sql, &query_params(&[schema], &patterns))
+        .await
+        .map_err(map_error)?;
     rows.iter().map(object_from_row).collect()
 }
 

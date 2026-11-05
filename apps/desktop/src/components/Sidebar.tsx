@@ -125,6 +125,9 @@ function SearchIcon() {
   );
 }
 
+/** Whether the explorer's filters go into the catalog queries (Settings → Explorer). */
+const serverSide = () => usePreferences.getState().explorer.serverSideFilters;
+
 /** Sorts names as Settings → Explorer says (columns are never sorted). */
 function useSortByName() {
   const { i18n } = useTranslation();
@@ -630,7 +633,7 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
     setFilters(filter);
     // Without its roles or logins the connection still shows its schemas.
     const [all, server] = await Promise.all([
-      call(commands.listSchemas(session, filter.schemas)),
+      call(commands.listSchemas(session, filter.schemas, usePreferences.getState().explorer.serverSideFilters)),
       call(commands.listServerObjects(session)).catch((e: unknown) => {
         setError(errorText(e));
         return [];
@@ -839,8 +842,8 @@ function SchemaNode({
     try {
       // Without its functions or triggers the schema still shows its tables.
       const [relations, rest] = await Promise.all([
-        call(commands.listObjects(session, schema, objectFilter)),
-        call(commands.listSchemaObjects(session, schema, objectFilter)).catch((e: unknown) => {
+        call(commands.listObjects(session, schema, objectFilter, serverSide())),
+        call(commands.listSchemaObjects(session, schema, objectFilter, serverSide())).catch((e: unknown) => {
           setError(errorText(e));
           return [];
         }),

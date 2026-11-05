@@ -633,6 +633,21 @@ async fn sqlite_on_a_server_through_two_hops() {
         .find(|o| o.name == "remote_t_note")
         .unwrap_or_else(|| panic!("{triggers:?}"));
     assert_eq!(trigger.detail.as_deref(), Some("remote_t"));
+    // The explorer's filter goes into the server's catalog query too (ADR-025).
+    let only_remote = spelaion_driver_api::NameFilter {
+        include: vec!["REMOTE_*".into()],
+        exclude: vec![],
+    };
+    let narrowed: Vec<String> = conn
+        .session
+        .connection()
+        .list_objects_matching("main", &only_remote)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|o| o.name)
+        .collect();
+    assert_eq!(narrowed, ["remote_t"]);
     assert_eq!(
         conn.session
             .connection()

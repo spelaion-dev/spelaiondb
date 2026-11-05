@@ -51,7 +51,7 @@ interface PreferencesStore {
 export const usePreferences = create<PreferencesStore>((set, get) => ({
   language: "system",
   theme: "system",
-  explorer: { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false },
+  explorer: { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true },
   loading: true,
   saving: null,
   error: null,

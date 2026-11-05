@@ -1020,6 +1020,22 @@ try {
   assert.equal(await tablesFolder.locator(".muted").innerText(), "2");
   await tablesFolder.locator(".tag", { hasText: "filtered" }).waitFor();
   await shot("05h-filtered-folder");
+  // Filtered on this computer instead of in the catalog query: the same tables.
+  const setServerSide = (checked) =>
+    withSettings("explorer", async (settings) => {
+      await settings.locator('input[name="serverSideFilters"]').setChecked(checked);
+      await page.waitForFunction((want) => {
+        const input = document.querySelector('input[name="serverSideFilters"]');
+        return input?.checked === want && !input.disabled;
+      }, checked);
+    });
+  await setServerSide(false);
+  await mainSchema.focus();
+  await page.keyboard.press("F5");
+  await ordersNode.waitFor();
+  assert.equal(await customerNode.count(), 0);
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "2");
+  await setServerSide(true);
   await tablesFolder.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Configure filter…" }).click();
   assert.equal(await filterDialog.locator('input[name="objects.exclude"]').inputValue(), "CUST*");

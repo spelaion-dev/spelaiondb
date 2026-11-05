@@ -209,11 +209,11 @@ export const commands = {
 	/**  The databases this tab's session can switch to (MySQL, MariaDB, SQL Server). */
 	listDatabases: (session: string) => typedError<string[], string>(__TAURI_INVOKE("list_databases", { session })),
 	selectDatabase: (session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("select_database", { session, database })),
-	listSchemas: (session: string, filter: NameFilterItem | null) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session, filter })),
-	listObjects: (session: string, schema: string, filter: NameFilterItem | null) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema, filter })),
+	listSchemas: (session: string, filter: NameFilterItem | null, serverSide: boolean) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session, filter, serverSide })),
+	listObjects: (session: string, schema: string, filter: NameFilterItem | null, serverSide: boolean) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema, filter, serverSide })),
 	describeTable: (session: string, schema: string, name: string, columns: NameFilterItem | null) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name, columns })),
 	/**  Functions, sequences, triggers, types… of a schema, for its folders (ADR-024). */
-	listSchemaObjects: (session: string, schema: string, filter: NameFilterItem | null) => typedError<SchemaObjectItem_Serialize[], string>(__TAURI_INVOKE("list_schema_objects", { session, schema, filter })),
+	listSchemaObjects: (session: string, schema: string, filter: NameFilterItem | null, serverSide: boolean) => typedError<SchemaObjectItem_Serialize[], string>(__TAURI_INVOKE("list_schema_objects", { session, schema, filter, serverSide })),
 	/**  Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024). */
 	listServerObjects: (session: string) => typedError<ServerObjectItem_Serialize[], string>(__TAURI_INVOKE("list_server_objects", { session })),
 	/**  A connection's explorer filter (ADR-025), personal and per workspace. */
@@ -569,6 +569,7 @@ export type ExplorerPreferencesItem = {
 	sortIgnoreCase: boolean,
 	foldersFirst: boolean,
 	connectedOnly: boolean,
+	serverSideFilters: boolean,
 };
 
 /**

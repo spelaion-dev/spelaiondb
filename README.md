@@ -203,6 +203,9 @@ next one, and case is ignored. A filtered folder says **filtered**; **Show every
 removes its filter. The right-click menu of a schema, an object or a column also has **Hide**
 (its name joins the excluded ones) and **Show only** (it becomes the only included one). Filters are personal: they are kept on this computer (not in the
 connection's file) and change only what the explorer shows, not autocompletion (ADR-025).
+They go into each engine's catalog query, so a server with thousands of schemas or tables
+sends only what passes them; **Settings → Explorer → Use server-side filters** can turn that
+off (every name is then read and filtered on this computer, with the same result).
 The explorer keeps what it has read until you refresh it: **F5** on a schema or table (or
 **Refresh schema** and **Refresh** in their right-click menus) reads it again, and **Refresh
 all schemas** (in a schema's menu, the connection's "⋯" menu, or F5 on the connection) reads

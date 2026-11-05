@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use rusqlite::{InterruptHandle, OpenFlags};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, SchemaInfo, SchemaObject, TableInfo,
+    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, SchemaInfo,
+    SchemaObject, TableInfo,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -243,9 +244,42 @@ impl Connection for SqliteConnection {
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
-        let sql = catalog::schema_objects_sql(schema);
+        let sql = catalog::schema_objects_sql(schema, &LikeFilter::default());
         let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
         Ok(catalog::schema_objects(schema, &rows))
+    }
+
+    // Narrowed in the catalog query, then matched exactly (ADR-025).
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let sql = catalog::schemas_sql(&filter.server_side());
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        let mut schemas = catalog::schemas(&rows);
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let sql = catalog::objects_sql(schema, &filter.server_side());
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        let mut objects = catalog::objects(schema, &rows);
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let sql = catalog::schema_objects_sql(schema, &filter.server_side());
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        let mut objects = catalog::schema_objects(schema, &rows);
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
     }
 
     async fn object_definition(&self, object: &SchemaObject) -> Result<String> {

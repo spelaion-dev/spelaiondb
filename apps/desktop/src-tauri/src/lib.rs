@@ -30,6 +30,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::dto::*;
 use crate::interaction::{AppInteraction, Pending};
+use spelaion_driver_api::NameFilter;
 
 /// App state. Sessions are identified by a key the UI chooses: one per editor tab and one
 /// for metadata per connection (ADR-004).
@@ -1807,12 +1808,18 @@ async fn select_database(
 async fn list_schemas(
     session: String,
     filter: Option<NameFilterItem>,
+    server_side: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<SchemaItem>> {
     let open = state.session(&session).await?;
     let connection = open.session.connection();
-    let schemas = match filter {
-        Some(filter) => connection.list_schemas_matching(&filter.into()).await,
+    // The explorer's filter, narrowed in the catalog query or only here (ADR-025).
+    let schemas = match filter.map(NameFilter::from) {
+        Some(filter) if server_side => connection.list_schemas_matching(&filter).await,
+        Some(filter) => connection.list_schemas().await.map(|mut all| {
+            all.retain(|s| filter.matches(&s.name));
+            all
+        }),
         None => connection.list_schemas().await,
     }
     .map_err(|e| e.to_string())?;
@@ -1831,16 +1838,17 @@ async fn list_objects(
     session: String,
     schema: String,
     filter: Option<NameFilterItem>,
+    server_side: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<ObjectItem>> {
     let open = state.session(&session).await?;
     let connection = open.session.connection();
-    let objects = match filter {
-        Some(filter) => {
-            connection
-                .list_objects_matching(&schema, &filter.into())
-                .await
-        }
+    let objects = match filter.map(NameFilter::from) {
+        Some(filter) if server_side => connection.list_objects_matching(&schema, &filter).await,
+        Some(filter) => connection.list_objects(&schema).await.map(|mut all| {
+            all.retain(|o| filter.matches(&o.name));
+            all
+        }),
         None => connection.list_objects(&schema).await,
     }
     .map_err(|e| e.to_string())?;
@@ -1878,16 +1886,24 @@ async fn list_schema_objects(
     session: String,
     schema: String,
     filter: Option<NameFilterItem>,
+    server_side: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<SchemaObjectItem>> {
     let open = state.session(&session).await?;
     let connection = open.session.connection();
-    let objects = match filter {
-        Some(filter) => {
+    let objects = match filter.map(NameFilter::from) {
+        Some(filter) if server_side => {
             connection
-                .list_schema_objects_matching(&schema, &filter.into())
+                .list_schema_objects_matching(&schema, &filter)
                 .await
         }
+        Some(filter) => connection
+            .list_schema_objects(&schema)
+            .await
+            .map(|mut all| {
+                all.retain(|o| filter.matches(&o.name));
+                all
+            }),
         None => connection.list_schema_objects(&schema).await,
     }
     .map_err(|e| e.to_string())?;

@@ -204,6 +204,17 @@ function ExplorerSettings() {
         </label>
       </fieldset>
       <p className="muted small">{t("explorer.sortingHint")}</p>
+      <label className="check">
+        <input
+          type="checkbox"
+          name="serverSideFilters"
+          checked={explorer.serverSideFilters}
+          disabled={busy}
+          onChange={(e) => void setExplorer({ ...explorer, serverSideFilters: e.target.checked })}
+        />
+        {t("explorer.serverSideFilters")}
+      </label>
+      <p className="muted small">{t("explorer.serverSideFiltersHint")}</p>
       <SaveError setting="explorer" />
     </>
   );

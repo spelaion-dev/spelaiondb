@@ -24,10 +24,12 @@ puts the masks into its catalog queries so a big catalog is not read whole.
    connections (ADR-022).
 4. **Narrowed on the server:** `list_*_matching` in the driver contract filter in Rust by
    default; drivers may put the patterns into their catalog query as `LIKE` (case folded, with
-   an escape character) and still apply `NameFilter` to what comes back. What goes to the
-   server must keep every name the exact filter keeps: an include pattern turns each non-ASCII
-   character into `_` (any one), and an exclude pattern is sent only when it is plain ASCII, so
-   case folding on the server can never drop a name that should stay. A personal setting
+   `!` as the escape character, which every engine writes the same way in a string literal)
+   and still apply `NameFilter` to what comes back. What goes to the server must keep every
+   name the exact filter keeps: an include pattern turns each non-ASCII character into `%`
+   (lowercasing may change how many characters there are), and an exclude pattern is sent only
+   when it is plain ASCII without `?`, so case folding on the server can never drop a name that
+   should stay. A personal setting
    ("Use server-side filters", on) chooses between the two; the result is the same.
 
 ## Alternatives

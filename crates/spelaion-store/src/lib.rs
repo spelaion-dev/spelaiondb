@@ -317,6 +317,9 @@ pub struct ExplorerPreferences {
     /// Only the connections that are connected (opened in the explorer or used by a tab);
     /// off by default.
     pub connected_only: bool,
+    /// Filters go into the catalog queries, so big catalogs are not read whole (ADR-025);
+    /// on by default. Off, every name is read and filtered on this computer.
+    pub server_side_filters: bool,
 }
 
 impl Default for ExplorerPreferences {
@@ -327,6 +330,7 @@ impl Default for ExplorerPreferences {
             sort_ignore_case: true,
             folders_first: false,
             connected_only: false,
+            server_side_filters: true,
         }
     }
 }
@@ -653,6 +657,8 @@ impl Store {
                 .get_flag("explorer.sort_ignore_case", defaults.sort_ignore_case)?,
             folders_first: self.get_flag("explorer.folders_first", defaults.folders_first)?,
             connected_only: self.get_flag("explorer.connected_only", defaults.connected_only)?,
+            server_side_filters: self
+                .get_flag("explorer.server_side_filters", defaults.server_side_filters)?,
         })
     }
 
@@ -666,12 +672,14 @@ impl Store {
             sort_ignore_case,
             folders_first,
             connected_only,
+            server_side_filters,
         } = *preferences;
         self.set_flag("explorer.show_system", show_system)?;
         self.set_flag("explorer.sort_alphabetically", sort_alphabetically)?;
         self.set_flag("explorer.sort_ignore_case", sort_ignore_case)?;
         self.set_flag("explorer.folders_first", folders_first)?;
-        self.set_flag("explorer.connected_only", connected_only)
+        self.set_flag("explorer.connected_only", connected_only)?;
+        self.set_flag("explorer.server_side_filters", server_side_filters)
     }
 
     fn get_flag(&self, key: &str, default: bool) -> Result<bool, StoreError> {
@@ -1323,7 +1331,11 @@ mod tests {
             ExplorerPreferences::default()
         );
         let defaults = ExplorerPreferences::default();
-        assert!(defaults.sort_alphabetically && defaults.sort_ignore_case);
+        assert!(
+            defaults.sort_alphabetically
+                && defaults.sort_ignore_case
+                && defaults.server_side_filters
+        );
         assert!(!defaults.show_system && !defaults.folders_first && !defaults.connected_only);
         // Every field is saved on its own: each one flipped from its default.
         let changed = ExplorerPreferences {
@@ -1332,6 +1344,7 @@ mod tests {
             sort_ignore_case: false,
             folders_first: true,
             connected_only: true,
+            server_side_filters: false,
         };
         store.set_explorer_preferences(&changed).unwrap();
         drop(store);

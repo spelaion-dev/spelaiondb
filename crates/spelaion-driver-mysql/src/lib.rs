@@ -21,8 +21,8 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, LogicalType, ObjectInfo, Result,
-    ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
+    DriverError, EventStream, ExecEvent, ExecOptions, LikeFilter, LogicalType, NameFilter,
+    ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -439,7 +439,7 @@ impl Connection for MysqlConnection {
 
     /// MySQL calls its databases schemas: the same list as the explorer.
     async fn list_databases(&self) -> Result<Vec<String>> {
-        Ok(introspect::list_schemas(self)
+        Ok(introspect::list_schemas(self, &LikeFilter::default())
             .await?
             .into_iter()
             .map(|s| s.name)
@@ -453,11 +453,38 @@ impl Connection for MysqlConnection {
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
-        introspect::list_schemas(self).await
+        introspect::list_schemas(self, &LikeFilter::default()).await
     }
 
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>> {
-        introspect::list_objects(self, schema).await
+        introspect::list_objects(self, schema, &LikeFilter::default()).await
+    }
+
+    // Narrowed in the catalog query, then matched exactly (ADR-025).
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let mut schemas = introspect::list_schemas(self, &filter.server_side()).await?;
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let mut objects = introspect::list_objects(self, schema, &filter.server_side()).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let mut objects = objects::list_schema_objects(self, schema, &filter.server_side()).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
     }
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
@@ -465,7 +492,7 @@ impl Connection for MysqlConnection {
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
-        objects::list_schema_objects(self, schema).await
+        objects::list_schema_objects(self, schema, &LikeFilter::default()).await
     }
 
     async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {

@@ -27,7 +27,9 @@
     "sortAlphabetically": "Ordenar alfabéticamente",
     "sortIgnoreCase": "Ignorar mayúsculas",
     "foldersFirst": "Carpetas primero",
-    "sortingHint": "Sin orden alfabético, los nombres siguen el orden que devuelve la base de datos. Las columnas mantienen siempre el orden de su tabla. Carpetas primero pone los roles, usuarios y similares antes de los esquemas."
+    "sortingHint": "Sin orden alfabético, los nombres siguen el orden que devuelve la base de datos. Las columnas mantienen siempre el orden de su tabla. Carpetas primero pone los roles, usuarios y similares antes de los esquemas.",
+    "serverSideFilters": "Usar filtros en el servidor",
+    "serverSideFiltersHint": "Los filtros de una conexión van dentro de las consultas al catálogo de la base de datos, así un servidor con miles de esquemas o tablas solo envía lo que los pasa. Desactivado, se leen todos los nombres y se filtran en este equipo; lo que ves es lo mismo."
   },
   "history": {
     "title": "Historial",

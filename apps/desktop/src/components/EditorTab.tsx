@@ -415,10 +415,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
     let cancelled = false;
     (async () => {
       // Autocompletion sees every name: the explorer's filters (ADR-025) do not apply here.
-      const schemas = (await call(commands.listSchemas(tab.id, null))).filter((s) => !s.system).slice(0, 20);
+      const schemas = (await call(commands.listSchemas(tab.id, null, false))).filter((s) => !s.system).slice(0, 20);
       const out: Record<string, string[]> = {};
       for (const schema of schemas) {
-        for (const o of await call(commands.listObjects(tab.id, schema.name, null))) {
+        for (const o of await call(commands.listObjects(tab.id, schema.name, null, false))) {
           out[`${o.schema}.${o.name}`] = [];
           if (o.schema === "public" || o.schema === "main" || o.schema === database) out[o.name] = [];
         }

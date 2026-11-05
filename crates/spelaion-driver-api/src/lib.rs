@@ -25,7 +25,7 @@ use futures_util::stream::BoxStream;
 pub use column::{ColumnMeta, ResultSchema};
 pub use dialect::{Dialect, StatementSpan};
 pub use error::DriverError;
-pub use filter::{NameFilter, literal_pattern, pattern_matches};
+pub use filter::{LikeFilter, NameFilter, literal_pattern, pattern_matches};
 pub use introspect::{
     ColumnInfo, ConstraintInfo, ConstraintKind, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind,
     SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo,

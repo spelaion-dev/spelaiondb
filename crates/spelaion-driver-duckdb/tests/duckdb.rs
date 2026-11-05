@@ -684,3 +684,154 @@ fn constraints(
         })
         .collect()
 }
+
+#[tokio::test]
+async fn server_side_filters_keep_what_the_filter_keeps() {
+    let conn = memory().await;
+    run(&*conn, "create schema like_probe").await.unwrap();
+    for name in TRICKY_NAMES {
+        let quoted = name.replace('"', "\"\"");
+        run(
+            &*conn,
+            &format!("create table like_probe.\"{quoted}\" (id int)"),
+        )
+        .await
+        .unwrap();
+        run(
+            &*conn,
+            &format!("create sequence like_probe.\"{quoted}_seq\""),
+        )
+        .await
+        .unwrap();
+    }
+    server_side_keeps_what_rust_keeps(&*conn, "like_probe").await;
+
+    // An attached database's schemas are shown, and filtered, as `database.schema`.
+    // A new file, created by ATTACH itself.
+    let other = TempDb::new("duck-like-attached");
+    let path = other.0.to_string_lossy().replace('\'', "''");
+    run(&*conn, &format!("attach '{path}' as other"))
+        .await
+        .unwrap();
+    run(&*conn, "create table other.main.things (a int)")
+        .await
+        .unwrap();
+    let names = |filter: spelaion_driver_api::NameFilter| {
+        let conn = &conn;
+        async move {
+            let mut got: Vec<String> = conn
+                .list_schemas_matching(&filter)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|s| s.name)
+                .collect();
+            got.sort();
+            got
+        }
+    };
+    let only = |pattern: &str| spelaion_driver_api::NameFilter {
+        include: vec![pattern.into()],
+        exclude: vec![],
+    };
+    assert_eq!(names(only("OTHER.*")).await, ["other.main"]);
+    assert_eq!(names(only("like_*")).await, ["like_probe"]);
+    assert_eq!(
+        conn.list_objects_matching("other.main", &only("thing?"))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| o.name)
+            .collect::<Vec<_>>(),
+        ["things"]
+    );
+}
+
+/// Filters whose patterns are hard to send to a server (ADR-025): a literal `_` and `%`, the
+/// escape character, a non-ASCII letter whose case differs, `?` and an exclude-only filter.
+fn tricky_filters() -> Vec<spelaion_driver_api::NameFilter> {
+    let filter = |include: &[&str], exclude: &[&str]| spelaion_driver_api::NameFilter {
+        include: include.iter().map(|p| p.to_string()).collect(),
+        exclude: exclude.iter().map(|p| p.to_string()).collect(),
+    };
+    vec![
+        filter(&["tenant_*"], &[]),
+        filter(&["tenant\\%*"], &[]),
+        filter(&["ñame*"], &[]),
+        filter(&["t?nant*"], &[]),
+        filter(&["wow!*"], &[]),
+        filter(&[], &["*_a", "wow!*"]),
+        filter(&["*"], &["ñ*"]),
+        filter(&["nothing_matches_this"], &[]),
+    ]
+}
+
+/// The names created by each test for [`tricky_filters`].
+const TRICKY_NAMES: [&str; 6] = [
+    "Tenant_A", "tenantXb", "tenant%c", "ÑAME_1", "plain", "wow!x",
+];
+
+/// Narrowed on the server or only in Rust, the same names come back.
+async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) {
+    let all_objects = conn.list_objects(schema).await.unwrap();
+    let all_others = conn.list_schema_objects(schema).await.unwrap();
+    for filter in tricky_filters() {
+        let names = |items: Vec<String>| {
+            let mut items = items;
+            items.sort();
+            items
+        };
+        let expected = names(
+            all_objects
+                .iter()
+                .filter(|o| filter.matches(&o.name))
+                .map(|o| o.name.clone())
+                .collect(),
+        );
+        let got = names(
+            conn.list_objects_matching(schema, &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{filter:?}: {e}"))
+                .into_iter()
+                .map(|o| o.name)
+                .collect(),
+        );
+        assert_eq!(got, expected, "objects, {filter:?}");
+        let expected = names(
+            all_others
+                .iter()
+                .filter(|o| filter.matches(&o.name))
+                .map(|o| o.name.clone())
+                .collect(),
+        );
+        let got = names(
+            conn.list_schema_objects_matching(schema, &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{filter:?}: {e}"))
+                .into_iter()
+                .map(|o| o.name)
+                .collect(),
+        );
+        assert_eq!(got, expected, "schema objects, {filter:?}");
+    }
+    // The filters do something: each name is found by the one meant for it.
+    let only = |pattern: &str| spelaion_driver_api::NameFilter {
+        include: vec![pattern.into()],
+        exclude: vec![],
+    };
+    for (pattern, name) in [
+        ("tenant_*", "Tenant_A"),
+        ("tenant\\%*", "tenant%c"),
+        ("ñame*", "ÑAME_1"),
+        ("wow!*", "wow!x"),
+    ] {
+        let got: Vec<String> = conn
+            .list_objects_matching(schema, &only(pattern))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| o.name)
+            .collect();
+        assert_eq!(got, [name], "{pattern}");
+    }
+}

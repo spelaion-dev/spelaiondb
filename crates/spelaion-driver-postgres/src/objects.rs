@@ -3,10 +3,12 @@
 //! Definitions quote names on the server (`format('%I')`); names arrive as parameters.
 
 use spelaion_driver_api::{
-    DriverError, Result, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind, terminated,
+    DriverError, LikeFilter, Result, SchemaObject, SchemaObjectKind, ServerObject,
+    ServerObjectKind, terminated,
 };
 use tokio_postgres::Client;
 
+use crate::introspect::{like_sql, query_params};
 use crate::map_error;
 
 /// `pg_depend` rows that make an object part of something else: of an extension (`e`), or
@@ -18,9 +20,15 @@ fn not_owned(catalog: &str, oid: &str) -> String {
     )
 }
 
-pub async fn list_schema_objects(client: &Client, schema: &str) -> Result<Vec<SchemaObject>> {
+pub async fn list_schema_objects(
+    client: &Client,
+    schema: &str,
+    like: &LikeFilter,
+) -> Result<Vec<SchemaObject>> {
+    let mut patterns = Vec::new();
+    let narrow = like_sql(like, "o.name", &mut patterns, 1);
     let sql = format!(
-        "select p.proname::text, \
+        "select * from (select p.proname::text, \
                 case p.prokind when 'p' then 'procedure' when 'a' then 'aggregate' \
                      else 'function' end, \
                 pg_get_function_identity_arguments(p.oid), obj_description(p.oid, 'pg_proc') \
@@ -45,13 +53,17 @@ pub async fn list_schema_objects(client: &Client, schema: &str) -> Result<Vec<Sc
          where n.nspname = $1 and t.typtype in ('e', 'd', 'c', 'r') and {type_} \
            and (t.typtype <> 'c' \
                 or (select c.relkind from pg_class c where c.oid = t.typrelid) = 'c') \
+         ) as o(name, kind, detail, comment) where true{narrow} \
          order by 1, 2, 3",
         proc = not_owned("pg_proc", "p.oid"),
         class = not_owned("pg_class", "c.oid"),
         table = not_owned("pg_class", "c.oid"),
         type_ = not_owned("pg_type", "t.oid"),
     );
-    let rows = client.query(&sql, &[&schema]).await.map_err(map_error)?;
+    let rows = client
+        .query(&sql, &query_params(&[schema], &patterns))
+        .await
+        .map_err(map_error)?;
     rows.iter()
         .map(|r| {
             let kind: String = r.get(1);

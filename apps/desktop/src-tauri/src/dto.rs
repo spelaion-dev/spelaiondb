@@ -102,6 +102,7 @@ pub struct ExplorerPreferencesItem {
     pub sort_ignore_case: bool,
     pub folders_first: bool,
     pub connected_only: bool,
+    pub server_side_filters: bool,
 }
 
 impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
@@ -112,6 +113,7 @@ impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
             sort_ignore_case,
             folders_first,
             connected_only,
+            server_side_filters,
         } = p;
         Self {
             show_system,
@@ -119,6 +121,7 @@ impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
             sort_ignore_case,
             folders_first,
             connected_only,
+            server_side_filters,
         }
     }
 }
@@ -131,6 +134,7 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
             sort_ignore_case,
             folders_first,
             connected_only,
+            server_side_filters,
         } = p;
         Self {
             show_system,
@@ -138,6 +142,7 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
             sort_ignore_case,
             folders_first,
             connected_only,
+            server_side_filters,
         }
     }
 }

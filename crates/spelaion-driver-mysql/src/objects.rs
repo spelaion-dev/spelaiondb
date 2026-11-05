@@ -2,11 +2,12 @@
 //! (ADR-024). Definitions come from `SHOW CREATE …`, with names quoted by our dialect.
 
 use spelaion_driver_api::{
-    Dialect, DriverError, Result, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind,
-    terminated,
+    Dialect, DriverError, LikeFilter, Result, SchemaObject, SchemaObjectKind, ServerObject,
+    ServerObjectKind, terminated,
 };
 
 use crate::dialect::MysqlDialect;
+use crate::introspect::like_sql;
 use crate::{Flavor, MysqlConnection};
 
 fn text(row: &[Option<String>], i: usize) -> String {
@@ -20,11 +21,16 @@ fn opt(row: &[Option<String>], i: usize) -> Option<String> {
 pub(crate) async fn list_schema_objects(
     conn: &MysqlConnection,
     schema: &str,
+    like: &LikeFilter,
 ) -> Result<Vec<SchemaObject>> {
+    let mut params = vec![schema.to_string(); 4];
+    let narrow = like_sql(like, "o.name", &mut params);
     // Routines of other types (MariaDB's packages, in its Oracle mode) are not listed.
     let rows = conn
         .rows(
-            "select routine_name, lower(routine_type), null, routine_comment \
+            &format!(
+                "select * from (select routine_name as name, lower(routine_type) as kind, \
+                    null as detail, routine_comment as comment \
              from information_schema.routines \
              where routine_schema = ? and routine_type in ('FUNCTION', 'PROCEDURE') \
              union all \
@@ -35,9 +41,10 @@ pub(crate) async fn list_schema_objects(
              from information_schema.triggers where trigger_schema = ? \
              union all \
              select event_name, 'event', null, event_comment from information_schema.events \
-             where event_schema = ? \
-             order by 1, 2",
-            vec![schema.to_string(); 4],
+             where event_schema = ?) o where true{narrow} \
+             order by 1, 2"
+            ),
+            params,
         )
         .await?;
     rows.iter()

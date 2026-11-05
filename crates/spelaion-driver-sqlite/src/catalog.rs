@@ -6,8 +6,8 @@
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, Dialect, DriverError, ForeignKeyInfo, IndexInfo,
-    ObjectInfo, ObjectKind, Result, SchemaInfo, SchemaObject, SchemaObjectKind, TableInfo,
-    terminated,
+    LikeFilter, ObjectInfo, ObjectKind, Result, SchemaInfo, SchemaObject, SchemaObjectKind,
+    TableInfo, terminated,
 };
 
 use crate::dialect::SqliteDialect;
@@ -48,7 +48,14 @@ fn schema_table(schema: &str) -> String {
     format!("{}.sqlite_schema", SqliteDialect.quote_identifier(schema))
 }
 
-pub(crate) const SCHEMAS_SQL: &str = "select name from pragma_database_list order by seq";
+/// The schemas (main, temp, attached databases), narrowed by `like` (ADR-025). Patterns go
+/// in as literals: the same text runs locally and through a server's `sqlite3`.
+pub(crate) fn schemas_sql(like: &LikeFilter) -> String {
+    format!(
+        "select name from pragma_database_list where true{} order by seq",
+        like.sql("name", literal)
+    )
+}
 
 pub(crate) fn schemas(rows: &[Row]) -> Vec<SchemaInfo> {
     rows.iter()
@@ -59,10 +66,11 @@ pub(crate) fn schemas(rows: &[Row]) -> Vec<SchemaInfo> {
         .collect()
 }
 
-pub(crate) fn objects_sql(schema: &str) -> String {
+pub(crate) fn objects_sql(schema: &str, like: &LikeFilter) -> String {
     format!(
-        r"select name, type from {} where type in ('table', 'view') and name not like 'sqlite\_%' escape '\' order by name",
-        schema_table(schema)
+        r"select name, type from {} where type in ('table', 'view') and name not like 'sqlite\_%' escape '\'{} order by name",
+        schema_table(schema),
+        like.sql("name", literal)
     )
 }
 
@@ -84,10 +92,11 @@ pub(crate) fn objects(schema: &str, rows: &[Row]) -> Vec<ObjectInfo> {
 }
 
 /// Triggers are all a SQLite schema holds besides its tables and views (ADR-024).
-pub(crate) fn schema_objects_sql(schema: &str) -> String {
+pub(crate) fn schema_objects_sql(schema: &str, like: &LikeFilter) -> String {
     format!(
-        "select name, tbl_name from {} where type = 'trigger' order by name",
-        schema_table(schema)
+        "select name, tbl_name from {} where type = 'trigger'{} order by name",
+        schema_table(schema),
+        like.sql("name", literal)
     )
 }
 
