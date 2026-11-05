@@ -97,6 +97,7 @@ export function TunnelEditor(props: {
   const [hops, setHops] = useState<HopState[]>(editing ? [] : [emptyHop()]);
   const [keepaliveInterval, setKeepaliveInterval] = useState<number | null>(null);
   const [keepaliveCount, setKeepaliveCount] = useState<number | null>(null);
+  const [connectTimeout, setConnectTimeout] = useState<number | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "idle" | "testing" | "ok" } | { kind: "error"; message: string }>({ kind: "idle" });
@@ -112,6 +113,7 @@ export function TunnelEditor(props: {
         setHops(loaded.hops.map(fromDraft));
         setKeepaliveInterval(loaded.keepaliveInterval ?? null);
         setKeepaliveCount(loaded.keepaliveCount ?? null);
+        setConnectTimeout(loaded.connectTimeout ?? null);
       })
       .catch((e: unknown) => setLoadError(errorText(e)));
   }, [mode]);
@@ -142,7 +144,7 @@ export function TunnelEditor(props: {
     setStatus({ kind: "idle" });
   };
 
-  const draft: TunnelDraft = { personal, name, hops: hops.map(toDraft), keepaliveInterval, keepaliveCount };
+  const draft: TunnelDraft = { personal, name, hops: hops.map(toDraft), keepaliveInterval, keepaliveCount, connectTimeout };
   /** A whole number typed in a field, or null when it is empty. */
   const numberOrNull = (text: string) => (text.trim() === "" ? null : Math.max(0, Math.trunc(Number(text))));
   const passwords = hops.map((hop) => hop.password || null);
@@ -380,8 +382,23 @@ export function TunnelEditor(props: {
                     }}
                   />
                 </label>
+                <label className="field">
+                  <span>{t("tunnel.connectTimeout")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={600}
+                    value={connectTimeout ?? ""}
+                    placeholder="15"
+                    onChange={(e) => {
+                      setConnectTimeout(numberOrNull(e.target.value));
+                      setStatus({ kind: "idle" });
+                    }}
+                  />
+                </label>
               </div>
               <p className="muted small">{t("tunnel.keepaliveHint")}</p>
+              <p className="muted small">{t("tunnel.connectTimeoutHint")}</p>
             </fieldset>
           </div>
 

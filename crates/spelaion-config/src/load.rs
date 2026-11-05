@@ -405,6 +405,18 @@ pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFil
             ),
         ));
     }
+    if file
+        .connect_timeout
+        .is_some_and(|s| s == 0 || s > TunnelFile::MAX_CONNECT_TIMEOUT)
+    {
+        return Err(ConfigError::new(
+            path,
+            format!(
+                "connect_timeout is in seconds, from 1 to {}",
+                TunnelFile::MAX_CONNECT_TIMEOUT
+            ),
+        ));
+    }
     Ok(file)
 }
 

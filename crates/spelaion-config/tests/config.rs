@@ -1528,6 +1528,28 @@ fn tunnel_keepalives_are_edited_validated_and_resolved() {
     let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
     assert_eq!(TunnelSettings::of(&entry.file).keepalive_interval, None);
 
+    // The connect timeout is written and resolved the same way.
+    let mut timeout = TunnelDraft::from_entry(entry);
+    timeout.options.connect_timeout = Some(40);
+    update_tunnel(&config, Source::Workspace, "prod", &timeout, &[], &backend).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("connect_timeout = 40")
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::Workspace, "prod").unwrap();
+    assert_eq!(
+        TunnelSettings::of(&entry.file).connect_timeout,
+        std::time::Duration::from_secs(40)
+    );
+    for bad in [0, 601] {
+        let mut wrong = TunnelDraft::from_entry(entry);
+        wrong.options.connect_timeout = Some(bad);
+        let error = wrong.to_file(&config).unwrap_err().message;
+        assert!(error.contains("connect_timeout"), "{error}");
+    }
+
     // Out of range: refused, in the form and in a hand-written file.
     let mut huge = TunnelDraft::from_entry(entry);
     huge.options.keepalive_interval = Some(100_000);

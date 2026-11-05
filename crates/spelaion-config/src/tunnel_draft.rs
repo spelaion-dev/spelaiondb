@@ -52,6 +52,8 @@ pub struct TunnelDraftOptions {
     pub keepalive_interval: Option<u32>,
     /// 0 never gives up.
     pub keepalive_count: Option<u32>,
+    /// Seconds.
+    pub connect_timeout: Option<u32>,
 }
 
 impl TunnelDraftOptions {
@@ -59,6 +61,7 @@ impl TunnelDraftOptions {
         Self {
             keepalive_interval: file.keepalive_interval,
             keepalive_count: file.keepalive_count,
+            connect_timeout: file.connect_timeout,
         }
     }
 }
@@ -182,6 +185,9 @@ impl TunnelDraft {
                 keepalive_count: options
                     .keepalive_count
                     .filter(|n| *n != TunnelFile::DEFAULT_KEEPALIVE_COUNT),
+                connect_timeout: options
+                    .connect_timeout
+                    .filter(|s| *s != TunnelFile::DEFAULT_CONNECT_TIMEOUT),
                 hops,
             },
         )
@@ -366,6 +372,9 @@ fn write_options(table: &mut Table, old: &TunnelFile, new: &TunnelFile) {
     }
     if old.keepalive_count != new.keepalive_count {
         put(table, "keepalive_count", number(new.keepalive_count));
+    }
+    if old.connect_timeout != new.connect_timeout {
+        put(table, "connect_timeout", number(new.connect_timeout));
     }
 }
 

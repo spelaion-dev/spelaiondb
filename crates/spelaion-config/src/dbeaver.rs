@@ -57,6 +57,8 @@ pub struct DbeaverSsh {
     /// Seconds (DBeaver keeps milliseconds); `None` where DBeaver left it unset or 0.
     pub keepalive_interval: Option<u32>,
     pub keepalive_count: Option<u32>,
+    /// Seconds (DBeaver keeps milliseconds).
+    pub connect_timeout: Option<u32>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -272,6 +274,8 @@ fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverSsh> {
                 .unwrap_or(u32::MAX)
                 .min(TunnelFile::MAX_KEEPALIVE_COUNT)
         }),
+        connect_timeout: seconds(properties.get("sshConnectTimeout"))
+            .map(|s| s.min(TunnelFile::MAX_CONNECT_TIMEOUT)),
     })
 }
 
@@ -324,6 +328,7 @@ pub fn import_plan(
                 options: TunnelDraftOptions {
                     keepalive_interval: ssh.keepalive_interval,
                     keepalive_count: ssh.keepalive_count,
+                    connect_timeout: ssh.connect_timeout,
                 },
             },
             vec![keep(&ssh.password)],
@@ -403,7 +408,8 @@ mod tests {
                     "host": "db.internal", "port": "5432", "database": "orders", "type": "prod",
                     "handlers": {"ssh_tunnel": {"type": "TUNNEL", "enabled": true,
                       "properties": {"host": "bastion.example.com", "port": 22, "authType": "PASSWORD",
-                        "aliveInterval": "29500", "aliveCount": "5"}}}
+                        "aliveInterval": "29500", "aliveCount": "5",
+                        "sshConnectTimeout": "20000"}}}
                   }
                 },
                 "mariaDB-2": {
@@ -473,6 +479,7 @@ mod tests {
             (ssh.keepalive_interval, ssh.keepalive_count),
             (Some(30), Some(5))
         );
+        assert_eq!(ssh.connect_timeout, Some(20));
         let maria = by_id("mariaDB-2");
         assert_eq!(
             (maria.engine.clone(), maria.user.as_str()),
@@ -521,6 +528,7 @@ mod tests {
         assert_eq!(tunnel.hops[0].password, PasswordChoice::Keychain);
         assert_eq!(tunnel.options.keepalive_interval, Some(30));
         assert_eq!(tunnel.options.keepalive_count, Some(5));
+        assert_eq!(tunnel.options.connect_timeout, Some(20));
         assert_eq!(secrets[0].as_ref().map(Secret::expose), Some("hop-pass"));
         let asked = import_plan(pg, Engine::Postgres, Source::User, false, "t");
         assert_eq!(asked.connection.password, PasswordChoice::Prompt);

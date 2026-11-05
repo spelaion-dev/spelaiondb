@@ -359,6 +359,7 @@ fn tunnel_options(tunnel: &ResolvedTunnel) -> TunnelOptions {
     TunnelOptions {
         keepalive_interval: tunnel.options.keepalive_interval,
         keepalive_count: tunnel.options.keepalive_count,
+        connect_timeout: tunnel.options.connect_timeout,
     }
 }
 

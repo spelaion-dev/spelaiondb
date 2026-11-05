@@ -83,6 +83,7 @@ pub struct TunnelSettings {
     pub keepalive_interval: Option<Duration>,
     /// 0 never gives up.
     pub keepalive_count: u32,
+    pub connect_timeout: Duration,
 }
 
 impl TunnelSettings {
@@ -95,6 +96,11 @@ impl TunnelSettings {
             keepalive_count: file
                 .keepalive_count
                 .unwrap_or(TunnelFile::DEFAULT_KEEPALIVE_COUNT),
+            connect_timeout: Duration::from_secs(
+                file.connect_timeout
+                    .unwrap_or(TunnelFile::DEFAULT_CONNECT_TIMEOUT)
+                    .into(),
+            ),
         }
     }
 }
