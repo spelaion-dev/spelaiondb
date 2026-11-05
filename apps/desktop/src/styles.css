@@ -970,6 +970,26 @@ input[type="search"] {
 .danger-text {
   color: var(--danger);
 }
+.warn {
+  color: var(--warn-fg);
+}
+.object-change-dialog {
+  width: min(560px, 92vw);
+}
+.object-change-dialog .field {
+  display: grid;
+  gap: 4px;
+}
+.object-change-sql {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--grid-header);
+  padding: 8px;
+  border-radius: 6px;
+}
 .wizard-error {
   padding: 16px 18px;
 }

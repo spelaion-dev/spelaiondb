@@ -114,6 +114,19 @@ export const commands = {
 	 *  for the explorer's "Copy qualified name".
 	 */
 	qualifiedNames: (session: string, paths: ObjectPathItem[]) => typedError<string[], string>(__TAURI_INVOKE("qualified_names", { session, paths })),
+	/**  What the explorer may offer on this session's engine: the core decides (ADR-026). */
+	objectActions: (session: string) => typedError<ObjectActionsItem, string>(__TAURI_INVOKE("object_actions", { session })),
+	/**
+	 *  The SQL of a change to an object (rename, drop…), written by the core, to show before it
+	 *  runs or to open in the editor.
+	 */
+	previewObjectChange: (session: string, change: ObjectChangeItem) => typedError<string, string>(__TAURI_INVOKE("preview_object_change", { session, change })),
+	/**
+	 *  Runs a change to an object on the explorer's session, once the user confirmed the SQL it
+	 *  was shown. The core writes the statements again from the change, and refuses read-only
+	 *  connections (ADR-026). Returns how many statements ran.
+	 */
+	applyObjectChange: (session: string, change: ObjectChangeItem, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_object_change", { session, change, confirmed })),
 	/**
 	 *  The statements the core would run for the pending changes of a table data tab, to show
 	 *  before applying them (production asks for confirmation).
@@ -775,6 +788,14 @@ export type NameFilterItem = {
 	exclude: string[],
 };
 
+/**  What the explorer may offer on a session's engine (ADR-026). */
+export type ObjectActionsItem = {
+	renameViews: boolean,
+};
+
+/**  What to do with an object of the explorer. */
+export type ObjectChangeItem = { action: "rename"; target: ObjectTargetItem; newName: string };
+
 export type ObjectItem = ObjectItem_Serialize | ObjectItem_Deserialize;
 
 export type ObjectItem_Deserialize = {
@@ -803,6 +824,14 @@ export type ObjectPathItem = {
 	schema: string,
 	names: string[],
 };
+
+/**
+ *  An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
+ *  writes the statements.
+ */
+export type ObjectTargetItem = 
+/**  `relation` is the `kind` of an `ObjectItem`: `table`, `view`… */
+{ kind: "relation"; schema: string; name: string; relation: string } | { kind: "column"; schema: string; table: string; name: string };
 
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */

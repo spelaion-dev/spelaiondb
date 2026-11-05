@@ -455,7 +455,7 @@ pub async fn apply_edits(session: &Session, statements: &[String]) -> Result<usi
 }
 
 /// Rows affected by one statement, or its error.
-async fn run_one(session: &Session, sql: &str) -> Result<Option<u64>, String> {
+pub(crate) async fn run_one(session: &Session, sql: &str) -> Result<Option<u64>, String> {
     let mut events = session.run_script(sql);
     let mut affected = None;
     let mut failure = None;

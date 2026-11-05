@@ -61,6 +61,101 @@ pub struct ObjectPathItem {
     pub names: Vec<String>,
 }
 
+/// An object the explorer can change (ADR-026). The UI sends what the tree shows; the core
+/// writes the statements.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ObjectTargetItem {
+    /// `relation` is the `kind` of an `ObjectItem`: `table`, `view`…
+    Relation {
+        schema: String,
+        name: String,
+        relation: String,
+    },
+    Column {
+        schema: String,
+        table: String,
+        name: String,
+    },
+}
+
+impl TryFrom<ObjectTargetItem> for spelaion_core::ObjectTarget {
+    type Error = String;
+    fn try_from(item: ObjectTargetItem) -> Result<Self, String> {
+        Ok(match item {
+            ObjectTargetItem::Relation {
+                schema,
+                name,
+                relation,
+            } => Self::Relation {
+                schema,
+                name,
+                kind: match relation.as_str() {
+                    "table" => ObjectKind::Table,
+                    "partitioned_table" => ObjectKind::PartitionedTable,
+                    "view" => ObjectKind::View,
+                    "materialized_view" => ObjectKind::MaterializedView,
+                    "foreign_table" => ObjectKind::ForeignTable,
+                    other => return Err(format!("unknown kind of relation: {other}")),
+                },
+            },
+            ObjectTargetItem::Column {
+                schema,
+                table,
+                name,
+            } => Self::Column {
+                schema,
+                table,
+                name,
+            },
+        })
+    }
+}
+
+/// What to do with an object of the explorer.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "action",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ObjectChangeItem {
+    Rename {
+        target: ObjectTargetItem,
+        new_name: String,
+    },
+}
+
+impl TryFrom<ObjectChangeItem> for spelaion_core::ObjectChange {
+    type Error = String;
+    fn try_from(item: ObjectChangeItem) -> Result<Self, String> {
+        Ok(match item {
+            ObjectChangeItem::Rename { target, new_name } => Self::Rename {
+                target: target.try_into()?,
+                new_name,
+            },
+        })
+    }
+}
+
+/// What the explorer may offer on a session's engine (ADR-026).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectActionsItem {
+    pub rename_views: bool,
+}
+
+impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
+    fn from(actions: spelaion_core::ObjectActions) -> Self {
+        let spelaion_core::ObjectActions { rename_views } = actions;
+        Self { rename_views }
+    }
+}
+
 /// What "Hide" and "Show only" in the explorer do with one name.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

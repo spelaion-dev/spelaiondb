@@ -213,5 +213,18 @@
   "copyName": "Copy name",
   "copyNames": "Copy {{count}} names",
   "copyQualifiedName": "Copy qualified name",
-  "copyQualifiedNames": "Copy {{count}} qualified names"
+  "copyQualifiedNames": "Copy {{count}} qualified names",
+  "objectChange": {
+    "renameMenu": "Rename…",
+    "renameTitle": "Rename {{name}}",
+    "renameColumnTitle": "Rename column {{name}} of {{table}}",
+    "rename": "Rename",
+    "newName": "New name",
+    "cascade": "Cascade: also drop what depends on it",
+    "sql": "SQL that will run",
+    "openInEditor": "Open in editor",
+    "running": "Running…",
+    "production": "This is a production connection.",
+    "readOnly": "The connection is read-only: the SQL can only be opened in the editor."
+  }
 }

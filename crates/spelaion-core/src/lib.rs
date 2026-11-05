@@ -37,7 +37,10 @@ pub use filter::{ColumnFilter, FilterOp};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use guard::{Risk, RiskyStatement, script_risks};
 pub use history::{HistoryError, QueryHistory};
-pub use objects::qualified_name;
+pub use objects::{
+    ObjectActions, ObjectChange, ObjectError, ObjectTarget, apply_change, change_script,
+    change_statements, object_actions, qualified_name,
+};
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,
 };
