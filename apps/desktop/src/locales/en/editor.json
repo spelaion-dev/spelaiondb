@@ -5,13 +5,16 @@
   "loadingDatabases": "Loading databases…",
   "databaseLoadFailed": "Could not load databases",
   "retryDatabases": "Retry",
+  "reconnect": "Reconnect",
+  "reconnected": "Reconnected. Nothing was run again.",
   "connectToChooseDatabase": "Connect to choose database",
   "noConnection": "— No connection —",
   "pickConnection": "Pick a connection for this tab.",
   "status": {
     "connected": "Connected",
     "connecting": "Connecting…",
-    "disconnected": "Disconnected"
+    "disconnected": "Disconnected",
+    "lost": "Connection lost"
   },
   "production": "PRODUCTION",
   "cancel": "Cancel",
@@ -89,6 +92,7 @@
     "filterMenu": "Filter"
   },
   "messages": {
+    "connectionLost": "The connection was lost: {{detail}}. Nothing ran. Reconnect, then run it again: nothing is re-run on its own.",
     "connectionFailed": "Could not connect: {{detail}}",
     "runFailed": "Could not run the query: {{detail}}",
     "statementOk": "Statement {{index}}: OK ({{duration}} ms)",

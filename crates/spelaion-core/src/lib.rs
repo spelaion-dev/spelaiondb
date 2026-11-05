@@ -11,6 +11,7 @@ mod export;
 mod filter;
 mod generate;
 mod guard;
+mod health;
 mod history;
 pub mod kube;
 mod objects;
@@ -36,6 +37,7 @@ pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, wr
 pub use filter::{ColumnFilter, FilterOp};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use guard::{Risk, RiskyStatement, script_risks};
+pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, QueryHistory};
 pub use objects::{
     CreateKind, FoundObject, NewIndexKind, ObjectActions, ObjectChange, ObjectError, ObjectTarget,

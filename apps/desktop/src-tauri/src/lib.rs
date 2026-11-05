@@ -20,12 +20,14 @@ use spelaion_config::{
 };
 use spelaion_core::{
     Engines, ExportFormat, ExportOptions, GenericDialect, OpenConnection, OpenError, OpenOptions,
-    QueryHistory, ResultId, ResultStore, SortKey, TunnelPool, open_connection, write_result,
+    QueryHistory, ResultId, ResultStore, SessionHealth, SortKey, TunnelPool, open_connection,
+    write_result,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State};
+use tauri_specta::Event as _;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::dto::*;
@@ -1140,10 +1142,12 @@ async fn connect(
         open.close().await;
         return Err("the folder changed while connecting; select a connection again".into());
     }
+    let open = Arc::new(open);
+    watch_session(&app, session.clone(), &open);
     let old = sessions.insert(
         session,
         DesktopSession {
-            open: Arc::new(open),
+            open,
             password,
             history_workspace,
         },
@@ -1187,7 +1191,7 @@ async fn connect_from_session(
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app, state.pending.clone())),
+        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password: password.clone(),
     };
     let open = open_connection(
@@ -1222,15 +1226,55 @@ async fn connect_from_session(
         open.close().await;
         return Err("the source connection or folder changed while connecting".into());
     }
+    let open = Arc::new(open);
+    watch_session(&app, session.clone(), &open);
     sessions.insert(
         session,
         DesktopSession {
-            open: Arc::new(open),
+            open,
             password,
             history_workspace,
         },
     );
     Ok(server_version)
+}
+
+/// Keeps an editor session alive if its connection asks for it, and tells the UI when it is
+/// lost (ADR-028). Nothing is reconnected or re-run here: the tab shows the loss and the
+/// user reconnects. A session replaced in the meantime says nothing.
+fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
+    if let Some(interval) = open.resolved.keepalive {
+        open.session.start_keep_alive(interval);
+    }
+    let mut health = open.session.health();
+    let watched = Arc::downgrade(open);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let reason = match health
+            .wait_for(|h| matches!(h, SessionHealth::Lost { .. }))
+            .await
+        {
+            Ok(health) => match &*health {
+                SessionHealth::Lost { reason } => reason.clone(),
+                SessionHealth::Alive => return,
+            },
+            // The session was closed.
+            Err(_) => return,
+        };
+        let Some(watched) = watched.upgrade() else {
+            return;
+        };
+        let state = app.state::<AppState>();
+        let current = state
+            .sessions
+            .lock()
+            .await
+            .get(&session)
+            .is_some_and(|s| Arc::ptr_eq(&s.open, &watched));
+        if current {
+            let _ = SessionLost { session, reason }.emit(&app);
+        }
+    });
 }
 
 #[tauri::command]
@@ -2730,7 +2774,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             editable_query_table,
             answer_interaction,
         ])
-        .events(tauri_specta::collect_events![InteractionRequest])
+        .events(tauri_specta::collect_events![
+            InteractionRequest,
+            SessionLost
+        ])
 }
 
 /// Generates `src/bindings.ts`. Run by `cargo run -p spelaion-desktop --features bindings --bin export-bindings`

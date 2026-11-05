@@ -66,6 +66,8 @@ export interface Tab {
   number: number;
   connectionId: string | null;
   status: TabStatus;
+  /** Why its session was lost (ADR-028): nothing runs until the user reconnects. */
+  lost?: string;
   serverVersion: string | null;
   sql: string;
   run: RunState | null;

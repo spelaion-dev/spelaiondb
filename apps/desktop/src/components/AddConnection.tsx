@@ -342,6 +342,8 @@ function ConnectionForm(props: {
     mcpWrites: false,
     sqlite3: "",
     localPort: null,
+    // New connections keep idle sessions alive (ADR-028); 0 or empty turns it off.
+    keepalive: network ? 300 : null,
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
 
@@ -832,6 +834,22 @@ function ConnectionForm(props: {
               </Field>
             </div>
           </fieldset>
+          {network && (
+            <fieldset>
+              <legend>{t("sections.idle")}</legend>
+              <Field label={t("fields.keepalive")} className="port">
+                <input
+                  type="number"
+                  min={0}
+                  max={86400}
+                  value={draft.keepalive ?? ""}
+                  placeholder={t("fields.keepaliveOff")}
+                  onChange={(e) => update({ keepalive: e.target.value ? Math.max(0, Math.trunc(Number(e.target.value))) : null })}
+                />
+              </Field>
+              <p className="muted small">{t("fields.keepaliveHint")}</p>
+            </fieldset>
+          )}
           <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">

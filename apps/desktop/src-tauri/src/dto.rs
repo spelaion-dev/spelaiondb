@@ -1127,6 +1127,15 @@ impl From<TableInfo> for TableDetails {
     }
 }
 
+/// An editor session's connection is gone (ADR-028): the tab shows it and offers to
+/// reconnect. Nothing was re-run.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLost {
+    pub session: String,
+    pub reason: String,
+}
+
 /// Dialog the tunnel needs to show. The UI answers with `answer_interaction`.
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
@@ -1331,6 +1340,8 @@ pub struct ConnectionDraftItem {
     /// SQLite on a server (with a tunnel): the program there; empty for `sqlite3`.
     pub sqlite3: String,
     pub read_only: bool,
+    /// Seconds idle before a keep-alive (ADR-028); null or 0 for off.
+    pub keepalive: Option<u32>,
     pub mcp_exposed: bool,
     /// Agents may write (`[mcp] writes = "allow"`, ADR-019).
     pub mcp_writes: bool,
@@ -1383,6 +1394,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             kubernetes: item.kubernetes.map(Into::into),
             sqlite3: item.sqlite3,
             read_only: item.read_only,
+            keepalive: item.keepalive,
             mcp_exposed: item.mcp_exposed,
             mcp_writes: item.mcp_writes,
         })
@@ -1429,6 +1441,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             kubernetes: draft.kubernetes.map(Into::into),
             sqlite3: draft.sqlite3,
             read_only: draft.read_only,
+            keepalive: draft.keepalive,
             mcp_exposed: draft.mcp_exposed,
             mcp_writes: draft.mcp_writes,
         }

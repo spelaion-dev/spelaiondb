@@ -68,7 +68,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, production
-  writes); `run_script` refuses unconfirmed risky scripts. `sort.rs` orders stored results
+  writes); `run_script` refuses unconfirmed risky scripts. `health.rs` keeps idle sessions
+  alive and marks a session lost (ADR-028): every use goes through its `Tracked` connection, and
+  nothing is ever reconnected or re-run there. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view)
   and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks

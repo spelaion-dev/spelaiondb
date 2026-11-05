@@ -76,6 +76,10 @@ export default function App() {
     const unlisten = events.interactionRequest.listen((e) =>
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );
+    // A tab whose session died shows it; nothing reconnects or re-runs on its own (ADR-028).
+    const unlistenLost = events.sessionLost.listen((e) =>
+      useApp.getState().updateTab(e.payload.session, { status: "disconnected", lost: e.payload.reason }),
+    );
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
@@ -121,6 +125,7 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => {
       void unlisten.then((f) => f());
+      void unlistenLost.then((f) => f());
       window.removeEventListener("keydown", onKey);
     };
   }, []);
