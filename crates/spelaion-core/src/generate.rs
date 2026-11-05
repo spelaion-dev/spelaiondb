@@ -25,7 +25,11 @@ pub enum SqlTemplate {
     /// `MERGE INTO … USING (SELECT :values) …` (PostgreSQL, SQL Server, DuckDB).
     Merge,
     Update,
+    /// `UPDATE … FROM (SELECT :values) AS source WHERE key matches`, in each engine's form.
+    UpdateFrom,
     Delete,
+    /// `DELETE … USING (SELECT :keys) AS source WHERE key matches` (not SQLite).
+    DeleteUsing,
 }
 
 /// What the explorer offers for a table on this engine (a view only gets `Select`).
@@ -42,8 +46,20 @@ pub fn table_templates(dialect: &dyn Dialect) -> Vec<SqlTemplate> {
     if has_merge(dialect) {
         templates.push(SqlTemplate::Merge);
     }
-    templates.extend([SqlTemplate::Update, SqlTemplate::Delete]);
+    templates.extend([
+        SqlTemplate::Update,
+        SqlTemplate::UpdateFrom,
+        SqlTemplate::Delete,
+    ]);
+    if has_delete_using(dialect) {
+        templates.push(SqlTemplate::DeleteUsing);
+    }
     templates
+}
+
+/// SQLite's DELETE takes one table only.
+fn has_delete_using(dialect: &dyn Dialect) -> bool {
+    dialect.name() != "sqlite"
 }
 
 fn has_upsert(dialect: &dyn Dialect) -> bool {
@@ -127,6 +143,90 @@ pub fn table_sql(dialect: &dyn Dialect, table: &TableInfo, template: SqlTemplate
             "DELETE FROM {name}\n{}",
             where_clause(dialect, &row_key(table))
         ),
+        SqlTemplate::UpdateFrom => update_from(dialect, table),
+        // Without DELETE … USING, a plain DELETE by key.
+        SqlTemplate::DeleteUsing if !has_delete_using(dialect) => format!(
+            "DELETE FROM {name}\n{}",
+            where_clause(dialect, &row_key(table))
+        ),
+        SqlTemplate::DeleteUsing => delete_using(dialect, table),
+    }
+}
+
+/// `(SELECT :a AS a, …) AS source`: the values to replace, or a real table in their place.
+fn source(dialect: &dyn Dialect, columns: &[&str]) -> String {
+    format!(
+        "(\n  SELECT\n{}\n) AS source",
+        columns
+            .iter()
+            .map(|c| format!("    {} AS {}", placeholder(c), dialect.quote_identifier(c)))
+            .collect::<Vec<_>>()
+            .join(",\n")
+    )
+}
+
+/// `target.key = source.key AND …`
+fn key_match(dialect: &dyn Dialect, key: &[&str]) -> String {
+    key.iter()
+        .map(|c| {
+            let c = dialect.quote_identifier(c);
+            format!("target.{c} = source.{c}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n  AND ")
+}
+
+/// The other columns take the source's values where the keys match. MySQL and SQL Server put
+/// the source next to the table, so every form keeps its WHERE.
+fn update_from(dialect: &dyn Dialect, table: &TableInfo) -> String {
+    let name = qualified(dialect, &table.object.schema, &table.object.name);
+    let quote = |c: &str| dialect.quote_identifier(c);
+    let columns: Vec<&str> = table.columns.iter().map(|c| c.name.as_str()).collect();
+    let key = row_key(table);
+    let rest: Vec<&str> = columns
+        .iter()
+        .copied()
+        .filter(|c| !key.columns.contains(c))
+        .collect();
+    let set = if rest.is_empty() { &columns } else { &rest };
+    let source = source(dialect, &columns);
+    let on = key_match(dialect, &key.columns);
+    let note = key.note(dialect);
+    let assignments = |prefix: &str| {
+        set.iter()
+            .map(|c| format!("  {prefix}{} = source.{}", quote(c), quote(c)))
+            .collect::<Vec<_>>()
+            .join(",\n")
+    };
+    match dialect.name() {
+        "sqlserver" => format!(
+            "{note}UPDATE target\nSET\n{}\nFROM {name} AS target, {source}\nWHERE {on};\n",
+            assignments("")
+        ),
+        // The keys again in WHERE: the guard reads this form, and sees it is not every row.
+        "mysql" => format!(
+            "{note}UPDATE {name} AS target\nJOIN {source}\n  ON {on}\nSET\n{}\nWHERE {on};\n",
+            assignments("target.")
+        ),
+        _ => format!(
+            "{note}UPDATE {name} AS target\nSET\n{}\nFROM {source}\nWHERE {on};\n",
+            assignments("")
+        ),
+    }
+}
+
+/// The rows whose keys are in the source.
+fn delete_using(dialect: &dyn Dialect, table: &TableInfo) -> String {
+    let name = qualified(dialect, &table.object.schema, &table.object.name);
+    let key = row_key(table);
+    let source = source(dialect, &key.columns);
+    let on = key_match(dialect, &key.columns);
+    let note = key.note(dialect);
+    match dialect.name() {
+        "sqlserver" | "mysql" => {
+            format!("{note}DELETE target\nFROM {name} AS target, {source}\nWHERE {on};\n")
+        }
+        _ => format!("{note}DELETE FROM {name} AS target\nUSING {source}\nWHERE {on};\n"),
     }
 }
 

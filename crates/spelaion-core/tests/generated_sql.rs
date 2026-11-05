@@ -331,3 +331,66 @@ async fn upserts_and_merges_insert_then_update() {
         assert_eq!(got, expected, "{label}");
     }
 }
+
+#[tokio::test]
+async fn updates_from_and_deletes_using_a_source() {
+    let pid = std::process::id();
+    let items = format!("gen_from_{pid}");
+    for (label, session, schema) in engines().await {
+        for sql in [
+            format!("drop table if exists {items}"),
+            format!("create table {items} (id int primary key, name varchar(40), qty int)"),
+            format!("insert into {items} (id, name, qty) values (1, 'a', 1), (2, 'b', 2)"),
+        ] {
+            run(label, &session, &sql).await;
+        }
+        let update = generated(&session, schema, &items, SqlTemplate::UpdateFrom).await;
+        // What the app asks to confirm (an UPDATE without WHERE…) never applies: each has one.
+        assert!(
+            spelaion_core::script_risks(session.dialect().as_ref(), &update, false).is_empty(),
+            "{label}: {update}"
+        );
+        run(
+            label,
+            &session,
+            &fill(&update, &[("id", "2"), ("name", "'z'"), ("qty", "9")]),
+        )
+        .await;
+        assert_eq!(
+            first(
+                label,
+                &session,
+                &format!("select name from {items} where id = 2")
+            )
+            .await,
+            "z",
+            "{label}: {update}"
+        );
+        assert_eq!(
+            first(
+                label,
+                &session,
+                &format!("select name from {items} where id = 1")
+            )
+            .await,
+            "a",
+            "{label}: {update}"
+        );
+        if table_templates(session.dialect().as_ref()).contains(&SqlTemplate::DeleteUsing) {
+            let delete = generated(&session, schema, &items, SqlTemplate::DeleteUsing).await;
+            assert!(
+                spelaion_core::script_risks(session.dialect().as_ref(), &delete, false).is_empty(),
+                "{label}: {delete}"
+            );
+            run(label, &session, &fill(&delete, &[("id", "1")])).await;
+            assert_eq!(
+                first(label, &session, &format!("select count(*) from {items}")).await,
+                "1",
+                "{label}: {delete}"
+            );
+        } else {
+            assert_eq!(label, "sqlite");
+        }
+        run(label, &session, &format!("drop table {items}")).await;
+    }
+}

@@ -1422,7 +1422,9 @@ pub enum SqlTemplateItem {
     Upsert,
     Merge,
     Update,
+    UpdateFrom,
     Delete,
+    DeleteUsing,
 }
 
 impl From<SqlTemplateItem> for spelaion_core::SqlTemplate {
@@ -1435,6 +1437,8 @@ impl From<SqlTemplateItem> for spelaion_core::SqlTemplate {
             SqlTemplateItem::Insert => Self::Insert,
             SqlTemplateItem::Upsert => Self::Upsert,
             SqlTemplateItem::Merge => Self::Merge,
+            SqlTemplateItem::UpdateFrom => Self::UpdateFrom,
+            SqlTemplateItem::DeleteUsing => Self::DeleteUsing,
             SqlTemplateItem::Update => Self::Update,
             SqlTemplateItem::Delete => Self::Delete,
         }
@@ -1452,6 +1456,8 @@ impl From<spelaion_core::SqlTemplate> for SqlTemplateItem {
             SqlTemplate::Insert => Self::Insert,
             SqlTemplate::Upsert => Self::Upsert,
             SqlTemplate::Merge => Self::Merge,
+            SqlTemplate::UpdateFrom => Self::UpdateFrom,
+            SqlTemplate::DeleteUsing => Self::DeleteUsing,
             SqlTemplate::Update => Self::Update,
             SqlTemplate::Delete => Self::Delete,
         }

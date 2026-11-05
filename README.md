@@ -233,7 +233,9 @@ table, so nothing typed in the filter can run another statement or load the whol
 or, for tables, a `SELECT … WHERE key =` (one row), a `SELECT … WHERE key IN` (several), an
 `INSERT`, an upsert where the engine has one (`INSERT … ON CONFLICT … DO UPDATE` in PostgreSQL,
 SQLite and DuckDB, `ON DUPLICATE KEY UPDATE` in MySQL and MariaDB), a `MERGE` where it has
-one (PostgreSQL, SQL Server, DuckDB), an `UPDATE` or a `DELETE`. The key is the primary key; without one, a unique key
+one (PostgreSQL, SQL Server, DuckDB), an `UPDATE` or a `DELETE`, and `UPDATE … FROM` /
+`DELETE … USING` with a source of `:values` (`SELECT :id AS id, …`) to replace by a real table
+(SQLite has no `DELETE … USING`). The key is the primary key; without one, a unique key
 (one whose columns cannot be NULL first); without either, every column, and the SQL says so. The core writes
 them with the engine's quoting and `:name` placeholders for the values; nothing runs until
 you replace them and run it.
