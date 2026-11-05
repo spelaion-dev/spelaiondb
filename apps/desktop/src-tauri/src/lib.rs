@@ -621,6 +621,18 @@ async fn list_tunnels(state: State<'_, AppState>) -> CmdResult<Vec<TunnelItem>> 
         .collect())
 }
 
+/// Every tunnel file as a network profile (ADR-027), for Settings → Network.
+#[tauri::command]
+#[specta::specta]
+async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkProfileItem>> {
+    let config = state.config.read().await;
+    Ok(config
+        .tunnels
+        .iter()
+        .map(|t| NetworkProfileItem::of(&config, t))
+        .collect())
+}
+
 /// Opens and closes a connection that has not been saved yet. Nothing is written: neither
 /// the file nor the keychain. `editing` is the connection being edited, if any: its stored
 /// password is used when none is typed.
@@ -2754,6 +2766,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             accept_change,
             set_user_vars,
             tunnel_ports,
+            network_profiles,
             set_tunnel_ports,
             list_connections,
             list_history,

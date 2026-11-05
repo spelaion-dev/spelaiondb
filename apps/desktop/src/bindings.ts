@@ -222,6 +222,8 @@ export const commands = {
 	setUserVars: (values: { [key in string]: string }) => typedError<null, string>(__TAURI_INVOKE("set_user_vars", { values })),
 	/**  The personal range of local ports for SSH tunnels (`[tunnels]` in `user.toml`), if set. */
 	tunnelPorts: () => typedError<TunnelPortsItem | null, string>(__TAURI_INVOKE("tunnel_ports")),
+	/**  Every tunnel file as a network profile (ADR-027), for Settings → Network. */
+	networkProfiles: () => typedError<NetworkProfileItem_Serialize[], string>(__TAURI_INVOKE("network_profiles")),
 	/**
 	 *  Sets (or clears, with null) the personal range of local ports for SSH tunnels. It applies
 	 *  to tunnels opened from then on.
@@ -857,6 +859,42 @@ export type KubernetesDraftItem = {
 export type NameFilterItem = {
 	include: string[],
 	exclude: string[],
+};
+
+/**
+ *  A tunnel file shown as a network profile (ADR-027), for Settings → Network. Only what the
+ *  file says: nothing is resolved, so a repository's profiles can be listed before trusting it.
+ */
+export type NetworkProfileItem = NetworkProfileItem_Serialize | NetworkProfileItem_Deserialize;
+
+/**
+ *  A tunnel file shown as a network profile (ADR-027), for Settings → Network. Only what the
+ *  file says: nothing is resolved, so a repository's profiles can be listed before trusting it.
+ */
+export type NetworkProfileItem_Deserialize = {
+	name: string,
+	personal: boolean,
+	/**  `socks5 host:port` or `http host:port`. */
+	proxy?: string | null,
+	/**  `user@host:port` per hop, in order. */
+	hops: string[],
+	/**  Display names of the connections that use it. */
+	usedBy: string[],
+};
+
+/**
+ *  A tunnel file shown as a network profile (ADR-027), for Settings → Network. Only what the
+ *  file says: nothing is resolved, so a repository's profiles can be listed before trusting it.
+ */
+export type NetworkProfileItem_Serialize = {
+	name: string,
+	personal: boolean,
+	/**  `socks5 host:port` or `http host:port`. */
+	proxy: string | null,
+	/**  `user@host:port` per hop, in order. */
+	hops: string[],
+	/**  Display names of the connections that use it. */
+	usedBy: string[],
 };
 
 /**  What can be added on the columns chosen in the explorer (see `spelaion_core::NewIndexKind`). */

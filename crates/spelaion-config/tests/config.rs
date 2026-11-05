@@ -2070,7 +2070,14 @@ fn tunnels_in_use_cannot_be_deleted() {
     backend
         .keychain_set(&repo_hop(&fx, "prod", 1), "old")
         .unwrap();
+    // A personal tunnel of the same name is not the one the repository connection uses.
+    fx.write("user/tunnels/prod.toml", HAND_WRITTEN_TUNNEL);
     let config = load(Some(&fx.repo()), &fx.user());
+    assert_eq!(
+        spelaion_config::tunnel_users(&config, Source::Workspace, "prod"),
+        vec!["Orders".to_string()]
+    );
+    assert!(spelaion_config::tunnel_users(&config, Source::User, "prod").is_empty());
     let err = delete_tunnel(&config, Source::Workspace, "prod", &backend).unwrap_err();
     assert!(err.to_string().contains("Orders"), "{err}");
     assert!(path.exists());

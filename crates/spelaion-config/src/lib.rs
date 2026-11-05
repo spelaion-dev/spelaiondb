@@ -63,7 +63,7 @@ pub use trust::{
 };
 pub use tunnel_draft::{
     HopDraft, ProxyDraft, TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, TunnelPasswords,
-    add_tunnel, delete_tunnel, tunnel_revision, tunnels_dir, update_tunnel,
+    add_tunnel, delete_tunnel, tunnel_revision, tunnel_users, tunnels_dir, update_tunnel,
     update_tunnel_at_revision,
 };
 

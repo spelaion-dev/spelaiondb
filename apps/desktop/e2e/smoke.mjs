@@ -2064,7 +2064,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("Client key (PEM)", { exact: true }).waitFor();
   await wizard.getByRole("tab", { name: "SSH" }).click();
   // The demo defines one tunnel; leaving the box unchecked connects directly.
-  assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), false);
+  assert.equal(await wizard.getByRole("checkbox", { name: "Connect through a network profile (SSH tunnel or proxy)" }).isChecked(), false);
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByLabel("Folder", { exact: true }).fill("Wizard");
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
@@ -2129,10 +2129,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("tab", { name: "SSH" }).click();
-  await wizard.getByRole("button", { name: "New tunnel…" }).click();
-  const editor = page.getByRole("dialog", { name: "New SSH tunnel" });
+  await wizard.getByRole("button", { name: "New profile…" }).click();
+  const editor = page.getByRole("dialog", { name: "New network profile" });
   const key = join(root, "testing", "docker", "keys", "id_ed25519");
-  await editor.getByLabel("Tunnel name").fill("Wizard bastions");
+  await editor.getByLabel("Profile name").fill("Wizard bastions");
   await editor.getByRole("radio", { name: "Personal", exact: true }).check();
   await editor.getByLabel("Hop 1 Host").fill("127.0.0.1");
   await editor.getByLabel("Hop 1 Port").fill("2221");
@@ -2148,7 +2148,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await editor.getByLabel("Keep-alive every (seconds)").fill("30");
   await editor.getByLabel("Give up after (unanswered)").fill("5");
   await editor.getByLabel("Connect timeout (seconds)").fill("20");
-  await editor.getByRole("button", { name: "Test tunnel" }).click();
+  await editor.getByRole("button", { name: "Test profile" }).click();
   // The bastions' fingerprints may already be known from the earlier step; accept any new one.
   await Promise.race([
     editor.locator(".test-result", { hasText: "Tunnel OK · 2 hops" }).waitFor(),
@@ -2162,8 +2162,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await shot("14a-tunnel-editor");
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await editor.waitFor({ state: "detached" });
-  assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), true);
-  assert.equal(await wizard.getByLabel("SSH tunnel", { exact: true }).inputValue(), "wizard-bastions");
+  assert.equal(await wizard.getByRole("checkbox", { name: "Connect through a network profile (SSH tunnel or proxy)" }).isChecked(), true);
+  assert.equal(await wizard.getByLabel("Network profile", { exact: true }).inputValue(), "wizard-bastions");
   // A fixed local port: testing the connection goes through it.
   const localPort = await freePort();
   await wizard.getByLabel("Local port", { exact: true }).fill(String(localPort));
@@ -2205,14 +2205,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await (await connectionMenu("PG through wizard tunnel")).getByRole("button", { name: "Edit…" }).click();
   wizard = page.locator(".modal.wizard").first();
   await wizard.getByRole("tab", { name: "SSH" }).click();
-  await wizard.getByRole("button", { name: "Edit tunnel…" }).click();
-  const editTunnel = page.getByRole("dialog", { name: "Edit tunnel wizard-bastions" });
-  assert.ok(await editTunnel.getByLabel("Tunnel name").isDisabled());
+  await wizard.getByRole("button", { name: "Edit profile…" }).click();
+  const editTunnel = page.getByRole("dialog", { name: "Edit network profile wizard-bastions" });
+  assert.ok(await editTunnel.getByLabel("Profile name").isDisabled());
   assert.equal(await editTunnel.getByLabel("Hop 2 Host").inputValue(), "bastion2");
   assert.equal(await editTunnel.getByLabel("Keep-alive every (seconds)").inputValue(), "30");
   assert.equal(await editTunnel.getByLabel("Give up after (unanswered)").inputValue(), "5");
   assert.equal(await editTunnel.getByLabel("Connect timeout (seconds)").inputValue(), "20");
-  await editTunnel.getByRole("button", { name: "Delete tunnel" }).click();
+  await editTunnel.getByRole("button", { name: "Delete profile" }).click();
   await editTunnel.getByRole("button", { name: "Click again to delete" }).click();
   await editTunnel.locator(".test-result", { hasText: "PG through wizard tunnel" }).waitFor();
   await editTunnel.getByRole("button", { name: "Cancel" }).click();
@@ -2242,9 +2242,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("tab", { name: "SSH" }).click();
-  await wizard.getByRole("button", { name: "New tunnel…" }).click();
-  const proxyEditor = page.getByRole("dialog", { name: "New SSH tunnel" });
-  await proxyEditor.getByLabel("Tunnel name").fill("Corp proxy");
+  await wizard.getByRole("button", { name: "New profile…" }).click();
+  const proxyEditor = page.getByRole("dialog", { name: "New network profile" });
+  await proxyEditor.getByLabel("Profile name").fill("Corp proxy");
   await proxyEditor.getByRole("radio", { name: "Personal", exact: true }).check();
   await proxyEditor.getByRole("checkbox", { name: "Go through a SOCKS5 or HTTP proxy" }).check();
   await proxyEditor.getByLabel("Proxy host").fill("127.0.0.1");
@@ -2255,7 +2255,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await proxyEditor.getByRole("checkbox", { name: "Save the proxy password in the keychain" }).uncheck();
   // With a proxy, the only hop can go: the proxy alone reaches the database.
   await proxyEditor.getByRole("button", { name: "Remove Hop 1" }).click();
-  await proxyEditor.getByRole("button", { name: "Test tunnel" }).click();
+  await proxyEditor.getByRole("button", { name: "Test profile" }).click();
   await proxyEditor.locator(".test-result", { hasText: "Proxy OK" }).waitFor();
   await shot("14c-proxy-tunnel");
   await proxyEditor.getByRole("button", { name: "Save", exact: true }).click();
@@ -2277,6 +2277,35 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await answerProxyPassword();
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
+  step("Settings → Network: network profiles listed, created, edited and deleted there");
+  await withSettings("network", async (settings) => {
+    const corp = settings.getByRole("listitem", { name: "corp-proxy" });
+    await corp.waitFor();
+    assert.match(await corp.innerText(), /socks5 127\.0\.0\.1:11080/);
+    assert.match(await corp.innerText(), /Used by: PG through proxy/);
+    assert.match(await settings.getByRole("listitem", { name: "wizard-bastions" }).innerText(), /spelaion@127\.0\.0\.1:2221 → spelaion@bastion2:22/);
+    await shot("15b-network-profiles");
+    await settings.getByRole("button", { name: "New network profile…" }).click();
+    const spare = page.getByRole("dialog", { name: "New network profile" });
+    await spare.getByLabel("Profile name").fill("Spare route");
+    await spare.getByRole("radio", { name: "Personal", exact: true }).check();
+    await spare.getByLabel("Hop 1 Host").fill("spare.example");
+    await spare.getByLabel("Hop 1 User").fill("ops");
+    await spare.getByRole("button", { name: "Save", exact: true }).click();
+    await spare.waitFor({ state: "detached" });
+    const row = settings.getByRole("listitem", { name: "spare-route" });
+    await row.waitFor();
+    assert.match(await row.innerText(), /Not used by any connection/);
+    await row.getByRole("button", { name: "Edit…" }).click();
+    const editSpare = page.getByRole("dialog", { name: "Edit network profile spare-route" });
+    assert.equal(await editSpare.getByLabel("Hop 1 Host").inputValue(), "spare.example");
+    await editSpare.getByRole("button", { name: "Delete profile" }).click();
+    await editSpare.getByRole("button", { name: "Click again to delete" }).click();
+    await editSpare.waitFor({ state: "detached" });
+    await row.waitFor({ state: "detached" });
+  });
+  assert.ok(!existsSync(join(userDir, "tunnels", "spare-route.toml")));
+
   step("SQLite on a server: the server's sqlite3 through two hops, nothing copied");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard").first();
@@ -2286,9 +2315,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("tab", { name: "SSH" }).click();
-  await wizard.getByRole("button", { name: "New tunnel…" }).click();
-  const serverTunnel = page.getByRole("dialog", { name: "New SSH tunnel" });
-  await serverTunnel.getByLabel("Tunnel name").fill("File server");
+  await wizard.getByRole("button", { name: "New profile…" }).click();
+  const serverTunnel = page.getByRole("dialog", { name: "New network profile" });
+  await serverTunnel.getByLabel("Profile name").fill("File server");
   await serverTunnel.getByRole("radio", { name: "Personal", exact: true }).check();
   await serverTunnel.getByLabel("Hop 1 Host").fill("127.0.0.1");
   await serverTunnel.getByLabel("Hop 1 Port").fill("2221");
@@ -2300,7 +2329,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await serverTunnel.getByLabel("Hop 2 User").fill("spelaion");
   await serverTunnel.getByLabel("Hop 2 Authentication").selectOption("key");
   await serverTunnel.getByLabel("Hop 2 Private key file").fill(key);
-  await serverTunnel.getByRole("button", { name: "Test tunnel" }).click();
+  await serverTunnel.getByRole("button", { name: "Test profile" }).click();
   // bastion1 is known from earlier steps; the file server is new.
   await Promise.race([
     serverTunnel.locator(".test-result", { hasText: "Tunnel OK · 2 hops" }).waitFor(),
@@ -2367,7 +2396,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await shot("14b-kubernetes-tab");
     // The SSH tunnel and Kubernetes exclude each other.
     await wizard.getByRole("tab", { name: "SSH" }).click();
-    assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), false);
+    assert.equal(await wizard.getByRole("checkbox", { name: "Connect through a network profile (SSH tunnel or proxy)" }).isChecked(), false);
     await wizard.getByRole("button", { name: "Test connection" }).click();
     await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
     await wizard.getByRole("button", { name: "Save", exact: true }).click();
