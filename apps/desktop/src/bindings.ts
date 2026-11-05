@@ -133,6 +133,11 @@ export const commands = {
 	 */
 	createSql: (session: string, kind: CreateKindItem, schema: string) => typedError<string, string>(__TAURI_INVOKE("create_sql", { session, kind, schema })),
 	/**
+	 *  An index or constraint on the columns chosen in the explorer, in their order, written by
+	 *  the core, to finish in a new tab: nothing runs (ADR-026).
+	 */
+	newIndexSql: (session: string, schema: string, table: string, columns: string[], kind: NewIndexKindItem) => typedError<string, string>(__TAURI_INVOKE("new_index_sql", { session, schema, table, columns, kind })),
+	/**
 	 *  The statements the core would run for the pending changes of a table data tab, to show
 	 *  before applying them (production asks for confirmation).
 	 */
@@ -796,12 +801,16 @@ export type NameFilterItem = {
 	exclude: string[],
 };
 
+/**  What can be added on the columns chosen in the explorer (see `spelaion_core::NewIndexKind`). */
+export type NewIndexKindItem = "index" | "uniqueIndex" | "uniqueConstraint" | "primaryKey";
+
 /**  What the explorer may offer on a session's engine (ADR-026). */
 export type ObjectActionsItem = {
 	renameViews: boolean,
 	dropSchemas: boolean,
 	dropConstraints: boolean,
 	create: CreateKindItem[],
+	newIndex: NewIndexKindItem[],
 };
 
 /**  What to do with an object of the explorer. */

@@ -214,6 +214,40 @@ pub struct ObjectActionsItem {
     pub drop_schemas: bool,
     pub drop_constraints: bool,
     pub create: Vec<CreateKindItem>,
+    pub new_index: Vec<NewIndexKindItem>,
+}
+
+/// What can be added on the columns chosen in the explorer (see `spelaion_core::NewIndexKind`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum NewIndexKindItem {
+    Index,
+    UniqueIndex,
+    UniqueConstraint,
+    PrimaryKey,
+}
+
+impl From<spelaion_core::NewIndexKind> for NewIndexKindItem {
+    fn from(kind: spelaion_core::NewIndexKind) -> Self {
+        use spelaion_core::NewIndexKind;
+        match kind {
+            NewIndexKind::Index => Self::Index,
+            NewIndexKind::UniqueIndex => Self::UniqueIndex,
+            NewIndexKind::UniqueConstraint => Self::UniqueConstraint,
+            NewIndexKind::PrimaryKey => Self::PrimaryKey,
+        }
+    }
+}
+
+impl From<NewIndexKindItem> for spelaion_core::NewIndexKind {
+    fn from(kind: NewIndexKindItem) -> Self {
+        match kind {
+            NewIndexKindItem::Index => Self::Index,
+            NewIndexKindItem::UniqueIndex => Self::UniqueIndex,
+            NewIndexKindItem::UniqueConstraint => Self::UniqueConstraint,
+            NewIndexKindItem::PrimaryKey => Self::PrimaryKey,
+        }
+    }
 }
 
 /// What "Create" in the explorer can start (see `spelaion_core::CreateKind`).
@@ -259,12 +293,14 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             drop_schemas,
             drop_constraints,
             create,
+            new_index,
         } = actions;
         Self {
             rename_views,
             drop_schemas,
             drop_constraints,
             create: create.into_iter().map(CreateKindItem::from).collect(),
+            new_index: new_index.into_iter().map(NewIndexKindItem::from).collect(),
         }
     }
 }

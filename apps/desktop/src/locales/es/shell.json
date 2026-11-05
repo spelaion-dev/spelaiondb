@@ -236,5 +236,11 @@
     "materializedView": "Nueva vista materializada",
     "sequence": "Nueva secuencia",
     "schema": "Nuevo esquema"
+  },
+  "newIndex": {
+    "index": "Nuevo índice sobre ({{columns}})",
+    "uniqueIndex": "Nuevo índice único sobre ({{columns}})",
+    "uniqueConstraint": "Nueva constraint única sobre ({{columns}})",
+    "primaryKey": "Nueva clave primaria sobre ({{columns}})"
   }
 }

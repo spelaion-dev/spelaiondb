@@ -28,6 +28,7 @@ import {
   type ExplorerPreferencesItem,
   type ExplorerFilterItem,
   type NameFilterItem,
+  type NewIndexKindItem,
   type FilterKindItem,
   type FilterActionItem,
   type SchemaObjectItem_Serialize,
@@ -77,7 +78,7 @@ export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
 export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
-export type { CreateKindItem, FilterActionItem, FilterKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };
+export type { CreateKindItem, FilterActionItem, FilterKindItem, NewIndexKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };
 export type SchemaObjectItem = SchemaObjectItem_Serialize;
 export type ServerObjectItem = ServerObjectItem_Serialize;
 export type { SchemaObjectKindItem, ServerObjectKindItem };

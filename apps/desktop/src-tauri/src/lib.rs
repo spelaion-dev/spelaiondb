@@ -2300,6 +2300,29 @@ async fn create_sql(
     ))
 }
 
+/// An index or constraint on the columns chosen in the explorer, in their order, written by
+/// the core, to finish in a new tab: nothing runs (ADR-026).
+#[tauri::command]
+#[specta::specta]
+async fn new_index_sql(
+    session: String,
+    schema: String,
+    table: String,
+    columns: Vec<String>,
+    kind: NewIndexKindItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    spelaion_core::new_index_sql(
+        open.session.dialect().as_ref(),
+        &schema,
+        &table,
+        &columns,
+        kind.into(),
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 /// was shown. The core writes the statements again from the change, and refuses read-only
 /// connections (ADR-026). Returns how many statements ran.
@@ -2508,6 +2531,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             preview_object_change,
             apply_object_change,
             create_sql,
+            new_index_sql,
             preview_table_edits,
             apply_table_edits,
             save_snippet,

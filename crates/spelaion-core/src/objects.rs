@@ -1,6 +1,7 @@
 //! What the explorer does with an object besides reading it (ADR-026): its name as the engine
 //! writes it, for the clipboard, the statements that rename or drop it, and those that create a
-//! new one (opened in the editor, never run from here). Statements are written
+//! new one or an index on chosen columns (opened in the editor, never run from here). Statements
+//! are written
 //! here with each engine's syntax and quoting; the UI only says what to change, and a change
 //! runs only once the user has seen its SQL and confirmed it.
 
@@ -83,6 +84,8 @@ pub enum ObjectError {
     Unsupported(String),
     #[error("write the new name")]
     NoName,
+    #[error("choose one column or more")]
+    NoColumns,
     #[error("the new name is the one it already has")]
     SameName,
     #[error("the connection is read-only: its objects cannot be changed")]
@@ -110,6 +113,15 @@ pub enum CreateKind {
     Schema,
 }
 
+/// What can be added on the columns chosen in the explorer: the statement opens in a new tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewIndexKind {
+    Index,
+    UniqueIndex,
+    UniqueConstraint,
+    PrimaryKey,
+}
+
 /// What the explorer may offer on this engine; the UI shows only these.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectActions {
@@ -122,6 +134,9 @@ pub struct ObjectActions {
     pub drop_constraints: bool,
     /// What "Create" offers, in menu order.
     pub create: Vec<CreateKind>,
+    /// What can be added on chosen columns: SQLite and DuckDB add constraints only when the
+    /// table is created, so they get indexes.
+    pub new_index: Vec<NewIndexKind>,
 }
 
 pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
@@ -149,7 +164,80 @@ pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
         drop_schemas: engine != "sqlite",
         drop_constraints: !matches!(engine, "sqlite" | "duckdb"),
         create,
+        new_index: if matches!(engine, "sqlite" | "duckdb") {
+            vec![NewIndexKind::Index, NewIndexKind::UniqueIndex]
+        } else {
+            vec![
+                NewIndexKind::Index,
+                NewIndexKind::UniqueIndex,
+                NewIndexKind::UniqueConstraint,
+                NewIndexKind::PrimaryKey,
+            ]
+        },
     }
+}
+
+/// An index or constraint on `columns` of a table, in that order, named after them
+/// (`orders_customer_id_idx`, `_key`, `_pkey`), to finish in the editor.
+pub fn new_index_sql(
+    dialect: &dyn Dialect,
+    schema: &str,
+    table: &str,
+    columns: &[String],
+    kind: NewIndexKind,
+) -> Result<String, ObjectError> {
+    if columns.is_empty() {
+        return Err(ObjectError::NoColumns);
+    }
+    let engine = dialect.name();
+    let quote = |name: &str| dialect.quote_identifier(name);
+    let suffix = match kind {
+        NewIndexKind::Index => "idx",
+        NewIndexKind::UniqueIndex | NewIndexKind::UniqueConstraint => "key",
+        NewIndexKind::PrimaryKey => "pkey",
+    };
+    let name = match kind {
+        NewIndexKind::PrimaryKey => format!("{table}_{suffix}"),
+        _ => format!("{table}_{}_{suffix}", columns.join("_")),
+    };
+    let list = columns
+        .iter()
+        .map(|c| quote(c))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let target = qualified_name(dialect, schema, &[table.to_string()]);
+    Ok(match kind {
+        NewIndexKind::Index | NewIndexKind::UniqueIndex => {
+            let unique = if kind == NewIndexKind::UniqueIndex {
+                "UNIQUE "
+            } else {
+                ""
+            };
+            // SQLite names the index's schema, never the table's.
+            let (index, on) = if engine == "sqlite" {
+                (qualified_name(dialect, schema, &[name]), quote(table))
+            } else {
+                (quote(&name), target)
+            };
+            format!("CREATE {unique}INDEX {index} ON {on} ({list});\n")
+        }
+        NewIndexKind::UniqueConstraint => {
+            format!(
+                "ALTER TABLE {target} ADD CONSTRAINT {} UNIQUE ({list});\n",
+                quote(&name)
+            )
+        }
+        // MySQL and MariaDB call every primary key PRIMARY: a name would be ignored.
+        NewIndexKind::PrimaryKey if engine == "mysql" => {
+            format!("ALTER TABLE {target} ADD PRIMARY KEY ({list});\n")
+        }
+        NewIndexKind::PrimaryKey => {
+            format!(
+                "ALTER TABLE {target} ADD CONSTRAINT {} PRIMARY KEY ({list});\n",
+                quote(&name)
+            )
+        }
+    })
 }
 
 /// The statement that starts a new object, to finish in the editor: a placeholder name, and
@@ -972,6 +1060,68 @@ mod tests {
             !object_actions(&DuckdbDialect)
                 .create
                 .contains(&CreateKind::MaterializedView)
+        );
+    }
+
+    #[test]
+    fn indexes_and_constraints_on_chosen_columns() {
+        let cols = names(&["customer_id", "created"]);
+        assert_eq!(
+            new_index_sql(&PostgresDialect, "s", "orders", &cols, NewIndexKind::Index).unwrap(),
+            "CREATE INDEX orders_customer_id_created_idx ON s.orders (customer_id, created);\n"
+        );
+        assert_eq!(
+            new_index_sql(
+                &MysqlDialect,
+                "shop",
+                "orders",
+                &cols,
+                NewIndexKind::UniqueConstraint
+            )
+            .unwrap(),
+            "ALTER TABLE `shop`.`orders` ADD CONSTRAINT `orders_customer_id_created_key` UNIQUE (`customer_id`, `created`);\n"
+        );
+        assert_eq!(
+            new_index_sql(
+                &MysqlDialect,
+                "shop",
+                "orders",
+                &names(&["id"]),
+                NewIndexKind::PrimaryKey
+            )
+            .unwrap(),
+            "ALTER TABLE `shop`.`orders` ADD PRIMARY KEY (`id`);\n"
+        );
+        assert_eq!(
+            new_index_sql(
+                &SqlServerDialect,
+                "dbo",
+                "orders",
+                &names(&["id"]),
+                NewIndexKind::PrimaryKey
+            )
+            .unwrap(),
+            "ALTER TABLE dbo.orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id);\n"
+        );
+        // SQLite puts the schema on the index, never on its table.
+        assert_eq!(
+            new_index_sql(
+                &SqliteDialect,
+                "other",
+                "t",
+                &names(&["a"]),
+                NewIndexKind::UniqueIndex
+            )
+            .unwrap(),
+            "CREATE UNIQUE INDEX other.t_a_key ON t (a);\n"
+        );
+        assert_eq!(
+            new_index_sql(&PostgresDialect, "s", "t", &[], NewIndexKind::Index),
+            Err(ObjectError::NoColumns)
+        );
+        assert_eq!(
+            object_actions(&SqliteDialect).new_index,
+            [NewIndexKind::Index, NewIndexKind::UniqueIndex]
         );
     }
 }

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    CoreEvent, CreateKind, ObjectChange, ObjectError, ObjectTarget, ResultStore, Session,
-    apply_change, create_sql, object_actions,
+    CoreEvent, CreateKind, NewIndexKind, ObjectChange, ObjectError, ObjectTarget, ResultStore,
+    Session, apply_change, create_sql, new_index_sql, object_actions,
 };
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, ObjectKind, SchemaObject, SchemaObjectKind, Secret,
@@ -675,5 +675,65 @@ async fn what_create_starts_runs_on_each_engine() {
             assert!(found, "{label}: {sql}");
             run(label, &session, &[cleanup], false).await;
         }
+    }
+}
+
+#[tokio::test]
+async fn indexes_and_constraints_on_chosen_columns_run_on_each_engine() {
+    for (label, session, schema) in engines().await {
+        let dialect = session.dialect().clone();
+        for kind in object_actions(dialect.as_ref()).new_index {
+            run(label, &session, &["DROP TABLE oa_index_t"], true).await;
+            run(
+                label,
+                &session,
+                &["CREATE TABLE oa_index_t (id INT NOT NULL, a INT, b INT)"],
+                false,
+            )
+            .await;
+            let columns: Vec<String> = match kind {
+                NewIndexKind::PrimaryKey => vec!["id".into()],
+                _ => vec!["b".into(), "a".into()],
+            };
+            let sql =
+                new_index_sql(dialect.as_ref(), schema, "oa_index_t", &columns, kind).unwrap();
+            run(
+                label,
+                &session,
+                &[sql.trim_end().trim_end_matches(';')],
+                false,
+            )
+            .await;
+            let info = session
+                .connection()
+                .describe_table(schema, "oa_index_t")
+                .await
+                .unwrap();
+            match kind {
+                NewIndexKind::Index | NewIndexKind::UniqueIndex => {
+                    let name = format!(
+                        "oa_index_t_b_a_{}",
+                        if kind == NewIndexKind::Index {
+                            "idx"
+                        } else {
+                            "key"
+                        }
+                    );
+                    let index = info.indexes.iter().find(|i| i.name == name);
+                    let index =
+                        index.unwrap_or_else(|| panic!("{label}: {name} in {:?}", info.indexes));
+                    assert_eq!(index.unique, kind == NewIndexKind::UniqueIndex, "{label}");
+                }
+                NewIndexKind::UniqueConstraint => assert!(
+                    info.constraints
+                        .iter()
+                        .any(|c| c.kind == ConstraintKind::Unique && c.columns == columns),
+                    "{label}: {:?}",
+                    info.constraints
+                ),
+                NewIndexKind::PrimaryKey => assert_eq!(info.primary_key, columns, "{label}"),
+            }
+        }
+        run(label, &session, &["DROP TABLE oa_index_t"], true).await;
     }
 }
