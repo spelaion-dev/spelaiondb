@@ -1,4 +1,32 @@
 {
+  "$defs": {
+    "TunnelPreferences": {
+      "additionalProperties": false,
+      "description": "Personal settings of every SSH tunnel on this computer.",
+      "properties": {
+        "port_max": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "port_min": {
+          "description": "Local ports for tunnels are taken from `port_min` to `port_max` (both included), for\na firewall that only allows some; any free port when absent. Both or neither.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Personal configuration: `<user config>/spelaiondb/user.toml`. Never goes to git.",
@@ -8,6 +36,9 @@
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
+    },
+    "tunnels": {
+      "$ref": "#/$defs/TunnelPreferences"
     },
     "vars": {
       "additionalProperties": {

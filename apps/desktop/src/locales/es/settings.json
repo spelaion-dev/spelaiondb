@@ -38,6 +38,16 @@
     "audit": "Este historial es de la app de escritorio. Las consultas de los agentes de IA (spelaiondb mcp) van a un registro de auditoría aparte.",
     "open": "Abrir el historial de consultas"
   },
+  "network": {
+    "title": "Red",
+    "portsIntro": "Los túneles SSH escuchan en un puerto local de este ordenador (127.0.0.1). Por defecto se usa cualquiera libre.",
+    "portMin": "Puerto más bajo",
+    "portMax": "Puerto más alto",
+    "save": "Usar este rango",
+    "clear": "Cualquier puerto libre",
+    "saved": "Guardado. Lo usan los túneles que se abran a partir de ahora.",
+    "portsHint": "Útil cuando un firewall u otra herramienta solo permite algunos puertos. Una conexión con su propio puerto local (en su pestaña SSH) mantiene el suyo."
+  },
   "updates": {
     "title": "Actualizaciones",
     "version": "Versión {{version}}",

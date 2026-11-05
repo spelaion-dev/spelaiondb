@@ -38,6 +38,16 @@
     "audit": "This history belongs to the desktop app. Queries from AI agents (spelaiondb mcp) go to a separate audit log.",
     "open": "Open query history"
   },
+  "network": {
+    "title": "Network",
+    "portsIntro": "SSH tunnels listen on a local port of this computer (127.0.0.1). By default any free one is used.",
+    "portMin": "Lowest port",
+    "portMax": "Highest port",
+    "save": "Use this range",
+    "clear": "Any free port",
+    "saved": "Saved. Tunnels opened from now on use it.",
+    "portsHint": "Useful when a firewall or another tool only allows some ports. A connection with its own local port (in its SSH tab) keeps that one."
+  },
   "updates": {
     "title": "Updates",
     "version": "Version {{version}}",

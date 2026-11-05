@@ -9,8 +9,9 @@
 import { execFileSync, spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { createServer } from "node:net";
 import { createCipheriv } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -23,6 +24,17 @@ const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
 const port = 9333;
 const editSmokeComplete = Symbol("edit smoke complete");
 mkdirSync(shots, { recursive: true });
+
+/** A local port nothing listens on right now. */
+async function freePort() {
+  const server = createServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address();
+  server.close();
+  await once(server, "close");
+  return port;
+}
 
 function startApp() {
   return spawn(exe, [demo], {
@@ -139,7 +151,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, history: 4 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, history: 4, network: 5 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -2127,6 +2139,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await editor.waitFor({ state: "detached" });
   assert.equal(await wizard.getByRole("checkbox", { name: "Connect through an SSH tunnel" }).isChecked(), true);
   assert.equal(await wizard.getByLabel("SSH tunnel", { exact: true }).inputValue(), "wizard-bastions");
+  // A fixed local port: testing the connection goes through it.
+  const localPort = await freePort();
+  await wizard.getByLabel("Local port", { exact: true }).fill(String(localPort));
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
   await wizard.getByRole("button", { name: "Save", exact: true }).click();
@@ -2139,6 +2154,27 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.match(tunnelFile, /keepalive_count = 5/);
   assert.match(tunnelFile, /connect_timeout = 20/);
   assert.doesNotMatch(tunnelFile, /password/);
+  const throughTunnel = readdirSync(join(userDir, "connections"))
+    .filter((name) => name.endsWith(".toml"))
+    .map((name) => readFileSync(join(userDir, "connections", name), "utf8"))
+    .find((text) => text.includes('tunnel = "wizard-bastions"'));
+  assert.match(throughTunnel ?? "", new RegExp(`local_port = ${localPort}\\b`), throughTunnel);
+
+  step("Settings → Network: a range of local ports for tunnels");
+  await withSettings("network", async (settings) => {
+    await settings.getByLabel("Lowest port").fill("20000");
+    await settings.getByLabel("Highest port").fill("20100");
+    await settings.getByRole("button", { name: "Use this range" }).click();
+    await settings.getByRole("status").filter({ hasText: "Saved" }).waitFor();
+  });
+  const userToml = readFileSync(join(userDir, "user.toml"), "utf8");
+  assert.match(userToml, /\[tunnels\]\s*port_min = 20000\s*port_max = 20100/, userToml);
+  await withSettings("network", async (settings) => {
+    assert.equal(await settings.getByLabel("Lowest port").inputValue(), "20000");
+    await settings.getByRole("button", { name: "Any free port" }).click();
+    await settings.getByRole("status").filter({ hasText: "Saved" }).waitFor();
+  });
+  assert.doesNotMatch(readFileSync(join(userDir, "user.toml"), "utf8"), /tunnels/);
 
   // While a connection uses it, the tunnel cannot be deleted.
   await (await connectionMenu("PG through wizard tunnel")).getByRole("button", { name: "Edit…" }).click();

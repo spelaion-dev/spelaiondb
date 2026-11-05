@@ -13,8 +13,8 @@ use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
 use spelaion_ssh::{
-    AuthMethod, HopSpec, Interaction, KnownHosts, RemoteSignals, SshError, Target, Tunnel,
-    TunnelOptions, TunnelSpec, TunnelState,
+    AuthMethod, HopSpec, Interaction, KnownHosts, LocalPort, RemoteSignals, SshError, Target,
+    Tunnel, TunnelOptions, TunnelSpec, TunnelState,
 };
 use tokio::sync::watch;
 
@@ -306,7 +306,12 @@ pub async fn open_connection(
                     host: params.host.clone(),
                     port: params.port,
                 };
-                params.connect_addr = Some(tunnel.forward(target).await?);
+                let port = match resolved.local_port {
+                    spelaion_config::LocalPort::Any => LocalPort::Any,
+                    spelaion_config::LocalPort::Fixed(port) => LocalPort::Fixed(port),
+                    spelaion_config::LocalPort::Range { min, max } => LocalPort::Range { min, max },
+                };
+                params.connect_addr = Some(tunnel.forward_on(target, port).await?);
             }
             Some(ActiveTunnel::Ssh(tunnel))
         }

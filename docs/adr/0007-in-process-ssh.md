@@ -79,6 +79,10 @@ Rules:
   (before, only the first hop's TCP connection and handshake had a limit; a later hop or a
   `command` could wait forever). `connect_timeout` in the tunnel file changes it.
   Authentication is not counted: it may be waiting for a passphrase or a 2FA code.
+- Local ports (2026-11-05): a connection can fix the port its forward listens on
+  (`local_port`, for other tools to use the same tunnel), and the personal `user.toml` can
+  limit tunnels to a range (`[tunnels] port_min`/`port_max`, for firewalls). Forwards are still
+  only on 127.0.0.1. They apply to SSH tunnels; Kubernetes forwards still take any free port.
 
 ## Alternatives
 Delegating to the system `ssh` binary (the VS Code Remote-SSH model).

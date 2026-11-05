@@ -1324,6 +1324,8 @@ pub struct ConnectionDraftItem {
     pub tls_cert: String,
     pub tls_key: String,
     pub tunnel: String,
+    /// Fixed local port of the SSH tunnel; null for a free one.
+    pub local_port: Option<u16>,
     /// Through `kubectl port-forward` instead of a tunnel (ADR-015); `port` is the resource's.
     pub kubernetes: Option<KubernetesDraftItem>,
     /// SQLite on a server (with a tunnel): the program there; empty for `sqlite3`.
@@ -1377,6 +1379,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             tls_cert: item.tls_cert,
             tls_key: item.tls_key,
             tunnel: item.tunnel,
+            local_port: item.local_port,
             kubernetes: item.kubernetes.map(Into::into),
             sqlite3: item.sqlite3,
             read_only: item.read_only,
@@ -1422,6 +1425,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             tls_cert: draft.tls_cert,
             tls_key: draft.tls_key,
             tunnel: draft.tunnel,
+            local_port: draft.local_port,
             kubernetes: draft.kubernetes.map(Into::into),
             sqlite3: draft.sqlite3,
             read_only: draft.read_only,
@@ -1521,6 +1525,14 @@ impl From<spelaion_config::KubernetesDraft> for KubernetesDraftItem {
             kubectl: k.kubectl,
         }
     }
+}
+
+/// The personal range of local ports for SSH tunnels, both ends included.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelPortsItem {
+    pub min: u16,
+    pub max: u16,
 }
 
 /// Result of testing a tunnel from the editor.
