@@ -1090,6 +1090,24 @@ try {
   await columnDialog.waitFor({ state: "detached" });
   const amountColumn = probeColumns.locator(".leaf-row", { hasText: "amount" });
   await amountColumn.waitFor();
+  // Ctrl+click chooses columns; a new index takes them in that order (opened, not run).
+  const idColumn = probeColumns.locator(".leaf-row", { hasText: /^id/ });
+  await amountColumn.click({ modifiers: ["Control"] });
+  await idColumn.click({ modifiers: ["Control"] });
+  assert.equal(await idColumn.getAttribute("aria-selected"), "true");
+  await idColumn.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New index on (amount, id)" }).click();
+  await panel.locator(".cm-content", { hasText: "CREATE INDEX" }).waitFor();
+  assert.equal(
+    (await panel.locator(".cm-content").innerText()).trimEnd(),
+    "CREATE INDEX renamed_probe_amount_id_idx ON renamed_probe (amount, id);",
+  );
+  // SQLite adds constraints only when it creates a table.
+  await idColumn.click({ button: "right" });
+  assert.equal(await page.getByRole("menuitem", { name: /^New unique constraint/ }).count(), 0);
+  await page.keyboard.press("Escape");
+  await idColumn.click();
+  assert.equal(await idColumn.getAttribute("aria-selected"), "false");
   // Drop: the core's SQL first, without "Cascade" on SQLite, which has none.
   await amountColumn.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Drop…" }).click();

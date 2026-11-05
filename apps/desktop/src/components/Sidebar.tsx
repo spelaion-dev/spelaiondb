@@ -13,6 +13,7 @@ import {
   type FilterKindItem,
   type IndexDetails,
   type NameFilter,
+  type NewIndexKindItem,
   type ObjectActionsItem,
   type ObjectItem,
   type ObjectPathItem,
@@ -1401,6 +1402,10 @@ function ObjectNode({
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
   const actions = useObjectActions(session);
+  /** Columns chosen with Ctrl+click, in the order chosen: a new index takes them so. */
+  const [chosenColumns, setChosenColumns] = useState<string[]>([]);
+  const chooseColumn = (name: string, add: boolean) =>
+    setChosenColumns((list) => (!add ? [] : list.includes(name) ? list.filter((n) => n !== name) : [...list, name]));
 
   async function loadDetails() {
     setDetails(
@@ -1710,6 +1715,9 @@ function ObjectNode({
                 table={object.name}
                 onTableChanged={refresh}
                 column={c}
+                chosenColumns={chosenColumns}
+                onChoose={(add) => chooseColumn(c.name, add)}
+                hasPrimaryKey={details.primaryKey.length > 0}
                 primary={details.primaryKey.includes(c.name)}
                 onFilterName={onFilterName}
               />
@@ -1787,6 +1795,9 @@ function ColumnRow({
   table,
   onTableChanged,
   column,
+  chosenColumns,
+  onChoose,
+  hasPrimaryKey,
   primary,
   onFilterName,
 }: {
@@ -1797,6 +1808,11 @@ function ColumnRow({
   /** After a column was renamed or dropped: the table reads its columns again. */
   onTableChanged(): void;
   column: TableDetails["columns"][number];
+  /** The table's columns chosen with Ctrl+click, in order. */
+  chosenColumns: string[];
+  /** Ctrl+click adds or removes this column; a plain click forgets the choice. */
+  onChoose(add: boolean): void;
+  hasPrimaryKey: boolean;
   primary: boolean;
   onFilterName: FilterName;
 }) {
@@ -1805,11 +1821,26 @@ function ColumnRow({
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
+  const actions = useObjectActions(session);
   const paths = [{ schema, names: [table, column.name] }];
+  const chosen = chosenColumns.includes(column.name);
+  /** What a new index takes: the chosen columns if this is one of them, else this one. */
+  const indexColumns = chosen ? chosenColumns : [column.name];
+  async function openNewIndex(kind: NewIndexKindItem) {
+    setMenu(null);
+    setError(null);
+    try {
+      openSqlTab(connectionId, session, schema, await call(commands.newIndexSql(session, schema, table, indexColumns, kind)));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
   return (
     <div className="node">
       <div
-        className="row leaf-row"
+        className={`row leaf-row${chosen ? " selected" : ""}`}
+        aria-selected={chosen}
+        onClick={(e) => onChoose(e.ctrlKey || e.metaKey)}
         title={column.comment ?? ""}
         tabIndex={0}
         onKeyDown={(e) => {
@@ -1851,6 +1882,14 @@ function ColumnRow({
             }}
           />
           <FilterMenuItems kind="columns" names={[column.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
+          {actions && actions.newIndex.length > 0 && <hr />}
+          {actions?.newIndex
+            .filter((kind) => kind !== "primaryKey" || !hasPrimaryKey)
+            .map((kind) => (
+              <button key={kind} role="menuitem" onClick={() => void openNewIndex(kind)}>
+                {t(`newIndex.${kind}`, { columns: indexColumns.join(", ") })}
+              </button>
+            ))}
         </div>
       )}
       {renaming && (
