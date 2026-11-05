@@ -35,7 +35,11 @@ ADR-019's writes. What changes per engine is the second layer:
   barrier and the names only give a clearer message.
 - **Writes keep to an allow list** (`write.rs`), on every engine: `INSERT`, `UPDATE`,
   `DELETE`, `MERGE`, `COMMENT`, and `CREATE`/`ALTER` of tables, views, indexes, schemas and
-  sequences. Procedures (`CALL`, `EXEC`), permissions (`GRANT`, users and roles), settings
+  sequences. Since 0.5 (issue #7), `CREATE OR REPLACE` of a table, schema or materialized view
+  is refused, and `ALTER TABLE` may only add columns or constraints and rename: an agent cannot
+  drop a column, change its type or drop a partition. MySQL and MariaDB executable comments
+  (`/*! … */`, `/*M! … */`) are refused before anything is parsed: the server runs what the
+  parser reads as a comment. Procedures (`CALL`, `EXEC`), permissions (`GRANT`, users and roles), settings
   (`SET`), secrets, routines and triggers are refused, as are ADR-019's destructive
   statements, transaction control and other files.
 - **DuckDB opens a file in one mode per process** (ADR-016): where agents may write, the

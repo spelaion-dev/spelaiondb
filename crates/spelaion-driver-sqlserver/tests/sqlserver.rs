@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, Secret, TlsMode, Value,
+    ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
+    LogicalType, ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
 };
 use spelaion_driver_sqlserver::SqlServerDriver;
 
@@ -564,7 +564,7 @@ async fn introspection_describes_tables() {
          drop table if exists zoo.orders;
          drop table if exists zoo.customer;
          if schema_id('zoo') is null exec('create schema zoo');
-         create table zoo.customer (id int primary key, name nvarchar(80) not null default N'x');
+         create table zoo.customer (id int constraint customer_pk primary key, name nvarchar(80) not null default N'x' constraint customer_name unique, constraint customer_id_positive check (id > 0));
          create table zoo.orders (id int, line int, customer_id int references zoo.customer (id),
                                   total decimal(12, 2), note varchar(max), primary key (id, line));
          create index orders_total on zoo.orders (total desc);
@@ -589,6 +589,30 @@ async fn introspection_describes_tables() {
             ("big_orders", ObjectKind::View),
             ("customer", ObjectKind::Table),
             ("orders", ObjectKind::Table)
+        ]
+    );
+    let customer = conn.describe_table("zoo", "customer").await.unwrap();
+    assert_eq!(
+        constraints(&customer),
+        [
+            (
+                Some("customer_pk"),
+                ConstraintKind::PrimaryKey,
+                vec!["id"],
+                "PRIMARY KEY ([id])"
+            ),
+            (
+                Some("customer_name"),
+                ConstraintKind::Unique,
+                vec!["name"],
+                "UNIQUE ([name])"
+            ),
+            (
+                Some("customer_id_positive"),
+                ConstraintKind::Check,
+                vec![],
+                "CHECK ([id]>(0))"
+            ),
         ]
     );
     let orders = conn.describe_table("zoo", "orders").await.unwrap();
@@ -634,4 +658,426 @@ async fn introspection_describes_tables() {
     assert!(conn.describe_table("zoo", "missing").await.is_err());
     let version = conn.server_version().await.unwrap();
     assert!(version.starts_with("16."), "{version}");
+}
+
+#[tokio::test]
+async fn explorer_lists_routines_sequences_triggers_synonyms_and_types() {
+    let Some(conn) = connect().await else { return };
+    let cleanup = [
+        "drop synonym if exists explorer.syn",
+        "drop table if exists explorer.t",
+        "drop function if exists explorer.add1",
+        "drop function if exists explorer.rows",
+        "drop procedure if exists explorer.noop",
+        "drop sequence if exists explorer.seq1",
+        "drop type if exists explorer.posint",
+        "drop type if exists explorer.pairs",
+    ];
+    for sql in cleanup {
+        run(&*conn, sql).await.unwrap();
+    }
+    for sql in [
+        "if schema_id('explorer') is null exec('create schema explorer')",
+        "create function explorer.add1(@a int) returns int as begin return @a + 1 end",
+        "exec sp_addextendedproperty 'MS_Description', 'adds one', 'SCHEMA', 'explorer', 'FUNCTION', 'add1'",
+        "create function explorer.rows() returns table as return select 1 as x",
+        "create procedure explorer.noop as select 1",
+        "create sequence explorer.seq1 as bigint start with 5 increment by 2",
+        "create table explorer.t (id int)",
+        "create trigger explorer.t_ins on explorer.t after insert as select 1",
+        "create synonym explorer.syn for explorer.t",
+        "create type explorer.posint from int not null",
+        "create type explorer.pairs as table (id int not null, name nvarchar(50))",
+    ] {
+        run(&*conn, sql)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+
+    let objects = conn.list_schema_objects("explorer").await.unwrap();
+    let listed: Vec<_> = objects
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind, o.detail.as_deref()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("add1", SchemaObjectKind::Function, None),
+            ("noop", SchemaObjectKind::Procedure, None),
+            ("pairs", SchemaObjectKind::Type, Some("TABLE")),
+            ("posint", SchemaObjectKind::Type, Some("int")),
+            ("rows", SchemaObjectKind::Function, None),
+            ("seq1", SchemaObjectKind::Sequence, None),
+            ("syn", SchemaObjectKind::Synonym, Some("[explorer].[t]")),
+            ("t_ins", SchemaObjectKind::Trigger, Some("t")),
+        ]
+    );
+    assert_eq!(objects[0].comment.as_deref(), Some("adds one"));
+
+    let definition = |i: usize| conn.object_definition(&objects[i]);
+    assert_eq!(
+        definition(0).await.unwrap(),
+        "create function explorer.add1(@a int) returns int as begin return @a + 1 end;"
+    );
+    assert_eq!(
+        definition(1).await.unwrap(),
+        "create procedure explorer.noop as select 1;"
+    );
+    assert_eq!(
+        definition(2).await.unwrap(),
+        "CREATE TYPE explorer.pairs AS TABLE (\n    id int NOT NULL,\n    name nvarchar(50) NULL\n);"
+    );
+    assert_eq!(
+        definition(3).await.unwrap(),
+        "CREATE TYPE explorer.posint FROM int NOT NULL;"
+    );
+    assert_eq!(
+        definition(5).await.unwrap(),
+        "CREATE SEQUENCE [explorer].[seq1] AS bigint START WITH 5 INCREMENT BY 2 \
+         MINVALUE -9223372036854775808 MAXVALUE 9223372036854775807 NO CYCLE;"
+    );
+    assert_eq!(
+        definition(6).await.unwrap(),
+        "CREATE SYNONYM [explorer].[syn] FOR [explorer].[t];"
+    );
+    assert_eq!(
+        definition(7).await.unwrap(),
+        "create trigger explorer.t_ins on explorer.t after insert as select 1;"
+    );
+    let mut missing = objects[0].clone();
+    missing.name = "nope".into();
+    assert!(conn.object_definition(&missing).await.is_err());
+
+    let server = conn.list_server_objects().await.unwrap();
+    let has = |name: &str, kind| server.iter().any(|o| o.name == name && o.kind == kind);
+    assert!(has("sa", ServerObjectKind::Login), "{server:?}");
+    assert!(has("dbo", ServerObjectKind::User), "{server:?}");
+    // The fixed roles, built-in users and internal logins are marked as system objects.
+    let system = |name: &str| server.iter().find(|o| o.name == name).map(|o| o.system);
+    assert_eq!(system("db_owner"), Some(true), "{server:?}");
+    assert_eq!(system("guest"), Some(true), "{server:?}");
+    assert_eq!(system("dbo"), Some(false), "{server:?}");
+    assert_eq!(system("sa"), Some(false), "{server:?}");
+    assert!(
+        server
+            .iter()
+            .filter(|o| o.name.starts_with("##"))
+            .all(|o| o.system)
+    );
+
+    for sql in cleanup {
+        run(&*conn, sql).await.unwrap();
+    }
+}
+
+/// (name, kind, columns, definition) of each constraint, to compare in one go.
+fn constraints(
+    table: &spelaion_driver_api::TableInfo,
+) -> Vec<(Option<&str>, ConstraintKind, Vec<&str>, &str)> {
+    table
+        .constraints
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_deref(),
+                c.kind,
+                c.columns.iter().map(String::as_str).collect(),
+                c.definition.as_str(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn server_side_filters_keep_what_the_filter_keeps() {
+    let Some(conn) = connect().await else { return };
+    let quote = |name: &str| format!("[{}]", name.replace(']', "]]"));
+    let schema = "like_probe";
+    let drop = || async {
+        for name in TRICKY_NAMES {
+            run(
+                &*conn,
+                &format!("drop table if exists {schema}.{}", quote(name)),
+            )
+            .await
+            .unwrap();
+            run(
+                &*conn,
+                &format!(
+                    "drop sequence if exists {schema}.{}",
+                    quote(&format!("{name}_seq"))
+                ),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    drop().await;
+    run(
+        &*conn,
+        &format!("if schema_id('{schema}') is null exec('create schema {schema}')"),
+    )
+    .await
+    .unwrap();
+    for name in TRICKY_NAMES {
+        run(
+            &*conn,
+            &format!("create table {schema}.{} (id int)", quote(name)),
+        )
+        .await
+        .unwrap();
+        run(
+            &*conn,
+            &format!("create sequence {schema}.{}", quote(&format!("{name}_seq"))),
+        )
+        .await
+        .unwrap();
+    }
+    server_side_keeps_what_rust_keeps(&*conn, schema).await;
+    let got: Vec<String> = conn
+        .list_schemas_matching(&spelaion_driver_api::NameFilter {
+            include: vec!["LIKE_*".into(), "DB?".into()],
+            exclude: vec![],
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(got, ["dbo", schema]);
+    drop().await;
+}
+
+/// Filters whose patterns are hard to send to a server (ADR-025): a literal `_` and `%`, the
+/// escape character, a non-ASCII letter whose case differs, `?` and an exclude-only filter.
+fn tricky_filters() -> Vec<spelaion_driver_api::NameFilter> {
+    let filter = |include: &[&str], exclude: &[&str]| spelaion_driver_api::NameFilter {
+        include: include.iter().map(|p| p.to_string()).collect(),
+        exclude: exclude.iter().map(|p| p.to_string()).collect(),
+    };
+    vec![
+        filter(&["tenant_*"], &[]),
+        filter(&["tenant\\%*"], &[]),
+        filter(&["ñame*"], &[]),
+        filter(&["t?nant*"], &[]),
+        filter(&["wow!*"], &[]),
+        filter(&[], &["*_a", "wow!*"]),
+        filter(&["*"], &["ñ*"]),
+        filter(&["nothing_matches_this"], &[]),
+    ]
+}
+
+/// The names created by each test for [`tricky_filters`].
+const TRICKY_NAMES: [&str; 6] = [
+    "Tenant_A", "tenantXb", "tenant%c", "ÑAME_1", "plain", "wow!x",
+];
+
+/// Narrowed on the server or only in Rust, the same names come back.
+async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) {
+    let all_objects = conn.list_objects(schema).await.unwrap();
+    let all_others = conn.list_schema_objects(schema).await.unwrap();
+    for filter in tricky_filters() {
+        let names = |items: Vec<String>| {
+            let mut items = items;
+            items.sort();
+            items
+        };
+        let expected = names(
+            all_objects
+                .iter()
+                .filter(|o| filter.matches(&o.name))
+                .map(|o| o.name.clone())
+                .collect(),
+        );
+        let got = names(
+            conn.list_objects_matching(schema, &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{filter:?}: {e}"))
+                .into_iter()
+                .map(|o| o.name)
+                .collect(),
+        );
+        assert_eq!(got, expected, "objects, {filter:?}");
+        let expected = names(
+            all_others
+                .iter()
+                .filter(|o| filter.matches(&o.name))
+                .map(|o| o.name.clone())
+                .collect(),
+        );
+        let got = names(
+            conn.list_schema_objects_matching(schema, &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{filter:?}: {e}"))
+                .into_iter()
+                .map(|o| o.name)
+                .collect(),
+        );
+        assert_eq!(got, expected, "schema objects, {filter:?}");
+    }
+    // The filters do something: each name is found by the one meant for it.
+    let only = |pattern: &str| spelaion_driver_api::NameFilter {
+        include: vec![pattern.into()],
+        exclude: vec![],
+    };
+    for (pattern, name) in [
+        ("tenant_*", "Tenant_A"),
+        ("tenant\\%*", "tenant%c"),
+        ("ñame*", "ÑAME_1"),
+        ("wow!*", "wow!x"),
+    ] {
+        let got: Vec<String> = conn
+            .list_objects_matching(schema, &only(pattern))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| o.name)
+            .collect();
+        assert_eq!(got, [name], "{pattern}");
+    }
+}
+
+#[tokio::test]
+async fn generated_ddl_recreates_tables_and_views() {
+    let Some(conn) = connect().await else { return };
+    let cleanup = [
+        "drop view if exists ddl.big",
+        "drop table if exists ddl.lines",
+        "drop table if exists ddl.customer",
+    ];
+    for sql in cleanup {
+        run(&*conn, sql).await.unwrap();
+    }
+    for sql in [
+        "if schema_id('ddl') is null exec('create schema ddl')",
+        "create table ddl.customer (id int constraint customer_pk primary key, email nvarchar(80) not null constraint customer_email unique)",
+        "create table ddl.lines (
+             id bigint identity(10, 5) constraint lines_pk primary key,
+             customer_id int not null,
+             qty int not null constraint lines_qty_default default 1,
+             price decimal(12, 2),
+             total as (qty * price) persisted,
+             note varchar(max),
+             constraint lines_qty_positive check (qty > 0),
+             constraint lines_customer foreign key (customer_id) references ddl.customer (id) on delete cascade
+         )",
+        "create index lines_qty on ddl.lines (qty desc) include (note) where qty > 1",
+        "exec sp_addextendedproperty 'MS_Description', N'it''s the lines', 'schema', 'ddl', 'table', 'lines'",
+        "exec sp_addextendedproperty 'MS_Description', N'how many', 'schema', 'ddl', 'table', 'lines', 'column', 'qty'",
+        "create view ddl.big as select id, qty from ddl.lines where qty > 10",
+    ] {
+        run(&*conn, sql)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+    let dialect = spelaion_driver_sqlserver::SqlServerDialect;
+    let big = conn.relation_definition("ddl", "big").await.unwrap();
+    assert_eq!(
+        big,
+        "create view ddl.big as select id, qty from ddl.lines where qty > 10;"
+    );
+    run(&*conn, "drop view ddl.big").await.unwrap();
+    let lines = ddl_round_trip(&*conn, &dialect, "ddl", "lines", "drop table ddl.lines").await;
+    for expected in [
+        "IDENTITY(10, 5) NOT NULL",
+        "AS ([qty]*[price]) PERSISTED",
+        "CONSTRAINT lines_qty_default DEFAULT ((1)) NOT NULL",
+        "ON DELETE CASCADE",
+        "INCLUDE (note) WHERE ([qty]>(1));",
+        "@value = N'it''s the lines'",
+    ] {
+        assert!(lines.contains(expected), "{expected}\n{lines}");
+    }
+    run(&*conn, "drop table ddl.lines").await.unwrap();
+    ddl_round_trip(
+        &*conn,
+        &dialect,
+        "ddl",
+        "customer",
+        "drop table ddl.customer",
+    )
+    .await;
+    for sql in cleanup {
+        run(&*conn, sql).await.unwrap();
+    }
+}
+
+/// "Generate DDL" round trip: the DDL of `table`, run after `drop`, creates the same table
+/// (columns, keys, constraints, foreign keys, indexes and comment). Returns the DDL.
+async fn ddl_round_trip(
+    conn: &dyn Connection,
+    dialect: &dyn spelaion_driver_api::Dialect,
+    schema: &str,
+    table: &str,
+    drop: &str,
+) -> String {
+    let before = conn.describe_table(schema, table).await.unwrap();
+    let ddl = conn
+        .relation_definition(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{table}: {e}"));
+    assert!(ddl.ends_with(';'), "{ddl}");
+    run(conn, drop)
+        .await
+        .unwrap_or_else(|e| panic!("{drop}: {e:?}"));
+    for span in dialect.split_statements(&ddl) {
+        let statement = span.text(&ddl);
+        run(conn, statement)
+            .await
+            .unwrap_or_else(|e| panic!("{statement}\n→ {e:?}\n\n{ddl}"));
+    }
+    let after = conn.describe_table(schema, table).await.unwrap();
+    assert_eq!(after.columns, before.columns, "{ddl}");
+    assert_eq!(after.primary_key, before.primary_key, "{ddl}");
+    assert_eq!(after.constraints, before.constraints, "{ddl}");
+    assert_eq!(after.foreign_keys, before.foreign_keys, "{ddl}");
+    assert_eq!(after.indexes, before.indexes, "{ddl}");
+    assert_eq!(after.object.comment, before.object.comment, "{ddl}");
+    assert_eq!(after.object.kind, before.object.kind, "{ddl}");
+    ddl
+}
+
+#[tokio::test]
+async fn procedure_calls_pass_inputs_and_collect_outputs() {
+    let Some(conn) = connect().await else { return };
+    for sql in [
+        "drop procedure if exists call_probe.calc",
+        "drop procedure if exists call_probe.nothing",
+        "if schema_id('call_probe') is null exec('create schema call_probe')",
+        "create procedure call_probe.calc @a int, @b int output, @c varchar(10) output \
+         as begin set @b = @b + @a; set @c = concat('x', @a) end",
+        "create procedure call_probe.nothing as select 1 as one",
+    ] {
+        run(&*conn, sql)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+    let objects = conn.list_schema_objects("call_probe").await.unwrap();
+    let find = |name: &str| objects.iter().find(|o| o.name == name).unwrap().clone();
+    let call = conn.procedure_call(&find("calc")).await.unwrap();
+    assert_eq!(
+        call,
+        "DECLARE @b int = :b\nDECLARE @c varchar(10) = :c\n\
+         EXEC call_probe.calc @a = :a, @b = @b OUTPUT, @c = @c OUTPUT\nSELECT @b AS b, @c AS c"
+    );
+    let filled = call
+        .replace(":a", "1")
+        .replace(":b", "2")
+        .replace(":c", "NULL");
+    // One batch: the editor's splitter keeps it whole (no semicolons).
+    let dialect = spelaion_driver_sqlserver::SqlServerDialect;
+    assert_eq!(
+        spelaion_driver_api::Dialect::split_statements(&dialect, &filled).len(),
+        1
+    );
+    let results = tables(&*conn, &filled).await;
+    assert_eq!(results.last().unwrap().1, [["3", "x1"]]);
+    assert_eq!(
+        conn.procedure_call(&find("nothing")).await.unwrap(),
+        "EXEC call_probe.nothing"
+    );
+    run(&*conn, "drop procedure call_probe.calc").await.unwrap();
+    run(&*conn, "drop procedure call_probe.nothing")
+        .await
+        .unwrap();
 }

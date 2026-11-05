@@ -8,6 +8,7 @@
 mod column;
 mod dialect;
 mod error;
+mod filter;
 mod introspect;
 mod remote;
 mod secret;
@@ -24,8 +25,11 @@ use futures_util::stream::BoxStream;
 pub use column::{ColumnMeta, ResultSchema};
 pub use dialect::{Dialect, StatementSpan};
 pub use error::DriverError;
+pub use filter::{LikeFilter, NameFilter, literal_pattern, pattern_matches};
 pub use introspect::{
-    ColumnInfo, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, SchemaInfo, TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind,
+    SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo,
+    check_definition, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use secret::Secret;
@@ -167,6 +171,82 @@ pub trait Connection: Send + Sync {
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>>;
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>>;
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo>;
+    /// Functions, sequences, triggers, types… of a schema (ADR-024), ordered by name. Engines
+    /// without any return none.
+    async fn list_schema_objects(&self, _schema: &str) -> Result<Vec<SchemaObject>> {
+        Ok(Vec::new())
+    }
+    /// Roles, logins, tablespaces, extensions… (ADR-024). Engines without any return none.
+    async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
+        Ok(Vec::new())
+    }
+    /// [`Connection::list_schemas`] narrowed to what `filter` keeps (ADR-025). Drivers may
+    /// narrow it in their catalog query too; the result must be the same.
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let mut schemas = self.list_schemas().await?;
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+    /// [`Connection::list_objects`] narrowed to what `filter` keeps (ADR-025).
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let mut objects = self.list_objects(schema).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+    /// [`Connection::list_schema_objects`] narrowed to what `filter` keeps (ADR-025).
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let mut objects = self.list_schema_objects(schema).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+    /// The DDL of an object from [`Connection::list_schema_objects`], ending in `;`.
+    async fn object_definition(&self, _object: &SchemaObject) -> Result<String> {
+        Err(DriverError::Other(
+            "this engine has no object definitions".into(),
+        ))
+    }
+    /// The DDL that creates a relation of [`Connection::list_objects`]: `CREATE TABLE` with
+    /// its constraints, then its indexes and comments, or `CREATE VIEW`. Statements end in
+    /// `;` and are separated by a blank line.
+    async fn relation_definition(&self, _schema: &str, _name: &str) -> Result<String> {
+        Err(DriverError::Other(
+            "this engine has no table definitions".into(),
+        ))
+    }
+    /// The SQL that calls a procedure of [`Connection::list_schema_objects`]: its input
+    /// parameters as `:name` placeholders, its output ones collected and shown.
+    async fn procedure_call(&self, _object: &SchemaObject) -> Result<String> {
+        Err(DriverError::Other("this engine has no procedures".into()))
+    }
+}
+
+/// `:name` for a parameter, with anything but letters, digits and `_` turned into `_` (and
+/// SQL Server's leading `@` left out); `:argN` for one without a name.
+pub fn parameter_placeholder(name: &str, position: usize) -> String {
+    let name: String = name
+        .trim_start_matches('@')
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        format!(":arg{position}")
+    } else {
+        format!(":{name}")
+    }
 }
 
 #[async_trait]

@@ -30,6 +30,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::dto::*;
 use crate::interaction::{AppInteraction, Pending};
+use spelaion_driver_api::NameFilter;
 
 /// App state. Sessions are identified by a key the UI chooses: one per editor tab and one
 /// for metadata per connection (ADR-004).
@@ -186,6 +187,32 @@ async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
     state
         .history
         .set_theme(theme)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_explorer_preferences(
+    state: State<'_, AppState>,
+) -> CmdResult<ExplorerPreferencesItem> {
+    state
+        .history
+        .explorer_preferences()
+        .await
+        .map(ExplorerPreferencesItem::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_explorer_preferences(
+    preferences: ExplorerPreferencesItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_explorer_preferences(preferences.into())
         .await
         .map_err(|e| e.to_string())
 }
@@ -400,6 +427,85 @@ async fn set_history_enabled(
         .set_enabled(workspace, connection, enabled)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// A connection's explorer filter (ADR-025), personal and per workspace.
+#[tauri::command]
+#[specta::specta]
+async fn get_explorer_filter(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ExplorerFilterItem> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    state
+        .history
+        .explorer_filter(workspace, connection)
+        .await
+        .map(ExplorerFilterItem::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_explorer_filter(
+    connection: String,
+    filter: ExplorerFilterItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    state
+        .history
+        .set_explorer_filter(workspace, connection, filter.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// "Hide" or "Show only" on the schemas, objects or columns chosen in the explorer: their
+/// names, with their wildcard characters escaped, go into the connection's filter. Returns the
+/// new filter.
+#[tauri::command]
+#[specta::specta]
+async fn filter_explorer_name(
+    connection: String,
+    kind: FilterKindItem,
+    names: Vec<String>,
+    action: FilterActionItem,
+    state: State<'_, AppState>,
+) -> CmdResult<ExplorerFilterItem> {
+    let workspace = connection_workspace(&state, &connection).await?;
+    let mut filter = state
+        .history
+        .explorer_filter(workspace.clone(), connection.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let patterns: Vec<String> = names
+        .iter()
+        .map(|name| spelaion_driver_api::literal_pattern(name))
+        .collect();
+    match action {
+        FilterActionItem::Hide => {
+            for pattern in &patterns {
+                filter.hide(kind.into(), pattern);
+            }
+        }
+        FilterActionItem::ShowOnly => filter.show_only(kind.into(), &patterns),
+    }
+    state
+        .history
+        .set_explorer_filter(workspace, connection, filter.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(ExplorerFilterItem::from(filter))
+}
+
+/// The scope a connection's personal preferences are kept under (see `history_workspace`).
+async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<String> {
+    let id = parse_id(connection);
+    let config = state.config.read().await;
+    if config.connection(&id).is_none() {
+        return Err(format!("unknown connection: {connection}"));
+    }
+    Ok(history_workspace(&config, id.source))
 }
 
 /// Engines shown when adding a connection, including the ones not supported yet.
@@ -1707,14 +1813,24 @@ async fn select_database(
 
 #[tauri::command]
 #[specta::specta]
-async fn list_schemas(session: String, state: State<'_, AppState>) -> CmdResult<Vec<SchemaItem>> {
+async fn list_schemas(
+    session: String,
+    filter: Option<NameFilterItem>,
+    server_side: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<SchemaItem>> {
     let open = state.session(&session).await?;
-    let schemas = open
-        .session
-        .connection()
-        .list_schemas()
-        .await
-        .map_err(|e| e.to_string())?;
+    let connection = open.session.connection();
+    // The explorer's filter, narrowed in the catalog query or only here (ADR-025).
+    let schemas = match filter.map(NameFilter::from) {
+        Some(filter) if server_side => connection.list_schemas_matching(&filter).await,
+        Some(filter) => connection.list_schemas().await.map(|mut all| {
+            all.retain(|s| filter.matches(&s.name));
+            all
+        }),
+        None => connection.list_schemas().await,
+    }
+    .map_err(|e| e.to_string())?;
     Ok(schemas
         .into_iter()
         .map(|s| SchemaItem {
@@ -1729,15 +1845,21 @@ async fn list_schemas(session: String, state: State<'_, AppState>) -> CmdResult<
 async fn list_objects(
     session: String,
     schema: String,
+    filter: Option<NameFilterItem>,
+    server_side: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<ObjectItem>> {
     let open = state.session(&session).await?;
-    let objects = open
-        .session
-        .connection()
-        .list_objects(&schema)
-        .await
-        .map_err(|e| e.to_string())?;
+    let connection = open.session.connection();
+    let objects = match filter.map(NameFilter::from) {
+        Some(filter) if server_side => connection.list_objects_matching(&schema, &filter).await,
+        Some(filter) => connection.list_objects(&schema).await.map(|mut all| {
+            all.retain(|o| filter.matches(&o.name));
+            all
+        }),
+        None => connection.list_objects(&schema).await,
+    }
+    .map_err(|e| e.to_string())?;
     Ok(objects.into_iter().map(ObjectItem::from).collect())
 }
 
@@ -1747,16 +1869,120 @@ async fn describe_table(
     session: String,
     schema: String,
     name: String,
+    columns: Option<NameFilterItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<TableDetails> {
     let open = state.session(&session).await?;
-    let table = open
+    let mut table = open
         .session
         .connection()
         .describe_table(&schema, &name)
         .await
         .map_err(|e| e.to_string())?;
+    // The explorer's column filter (ADR-025); editing asks without one, for every column.
+    if let Some(columns) = columns {
+        let columns = spelaion_driver_api::NameFilter::from(columns);
+        table.columns.retain(|c| columns.matches(&c.name));
+    }
     Ok(TableDetails::from(table))
+}
+
+/// Functions, sequences, triggers, types… of a schema, for its folders (ADR-024).
+#[tauri::command]
+#[specta::specta]
+async fn list_schema_objects(
+    session: String,
+    schema: String,
+    filter: Option<NameFilterItem>,
+    server_side: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<SchemaObjectItem>> {
+    let open = state.session(&session).await?;
+    let connection = open.session.connection();
+    let objects = match filter.map(NameFilter::from) {
+        Some(filter) if server_side => {
+            connection
+                .list_schema_objects_matching(&schema, &filter)
+                .await
+        }
+        Some(filter) => connection
+            .list_schema_objects(&schema)
+            .await
+            .map(|mut all| {
+                all.retain(|o| filter.matches(&o.name));
+                all
+            }),
+        None => connection.list_schema_objects(&schema).await,
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(objects.into_iter().map(SchemaObjectItem::from).collect())
+}
+
+/// Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024).
+#[tauri::command]
+#[specta::specta]
+async fn list_server_objects(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<ServerObjectItem>> {
+    let open = state.session(&session).await?;
+    let objects = open
+        .session
+        .connection()
+        .list_server_objects()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(objects.into_iter().map(ServerObjectItem::from).collect())
+}
+
+/// The DDL of a table or view (`CREATE TABLE` with its constraints, indexes and comments),
+/// to open in a new tab (nothing runs).
+#[tauri::command]
+#[specta::specta]
+async fn relation_definition(
+    session: String,
+    schema: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .relation_definition(&schema, &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The SQL that calls a procedure (inputs as `:name`, outputs collected), to open in a new tab.
+#[tauri::command]
+#[specta::specta]
+async fn procedure_call(
+    session: String,
+    object: SchemaObjectItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .procedure_call(&object.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The DDL of an object, to open in a new tab (nothing runs).
+#[tauri::command]
+#[specta::specta]
+async fn object_definition(
+    session: String,
+    object: SchemaObjectItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .object_definition(&object.into())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The table a query's result can be edited as, or none: the core decides (ADR-014).
@@ -1806,6 +2032,54 @@ async fn table_sql(
         &table,
         template.into(),
     ))
+}
+
+/// A SELECT joining the tables chosen in the explorer on the foreign keys between them
+/// (`INNER JOIN … ON`, or the simple `FROM a, b WHERE`), to open in a new tab.
+#[tauri::command]
+#[specta::specta]
+async fn join_sql(
+    session: String,
+    tables: Vec<TableRefItem>,
+    inner: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    let mut described = Vec::new();
+    for table in &tables {
+        described.push(
+            open.session
+                .connection()
+                .describe_table(&table.schema, &table.name)
+                .await
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    if described.len() < 2 {
+        return Err("choose two tables or more to join".into());
+    }
+    Ok(spelaion_core::join_sql(
+        open.session.dialect().as_ref(),
+        &described,
+        inner,
+    ))
+}
+
+/// The SQL a table's menu can generate on this connection's engine (the core decides: an
+/// upsert or MERGE only where the engine has them).
+#[tauri::command]
+#[specta::specta]
+async fn table_templates(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<SqlTemplateItem>> {
+    let open = state.session(&session).await?;
+    Ok(
+        spelaion_core::table_templates(open.session.dialect().as_ref())
+            .into_iter()
+            .map(SqlTemplateItem::from)
+            .collect(),
+    )
 }
 
 /// The exact row count of a table or view, counted by the core on the explorer's session.
@@ -2013,6 +2287,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_theme,
             get_update_check,
             set_update_check,
+            get_explorer_preferences,
+            set_explorer_preferences,
             update::update_check,
             update::update_install,
             engine_catalog,
@@ -2081,6 +2357,16 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_schemas,
             list_objects,
             describe_table,
+            list_schema_objects,
+            list_server_objects,
+            get_explorer_filter,
+            set_explorer_filter,
+            filter_explorer_name,
+            object_definition,
+            relation_definition,
+            procedure_call,
+            table_templates,
+            join_sql,
             editable_query_table,
             answer_interaction,
         ])

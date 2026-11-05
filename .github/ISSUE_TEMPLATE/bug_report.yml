@@ -28,7 +28,7 @@ body:
     id: version
     attributes:
       label: SpelaionDB version
-      placeholder: 0.4.0 (Settings → Updates shows it)
+      placeholder: 0.5.0 (Settings → Updates shows it)
     validations:
       required: true
   - type: dropdown

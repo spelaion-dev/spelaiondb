@@ -139,7 +139,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, history: 3 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, history: 4 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -926,9 +926,14 @@ try {
   step("explorer: view rows and generate SQL written by the core");
   await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
   await page.getByRole("button", { name: "Expand or collapse schema main" }).click();
+  // Objects are in folders by type (ADR-024), with how many each holds.
+  const tablesFolder = page.getByRole("button", { name: "Expand or collapse Tables", exact: true });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  await tablesFolder.click();
+  await page.getByRole("button", { name: "Expand or collapse Views", exact: true }).click();
   const ordersNode = page.getByRole("button", { name: "Expand or collapse orders", exact: true });
   await ordersNode.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Generate UPDATE" }).click();
+  await page.getByRole("menuitem", { name: "Generate UPDATE", exact: true }).click();
   await panel.locator(".cm-content", { hasText: "UPDATE orders" }).waitFor();
   assert.equal(
     (await panel.locator(".cm-content").innerText()).trimEnd(),
@@ -936,10 +941,170 @@ try {
   );
   await shot("05f-generated-update");
   await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).click({ button: "right" });
-  assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE" }).count(), 0);
+  assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE", exact: true }).count(), 0);
   await page.getByRole("menuitem", { name: "Open as SQL" }).click();
   await panel.locator(".cm-content", { hasText: "FROM big_orders" }).waitFor();
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM big_orders\nLIMIT 100;");
+  // A trigger's definition, as SQLite keeps it, opens in a new tab and does not run.
+  await page.getByRole("button", { name: "Expand or collapse Triggers", exact: true }).click();
+  const triggerNode = page.getByRole("button", { name: "product_stock_check: open its definition", exact: true });
+  assert.equal(await triggerNode.locator(".muted").innerText(), "on product");
+  await triggerNode.dblclick();
+  await panel.locator(".cm-content", { hasText: "CREATE TRIGGER product_stock_check" }).waitFor();
+  assert.match((await panel.locator(".cm-content").innerText()).trimEnd(), /^CREATE TRIGGER product_stock_check before update of stock on product[\s\S]*end;$/);
+  await shot("05g-trigger-definition");
+  // A table holds folders of its columns (open), constraints, foreign keys and indexes.
+  await ordersNode.click();
+  const ordersChildren = ordersNode.locator("xpath=..");
+  const columnsFolder = ordersChildren.getByRole("button", { name: "Expand or collapse Columns", exact: true });
+  await columnsFolder.waitFor();
+  assert.equal(await columnsFolder.getAttribute("aria-expanded"), "true");
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Constraints", exact: true }).click();
+  await ordersChildren.locator(".row", { hasText: "PRIMARY KEY (id)" }).waitFor();
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Foreign keys", exact: true }).click();
+  await ordersChildren.locator(".row", { hasText: "(customer_id) → customer (id)" }).waitFor();
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Indexes", exact: true }).click();
+  await ordersChildren.getByRole("button", { name: "orders_customer: open its definition", exact: true }).dblclick();
+  await panel.locator(".cm-content", { hasText: "CREATE INDEX orders_customer" }).waitFor();
+  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "CREATE INDEX orders_customer on orders (customer_id);");
+  await shot("05g-table-folders");
+  await ordersNode.click();
+  // "Generate DDL": the table's CREATE, then its own indexes, in a new tab (nothing runs).
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate DDL" }).click();
+  await panel.locator(".cm-content", { hasText: "CREATE TABLE orders" }).waitFor();
+  const ordersDdl = (await panel.locator(".cm-content").innerText()).trimEnd();
+  assert.match(ordersDdl, /^CREATE TABLE orders \(/);
+  assert.ok(ordersDdl.endsWith("CREATE INDEX orders_customer on orders (customer_id);"), ordersDdl);
+  // Rows by a list of keys.
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate SELECT … WHERE key IN" }).click();
+  await panel.locator(".cm-content", { hasText: "WHERE id IN" }).waitFor();
+  assert.ok((await panel.locator(".cm-content").innerText()).trimEnd().endsWith("FROM orders\nWHERE id IN (:id_1, :id_2, :id_3);"));
+  // The engine decides what else: SQLite has an upsert, and no MERGE.
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate upsert (INSERT or UPDATE)" }).waitFor();
+  assert.equal(await page.getByRole("menuitem", { name: "Generate MERGE" }).count(), 0);
+  await page.getByRole("menuitem", { name: "Generate upsert (INSERT or UPDATE)" }).click();
+  await panel.locator(".cm-content", { hasText: "ON CONFLICT (id) DO UPDATE SET" }).waitFor();
+  // UPDATE … FROM a source of values; SQLite has no DELETE … USING.
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate UPDATE … FROM" }).waitFor();
+  assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE … USING" }).count(), 0);
+  await page.getByRole("menuitem", { name: "Generate UPDATE … FROM" }).click();
+  await panel.locator(".cm-content", { hasText: "WHERE target.id = source.id" }).waitFor();
+  assert.match(await panel.locator(".cm-content").innerText(), /^UPDATE orders AS target\nSET\n/);
+  // Ctrl+click chooses tables; their menu joins them on the foreign keys between them.
+  const customerRow = page.getByRole("button", { name: "Expand or collapse customer", exact: true });
+  await ordersNode.click({ modifiers: ["Control"] });
+  await customerRow.click({ modifiers: ["Control"] });
+  assert.equal(await ordersNode.getAttribute("aria-selected"), "true");
+  assert.equal(await customerRow.getAttribute("aria-selected"), "true");
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate INNER JOIN of the 2 chosen tables" }).click();
+  await panel.locator(".cm-content", { hasText: "INNER JOIN customer c ON c.id = o.customer_id" }).waitFor();
+  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM orders o\nINNER JOIN customer c ON c.id = o.customer_id;");
+  // A plain click forgets the choice (and expands the table, collapsed again).
+  await ordersNode.click();
+  assert.equal(await customerRow.getAttribute("aria-selected"), "false");
+  await ordersNode.click();
+  // Refresh: a table created from a query tab appears with F5 on its schema, and "Refresh all
+  // schemas" sees it go; open folders stay open.
+  const mainSchema = page.getByRole("button", { name: "Expand or collapse schema main" });
+  const probeNode = page.getByRole("button", { name: "Expand or collapse refresh_probe", exact: true });
+  await replaceQuery(panel, "create table refresh_probe (id integer);\ninsert into refresh_probe values (1);");
+  await run(panel);
+  await panel.getByText("Statement 2: 1 row", { exact: false }).waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  await mainSchema.focus();
+  await page.keyboard.press("F5");
+  await probeNode.waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "4");
+  // Two rows: the next step waits for "1 row" in this same tab.
+  await replaceQuery(panel, "drop table refresh_probe;\nselect 1 as dropped union all select 2;");
+  await run(panel);
+  await page.getByRole("button", { name: "Run anyway" }).click();
+  await panel.locator(".statusline", { hasText: "2 rows" }).waitFor();
+  await mainSchema.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Refresh all schemas" }).click();
+  await probeNode.waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  assert.equal(await tablesFolder.getAttribute("aria-expanded"), "true");
+  // Quick filter (Ctrl+Shift+F): only what matches by name, plus the expanded connections.
+  await page.keyboard.press("Control+Shift+F");
+  const quickFilter = page.getByRole("searchbox", { name: "Filter the explorer" });
+  await quickFilter.waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Filter the explorer");
+  await page.keyboard.insertText("ord");
+  await page.getByRole("button", { name: "Expand or collapse customer", exact: true }).waitFor({ state: "detached" });
+  await ordersNode.waitFor();
+  await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "1");
+  assert.equal(await page.locator('.connection-row:has-text("MariaDB (Docker)")').count(), 0);
+  await page.keyboard.press("Escape");
+  assert.equal(await quickFilter.inputValue(), "");
+  await page.locator('.connection-row:has-text("MariaDB (Docker)")').waitFor();
+  await page.keyboard.press("Escape");
+  await quickFilter.waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  // Filters as in DBeaver: right-click a folder, Configure filter…; the folder says it is filtered.
+  const customerNode = page.getByRole("button", { name: "Expand or collapse customer", exact: true });
+  const filterDialog = page.getByRole("dialog", { name: "Filter of tables, views and other objects for Shop (SQLite)" });
+  await tablesFolder.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Configure filter…" }).click();
+  await filterDialog.locator('input[name="objects.exclude"]').fill("CUST*");
+  await filterDialog.getByRole("button", { name: "Apply" }).click();
+  await filterDialog.waitFor({ state: "detached" });
+  await customerNode.waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "2");
+  await tablesFolder.locator(".tag", { hasText: "filtered" }).waitFor();
+  await shot("05h-filtered-folder");
+  // Filtered on this computer instead of in the catalog query: the same tables.
+  const setServerSide = (checked) =>
+    withSettings("explorer", async (settings) => {
+      await settings.locator('input[name="serverSideFilters"]').setChecked(checked);
+      await page.waitForFunction((want) => {
+        const input = document.querySelector('input[name="serverSideFilters"]');
+        return input?.checked === want && !input.disabled;
+      }, checked);
+    });
+  await setServerSide(false);
+  await mainSchema.focus();
+  await page.keyboard.press("F5");
+  await ordersNode.waitFor();
+  assert.equal(await customerNode.count(), 0);
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "2");
+  await setServerSide(true);
+  await tablesFolder.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Configure filter…" }).click();
+  assert.equal(await filterDialog.locator('input[name="objects.exclude"]').inputValue(), "CUST*");
+  await filterDialog.getByRole("button", { name: "Show everything" }).click();
+  await customerNode.waitFor();
+  assert.equal(await tablesFolder.locator(".tag").count(), 0);
+  // "Hide" and "Show only" on one object write its name into the same filter.
+  await customerNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Hide customer" }).click();
+  await customerNode.waitFor({ state: "detached" });
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Show only orders" }).click();
+  await page.getByRole("button", { name: "Expand or collapse product", exact: true }).waitFor({ state: "detached" });
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "1");
+  await tablesFolder.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Configure filter…" }).click();
+  assert.equal(await filterDialog.locator('input[name="objects.include"]').inputValue(), "orders");
+  assert.equal(await filterDialog.locator('input[name="objects.exclude"]').inputValue(), "customer");
+  await filterDialog.getByRole("button", { name: "Show everything" }).click();
+  await customerNode.waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
+  // Only the connected connections: Shop is open; nothing has connected to the Docker ones yet.
+  const connectedOnly = page.getByRole("button", { name: "Show only connected connections" });
+  await connectedOnly.click();
+  await page.locator('.connection-row:has-text("MariaDB (Docker)")').waitFor({ state: "detached" });
+  assert.equal(await page.locator('.connection-row:has-text("Postgres (Docker)")').count(), 0);
+  assert.equal(await page.locator('.connection-row:has-text("Shop (SQLite)")').count(), 1);
+  assert.equal(await connectedOnly.getAttribute("aria-pressed"), "true");
+  await connectedOnly.click();
+  await page.locator('.connection-row:has-text("MariaDB (Docker)")').waitFor();
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Count rows" }).click();
   const exactCount = ordersNode.locator('[title="Exact row count: 50,000"]');
@@ -1278,6 +1443,41 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await connectionsActivity.click();
   await page.getByRole("button", { name: "Expand or collapse schema spelaion" }).waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0);
+  // System schemas only when asked for, in Settings → Explorer (a personal preference).
+  const systemSchema = page.getByRole("button", { name: "Expand or collapse schema information_schema" });
+  assert.equal(await systemSchema.count(), 0);
+  const setShowSystem = (checked) =>
+    withSettings("explorer", async (settings) => {
+      const box = settings.locator('input[name="showSystem"]');
+      await box.setChecked(checked);
+      await page.waitForFunction(([want]) => {
+        const input = document.querySelector('input[name="showSystem"]');
+        return input?.checked === want && !input.disabled;
+      }, [checked]);
+    });
+  await setShowSystem(true);
+  await systemSchema.first().waitFor();
+  // Alphabetical by default; without it, the database's order (MySQL's system schemas last).
+  // The test user only sees the schemas it has privileges on.
+  const mysqlNode = page.locator(".node", { has: page.locator('.connection-row:has-text("MySQL (Docker)")') }).first();
+  const schemaOrder = () =>
+    mysqlNode.locator('[aria-label^="Expand or collapse schema "]').evaluateAll((rows) =>
+      rows.map((row) => row.getAttribute("aria-label").replace("Expand or collapse schema ", "")),
+    );
+  assert.deepEqual(await schemaOrder(), ["information_schema", "performance_schema", "spelaion"]);
+  const setExplorerBox = (name, checked) =>
+    withSettings("explorer", async (settings) => {
+      await settings.locator(`input[name="${name}"]`).setChecked(checked);
+      await page.waitForFunction(([n, want]) => {
+        const input = document.querySelector(`input[name="${n}"]`);
+        return input?.checked === want && !input.closest("fieldset").disabled;
+      }, [name, checked]);
+    });
+  await setExplorerBox("sortAlphabetically", false);
+  assert.deepEqual(await schemaOrder(), ["spelaion", "information_schema", "performance_schema"]);
+  await setExplorerBox("sortAlphabetically", true);
+  await setShowSystem(false);
+  await systemSchema.first().waitFor({ state: "detached" });
 
   step("explorer: open a connected query for the selected database without asking again");
   await page.locator('.connection-row:has-text("MySQL (Docker)") .label').dblclick();
@@ -1293,9 +1493,25 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.keyboard.insertText("select 1 where database() = 'spelaion';");
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  // "Generate CALL" on a procedure: its IN parameter as a placeholder, its OUT one collected.
+  await replaceQuery(panel, "create procedure if not exists smoke_call(in a int, out b int) set b = a + 1;\nselect 2 as done union all select 3;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "2 rows" }).waitFor();
+  if ((await mysqlSchema.getAttribute("aria-expanded")) !== "true") await mysqlSchema.click();
+  await mysqlSchema.focus();
+  await page.keyboard.press("F5");
+  const mysqlProcedures = mysqlSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Procedures", exact: true });
+  await mysqlProcedures.click();
+  await page.getByRole("button", { name: "smoke_call: open its definition", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate CALL" }).click();
+  await panel.locator(".cm-content", { hasText: "CALL `spelaion`.`smoke_call`" }).waitFor();
+  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "CALL `spelaion`.`smoke_call`(:a, @b);\nSELECT @b AS `b`;");
+  await mysqlProcedures.click();
 
   step("editing table data: cells, NULL, delete and insert applied in one transaction");
   if ((await mysqlSchema.getAttribute("aria-expanded")) !== "true") await mysqlSchema.click();
+  const mysqlTables = mysqlSchema.locator("xpath=..").getByRole("button", { name: "Expand or collapse Tables", exact: true });
+  if ((await mysqlTables.getAttribute("aria-expanded")) !== "true") await mysqlTables.click();
   const smokeEditNode = page.getByRole("button", { name: "Expand or collapse smoke_edit", exact: true });
   const estimate = smokeEditNode.locator('[title^="Estimated rows (from the planner, not counted): "]');
   await estimate.waitFor();

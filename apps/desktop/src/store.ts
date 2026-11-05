@@ -125,6 +125,14 @@ interface AppStore {
   historyRevision: number;
   historySaving: string[];
   workspaceChanging: boolean;
+  /** Text of the explorer's quick filter; null while its box is closed. */
+  explorerFilter: string | null;
+  /** Connections expanded in the explorer: the quick filter keeps them shown. */
+  openConnections: string[];
+  /** Connections the explorer has a session on (they were opened at least once). */
+  explorerConnected: string[];
+  /** Tables and views chosen with Ctrl+click, in the order they were chosen (one session). */
+  explorerSelection: { session: string; schema: string; name: string }[];
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
   addTab(connectionId: string | null, sql?: string): string;
@@ -150,6 +158,12 @@ interface AppStore {
   setHistorySaving(connection: string, saving: boolean): void;
   setWorkspaceChanging(changing: boolean): void;
   clearTabConnections(): void;
+  setExplorerFilter(filter: string | null): void;
+  setConnectionOpen(connection: string, open: boolean): void;
+  setExplorerConnected(connection: string, connected: boolean): void;
+  /** Ctrl+click: adds or removes one; choosing in another session starts again. */
+  toggleExplorerSelection(item: { session: string; schema: string; name: string }): void;
+  clearExplorerSelection(): void;
 }
 
 export const useApp = create<AppStore>((set) => ({
@@ -166,6 +180,10 @@ export const useApp = create<AppStore>((set) => ({
   historyRevision: 0,
   historySaving: [],
   workspaceChanging: false,
+  explorerFilter: null,
+  openConnections: [],
+  explorerConnected: [],
+  explorerSelection: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
   addTab: (connectionId, sql = "") => {
@@ -225,6 +243,19 @@ export const useApp = create<AppStore>((set) => ({
     historySaving: saving ? [...new Set([...s.historySaving, connection])] : s.historySaving.filter((id) => id !== connection),
   })),
   setWorkspaceChanging: (workspaceChanging) => set({ workspaceChanging }),
+  setExplorerFilter: (explorerFilter) => set({ explorerFilter }),
+  toggleExplorerSelection: (item) => set((s) => {
+    const same = (o: typeof item) => o.session === item.session && o.schema === item.schema && o.name === item.name;
+    const mine = s.explorerSelection.filter((o) => o.session === item.session);
+    return { explorerSelection: mine.some(same) ? mine.filter((o) => !same(o)) : [...mine, item] };
+  }),
+  clearExplorerSelection: () => set((s) => (s.explorerSelection.length === 0 ? s : { explorerSelection: [] })),
+  setExplorerConnected: (connection, connected) => set((s) => ({
+    explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),
+  })),
+  setConnectionOpen: (connection, open) => set((s) => ({
+    openConnections: open ? [...new Set([...s.openConnections, connection])] : s.openConnections.filter((id) => id !== connection),
+  })),
   clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, status: "disconnected", serverVersion: null, run: null })) })),
 }));
 

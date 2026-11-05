@@ -4,9 +4,11 @@
 //! and is then executed in streaming mode. Values arrive in binary format and [`decode`]
 //! decodes them without losing information for any type.
 
+mod ddl;
 mod decode;
 mod dialect;
 mod introspect;
+mod objects;
 mod tls;
 
 use std::sync::{Arc, Mutex};
@@ -17,8 +19,8 @@ use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, Notice, ObjectInfo, Result, ResultSchema,
-    SchemaInfo, TableInfo,
+    DriverError, EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, Notice, ObjectInfo,
+    Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -205,15 +207,64 @@ impl Connection for PgConnection {
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
-        introspect::list_schemas(&self.client).await
+        introspect::list_schemas(&self.client, &LikeFilter::default()).await
     }
 
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>> {
-        introspect::list_objects(&self.client, schema).await
+        introspect::list_objects(&self.client, schema, &LikeFilter::default()).await
+    }
+
+    // Narrowed in the catalog query, then matched exactly (ADR-025).
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let mut schemas = introspect::list_schemas(&self.client, &filter.server_side()).await?;
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let mut objects =
+            introspect::list_objects(&self.client, schema, &filter.server_side()).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let mut objects =
+            objects::list_schema_objects(&self.client, schema, &filter.server_side()).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
     }
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(&self.client, schema, name).await
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        objects::list_schema_objects(&self.client, schema, &LikeFilter::default()).await
+    }
+
+    async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
+        objects::list_server_objects(&self.client).await
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        objects::object_definition(&self.client, object).await
+    }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        ddl::relation_definition(&self.client, schema, name).await
+    }
+
+    async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
+        objects::procedure_call(&self.client, object).await
     }
 }
 

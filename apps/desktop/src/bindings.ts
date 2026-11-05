@@ -14,6 +14,8 @@ export const commands = {
 	setTheme: (theme: string) => typedError<null, string>(__TAURI_INVOKE("set_theme", { theme })),
 	getUpdateCheck: () => typedError<boolean, string>(__TAURI_INVOKE("get_update_check")),
 	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
+	getExplorerPreferences: () => typedError<ExplorerPreferencesItem, string>(__TAURI_INVOKE("get_explorer_preferences")),
+	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
@@ -207,9 +209,41 @@ export const commands = {
 	/**  The databases this tab's session can switch to (MySQL, MariaDB, SQL Server). */
 	listDatabases: (session: string) => typedError<string[], string>(__TAURI_INVOKE("list_databases", { session })),
 	selectDatabase: (session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("select_database", { session, database })),
-	listSchemas: (session: string) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session })),
-	listObjects: (session: string, schema: string) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema })),
-	describeTable: (session: string, schema: string, name: string) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name })),
+	listSchemas: (session: string, filter: NameFilterItem | null, serverSide: boolean) => typedError<SchemaItem[], string>(__TAURI_INVOKE("list_schemas", { session, filter, serverSide })),
+	listObjects: (session: string, schema: string, filter: NameFilterItem | null, serverSide: boolean) => typedError<ObjectItem_Serialize[], string>(__TAURI_INVOKE("list_objects", { session, schema, filter, serverSide })),
+	describeTable: (session: string, schema: string, name: string, columns: NameFilterItem | null) => typedError<TableDetails_Serialize, string>(__TAURI_INVOKE("describe_table", { session, schema, name, columns })),
+	/**  Functions, sequences, triggers, types… of a schema, for its folders (ADR-024). */
+	listSchemaObjects: (session: string, schema: string, filter: NameFilterItem | null, serverSide: boolean) => typedError<SchemaObjectItem_Serialize[], string>(__TAURI_INVOKE("list_schema_objects", { session, schema, filter, serverSide })),
+	/**  Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024). */
+	listServerObjects: (session: string) => typedError<ServerObjectItem_Serialize[], string>(__TAURI_INVOKE("list_server_objects", { session })),
+	/**  A connection's explorer filter (ADR-025), personal and per workspace. */
+	getExplorerFilter: (connection: string) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
+	setExplorerFilter: (connection: string, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
+	/**
+	 *  "Hide" or "Show only" on the schemas, objects or columns chosen in the explorer: their
+	 *  names, with their wildcard characters escaped, go into the connection's filter. Returns the
+	 *  new filter.
+	 */
+	filterExplorerName: (connection: string, kind: FilterKindItem, names: string[], action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, names, action })),
+	/**  The DDL of an object, to open in a new tab (nothing runs). */
+	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
+	/**
+	 *  The DDL of a table or view (`CREATE TABLE` with its constraints, indexes and comments),
+	 *  to open in a new tab (nothing runs).
+	 */
+	relationDefinition: (session: string, schema: string, name: string) => typedError<string, string>(__TAURI_INVOKE("relation_definition", { session, schema, name })),
+	/**  The SQL that calls a procedure (inputs as `:name`, outputs collected), to open in a new tab. */
+	procedureCall: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("procedure_call", { session, object })),
+	/**
+	 *  The SQL a table's menu can generate on this connection's engine (the core decides: an
+	 *  upsert or MERGE only where the engine has them).
+	 */
+	tableTemplates: (session: string) => typedError<SqlTemplateItem[], string>(__TAURI_INVOKE("table_templates", { session })),
+	/**
+	 *  A SELECT joining the tables chosen in the explorer on the foreign keys between them
+	 *  (`INNER JOIN … ON`, or the simple `FROM a, b WHERE`), to open in a new tab.
+	 */
+	joinSql: (session: string, tables: TableRefItem[], inner: boolean) => typedError<string, string>(__TAURI_INVOKE("join_sql", { session, tables, inner })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
@@ -423,6 +457,26 @@ export type ConnectionItem_Serialize = {
 	readOnly: boolean,
 };
 
+export type ConstraintDetails = ConstraintDetails_Serialize | ConstraintDetails_Deserialize;
+
+export type ConstraintDetails_Deserialize = {
+	/**  None where the engine keeps no name (SQLite's primary key). */
+	name?: string | null,
+	kind: ConstraintKindItem,
+	columns: string[],
+	definition: string,
+};
+
+export type ConstraintDetails_Serialize = {
+	/**  None where the engine keeps no name (SQLite's primary key). */
+	name: string | null,
+	kind: ConstraintKindItem,
+	columns: string[],
+	definition: string,
+};
+
+export type ConstraintKindItem = "primary_key" | "unique" | "check";
+
 /**
  *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
  *  a password.
@@ -519,6 +573,23 @@ export type EngineItem_Serialize = {
 	available: boolean,
 };
 
+/**  A connection's explorer filter: personal, per workspace and connection (ADR-025). */
+export type ExplorerFilterItem = {
+	schemas: NameFilterItem,
+	objects: NameFilterItem,
+	columns: NameFilterItem,
+};
+
+/**  How the explorer shows its tree; personal, like the theme. */
+export type ExplorerPreferencesItem = {
+	showSystem: boolean,
+	sortAlphabetically: boolean,
+	sortIgnoreCase: boolean,
+	foldersFirst: boolean,
+	connectedOnly: boolean,
+	serverSideFilters: boolean,
+};
+
 /**
  *  One field of a changed repository item. Repository files hold secret references, never
  *  secrets.
@@ -545,6 +616,11 @@ export type FieldChangeItem_Serialize = {
 	after: string | null,
 };
 
+/**  What "Hide" and "Show only" in the explorer do with one name. */
+export type FilterActionItem = "hide" | "showOnly";
+
+export type FilterKindItem = "schemas" | "objects" | "columns";
+
 /**  A column filter operator (see `spelaion_core::FilterOp`). */
 export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "isNull" | "isNotNull";
 
@@ -552,6 +628,14 @@ export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" |
 export type FilterOutcome = {
 	rows: number,
 	total: number,
+};
+
+export type ForeignKeyDetails = {
+	name: string,
+	columns: string[],
+	referencedSchema: string,
+	referencedTable: string,
+	referencedColumns: string[],
 };
 
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
@@ -623,6 +707,14 @@ export type ImportSkip = {
 	reason: string,
 };
 
+export type IndexDetails = {
+	name: string,
+	unique: boolean,
+	primary: boolean,
+	/**  `CREATE INDEX …` as the engine writes it (or a comment for SQLite's automatic ones). */
+	definition: string,
+};
+
 export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; port: number; algorithm: string; fingerprint: string } | { kind: "secret"; title: string; prompt: string; echo: boolean; label: SecretLabel };
 
 /**  Dialog the tunnel needs to show. The UI answers with `answer_interaction`. */
@@ -655,6 +747,12 @@ export type KubernetesDraftItem = {
 	resource: string,
 	kubeconfig: string,
 	kubectl: string,
+};
+
+/**  Include and exclude patterns for one kind of name (ADR-025). */
+export type NameFilterItem = {
+	include: string[],
+	exclude: string[],
 };
 
 export type ObjectItem = ObjectItem_Serialize | ObjectItem_Deserialize;
@@ -770,6 +868,41 @@ export type SchemaItem = {
 	system: boolean,
 };
 
+/**
+ *  A function, sequence, trigger, type… of a schema. The UI sends it back unchanged to ask
+ *  for its definition.
+ */
+export type SchemaObjectItem = SchemaObjectItem_Serialize | SchemaObjectItem_Deserialize;
+
+/**
+ *  A function, sequence, trigger, type… of a schema. The UI sends it back unchanged to ask
+ *  for its definition.
+ */
+export type SchemaObjectItem_Deserialize = {
+	schema: string,
+	name: string,
+	kind: SchemaObjectKindItem,
+	/**  A function's arguments, a trigger's table… */
+	detail?: string | null,
+	comment?: string | null,
+};
+
+/**
+ *  A function, sequence, trigger, type… of a schema. The UI sends it back unchanged to ask
+ *  for its definition.
+ */
+export type SchemaObjectItem_Serialize = {
+	schema: string,
+	name: string,
+	kind: SchemaObjectKindItem,
+	/**  A function's arguments, a trigger's table… */
+	detail: string | null,
+	comment: string | null,
+};
+
+/**  The kinds of `list_schema_objects` (ADR-024): the explorer has a folder for each. */
+export type SchemaObjectKindItem = "function" | "procedure" | "aggregate" | "sequence" | "trigger" | "enum" | "domain" | "type" | "event" | "synonym";
+
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
 export type ScriptEvent_Deserialize = 
@@ -787,6 +920,29 @@ scriptOffset: number | null; cancelled: boolean } | { kind: "scriptFinished"; ex
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
 
+/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+export type ServerObjectItem = ServerObjectItem_Serialize | ServerObjectItem_Deserialize;
+
+/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+export type ServerObjectItem_Deserialize = {
+	name: string,
+	kind: ServerObjectKindItem,
+	detail?: string | null,
+	/**  Built into the engine: shown only with "Show system objects". */
+	system: boolean,
+};
+
+/**  A role, login, tablespace or extension: outside every schema (ADR-024). */
+export type ServerObjectItem_Serialize = {
+	name: string,
+	kind: ServerObjectKindItem,
+	detail: string | null,
+	/**  Built into the engine: shown only with "Show system objects". */
+	system: boolean,
+};
+
+export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension";
+
 /**  A saved query; `connection` is empty when it was saved without one. */
 export type SnippetItem = {
 	id: number,
@@ -799,7 +955,7 @@ export type SnippetItem = {
 };
 
 /**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */
-export type SqlTemplateItem = "preview" | "select" | "insert" | "update" | "delete";
+export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" | "insert" | "upsert" | "merge" | "update" | "updateFrom" | "delete" | "deleteUsing";
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
 
@@ -808,15 +964,17 @@ export type TableDetails = TableDetails_Serialize | TableDetails_Deserialize;
 export type TableDetails_Deserialize = {
 	columns: ColumnDetails_Deserialize[],
 	primaryKey: string[],
-	indexes: string[],
-	foreignKeys: string[],
+	constraints: ConstraintDetails_Deserialize[],
+	foreignKeys: ForeignKeyDetails[],
+	indexes: IndexDetails[],
 };
 
 export type TableDetails_Serialize = {
 	columns: ColumnDetails_Serialize[],
 	primaryKey: string[],
-	indexes: string[],
-	foreignKeys: string[],
+	constraints: ConstraintDetails_Serialize[],
+	foreignKeys: ForeignKeyDetails[],
+	indexes: IndexDetails[],
 };
 
 /**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */
@@ -827,6 +985,12 @@ export type TablePageItem = {
 	orderBy: string,
 	limit: number,
 	offset: number,
+};
+
+/**  A table chosen in the explorer, by schema and name. */
+export type TableRefItem = {
+	schema: string,
+	name: string,
 };
 
 /**  Text format to copy or export rows in. */

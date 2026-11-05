@@ -377,7 +377,13 @@ fn split(script: &str) -> Vec<StatementSpan> {
             }
             b';' if depth == 0 && !rest_of_batch => {
                 if has_code {
-                    push(&mut spans, start, i);
+                    // MERGE is the one statement T-SQL refuses without its `;`: it keeps it.
+                    let end = if words.first().is_some_and(|w| w == "merge") {
+                        i + 1
+                    } else {
+                        i
+                    };
+                    push(&mut spans, start, end);
                 }
                 i += 1;
                 start = i;
@@ -475,6 +481,22 @@ mod tests {
         );
         // `go` inside a line is not a separator.
         assert_eq!(parts("select 1 as go"), ["select 1 as go"]);
+    }
+
+    #[test]
+    fn merge_keeps_the_semicolon_it_requires() {
+        assert_eq!(
+            parts("merge into t using s on t.id = s.id when matched then delete; select 1;"),
+            [
+                "merge into t using s on t.id = s.id when matched then delete;",
+                "select 1"
+            ]
+        );
+        // A MERGE without one is sent as written: SQL Server says what is missing.
+        assert_eq!(
+            parts("merge into t using s on 1 = 1 when matched then delete"),
+            ["merge into t using s on 1 = 1 when matched then delete"]
+        );
     }
 
     #[test]

@@ -7,6 +7,12 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
 import { useApp, useDialogs } from "./store";
 
+/**
+ * Fired on `window` with a connection id when the explorer refreshes all its schemas: editor
+ * tabs on that connection reload the names their autocompletion offers.
+ */
+export const SCHEMAS_REFRESHED_EVENT = "spelaion-schemas-refreshed";
+
 /** What must be answered before resolving (ADR-022): a repository connection or tunnel that
  *  is new or changed (shown, and recorded if accepted) and personal `${user.…}` variables
  *  that are not defined yet (asked for and saved). Tries again after each answer; returns

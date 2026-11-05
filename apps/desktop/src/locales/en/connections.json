@@ -115,6 +115,25 @@
     "token": "Cloud token (IAM)"
   },
   "cancel": "Cancel",
+  "refresh": "Refresh all schemas",
+  "configureFilters": "Configure filters…",
+  "filterTitle": "Filters for {{name}}",
+  "filterTitleKind": "Filter of {{kind}} for {{name}}",
+  "filterHint": "Patterns separated by commas: * is any run of characters, ? one character, \\ escapes the next one; case is ignored. Without include patterns everything is included; exclude patterns hide what matches them.",
+  "filterKinds": {
+    "schemas": "schemas",
+    "objects": "tables, views and other objects",
+    "columns": "columns"
+  },
+  "filter": {
+    "include": "Include",
+    "exclude": "Exclude"
+  },
+  "filterIncludePlaceholder": "everything",
+  "filterExcludePlaceholder": "nothing",
+  "filterPersonal": "Filters are yours: they are saved on this computer, not in the connection's file, and only change what the explorer shows.",
+  "filterClear": "Show everything",
+  "filterApply": "Apply",
   "edit": "Edit…",
   "delete": "Delete…",
   "editTitle": "Edit {{name}}",

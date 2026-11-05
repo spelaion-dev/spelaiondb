@@ -47,6 +47,7 @@ point            native       point          (1.5,-2)
 box              native       box            (2,3),(0,0)
 path             native       path           [(0,0),(1,1)]
 arr_int          array        _int4          {1,2,NULL}
+arr_six_dimensions array        _int4          {{{{{{42}}}}}}
 arr_text         array        _text          {{a,"b c"},{"{","null"}}
 arr_bounds       array        _int4          [2:3]={7,8}
 arr_empty        array        _int4          {}

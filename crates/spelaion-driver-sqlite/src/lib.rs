@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use rusqlite::{InterruptHandle, OpenFlags};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, SchemaInfo, TableInfo,
+    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, SchemaInfo,
+    SchemaObject, TableInfo,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -140,6 +141,8 @@ enum Command {
     Schemas(Reply<Vec<SchemaInfo>>),
     Objects(String, Reply<Vec<ObjectInfo>>),
     Describe(String, String, Reply<TableInfo>),
+    /// A catalog query from `catalog.rs`.
+    Catalog(String, Reply<Vec<catalog::Row>>),
 }
 
 /// Loop of the connection thread. Ends when the `SqliteConnection` is dropped.
@@ -169,6 +172,9 @@ fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>
             }
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(&conn, &schema, &name));
+            }
+            Command::Catalog(sql, reply) => {
+                let _ = reply.send(introspect::query(&conn, &sql));
             }
         }
     }
@@ -235,6 +241,57 @@ impl Connection for SqliteConnection {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Describe(schema, name, reply))
             .await
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        let sql = catalog::schema_objects_sql(schema, &LikeFilter::default());
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        Ok(catalog::schema_objects(schema, &rows))
+    }
+
+    // Narrowed in the catalog query, then matched exactly (ADR-025).
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let sql = catalog::schemas_sql(&filter.server_side());
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        let mut schemas = catalog::schemas(&rows);
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let sql = catalog::objects_sql(schema, &filter.server_side());
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        let mut objects = catalog::objects(schema, &rows);
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let sql = catalog::schema_objects_sql(schema, &filter.server_side());
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        let mut objects = catalog::schema_objects(schema, &rows);
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        let sql = catalog::definition_sql(object)?;
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        catalog::definition(object, &rows)
+    }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        let sql = catalog::relation_definition_sql(schema, name);
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        catalog::relation_definition(schema, name, &rows)
     }
 }
 

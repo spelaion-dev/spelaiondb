@@ -80,6 +80,55 @@ async fn count(session: &Session, sql: &str) -> String {
 }
 
 #[tokio::test]
+async fn destructive_ddl_is_rejected_before_reaching_sqlite_or_postgres() {
+    let mut sessions = vec![sqlite().await];
+    if let Some(session) = pg().await {
+        sessions.push(session);
+    }
+    for session in sessions {
+        let table = format!("agent_ddl_{}", std::process::id());
+        run(
+            &session,
+            &format!(
+                "create table {table} (id int, body text); insert into {table} values (1, 'keep')"
+            ),
+        )
+        .await;
+        let result = session
+            .run_write(
+                &format!("alter table {table} drop column body"),
+                &WriteLimits::default(),
+            )
+            .await;
+        assert!(matches!(result, Err(WriteError::Rejected(_))), "{result:?}");
+        assert_eq!(
+            count(
+                &session,
+                &format!("select count(*) from {table} where body = 'keep'")
+            )
+            .await,
+            "1"
+        );
+        session
+            .run_write(
+                &format!("alter table {table} add column extra int"),
+                &WriteLimits::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            count(
+                &session,
+                &format!("select count(*) from {table} where extra is null")
+            )
+            .await,
+            "1"
+        );
+        run(&session, &format!("drop table {table}")).await;
+    }
+}
+
+#[tokio::test]
 async fn writes_commit_with_their_row_count() {
     let session = sqlite().await;
     run(

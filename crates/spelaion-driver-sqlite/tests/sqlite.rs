@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, Value,
+    ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
+    LogicalType, ObjectKind, SchemaObjectKind, Value,
 };
 use spelaion_driver_sqlite::SqliteDriver;
 
@@ -364,6 +364,12 @@ async fn introspection_describes_tables() {
          attach ':memory:' as aux",
     )
     .await;
+    run(
+        &*conn,
+        "create trigger orders_total after update of total on orders begin select 1; end",
+    )
+    .await
+    .unwrap();
 
     let schemas: Vec<String> = conn
         .list_schemas()
@@ -385,6 +391,27 @@ async fn introspection_describes_tables() {
             ("orders", ObjectKind::Table),
         ]
     );
+
+    // Triggers are what the explorer lists besides tables and views (ADR-024).
+    let others = conn.list_schema_objects("main").await.unwrap();
+    assert_eq!(others.len(), 1);
+    assert_eq!(
+        (
+            others[0].name.as_str(),
+            others[0].kind,
+            others[0].detail.as_deref()
+        ),
+        ("orders_total", SchemaObjectKind::Trigger, Some("orders"))
+    );
+    assert_eq!(
+        conn.object_definition(&others[0]).await.unwrap(),
+        "CREATE TRIGGER orders_total after update of total on orders begin select 1; end;"
+    );
+    let mut sequence = others[0].clone();
+    sequence.kind = SchemaObjectKind::Sequence;
+    assert!(conn.object_definition(&sequence).await.is_err());
+    assert_eq!(conn.list_schema_objects("aux").await.unwrap(), []);
+    assert_eq!(conn.list_server_objects().await.unwrap(), []);
 
     let orders = conn.describe_table("main", "orders").await.unwrap();
     let cols: Vec<_> = orders
@@ -427,6 +454,25 @@ async fn introspection_describes_tables() {
 
     let customer = conn.describe_table("main", "customer").await.unwrap();
     assert!(customer.indexes.iter().any(|i| i.unique && !i.primary));
+    // SQLite keeps no name for the primary key, and check constraints only in the CREATE text.
+    assert_eq!(
+        constraints(&customer),
+        [
+            (
+                None,
+                ConstraintKind::PrimaryKey,
+                vec!["id"],
+                "PRIMARY KEY (id)"
+            ),
+            (
+                Some("sqlite_autoindex_customer_1"),
+                ConstraintKind::Unique,
+                vec!["email"],
+                "UNIQUE (email)"
+            ),
+        ]
+    );
+    assert_eq!(constraints(&line)[0].3, "PRIMARY KEY (order_id, n)");
 }
 
 #[tokio::test]
@@ -457,4 +503,209 @@ async fn new_databases_are_created_once_and_never_overwritten() {
         "{err}"
     );
     assert_eq!(std::fs::read(&db.0).unwrap(), before);
+}
+
+/// (name, kind, columns, definition) of each constraint, to compare in one go.
+fn constraints(
+    table: &spelaion_driver_api::TableInfo,
+) -> Vec<(Option<&str>, ConstraintKind, Vec<&str>, &str)> {
+    table
+        .constraints
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_deref(),
+                c.kind,
+                c.columns.iter().map(String::as_str).collect(),
+                c.definition.as_str(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn server_side_filters_keep_what_the_filter_keeps() {
+    let db = TempDb::new("like");
+    let conn = open(&db).await;
+    for name in TRICKY_NAMES {
+        let quoted = name.replace('"', "\"\"");
+        run(&*conn, &format!("create table \"{quoted}\" (id int)"))
+            .await
+            .unwrap();
+        run(
+            &*conn,
+            &format!(
+                "create trigger \"{quoted}_trigger\" after insert on \"{quoted}\" begin select 1; end"
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    server_side_keeps_what_rust_keeps(&*conn, "main").await;
+    run(&*conn, "attach ':memory:' as Aux_1").await.unwrap();
+    let got: Vec<String> = conn
+        .list_schemas_matching(&spelaion_driver_api::NameFilter {
+            include: vec!["aux_?".into()],
+            exclude: vec![],
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(got, ["Aux_1"]);
+}
+
+/// Filters whose patterns are hard to send to a server (ADR-025): a literal `_` and `%`, the
+/// escape character, a non-ASCII letter whose case differs, `?` and an exclude-only filter.
+fn tricky_filters() -> Vec<spelaion_driver_api::NameFilter> {
+    let filter = |include: &[&str], exclude: &[&str]| spelaion_driver_api::NameFilter {
+        include: include.iter().map(|p| p.to_string()).collect(),
+        exclude: exclude.iter().map(|p| p.to_string()).collect(),
+    };
+    vec![
+        filter(&["tenant_*"], &[]),
+        filter(&["tenant\\%*"], &[]),
+        filter(&["ñame*"], &[]),
+        filter(&["t?nant*"], &[]),
+        filter(&["wow!*"], &[]),
+        filter(&[], &["*_a", "wow!*"]),
+        filter(&["*"], &["ñ*"]),
+        filter(&["nothing_matches_this"], &[]),
+    ]
+}
+
+/// The names created by each test for [`tricky_filters`].
+const TRICKY_NAMES: [&str; 6] = [
+    "Tenant_A", "tenantXb", "tenant%c", "ÑAME_1", "plain", "wow!x",
+];
+
+/// Narrowed on the server or only in Rust, the same names come back.
+async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) {
+    let all_objects = conn.list_objects(schema).await.unwrap();
+    let all_others = conn.list_schema_objects(schema).await.unwrap();
+    for filter in tricky_filters() {
+        let names = |items: Vec<String>| {
+            let mut items = items;
+            items.sort();
+            items
+        };
+        let expected = names(
+            all_objects
+                .iter()
+                .filter(|o| filter.matches(&o.name))
+                .map(|o| o.name.clone())
+                .collect(),
+        );
+        let got = names(
+            conn.list_objects_matching(schema, &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{filter:?}: {e}"))
+                .into_iter()
+                .map(|o| o.name)
+                .collect(),
+        );
+        assert_eq!(got, expected, "objects, {filter:?}");
+        let expected = names(
+            all_others
+                .iter()
+                .filter(|o| filter.matches(&o.name))
+                .map(|o| o.name.clone())
+                .collect(),
+        );
+        let got = names(
+            conn.list_schema_objects_matching(schema, &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{filter:?}: {e}"))
+                .into_iter()
+                .map(|o| o.name)
+                .collect(),
+        );
+        assert_eq!(got, expected, "schema objects, {filter:?}");
+    }
+    // The filters do something: each name is found by the one meant for it.
+    let only = |pattern: &str| spelaion_driver_api::NameFilter {
+        include: vec![pattern.into()],
+        exclude: vec![],
+    };
+    for (pattern, name) in [
+        ("tenant_*", "Tenant_A"),
+        ("tenant\\%*", "tenant%c"),
+        ("ñame*", "ÑAME_1"),
+        ("wow!*", "wow!x"),
+    ] {
+        let got: Vec<String> = conn
+            .list_objects_matching(schema, &only(pattern))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| o.name)
+            .collect();
+        assert_eq!(got, [name], "{pattern}");
+    }
+}
+
+#[tokio::test]
+async fn generated_ddl_recreates_tables_and_views() {
+    let db = TempDb::new("ddl");
+    let conn = open(&db).await;
+    exec_all(
+        &*conn,
+        "create table customer (id integer primary key, email text not null unique);
+         create table lines (id integer primary key autoincrement,
+                             customer_id integer not null references customer (id) on delete cascade,
+                             qty integer not null default 1 check (qty > 0),
+                             note text collate nocase);
+         create index lines_qty on lines (qty desc) where qty > 1;
+         create view big as select id, qty from lines where qty > 10",
+    )
+    .await;
+    let dialect = spelaion_driver_sqlite::SqliteDialect;
+    let big = conn.relation_definition("main", "big").await.unwrap();
+    assert_eq!(
+        big,
+        "CREATE VIEW big as select id, qty from lines where qty > 10;"
+    );
+    let lines = ddl_round_trip(&*conn, &dialect, "main", "lines", "drop table lines").await;
+    assert!(
+        lines.contains("\n\nCREATE INDEX lines_qty on lines (qty desc) where qty > 1;"),
+        "{lines}"
+    );
+    ddl_round_trip(&*conn, &dialect, "main", "customer", "drop table customer").await;
+    assert!(conn.relation_definition("main", "nope").await.is_err());
+}
+
+/// "Generate DDL" round trip: the DDL of `table`, run after `drop`, creates the same table
+/// (columns, keys, constraints, foreign keys, indexes and comment). Returns the DDL.
+async fn ddl_round_trip(
+    conn: &dyn Connection,
+    dialect: &dyn spelaion_driver_api::Dialect,
+    schema: &str,
+    table: &str,
+    drop: &str,
+) -> String {
+    let before = conn.describe_table(schema, table).await.unwrap();
+    let ddl = conn
+        .relation_definition(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{table}: {e}"));
+    assert!(ddl.ends_with(';'), "{ddl}");
+    run(conn, drop)
+        .await
+        .unwrap_or_else(|e| panic!("{drop}: {e:?}"));
+    for span in dialect.split_statements(&ddl) {
+        let statement = span.text(&ddl);
+        run(conn, statement)
+            .await
+            .unwrap_or_else(|e| panic!("{statement}\n→ {e:?}\n\n{ddl}"));
+    }
+    let after = conn.describe_table(schema, table).await.unwrap();
+    assert_eq!(after.columns, before.columns, "{ddl}");
+    assert_eq!(after.primary_key, before.primary_key, "{ddl}");
+    assert_eq!(after.constraints, before.constraints, "{ddl}");
+    assert_eq!(after.foreign_keys, before.foreign_keys, "{ddl}");
+    assert_eq!(after.indexes, before.indexes, "{ddl}");
+    assert_eq!(after.object.comment, before.object.comment, "{ddl}");
+    assert_eq!(after.object.kind, before.object.kind, "{ddl}");
+    ddl
 }

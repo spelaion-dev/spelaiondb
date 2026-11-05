@@ -135,6 +135,52 @@ async fn mysql_sessions() -> Vec<(&'static str, Session)> {
 }
 
 #[tokio::test]
+async fn mysql_executable_comments_do_not_bypass_agent_barriers() {
+    for (server, session) in mysql_sessions().await {
+        let t = format!("agent_comments_{}", std::process::id());
+        run(&session, &format!("create table {t} (id int primary key, n int); insert into {t} values (1, 1), (2, 2)")).await;
+        for sql in [
+            format!("delete from {t} /*!99999 where id = 1 */"),
+            format!("update {t} set n = 0 /*!99999 where id = 1 */"),
+            format!("delete from {t} /*M!999999 where id = 1 */"),
+        ] {
+            assert!(
+                matches!(
+                    session.run_write(&sql, &write_limits()).await,
+                    Err(WriteError::Rejected(_))
+                ),
+                "{server}: {sql}"
+            );
+        }
+        for sql in [
+            format!("select * from {t} /*!99999 where id = 1 */"),
+            format!("explain select * from {t} /*M!100000 where id = 1 */"),
+            "select 1 /*M! , get_lock('agent_comment_test', 0) */".to_string(),
+        ] {
+            rejected(session.run_read_only(&sql, &limits(5)).await, &sql);
+        }
+        assert_eq!(
+            first(&session, &format!("select count(*) from {t} where n = id")).await,
+            "2",
+            "{server}"
+        );
+        session
+            .run_write(
+                &format!("update {t} set n = 3 /* ordinary comment */ where id = 1"),
+                &write_limits(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first(&session, &format!("select n from {t} where id = 1")).await,
+            "3",
+            "{server}"
+        );
+        run(&session, &format!("drop table {t}")).await;
+    }
+}
+
+#[tokio::test]
 async fn mysql_reads_are_read_only_capped_and_leave_nothing_open() {
     for (server, session) in mysql_sessions().await {
         let t = format!("agent_read_{}", std::process::id());
@@ -480,6 +526,95 @@ async fn duckdb(database: &str, read_only: bool) -> Session {
         .await
         .unwrap();
     Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+}
+
+#[tokio::test]
+async fn destructive_table_ddl_preserves_existing_data() {
+    let mut sessions = mysql_sessions().await;
+    sessions.push(("duckdb", duckdb(":memory:", false).await));
+    for (server, session) in sessions {
+        let table = format!("agent_ddl_{}", std::process::id());
+        run(&session, &format!("create table {table} (id int, body varchar(20)); insert into {table} values (1, 'kept'), (2, 'safe')")).await;
+        for sql in [
+            format!("create or replace table {table} (id int)"),
+            format!("alter table {table} drop column body"),
+        ] {
+            assert!(
+                matches!(
+                    session.run_write(&sql, &write_limits()).await,
+                    Err(WriteError::Rejected(_))
+                ),
+                "{server}: {sql}"
+            );
+        }
+        assert_eq!(
+            first(
+                &session,
+                &format!("select count(*) from {table} where body in ('kept', 'safe')")
+            )
+            .await,
+            "2",
+            "{server}"
+        );
+        session
+            .run_write(
+                &format!("alter table {table} add column extra int"),
+                &write_limits(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first(
+                &session,
+                &format!("select count(*) from {table} where extra is null")
+            )
+            .await,
+            "2",
+            "{server}"
+        );
+        run(&session, &format!("drop table {table}")).await;
+    }
+}
+
+#[tokio::test]
+async fn mariadb_schema_replacement_preserves_tables() {
+    let Ok(addr) = std::env::var("SPELAION_TEST_MARIADB") else {
+        eprintln!("SPELAION_TEST_MARIADB not set: test skipped");
+        return;
+    };
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let driver = MysqlDriver::mariadb();
+    let conn = driver
+        .connect(&ConnectParams {
+            host: host.into(),
+            port: port.parse().unwrap(),
+            user: "root".into(),
+            password: Some(Secret::new("spelaion-root")),
+            database: "spelaion".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let schema = format!("agent_ddl_schema_{}", std::process::id());
+    run(&session, &format!("create database {schema}; create table {schema}.t (id int); insert into {schema}.t values (1)")).await;
+    for sql in [
+        format!("create or replace schema {schema}"),
+        format!("create or replace database {schema}"),
+    ] {
+        assert!(
+            matches!(
+                session.run_write(&sql, &write_limits()).await,
+                Err(WriteError::Rejected(_))
+            ),
+            "{sql}"
+        );
+    }
+    assert_eq!(
+        first(&session, &format!("select count(*) from {schema}.t")).await,
+        "1"
+    );
+    run(&session, &format!("drop database {schema}")).await;
 }
 
 #[tokio::test]

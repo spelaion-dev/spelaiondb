@@ -5,9 +5,11 @@
 //! (procedures, `sp_help`), and each one becomes a result. Cancelling sends a TDS Attention,
 //! which stops the running batch and keeps the session (`KILL` would end it).
 
+mod ddl;
 mod decode;
 mod dialect;
 mod introspect;
+mod objects;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,8 +19,8 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, ObjectInfo, Result, ResultSchema, SchemaInfo, TableInfo,
-    TlsMode,
+    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, ResultSchema,
+    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -28,6 +30,8 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 pub use dialect::SqlServerDialect;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// SQL Server's "chosen as deadlock victim" error.
+const DEADLOCK_VICTIM: &str = "1205";
 
 type SqlClient = Client<Compat<TcpStream>>;
 
@@ -372,17 +376,30 @@ fn closed() -> DriverError {
 }
 
 impl SqlServerConnection {
+    /// A catalog query of the driver's own. They only read, so when SQL Server picks one as the
+    /// victim of a deadlock with other sessions' DDL (error 1205) it is simply run again.
     pub(crate) async fn rows(&self, sql: &str, params: Vec<String>) -> Result<Rows> {
-        let (reply, response) = oneshot::channel();
-        self.requests
-            .send(Request::Rows {
-                sql: sql.to_string(),
-                params,
-                reply,
-            })
-            .await
-            .map_err(|_| closed())?;
-        response.await.map_err(|_| closed())?
+        const ATTEMPTS: usize = 3;
+        let mut attempt = 1;
+        loop {
+            let (reply, response) = oneshot::channel();
+            self.requests
+                .send(Request::Rows {
+                    sql: sql.to_string(),
+                    params: params.clone(),
+                    reply,
+                })
+                .await
+                .map_err(|_| closed())?;
+            match response.await.map_err(|_| closed())? {
+                Err(DriverError::Database { code, .. })
+                    if code.as_deref() == Some(DEADLOCK_VICTIM) && attempt < ATTEMPTS =>
+                {
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
     }
 }
 
@@ -457,15 +474,62 @@ impl Connection for SqlServerConnection {
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
-        introspect::list_schemas(self).await
+        introspect::list_schemas(self, &LikeFilter::default()).await
     }
 
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>> {
-        introspect::list_objects(self, schema).await
+        introspect::list_objects(self, schema, &LikeFilter::default()).await
+    }
+
+    // Narrowed in the catalog query, then matched exactly (ADR-025).
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let mut schemas = introspect::list_schemas(self, &filter.server_side()).await?;
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let mut objects = introspect::list_objects(self, schema, &filter.server_side()).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let mut objects = objects::list_schema_objects(self, schema, &filter.server_side()).await?;
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
     }
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, schema, name).await
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        objects::list_schema_objects(self, schema, &LikeFilter::default()).await
+    }
+
+    async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
+        objects::list_server_objects(self).await
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        objects::object_definition(self, object).await
+    }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        ddl::relation_definition(self, schema, name).await
+    }
+
+    async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
+        objects::procedure_call(self, object).await
     }
 }
 

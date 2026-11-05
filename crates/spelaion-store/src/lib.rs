@@ -89,6 +89,18 @@ const MIGRATIONS: &[&str] = &["create table audit (
         connection    text not null,
         updated_ms    integer not null,
         unique (workspace, name)
+    );",
+    // Patterns one per line (ADR-025); a row with every list empty is deleted instead.
+    "create table explorer_filters (
+        workspace       text not null,
+        connection      text not null,
+        schema_include  text not null,
+        schema_exclude  text not null,
+        object_include  text not null,
+        object_exclude  text not null,
+        column_include  text not null,
+        column_exclude  text not null,
+        primary key (workspace, connection)
     );"
 ];
 
@@ -203,6 +215,126 @@ impl AuditEntry {
 }
 
 /// Local database. Used by the app and `spelaiondb mcp` at the same time: WAL mode and waiting on locks.
+/// A connection's explorer filter (ADR-025): include and exclude patterns for its schemas,
+/// objects and columns. Empty lists show everything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExplorerFilter {
+    pub schema_include: Vec<String>,
+    pub schema_exclude: Vec<String>,
+    pub object_include: Vec<String>,
+    pub object_exclude: Vec<String>,
+    pub column_include: Vec<String>,
+    pub column_exclude: Vec<String>,
+}
+
+impl ExplorerFilter {
+    fn lists(&self) -> [&Vec<String>; 6] {
+        [
+            &self.schema_include,
+            &self.schema_exclude,
+            &self.object_include,
+            &self.object_exclude,
+            &self.column_include,
+            &self.column_exclude,
+        ]
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lists().iter().all(|list| list.is_empty())
+    }
+
+    fn lists_of(&mut self, kind: FilterKind) -> (&mut Vec<String>, &mut Vec<String>) {
+        match kind {
+            FilterKind::Schemas => (&mut self.schema_include, &mut self.schema_exclude),
+            FilterKind::Objects => (&mut self.object_include, &mut self.object_exclude),
+            FilterKind::Columns => (&mut self.column_include, &mut self.column_exclude),
+        }
+    }
+
+    /// "Hide": adds a pattern to the excluded ones of a kind.
+    pub fn hide(&mut self, kind: FilterKind, pattern: &str) {
+        let (_, exclude) = self.lists_of(kind);
+        if !exclude.iter().any(|p| p == pattern) {
+            exclude.push(pattern.to_string());
+        }
+    }
+
+    /// "Show only": the patterns become the only included ones of a kind, and stop being
+    /// excluded.
+    pub fn show_only(&mut self, kind: FilterKind, patterns: &[String]) {
+        let (include, exclude) = self.lists_of(kind);
+        *include = patterns.to_vec();
+        exclude.retain(|p| !patterns.contains(p));
+    }
+}
+
+/// The three kinds of names an explorer filter has patterns for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterKind {
+    Schemas,
+    Objects,
+    Columns,
+}
+
+/// Patterns are kept one per line: blank ones are dropped and none may contain a line break.
+fn pattern_lines(patterns: &[String]) -> Result<String, StoreError> {
+    let mut lines = Vec::new();
+    for pattern in patterns {
+        let pattern = pattern.trim();
+        if pattern.contains(['\n', '\r']) {
+            return Err(StoreError(
+                "a filter pattern cannot contain a line break".into(),
+            ));
+        }
+        if !pattern.is_empty() {
+            lines.push(pattern);
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
+fn patterns_of(lines: &str) -> Vec<String> {
+    lines
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// How the explorer shows its tree, shared by every workspace in this user directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExplorerPreferences {
+    /// System schemas (`pg_catalog`, `information_schema`, `sys`…) and built-in roles and
+    /// logins. Off by default.
+    pub show_system: bool,
+    /// Names in alphabetical order rather than the database's; on by default. Columns always
+    /// keep their table's order.
+    pub sort_alphabetically: bool,
+    /// Alphabetical order ignores case (`b` between `A` and `C`); on by default.
+    pub sort_ignore_case: bool,
+    /// Folders (roles, tablespaces…) before the schemas next to them; off by default.
+    pub folders_first: bool,
+    /// Only the connections that are connected (opened in the explorer or used by a tab);
+    /// off by default.
+    pub connected_only: bool,
+    /// Filters go into the catalog queries, so big catalogs are not read whole (ADR-025);
+    /// on by default. Off, every name is read and filtered on this computer.
+    pub server_side_filters: bool,
+}
+
+impl Default for ExplorerPreferences {
+    fn default() -> Self {
+        Self {
+            show_system: false,
+            sort_alphabetically: true,
+            sort_ignore_case: true,
+            folders_first: false,
+            connected_only: false,
+            server_side_filters: true,
+        }
+    }
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -391,6 +523,70 @@ impl Store {
         Ok(())
     }
 
+    /// A connection's explorer filter; empty if it has none.
+    pub fn explorer_filter(
+        &self,
+        workspace: &str,
+        connection: &str,
+    ) -> Result<ExplorerFilter, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "select schema_include, schema_exclude, object_include, object_exclude,
+                        column_include, column_exclude
+                 from explorer_filters where workspace = ?1 and connection = ?2",
+                params![workspace, connection],
+                |r| {
+                    Ok(ExplorerFilter {
+                        schema_include: patterns_of(&r.get::<_, String>(0)?),
+                        schema_exclude: patterns_of(&r.get::<_, String>(1)?),
+                        object_include: patterns_of(&r.get::<_, String>(2)?),
+                        object_exclude: patterns_of(&r.get::<_, String>(3)?),
+                        column_include: patterns_of(&r.get::<_, String>(4)?),
+                        column_exclude: patterns_of(&r.get::<_, String>(5)?),
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    /// Replaces a connection's explorer filter (blank patterns dropped); an empty one is
+    /// removed.
+    pub fn set_explorer_filter(
+        &self,
+        workspace: &str,
+        connection: &str,
+        filter: &ExplorerFilter,
+    ) -> Result<(), StoreError> {
+        let lines = filter
+            .lists()
+            .map(|list| pattern_lines(list))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        if lines.iter().all(String::is_empty) {
+            self.conn.execute(
+                "delete from explorer_filters where workspace = ?1 and connection = ?2",
+                params![workspace, connection],
+            )?;
+            return Ok(());
+        }
+        self.conn.execute(
+            "insert into explorer_filters (workspace, connection, schema_include, schema_exclude,
+                                           object_include, object_exclude, column_include,
+                                           column_exclude)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             on conflict (workspace, connection) do update set
+                schema_include = excluded.schema_include, schema_exclude = excluded.schema_exclude,
+                object_include = excluded.object_include, object_exclude = excluded.object_exclude,
+                column_include = excluded.column_include, column_exclude = excluded.column_exclude",
+            params![
+                workspace, connection, lines[0], lines[1], lines[2], lines[3], lines[4], lines[5]
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Personal interface language, shared by every workspace in this user directory.
     /// `system` follows the operating system; `en` and `es` are explicit overrides.
     pub fn get_language(&self) -> Result<String, StoreError> {
@@ -448,6 +644,62 @@ impl Store {
 
     pub fn set_update_check(&self, enabled: bool) -> Result<(), StoreError> {
         self.set_personal_setting("update_check", if enabled { "on" } else { "off" })
+    }
+
+    /// The explorer's preferences, each one at its default until it is changed.
+    pub fn get_explorer_preferences(&self) -> Result<ExplorerPreferences, StoreError> {
+        let defaults = ExplorerPreferences::default();
+        Ok(ExplorerPreferences {
+            show_system: self.get_flag("explorer.show_system", defaults.show_system)?,
+            sort_alphabetically: self
+                .get_flag("explorer.sort_alphabetically", defaults.sort_alphabetically)?,
+            sort_ignore_case: self
+                .get_flag("explorer.sort_ignore_case", defaults.sort_ignore_case)?,
+            folders_first: self.get_flag("explorer.folders_first", defaults.folders_first)?,
+            connected_only: self.get_flag("explorer.connected_only", defaults.connected_only)?,
+            server_side_filters: self
+                .get_flag("explorer.server_side_filters", defaults.server_side_filters)?,
+        })
+    }
+
+    pub fn set_explorer_preferences(
+        &self,
+        preferences: &ExplorerPreferences,
+    ) -> Result<(), StoreError> {
+        let ExplorerPreferences {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+            connected_only,
+            server_side_filters,
+        } = *preferences;
+        self.set_flag("explorer.show_system", show_system)?;
+        self.set_flag("explorer.sort_alphabetically", sort_alphabetically)?;
+        self.set_flag("explorer.sort_ignore_case", sort_ignore_case)?;
+        self.set_flag("explorer.folders_first", folders_first)?;
+        self.set_flag("explorer.connected_only", connected_only)?;
+        self.set_flag("explorer.server_side_filters", server_side_filters)
+    }
+
+    fn get_flag(&self, key: &str, default: bool) -> Result<bool, StoreError> {
+        let value = self
+            .conn
+            .query_row(
+                "select value from personal_settings where key = ?1",
+                [key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(match value.as_deref() {
+            Some("on") => true,
+            Some("off") => false,
+            _ => default,
+        })
+    }
+
+    fn set_flag(&self, key: &str, value: bool) -> Result<(), StoreError> {
+        self.set_personal_setting(key, if value { "on" } else { "off" })
     }
 
     fn set_personal_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
@@ -1011,6 +1263,96 @@ mod tests {
             Store::open(&second_path).unwrap().get_language().unwrap(),
             "en"
         );
+    }
+
+    #[test]
+    fn explorer_filters_are_per_workspace_and_connection() {
+        let path = temp("explorer-filters");
+        let store = Store::open(&path).unwrap();
+        assert!(store.explorer_filter("/repo", "shop").unwrap().is_empty());
+        let filter = ExplorerFilter {
+            schema_include: vec![" tenant_* ".into(), "".into(), "public".into()],
+            object_exclude: vec!["*_old".into()],
+            column_exclude: vec!["password".into()],
+            ..ExplorerFilter::default()
+        };
+        store.set_explorer_filter("/repo", "shop", &filter).unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        let saved = store.explorer_filter("/repo", "shop").unwrap();
+        // Trimmed, blank patterns dropped.
+        assert_eq!(saved.schema_include, ["tenant_*", "public"]);
+        assert_eq!(saved.object_exclude, ["*_old"]);
+        assert_eq!(saved.column_exclude, ["password"]);
+        assert!(saved.schema_exclude.is_empty() && saved.object_include.is_empty());
+        // Another workspace's connection with the same id has its own.
+        assert!(store.explorer_filter("/other", "shop").unwrap().is_empty());
+        assert!(store.explorer_filter("/repo", "other").unwrap().is_empty());
+        // A line break would split one pattern into two: refused.
+        let broken = ExplorerFilter {
+            object_include: vec!["a\nb".into()],
+            ..ExplorerFilter::default()
+        };
+        assert!(store.set_explorer_filter("/repo", "shop", &broken).is_err());
+        assert_eq!(store.explorer_filter("/repo", "shop").unwrap(), saved);
+        // Clearing it removes the row.
+        store
+            .set_explorer_filter("/repo", "shop", &ExplorerFilter::default())
+            .unwrap();
+        assert!(store.explorer_filter("/repo", "shop").unwrap().is_empty());
+    }
+
+    #[test]
+    fn hide_and_show_only_edit_one_kind() {
+        let mut filter = ExplorerFilter {
+            object_include: vec!["a*".into(), "b*".into()],
+            object_exclude: vec!["orders".into()],
+            ..ExplorerFilter::default()
+        };
+        filter.hide(FilterKind::Objects, "audit");
+        filter.hide(FilterKind::Objects, "audit");
+        assert_eq!(filter.object_exclude, ["orders", "audit"]);
+        filter.show_only(FilterKind::Objects, &["orders".into()]);
+        assert_eq!(filter.object_include, ["orders"]);
+        assert_eq!(filter.object_exclude, ["audit"]);
+        filter.hide(FilterKind::Columns, "password");
+        filter.show_only(FilterKind::Schemas, &["public".into(), "audit".into()]);
+        assert_eq!(filter.column_exclude, ["password"]);
+        assert_eq!(filter.schema_include, ["public", "audit"]);
+        assert!(filter.schema_exclude.is_empty() && filter.column_include.is_empty());
+    }
+
+    #[test]
+    fn explorer_preferences_start_at_their_defaults_and_persist() {
+        let path = temp("explorer");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.get_explorer_preferences().unwrap(),
+            ExplorerPreferences::default()
+        );
+        let defaults = ExplorerPreferences::default();
+        assert!(
+            defaults.sort_alphabetically
+                && defaults.sort_ignore_case
+                && defaults.server_side_filters
+        );
+        assert!(!defaults.show_system && !defaults.folders_first && !defaults.connected_only);
+        // Every field is saved on its own: each one flipped from its default.
+        let changed = ExplorerPreferences {
+            show_system: true,
+            sort_alphabetically: false,
+            sort_ignore_case: false,
+            folders_first: true,
+            connected_only: true,
+            server_side_filters: false,
+        };
+        store.set_explorer_preferences(&changed).unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.get_explorer_preferences().unwrap(), changed);
+        // Another setting does not touch them.
+        reopened.set_theme("light").unwrap();
+        assert_eq!(reopened.get_explorer_preferences().unwrap(), changed);
     }
 
     #[test]

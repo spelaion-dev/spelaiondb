@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
 import type { EditableTableItem } from "../bindings";
-import { openSession } from "../connect";
+import { openSession, SCHEMAS_REFRESHED_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
@@ -239,7 +239,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function loadPageNow(view: TableView) {
     if (!(await ensureConnected())) return;
     if (primaryKey === null) {
-      call(commands.describeTable(tab.id, view.schema, view.name))
+      call(commands.describeTable(tab.id, view.schema, view.name, null))
         .then((details) => setPrimaryKey(details.primaryKey))
         .catch(() => setPrimaryKey([]));
     }
@@ -399,15 +399,26 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => window.removeEventListener(SAVE_QUERY_EVENT, onSave);
   }, [tab.id]);
 
+  // "Refresh all schemas" in the explorer reloads the names below.
+  const [schemasRefreshed, setSchemasRefreshed] = useState(0);
+  useEffect(() => {
+    const onRefresh = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === tab.connectionId) setSchemasRefreshed((n) => n + 1);
+    };
+    window.addEventListener(SCHEMAS_REFRESHED_EVENT, onRefresh);
+    return () => window.removeEventListener(SCHEMAS_REFRESHED_EVENT, onRefresh);
+  }, [tab.connectionId]);
+
   // Autocompletion: tables and views of the user schemas.
   useEffect(() => {
     if (tab.status !== "connected") return;
     let cancelled = false;
     (async () => {
-      const schemas = (await call(commands.listSchemas(tab.id))).filter((s) => !s.system).slice(0, 20);
+      // Autocompletion sees every name: the explorer's filters (ADR-025) do not apply here.
+      const schemas = (await call(commands.listSchemas(tab.id, null, false))).filter((s) => !s.system).slice(0, 20);
       const out: Record<string, string[]> = {};
       for (const schema of schemas) {
-        for (const o of await call(commands.listObjects(tab.id, schema.name))) {
+        for (const o of await call(commands.listObjects(tab.id, schema.name, null, false))) {
           out[`${o.schema}.${o.name}`] = [];
           if (o.schema === "public" || o.schema === "main" || o.schema === database) out[o.name] = [];
         }
@@ -417,7 +428,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => {
       cancelled = true;
     };
-  }, [tab.status, tab.id, database]);
+  }, [tab.status, tab.id, database, schemasRefreshed]);
 
   // Read the server state after connecting and after each script, including failed scripts:
   // a USE earlier in a script can succeed even when a later statement fails.

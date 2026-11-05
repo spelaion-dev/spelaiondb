@@ -10,8 +10,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
 import { useUpdate } from "../update";
 
-type Category = "appearance" | "language" | "history" | "updates";
-const CATEGORIES: Category[] = ["appearance", "language", "history", "updates"];
+type Category = "appearance" | "language" | "explorer" | "history" | "updates";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "history", "updates"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -57,6 +57,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         <h2 id={`settings-${category}`}>{t(`${category}.title`)}</h2>
         {category === "appearance" && <AppearanceSettings />}
         {category === "language" && <LanguageSettings />}
+        {category === "explorer" && <ExplorerSettings />}
         {category === "history" && <HistorySettings />}
         {category === "updates" && <UpdateSettings />}
       </section>
@@ -91,7 +92,7 @@ function Choice<T extends string>(props: {
   );
 }
 
-function SaveError({ setting }: { setting: "language" | "theme" }) {
+function SaveError({ setting }: { setting: "language" | "theme" | "explorer" }) {
   const { t } = useTranslation("settings");
   const error = usePreferences((s) => s.error);
   if (error?.setting !== setting) return null;
@@ -149,6 +150,72 @@ function LanguageSettings() {
       />
       <p className="muted small">{t("language.hint")}</p>
       <SaveError setting="language" />
+    </>
+  );
+}
+
+function ExplorerSettings() {
+  const { t } = useTranslation("settings");
+  const explorer = usePreferences((s) => s.explorer);
+  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const setExplorer = usePreferences((s) => s.setExplorer);
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          name="showSystem"
+          checked={explorer.showSystem}
+          disabled={busy}
+          onChange={(e) => void setExplorer({ ...explorer, showSystem: e.target.checked })}
+        />
+        {t("explorer.showSystem")}
+      </label>
+      <p className="muted small">{t("explorer.showSystemHint")}</p>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("explorer.sorting")}</legend>
+        <label className="check">
+          <input
+            type="checkbox"
+            name="sortAlphabetically"
+            checked={explorer.sortAlphabetically}
+            onChange={(e) => void setExplorer({ ...explorer, sortAlphabetically: e.target.checked })}
+          />
+          {t("explorer.sortAlphabetically")}
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            name="sortIgnoreCase"
+            checked={explorer.sortIgnoreCase}
+            disabled={!explorer.sortAlphabetically}
+            onChange={(e) => void setExplorer({ ...explorer, sortIgnoreCase: e.target.checked })}
+          />
+          {t("explorer.sortIgnoreCase")}
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            name="foldersFirst"
+            checked={explorer.foldersFirst}
+            onChange={(e) => void setExplorer({ ...explorer, foldersFirst: e.target.checked })}
+          />
+          {t("explorer.foldersFirst")}
+        </label>
+      </fieldset>
+      <p className="muted small">{t("explorer.sortingHint")}</p>
+      <label className="check">
+        <input
+          type="checkbox"
+          name="serverSideFilters"
+          checked={explorer.serverSideFilters}
+          disabled={busy}
+          onChange={(e) => void setExplorer({ ...explorer, serverSideFilters: e.target.checked })}
+        />
+        {t("explorer.serverSideFilters")}
+      </label>
+      <p className="muted small">{t("explorer.serverSideFiltersHint")}</p>
+      <SaveError setting="explorer" />
     </>
   );
 }

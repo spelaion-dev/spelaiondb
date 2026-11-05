@@ -5,7 +5,9 @@
 
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
-    ColumnInfo, Dialect, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, SchemaInfo, TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, Dialect, DriverError, ForeignKeyInfo, IndexInfo,
+    LikeFilter, ObjectInfo, ObjectKind, Result, SchemaInfo, SchemaObject, SchemaObjectKind,
+    TableInfo, terminated,
 };
 
 use crate::dialect::SqliteDialect;
@@ -46,7 +48,14 @@ fn schema_table(schema: &str) -> String {
     format!("{}.sqlite_schema", SqliteDialect.quote_identifier(schema))
 }
 
-pub(crate) const SCHEMAS_SQL: &str = "select name from pragma_database_list order by seq";
+/// The schemas (main, temp, attached databases), narrowed by `like` (ADR-025). Patterns go
+/// in as literals: the same text runs locally and through a server's `sqlite3`.
+pub(crate) fn schemas_sql(like: &LikeFilter) -> String {
+    format!(
+        "select name from pragma_database_list where true{} order by seq",
+        like.sql("name", literal)
+    )
+}
 
 pub(crate) fn schemas(rows: &[Row]) -> Vec<SchemaInfo> {
     rows.iter()
@@ -57,10 +66,11 @@ pub(crate) fn schemas(rows: &[Row]) -> Vec<SchemaInfo> {
         .collect()
 }
 
-pub(crate) fn objects_sql(schema: &str) -> String {
+pub(crate) fn objects_sql(schema: &str, like: &LikeFilter) -> String {
     format!(
-        r"select name, type from {} where type in ('table', 'view') and name not like 'sqlite\_%' escape '\' order by name",
-        schema_table(schema)
+        r"select name, type from {} where type in ('table', 'view') and name not like 'sqlite\_%' escape '\'{} order by name",
+        schema_table(schema),
+        like.sql("name", literal)
     )
 }
 
@@ -81,6 +91,86 @@ pub(crate) fn objects(schema: &str, rows: &[Row]) -> Vec<ObjectInfo> {
         .collect()
 }
 
+/// Triggers are all a SQLite schema holds besides its tables and views (ADR-024).
+pub(crate) fn schema_objects_sql(schema: &str, like: &LikeFilter) -> String {
+    format!(
+        "select name, tbl_name from {} where type = 'trigger'{} order by name",
+        schema_table(schema),
+        like.sql("name", literal)
+    )
+}
+
+pub(crate) fn schema_objects(schema: &str, rows: &[Row]) -> Vec<SchemaObject> {
+    rows.iter()
+        .map(|row| SchemaObject {
+            schema: schema.to_string(),
+            name: text(row, 0),
+            kind: SchemaObjectKind::Trigger,
+            detail: optional_text(row, 1),
+            comment: None,
+        })
+        .collect()
+}
+
+/// The `CREATE TABLE` or `CREATE VIEW` SQLite keeps, then the `CREATE INDEX` of the table's
+/// own indexes (automatic ones have no text: they come from its constraints).
+pub(crate) fn relation_definition_sql(schema: &str, name: &str) -> String {
+    format!(
+        "select sql from {table} where name = {name} and type in ('table', 'view') \
+         union all \
+         select * from (select sql from {table} where tbl_name = {name} and type = 'index' \
+                        and sql is not null order by name)",
+        table = schema_table(schema),
+        name = literal(name)
+    )
+}
+
+pub(crate) fn relation_definition(schema: &str, name: &str, rows: &[Row]) -> Result<String> {
+    if rows.is_empty() {
+        return Err(DriverError::Other(format!(
+            "{schema}.{name} does not exist"
+        )));
+    }
+    Ok(rows
+        .iter()
+        .filter_map(|row| optional_text(row, 0))
+        .map(|sql| terminated(&sql))
+        .collect::<Vec<_>>()
+        .join("\n\n"))
+}
+
+/// The `CREATE TRIGGER` SQLite keeps, or an error for kinds SQLite does not have.
+pub(crate) fn definition_sql(object: &SchemaObject) -> Result<String> {
+    match object.kind {
+        SchemaObjectKind::Trigger => Ok(format!(
+            "select sql from {} where type = 'trigger' and name = {}",
+            schema_table(&object.schema),
+            literal(&object.name)
+        )),
+        SchemaObjectKind::Function
+        | SchemaObjectKind::Procedure
+        | SchemaObjectKind::Aggregate
+        | SchemaObjectKind::Sequence
+        | SchemaObjectKind::Enum
+        | SchemaObjectKind::Domain
+        | SchemaObjectKind::Type
+        | SchemaObjectKind::Event
+        | SchemaObjectKind::Synonym => Err(DriverError::Other(format!(
+            "SQLite has no {:?} objects",
+            object.kind
+        ))),
+    }
+}
+
+pub(crate) fn definition(object: &SchemaObject, rows: &[Row]) -> Result<String> {
+    rows.first()
+        .and_then(|row| optional_text(row, 0))
+        .map(|sql| terminated(&sql))
+        .ok_or_else(|| {
+            DriverError::Other(format!("{}.{} does not exist", object.schema, object.name))
+        })
+}
+
 /// hidden = 1: hidden columns of virtual tables; 2 and 3: generated (shown).
 pub(crate) fn columns_sql(schema: &str, name: &str) -> String {
     format!(
@@ -97,6 +187,16 @@ pub(crate) fn indexes_sql(schema: &str, name: &str) -> String {
         literal(name),
         literal(schema),
         schema_table(schema)
+    )
+}
+
+/// The columns of the indexes behind UNIQUE constraints (`origin = 'u'`), in order.
+pub(crate) fn unique_columns_sql(schema: &str, name: &str) -> String {
+    format!(
+        "select il.name, ii.name from pragma_index_list({table}, {schema}) il, \
+         pragma_index_info(il.name, {schema}) ii where il.origin = 'u' order by il.name, ii.seqno",
+        table = literal(name),
+        schema = literal(schema)
     )
 }
 
@@ -129,6 +229,7 @@ pub(crate) fn table(
     column_rows: &[Row],
     index_rows: &[Row],
     foreign_key_rows: &[Row],
+    unique_rows: &[Row],
 ) -> (TableInfo, Vec<usize>) {
     let schema = object.schema.clone();
     let mut pk: Vec<(i64, String)> = column_rows
@@ -196,13 +297,53 @@ pub(crate) fn table(
         .map(|(i, _)| i)
         .collect();
 
+    let primary_key: Vec<String> = pk.into_iter().map(|(_, n)| n).collect();
+    let quoted = |columns: &[String]| {
+        columns
+            .iter()
+            .map(|c| SqliteDialect.quote_identifier(c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut constraints = Vec::new();
+    if !primary_key.is_empty() {
+        constraints.push(ConstraintInfo {
+            name: None,
+            kind: ConstraintKind::PrimaryKey,
+            definition: format!("PRIMARY KEY ({})", quoted(&primary_key)),
+            columns: primary_key.clone(),
+        });
+    }
+    for row in unique_rows {
+        let index = text(row, 0);
+        match constraints.last_mut() {
+            Some(ConstraintInfo {
+                name: Some(name),
+                columns,
+                ..
+            }) if *name == index => columns.push(text(row, 1)),
+            _ => constraints.push(ConstraintInfo {
+                name: Some(index),
+                kind: ConstraintKind::Unique,
+                columns: vec![text(row, 1)],
+                definition: String::new(),
+            }),
+        }
+    }
+    for c in &mut constraints {
+        if c.kind == ConstraintKind::Unique {
+            c.definition = format!("UNIQUE ({})", quoted(&c.columns));
+        }
+    }
+
     (
         TableInfo {
             object,
             columns,
-            primary_key: pk.into_iter().map(|(_, n)| n).collect(),
+            primary_key,
             indexes,
             foreign_keys,
+            constraints,
         },
         to_primary_keys,
     )

@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, Connection, Dialect, DriverError, EventStream,
-    ExecEvent, ExecOptions, ObjectInfo, Remote, RemoteControl, RemoteProcess, Result, ResultSchema,
-    SchemaInfo, TableInfo,
+    ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Remote, RemoteControl,
+    RemoteProcess, Result, ResultSchema, SchemaInfo, SchemaObject, TableInfo,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -728,14 +728,18 @@ impl Connection for RemoteConnection {
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
         Ok(catalog::schemas(
-            &self.rows(catalog::SCHEMAS_SQL.to_string()).await?,
+            &self
+                .rows(catalog::schemas_sql(&LikeFilter::default()))
+                .await?,
         ))
     }
 
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>> {
         Ok(catalog::objects(
             schema,
-            &self.rows(catalog::objects_sql(schema)).await?,
+            &self
+                .rows(catalog::objects_sql(schema, &LikeFilter::default()))
+                .await?,
         ))
     }
 
@@ -751,6 +755,7 @@ impl Connection for RemoteConnection {
             &self.rows(catalog::columns_sql(schema, name)).await?,
             &self.rows(catalog::indexes_sql(schema, name)).await?,
             &self.rows(catalog::foreign_keys_sql(schema, name)).await?,
+            &self.rows(catalog::unique_columns_sql(schema, name)).await?,
         );
         for i in to_primary_keys {
             let referenced = table.foreign_keys[i].referenced_table.clone();
@@ -761,6 +766,63 @@ impl Connection for RemoteConnection {
             );
         }
         Ok(table)
+    }
+
+    async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
+        Ok(catalog::schema_objects(
+            schema,
+            &self
+                .rows(catalog::schema_objects_sql(schema, &LikeFilter::default()))
+                .await?,
+        ))
+    }
+
+    // Narrowed in the catalog query, then matched exactly (ADR-025).
+    async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
+        let rows = self
+            .rows(catalog::schemas_sql(&filter.server_side()))
+            .await?;
+        let mut schemas = catalog::schemas(&rows);
+        schemas.retain(|s| filter.matches(&s.name));
+        Ok(schemas)
+    }
+
+    async fn list_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<ObjectInfo>> {
+        let rows = self
+            .rows(catalog::objects_sql(schema, &filter.server_side()))
+            .await?;
+        let mut objects = catalog::objects(schema, &rows);
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn list_schema_objects_matching(
+        &self,
+        schema: &str,
+        filter: &NameFilter,
+    ) -> Result<Vec<SchemaObject>> {
+        let rows = self
+            .rows(catalog::schema_objects_sql(schema, &filter.server_side()))
+            .await?;
+        let mut objects = catalog::schema_objects(schema, &rows);
+        objects.retain(|o| filter.matches(&o.name));
+        Ok(objects)
+    }
+
+    async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
+        let rows = self.rows(catalog::definition_sql(object)?).await?;
+        catalog::definition(object, &rows)
+    }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        let rows = self
+            .rows(catalog::relation_definition_sql(schema, name))
+            .await?;
+        catalog::relation_definition(schema, name, &rows)
     }
 }
 

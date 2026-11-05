@@ -2,32 +2,46 @@
 //! `duckdb_tables()`…). Schemas of the open database keep their name (`main`); those of
 //! attached databases are shown as `database.schema`.
 
-use duckdb::{Connection, params};
+use duckdb::types::Value;
+use duckdb::{Connection, params, params_from_iter};
 use spelaion_driver_api::{
-    ColumnInfo, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, Result, SchemaInfo,
-    TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
+    ObjectInfo, ObjectKind, Result, SchemaInfo, TableInfo,
 };
 
 use crate::exec::map_error;
 
-fn current_database(conn: &Connection) -> Result<String> {
+pub(crate) fn current_database(conn: &Connection) -> Result<String> {
     conn.query_row("select current_database()", [], |r| r.get(0))
         .map_err(map_error)
 }
 
-pub fn list_schemas(conn: &Connection) -> Result<Vec<SchemaInfo>> {
+/// `like` as SQL over `column`, its patterns appended to `params` as `?n` (ADR-025).
+pub(crate) fn like_sql(like: &LikeFilter, column: &str, params: &mut Vec<Value>) -> String {
+    like.sql(column, |pattern| {
+        params.push(Value::Text(pattern.to_string()));
+        format!("?{}", params.len())
+    })
+}
+
+pub fn list_schemas(conn: &Connection, like: &LikeFilter) -> Result<Vec<SchemaInfo>> {
     let current = current_database(conn)?;
+    // The name shown, which the explorer's filter matches: `database.schema` when attached.
+    let shown = "case when database_name = current_database() then schema_name \
+                 else database_name || '.' || schema_name end";
+    let mut values = Vec::new();
+    let narrow = like_sql(like, shown, &mut values);
     let mut statement = conn
-        .prepare(
+        .prepare(&format!(
             "select database_name, schema_name, \
                     schema_name in ('information_schema', 'pg_catalog') as system \
              from duckdb_schemas() \
-             where database_name not in ('system', 'temp') \
-             order by database_name <> current_database(), database_name, system, schema_name",
-        )
+             where database_name not in ('system', 'temp'){narrow} \
+             order by database_name <> current_database(), database_name, system, schema_name"
+        ))
         .map_err(map_error)?;
     let rows = statement
-        .query_map([], |r| {
+        .query_map(params_from_iter(values), |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
@@ -50,7 +64,7 @@ pub fn list_schemas(conn: &Connection) -> Result<Vec<SchemaInfo>> {
 }
 
 /// `schema` as shown by [`list_schemas`] → (database, schema).
-fn locate(conn: &Connection, schema: &str) -> Result<(String, String)> {
+pub(crate) fn locate(conn: &Connection, schema: &str) -> Result<(String, String)> {
     let current = current_database(conn)?;
     if let Some((database, rest)) = schema.split_once('.') {
         let attached: bool = conn
@@ -72,21 +86,29 @@ fn objects(
     database: &str,
     schema: &str,
     name: Option<&str>,
+    like: &LikeFilter,
 ) -> Result<Vec<ObjectInfo>> {
+    let mut values = vec![
+        Value::Text(database.to_string()),
+        Value::Text(schema.to_string()),
+        name.map_or(Value::Null, |n| Value::Text(n.to_string())),
+    ];
+    let narrow = like_sql(like, "o.name", &mut values);
     let mut statement = conn
-        .prepare(
-            "select table_name, false, estimated_size, comment from duckdb_tables() \
+        .prepare(&format!(
+            "select * from (select table_name, false, estimated_size, comment from duckdb_tables() \
                where database_name = ?1 and schema_name = ?2 and (?3 is null or table_name = ?3) \
              union all \
              select view_name, true, null, comment from duckdb_views() \
                where database_name = ?1 and schema_name = ?2 and (?3 is null or view_name = ?3) \
-                 and not internal \
-             order by 1",
-        )
+                 and not internal) as o(name, is_view, estimated_size, comment) \
+             where true{narrow} \
+             order by 1"
+        ))
         .map_err(map_error)?;
     let shown = schema_label(conn, database, schema)?;
     let rows = statement
-        .query_map(params![database, schema, name], |r| {
+        .query_map(params_from_iter(values), |r| {
             Ok(ObjectInfo {
                 schema: shown.clone(),
                 name: r.get(0)?,
@@ -111,14 +133,14 @@ fn schema_label(conn: &Connection, database: &str, schema: &str) -> Result<Strin
     })
 }
 
-pub fn list_objects(conn: &Connection, schema: &str) -> Result<Vec<ObjectInfo>> {
+pub fn list_objects(conn: &Connection, schema: &str, like: &LikeFilter) -> Result<Vec<ObjectInfo>> {
     let (database, schema) = locate(conn, schema)?;
-    objects(conn, &database, &schema, None)
+    objects(conn, &database, &schema, None, like)
 }
 
 pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<TableInfo> {
     let (database, schema) = locate(conn, schema)?;
-    let object = objects(conn, &database, &schema, Some(name))?
+    let object = objects(conn, &database, &schema, Some(name), &LikeFilter::default())?
         .into_iter()
         .next()
         .ok_or_else(|| DriverError::Other(format!("{schema}.{name} does not exist")))?;
@@ -148,10 +170,11 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
         .prepare(
             "select constraint_type, constraint_name, \
                     array_to_string(constraint_column_names, chr(1)), \
-                    referenced_table, array_to_string(referenced_column_names, chr(1)) \
+                    referenced_table, array_to_string(referenced_column_names, chr(1)), \
+                    constraint_text \
              from duckdb_constraints() \
              where database_name = ? and schema_name = ? and table_name = ? \
-               and constraint_type in ('PRIMARY KEY', 'FOREIGN KEY') \
+               and constraint_type in ('PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE', 'CHECK') \
              order by constraint_index",
         )
         .map_err(map_error)?;
@@ -163,7 +186,8 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
     let mut primary_key = Vec::new();
     let mut foreign_keys = Vec::new();
     let mut indexes = Vec::new();
-    let constraints = statement
+    let mut constraints = Vec::new();
+    let rows = statement
         .query_map(params![database, schema, name], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -171,13 +195,35 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, Option<String>>(3)?,
                 r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         })
         .map_err(map_error)?;
-    for constraint in constraints {
-        let (kind, constraint_name, columns_text, referenced_table, referenced_columns) =
-            constraint.map_err(map_error)?;
+    for row in rows {
+        let (kind, constraint_name, columns_text, referenced_table, referenced_columns, text) =
+            row.map_err(map_error)?;
         let constraint_columns = split(columns_text);
+        let constraint_kind = match kind.as_str() {
+            "PRIMARY KEY" => Some(ConstraintKind::PrimaryKey),
+            "UNIQUE" => Some(ConstraintKind::Unique),
+            "CHECK" => Some(ConstraintKind::Check),
+            _ => None,
+        };
+        if let Some(kind) = constraint_kind {
+            constraints.push(ConstraintInfo {
+                name: constraint_name.clone(),
+                kind,
+                columns: if kind == ConstraintKind::Check {
+                    Vec::new()
+                } else {
+                    constraint_columns.clone()
+                },
+                definition: text.unwrap_or_default(),
+            });
+        }
+        if kind == "UNIQUE" || kind == "CHECK" {
+            continue;
+        }
         if kind == "PRIMARY KEY" {
             indexes.push(IndexInfo {
                 name: constraint_name
@@ -225,5 +271,6 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
         primary_key,
         indexes,
         foreign_keys,
+        constraints,
     })
 }

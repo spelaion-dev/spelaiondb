@@ -24,7 +24,7 @@ use futures_util::StreamExt;
 use spelaion_driver_api::{ColumnMeta, DriverError, ExecEvent, ExecOptions, Value};
 
 use crate::Session;
-use crate::classify::{ReadKind, classify_read_only};
+use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comments};
 
 #[derive(Debug, Clone)]
 pub struct ReadLimits {
@@ -83,6 +83,7 @@ impl Session {
     ) -> Result<ReadResult, ReadError> {
         let engine = self.dialect().name();
         let sql = sql.trim().trim_end_matches(';').trim();
+        reject_mysql_executable_comments(engine, sql).map_err(ReadError::Rejected)?;
         let kind = classify_read_only(engine, sql).map_err(ReadError::Rejected)?;
         let started = Instant::now();
 

@@ -1,12 +1,12 @@
 //! SQLite catalog of a local file, through rusqlite (queries and rows in `catalog.rs`).
 
 use rusqlite::types::Value as SqlValue;
-use spelaion_driver_api::{DriverError, ObjectInfo, Result, SchemaInfo, TableInfo};
+use spelaion_driver_api::{DriverError, LikeFilter, ObjectInfo, Result, SchemaInfo, TableInfo};
 
 use crate::catalog::{self, Row};
 use crate::exec::map_error;
 
-fn query(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<Row>> {
+pub(crate) fn query(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<Row>> {
     let mut stmt = conn.prepare(sql).map_err(map_error)?;
     let width = stmt.column_count();
     stmt.query_map([], |r| {
@@ -20,13 +20,16 @@ fn query(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<Row>> {
 }
 
 pub fn list_schemas(conn: &rusqlite::Connection) -> Result<Vec<SchemaInfo>> {
-    Ok(catalog::schemas(&query(conn, catalog::SCHEMAS_SQL)?))
+    Ok(catalog::schemas(&query(
+        conn,
+        &catalog::schemas_sql(&LikeFilter::default()),
+    )?))
 }
 
 pub fn list_objects(conn: &rusqlite::Connection, schema: &str) -> Result<Vec<ObjectInfo>> {
     Ok(catalog::objects(
         schema,
-        &query(conn, &catalog::objects_sql(schema))?,
+        &query(conn, &catalog::objects_sql(schema, &LikeFilter::default()))?,
     ))
 }
 
@@ -40,6 +43,7 @@ pub fn describe_table(conn: &rusqlite::Connection, schema: &str, name: &str) -> 
         &query(conn, &catalog::columns_sql(schema, name))?,
         &query(conn, &catalog::indexes_sql(schema, name))?,
         &query(conn, &catalog::foreign_keys_sql(schema, name))?,
+        &query(conn, &catalog::unique_columns_sql(schema, name))?,
     );
     for i in to_primary_keys {
         let referenced = table.foreign_keys[i].referenced_table.clone();

@@ -19,6 +19,18 @@
     "system": "Igual que el sistema",
     "hint": "Los mensajes de las bases de datos y de los servidores SSH se muestran tal como llegan."
   },
+  "explorer": {
+    "title": "Explorador",
+    "showSystem": "Mostrar objetos del sistema",
+    "showSystemHint": "Esquemas del sistema (pg_catalog, information_schema, sys…) y los roles, usuarios e inicios de sesión que trae cada motor.",
+    "sorting": "Orden",
+    "sortAlphabetically": "Ordenar alfabéticamente",
+    "sortIgnoreCase": "Ignorar mayúsculas",
+    "foldersFirst": "Carpetas primero",
+    "sortingHint": "Sin orden alfabético, los nombres siguen el orden que devuelve la base de datos. Las columnas mantienen siempre el orden de su tabla. Carpetas primero pone los roles, usuarios y similares antes de los esquemas.",
+    "serverSideFilters": "Usar filtros en el servidor",
+    "serverSideFiltersHint": "Los filtros de una conexión van dentro de las consultas al catálogo de la base de datos, así un servidor con miles de esquemas o tablas solo envía lo que los pasa. Desactivado, se leen todos los nombres y se filtran en este equipo; lo que ves es lo mismo."
+  },
   "history": {
     "title": "Historial",
     "stored": "Cada consulta que ejecutas desde la app se guarda en este equipo con su conexión, hora, duración, número de filas y error. Abrir una consulta guardada nunca la ejecuta.",

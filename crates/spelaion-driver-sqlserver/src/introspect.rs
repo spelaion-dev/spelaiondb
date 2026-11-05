@@ -3,8 +3,8 @@
 //! only has from 2017.
 
 use spelaion_driver_api::{
-    ColumnInfo, DriverError, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind, Result, SchemaInfo,
-    TableInfo,
+    ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
+    ObjectInfo, ObjectKind, Result, SchemaInfo, TableInfo,
 };
 
 use crate::SqlServerConnection;
@@ -17,14 +17,29 @@ fn flag(row: &[Option<String>], i: usize) -> bool {
     row.get(i).cloned().flatten().is_some_and(|v| v == "1")
 }
 
-pub async fn list_schemas(conn: &SqlServerConnection) -> Result<Vec<SchemaInfo>> {
+/// `like` as SQL over `column`, its patterns appended to `params` as `@Pn` (ADR-025).
+pub(crate) fn like_sql(like: &LikeFilter, column: &str, params: &mut Vec<String>) -> String {
+    like.sql(column, |pattern| {
+        params.push(pattern.to_string());
+        format!("@P{}", params.len())
+    })
+}
+
+pub async fn list_schemas(
+    conn: &SqlServerConnection,
+    like: &LikeFilter,
+) -> Result<Vec<SchemaInfo>> {
+    let mut params = Vec::new();
+    let narrow = like_sql(like, "name", &mut params);
     // The `db_*` role schemas (16384…) and `guest` hold nothing of the user's.
     let rows = conn
         .rows(
-            "select name, case when name in ('sys', 'INFORMATION_SCHEMA', 'guest') \
-                     or schema_id >= 16384 then 1 else 0 end \
-             from sys.schemas order by 2, name",
-            vec![],
+            &format!(
+                "select name, case when name in ('sys', 'INFORMATION_SCHEMA', 'guest') \
+                         or schema_id >= 16384 then 1 else 0 end \
+                 from sys.schemas where 1 = 1{narrow} order by 2, name"
+            ),
+            params,
         )
         .await?;
     Ok(rows
@@ -40,10 +55,14 @@ async fn objects(
     conn: &SqlServerConnection,
     schema: &str,
     name: Option<&str>,
+    like: &LikeFilter,
 ) -> Result<Vec<ObjectInfo>> {
+    let mut params = vec![schema.to_string(), name.unwrap_or("").to_string()];
+    let narrow = like_sql(like, "o.name", &mut params);
     let rows = conn
         .rows(
-            "select o.name, case o.type when 'V' then 1 else 0 end, \
+            &format!(
+                "select o.name, case o.type when 'V' then 1 else 0 end, \
                     (select sum(p.rows) from sys.partitions p \
                       where p.object_id = o.object_id and p.index_id in (0, 1)), \
                     cast(ep.value as nvarchar(4000)) \
@@ -53,9 +72,10 @@ async fn objects(
                on ep.class = 1 and ep.major_id = o.object_id and ep.minor_id = 0 \
               and ep.name = 'MS_Description' \
              where s.name = @P1 and o.type in ('U', 'V') and o.is_ms_shipped = 0 \
-               and (@P2 = '' or o.name = @P2) \
-             order by o.name",
-            vec![schema.to_string(), name.unwrap_or("").to_string()],
+               and (@P2 = '' or o.name = @P2){narrow} \
+             order by o.name"
+            ),
+            params,
         )
         .await?;
     Ok(rows
@@ -74,12 +94,16 @@ async fn objects(
         .collect())
 }
 
-pub async fn list_objects(conn: &SqlServerConnection, schema: &str) -> Result<Vec<ObjectInfo>> {
-    objects(conn, schema, None).await
+pub async fn list_objects(
+    conn: &SqlServerConnection,
+    schema: &str,
+    like: &LikeFilter,
+) -> Result<Vec<ObjectInfo>> {
+    objects(conn, schema, None, like).await
 }
 
 /// The type as written in `CREATE TABLE`: `nvarchar(80)`, `varchar(max)`, `decimal(12,2)`.
-fn native_type(name: &str, max_length: i64, precision: i64, scale: i64) -> String {
+pub(crate) fn native_type(name: &str, max_length: i64, precision: i64, scale: i64) -> String {
     match name {
         "varchar" | "char" | "varbinary" | "binary" => {
             if max_length < 0 {
@@ -107,7 +131,7 @@ pub async fn describe_table(
     schema: &str,
     name: &str,
 ) -> Result<TableInfo> {
-    let object = objects(conn, schema, Some(name))
+    let object = objects(conn, schema, Some(name), &LikeFilter::default())
         .await?
         .into_iter()
         .next()
@@ -213,7 +237,7 @@ pub async fn describe_table(
              join sys.columns rc on rc.object_id = fkc.referenced_object_id and rc.column_id = fkc.referenced_column_id \
              where fk.parent_object_id = object_id(quotename(@P1) + '.' + quotename(@P2)) \
              order by fk.name, fkc.constraint_column_id",
-            qualified,
+            qualified.clone(),
         )
         .await?;
     let mut foreign_keys: Vec<ForeignKeyInfo> = Vec::new();
@@ -234,12 +258,75 @@ pub async fn describe_table(
         }
     }
 
+    // Primary key and unique constraints (one row per column), then checks.
+    let rows = conn
+        .rows(
+            "select kc.name, kc.type, c.name, null, case kc.type when 'PK' then 0 else 1 end \
+             from sys.key_constraints kc \
+             join sys.index_columns ic \
+               on ic.object_id = kc.parent_object_id and ic.index_id = kc.unique_index_id \
+             join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
+             where kc.parent_object_id = object_id(quotename(@P1) + '.' + quotename(@P2)) \
+               and ic.is_included_column = 0 \
+             union all \
+             select cc.name, 'C', null, cc.definition, 2 from sys.check_constraints cc \
+             where cc.parent_object_id = object_id(quotename(@P1) + '.' + quotename(@P2)) \
+             order by 5, 1",
+            qualified,
+        )
+        .await?;
+    let mut constraints: Vec<ConstraintInfo> = Vec::new();
+    for row in &rows {
+        let constraint = text(row, 0);
+        let kind = match text(row, 1).trim() {
+            "PK" => ConstraintKind::PrimaryKey,
+            "UQ" => ConstraintKind::Unique,
+            _ => ConstraintKind::Check,
+        };
+        match constraints.last_mut() {
+            Some(c)
+                if c.name.as_deref() == Some(constraint.as_str())
+                    && c.kind != ConstraintKind::Check =>
+            {
+                c.columns.push(text(row, 2));
+            }
+            _ => constraints.push(ConstraintInfo {
+                name: Some(constraint),
+                kind,
+                columns: if kind == ConstraintKind::Check {
+                    Vec::new()
+                } else {
+                    vec![text(row, 2)]
+                },
+                definition: if kind == ConstraintKind::Check {
+                    spelaion_driver_api::check_definition(&text(row, 3))
+                } else {
+                    String::new()
+                },
+            }),
+        }
+    }
+    for c in &mut constraints {
+        let list = c
+            .columns
+            .iter()
+            .map(|col| format!("[{col}]"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        match c.kind {
+            ConstraintKind::PrimaryKey => c.definition = format!("PRIMARY KEY ({list})"),
+            ConstraintKind::Unique => c.definition = format!("UNIQUE ({list})"),
+            ConstraintKind::Check => {}
+        }
+    }
+
     Ok(TableInfo {
         object,
         columns,
         primary_key,
         indexes,
         foreign_keys,
+        constraints,
     })
 }
 

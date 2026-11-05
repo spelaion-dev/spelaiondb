@@ -88,14 +88,22 @@ async fn process_monitor_lists_and_ends_sqlserver_sessions() {
     spelaion_core::control_process(&monitor, &target_info, true, false, true)
         .await
         .unwrap();
-    assert!(
-        !spelaion_core::list_processes(&monitor)
+    // KILL returns before SQL Server has removed the session: it may still be listed for a
+    // moment, so the test waits (up to 10 s) for it to go.
+    let mut gone = false;
+    for _ in 0..50 {
+        gone = !spelaion_core::list_processes(&monitor)
             .await
             .unwrap()
             .processes
             .iter()
-            .any(|p| p.id == target_id)
-    );
+            .any(|p| p.id == target_id);
+        if gone {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(gone, "session {target_id} is still listed after KILL");
 }
 
 #[tokio::test]

@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, LogicalType,
-    ObjectKind, Secret, TlsMode, Value,
+    ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
+    LogicalType, ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
 };
 use spelaion_driver_postgres::PostgresDriver;
 
@@ -224,6 +224,10 @@ async fn type_zoo_builtin() {
             ("box", "box(point(0, 0), point(2, 3))"),
             ("path", "'[(0,0),(1,1)]'::path"),
             ("arr_int", "array[1, 2, null]::int4[]"),
+            (
+                "arr_six_dimensions",
+                "array_fill(42, array[1, 1, 1, 1, 1, 1])",
+            ),
             ("arr_text", "array[['a', 'b c'], ['{', 'null']]::text[]"),
             ("arr_bounds", "'[2:3]={7,8}'::int[]"),
             ("arr_empty", "array[]::int[]"),
@@ -403,6 +407,7 @@ async fn introspection_describes_tables() {
              created timestamptz
          );
          create index orders_created on {schema}.orders (created);
+         alter table {schema}.orders add constraint orders_total_positive check (total >= 0);
          create view {schema}.big_orders as select * from {schema}.orders where total > 100"
     );
     for stmt in ddl.split(';') {
@@ -456,6 +461,234 @@ async fn introspection_describes_tables() {
         assert_eq!(orders.foreign_keys[0].columns, ["customer_id"]);
         assert_eq!(orders.foreign_keys[0].referenced_table, "customer");
         assert_eq!(orders.foreign_keys[0].referenced_columns, ["id"]);
+        assert_eq!(
+            constraints(&orders),
+            [
+                (
+                    Some("orders_pkey"),
+                    ConstraintKind::PrimaryKey,
+                    vec!["id"],
+                    "PRIMARY KEY (id)"
+                ),
+                (
+                    Some("orders_total_positive"),
+                    ConstraintKind::Check,
+                    vec![],
+                    "CHECK (total >= 0::numeric)"
+                ),
+            ]
+        );
+        let customer = conn.describe_table(&schema, "customer").await.unwrap();
+        assert_eq!(
+            constraints(&customer),
+            [
+                (
+                    Some("customer_pkey"),
+                    ConstraintKind::PrimaryKey,
+                    vec!["id"],
+                    "PRIMARY KEY (id)"
+                ),
+                (
+                    Some("customer_email_key"),
+                    ConstraintKind::Unique,
+                    vec!["email"],
+                    "UNIQUE (email)"
+                ),
+            ]
+        );
+    };
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    run(&*conn, &format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[tokio::test]
+async fn explorer_lists_the_other_objects_of_a_schema() {
+    let Some(conn) = connect().await else { return };
+    let schema = format!("spelaion_objects_{}", std::process::id());
+    let ddl = [
+        format!("create schema {schema}"),
+        format!("create table {schema}.t (id int generated always as identity, s serial)"),
+        format!("create table {schema}.p (id int) partition by range (id)"),
+        format!("create materialized view {schema}.m as select 1 as x"),
+        format!(
+            "create function {schema}.add1(a integer) returns integer language sql as 'select a + 1'"
+        ),
+        format!(
+            "create function {schema}.add1(a integer, b text) returns integer language sql as 'select a + 1'"
+        ),
+        format!("comment on function {schema}.add1(integer) is 'adds one'"),
+        format!("create procedure {schema}.noop() language sql as 'select 1'"),
+        format!(
+            "create aggregate {schema}.total(integer) (sfunc = int4pl, stype = integer, initcond = '0')"
+        ),
+        format!("create sequence {schema}.seq1 start 5"),
+        format!(
+            "create function {schema}.trg() returns trigger language plpgsql as 'begin return new; end'"
+        ),
+        format!(
+            "create trigger t_ins before insert on {schema}.t for each row execute function {schema}.trg()"
+        ),
+        format!("create type {schema}.mood as enum ('sad', 'it''s ok')"),
+        format!("create domain {schema}.posint as integer not null default 1 check (value > 0)"),
+        format!("create type {schema}.pair as (a int, b text)"),
+        format!("create type {schema}.floatrange as range (subtype = float8)"),
+    ];
+    for stmt in &ddl {
+        run(&*conn, stmt)
+            .await
+            .unwrap_or_else(|e| panic!("{stmt}: {e:?}"));
+    }
+
+    let result = async {
+        let kinds: Vec<_> = conn
+            .list_objects(&schema)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.name, o.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("m".to_string(), ObjectKind::MaterializedView),
+                ("p".to_string(), ObjectKind::PartitionedTable),
+                ("t".to_string(), ObjectKind::Table),
+            ]
+        );
+
+        let objects = conn.list_schema_objects(&schema).await.unwrap();
+        let listed: Vec<_> = objects
+            .iter()
+            .map(|o| (o.name.as_str(), o.kind, o.detail.as_deref()))
+            .collect();
+        // Neither the identity column's sequence nor the range type's constructors.
+        assert_eq!(
+            listed,
+            [
+                ("add1", SchemaObjectKind::Function, Some("a integer")),
+                (
+                    "add1",
+                    SchemaObjectKind::Function,
+                    Some("a integer, b text")
+                ),
+                ("floatrange", SchemaObjectKind::Type, Some("RANGE")),
+                ("mood", SchemaObjectKind::Enum, None),
+                ("noop", SchemaObjectKind::Procedure, Some("")),
+                ("pair", SchemaObjectKind::Type, None),
+                ("posint", SchemaObjectKind::Domain, Some("integer")),
+                ("seq1", SchemaObjectKind::Sequence, None),
+                ("t_ins", SchemaObjectKind::Trigger, Some("t")),
+                ("t_s_seq", SchemaObjectKind::Sequence, None),
+                ("total", SchemaObjectKind::Aggregate, Some("integer")),
+                ("trg", SchemaObjectKind::Function, Some("")),
+            ]
+        );
+        assert_eq!(objects[0].comment.as_deref(), Some("adds one"));
+
+        let find = |name: &str, kind: SchemaObjectKind| {
+            objects
+                .iter()
+                .find(|o| o.name == name && o.kind == kind)
+                .unwrap_or_else(|| panic!("{name} is not listed"))
+                .clone()
+        };
+        let text = conn.object_definition(&objects[1]).await.unwrap();
+        assert!(
+            text.starts_with(&format!(
+                "CREATE OR REPLACE FUNCTION {schema}.add1(a integer, b text)"
+            )),
+            "{text}"
+        );
+        assert!(text.ends_with(';'), "{text}");
+        let expected = [
+            (
+                "total",
+                SchemaObjectKind::Aggregate,
+                format!(
+                    "CREATE AGGREGATE {schema}.total(integer) (\n    SFUNC = int4pl,\n    STYPE = integer,\n    INITCOND = '0'\n);"
+                ),
+            ),
+            (
+                "seq1",
+                SchemaObjectKind::Sequence,
+                format!(
+                    "CREATE SEQUENCE {schema}.seq1 AS bigint INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 5 CACHE 1 NO CYCLE;"
+                ),
+            ),
+            (
+                "t_ins",
+                SchemaObjectKind::Trigger,
+                format!(
+                    "CREATE TRIGGER t_ins BEFORE INSERT ON {schema}.t FOR EACH ROW EXECUTE FUNCTION {schema}.trg();"
+                ),
+            ),
+            (
+                "mood",
+                SchemaObjectKind::Enum,
+                format!("CREATE TYPE {schema}.mood AS ENUM ('sad', 'it''s ok');"),
+            ),
+            (
+                "posint",
+                SchemaObjectKind::Domain,
+                format!(
+                    "CREATE DOMAIN {schema}.posint AS integer DEFAULT 1 NOT NULL CONSTRAINT posint_check CHECK (VALUE > 0);"
+                ),
+            ),
+            (
+                "pair",
+                SchemaObjectKind::Type,
+                format!("CREATE TYPE {schema}.pair AS (\n    a integer,\n    b text\n);"),
+            ),
+            (
+                "floatrange",
+                SchemaObjectKind::Type,
+                format!("CREATE TYPE {schema}.floatrange AS RANGE (SUBTYPE = double precision);"),
+            ),
+        ];
+        for (name, kind, sql) in expected {
+            assert_eq!(
+                conn.object_definition(&find(name, kind)).await.unwrap(),
+                sql
+            );
+        }
+        let mut missing = find("seq1", SchemaObjectKind::Sequence);
+        missing.name = "nope".into();
+        assert!(conn.object_definition(&missing).await.is_err());
+
+        // What belongs to an extension is left out: plpgsql (always there) puts its handlers in
+        // pg_catalog, next to the built-in functions, which are listed.
+        let catalog = conn.list_schema_objects("pg_catalog").await.unwrap();
+        assert!(catalog.iter().any(|o| o.name == "now"));
+        assert!(
+            !catalog.iter().any(|o| o.name == "plpgsql_call_handler"),
+            "{catalog:?}"
+        );
+
+        let server = conn.list_server_objects().await.unwrap();
+        let has = |name: &str, kind| server.iter().any(|o| o.name == name && o.kind == kind);
+        assert!(has("spelaion", ServerObjectKind::Role), "{server:?}");
+        assert!(
+            has("pg_default", ServerObjectKind::Tablespace),
+            "{server:?}"
+        );
+        assert!(has("plpgsql", ServerObjectKind::Extension), "{server:?}");
+        // The predefined roles are there, marked as system objects; ours are not.
+        assert!(has("pg_monitor", ServerObjectKind::Role), "{server:?}");
+        assert!(
+            server.iter().all(
+                |o| o.system == (o.kind == ServerObjectKind::Role && o.name.starts_with("pg_"))
+            )
+        );
+        let role = server.iter().find(|o| o.name == "spelaion").unwrap();
+        assert_eq!(
+            role.detail.as_deref(),
+            Some("SUPERUSER, LOGIN, CREATEDB, CREATEROLE, REPLICATION")
+        );
     };
     let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
     run(&*conn, &format!("drop schema {schema} cascade"))
@@ -681,4 +914,345 @@ async fn client_certificates_log_in_without_a_password() {
         .to_string();
     assert!(message.contains("no-such.key"), "{message}");
     assert!(!message.contains("PRIVATE KEY"), "{message}");
+}
+
+/// (name, kind, columns, definition) of each constraint, to compare in one go.
+fn constraints(
+    table: &spelaion_driver_api::TableInfo,
+) -> Vec<(Option<&str>, ConstraintKind, Vec<&str>, &str)> {
+    table
+        .constraints
+        .iter()
+        .map(|c| {
+            (
+                c.name.as_deref(),
+                c.kind,
+                c.columns.iter().map(String::as_str).collect(),
+                c.definition.as_str(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn server_side_filters_keep_what_the_filter_keeps() {
+    let Some(conn) = connect().await else { return };
+    let schema = format!("spelaion_like_{}", std::process::id());
+    run(&*conn, &format!("create schema {schema}"))
+        .await
+        .unwrap();
+    let result = async {
+        for name in TRICKY_NAMES {
+            let quoted = name.replace('"', "\"\"");
+            run(
+                &*conn,
+                &format!("create table {schema}.\"{quoted}\" (id int)"),
+            )
+            .await
+            .unwrap();
+            run(
+                &*conn,
+                &format!("create sequence {schema}.\"{quoted}_seq\""),
+            )
+            .await
+            .unwrap();
+        }
+        server_side_keeps_what_rust_keeps(&*conn, &schema).await;
+        // Schemas too.
+        let mine = spelaion_driver_api::NameFilter {
+            include: vec![format!("{schema}*"), "PUBLIC".into()],
+            exclude: vec![],
+        };
+        let mut got: Vec<String> = conn
+            .list_schemas_matching(&mine)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        got.sort();
+        assert_eq!(got, ["public".to_string(), schema.clone()]);
+    };
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    run(&*conn, &format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Filters whose patterns are hard to send to a server (ADR-025): a literal `_` and `%`, the
+/// escape character, a non-ASCII letter whose case differs, `?` and an exclude-only filter.
+fn tricky_filters() -> Vec<spelaion_driver_api::NameFilter> {
+    let filter = |include: &[&str], exclude: &[&str]| spelaion_driver_api::NameFilter {
+        include: include.iter().map(|p| p.to_string()).collect(),
+        exclude: exclude.iter().map(|p| p.to_string()).collect(),
+    };
+    vec![
+        filter(&["tenant_*"], &[]),
+        filter(&["tenant\\%*"], &[]),
+        filter(&["ñame*"], &[]),
+        filter(&["t?nant*"], &[]),
+        filter(&["wow!*"], &[]),
+        filter(&[], &["*_a", "wow!*"]),
+        filter(&["*"], &["ñ*"]),
+        filter(&["nothing_matches_this"], &[]),
+    ]
+}
+
+/// The names created by each test for [`tricky_filters`].
+const TRICKY_NAMES: [&str; 6] = [
+    "Tenant_A", "tenantXb", "tenant%c", "ÑAME_1", "plain", "wow!x",
+];
+
+/// Narrowed on the server or only in Rust, the same names come back.
+async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) {
+    let all_objects = conn.list_objects(schema).await.unwrap();
+    let all_others = conn.list_schema_objects(schema).await.unwrap();
+    for filter in tricky_filters() {
+        let names = |items: Vec<String>| {
+            let mut items = items;
+            items.sort();
+            items
+        };
+        let expected = names(
+            all_objects
+                .iter()
+                .filter(|o| filter.matches(&o.name))
+                .map(|o| o.name.clone())
+                .collect(),
+        );
+        let got = names(
+            conn.list_objects_matching(schema, &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{filter:?}: {e}"))
+                .into_iter()
+                .map(|o| o.name)
+                .collect(),
+        );
+        assert_eq!(got, expected, "objects, {filter:?}");
+        let expected = names(
+            all_others
+                .iter()
+                .filter(|o| filter.matches(&o.name))
+                .map(|o| o.name.clone())
+                .collect(),
+        );
+        let got = names(
+            conn.list_schema_objects_matching(schema, &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{filter:?}: {e}"))
+                .into_iter()
+                .map(|o| o.name)
+                .collect(),
+        );
+        assert_eq!(got, expected, "schema objects, {filter:?}");
+    }
+    // The filters do something: each name is found by the one meant for it.
+    let only = |pattern: &str| spelaion_driver_api::NameFilter {
+        include: vec![pattern.into()],
+        exclude: vec![],
+    };
+    for (pattern, name) in [
+        ("tenant_*", "Tenant_A"),
+        ("tenant\\%*", "tenant%c"),
+        ("ñame*", "ÑAME_1"),
+        ("wow!*", "wow!x"),
+    ] {
+        let got: Vec<String> = conn
+            .list_objects_matching(schema, &only(pattern))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| o.name)
+            .collect();
+        assert_eq!(got, [name], "{pattern}");
+    }
+}
+
+#[tokio::test]
+async fn generated_ddl_recreates_tables_and_views() {
+    let Some(conn) = connect().await else { return };
+    let schema = format!("spelaion_ddl_{}", std::process::id());
+    let ddl = [
+        format!("create schema {schema}"),
+        format!("create table {schema}.customer (id int primary key, email text not null unique)"),
+        format!(
+            "create table {schema}.\"Order Lines\" (
+                 id bigint generated always as identity primary key,
+                 customer_id int not null references {schema}.customer (id) on delete cascade,
+                 qty int not null default 1 check (qty > 0),
+                 price numeric(12, 2),
+                 total numeric(14, 2) generated always as (qty * price) stored,
+                 note text collate \"C\",
+                 seen timestamptz default now(),
+                 unique (customer_id, note)
+             )"
+        ),
+        format!(
+            "create index order_lines_seen on {schema}.\"Order Lines\" (seen desc) where qty > 1"
+        ),
+        format!("comment on table {schema}.\"Order Lines\" is 'it''s the lines'"),
+        format!("comment on column {schema}.\"Order Lines\".qty is 'how many'"),
+        format!("create table {schema}.events (id int, at date not null) partition by range (at)"),
+        format!(
+            "create view {schema}.big as select id, qty from {schema}.\"Order Lines\" where qty > 10"
+        ),
+        format!(
+            "create materialized view {schema}.counts as select customer_id, count(*) as n from {schema}.\"Order Lines\" group by customer_id"
+        ),
+    ];
+    for stmt in &ddl {
+        run(&*conn, stmt)
+            .await
+            .unwrap_or_else(|e| panic!("{stmt}: {e:?}"));
+    }
+    let result = async {
+        let dialect = spelaion_driver_postgres::PostgresDialect;
+        // The view and the materialized view depend on the table: dropped with it, and made
+        // again from their own DDL, read before.
+        let big = conn.relation_definition(&schema, "big").await.unwrap();
+        assert!(
+            big.starts_with(&format!("CREATE OR REPLACE VIEW {schema}.big AS\n")),
+            "{big}"
+        );
+        let counts = conn.relation_definition(&schema, "counts").await.unwrap();
+        assert!(
+            counts.starts_with(&format!("CREATE MATERIALIZED VIEW {schema}.counts AS\n")),
+            "{counts}"
+        );
+        assert!(counts.ends_with("WITH DATA;"), "{counts}");
+        let lines = ddl_round_trip(
+            &*conn,
+            &dialect,
+            &schema,
+            "Order Lines",
+            &format!("drop table {schema}.\"Order Lines\" cascade"),
+        )
+        .await;
+        for expected in [
+            "GENERATED ALWAYS AS IDENTITY NOT NULL",
+            "GENERATED ALWAYS AS (((qty)::numeric * price)) STORED",
+            "COLLATE \"C\"",
+            "DEFAULT now()",
+            "ON DELETE CASCADE",
+            "CREATE INDEX order_lines_seen ON",
+            "IS 'it''s the lines';",
+            "IS 'how many';",
+        ] {
+            assert!(lines.contains(expected), "{expected}\n{lines}");
+        }
+        for view in [&big, &counts] {
+            for span in spelaion_driver_api::Dialect::split_statements(&dialect, view) {
+                run(&*conn, span.text(view)).await.unwrap();
+            }
+        }
+        let customer = ddl_round_trip(
+            &*conn,
+            &dialect,
+            &schema,
+            "customer",
+            &format!("drop table {schema}.customer cascade"),
+        )
+        .await;
+        assert!(customer.contains("UNIQUE (email)"), "{customer}");
+        let events = ddl_round_trip(
+            &*conn,
+            &dialect,
+            &schema,
+            "events",
+            &format!("drop table {schema}.events"),
+        )
+        .await;
+        assert!(events.contains("PARTITION BY RANGE (at)"), "{events}");
+        assert!(conn.relation_definition(&schema, "nope").await.is_err());
+    };
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    run(&*conn, &format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// "Generate DDL" round trip: the DDL of `table`, run after `drop`, creates the same table
+/// (columns, keys, constraints, foreign keys, indexes and comment). Returns the DDL.
+async fn ddl_round_trip(
+    conn: &dyn Connection,
+    dialect: &dyn spelaion_driver_api::Dialect,
+    schema: &str,
+    table: &str,
+    drop: &str,
+) -> String {
+    let before = conn.describe_table(schema, table).await.unwrap();
+    let ddl = conn
+        .relation_definition(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{table}: {e}"));
+    assert!(ddl.ends_with(';'), "{ddl}");
+    run(conn, drop)
+        .await
+        .unwrap_or_else(|e| panic!("{drop}: {e:?}"));
+    for span in dialect.split_statements(&ddl) {
+        let statement = span.text(&ddl);
+        run(conn, statement)
+            .await
+            .unwrap_or_else(|e| panic!("{statement}\n→ {e:?}\n\n{ddl}"));
+    }
+    let after = conn.describe_table(schema, table).await.unwrap();
+    assert_eq!(after.columns, before.columns, "{ddl}");
+    assert_eq!(after.primary_key, before.primary_key, "{ddl}");
+    assert_eq!(after.constraints, before.constraints, "{ddl}");
+    assert_eq!(after.foreign_keys, before.foreign_keys, "{ddl}");
+    assert_eq!(after.indexes, before.indexes, "{ddl}");
+    assert_eq!(after.object.comment, before.object.comment, "{ddl}");
+    assert_eq!(after.object.kind, before.object.kind, "{ddl}");
+    ddl
+}
+
+#[tokio::test]
+async fn procedure_calls_pass_inputs_and_collect_outputs() {
+    let Some(conn) = connect().await else { return };
+    let schema = format!("spelaion_call_{}", std::process::id());
+    for stmt in [
+        format!("create schema {schema}"),
+        format!(
+            "create procedure {schema}.calc(a integer, inout b integer, out c text) \
+             language plpgsql as $$ begin b := b + a; c := 'x' || a; end $$"
+        ),
+        format!("create procedure {schema}.nothing() language sql as 'select 1'"),
+    ] {
+        run(&*conn, &stmt)
+            .await
+            .unwrap_or_else(|e| panic!("{stmt}: {e:?}"));
+    }
+    let result = async {
+        let objects = conn.list_schema_objects(&schema).await.unwrap();
+        let find = |name: &str| objects.iter().find(|o| o.name == name).unwrap().clone();
+        let call = conn.procedure_call(&find("calc")).await.unwrap();
+        assert_eq!(
+            call,
+            format!("CALL {schema}.calc(a => :a, b => :b, c => NULL);")
+        );
+        let row = first_row(&*conn, &call.replace(":a", "1").replace(":b", "2")).await;
+        let values: Vec<&str> = row.iter().map(|c| c.3.as_str()).collect();
+        assert_eq!(values, ["3", "x1"]);
+        assert_eq!(
+            conn.procedure_call(&find("nothing")).await.unwrap(),
+            format!("CALL {schema}.nothing();")
+        );
+        // A function is not called with CALL.
+        let mut function = find("calc");
+        function.kind = spelaion_driver_api::SchemaObjectKind::Function;
+        assert!(conn.procedure_call(&function).await.is_err());
+    };
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    run(&*conn, &format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
 }

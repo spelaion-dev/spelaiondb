@@ -11,11 +11,11 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use spelaion_driver_api::{Dialect, DriverError, ExecEvent, ExecOptions};
-use sqlparser::ast::{Statement, visit_statements};
+use sqlparser::ast::{AlterTableOperation, Statement, visit_statements};
 use sqlparser::parser::Parser;
 
 use crate::Session;
-use crate::classify::{classify_read_only, reaches_outside};
+use crate::classify::{classify_read_only, reaches_outside, reject_mysql_executable_comments};
 use crate::guard::{Risk, destructive, sql_dialect};
 use crate::readonly::DUCKDB_NO_EXTERNAL_ACCESS;
 
@@ -58,6 +58,7 @@ const CLIENT_GRACE: Duration = Duration::from_secs(2);
 /// Can an agent run `sql` as a write? `Err` says why not, in words for the agent.
 pub fn check_write(dialect: &dyn Dialect, sql: &str) -> Result<(), String> {
     let engine = dialect.name();
+    reject_mysql_executable_comments(engine, sql)?;
     if dialect.split_statements(sql).len() != 1 {
         return Err("exactly one statement per call".into());
     }
@@ -99,6 +100,33 @@ pub fn check_write(dialect: &dyn Dialect, sql: &str) -> Result<(), String> {
 /// The allow list, checked on the statement and on every statement nested in it.
 fn allowed(statement: &Statement) -> Result<(), String> {
     match statement {
+        Statement::CreateSchema {
+            or_replace: true, ..
+        } => Err("replacing an existing schema is never run for agents".into()),
+        Statement::CreateTable(table) if table.or_replace => {
+            Err("replacing an existing table is never run for agents".into())
+        }
+        Statement::CreateView(view) if view.materialized && (view.or_replace || view.or_alter) => {
+            Err("replacing a materialized view is never run for agents".into())
+        }
+        Statement::AlterTable(table) => {
+            if table.location.is_some()
+                || table.operations.is_empty()
+                || table.operations.iter().any(|operation| {
+                    !matches!(
+                        operation,
+                        AlterTableOperation::AddColumn { .. }
+                            | AlterTableOperation::AddConstraint { .. }
+                            | AlterTableOperation::RenameColumn { .. }
+                            | AlterTableOperation::RenameTable { .. }
+                    )
+                })
+            {
+                Err("ALTER TABLE operation is not allowed for agents".into())
+            } else {
+                Ok(())
+            }
+        }
         Statement::Insert { .. }
         | Statement::Update { .. }
         | Statement::Delete { .. }
@@ -109,7 +137,6 @@ fn allowed(statement: &Statement) -> Result<(), String> {
         | Statement::CreateIndex { .. }
         | Statement::CreateSchema { .. }
         | Statement::CreateSequence { .. }
-        | Statement::AlterTable { .. }
         | Statement::AlterIndex { .. }
         | Statement::AlterView { .. }
         | Statement::Comment { .. } => Ok(()),
@@ -315,6 +342,75 @@ mod tests {
         ] {
             let err = check_write(dialect, sql).unwrap_err();
             assert!(err.contains(why), "{sql}: {err}");
+        }
+    }
+
+    #[test]
+    fn mysql_executable_comments_cannot_hide_write_predicates() {
+        for sql in [
+            "delete from orders /*!99999 where id = 1 */",
+            "update orders set total = 0 /*!99999 where id = 1 */",
+            "delete from orders /*M!999999 where id = 1 */",
+            "update orders set total = 0 /*m!999999 where id = 1 */",
+            "delete from orders /*! where id = 1 */",
+            "insert into orders values (1, '/*!')",
+        ] {
+            let err = check_write(&MysqlDialect, sql).unwrap_err();
+            assert!(err.contains("executable comment"), "{sql}: {err}");
+        }
+        for sql in [
+            "delete from orders /* ordinary comment */ where id = 1",
+            "update orders set total = 0 where id = 1",
+        ] {
+            assert_eq!(check_write(&MysqlDialect, sql), Ok(()), "{sql}");
+        }
+    }
+
+    #[test]
+    fn destructive_table_ddl_is_refused() {
+        for (dialect, sql) in [
+            (
+                &DuckdbDialect as &dyn Dialect,
+                "create or replace table t (id int)",
+            ),
+            (&MysqlDialect, "create or replace table t (id int)"),
+            (&MysqlDialect, "create or replace schema important"),
+            (&MysqlDialect, "create or replace database important"),
+            (&DuckdbDialect, "create or replace schema important"),
+            (&PostgresDialect, "alter table t drop column body"),
+            (&SqliteDialect, "alter table t drop column body"),
+            (&MysqlDialect, "alter table t drop column body"),
+            (&SqlServerDialect, "alter table t drop column body"),
+            (&DuckdbDialect, "alter table t drop column body"),
+            (
+                &PostgresDialect,
+                "alter table t add column a int, drop column body",
+            ),
+            (&MysqlDialect, "alter table t modify column body varchar(1)"),
+            (&MysqlDialect, "alter table t drop partition p0"),
+            (
+                &PostgresDialect,
+                "alter table t alter column body type varchar(1)",
+            ),
+            (&PostgresDialect, "alter table t disable row level security"),
+        ] {
+            assert!(check_write(dialect, sql).is_err(), "must reject: {sql}");
+        }
+        let error = check_write(&MysqlDialect, "create or replace schema important").unwrap_err();
+        assert!(error.contains("replacing an existing schema"), "{error}");
+        for (dialect, sql) in [
+            (
+                &MysqlDialect as &dyn Dialect,
+                "alter table t add column added int",
+            ),
+            (&SqliteDialect, "alter table t add column added int"),
+            (
+                &PostgresDialect,
+                "alter table t rename column body to contents",
+            ),
+            (&DuckdbDialect, "create table t (id int)"),
+        ] {
+            assert_eq!(check_write(dialect, sql), Ok(()), "{sql}");
         }
     }
 

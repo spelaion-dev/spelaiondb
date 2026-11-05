@@ -4,7 +4,156 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_core::CoreEvent;
-use spelaion_driver_api::{ObjectInfo, ObjectKind, TableInfo};
+use spelaion_driver_api::{
+    ConstraintKind, ObjectInfo, ObjectKind, SchemaObject, SchemaObjectKind, ServerObject,
+    ServerObjectKind, TableInfo,
+};
+
+/// Include and exclude patterns for one kind of name (ADR-025).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NameFilterItem {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+impl From<NameFilterItem> for spelaion_driver_api::NameFilter {
+    fn from(f: NameFilterItem) -> Self {
+        Self {
+            include: f.include,
+            exclude: f.exclude,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterKindItem {
+    Schemas,
+    Objects,
+    Columns,
+}
+
+impl From<FilterKindItem> for spelaion_core::FilterKind {
+    fn from(kind: FilterKindItem) -> Self {
+        match kind {
+            FilterKindItem::Schemas => Self::Schemas,
+            FilterKindItem::Objects => Self::Objects,
+            FilterKindItem::Columns => Self::Columns,
+        }
+    }
+}
+
+/// A table chosen in the explorer, by schema and name.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRefItem {
+    pub schema: String,
+    pub name: String,
+}
+
+/// What "Hide" and "Show only" in the explorer do with one name.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterActionItem {
+    Hide,
+    ShowOnly,
+}
+
+/// A connection's explorer filter: personal, per workspace and connection (ADR-025).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplorerFilterItem {
+    pub schemas: NameFilterItem,
+    pub objects: NameFilterItem,
+    pub columns: NameFilterItem,
+}
+
+impl From<spelaion_core::ExplorerFilter> for ExplorerFilterItem {
+    fn from(f: spelaion_core::ExplorerFilter) -> Self {
+        Self {
+            schemas: NameFilterItem {
+                include: f.schema_include,
+                exclude: f.schema_exclude,
+            },
+            objects: NameFilterItem {
+                include: f.object_include,
+                exclude: f.object_exclude,
+            },
+            columns: NameFilterItem {
+                include: f.column_include,
+                exclude: f.column_exclude,
+            },
+        }
+    }
+}
+
+impl From<ExplorerFilterItem> for spelaion_core::ExplorerFilter {
+    fn from(f: ExplorerFilterItem) -> Self {
+        Self {
+            schema_include: f.schemas.include,
+            schema_exclude: f.schemas.exclude,
+            object_include: f.objects.include,
+            object_exclude: f.objects.exclude,
+            column_include: f.columns.include,
+            column_exclude: f.columns.exclude,
+        }
+    }
+}
+
+/// How the explorer shows its tree; personal, like the theme.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplorerPreferencesItem {
+    pub show_system: bool,
+    pub sort_alphabetically: bool,
+    pub sort_ignore_case: bool,
+    pub folders_first: bool,
+    pub connected_only: bool,
+    pub server_side_filters: bool,
+}
+
+impl From<spelaion_core::ExplorerPreferences> for ExplorerPreferencesItem {
+    fn from(p: spelaion_core::ExplorerPreferences) -> Self {
+        let spelaion_core::ExplorerPreferences {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+            connected_only,
+            server_side_filters,
+        } = p;
+        Self {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+            connected_only,
+            server_side_filters,
+        }
+    }
+}
+
+impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
+    fn from(p: ExplorerPreferencesItem) -> Self {
+        let ExplorerPreferencesItem {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+            connected_only,
+            server_side_filters,
+        } = p;
+        Self {
+            show_system,
+            sort_alphabetically,
+            sort_ignore_case,
+            folders_first,
+            connected_only,
+            server_side_filters,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -360,6 +509,131 @@ impl From<ObjectInfo> for ObjectItem {
     }
 }
 
+/// The kinds of `list_schema_objects` (ADR-024): the explorer has a folder for each.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaObjectKindItem {
+    Function,
+    Procedure,
+    Aggregate,
+    Sequence,
+    Trigger,
+    Enum,
+    Domain,
+    Type,
+    Event,
+    Synonym,
+}
+
+impl From<SchemaObjectKind> for SchemaObjectKindItem {
+    fn from(kind: SchemaObjectKind) -> Self {
+        match kind {
+            SchemaObjectKind::Function => Self::Function,
+            SchemaObjectKind::Procedure => Self::Procedure,
+            SchemaObjectKind::Aggregate => Self::Aggregate,
+            SchemaObjectKind::Sequence => Self::Sequence,
+            SchemaObjectKind::Trigger => Self::Trigger,
+            SchemaObjectKind::Enum => Self::Enum,
+            SchemaObjectKind::Domain => Self::Domain,
+            SchemaObjectKind::Type => Self::Type,
+            SchemaObjectKind::Event => Self::Event,
+            SchemaObjectKind::Synonym => Self::Synonym,
+        }
+    }
+}
+
+impl From<SchemaObjectKindItem> for SchemaObjectKind {
+    fn from(kind: SchemaObjectKindItem) -> Self {
+        match kind {
+            SchemaObjectKindItem::Function => Self::Function,
+            SchemaObjectKindItem::Procedure => Self::Procedure,
+            SchemaObjectKindItem::Aggregate => Self::Aggregate,
+            SchemaObjectKindItem::Sequence => Self::Sequence,
+            SchemaObjectKindItem::Trigger => Self::Trigger,
+            SchemaObjectKindItem::Enum => Self::Enum,
+            SchemaObjectKindItem::Domain => Self::Domain,
+            SchemaObjectKindItem::Type => Self::Type,
+            SchemaObjectKindItem::Event => Self::Event,
+            SchemaObjectKindItem::Synonym => Self::Synonym,
+        }
+    }
+}
+
+/// A function, sequence, trigger, type… of a schema. The UI sends it back unchanged to ask
+/// for its definition.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaObjectItem {
+    pub schema: String,
+    pub name: String,
+    pub kind: SchemaObjectKindItem,
+    /// A function's arguments, a trigger's table…
+    pub detail: Option<String>,
+    pub comment: Option<String>,
+}
+
+impl From<SchemaObject> for SchemaObjectItem {
+    fn from(o: SchemaObject) -> Self {
+        Self {
+            schema: o.schema,
+            name: o.name,
+            kind: o.kind.into(),
+            detail: o.detail,
+            comment: o.comment,
+        }
+    }
+}
+
+impl From<SchemaObjectItem> for SchemaObject {
+    fn from(o: SchemaObjectItem) -> Self {
+        Self {
+            schema: o.schema,
+            name: o.name,
+            kind: o.kind.into(),
+            detail: o.detail,
+            comment: o.comment,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerObjectKindItem {
+    Role,
+    User,
+    Login,
+    Tablespace,
+    Extension,
+}
+
+/// A role, login, tablespace or extension: outside every schema (ADR-024).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerObjectItem {
+    pub name: String,
+    pub kind: ServerObjectKindItem,
+    pub detail: Option<String>,
+    /// Built into the engine: shown only with "Show system objects".
+    pub system: bool,
+}
+
+impl From<ServerObject> for ServerObjectItem {
+    fn from(o: ServerObject) -> Self {
+        Self {
+            name: o.name,
+            kind: match o.kind {
+                ServerObjectKind::Role => ServerObjectKindItem::Role,
+                ServerObjectKind::User => ServerObjectKindItem::User,
+                ServerObjectKind::Login => ServerObjectKindItem::Login,
+                ServerObjectKind::Tablespace => ServerObjectKindItem::Tablespace,
+                ServerObjectKind::Extension => ServerObjectKindItem::Extension,
+            },
+            detail: o.detail,
+            system: o.system,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnDetails {
@@ -375,8 +649,47 @@ pub struct ColumnDetails {
 pub struct TableDetails {
     pub columns: Vec<ColumnDetails>,
     pub primary_key: Vec<String>,
-    pub indexes: Vec<String>,
-    pub foreign_keys: Vec<String>,
+    pub constraints: Vec<ConstraintDetails>,
+    pub foreign_keys: Vec<ForeignKeyDetails>,
+    pub indexes: Vec<IndexDetails>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintKindItem {
+    PrimaryKey,
+    Unique,
+    Check,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConstraintDetails {
+    /// None where the engine keeps no name (SQLite's primary key).
+    pub name: Option<String>,
+    pub kind: ConstraintKindItem,
+    pub columns: Vec<String>,
+    pub definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKeyDetails {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub referenced_schema: String,
+    pub referenced_table: String,
+    pub referenced_columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexDetails {
+    pub name: String,
+    pub unique: bool,
+    pub primary: bool,
+    /// `CREATE INDEX …` as the engine writes it (or a comment for SQLite's automatic ones).
+    pub definition: String,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -402,18 +715,39 @@ impl From<TableInfo> for TableDetails {
                 })
                 .collect(),
             primary_key: t.primary_key,
-            indexes: t.indexes.into_iter().map(|i| i.definition).collect(),
+            constraints: t
+                .constraints
+                .into_iter()
+                .map(|c| ConstraintDetails {
+                    name: c.name,
+                    kind: match c.kind {
+                        ConstraintKind::PrimaryKey => ConstraintKindItem::PrimaryKey,
+                        ConstraintKind::Unique => ConstraintKindItem::Unique,
+                        ConstraintKind::Check => ConstraintKindItem::Check,
+                    },
+                    columns: c.columns,
+                    definition: c.definition,
+                })
+                .collect(),
             foreign_keys: t
                 .foreign_keys
                 .into_iter()
-                .map(|fk| {
-                    format!(
-                        "({}) → {}.{} ({})",
-                        fk.columns.join(", "),
-                        fk.referenced_schema,
-                        fk.referenced_table,
-                        fk.referenced_columns.join(", ")
-                    )
+                .map(|fk| ForeignKeyDetails {
+                    name: fk.name,
+                    columns: fk.columns,
+                    referenced_schema: fk.referenced_schema,
+                    referenced_table: fk.referenced_table,
+                    referenced_columns: fk.referenced_columns,
+                })
+                .collect(),
+            indexes: t
+                .indexes
+                .into_iter()
+                .map(|i| IndexDetails {
+                    name: i.name,
+                    unique: i.unique,
+                    primary: i.primary,
+                    definition: i.definition,
                 })
                 .collect(),
         }
@@ -1085,14 +1419,20 @@ impl From<spelaion_core::RiskyStatement> for RiskyItem {
 }
 
 /// SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`).
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum SqlTemplateItem {
     Preview,
     Select,
+    SelectByKey,
+    SelectIn,
     Insert,
+    Upsert,
+    Merge,
     Update,
+    UpdateFrom,
     Delete,
+    DeleteUsing,
 }
 
 impl From<SqlTemplateItem> for spelaion_core::SqlTemplate {
@@ -1100,9 +1440,34 @@ impl From<SqlTemplateItem> for spelaion_core::SqlTemplate {
         match item {
             SqlTemplateItem::Preview => Self::Preview,
             SqlTemplateItem::Select => Self::Select,
+            SqlTemplateItem::SelectByKey => Self::SelectByKey,
+            SqlTemplateItem::SelectIn => Self::SelectIn,
             SqlTemplateItem::Insert => Self::Insert,
+            SqlTemplateItem::Upsert => Self::Upsert,
+            SqlTemplateItem::Merge => Self::Merge,
+            SqlTemplateItem::UpdateFrom => Self::UpdateFrom,
+            SqlTemplateItem::DeleteUsing => Self::DeleteUsing,
             SqlTemplateItem::Update => Self::Update,
             SqlTemplateItem::Delete => Self::Delete,
+        }
+    }
+}
+
+impl From<spelaion_core::SqlTemplate> for SqlTemplateItem {
+    fn from(template: spelaion_core::SqlTemplate) -> Self {
+        use spelaion_core::SqlTemplate;
+        match template {
+            SqlTemplate::Preview => Self::Preview,
+            SqlTemplate::Select => Self::Select,
+            SqlTemplate::SelectByKey => Self::SelectByKey,
+            SqlTemplate::SelectIn => Self::SelectIn,
+            SqlTemplate::Insert => Self::Insert,
+            SqlTemplate::Upsert => Self::Upsert,
+            SqlTemplate::Merge => Self::Merge,
+            SqlTemplate::UpdateFrom => Self::UpdateFrom,
+            SqlTemplate::DeleteUsing => Self::DeleteUsing,
+            SqlTemplate::Update => Self::Update,
+            SqlTemplate::Delete => Self::Delete,
         }
     }
 }

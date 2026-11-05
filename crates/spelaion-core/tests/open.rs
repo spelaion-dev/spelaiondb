@@ -615,6 +615,48 @@ async fn sqlite_on_a_server_through_two_hops() {
         "edited"
     );
 
+    // Triggers, and their definitions, from the server's catalog (ADR-024).
+    let (_, error) = script(
+        &conn,
+        "create trigger if not exists remote_t_note after update on remote_t begin select 1; end",
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    let triggers = conn
+        .session
+        .connection()
+        .list_schema_objects("main")
+        .await
+        .unwrap();
+    let trigger = triggers
+        .iter()
+        .find(|o| o.name == "remote_t_note")
+        .unwrap_or_else(|| panic!("{triggers:?}"));
+    assert_eq!(trigger.detail.as_deref(), Some("remote_t"));
+    // The explorer's filter goes into the server's catalog query too (ADR-025).
+    let only_remote = spelaion_driver_api::NameFilter {
+        include: vec!["REMOTE_*".into()],
+        exclude: vec![],
+    };
+    let narrowed: Vec<String> = conn
+        .session
+        .connection()
+        .list_objects_matching("main", &only_remote)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|o| o.name)
+        .collect();
+    assert_eq!(narrowed, ["remote_t"]);
+    assert_eq!(
+        conn.session
+            .connection()
+            .object_definition(trigger)
+            .await
+            .unwrap(),
+        "CREATE TRIGGER remote_t_note after update on remote_t begin select 1; end;"
+    );
+
     // The shell never runs commands of its own, nor a statement that would swallow the rest.
     let (_, error) = script(&conn, ".shell echo pwned").await;
     assert!(error.unwrap().message.contains("not run on the server"));
