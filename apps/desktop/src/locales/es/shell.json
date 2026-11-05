@@ -264,5 +264,7 @@
     "nothing": "Nada tiene ese nombre en lo que muestra el explorador.",
     "hint": "↑ ↓ para elegir, Intro para abrirlo y mostrarlo en el explorador.",
     "noneConnected": "Conecta primero una conexión en el explorador: la búsqueda lee su catálogo."
-  }
+  },
+  "setActiveSchema": "Usar como esquema del editor",
+  "activeSchemaHint": "Para la pestaña de consulta activa, cuando esté conectada a esta conexión"
 }

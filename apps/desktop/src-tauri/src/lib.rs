@@ -2349,6 +2349,29 @@ async fn search_objects(
     Ok(found.into_iter().map(FoundObjectItem::from).collect())
 }
 
+/// "Set as the editor's schema": where this tab's own session finds unqualified names from now
+/// on (the saved connection does not change).
+#[tauri::command]
+#[specta::specta]
+async fn set_active_schema(
+    session: String,
+    schema: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let open = state.session(&session).await?;
+    spelaion_core::set_active_schema(&open.session, &schema)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The schema where a session finds unqualified names ("Link with editor").
+#[tauri::command]
+#[specta::specta]
+async fn active_schema(session: String, state: State<'_, AppState>) -> CmdResult<Option<String>> {
+    let open = state.session(&session).await?;
+    spelaion_core::active_schema(&open.session).await
+}
+
 /// Runs a change to an object on the explorer's session, once the user confirmed the SQL it
 /// was shown. The core writes the statements again from the change, and refuses read-only
 /// connections (ADR-026). Returns how many statements ran.
@@ -2559,6 +2582,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             create_sql,
             new_index_sql,
             search_objects,
+            set_active_schema,
+            active_schema,
             preview_table_edits,
             apply_table_edits,
             save_snippet,

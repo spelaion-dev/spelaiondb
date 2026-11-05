@@ -7,8 +7,8 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_core::{
     CoreEvent, CreateKind, FoundObject, NewIndexKind, ObjectChange, ObjectError, ObjectTarget,
-    ResultStore, SEARCH_LIMIT, Session, apply_change, create_sql, new_index_sql, object_actions,
-    search_objects,
+    ResultStore, SEARCH_LIMIT, Session, active_schema, apply_change, create_sql, new_index_sql,
+    object_actions, search_objects, set_active_schema,
 };
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, NameFilter, ObjectKind, SchemaObject, SchemaObjectKind,
@@ -805,6 +805,67 @@ async fn open_an_object_by_name_on_each_engine() {
             .await
             .unwrap()
             .is_empty(),
+            "{label}"
+        );
+        run(label, &session, &cleanup, true).await;
+    }
+}
+
+#[tokio::test]
+async fn the_editors_schema_is_set_where_the_engine_has_one_per_session() {
+    for (label, session, default_schema) in engines().await {
+        let session = admin_session(label, session).await;
+        if !object_actions(session.dialect().as_ref()).active_schema {
+            assert!(matches!(
+                set_active_schema(&session, default_schema).await,
+                Err(ObjectError::Unsupported(_))
+            ));
+            assert_eq!(
+                active_schema(&session).await.unwrap().as_deref(),
+                Some(default_schema),
+                "{label}"
+            );
+            continue;
+        }
+        let mysql = matches!(label, "mysql" | "mariadb");
+        let cleanup = [if mysql {
+            "DROP DATABASE oa_active"
+        } else {
+            "DROP SCHEMA oa_active CASCADE"
+        }];
+        run(label, &session, &cleanup, true).await;
+        let create = if mysql {
+            "CREATE DATABASE oa_active"
+        } else {
+            "CREATE SCHEMA oa_active"
+        };
+        run(
+            label,
+            &session,
+            &[create, "CREATE TABLE oa_active.oa_only_here (id INT)"],
+            false,
+        )
+        .await;
+        set_active_schema(&session, "oa_active")
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(
+            active_schema(&session).await.unwrap().as_deref(),
+            Some("oa_active"),
+            "{label}"
+        );
+        // Unqualified names are found there now.
+        run(
+            label,
+            &session,
+            &["SELECT count(*) FROM oa_only_here"],
+            false,
+        )
+        .await;
+        set_active_schema(&session, default_schema).await.unwrap();
+        assert_eq!(
+            active_schema(&session).await.unwrap().as_deref(),
+            Some(default_schema),
             "{label}"
         );
         run(label, &session, &cleanup, true).await;

@@ -13,6 +13,12 @@ import { useApp, useDialogs } from "./store";
  */
 export const SCHEMAS_REFRESHED_EVENT = "spelaion-schemas-refreshed";
 
+/**
+ * Fired on `window` with `{ tabId, schema }` by "Set as the editor's schema" in the explorer:
+ * that editor tab switches its own session's schema (its database on MySQL and MariaDB).
+ */
+export const SET_ACTIVE_SCHEMA_EVENT = "spelaion-set-active-schema";
+
 /** What must be answered before resolving (ADR-022): a repository connection or tunnel that
  *  is new or changed (shown, and recorded if accepted) and personal `${user.…}` variables
  *  that are not defined yet (asked for and saved). Tries again after each answer; returns

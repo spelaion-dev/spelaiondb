@@ -143,6 +143,13 @@ export const commands = {
 	 */
 	searchObjects: (session: string, text: string, schemaFilter: NameFilterItem | null, objectFilter: NameFilterItem | null, showSystem: boolean) => typedError<FoundObjectItem_Serialize[], string>(__TAURI_INVOKE("search_objects", { session, text, schemaFilter, objectFilter, showSystem })),
 	/**
+	 *  "Set as the editor's schema": where this tab's own session finds unqualified names from now
+	 *  on (the saved connection does not change).
+	 */
+	setActiveSchema: (session: string, schema: string) => typedError<null, string>(__TAURI_INVOKE("set_active_schema", { session, schema })),
+	/**  The schema where a session finds unqualified names ("Link with editor"). */
+	activeSchema: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("active_schema", { session })),
+	/**
 	 *  The statements the core would run for the pending changes of a table data tab, to show
 	 *  before applying them (production asks for confirmation).
 	 */
@@ -825,6 +832,7 @@ export type ObjectActionsItem = {
 	dropConstraints: boolean,
 	create: CreateKindItem[],
 	newIndex: NewIndexKindItem[],
+	activeSchema: boolean,
 };
 
 /**  What to do with an object of the explorer. */

@@ -274,5 +274,6 @@
     "applied_one": "Applied {{count}} change",
     "applied_other": "Applied {{count}} changes",
     "applyFirst": "Apply or discard the pending changes first"
-  }
+  },
+  "activeSchemaSet": "Unqualified names are looked up in {{schema}} now"
 }
