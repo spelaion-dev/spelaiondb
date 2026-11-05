@@ -15,7 +15,7 @@ use sqlparser::ast::{Statement, visit_statements};
 use sqlparser::parser::Parser;
 
 use crate::Session;
-use crate::classify::{classify_read_only, reaches_outside};
+use crate::classify::{classify_read_only, reaches_outside, reject_mysql_executable_comments};
 use crate::guard::{Risk, destructive, sql_dialect};
 use crate::readonly::DUCKDB_NO_EXTERNAL_ACCESS;
 
@@ -58,6 +58,7 @@ const CLIENT_GRACE: Duration = Duration::from_secs(2);
 /// Can an agent run `sql` as a write? `Err` says why not, in words for the agent.
 pub fn check_write(dialect: &dyn Dialect, sql: &str) -> Result<(), String> {
     let engine = dialect.name();
+    reject_mysql_executable_comments(engine, sql)?;
     if dialect.split_statements(sql).len() != 1 {
         return Err("exactly one statement per call".into());
     }
@@ -315,6 +316,27 @@ mod tests {
         ] {
             let err = check_write(dialect, sql).unwrap_err();
             assert!(err.contains(why), "{sql}: {err}");
+        }
+    }
+
+    #[test]
+    fn mysql_executable_comments_cannot_hide_write_predicates() {
+        for sql in [
+            "delete from orders /*!99999 where id = 1 */",
+            "update orders set total = 0 /*!99999 where id = 1 */",
+            "delete from orders /*M!999999 where id = 1 */",
+            "update orders set total = 0 /*m!999999 where id = 1 */",
+            "delete from orders /*! where id = 1 */",
+            "insert into orders values (1, '/*!')",
+        ] {
+            let err = check_write(&MysqlDialect, sql).unwrap_err();
+            assert!(err.contains("executable comment"), "{sql}: {err}");
+        }
+        for sql in [
+            "delete from orders /* ordinary comment */ where id = 1",
+            "update orders set total = 0 where id = 1",
+        ] {
+            assert_eq!(check_write(&MysqlDialect, sql), Ok(()), "{sql}");
         }
     }
 

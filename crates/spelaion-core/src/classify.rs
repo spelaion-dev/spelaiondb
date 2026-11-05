@@ -89,6 +89,24 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
     Ok(kind)
 }
 
+/// MySQL and MariaDB may execute comment bodies differently depending on server version.
+/// Reject the markers even inside quoted text: SQL modes change quote/escape semantics, so
+/// attempting to distinguish literals here could let the parser and server disagree again.
+pub(crate) fn reject_mysql_executable_comments(engine: &str, sql: &str) -> Result<(), String> {
+    if engine == "mysql"
+        && (sql.as_bytes().windows(3).any(|w| w == b"/*!")
+            || sql
+                .as_bytes()
+                .windows(4)
+                .any(|w| w[0..2] == *b"/*" && w[2].eq_ignore_ascii_case(&b'm') && w[3] == b'!'))
+    {
+        return Err(
+            "MySQL and MariaDB executable comment markers are not allowed for agents".into(),
+        );
+    }
+    Ok(())
+}
+
 /// Functions that reach outside the database: files on the server, other servers, environment
 /// variables, or locks and settings that outlive the statement. Matched by their last name
 /// part, case-insensitively, as calls and as table functions.
@@ -320,6 +338,28 @@ mod tests {
         assert_eq!(pg("show search_path"), Ok(ReadKind::Show));
         assert_eq!(
             classify_read_only("sqlite", "select * from t limit 3"),
+            Ok(ReadKind::Query)
+        );
+    }
+
+    #[test]
+    fn mysql_executable_comment_marker_check_is_conservative() {
+        for sql in [
+            "select 1 /*!99999 + 1 */",
+            "explain select 1 /*M!100000 + 1 */",
+            "show tables /*m!100000 */",
+            "select 1 /*M! , get_lock('agent_comment_test', 0) */",
+            "select '/*!'",
+        ] {
+            let err = reject_mysql_executable_comments("mysql", sql).unwrap_err();
+            assert!(err.contains("executable comment"), "{sql}: {err}");
+        }
+        assert_eq!(
+            reject_mysql_executable_comments("mysql", "select 1 /* ordinary comment */"),
+            Ok(())
+        );
+        assert_eq!(
+            classify_read_only("postgres", "select '/*!'"),
             Ok(ReadKind::Query)
         );
     }

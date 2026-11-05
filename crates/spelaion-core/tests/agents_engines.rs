@@ -135,6 +135,52 @@ async fn mysql_sessions() -> Vec<(&'static str, Session)> {
 }
 
 #[tokio::test]
+async fn mysql_executable_comments_do_not_bypass_agent_barriers() {
+    for (server, session) in mysql_sessions().await {
+        let t = format!("agent_comments_{}", std::process::id());
+        run(&session, &format!("create table {t} (id int primary key, n int); insert into {t} values (1, 1), (2, 2)")).await;
+        for sql in [
+            format!("delete from {t} /*!99999 where id = 1 */"),
+            format!("update {t} set n = 0 /*!99999 where id = 1 */"),
+            format!("delete from {t} /*M!999999 where id = 1 */"),
+        ] {
+            assert!(
+                matches!(
+                    session.run_write(&sql, &write_limits()).await,
+                    Err(WriteError::Rejected(_))
+                ),
+                "{server}: {sql}"
+            );
+        }
+        for sql in [
+            format!("select * from {t} /*!99999 where id = 1 */"),
+            format!("explain select * from {t} /*M!100000 where id = 1 */"),
+            "select 1 /*M! , get_lock('agent_comment_test', 0) */".to_string(),
+        ] {
+            rejected(session.run_read_only(&sql, &limits(5)).await, &sql);
+        }
+        assert_eq!(
+            first(&session, &format!("select count(*) from {t} where n = id")).await,
+            "2",
+            "{server}"
+        );
+        session
+            .run_write(
+                &format!("update {t} set n = 3 /* ordinary comment */ where id = 1"),
+                &write_limits(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first(&session, &format!("select n from {t} where id = 1")).await,
+            "3",
+            "{server}"
+        );
+        run(&session, &format!("drop table {t}")).await;
+    }
+}
+
+#[tokio::test]
 async fn mysql_reads_are_read_only_capped_and_leave_nothing_open() {
     for (server, session) in mysql_sessions().await {
         let t = format!("agent_read_{}", std::process::id());
