@@ -644,3 +644,68 @@ async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) 
         assert_eq!(got, [name], "{pattern}");
     }
 }
+
+#[tokio::test]
+async fn generated_ddl_recreates_tables_and_views() {
+    let db = TempDb::new("ddl");
+    let conn = open(&db).await;
+    exec_all(
+        &*conn,
+        "create table customer (id integer primary key, email text not null unique);
+         create table lines (id integer primary key autoincrement,
+                             customer_id integer not null references customer (id) on delete cascade,
+                             qty integer not null default 1 check (qty > 0),
+                             note text collate nocase);
+         create index lines_qty on lines (qty desc) where qty > 1;
+         create view big as select id, qty from lines where qty > 10",
+    )
+    .await;
+    let dialect = spelaion_driver_sqlite::SqliteDialect;
+    let big = conn.relation_definition("main", "big").await.unwrap();
+    assert_eq!(
+        big,
+        "CREATE VIEW big as select id, qty from lines where qty > 10;"
+    );
+    let lines = ddl_round_trip(&*conn, &dialect, "main", "lines", "drop table lines").await;
+    assert!(
+        lines.contains("\n\nCREATE INDEX lines_qty on lines (qty desc) where qty > 1;"),
+        "{lines}"
+    );
+    ddl_round_trip(&*conn, &dialect, "main", "customer", "drop table customer").await;
+    assert!(conn.relation_definition("main", "nope").await.is_err());
+}
+
+/// "Generate DDL" round trip: the DDL of `table`, run after `drop`, creates the same table
+/// (columns, keys, constraints, foreign keys, indexes and comment). Returns the DDL.
+async fn ddl_round_trip(
+    conn: &dyn Connection,
+    dialect: &dyn spelaion_driver_api::Dialect,
+    schema: &str,
+    table: &str,
+    drop: &str,
+) -> String {
+    let before = conn.describe_table(schema, table).await.unwrap();
+    let ddl = conn
+        .relation_definition(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{table}: {e}"));
+    assert!(ddl.ends_with(';'), "{ddl}");
+    run(conn, drop)
+        .await
+        .unwrap_or_else(|e| panic!("{drop}: {e:?}"));
+    for span in dialect.split_statements(&ddl) {
+        let statement = span.text(&ddl);
+        run(conn, statement)
+            .await
+            .unwrap_or_else(|e| panic!("{statement}\n→ {e:?}\n\n{ddl}"));
+    }
+    let after = conn.describe_table(schema, table).await.unwrap();
+    assert_eq!(after.columns, before.columns, "{ddl}");
+    assert_eq!(after.primary_key, before.primary_key, "{ddl}");
+    assert_eq!(after.constraints, before.constraints, "{ddl}");
+    assert_eq!(after.foreign_keys, before.foreign_keys, "{ddl}");
+    assert_eq!(after.indexes, before.indexes, "{ddl}");
+    assert_eq!(after.object.comment, before.object.comment, "{ddl}");
+    assert_eq!(after.object.kind, before.object.kind, "{ddl}");
+    ddl
+}

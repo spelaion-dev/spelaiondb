@@ -924,3 +924,90 @@ async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) 
         assert_eq!(got, [name], "{pattern}");
     }
 }
+
+#[tokio::test]
+async fn generated_ddl_recreates_tables_and_views() {
+    for server in servers() {
+        let conn = server.connect().await;
+        for sql in [
+            "drop view if exists ddl_big",
+            "drop table if exists ddl_lines",
+            "drop table if exists ddl_customer",
+            "create table ddl_customer (id int primary key, email varchar(80) not null unique)",
+            "create table ddl_lines (
+                 id bigint auto_increment primary key,
+                 customer_id int not null,
+                 qty int not null default 1 comment 'how many',
+                 note varchar(40) character set latin1,
+                 key ddl_lines_qty (qty desc),
+                 constraint ddl_lines_customer foreign key (customer_id) references ddl_customer (id)
+                     on delete cascade,
+                 constraint ddl_lines_qty_positive check (qty > 0)
+             ) comment 'the lines'",
+            "create view ddl_big as select id, qty from ddl_lines where qty > 10",
+        ] {
+            run(&*conn, sql)
+                .await
+                .unwrap_or_else(|e| panic!("{}: {sql}: {e}", server.label));
+        }
+        let dialect = spelaion_driver_mysql::MysqlDialect;
+        let big = conn
+            .relation_definition("spelaion", "ddl_big")
+            .await
+            .unwrap();
+        assert!(big.contains("VIEW `ddl_big` AS"), "{}: {big}", server.label);
+        let lines = ddl_round_trip(
+            &*conn,
+            &dialect,
+            "spelaion",
+            "ddl_lines",
+            "drop table ddl_lines",
+        )
+        .await;
+        assert!(
+            lines.contains("ON DELETE CASCADE"),
+            "{}: {lines}",
+            server.label
+        );
+        run(&*conn, "drop view ddl_big").await.unwrap();
+        run(&*conn, &big).await.unwrap();
+        run(&*conn, "drop view ddl_big").await.unwrap();
+        run(&*conn, "drop table ddl_lines").await.unwrap();
+        run(&*conn, "drop table ddl_customer").await.unwrap();
+    }
+}
+
+/// "Generate DDL" round trip: the DDL of `table`, run after `drop`, creates the same table
+/// (columns, keys, constraints, foreign keys, indexes and comment). Returns the DDL.
+async fn ddl_round_trip(
+    conn: &dyn Connection,
+    dialect: &dyn spelaion_driver_api::Dialect,
+    schema: &str,
+    table: &str,
+    drop: &str,
+) -> String {
+    let before = conn.describe_table(schema, table).await.unwrap();
+    let ddl = conn
+        .relation_definition(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{table}: {e}"));
+    assert!(ddl.ends_with(';'), "{ddl}");
+    run(conn, drop)
+        .await
+        .unwrap_or_else(|e| panic!("{drop}: {e:?}"));
+    for span in dialect.split_statements(&ddl) {
+        let statement = span.text(&ddl);
+        run(conn, statement)
+            .await
+            .unwrap_or_else(|e| panic!("{statement}\n→ {e:?}\n\n{ddl}"));
+    }
+    let after = conn.describe_table(schema, table).await.unwrap();
+    assert_eq!(after.columns, before.columns, "{ddl}");
+    assert_eq!(after.primary_key, before.primary_key, "{ddl}");
+    assert_eq!(after.constraints, before.constraints, "{ddl}");
+    assert_eq!(after.foreign_keys, before.foreign_keys, "{ddl}");
+    assert_eq!(after.indexes, before.indexes, "{ddl}");
+    assert_eq!(after.object.comment, before.object.comment, "{ddl}");
+    assert_eq!(after.object.kind, before.object.kind, "{ddl}");
+    ddl
+}

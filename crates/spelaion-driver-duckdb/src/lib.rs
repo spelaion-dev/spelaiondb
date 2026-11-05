@@ -253,6 +253,7 @@ enum Command {
     Describe(String, String, Reply<TableInfo>),
     SchemaObjects(String, LikeFilter, Reply<Vec<SchemaObject>>),
     Definition(Box<SchemaObject>, Reply<String>),
+    RelationDefinition(String, String, Reply<String>),
 }
 
 /// Loop of the connection thread. Ends when the `DuckdbConnection` is dropped.
@@ -288,6 +289,9 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             }
             Command::Definition(object, reply) => {
                 let _ = reply.send(objects::object_definition(conn, &object));
+            }
+            Command::RelationDefinition(schema, name, reply) => {
+                let _ = reply.send(objects::relation_definition(conn, &schema, &name));
             }
         }
     }
@@ -403,6 +407,12 @@ impl Connection for DuckdbConnection {
     async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
         let object = Box::new(object.clone());
         self.ask(|reply| Command::Definition(object, reply)).await
+    }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        let (schema, name) = (schema.to_string(), name.to_string());
+        self.ask(|reply| Command::RelationDefinition(schema, name, reply))
+            .await
     }
 }
 

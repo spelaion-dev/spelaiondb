@@ -502,6 +502,10 @@ impl Connection for MysqlConnection {
     async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
         objects::object_definition(self, object).await
     }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        objects::relation_definition(self, schema, name).await
+    }
 }
 
 fn tokio_stream_from<T: Send + 'static>(

@@ -213,6 +213,14 @@ pub trait Connection: Send + Sync {
             "this engine has no object definitions".into(),
         ))
     }
+    /// The DDL that creates a relation of [`Connection::list_objects`]: `CREATE TABLE` with
+    /// its constraints, then its indexes and comments, or `CREATE VIEW`. Statements end in
+    /// `;` and are separated by a blank line.
+    async fn relation_definition(&self, _schema: &str, _name: &str) -> Result<String> {
+        Err(DriverError::Other(
+            "this engine has no table definitions".into(),
+        ))
+    }
 }
 
 #[async_trait]

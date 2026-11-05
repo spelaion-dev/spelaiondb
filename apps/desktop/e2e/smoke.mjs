@@ -969,6 +969,13 @@ try {
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "CREATE INDEX orders_customer on orders (customer_id);");
   await shot("05g-table-folders");
   await ordersNode.click();
+  // "Generate DDL": the table's CREATE, then its own indexes, in a new tab (nothing runs).
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate DDL" }).click();
+  await panel.locator(".cm-content", { hasText: "CREATE TABLE orders" }).waitFor();
+  const ordersDdl = (await panel.locator(".cm-content").innerText()).trimEnd();
+  assert.match(ordersDdl, /^CREATE TABLE orders \(/);
+  assert.ok(ordersDdl.endsWith("CREATE INDEX orders_customer on orders (customer_id);"), ordersDdl);
   // Refresh: a table created from a query tab appears with F5 on its schema, and "Refresh all
   // schemas" sees it go; open folders stay open.
   const mainSchema = page.getByRole("button", { name: "Expand or collapse schema main" });

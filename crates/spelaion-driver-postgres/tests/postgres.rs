@@ -1066,3 +1066,144 @@ async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) 
         assert_eq!(got, [name], "{pattern}");
     }
 }
+
+#[tokio::test]
+async fn generated_ddl_recreates_tables_and_views() {
+    let Some(conn) = connect().await else { return };
+    let schema = format!("spelaion_ddl_{}", std::process::id());
+    let ddl = [
+        format!("create schema {schema}"),
+        format!("create table {schema}.customer (id int primary key, email text not null unique)"),
+        format!(
+            "create table {schema}.\"Order Lines\" (
+                 id bigint generated always as identity primary key,
+                 customer_id int not null references {schema}.customer (id) on delete cascade,
+                 qty int not null default 1 check (qty > 0),
+                 price numeric(12, 2),
+                 total numeric(14, 2) generated always as (qty * price) stored,
+                 note text collate \"C\",
+                 seen timestamptz default now(),
+                 unique (customer_id, note)
+             )"
+        ),
+        format!(
+            "create index order_lines_seen on {schema}.\"Order Lines\" (seen desc) where qty > 1"
+        ),
+        format!("comment on table {schema}.\"Order Lines\" is 'it''s the lines'"),
+        format!("comment on column {schema}.\"Order Lines\".qty is 'how many'"),
+        format!("create table {schema}.events (id int, at date not null) partition by range (at)"),
+        format!(
+            "create view {schema}.big as select id, qty from {schema}.\"Order Lines\" where qty > 10"
+        ),
+        format!(
+            "create materialized view {schema}.counts as select customer_id, count(*) as n from {schema}.\"Order Lines\" group by customer_id"
+        ),
+    ];
+    for stmt in &ddl {
+        run(&*conn, stmt)
+            .await
+            .unwrap_or_else(|e| panic!("{stmt}: {e:?}"));
+    }
+    let result = async {
+        let dialect = spelaion_driver_postgres::PostgresDialect;
+        // The view and the materialized view depend on the table: dropped with it, and made
+        // again from their own DDL, read before.
+        let big = conn.relation_definition(&schema, "big").await.unwrap();
+        assert!(
+            big.starts_with(&format!("CREATE OR REPLACE VIEW {schema}.big AS\n")),
+            "{big}"
+        );
+        let counts = conn.relation_definition(&schema, "counts").await.unwrap();
+        assert!(
+            counts.starts_with(&format!("CREATE MATERIALIZED VIEW {schema}.counts AS\n")),
+            "{counts}"
+        );
+        assert!(counts.ends_with("WITH DATA;"), "{counts}");
+        let lines = ddl_round_trip(
+            &*conn,
+            &dialect,
+            &schema,
+            "Order Lines",
+            &format!("drop table {schema}.\"Order Lines\" cascade"),
+        )
+        .await;
+        for expected in [
+            "GENERATED ALWAYS AS IDENTITY NOT NULL",
+            "GENERATED ALWAYS AS (((qty)::numeric * price)) STORED",
+            "COLLATE \"C\"",
+            "DEFAULT now()",
+            "ON DELETE CASCADE",
+            "CREATE INDEX order_lines_seen ON",
+            "IS 'it''s the lines';",
+            "IS 'how many';",
+        ] {
+            assert!(lines.contains(expected), "{expected}\n{lines}");
+        }
+        for view in [&big, &counts] {
+            for span in spelaion_driver_api::Dialect::split_statements(&dialect, view) {
+                run(&*conn, span.text(view)).await.unwrap();
+            }
+        }
+        let customer = ddl_round_trip(
+            &*conn,
+            &dialect,
+            &schema,
+            "customer",
+            &format!("drop table {schema}.customer cascade"),
+        )
+        .await;
+        assert!(customer.contains("UNIQUE (email)"), "{customer}");
+        let events = ddl_round_trip(
+            &*conn,
+            &dialect,
+            &schema,
+            "events",
+            &format!("drop table {schema}.events"),
+        )
+        .await;
+        assert!(events.contains("PARTITION BY RANGE (at)"), "{events}");
+        assert!(conn.relation_definition(&schema, "nope").await.is_err());
+    };
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    run(&*conn, &format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// "Generate DDL" round trip: the DDL of `table`, run after `drop`, creates the same table
+/// (columns, keys, constraints, foreign keys, indexes and comment). Returns the DDL.
+async fn ddl_round_trip(
+    conn: &dyn Connection,
+    dialect: &dyn spelaion_driver_api::Dialect,
+    schema: &str,
+    table: &str,
+    drop: &str,
+) -> String {
+    let before = conn.describe_table(schema, table).await.unwrap();
+    let ddl = conn
+        .relation_definition(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{table}: {e}"));
+    assert!(ddl.ends_with(';'), "{ddl}");
+    run(conn, drop)
+        .await
+        .unwrap_or_else(|e| panic!("{drop}: {e:?}"));
+    for span in dialect.split_statements(&ddl) {
+        let statement = span.text(&ddl);
+        run(conn, statement)
+            .await
+            .unwrap_or_else(|e| panic!("{statement}\n→ {e:?}\n\n{ddl}"));
+    }
+    let after = conn.describe_table(schema, table).await.unwrap();
+    assert_eq!(after.columns, before.columns, "{ddl}");
+    assert_eq!(after.primary_key, before.primary_key, "{ddl}");
+    assert_eq!(after.constraints, before.constraints, "{ddl}");
+    assert_eq!(after.foreign_keys, before.foreign_keys, "{ddl}");
+    assert_eq!(after.indexes, before.indexes, "{ddl}");
+    assert_eq!(after.object.comment, before.object.comment, "{ddl}");
+    assert_eq!(after.object.kind, before.object.kind, "{ddl}");
+    ddl
+}

@@ -936,3 +936,103 @@ async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) 
         assert_eq!(got, [name], "{pattern}");
     }
 }
+
+#[tokio::test]
+async fn generated_ddl_recreates_tables_and_views() {
+    let Some(conn) = connect().await else { return };
+    let cleanup = [
+        "drop view if exists ddl.big",
+        "drop table if exists ddl.lines",
+        "drop table if exists ddl.customer",
+    ];
+    for sql in cleanup {
+        run(&*conn, sql).await.unwrap();
+    }
+    for sql in [
+        "if schema_id('ddl') is null exec('create schema ddl')",
+        "create table ddl.customer (id int constraint customer_pk primary key, email nvarchar(80) not null constraint customer_email unique)",
+        "create table ddl.lines (
+             id bigint identity(10, 5) constraint lines_pk primary key,
+             customer_id int not null,
+             qty int not null constraint lines_qty_default default 1,
+             price decimal(12, 2),
+             total as (qty * price) persisted,
+             note varchar(max),
+             constraint lines_qty_positive check (qty > 0),
+             constraint lines_customer foreign key (customer_id) references ddl.customer (id) on delete cascade
+         )",
+        "create index lines_qty on ddl.lines (qty desc) include (note) where qty > 1",
+        "exec sp_addextendedproperty 'MS_Description', N'it''s the lines', 'schema', 'ddl', 'table', 'lines'",
+        "exec sp_addextendedproperty 'MS_Description', N'how many', 'schema', 'ddl', 'table', 'lines', 'column', 'qty'",
+        "create view ddl.big as select id, qty from ddl.lines where qty > 10",
+    ] {
+        run(&*conn, sql)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+    let dialect = spelaion_driver_sqlserver::SqlServerDialect;
+    let big = conn.relation_definition("ddl", "big").await.unwrap();
+    assert_eq!(
+        big,
+        "create view ddl.big as select id, qty from ddl.lines where qty > 10;"
+    );
+    run(&*conn, "drop view ddl.big").await.unwrap();
+    let lines = ddl_round_trip(&*conn, &dialect, "ddl", "lines", "drop table ddl.lines").await;
+    for expected in [
+        "IDENTITY(10, 5) NOT NULL",
+        "AS ([qty]*[price]) PERSISTED",
+        "CONSTRAINT lines_qty_default DEFAULT ((1)) NOT NULL",
+        "ON DELETE CASCADE",
+        "INCLUDE (note) WHERE ([qty]>(1));",
+        "@value = N'it''s the lines'",
+    ] {
+        assert!(lines.contains(expected), "{expected}\n{lines}");
+    }
+    run(&*conn, "drop table ddl.lines").await.unwrap();
+    ddl_round_trip(
+        &*conn,
+        &dialect,
+        "ddl",
+        "customer",
+        "drop table ddl.customer",
+    )
+    .await;
+    for sql in cleanup {
+        run(&*conn, sql).await.unwrap();
+    }
+}
+
+/// "Generate DDL" round trip: the DDL of `table`, run after `drop`, creates the same table
+/// (columns, keys, constraints, foreign keys, indexes and comment). Returns the DDL.
+async fn ddl_round_trip(
+    conn: &dyn Connection,
+    dialect: &dyn spelaion_driver_api::Dialect,
+    schema: &str,
+    table: &str,
+    drop: &str,
+) -> String {
+    let before = conn.describe_table(schema, table).await.unwrap();
+    let ddl = conn
+        .relation_definition(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{table}: {e}"));
+    assert!(ddl.ends_with(';'), "{ddl}");
+    run(conn, drop)
+        .await
+        .unwrap_or_else(|e| panic!("{drop}: {e:?}"));
+    for span in dialect.split_statements(&ddl) {
+        let statement = span.text(&ddl);
+        run(conn, statement)
+            .await
+            .unwrap_or_else(|e| panic!("{statement}\n→ {e:?}\n\n{ddl}"));
+    }
+    let after = conn.describe_table(schema, table).await.unwrap();
+    assert_eq!(after.columns, before.columns, "{ddl}");
+    assert_eq!(after.primary_key, before.primary_key, "{ddl}");
+    assert_eq!(after.constraints, before.constraints, "{ddl}");
+    assert_eq!(after.foreign_keys, before.foreign_keys, "{ddl}");
+    assert_eq!(after.indexes, before.indexes, "{ddl}");
+    assert_eq!(after.object.comment, before.object.comment, "{ddl}");
+    assert_eq!(after.object.kind, before.object.kind, "{ddl}");
+    ddl
+}

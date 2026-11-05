@@ -1073,6 +1073,20 @@ function ObjectNode({
       setError(e instanceof Error ? e.message : String(e));
     }
   }
+  /** "Generate DDL": the driver writes the CREATE statement; it opens in a new tab. */
+  async function openDdl() {
+    setMenu(null);
+    try {
+      setError(null);
+      const tab = addTab(
+        connectionId,
+        await call(commands.relationDefinition(session, object.schema, object.name)),
+      );
+      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
   /** Pages of the table in a table data tab (double-click or "View rows"). */
   const preview = () => {
     setMenu(null);
@@ -1168,6 +1182,9 @@ function ObjectNode({
           </button>
           <FilterMenuItems kind="objects" name={object.name} onFilterName={onFilterName} close={() => setMenu(null)} />
           <hr />
+          <button role="menuitem" onClick={() => void openDdl()}>
+            {t("generateDdl")}
+          </button>
           {templates.map((template) => (
             <button
               key={template}

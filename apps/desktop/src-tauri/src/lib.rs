@@ -1927,6 +1927,24 @@ async fn list_server_objects(
     Ok(objects.into_iter().map(ServerObjectItem::from).collect())
 }
 
+/// The DDL of a table or view (`CREATE TABLE` with its constraints, indexes and comments),
+/// to open in a new tab (nothing runs).
+#[tauri::command]
+#[specta::specta]
+async fn relation_definition(
+    session: String,
+    schema: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    open.session
+        .connection()
+        .relation_definition(&schema, &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The DDL of an object, to open in a new tab (nothing runs).
 #[tauri::command]
 #[specta::specta]
@@ -2273,6 +2291,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_explorer_filter,
             filter_explorer_name,
             object_definition,
+            relation_definition,
             editable_query_table,
             answer_interaction,
         ])

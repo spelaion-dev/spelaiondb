@@ -87,7 +87,8 @@
   "viewRowsHint": "Double-click: view rows. Right-click: generate SQL",
   "toggleFolder": "Expand or collapse {{name}}",
   "openObject": "{{name}}: open its definition",
-  "openDefinition": "Open definition",
+  "openDefinition": "Generate DDL",
+  "generateDdl": "Generate DDL",
   "definitionHint": "Double-click: open its definition",
   "onTable": "on {{table}}",
   "kinds": {

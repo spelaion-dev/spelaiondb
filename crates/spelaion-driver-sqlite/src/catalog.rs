@@ -112,6 +112,33 @@ pub(crate) fn schema_objects(schema: &str, rows: &[Row]) -> Vec<SchemaObject> {
         .collect()
 }
 
+/// The `CREATE TABLE` or `CREATE VIEW` SQLite keeps, then the `CREATE INDEX` of the table's
+/// own indexes (automatic ones have no text: they come from its constraints).
+pub(crate) fn relation_definition_sql(schema: &str, name: &str) -> String {
+    format!(
+        "select sql from {table} where name = {name} and type in ('table', 'view') \
+         union all \
+         select * from (select sql from {table} where tbl_name = {name} and type = 'index' \
+                        and sql is not null order by name)",
+        table = schema_table(schema),
+        name = literal(name)
+    )
+}
+
+pub(crate) fn relation_definition(schema: &str, name: &str, rows: &[Row]) -> Result<String> {
+    if rows.is_empty() {
+        return Err(DriverError::Other(format!(
+            "{schema}.{name} does not exist"
+        )));
+    }
+    Ok(rows
+        .iter()
+        .filter_map(|row| optional_text(row, 0))
+        .map(|sql| terminated(&sql))
+        .collect::<Vec<_>>()
+        .join("\n\n"))
+}
+
 /// The `CREATE TRIGGER` SQLite keeps, or an error for kinds SQLite does not have.
 pub(crate) fn definition_sql(object: &SchemaObject) -> Result<String> {
     match object.kind {

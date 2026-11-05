@@ -226,6 +226,11 @@ export const commands = {
 	filterExplorerName: (connection: string, kind: FilterKindItem, name: string, action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, name, action })),
 	/**  The DDL of an object, to open in a new tab (nothing runs). */
 	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
+	/**
+	 *  The DDL of a table or view (`CREATE TABLE` with its constraints, indexes and comments),
+	 *  to open in a new tab (nothing runs).
+	 */
+	relationDefinition: (session: string, schema: string, name: string) => typedError<string, string>(__TAURI_INVOKE("relation_definition", { session, schema, name })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */

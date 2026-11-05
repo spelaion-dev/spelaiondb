@@ -5,6 +5,7 @@
 //! (procedures, `sp_help`), and each one becomes a result. Cancelling sends a TDS Attention,
 //! which stops the running batch and keeps the session (`KILL` would end it).
 
+mod ddl;
 mod decode;
 mod dialect;
 mod introspect;
@@ -506,6 +507,10 @@ impl Connection for SqlServerConnection {
 
     async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
         objects::object_definition(self, object).await
+    }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        ddl::relation_definition(self, schema, name).await
     }
 }
 

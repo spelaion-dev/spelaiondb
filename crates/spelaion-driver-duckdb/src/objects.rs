@@ -5,7 +5,7 @@
 use duckdb::types::Value;
 use duckdb::{Connection, params, params_from_iter};
 use spelaion_driver_api::{
-    Dialect, DriverError, LikeFilter, Result, SchemaObject, SchemaObjectKind,
+    Dialect, DriverError, LikeFilter, Result, SchemaObject, SchemaObjectKind, terminated,
 };
 
 use crate::dialect::DuckdbDialect;
@@ -69,6 +69,42 @@ pub fn list_schema_objects(
         })
     })
     .collect()
+}
+
+/// The `CREATE TABLE` or `CREATE VIEW` DuckDB keeps (`duckdb_tables().sql`), then the
+/// table's indexes.
+pub fn relation_definition(conn: &Connection, shown: &str, name: &str) -> Result<String> {
+    let (database, schema) = locate(conn, shown)?;
+    let mut statement = conn
+        .prepare(
+            "select sql, 0 from duckdb_tables() \
+               where database_name = ?1 and schema_name = ?2 and table_name = ?3 \
+             union all \
+             select sql, 0 from duckdb_views() \
+               where database_name = ?1 and schema_name = ?2 and view_name = ?3 \
+                 and not internal \
+             union all \
+             select sql, 1 from duckdb_indexes() \
+               where database_name = ?1 and schema_name = ?2 and table_name = ?3 \
+                 and sql is not null \
+             order by 2",
+        )
+        .map_err(map_error)?;
+    let rows = statement
+        .query_map(params![database, schema, name], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .map_err(map_error)?;
+    let mut statements = Vec::new();
+    for row in rows {
+        if let Some(sql) = row.map_err(map_error)? {
+            statements.push(terminated(&sql));
+        }
+    }
+    if statements.is_empty() {
+        return Err(DriverError::Other(format!("{shown}.{name} does not exist")));
+    }
+    Ok(statements.join("\n\n"))
 }
 
 pub fn object_definition(conn: &Connection, object: &SchemaObject) -> Result<String> {

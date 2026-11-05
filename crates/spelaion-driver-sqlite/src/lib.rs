@@ -287,6 +287,12 @@ impl Connection for SqliteConnection {
         let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
         catalog::definition(object, &rows)
     }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        let sql = catalog::relation_definition_sql(schema, name);
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        catalog::relation_definition(schema, name, &rows)
+    }
 }
 
 struct SqliteCancel(Arc<InterruptHandle>);

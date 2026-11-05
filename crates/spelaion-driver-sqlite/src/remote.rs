@@ -817,6 +817,13 @@ impl Connection for RemoteConnection {
         let rows = self.rows(catalog::definition_sql(object)?).await?;
         catalog::definition(object, &rows)
     }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        let rows = self
+            .rows(catalog::relation_definition_sql(schema, name))
+            .await?;
+        catalog::relation_definition(schema, name, &rows)
+    }
 }
 
 /// Cancelling: SIGINT to `sqlite3`, which interrupts the statement and then ends (it only

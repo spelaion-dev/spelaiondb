@@ -4,6 +4,7 @@
 //! and is then executed in streaming mode. Values arrive in binary format and [`decode`]
 //! decodes them without losing information for any type.
 
+mod ddl;
 mod decode;
 mod dialect;
 mod introspect;
@@ -256,6 +257,10 @@ impl Connection for PgConnection {
 
     async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
         objects::object_definition(&self.client, object).await
+    }
+
+    async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
+        ddl::relation_definition(&self.client, schema, name).await
     }
 }
 

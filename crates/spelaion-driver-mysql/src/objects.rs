@@ -123,6 +123,25 @@ fn quote_account(part: &str) -> String {
     format!("'{}'", part.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
+/// `SHOW CREATE TABLE`, which writes a view's `CREATE VIEW` too (both in its second column):
+/// the server's own text, with the table's indexes, keys and comments in it.
+pub(crate) async fn relation_definition(
+    conn: &MysqlConnection,
+    schema: &str,
+    name: &str,
+) -> Result<String> {
+    let sql = format!(
+        "SHOW CREATE TABLE {}.{}",
+        MysqlDialect.quote_identifier(schema),
+        MysqlDialect.quote_identifier(name)
+    );
+    let rows = conn.rows(&sql, vec![]).await?;
+    rows.first()
+        .and_then(|row| opt(row, 1))
+        .map(|d| terminated(&d))
+        .ok_or_else(|| DriverError::Other(format!("{schema}.{name} does not exist")))
+}
+
 pub(crate) async fn object_definition(
     conn: &MysqlConnection,
     object: &SchemaObject,

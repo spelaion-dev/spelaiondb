@@ -213,7 +213,10 @@ everything again, autocompletion included; what is expanded stays expanded.
 Names are sorted alphabetically, ignoring case; **Settings → Explorer** can keep the
 database's order instead, sort with case (upper case first), or put the folders before the
 schemas. Columns always keep their table's order.
-Double-click a function, trigger, sequence or type (or **Open definition** in its right-click
+**Generate DDL** in the right-click menu of a table or view opens its `CREATE` statement:
+the engine's own text where it keeps one (MySQL, MariaDB, SQLite, DuckDB), composed from the
+catalog for PostgreSQL and SQL Server, with constraints, indexes and comments.
+Double-click a function, trigger, sequence or type (or **Generate DDL** in its right-click
 menu) to open its `CREATE` statement in a new tab; nothing runs. Objects that belong to a
 PostgreSQL extension are not listed: the extension stands for them.
 

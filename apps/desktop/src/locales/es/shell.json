@@ -87,7 +87,8 @@
   "viewRowsHint": "Doble clic: ver filas. Clic derecho: generar SQL",
   "toggleFolder": "Expandir o contraer {{name}}",
   "openObject": "{{name}}: abrir su definición",
-  "openDefinition": "Abrir definición",
+  "openDefinition": "Generar DDL",
+  "generateDdl": "Generar DDL",
   "definitionHint": "Doble clic: abrir su definición",
   "onTable": "en {{table}}",
   "kinds": {

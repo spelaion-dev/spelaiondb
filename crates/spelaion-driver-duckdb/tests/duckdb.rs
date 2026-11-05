@@ -835,3 +835,64 @@ async fn server_side_keeps_what_rust_keeps(conn: &dyn Connection, schema: &str) 
         assert_eq!(got, [name], "{pattern}");
     }
 }
+
+#[tokio::test]
+async fn generated_ddl_recreates_tables_and_views() {
+    let conn = memory().await;
+    exec_all(
+        &*conn,
+        "create schema sales;
+         create table sales.customer (id integer primary key, email varchar not null unique);
+         create table sales.lines (id integer primary key,
+                                   customer_id integer not null references sales.customer (id),
+                                   qty integer not null default 1 check (qty > 0),
+                                   note varchar);
+         create index lines_qty on sales.lines (qty);
+         create view sales.big as select id, qty from sales.lines where qty > 10",
+    )
+    .await;
+    let dialect = spelaion_driver_duckdb::DuckdbDialect;
+    let big = conn.relation_definition("sales", "big").await.unwrap();
+    assert!(big.starts_with("CREATE VIEW sales.big AS"), "{big}");
+    let lines = ddl_round_trip(&*conn, &dialect, "sales", "lines", "drop table sales.lines").await;
+    assert!(
+        lines.contains("CREATE INDEX lines_qty ON sales.lines"),
+        "{lines}"
+    );
+    assert!(conn.relation_definition("sales", "nope").await.is_err());
+}
+
+/// "Generate DDL" round trip: the DDL of `table`, run after `drop`, creates the same table
+/// (columns, keys, constraints, foreign keys, indexes and comment). Returns the DDL.
+async fn ddl_round_trip(
+    conn: &dyn Connection,
+    dialect: &dyn spelaion_driver_api::Dialect,
+    schema: &str,
+    table: &str,
+    drop: &str,
+) -> String {
+    let before = conn.describe_table(schema, table).await.unwrap();
+    let ddl = conn
+        .relation_definition(schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{table}: {e}"));
+    assert!(ddl.ends_with(';'), "{ddl}");
+    run(conn, drop)
+        .await
+        .unwrap_or_else(|e| panic!("{drop}: {e:?}"));
+    for span in dialect.split_statements(&ddl) {
+        let statement = span.text(&ddl);
+        run(conn, statement)
+            .await
+            .unwrap_or_else(|e| panic!("{statement}\n→ {e:?}\n\n{ddl}"));
+    }
+    let after = conn.describe_table(schema, table).await.unwrap();
+    assert_eq!(after.columns, before.columns, "{ddl}");
+    assert_eq!(after.primary_key, before.primary_key, "{ddl}");
+    assert_eq!(after.constraints, before.constraints, "{ddl}");
+    assert_eq!(after.foreign_keys, before.foreign_keys, "{ddl}");
+    assert_eq!(after.indexes, before.indexes, "{ddl}");
+    assert_eq!(after.object.comment, before.object.comment, "{ddl}");
+    assert_eq!(after.object.kind, before.object.kind, "{ddl}");
+    ddl
+}
