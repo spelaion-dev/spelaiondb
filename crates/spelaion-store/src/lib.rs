@@ -259,12 +259,12 @@ impl ExplorerFilter {
         }
     }
 
-    /// "Show only": the pattern becomes the only included one of a kind, and stops being
+    /// "Show only": the patterns become the only included ones of a kind, and stop being
     /// excluded.
-    pub fn show_only(&mut self, kind: FilterKind, pattern: &str) {
+    pub fn show_only(&mut self, kind: FilterKind, patterns: &[String]) {
         let (include, exclude) = self.lists_of(kind);
-        *include = vec![pattern.to_string()];
-        exclude.retain(|p| p != pattern);
+        *include = patterns.to_vec();
+        exclude.retain(|p| !patterns.contains(p));
     }
 }
 
@@ -1312,13 +1312,13 @@ mod tests {
         filter.hide(FilterKind::Objects, "audit");
         filter.hide(FilterKind::Objects, "audit");
         assert_eq!(filter.object_exclude, ["orders", "audit"]);
-        filter.show_only(FilterKind::Objects, "orders");
+        filter.show_only(FilterKind::Objects, &["orders".into()]);
         assert_eq!(filter.object_include, ["orders"]);
         assert_eq!(filter.object_exclude, ["audit"]);
         filter.hide(FilterKind::Columns, "password");
-        filter.show_only(FilterKind::Schemas, "public");
+        filter.show_only(FilterKind::Schemas, &["public".into(), "audit".into()]);
         assert_eq!(filter.column_exclude, ["password"]);
-        assert_eq!(filter.schema_include, ["public"]);
+        assert_eq!(filter.schema_include, ["public", "audit"]);
         assert!(filter.schema_exclude.is_empty() && filter.column_include.is_empty());
     }
 

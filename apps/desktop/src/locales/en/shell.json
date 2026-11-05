@@ -69,6 +69,8 @@
   "configureSchemaFilter": "Configure schema filter…",
   "hideName": "Hide {{name}}",
   "showOnlyName": "Show only {{name}}",
+  "hideNames": "Hide the {{count}} chosen",
+  "showOnlyNames": "Show only the {{count}} chosen",
   "newQuery": "New query",
   "connecting": "Connecting…",
   "quickFilter": "Filter the explorer",
@@ -173,7 +175,9 @@
     "counting": "counting…",
     "exactCount": "Exact row count",
     "estimate": "Estimated rows (from the planner, not counted)",
-    "openAsSql": "Open as SQL"
+    "openAsSql": "Open as SQL",
+    "join": "Generate JOIN of the {{count}} chosen tables",
+    "innerJoin": "Generate INNER JOIN of the {{count}} chosen tables"
   },
   "params": {
     "title": "Query parameters",

@@ -153,6 +153,156 @@ pub fn table_sql(dialect: &dyn Dialect, table: &TableInfo, template: SqlTemplate
     }
 }
 
+/// Words an alias must not be (they mean something where an alias goes).
+const NOT_ALIASES: &[&str] = &[
+    "as", "at", "by", "do", "go", "if", "in", "is", "no", "of", "on", "or", "to", "and", "end",
+    "for", "not", "set", "all", "any", "asc", "key", "use", "add", "top",
+];
+
+/// Short aliases from the tables' names: the initials of their words (`order_lines` → `ol`),
+/// numbered when two would be the same.
+fn aliases(tables: &[TableInfo]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (i, table) in tables.iter().enumerate() {
+        let initials: String = table
+            .object
+            .name
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter_map(|word| word.chars().next())
+            .filter(char::is_ascii_alphabetic)
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        let base = if initials.is_empty() || NOT_ALIASES.contains(&initials.as_str()) {
+            format!("t{}", i + 1)
+        } else {
+            initials
+        };
+        let mut alias = base.clone();
+        let mut n = 2;
+        while out.contains(&alias) {
+            alias = format!("{base}{n}");
+            n += 1;
+        }
+        out.push(alias);
+    }
+    out
+}
+
+/// `b.x = a.y AND …` for the foreign keys between table `a` and table `b`, either way.
+fn links(
+    dialect: &dyn Dialect,
+    tables: &[TableInfo],
+    aliases: &[String],
+    a: usize,
+    b: usize,
+) -> Option<String> {
+    let quote = |c: &str| dialect.quote_identifier(c);
+    let refers = |from: usize, to: usize| -> Vec<String> {
+        let target = &tables[to].object;
+        tables[from]
+            .foreign_keys
+            .iter()
+            .filter(|fk| {
+                fk.referenced_table == target.name
+                    && (fk.referenced_schema.is_empty() || fk.referenced_schema == target.schema)
+            })
+            .flat_map(|fk| {
+                fk.columns
+                    .iter()
+                    .zip(&fk.referenced_columns)
+                    .map(|(column, referenced)| {
+                        format!(
+                            "{}.{} = {}.{}",
+                            aliases[to],
+                            quote(referenced),
+                            aliases[from],
+                            quote(column)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let mut conditions = refers(a, b);
+    if conditions.is_empty() {
+        conditions = refers(b, a);
+    }
+    (!conditions.is_empty()).then(|| conditions.join(" AND "))
+}
+
+/// A SELECT that joins the tables chosen in the explorer on the foreign keys between them:
+/// `INNER JOIN … ON …`, or the simple form, `FROM a, b WHERE …`. A table no foreign key links
+/// to the others is still joined (CROSS JOIN, or no condition), and the SQL says so.
+pub fn join_sql(dialect: &dyn Dialect, tables: &[TableInfo], inner: bool) -> String {
+    let aliases = aliases(tables);
+    let names: Vec<String> = tables
+        .iter()
+        .map(|t| qualified(dialect, &t.object.schema, &t.object.name))
+        .collect();
+    // Each table after the first goes next to one already placed that it links to.
+    let mut placed = vec![0];
+    let mut joins: Vec<(usize, Option<String>)> = Vec::new();
+    while placed.len() < tables.len() {
+        let next = (0..tables.len())
+            .filter(|i| !placed.contains(i))
+            .find_map(|i| {
+                placed
+                    .iter()
+                    .find_map(|&p| links(dialect, tables, &aliases, p, i))
+                    .map(|on| (i, Some(on)))
+            })
+            .unwrap_or_else(|| {
+                let i = (0..tables.len())
+                    .find(|i| !placed.contains(i))
+                    .expect("one left");
+                (i, None)
+            });
+        placed.push(next.0);
+        joins.push(next);
+    }
+    let notes: String = joins
+        .iter()
+        .filter(|(_, on)| on.is_none())
+        .map(|(i, _)| {
+            format!(
+                "-- No foreign key links {} to the other tables: every combination of rows.\n",
+                names[*i]
+            )
+        })
+        .collect();
+    if inner {
+        let mut sql = format!("{notes}SELECT *\nFROM {} {}", names[0], aliases[0]);
+        for (i, on) in &joins {
+            match on {
+                Some(on) => sql.push_str(&format!(
+                    "\nINNER JOIN {} {} ON {on}",
+                    names[*i], aliases[*i]
+                )),
+                None => sql.push_str(&format!("\nCROSS JOIN {} {}", names[*i], aliases[*i])),
+            }
+        }
+        return format!("{sql};\n");
+    }
+    let from = std::iter::once(0)
+        .chain(joins.iter().map(|(i, _)| *i))
+        .map(|i| format!("{} {}", names[i], aliases[i]))
+        .collect::<Vec<_>>()
+        .join(",\n     ");
+    let conditions: Vec<&String> = joins.iter().filter_map(|(_, on)| on.as_ref()).collect();
+    let mut sql = format!("{notes}SELECT *\nFROM {from}");
+    if !conditions.is_empty() {
+        sql.push_str(&format!(
+            "\nWHERE {}",
+            conditions
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  AND ")
+        ));
+    }
+    format!("{sql};\n")
+}
+
 /// `(SELECT :a AS a, …) AS source`: the values to replace, or a real table in their place.
 fn source(dialect: &dyn Dialect, columns: &[&str]) -> String {
     format!(
@@ -603,6 +753,42 @@ mod tests {
         assert_eq!(
             table_sql(&SqliteDialect, &table("main", &["id"]), SqlTemplate::Select),
             "SELECT\n  id,\n  \"unit price\",\n  qty\nFROM \"order lines\"\nLIMIT 100;\n"
+        );
+    }
+
+    #[test]
+    fn joins_follow_the_foreign_keys_between_the_tables() {
+        let mut orders = table("shop", &["id"]);
+        orders.object.name = "orders".into();
+        orders.columns[2].name = "customer_id".into();
+        orders.foreign_keys = vec![spelaion_driver_api::ForeignKeyInfo {
+            name: "orders_customer".into(),
+            columns: vec!["customer_id".into()],
+            referenced_schema: "shop".into(),
+            referenced_table: "customer".into(),
+            referenced_columns: vec!["id".into()],
+        }];
+        let mut customer = table("shop", &["id"]);
+        customer.object.name = "customer".into();
+        let mut notes = table("shop", &["id"]);
+        notes.object.name = "order notes".into();
+        let tables = [orders, customer, notes];
+        assert_eq!(
+            join_sql(&Backticks, &tables, true),
+            "-- No foreign key links `shop`.`order notes` to the other tables: every combination of rows.\n\
+             SELECT *\nFROM `shop`.`orders` o\n\
+             INNER JOIN `shop`.`customer` c ON c.`id` = o.`customer_id`\n\
+             CROSS JOIN `shop`.`order notes` t3;\n"
+        );
+        assert_eq!(
+            join_sql(&Backticks, &tables[..2], false),
+            "SELECT *\nFROM `shop`.`orders` o,\n     `shop`.`customer` c\nWHERE c.`id` = o.`customer_id`;\n"
+        );
+        // The other way round: customer first, orders refers to it.
+        let reversed = [tables[1].clone(), tables[0].clone()];
+        assert!(
+            join_sql(&Backticks, &reversed, true)
+                .contains("INNER JOIN `shop`.`orders` o ON c.`id` = o.`customer_id`")
         );
     }
 

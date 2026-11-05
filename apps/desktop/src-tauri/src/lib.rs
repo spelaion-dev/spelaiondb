@@ -460,14 +460,15 @@ async fn set_explorer_filter(
         .map_err(|e| e.to_string())
 }
 
-/// "Hide" or "Show only" on one schema, object or column of the explorer: its name, with its
-/// wildcard characters escaped, goes into the connection's filter. Returns the new filter.
+/// "Hide" or "Show only" on the schemas, objects or columns chosen in the explorer: their
+/// names, with their wildcard characters escaped, go into the connection's filter. Returns the
+/// new filter.
 #[tauri::command]
 #[specta::specta]
 async fn filter_explorer_name(
     connection: String,
     kind: FilterKindItem,
-    name: String,
+    names: Vec<String>,
     action: FilterActionItem,
     state: State<'_, AppState>,
 ) -> CmdResult<ExplorerFilterItem> {
@@ -477,10 +478,17 @@ async fn filter_explorer_name(
         .explorer_filter(workspace.clone(), connection.clone())
         .await
         .map_err(|e| e.to_string())?;
-    let pattern = spelaion_driver_api::literal_pattern(&name);
+    let patterns: Vec<String> = names
+        .iter()
+        .map(|name| spelaion_driver_api::literal_pattern(name))
+        .collect();
     match action {
-        FilterActionItem::Hide => filter.hide(kind.into(), &pattern),
-        FilterActionItem::ShowOnly => filter.show_only(kind.into(), &pattern),
+        FilterActionItem::Hide => {
+            for pattern in &patterns {
+                filter.hide(kind.into(), pattern);
+            }
+        }
+        FilterActionItem::ShowOnly => filter.show_only(kind.into(), &patterns),
     }
     state
         .history
@@ -2010,6 +2018,37 @@ async fn table_sql(
     ))
 }
 
+/// A SELECT joining the tables chosen in the explorer on the foreign keys between them
+/// (`INNER JOIN … ON`, or the simple `FROM a, b WHERE`), to open in a new tab.
+#[tauri::command]
+#[specta::specta]
+async fn join_sql(
+    session: String,
+    tables: Vec<TableRefItem>,
+    inner: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    let mut described = Vec::new();
+    for table in &tables {
+        described.push(
+            open.session
+                .connection()
+                .describe_table(&table.schema, &table.name)
+                .await
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    if described.len() < 2 {
+        return Err("choose two tables or more to join".into());
+    }
+    Ok(spelaion_core::join_sql(
+        open.session.dialect().as_ref(),
+        &described,
+        inner,
+    ))
+}
+
 /// The SQL a table's menu can generate on this connection's engine (the core decides: an
 /// upsert or MERGE only where the engine has them).
 #[tauri::command]
@@ -2310,6 +2349,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             object_definition,
             relation_definition,
             table_templates,
+            join_sql,
             editable_query_table,
             answer_interaction,
         ])

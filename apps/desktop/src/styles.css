@@ -429,6 +429,10 @@ input[type="search"] {
   border-color: var(--prod);
   color: var(--prod);
 }
+.row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .folder-row .label {
   color: var(--muted);
 }

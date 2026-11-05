@@ -220,10 +220,11 @@ export const commands = {
 	getExplorerFilter: (connection: string) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
 	setExplorerFilter: (connection: string, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
 	/**
-	 *  "Hide" or "Show only" on one schema, object or column of the explorer: its name, with its
-	 *  wildcard characters escaped, goes into the connection's filter. Returns the new filter.
+	 *  "Hide" or "Show only" on the schemas, objects or columns chosen in the explorer: their
+	 *  names, with their wildcard characters escaped, go into the connection's filter. Returns the
+	 *  new filter.
 	 */
-	filterExplorerName: (connection: string, kind: FilterKindItem, name: string, action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, name, action })),
+	filterExplorerName: (connection: string, kind: FilterKindItem, names: string[], action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, names, action })),
 	/**  The DDL of an object, to open in a new tab (nothing runs). */
 	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
 	/**
@@ -236,6 +237,11 @@ export const commands = {
 	 *  upsert or MERGE only where the engine has them).
 	 */
 	tableTemplates: (session: string) => typedError<SqlTemplateItem[], string>(__TAURI_INVOKE("table_templates", { session })),
+	/**
+	 *  A SELECT joining the tables chosen in the explorer on the foreign keys between them
+	 *  (`INNER JOIN … ON`, or the simple `FROM a, b WHERE`), to open in a new tab.
+	 */
+	joinSql: (session: string, tables: TableRefItem[], inner: boolean) => typedError<string, string>(__TAURI_INVOKE("join_sql", { session, tables, inner })),
 	/**  The table a query's result can be edited as, or none: the core decides (ADR-014). */
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
@@ -977,6 +983,12 @@ export type TablePageItem = {
 	orderBy: string,
 	limit: number,
 	offset: number,
+};
+
+/**  A table chosen in the explorer, by schema and name. */
+export type TableRefItem = {
+	schema: string,
+	name: string,
 };
 
 /**  Text format to copy or export rows in. */

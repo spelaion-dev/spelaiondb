@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use spelaion_core::{CoreEvent, ResultStore, Session, SqlTemplate, table_sql, table_templates};
+use spelaion_core::{
+    CoreEvent, ResultStore, Session, SqlTemplate, join_sql, table_sql, table_templates,
+};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 
 async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
@@ -392,5 +394,61 @@ async fn updates_from_and_deletes_using_a_source() {
             assert_eq!(label, "sqlite");
         }
         run(label, &session, &format!("drop table {items}")).await;
+    }
+}
+
+#[tokio::test]
+async fn joins_between_chosen_tables_run_everywhere() {
+    let pid = std::process::id();
+    let (customer, orders, other) = (
+        format!("gen_customer_{pid}"),
+        format!("gen_orders_{pid}"),
+        format!("gen_other_{pid}"),
+    );
+    for (label, session, schema) in engines().await {
+        for sql in [
+            format!("drop table if exists {orders}"),
+            format!("drop table if exists {customer}"),
+            format!("drop table if exists {other}"),
+            format!("create table {customer} (id int primary key, name varchar(40))"),
+            format!(
+                // A table-level FOREIGN KEY: MySQL ignores REFERENCES written on a column.
+                "create table {orders} (id int primary key, customer_id int, total int, \
+                 foreign key (customer_id) references {customer} (id))"
+            ),
+            format!("create table {other} (code varchar(10))"),
+            format!("insert into {customer} (id, name) values (1, 'a'), (2, 'b')"),
+            format!(
+                "insert into {orders} (id, customer_id, total) values (10, 1, 5), (11, 1, 6), (12, 2, 7)"
+            ),
+            format!("insert into {other} (code) values ('x'), ('y')"),
+        ] {
+            run(label, &session, &sql).await;
+        }
+        let mut tables = Vec::new();
+        for name in [&orders, &customer, &other] {
+            tables.push(
+                session
+                    .connection()
+                    .describe_table(schema, name)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let dialect = session.dialect();
+        for inner in [true, false] {
+            let linked = join_sql(dialect.as_ref(), &tables[..2], inner);
+            assert_eq!(
+                run(label, &session, &linked).await,
+                [3],
+                "{label}: {linked}"
+            );
+            // The unlinked table multiplies the rows.
+            let all = join_sql(dialect.as_ref(), &tables, inner);
+            assert_eq!(run(label, &session, &all).await, [6], "{label}: {all}");
+        }
+        for name in [&orders, &customer, &other] {
+            run(label, &session, &format!("drop table {name}")).await;
+        }
     }
 }

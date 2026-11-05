@@ -235,7 +235,9 @@ or, for tables, a `SELECT … WHERE key =` (one row), a `SELECT … WHERE key IN
 SQLite and DuckDB, `ON DUPLICATE KEY UPDATE` in MySQL and MariaDB), a `MERGE` where it has
 one (PostgreSQL, SQL Server, DuckDB), an `UPDATE` or a `DELETE`, and `UPDATE … FROM` /
 `DELETE … USING` with a source of `:values` (`SELECT :id AS id, …`) to replace by a real table
-(SQLite has no `DELETE … USING`). The key is the primary key; without one, a unique key
+(SQLite has no `DELETE … USING`). **Ctrl+click** chooses several tables or views: their menu
+then generates a `JOIN` (`FROM a, b WHERE …`) or an `INNER JOIN` of them on the foreign keys
+between them, and **Hide** / **Show only** act on all of them. The key is the primary key; without one, a unique key
 (one whose columns cannot be NULL first); without either, every column, and the SQL says so. The core writes
 them with the engine's quoting and `:name` placeholders for the values; nothing runs until
 you replace them and run it.

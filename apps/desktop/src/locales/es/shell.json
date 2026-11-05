@@ -69,6 +69,8 @@
   "configureSchemaFilter": "Configurar filtro de esquemas…",
   "hideName": "Ocultar {{name}}",
   "showOnlyName": "Mostrar solo {{name}}",
+  "hideNames": "Ocultar los {{count}} elegidos",
+  "showOnlyNames": "Mostrar solo los {{count}} elegidos",
   "newQuery": "Nueva consulta",
   "connecting": "Conectando…",
   "quickFilter": "Filtrar el explorador",
@@ -173,7 +175,9 @@
     "counting": "contando…",
     "exactCount": "Número exacto de filas",
     "estimate": "Filas estimadas (del planificador, sin contar)",
-    "openAsSql": "Abrir como SQL"
+    "openAsSql": "Abrir como SQL",
+    "join": "Generar JOIN de las {{count}} tablas elegidas",
+    "innerJoin": "Generar INNER JOIN de las {{count}} tablas elegidas"
   },
   "params": {
     "title": "Parámetros de la consulta",

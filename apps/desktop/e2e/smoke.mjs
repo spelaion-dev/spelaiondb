@@ -933,7 +933,7 @@ try {
   await page.getByRole("button", { name: "Expand or collapse Views", exact: true }).click();
   const ordersNode = page.getByRole("button", { name: "Expand or collapse orders", exact: true });
   await ordersNode.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Generate UPDATE" }).click();
+  await page.getByRole("menuitem", { name: "Generate UPDATE", exact: true }).click();
   await panel.locator(".cm-content", { hasText: "UPDATE orders" }).waitFor();
   assert.equal(
     (await panel.locator(".cm-content").innerText()).trimEnd(),
@@ -941,7 +941,7 @@ try {
   );
   await shot("05f-generated-update");
   await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).click({ button: "right" });
-  assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE" }).count(), 0);
+  assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE", exact: true }).count(), 0);
   await page.getByRole("menuitem", { name: "Open as SQL" }).click();
   await panel.locator(".cm-content", { hasText: "FROM big_orders" }).waitFor();
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM big_orders\nLIMIT 100;");
@@ -994,6 +994,20 @@ try {
   await page.getByRole("menuitem", { name: "Generate UPDATE … FROM" }).click();
   await panel.locator(".cm-content", { hasText: "WHERE target.id = source.id" }).waitFor();
   assert.match(await panel.locator(".cm-content").innerText(), /^UPDATE orders AS target\nSET\n/);
+  // Ctrl+click chooses tables; their menu joins them on the foreign keys between them.
+  const customerRow = page.getByRole("button", { name: "Expand or collapse customer", exact: true });
+  await ordersNode.click({ modifiers: ["Control"] });
+  await customerRow.click({ modifiers: ["Control"] });
+  assert.equal(await ordersNode.getAttribute("aria-selected"), "true");
+  assert.equal(await customerRow.getAttribute("aria-selected"), "true");
+  await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate INNER JOIN of the 2 chosen tables" }).click();
+  await panel.locator(".cm-content", { hasText: "INNER JOIN customer c ON c.id = o.customer_id" }).waitFor();
+  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM orders o\nINNER JOIN customer c ON c.id = o.customer_id;");
+  // A plain click forgets the choice (and expands the table, collapsed again).
+  await ordersNode.click();
+  assert.equal(await customerRow.getAttribute("aria-selected"), "false");
+  await ordersNode.click();
   // Refresh: a table created from a query tab appears with F5 on its schema, and "Refresh all
   // schemas" sees it go; open folders stay open.
   const mainSchema = page.getByRole("button", { name: "Expand or collapse schema main" });

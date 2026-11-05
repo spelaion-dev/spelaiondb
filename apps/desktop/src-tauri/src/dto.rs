@@ -44,6 +44,14 @@ impl From<FilterKindItem> for spelaion_core::FilterKind {
     }
 }
 
+/// A table chosen in the explorer, by schema and name.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRefItem {
+    pub schema: String,
+    pub name: String,
+}
+
 /// What "Hide" and "Show only" in the explorer do with one name.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

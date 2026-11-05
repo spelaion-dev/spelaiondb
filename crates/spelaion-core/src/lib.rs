@@ -33,7 +33,7 @@ pub use edit::{
 };
 pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
 pub use filter::{ColumnFilter, FilterOp};
-pub use generate::{SqlTemplate, count_rows, table_sql, table_templates};
+pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use guard::{Risk, RiskyStatement, script_risks};
 pub use history::{HistoryError, QueryHistory};
 pub use open::{

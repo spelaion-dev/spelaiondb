@@ -139,34 +139,49 @@ function useSortByName() {
 
 /** What a table's menu can generate, per session: the engine does not change while it is open. */
 const tableTemplates = new Map<string, Promise<SqlTemplateItem[]>>();
+/** The lists already answered, so a menu opens with the engine's own and does not change. */
+const knownTemplates = new Map<string, SqlTemplateItem[]>();
 function templatesOf(session: string): Promise<SqlTemplateItem[]> {
   let templates = tableTemplates.get(session);
   if (!templates) {
-    templates = call(commands.tableTemplates(session)).catch((e: unknown) => {
-      tableTemplates.delete(session);
-      throw e;
-    });
+    templates = call(commands.tableTemplates(session)).then(
+      (list) => {
+        knownTemplates.set(session, list);
+        return list;
+      },
+      (e: unknown) => {
+        tableTemplates.delete(session);
+        throw e;
+      },
+    );
     tableTemplates.set(session, templates);
   }
   return templates;
 }
+function forgetTemplates(session: string) {
+  tableTemplates.delete(session);
+  knownTemplates.delete(session);
+}
 
-/** "Hide" or "Show only" one name: it goes into the connection's filter (ADR-025). */
-type FilterName = (kind: FilterKindItem, name: string, action: FilterActionItem) => void;
+/** "Hide" or "Show only" names: they go into the connection's filter (ADR-025). */
+type FilterName = (kind: FilterKindItem, names: string[], action: FilterActionItem) => void;
 
 /** The two menu items DBeaver calls "Hide selected" and "Show only selected". */
 function FilterMenuItems({
   kind,
-  name,
+  names,
   onFilterName,
   close,
 }: {
   kind: FilterKindItem;
-  name: string;
+  /** The object right-clicked, or every one chosen with Ctrl+click. */
+  names: string[];
   onFilterName: FilterName;
   close(): void;
 }) {
-  const { t } = useTranslation("shell");
+  const { t, i18n } = useTranslation("shell");
+  const one = names.length === 1 ? names[0] : null;
+  const count = names.length.toLocaleString(i18n.language);
   return (
     <>
       <hr />
@@ -174,19 +189,19 @@ function FilterMenuItems({
         role="menuitem"
         onClick={() => {
           close();
-          onFilterName(kind, name, "hide");
+          onFilterName(kind, names, "hide");
         }}
       >
-        {t("hideName", { name })}
+        {one !== null ? t("hideName", { name: one }) : t("hideNames", { count })}
       </button>
       <button
         role="menuitem"
         onClick={() => {
           close();
-          onFilterName(kind, name, "showOnly");
+          onFilterName(kind, names, "showOnly");
         }}
       >
-        {t("showOnlyName", { name })}
+        {one !== null ? t("showOnlyName", { name: one }) : t("showOnlyNames", { count })}
       </button>
     </>
   );
@@ -590,8 +605,9 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   const [editingFilters, setEditingFilters] = useState<{ filter: ExplorerFilter; kind?: FilterKind } | null>(null);
   const [rowMenu, setRowMenu] = useContextMenu();
   /** "Hide" / "Show only": the filter changes and the tree is read again. */
-  const filterName: FilterName = (kind, name, action) => {
-    void call(commands.filterExplorerName(connection.id, kind, name, action))
+  const filterName: FilterName = (kind, names, action) => {
+    useApp.getState().clearExplorerSelection();
+    void call(commands.filterExplorerName(connection.id, kind, names, action))
       .then((next) => {
         setFilters(next);
         void refreshAll();
@@ -643,8 +659,9 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   }
 
   async function load() {
-    // The connection may have been edited to point to another engine.
-    tableTemplates.delete(session);
+    // The connection may have been edited to point to another engine; asked again now, so
+    // tables' menus have the list before they open.
+    forgetTemplates(session);
     const filter = await call(commands.getExplorerFilter(connection.id));
     setFilters(filter);
     // Without its roles or logins the connection still shows its schemas.
@@ -658,6 +675,7 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
     setSchemas(all);
     setServerObjects(server);
     useApp.getState().setExplorerConnected(connection.id, true);
+    void templatesOf(session).catch(() => undefined);
   }
 
   /** Schemas, server objects and everything already loaded under them, read again. */
@@ -954,7 +972,7 @@ function SchemaNode({
           >
             {t("refreshAllSchemas")}
           </button>
-          <FilterMenuItems kind="schemas" name={schema} onFilterName={onFilterName} close={() => setMenu(null)} />
+          <FilterMenuItems kind="schemas" names={[schema]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}
       {open && (
@@ -1089,6 +1107,27 @@ function ObjectNode({
       setError(e instanceof Error ? e.message : String(e));
     }
   }
+  /** Tables and views chosen with Ctrl+click in this session, this one among them or not. */
+  const selection = useApp((s) => s.explorerSelection).filter((o) => o.session === session);
+  const chosen = selection.some((o) => o.schema === object.schema && o.name === object.name);
+  /** A SELECT joining the chosen tables on their foreign keys, in a new tab. */
+  async function openJoin(inner: boolean) {
+    setMenu(null);
+    try {
+      setError(null);
+      const sql = await call(
+        commands.joinSql(
+          session,
+          selection.map((o) => ({ schema: o.schema, name: o.name })),
+          inner,
+        ),
+      );
+      const tab = addTab(connectionId, sql);
+      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
   /** "Generate DDL": the driver writes the CREATE statement; it opens in a new tab. */
   async function openDdl() {
     setMenu(null);
@@ -1123,9 +1162,9 @@ function ObjectNode({
     }
   }
   const view = object.kind.includes("view");
-  const [tableMenu, setTableMenu] = useState<SqlTemplateItem[]>(["select", "insert", "update", "delete"]);
+  const [tableMenu, setTableMenu] = useState<SqlTemplateItem[] | undefined>(() => knownTemplates.get(session));
   useEffect(() => {
-    if (!menu || view) return;
+    if (!menu || view || tableMenu) return;
     let current = true;
     void templatesOf(session)
       .then((list) => {
@@ -1135,8 +1174,9 @@ function ObjectNode({
     return () => {
       current = false;
     };
-  }, [menu, view, session]);
-  const templates: SqlTemplateItem[] = view ? ["select"] : tableMenu;
+  }, [menu, view, session, tableMenu]);
+  // Until the engine's list arrives, only what every engine has.
+  const templates: SqlTemplateItem[] = view ? ["select"] : (tableMenu ?? ["select", "insert", "update", "delete"]);
   const rowCount = typeof count === "number" ? count : count === null ? object.estimatedRows : null;
   const countDescription = rowCount == null ? undefined : `${t(typeof count === "number" ? "sql.exactCount" : "sql.estimate")}: ${rowCount.toLocaleString(i18n.language)}`;
   return (
@@ -1147,8 +1187,16 @@ function ObjectNode({
       }}
     >
       <div
-        className="row"
-        onClick={() => void toggle()}
+        className={`row${chosen ? " selected" : ""}`}
+        aria-selected={chosen}
+        onClick={(e) => {
+          if (e.ctrlKey || e.metaKey) {
+            useApp.getState().toggleExplorerSelection({ session, schema: object.schema, name: object.name });
+            return;
+          }
+          useApp.getState().clearExplorerSelection();
+          void toggle();
+        }}
         onDoubleClick={preview}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -1207,8 +1255,23 @@ function ObjectNode({
           <button role="menuitem" onClick={refresh}>
             {t("refresh")}
           </button>
-          <FilterMenuItems kind="objects" name={object.name} onFilterName={onFilterName} close={() => setMenu(null)} />
+          <FilterMenuItems
+            kind="objects"
+            names={chosen ? selection.map((o) => o.name) : [object.name]}
+            onFilterName={onFilterName}
+            close={() => setMenu(null)}
+          />
           <hr />
+          {chosen && selection.length > 1 && (
+            <>
+              <button role="menuitem" onClick={() => void openJoin(false)}>
+                {t("sql.join", { count: selection.length.toLocaleString(i18n.language) })}
+              </button>
+              <button role="menuitem" onClick={() => void openJoin(true)}>
+                {t("sql.innerJoin", { count: selection.length.toLocaleString(i18n.language) })}
+              </button>
+            </>
+          )}
           <button role="menuitem" onClick={() => void openDdl()}>
             {t("generateDdl")}
           </button>
@@ -1320,7 +1383,7 @@ function ColumnRow({
       </div>
       {menu && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
-          <FilterMenuItems kind="columns" name={column.name} onFilterName={onFilterName} close={() => setMenu(null)} />
+          <FilterMenuItems kind="columns" names={[column.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}
     </div>
@@ -1462,7 +1525,7 @@ function SchemaObjectNode({
           <button role="menuitem" onClick={() => void openDefinition()}>
             {t("openDefinition")}
           </button>
-          <FilterMenuItems kind="objects" name={object.name} onFilterName={onFilterName} close={() => setMenu(null)} />
+          <FilterMenuItems kind="objects" names={[object.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
         </div>
       )}
       {error && (
