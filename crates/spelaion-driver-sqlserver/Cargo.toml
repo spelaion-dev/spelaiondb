@@ -16,6 +16,8 @@ futures-util.workspace = true
 tiberius = { version = "0.13", default-features = false, features = ["tds80", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio = { workspace = true, features = ["net"] }
+# Only to turn on TCP keepalive on the connection's socket (ADR-028).
+socket2 = "0.6"
 tokio-util = { version = "0.7", features = ["compat"] }
 
 [dev-dependencies]

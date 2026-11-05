@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, ResultSchema,
-    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
+    EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, ObjectInfo, Result,
+    ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -97,6 +97,12 @@ async fn open(params: &ConnectParams) -> Result<SqlClient> {
             .await
             .map_err(|e| DriverError::Connection(format!("could not reach {address}: {e}")))?;
         let _ = tcp.set_nodelay(true);
+        // TCP keepalive after a minute idle, so a NAT in front of the server does not drop a
+        // direct connection (ADR-028).
+        let keepalive = socket2::TcpKeepalive::new()
+            .with_time(Duration::from_secs(60))
+            .with_interval(Duration::from_secs(10));
+        let _ = socket2::SockRef::from(&tcp).set_tcp_keepalive(&keepalive);
         Client::connect(config, tcp.compat_write())
             .await
             .map_err(|e| match e {
@@ -426,6 +432,24 @@ impl Connection for SqlServerConnection {
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
         self.cancel.clone()
+    }
+
+    async fn keep_alive(&self) -> Result<KeepAlive> {
+        let rows = self.rows("select @@trancount", vec![]).await?;
+        let count = rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next().flatten())
+            .unwrap_or_default();
+        Ok(if count.trim() == "0" {
+            KeepAlive::Alive
+        } else {
+            KeepAlive::InTransaction
+        })
+    }
+
+    fn is_closed(&self) -> bool {
+        self.requests.is_closed()
     }
 
     async fn server_version(&self) -> Result<String> {

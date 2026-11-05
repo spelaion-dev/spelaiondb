@@ -1050,3 +1050,63 @@ async fn procedure_calls_pass_inputs_and_collect_outputs() {
         run(&*conn, "drop procedure call_calc").await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn keep_alives_answer_and_say_when_a_transaction_is_open() {
+    use spelaion_driver_api::KeepAlive;
+    for server in servers() {
+        let conn = server.connect().await;
+        assert_eq!(
+            conn.keep_alive().await.unwrap(),
+            KeepAlive::Alive,
+            "{}",
+            server.label
+        );
+        run(&*conn, "start transaction").await.unwrap();
+        run(&*conn, "select 1").await.unwrap();
+        assert_eq!(
+            conn.keep_alive().await.unwrap(),
+            KeepAlive::InTransaction,
+            "{}",
+            server.label
+        );
+        run(&*conn, "commit").await.unwrap();
+        assert_eq!(
+            conn.keep_alive().await.unwrap(),
+            KeepAlive::Alive,
+            "{}",
+            server.label
+        );
+        // With autocommit off, the first statement on a transactional table opens one.
+        run(
+            &*conn,
+            "create temporary table keepalive_probe (id int) engine = innodb",
+        )
+        .await
+        .unwrap();
+        run(&*conn, "set autocommit = 0").await.unwrap();
+        run(&*conn, "insert into keepalive_probe values (1)")
+            .await
+            .unwrap();
+        assert_eq!(
+            conn.keep_alive().await.unwrap(),
+            KeepAlive::InTransaction,
+            "{}",
+            server.label
+        );
+    }
+}
+
+/// What happens overnight: the server closes a session idle for longer than `wait_timeout`.
+#[tokio::test]
+async fn a_session_past_wait_timeout_is_a_connection_error() {
+    for server in servers() {
+        let conn = server.connect().await;
+        run(&*conn, "set session wait_timeout = 1").await.unwrap();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        match conn.keep_alive().await {
+            Err(DriverError::Connection(_)) => {}
+            other => panic!("{}: expected a connection error: {other:?}", server.label),
+        }
+    }
+}
