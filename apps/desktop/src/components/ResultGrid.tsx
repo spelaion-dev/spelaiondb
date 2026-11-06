@@ -20,7 +20,9 @@ const MIN_RESIZE = 48;
 const MAX_RESIZE = 2000;
 /** Pixels on each side of a header edge that grab it. */
 const EDGE = 4;
-const DATA_FONT = '12.5px ui-monospace, "Cascadia Mono", Consolas, monospace';
+// Regular UI text is easier to scan across dense rows; the header remains distinct.
+const DATA_FONT = '400 13px "Segoe UI", system-ui, sans-serif';
+const ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
 const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
 const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
 const NUMERIC = new Set(["int", "float", "decimal"]);
@@ -342,7 +344,7 @@ export function ResultGrid({
       stripe: cssVar(style, "--grid-stripe"),
       line: cssVar(style, "--grid-line"),
       header: cssVar(style, "--grid-header"),
-      text: cssVar(style, "--fg"),
+      text: cssVar(style, "--grid-text"),
       muted: cssVar(style, "--muted"),
       select: cssVar(style, "--accent-soft"),
       accent: cssVar(style, "--accent"),
@@ -432,6 +434,7 @@ export function ResultGrid({
     // Row number column (fixed on the left).
     ctx.fillStyle = c.header;
     ctx.fillRect(0, HEADER_H, rowNumW, size.h);
+    ctx.font = ROW_NUMBER_FONT;
     ctx.textAlign = "right";
     for (let row = first; row < last; row++) {
       const y = HEADER_H + row * ROW_H - top;

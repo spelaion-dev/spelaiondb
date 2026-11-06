@@ -2415,7 +2415,19 @@ async fn object_actions(
     state: State<'_, AppState>,
 ) -> CmdResult<ObjectActionsItem> {
     let open = state.session(&session).await?;
-    Ok(spelaion_core::object_actions(open.session.dialect().as_ref()).into())
+    let dialect = open.session.dialect();
+    let mut actions = spelaion_core::object_actions(dialect.as_ref());
+    if dialect.name() == "mysql" {
+        let version = open
+            .session
+            .connection()
+            .server_version()
+            .await
+            .unwrap_or_default();
+        actions.add_check_constraints =
+            spelaion_core::supports_added_checks(dialect.as_ref(), &version);
+    }
+    Ok(actions.into())
 }
 
 /// The SQL of a change to an object (rename, drop…), written by the core, to show before it
@@ -2476,6 +2488,33 @@ async fn new_index_sql(
         &table,
         &columns,
         kind.into(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Prepares a table element in the editor without executing it (ADR-026).
+#[tauri::command]
+#[specta::specta]
+async fn new_table_element_sql(
+    session: String,
+    schema: String,
+    table: String,
+    element: NewTableElementItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    let version = open
+        .session
+        .connection()
+        .server_version()
+        .await
+        .unwrap_or_default();
+    spelaion_core::new_table_element_sql(
+        open.session.dialect().as_ref(),
+        &version,
+        &schema,
+        &table,
+        &element.into(),
     )
     .map_err(|e| e.to_string())
 }
@@ -2738,6 +2777,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             apply_object_change,
             create_sql,
             new_index_sql,
+            new_table_element_sql,
             search_objects,
             set_active_schema,
             active_schema,

@@ -88,6 +88,44 @@ async fn run(conn: &dyn Connection, sql: &str) -> Result<Vec<ExecEvent>, DriverE
 }
 
 #[tokio::test]
+async fn mysql5_describes_keys_without_a_check_constraint_catalog() {
+    let Ok(addr) = std::env::var("SPELAION_TEST_MYSQL5") else {
+        eprintln!("SPELAION_TEST_MYSQL5 not set: MySQL 5 skipped");
+        return;
+    };
+    let (host, port) = addr.rsplit_once(':').expect("host:port");
+    let server = Server {
+        label: "mysql5",
+        driver: MysqlDriver::mysql(),
+        host: host.into(),
+        port: port.parse().expect("port"),
+    };
+    let mut params = server.params();
+    // The stock MySQL 5.7 image does not negotiate TLS with modern rustls defaults.
+    params.tls = TlsMode::Disable;
+    let conn = server.driver.connect(&params).await.unwrap();
+    assert!(conn.server_version().await.unwrap().starts_with("5."));
+    run(&*conn, "drop table if exists old_mysql_catalog_test")
+        .await
+        .unwrap();
+    run(&*conn, "create table old_mysql_catalog_test (id int primary key, name varchar(40), unique key unique_name (name))")
+        .await
+        .unwrap();
+    let table = conn
+        .describe_table("spelaion", "old_mysql_catalog_test")
+        .await
+        .unwrap();
+    assert_eq!(table.primary_key, ["id"]);
+    assert!(table.constraints.iter().any(|constraint| {
+        constraint.kind == ConstraintKind::Unique && constraint.columns == ["name"]
+    }));
+    assert_eq!(table.columns.len(), 2);
+    run(&*conn, "drop table old_mysql_catalog_test")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn database_selection_is_per_session_and_tracks_use() {
     for server in servers() {
         let first = server.connect().await;

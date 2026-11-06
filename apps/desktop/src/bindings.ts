@@ -137,6 +137,8 @@ export const commands = {
 	 *  the core, to finish in a new tab: nothing runs (ADR-026).
 	 */
 	newIndexSql: (session: string, schema: string, table: string, columns: string[], kind: NewIndexKindItem) => typedError<string, string>(__TAURI_INVOKE("new_index_sql", { session, schema, table, columns, kind })),
+	/**  Prepares a table element in the editor without executing it (ADR-026). */
+	newTableElementSql: (session: string, schema: string, table: string, element: NewTableElementItem) => typedError<string, string>(__TAURI_INVOKE("new_table_element_sql", { session, schema, table, element })),
 	/**
 	 *  "Open object by name": the objects whose name contains `text`, in the schemas and among the
 	 *  objects the explorer shows (its filter, and system schemas only with `show_system`).
@@ -904,6 +906,8 @@ export type NetworkProfileItem_Serialize = {
 /**  What can be added on the columns chosen in the explorer (see `spelaion_core::NewIndexKind`). */
 export type NewIndexKindItem = "index" | "uniqueIndex" | "uniqueConstraint" | "primaryKey";
 
+export type NewTableElementItem = { kind: "column"; name: string; dataType: string; nullable: boolean; default: string } | { kind: "constraint"; name: string; constraintKind: string; columns: string[]; expression: string } | { kind: "foreignKey"; name: string; columns: string[]; referencedSchema: string; referencedTable: string; referencedColumns: string[] } | { kind: "index"; name: string; columns: string[]; unique: boolean } | { kind: "trigger"; name: string; timing: string; event: string; body: string };
+
 /**  What the explorer may offer on a session's engine (ADR-026). */
 export type ObjectActionsItem = {
 	renameViews: boolean,
@@ -912,6 +916,11 @@ export type ObjectActionsItem = {
 	create: CreateKindItem[],
 	newIndex: NewIndexKindItem[],
 	activeSchema: boolean,
+	addConstraints: boolean,
+	addTriggers: boolean,
+	beforeTriggers: boolean,
+	triggerFunction: boolean,
+	addCheckConstraints: boolean,
 };
 
 /**  What to do with an object of the explorer. */

@@ -40,9 +40,10 @@ pub use guard::{Risk, RiskyStatement, script_risks};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, QueryHistory};
 pub use objects::{
-    CreateKind, FoundObject, NewIndexKind, ObjectActions, ObjectChange, ObjectError, ObjectTarget,
-    SEARCH_LIMIT, active_schema, apply_change, can_cascade, change_script, change_statements,
-    create_sql, new_index_sql, object_actions, qualified_name, search_objects, set_active_schema,
+    CreateKind, FoundObject, NewIndexKind, NewTableElement, ObjectActions, ObjectChange,
+    ObjectError, ObjectTarget, SEARCH_LIMIT, active_schema, apply_change, can_cascade,
+    change_script, change_statements, create_sql, new_index_sql, new_table_element_sql,
+    object_actions, qualified_name, search_objects, set_active_schema, supports_added_checks,
 };
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,

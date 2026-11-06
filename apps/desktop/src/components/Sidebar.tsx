@@ -1,6 +1,7 @@
 // Side panel: open repository, connections (by folder) and schema explorer.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Trans, useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -30,13 +31,14 @@ import {
 import {
   connectTabFromExplorer,
   explorerDatabase,
+  EXPLORER_REFRESH_EVENT,
   openSession,
   SCHEMAS_REFRESHED_EVENT,
   SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
-import { useApp, useDialogs, type ExplorerReveal } from "../store";
+import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
@@ -115,6 +117,79 @@ function matchesFilter(name: string, filter: string): boolean {
   return filter === "" || name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
 }
 
+/** A separate submenu, positioned outside the scrollable explorer menu. */
+function GenerateMenu({ children }: { children: ReactNode }) {
+  const { t } = useTranslation("shell");
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const submenu = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const position = () => {
+      if (!trigger.current || !submenu.current) return;
+      const anchor = trigger.current.getBoundingClientRect();
+      const rect = submenu.current.getBoundingClientRect();
+      const x = anchor.right + rect.width <= window.innerWidth - 8 ? anchor.right : anchor.left - rect.width;
+      submenu.current.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+      submenu.current.style.top = `${Math.max(8, Math.min(anchor.top, window.innerHeight - rect.height - 8))}px`;
+    };
+    position();
+    window.addEventListener("resize", position);
+    window.addEventListener("scroll", position, true);
+    return () => {
+      window.removeEventListener("resize", position);
+      window.removeEventListener("scroll", position, true);
+    };
+  }, [open, children]);
+  return (
+    <div className="explorer-generate-group" onMouseEnter={() => setOpen(true)} onMouseLeave={(e) => {
+      if (!submenu.current?.contains(e.relatedTarget as Node | null) && !e.currentTarget.contains(document.activeElement)) setOpen(false);
+    }} onBlur={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget) && !submenu.current?.contains(e.relatedTarget)) setOpen(false);
+    }}>
+      <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open} onFocus={() => setOpen(true)} onClick={() => setOpen(true)}>
+        {t("generateSql")} ▸
+      </button>
+      {open && createPortal(
+        <div ref={submenu} className="grid-menu object-menu explorer-generate-items" role="menu" aria-label={t("generateSql")}>{children}</div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+/** An editable preview; generating SQL never opens a new connection. */
+function GeneratedSqlDialog({ initialSql, onClose }: { initialSql: string; onClose(): void }) {
+  const { t } = useTranslation("shell");
+  const [sql, setSql] = useState(initialSql);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(sql);
+      setCopied(true);
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  return (
+    <div className="modal-backdrop">
+      <section className="modal generated-sql-dialog" role="dialog" aria-modal="true" aria-label={t("generatedSql.title")}
+        onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
+        <h2>{t("generatedSql.title")}</h2>
+        <textarea autoFocus spellCheck={false} aria-label={t("generatedSql.editor")} value={sql}
+          onChange={(e) => { setSql(e.target.value); setCopied(false); }} />
+        {error && <p className="error small" role="alert">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" onClick={() => void copy()}>{t(copied ? "generatedSql.copied" : "generatedSql.copy")}</button>
+          <button type="button" onClick={onClose}>{t("generatedSql.close")}</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 /** A plug: "Show only connected connections". */
 function PlugIcon() {
   return (
@@ -180,22 +255,32 @@ function forgetTemplates(session: string) {
   tableTemplates.delete(session);
   knownTemplates.delete(session);
   objectActions.delete(session);
+  pendingObjectActions.delete(session);
 }
 
 /** What the core lets the explorer do on a session's engine (ADR-026), asked once per session
  *  (`enabled` once it is open). */
 const objectActions = new Map<string, ObjectActionsItem>();
+const pendingObjectActions = new Map<string, Promise<ObjectActionsItem>>();
 function useObjectActions(session: string, enabled = true): ObjectActionsItem | undefined {
   const [actions, setActions] = useState(() => objectActions.get(session));
   useEffect(() => {
     if (actions || !enabled) return;
     let current = true;
-    void call(commands.objectActions(session))
+    let pending = pendingObjectActions.get(session);
+    if (!pending) {
+      pending = call(commands.objectActions(session));
+      pendingObjectActions.set(session, pending);
+    }
+    void pending
       .then((answer) => {
-        objectActions.set(session, answer);
+        if (pendingObjectActions.get(session) === pending) {
+          objectActions.set(session, answer);
+          pendingObjectActions.delete(session);
+        }
         if (current) setActions(answer);
       })
-      .catch(() => undefined);
+      .catch(() => { if (pendingObjectActions.get(session) === pending) pendingObjectActions.delete(session); });
     return () => {
       current = false;
     };
@@ -283,6 +368,7 @@ function LeafRow({
   schema,
   label,
   detail,
+  icon,
   target,
   onChanged,
 }: {
@@ -291,6 +377,7 @@ function LeafRow({
   schema: string;
   label: string;
   detail: string;
+  icon: "constraints" | "foreignKeys";
   /** What "Drop…" drops; none when it cannot be dropped from here. */
   target: ObjectTargetItem | null;
   onChanged(): void;
@@ -312,6 +399,7 @@ function LeafRow({
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
+        <TreeIcon kind={icon} />
         <span className="label">{label}</span>
         <span className="muted small">{detail}</span>
       </div>
@@ -692,6 +780,24 @@ function schemaObjectFolder(kind: SchemaObjectKindItem): SchemaFolder {
 
 const SERVER_FOLDERS = ["roles", "users", "logins", "tablespaces", "extensions"] as const;
 
+type TreeIconKind = "folder" | "table" | "view" | "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers" | "column";
+
+/** Small, neutral line icons distinguish explorer nodes without competing with their labels. */
+function TreeIcon({ kind }: { kind: TreeIconKind }) {
+  return (
+    <svg className={`tree-icon tree-icon-${kind}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      {kind === "folder" && <path d="M1.8 4.1h4l1.3 1.4h7v6.8H1.8z" />}
+      {(kind === "table" || kind === "view") && <><rect x="2" y="2.5" width="12" height="11" rx="1" /><path d="M2 6.2h12M6 6.2v7.3M10 6.2v7.3" /></>}
+      {kind === "columns" && <><rect x="2.2" y="2.5" width="11.6" height="11" rx="1" /><path d="M6 3v10M10 3v10" /></>}
+      {kind === "column" && <><rect x="4" y="2" width="8" height="12" rx="1" /><path d="M4 6h8M4 10h8" /></>}
+      {kind === "constraints" && <><circle cx="6" cy="6" r="2.5" /><path d="m7.8 7.8 4.9 4.9m-1.5-1.5 1.4-1.4m-3 0 1.4-1.4" /></>}
+      {kind === "foreignKeys" && <><path d="M6.5 10.8 5.3 12a2.5 2.5 0 0 1-3.5-3.5l2.3-2.3a2.5 2.5 0 0 1 3.5 0M9.5 5.2 10.7 4a2.5 2.5 0 0 1 3.5 3.5l-2.3 2.3a2.5 2.5 0 0 1-3.5 0M5.9 10.1l4.2-4.2" /></>}
+      {kind === "indexes" && <><path d="M3 3.5h10M3 8h10M3 12.5h10" /><circle cx="5" cy="3.5" r="1" fill="var(--panel)" /><circle cx="10" cy="8" r="1" fill="var(--panel)" /><circle cx="6.5" cy="12.5" r="1" fill="var(--panel)" /></>}
+      {kind === "triggers" && <path d="M8.9 1.8 3.7 8h3.7l-.4 6.2L12.4 7H8.7z" />}
+    </svg>
+  );
+}
+
 function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[number] {
   switch (kind) {
     case "role":
@@ -711,16 +817,19 @@ function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[numbe
 function Folder({
   label,
   count,
+  icon = "folder",
   initiallyOpen = false,
   forceOpen = false,
   filtered = false,
   onConfigureFilter,
+  onOpenView,
   create,
   reveal,
   children,
 }: {
   label: string;
   count: number;
+  icon?: TreeIconKind;
   initiallyOpen?: boolean;
   /** Shown open whatever its state (the quick filter shows what matches inside). */
   forceOpen?: boolean;
@@ -728,6 +837,8 @@ function Folder({
   filtered?: boolean;
   /** Its right-click menu offers "Configure filter…", as DBeaver's folders do. */
   onConfigureFilter?: () => void;
+  /** Double-click opens an overview of this table's metadata. */
+  onOpenView?: () => void;
   /** Its right-click menu offers "New …" of what it holds. */
   create?: { label: string; run(): void };
   /** It holds an object the explorer was asked to show: it opens. */
@@ -750,19 +861,34 @@ function Folder({
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
-        onClick={() => setOpen(!open)}
+        onClick={() => { if (!onOpenView) setOpen(!open); }}
+        onDoubleClick={onOpenView}
+        title={onOpenView ? t("tableDetails.openHint") : undefined}
         role="button"
         tabIndex={0}
         aria-expanded={open}
         aria-label={t("toggleFolder", { name: label })}
         onKeyDown={(e) => {
+          if (onOpenView && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            e.stopPropagation();
+            onOpenView();
+            return;
+          }
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             setOpen(!open);
           }
         }}
       >
-        <span className="twisty">{open ? "▾" : "▸"}</span>
+        <span
+          className="twisty"
+          onClick={onOpenView ? (e) => { e.stopPropagation(); setOpen(!open); } : undefined}
+          onDoubleClick={onOpenView ? (e) => e.stopPropagation() : undefined}
+        >
+          {open ? "▾" : "▸"}
+        </span>
+        <TreeIcon kind={icon} />
         <span className="label">{label}</span>
         {filtered && (
           <span className="tag" title={t("filteredHint")}>
@@ -1114,6 +1240,13 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
   }
   const session = `meta:${connection.id}`;
   const actions = useObjectActions(session, schemas !== null);
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === connection.id && schemas) void refreshAll();
+    };
+    window.addEventListener(EXPLORER_REFRESH_EVENT, refresh);
+    return () => window.removeEventListener(EXPLORER_REFRESH_EVENT, refresh);
+  }, [connection.id, schemas]);
 
   function newQuery() {
     const tab = addTab(connection.id);
@@ -1489,6 +1622,13 @@ function SchemaNode({
   // A schema whose name matches the quick filter shows everything in it; otherwise only what
   // matches, and it is hidden if it is closed and nothing loaded in it matches.
   const inner = matchesFilter(schema, filter) ? "" : filter;
+  const triggersByTable = new Map<string, SchemaObjectItem[]>();
+  for (const item of others) {
+    if (item.kind !== "trigger" || item.detail === null) continue;
+    const group = triggersByTable.get(item.detail) ?? [];
+    group.push(item);
+    triggersByTable.set(item.detail, group);
+  }
   const anyMatch =
     objects !== null &&
     (objects.some((o) => matchesFilter(o.name, inner)) || others.some((o) => matchesFilter(o.name, inner)));
@@ -1532,6 +1672,7 @@ function SchemaNode({
         }}
       >
         <span className="twisty">{open ? "▾" : "▸"}</span>
+        <TreeIcon kind="folder" />
         <span className="label">{schema}</span>
         <BookmarkStar bookmark={{ connection: connectionId, schema, name: "", kind: "schema", detail: "" }} />
         {objects && (
@@ -1666,6 +1807,7 @@ function SchemaNode({
                         session={session}
                         connectionId={connectionId}
                         object={o}
+                        triggers={triggersByTable.get(o.name) ?? []}
                         onSchemaChanged={refresh}
                         generation={childGeneration}
                         columnFilter={columnFilter}
@@ -1693,18 +1835,11 @@ function SchemaNode({
   );
 }
 
-const KIND_BADGES: Record<string, string> = {
-  table: "T",
-  partitioned_table: "P",
-  foreign_table: "F",
-  view: "V",
-  materialized_view: "M",
-};
-
 function ObjectNode({
   session,
   connectionId,
   object,
+  triggers,
   onSchemaChanged,
   generation,
   columnFilter,
@@ -1714,6 +1849,7 @@ function ObjectNode({
   session: string;
   connectionId: string;
   object: ObjectItem;
+  triggers: SchemaObjectItem[];
   /** After it was renamed or dropped: its schema reads its objects again. */
   onSchemaChanged(): void;
   /** Changes when its schema (or the whole connection) is refreshed. */
@@ -1727,6 +1863,7 @@ function ObjectNode({
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
   const [menu, setMenu] = useContextMenu();
   const sort = useSortByName();
   /** Exact count asked from the menu ("counting" while it runs). */
@@ -1734,6 +1871,15 @@ function ObjectNode({
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
+  const [generatedSql, setGeneratedSql] = useState<string | null>(null);
+  const openDetails = (kind: TableDetailKind) => {
+    const app = useApp.getState();
+    const existing = app.tabs.some((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === object.schema && tab.tableDetails.name === object.name && tab.tableDetails.kind === kind);
+    const tab = app.addTableDetailsTab(connectionId, object.schema, object.name, kind);
+    if (!existing) {
+      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+    }
+  };
   const actions = useObjectActions(session);
   const { row: objectRow, revealed: objectRevealed } = useRevealedRow(
     (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
@@ -1744,11 +1890,16 @@ function ObjectNode({
     setChosenColumns((list) => (!add ? [] : list.includes(name) ? list.filter((n) => n !== name) : [...list, name]));
 
   async function loadDetails() {
-    setDetails(
-      await call(
-        commands.describeTable(session, object.schema, object.name, columnFilter),
-      ).catch(() => null),
-    );
+    setLoadingDetails(true);
+    setError(null);
+    try {
+      setDetails(await call(commands.describeTable(session, object.schema, object.name, columnFilter)));
+    } catch (e) {
+      setDetails(null);
+      setError(errorText(e));
+    } finally {
+      setLoadingDetails(false);
+    }
   }
 
   async function toggle() {
@@ -1761,32 +1912,29 @@ function ObjectNode({
   function refresh() {
     setMenu(null);
     setCount(null);
-    if (!details) return;
     if (open) void loadDetails();
     else setDetails(null);
   }
   useOnChange(generation, refresh);
 
-  /** The core writes the SQL with the engine's quoting; it opens in a new tab, not run. */
-  async function openSql(template: SqlTemplateItem) {
+  /** Preview the core's SQL; Open as SQL still opens an editor tab. */
+  async function openSql(template: SqlTemplateItem, inEditor = false) {
     setMenu(null);
     try {
       setError(null);
-      const tab = addTab(
-        connectionId,
-        await call(
-          commands.tableSql(session, object.schema, object.name, template),
-        ),
-      );
-      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+      const sql = await call(commands.tableSql(session, object.schema, object.name, template));
+      if (inEditor) {
+        const tab = addTab(connectionId, sql);
+        connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+      } else setGeneratedSql(sql);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     }
   }
   /** Tables and views chosen with Ctrl+click in this session, this one among them or not. */
   const selection = useApp((s) => s.explorerSelection).filter((o) => o.session === session);
   const chosen = selection.some((o) => o.schema === object.schema && o.name === object.name);
-  /** A SELECT joining the chosen tables on their foreign keys, in a new tab. */
+  /** A SELECT joining the chosen tables on their foreign keys. */
   async function openJoin(inner: boolean) {
     setMenu(null);
     try {
@@ -1798,22 +1946,17 @@ function ObjectNode({
           inner,
         ),
       );
-      const tab = addTab(connectionId, sql);
-      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+      setGeneratedSql(sql);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     }
   }
-  /** "Generate DDL": the driver writes the CREATE statement; it opens in a new tab. */
+  /** "Generate DDL": the driver writes the CREATE statement. */
   async function openDdl() {
     setMenu(null);
     try {
       setError(null);
-      const tab = addTab(
-        connectionId,
-        await call(commands.relationDefinition(session, object.schema, object.name)),
-      );
-      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+      setGeneratedSql(await call(commands.relationDefinition(session, object.schema, object.name)));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -1876,7 +2019,6 @@ function ObjectNode({
             return;
           }
           useApp.getState().clearExplorerSelection();
-          void toggle();
         }}
         onDoubleClick={preview}
         onContextMenu={(e) => {
@@ -1905,13 +2047,18 @@ function ObjectNode({
           }
         }}
       >
-        <span className="twisty">{open ? "▾" : "▸"}</span>
         <span
-          className={`kind ${view ? "kind-view" : "kind-table"}`}
-          title={t(`kinds.${object.kind}`)}
+          className="twisty"
+          aria-hidden="true"
+          onClick={(e) => {
+            e.stopPropagation();
+            void toggle();
+          }}
+          onDoubleClick={(e) => e.stopPropagation()}
         >
-          {KIND_BADGES[object.kind] ?? "T"}
+          {open ? "▾" : "▸"}
         </span>
+        <span title={t(`kinds.${object.kind}`)}><TreeIcon kind={view ? "view" : "table"} /></span>
         <span className="label">{object.name}</span>
         <BookmarkStar bookmark={bookmark} />
         {count === "counting" ? (
@@ -1930,14 +2077,19 @@ function ObjectNode({
       </div>
       {menu && (
         <div
-          className="grid-menu object-menu"
+          className="grid-menu object-menu explorer-relation-menu"
           role="menu"
-          style={{ position: "fixed", left: menu.x, top: menu.y }}
+          style={{
+            position: "fixed",
+            left: Math.max(8, Math.min(menu.x, window.innerWidth - 300)),
+            top: Math.max(8, Math.min(menu.y, window.innerHeight - 250)),
+            maxHeight: Math.min(window.innerHeight - Math.max(8, Math.min(menu.y, window.innerHeight - 250)) - 8, 480),
+          }}
         >
           <button role="menuitem" onClick={preview}>
             {t("sql.preview")}
           </button>
-          <button role="menuitem" onClick={() => void openSql("preview")}>
+          <button role="menuitem" onClick={() => void openSql("preview", true)}>
             {t("sql.openAsSql")}
           </button>
           <button role="menuitem" onClick={() => void countRows()}>
@@ -1974,28 +2126,30 @@ function ObjectNode({
             close={() => setMenu(null)}
           />
           <hr />
-          {chosen && selection.length > 1 && (
-            <>
-              <button role="menuitem" onClick={() => void openJoin(false)}>
-                {t("sql.join", { count: selection.length.toLocaleString(i18n.language) })}
-              </button>
-              <button role="menuitem" onClick={() => void openJoin(true)}>
-                {t("sql.innerJoin", { count: selection.length.toLocaleString(i18n.language) })}
-              </button>
-            </>
-          )}
-          <button role="menuitem" onClick={() => void openDdl()}>
-            {t("generateDdl")}
-          </button>
-          {templates.map((template) => (
-            <button
-              key={template}
-              role="menuitem"
-              onClick={() => void openSql(template)}
-            >
-              {t(`sql.${template}`)}
+          <GenerateMenu>
+            {chosen && selection.length > 1 && (
+              <>
+                <button role="menuitem" onClick={() => void openJoin(false)}>
+                  {t("sql.join", { count: selection.length.toLocaleString(i18n.language) })}
+                </button>
+                <button role="menuitem" onClick={() => void openJoin(true)}>
+                  {t("sql.innerJoin", { count: selection.length.toLocaleString(i18n.language) })}
+                </button>
+              </>
+            )}
+            <button role="menuitem" onClick={() => void openDdl()}>
+              {t("generateDdl")}
             </button>
-          ))}
+            {templates.map((template) => (
+              <button
+                key={template}
+                role="menuitem"
+                onClick={() => void openSql(template)}
+              >
+                {t(`sql.${template}`)}
+              </button>
+            ))}
+          </GenerateMenu>
         </div>
       )}
       {error && (
@@ -2003,6 +2157,8 @@ function ObjectNode({
           {error}
         </p>
       )}
+      {open && loadingDetails && <div className="children muted small" role="status">{t("loadingDetails")}</div>}
+      {generatedSql !== null && <GeneratedSqlDialog initialSql={generatedSql} onClose={() => setGeneratedSql(null)} />}
       {renaming && (
         <ObjectChangeDialog
           session={session}
@@ -2042,6 +2198,8 @@ function ObjectNode({
           <Folder
             label={t("folders.columns")}
             count={details.columns.length}
+            icon="columns"
+            onOpenView={() => openDetails("columns")}
             initiallyOpen
             filtered={!!columnFilter && (columnFilter.include.length > 0 || columnFilter.exclude.length > 0)}
             onConfigureFilter={() => onConfigureFilter("columns")}
@@ -2063,64 +2221,72 @@ function ObjectNode({
               />
             ))}
           </Folder>
-          {details.constraints.length > 0 && (
-            <Folder label={t("folders.constraints")} count={details.constraints.length}>
-              {sort(details.constraints, (c) => c.name ?? "").map((c, i) => (
+          <Folder label={t("folders.constraints")} count={details.constraints.length} icon="constraints" onOpenView={() => openDetails("constraints")}>
+            {sort(details.constraints, (c) => c.name ?? "").map((c, i) => (
+              <LeafRow
+                key={c.name ?? `${c.kind}:${i}`}
+                session={session}
+                connectionId={connectionId}
+                schema={object.schema}
+                label={c.name ?? t(`constraintKinds.${c.kind}`)}
+                detail={c.definition}
+                icon="constraints"
+                target={
+                  c.name != null && actions?.dropConstraints
+                    ? { kind: "constraint", schema: object.schema, table: object.name, name: c.name, constraint: c.kind }
+                    : null
+                }
+                onChanged={refresh}
+              />
+            ))}
+          </Folder>
+          <Folder label={t("folders.foreignKeys")} count={details.foreignKeys.length} icon="foreignKeys" onOpenView={() => openDetails("foreignKeys")}>
+            {sort(details.foreignKeys, (fk) => fk.name).map((fk) => {
+              const target = `(${fk.columns.join(", ")}) → ${fk.referencedSchema === object.schema ? "" : `${fk.referencedSchema}.`}${fk.referencedTable} (${fk.referencedColumns.join(", ")})`;
+              return (
                 <LeafRow
-                  key={c.name ?? `${c.kind}:${i}`}
+                  key={fk.name}
                   session={session}
                   connectionId={connectionId}
                   schema={object.schema}
-                  label={c.name ?? t(`constraintKinds.${c.kind}`)}
-                  detail={c.definition}
+                  label={fk.name}
+                  detail={target}
+                  icon="foreignKeys"
                   target={
-                    c.name != null && actions?.dropConstraints
-                      ? { kind: "constraint", schema: object.schema, table: object.name, name: c.name, constraint: c.kind }
+                    actions?.dropConstraints
+                      ? { kind: "foreignKey", schema: object.schema, table: object.name, name: fk.name }
                       : null
                   }
                   onChanged={refresh}
                 />
-              ))}
-            </Folder>
-          )}
-          {details.foreignKeys.length > 0 && (
-            <Folder label={t("folders.foreignKeys")} count={details.foreignKeys.length}>
-              {sort(details.foreignKeys, (fk) => fk.name).map((fk) => {
-                const target = `(${fk.columns.join(", ")}) → ${fk.referencedSchema === object.schema ? "" : `${fk.referencedSchema}.`}${fk.referencedTable} (${fk.referencedColumns.join(", ")})`;
-                return (
-                  <LeafRow
-                    key={fk.name}
-                    session={session}
-                    connectionId={connectionId}
-                    schema={object.schema}
-                    label={fk.name}
-                    detail={target}
-                    target={
-                      actions?.dropConstraints
-                        ? { kind: "foreignKey", schema: object.schema, table: object.name, name: fk.name }
-                        : null
-                    }
-                    onChanged={refresh}
-                  />
-                );
-              })}
-            </Folder>
-          )}
-          {details.indexes.length > 0 && (
-            <Folder label={t("folders.indexes")} count={details.indexes.length}>
-              {sort(details.indexes, (index) => index.name).map((index) => (
-                <IndexNode
-                  key={index.name}
-                  session={session}
-                  connectionId={connectionId}
-                  schema={object.schema}
-                  table={object.name}
-                  index={index}
-                  onTableChanged={refresh}
-                />
-              ))}
-            </Folder>
-          )}
+              );
+            })}
+          </Folder>
+          <Folder label={t("folders.indexes")} count={details.indexes.length} icon="indexes" onOpenView={() => openDetails("indexes")}>
+            {sort(details.indexes, (index) => index.name).map((index) => (
+              <IndexNode
+                key={index.name}
+                session={session}
+                connectionId={connectionId}
+                schema={object.schema}
+                table={object.name}
+                index={index}
+                onTableChanged={refresh}
+              />
+            ))}
+          </Folder>
+          <Folder label={t("folders.triggers")} count={triggers.length} icon="triggers" onOpenView={() => openDetails("triggers")}>
+            {sort(triggers, (trigger) => trigger.name).map((trigger) => (
+              <SchemaObjectNode
+                key={`${trigger.name}:${trigger.detail ?? ""}`}
+                session={session}
+                connectionId={connectionId}
+                object={trigger}
+                onSchemaChanged={onSchemaChanged}
+                onFilterName={onFilterName}
+              />
+            ))}
+          </Folder>
         </div>
       )}
     </div>
@@ -2193,8 +2359,8 @@ function ColumnRow({
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
+        <TreeIcon kind={primary ? "constraints" : "column"} />
         <span className="label">
-          {primary ? "🔑 " : ""}
           {column.name}
         </span>
         <span className="muted small">
@@ -2329,6 +2495,7 @@ function IndexNode({
           }
         }}
       >
+        <TreeIcon kind="indexes" />
         <span className="label">{index.name}</span>
         {(index.primary || index.unique) && (
           <span className="muted small">{index.primary ? "PRIMARY KEY" : "UNIQUE"}</span>
@@ -2464,6 +2631,7 @@ function SchemaObjectNode({
           }
         }}
       >
+        <TreeIcon kind={object.kind === "trigger" ? "triggers" : "folder"} />
         <span className="label">
           {object.name}
           {routine && object.detail !== null && (
