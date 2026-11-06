@@ -18,6 +18,23 @@ fn opt(row: &[Option<String>], i: usize) -> Option<String> {
     row.get(i).cloned().flatten().filter(|s| !s.is_empty())
 }
 
+/// MySQL before 8.0.16 parsed CHECK constraints but ignored them. MariaDB is different.
+fn mysql_without_checks(version: &str) -> bool {
+    if version.to_ascii_lowercase().contains("mariadb") {
+        return false;
+    }
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let minor = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let patch = parts.next().and_then(|part| {
+        part.split(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|part| part.parse::<u32>().ok())
+    });
+    matches!((major, minor, patch), (Some(5), Some(_), Some(_)))
+        || matches!((major, minor, patch), (Some(8), Some(0), Some(0..=15)))
+}
+
 /// `like` as SQL over `column`, its patterns appended to `params` as `?` (ADR-025).
 pub(crate) fn like_sql(like: &LikeFilter, column: &str, params: &mut Vec<String>) -> String {
     like.sql(column, |pattern| {
@@ -235,7 +252,44 @@ pub(crate) async fn describe_table(
             ),
             params(),
         )
-        .await?;
+        .await;
+    let constraint_rows = match constraint_rows {
+        Ok(rows) => rows,
+        Err(error) => {
+            // Do not hide permission errors, missing tables on newer servers, or MariaDB's
+            // real CHECK constraints. Only retry the known missing catalog on old MySQL.
+            let missing_checks = matches!(
+                &error,
+                DriverError::Database { message, .. }
+                    if message.to_ascii_lowercase().contains("check_constraints")
+                        && message.to_ascii_lowercase().contains("unknown table")
+            );
+            if !missing_checks || !matches!(flavor, Flavor::Mysql) {
+                return Err(error);
+            }
+            let version_rows = conn.rows("select version()", vec![]).await?;
+            let version = version_rows
+                .first()
+                .map(|row| text(row, 0))
+                .unwrap_or_default();
+            if !mysql_without_checks(&version) {
+                return Err(error);
+            }
+            conn.rows(
+                "select tc.constraint_name, tc.constraint_type, k.column_name, null
+                 from information_schema.table_constraints tc
+                 left join information_schema.key_column_usage k
+                   on k.constraint_schema = tc.constraint_schema and k.table_name = tc.table_name
+                  and k.constraint_name = tc.constraint_name
+                 where tc.table_schema = ? and tc.table_name = ?
+                   and tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')
+                 order by tc.constraint_type <> 'PRIMARY KEY', tc.constraint_name,
+                          k.ordinal_position",
+                params(),
+            )
+            .await?
+        }
+    };
     let mut constraints: Vec<ConstraintInfo> = Vec::new();
     for row in &constraint_rows {
         let constraint = text(row, 0);
@@ -280,4 +334,26 @@ pub(crate) async fn describe_table(
         foreign_keys,
         constraints,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mysql_without_checks;
+
+    #[test]
+    fn old_mysql_has_no_check_constraint_catalog() {
+        for version in ["5.7.44", "5.6.51-log", "8.0.15-commercial"] {
+            assert!(mysql_without_checks(version), "{version}");
+        }
+        for version in [
+            "8.0.16",
+            "8.4.0",
+            "9.0.0",
+            "5.5.5-10.11.6-MariaDB",
+            "5.7",
+            "unknown",
+        ] {
+            assert!(!mysql_without_checks(version), "{version}");
+        }
+    }
 }

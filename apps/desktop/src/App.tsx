@@ -12,6 +12,7 @@ import { SettingsDialog } from "./components/Settings";
 import { SnippetsPanel } from "./components/SnippetsPanel";
 import { FOCUS_EXPLORER_FILTER_EVENT, Sidebar, refreshConnections } from "./components/Sidebar";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
+import { TableDetailsView } from "./components/TableDetailsDialog";
 import { closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
 import { useUpdate } from "./update";
@@ -23,8 +24,19 @@ const SIDEBAR_MAX = 700;
 const EDITOR_MIN = 360;
 const ACTIVITY_WIDTH = 48;
 
+/** Distinguishes SQL, table data and table metadata without adding labels to the tab bar. */
+function TabIcon({ kind }: { kind: "query" | "table" | "details" }) {
+  return (
+    <svg className="tab-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {kind === "query" ? <><path d="m3 4 3 3-3 3M8 11h5" /></> :
+        kind === "table" ? <><rect x="2.5" y="3" width="11" height="10" rx="1" /><path d="M2.5 6.5h11M6.2 6.5V13M9.8 6.5V13" /></> :
+          <><rect x="2.5" y="3" width="11" height="10" rx="1" /><path d="M6 3v10M8 6h3.5M8 9.5h3.5" /></>}
+    </svg>
+  );
+}
+
 export default function App() {
-  const { t } = useTranslation(["app", "shell", "settings"]);
+  const { t } = useTranslation(["app", "shell", "settings", "editor"]);
   const tabs = useApp((s) => s.tabs);
   const activeTab = useApp((s) => s.activeTab);
   const addTab = useApp((s) => s.addTab);
@@ -61,6 +73,10 @@ export default function App() {
   useEffect(() => {
     if (workspaceChanging) setProcessConnection(null);
   }, [workspaceChanging]);
+
+  useEffect(() => {
+    if (activeTab) document.getElementById(`workspace-${activeTab}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTab]);
 
   async function loadConnections() {
     try {
@@ -179,19 +195,37 @@ export default function App() {
         <UpdateNotice />
         <div className="tab-strip" hidden={sidebarSection === "processes"}>
         <div className="tabbar" role="tablist">
-          {tabs.map((tab) => (
+          {tabs.map((tab, index) => (
             <div
               key={tab.id}
+              id={`workspace-${tab.id}`}
               role="tab"
               aria-selected={tab.id === activeTab}
               className={`tab ${tab.id === activeTab ? "active" : ""}`}
+              tabIndex={tab.id === activeTab ? 0 : -1}
               onClick={() => setActiveTab(tab.id)}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget || tabs.length === 0) return;
+                let next: number;
+                if (e.key === "ArrowRight") next = (index + 1) % tabs.length;
+                else if (e.key === "ArrowLeft") next = (index + tabs.length - 1) % tabs.length;
+                else if (e.key === "Home") next = 0;
+                else if (e.key === "End") next = tabs.length - 1;
+                else return;
+                e.preventDefault();
+                const target = tabs[next];
+                if (target) {
+                  setActiveTab(target.id);
+                  document.getElementById(`workspace-${target.id}`)?.focus();
+                }
+              }}
             >
-              <span className={`dot dot-${tab.status}`} />
-              <span>{tab.table ? tab.table.name : t("shell:queryTab", { number: tab.number })}</span>
+              <TabIcon kind={tab.tableDetails ? "details" : tab.table ? "table" : "query"} />
+              <span className={`dot dot-${tab.status}`} role="img" aria-label={t(`editor:status.${tab.status}`)} title={t(`editor:status.${tab.status}`)} />
+              <span className="tab-label" title={tab.tableDetails ? `${tab.tableDetails.name} · ${t(`shell:folders.${tab.tableDetails.kind}`)}` : tab.table ? tab.table.name : t("shell:queryTab", { number: tab.number })}>{tab.tableDetails ? `${tab.tableDetails.name} · ${t(`shell:folders.${tab.tableDetails.kind}`)}` : tab.table ? tab.table.name : t("shell:queryTab", { number: tab.number })}</span>
               <button
                 className="close"
-                aria-label={t("closeTab", { name: t("shell:queryTab", { number: tab.number }) })}
+                aria-label={t("closeTab", { name: tab.tableDetails ? `${tab.tableDetails.name} · ${t(`shell:folders.${tab.tableDetails.kind}`)}` : tab.table ? tab.table.name : t("shell:queryTab", { number: tab.number }) })}
                 onClick={(e) => {
                   e.stopPropagation();
                   void closeQueryTab(tab.id);
@@ -201,10 +235,8 @@ export default function App() {
               </button>
             </div>
           ))}
-          <button className="new-tab" onClick={() => addTab(null)} title={t("newQueryShortcut")}>
-            +
-          </button>
         </div>
+        <button className="new-tab" type="button" onClick={() => addTab(null)} title={t("newQueryShortcut")} aria-label={t("newQueryShortcut")}>+</button>
         </div>
         <div className="workspace-content">
           <div className="editor-workspace" hidden={sidebarSection === "processes"}>
@@ -220,7 +252,7 @@ export default function App() {
               tabs.map((t) => (
                 // All mounted (the editor keeps its state); only the active one is visible.
                 <div key={t.id} className="tab-panel" hidden={t.id !== activeTab}>
-                  <EditorTab tab={t} />
+                  {t.tableDetails ? <TableDetailsView tab={t} /> : <EditorTab tab={t} />}
                 </div>
               ))
             )}
