@@ -11,7 +11,7 @@ use russh::{ChannelMsg, ChannelWriteHalf, Sig};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::process::Child;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 
 use crate::auth::authenticate;
@@ -118,6 +118,7 @@ pub struct Tunnel {
     /// Local ports and the target each leads to. Usually one per target; a connection that
     /// asks for a fixed port may add another.
     forwards: Mutex<Vec<(Target, SocketAddr, JoinHandle<()>)>>,
+    forward_gate: Semaphore,
     /// Address of the first forward (the one from [`Tunnel::open`]).
     primary: std::sync::OnceLock<SocketAddr>,
     child: Mutex<Option<Child>>,
@@ -159,6 +160,20 @@ impl Tunnel {
                 "only the first hop can use an external command (command)".into(),
             ));
         }
+        // Human interaction is not part of the network handshake timeout.
+        let mut proxy = spec.proxy.clone();
+        if let Some(proxy) = &mut proxy
+            && let (Some(user), None) = (&proxy.user, &proxy.password)
+        {
+            proxy.password = Some(
+                ui.ask_secret(&SecretRequest::ProxyPassword {
+                    user: user.clone(),
+                    host: proxy.host.clone(),
+                })
+                .await
+                .ok_or(SshError::Cancelled)?,
+            );
+        }
         let config = Arc::new(client::Config {
             keepalive_interval: spec.options.keepalive_interval,
             keepalive_max: usize::try_from(spec.options.keepalive_count).unwrap_or(usize::MAX),
@@ -199,7 +214,7 @@ impl Tunnel {
                             }
                         }))
                     }
-                    (None, None) => match &spec.proxy {
+                    (None, None) => match &proxy {
                         // The first hop through the proxy (ADR-027).
                         Some(proxy) => {
                             let stream = crate::proxy::connect(
@@ -272,6 +287,7 @@ impl Tunnel {
             sessions,
             proxy_only: None,
             forwards: Mutex::new(Vec::new()),
+            forward_gate: Semaphore::new(1),
             primary: std::sync::OnceLock::new(),
             child: Mutex::new(child),
         })
@@ -298,6 +314,7 @@ impl Tunnel {
             sessions: Vec::new(),
             proxy_only: Some((Arc::new(proxy), timeout)),
             forwards: Mutex::new(Vec::new()),
+            forward_gate: Semaphore::new(1),
             primary: std::sync::OnceLock::new(),
             child: Mutex::new(None),
         })
@@ -373,6 +390,12 @@ the server refused to run a command (it may allow only port forwarding)
         target: Target,
         port: LocalPort,
     ) -> Result<SocketAddr, SshError> {
+        // Serialize lookup and bind: two tabs opening the same fixed port must share it.
+        let _permit = self
+            .forward_gate
+            .acquire()
+            .await
+            .expect("forward gate is never closed");
         if let TunnelState::Down { reason } = &*self.state.borrow() {
             return Err(SshError::Other(format!("the tunnel is down: {reason}")));
         }
@@ -388,9 +411,11 @@ the server refused to run a command (it may allow only port forwarding)
             (None, Some(last)) => Route::Ssh(last.clone()),
             (None, None) => return Err(SshError::Other("the tunnel has no hops".into())),
         };
-        // Another task may have created the same forward while the port was being opened.
-        if let Some(addr) = self.existing(&target, port) {
-            return Ok(addr);
+        // A proxy-only HTTP profile cannot authenticate until CONNECT has a target. Check it
+        // here, where its error can reach the caller, rather than losing it in the relay task.
+        if let Route::Proxy(proxy, timeout) = &route {
+            let ui: Arc<dyn Interaction> = Arc::new(crate::NonInteractive);
+            crate::proxy::connect(proxy, &target.host, target.port, *timeout, &ui).await?;
         }
         let task = tokio::spawn(forward(
             listener,

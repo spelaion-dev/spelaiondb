@@ -874,6 +874,25 @@ async fn a_fixed_local_port_is_used_shared_and_refused_when_taken() {
 }
 
 #[tokio::test]
+async fn concurrent_fixed_port_requests_share_one_forward() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("concurrent-fixed");
+    let tunnel = Tunnel::connect(&two_hops(&host, port), &known.known(), TestUi::accepting())
+        .await
+        .unwrap();
+    let (base, held) = free_ports();
+    drop(held);
+    let (one, two) = tokio::join!(
+        tunnel.forward_on(postgres(), LocalPort::Fixed(base)),
+        tunnel.forward_on(postgres(), LocalPort::Fixed(base)),
+    );
+    assert_eq!(one.unwrap(), two.unwrap());
+    tunnel.close().await;
+}
+
+#[tokio::test]
 async fn forwards_take_the_first_free_port_of_a_range() {
     let Some((host, port)) = bastion() else {
         return;
@@ -1021,8 +1040,53 @@ async fn a_wrong_proxy_password_is_reported_as_such() {
                 Tunnel::connect(&alone, &known.known(), TestUi::accepting()).await,
                 Err(SshError::Proxy { .. })
             ));
+        } else {
+            let tunnel = Tunnel::connect(&alone, &known.known(), TestUi::accepting())
+                .await
+                .unwrap();
+            match tunnel.forward(postgres()).await {
+                Err(SshError::Proxy { message, .. }) => assert!(
+                    message.contains("rejected the username or password"),
+                    "{message}"
+                ),
+                other => panic!("expected an HTTP proxy authentication error: {other:?}"),
+            }
         }
     }
+}
+
+struct SlowProxyPassword;
+
+#[async_trait]
+impl Interaction for SlowProxyPassword {
+    async fn confirm_unknown_host(&self, _: &HostInfo) -> bool {
+        true
+    }
+    async fn ask_secret(&self, _: &SecretRequest) -> Option<Secret> {
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        Some(Secret::new("proxy-pass"))
+    }
+}
+
+#[tokio::test]
+async fn proxy_password_prompt_is_not_subject_to_connect_timeout() {
+    let Some(mut proxy) = proxy_from("SPELAION_TEST_SOCKS", ProxyKind::Socks5) else {
+        return;
+    };
+    proxy.password = None;
+    let known = TempKnownHosts::new("slow-proxy-password");
+    let spec = TunnelSpec {
+        hops: vec![hop("bastion2", 22, "id_ed25519")],
+        proxy: Some(proxy),
+        options: TunnelOptions {
+            connect_timeout: Duration::from_secs(1),
+            ..Default::default()
+        },
+    };
+    let tunnel = Tunnel::connect(&spec, &known.known(), Arc::new(SlowProxyPassword))
+        .await
+        .unwrap();
+    tunnel.close().await;
 }
 
 #[tokio::test]

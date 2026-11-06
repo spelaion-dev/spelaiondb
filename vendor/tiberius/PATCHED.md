@@ -32,3 +32,7 @@ this folder and the `[patch.crates-io]` entry if it has), and run those tests.
 A path dependency's warnings are not capped as those of crates.io dependencies are, and with
 the features SpelaionDB leaves out (Windows authentication) some code is unused: CI's
 `-D warnings` would fail on code that is not ours. `#![allow(warnings)]` keeps them quiet.
+
+## Also: transaction state without a query
+
+`Client::in_transaction` drains a previously dropped response and exposes the TDS transaction descriptor, so an idle keep-alive never enters an open transaction. Test it against a real SQL Server before upgrading.
