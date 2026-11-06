@@ -558,23 +558,14 @@ async fn introspection_describes_tables() {
 #[tokio::test]
 async fn attached_databases_are_browsable() {
     let other = TempDb::new("duck-attached");
-    {
-        let conn = open(&other).await;
-        exec_all(&*conn, "create table things (a int)").await;
-    }
     let conn = memory().await;
-    // The writer's thread closes the file a moment after the connection is dropped, and
-    // ATTACH opens it outside the driver's registry (which would wait): try for a while.
-    let attach = format!("attach '{}' as other", other.0.display());
-    let mut attached = run(&*conn, &attach).await;
-    for _ in 0..50 {
-        if attached.is_ok() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        attached = run(&*conn, &attach).await;
-    }
-    attached.expect("attaching the closed file");
+    // Create the attached database through this connection so no background writer can
+    // still be closing the same file while ATTACH or DETACH touches its WAL.
+    let path = other.0.to_string_lossy().replace('\'', "''");
+    run(&*conn, &format!("attach '{path}' as other"))
+        .await
+        .expect("attaching the file");
+    exec_all(&*conn, "create table other.main.things (a int)").await;
     let schemas = conn.list_schemas().await.unwrap();
     assert!(
         schemas.iter().any(|s| s.name == "other.main"),
