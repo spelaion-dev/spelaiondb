@@ -12,6 +12,8 @@ import { useApp, useDialogs } from "./store";
  * tabs on that connection reload the names their autocompletion offers.
  */
 export const SCHEMAS_REFRESHED_EVENT = "spelaion-schemas-refreshed";
+/** A catalog change in a metadata tab asks the explorer to reread its objects. */
+export const EXPLORER_REFRESH_EVENT = "spelaion-explorer-refresh";
 
 /**
  * Fired on `window` with `{ tabId, schema }` by "Set as the editor's schema" in the explorer:

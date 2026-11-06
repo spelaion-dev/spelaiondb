@@ -289,6 +289,113 @@ pub struct ObjectActionsItem {
     pub create: Vec<CreateKindItem>,
     pub new_index: Vec<NewIndexKindItem>,
     pub active_schema: bool,
+    pub add_constraints: bool,
+    pub add_triggers: bool,
+    pub before_triggers: bool,
+    pub trigger_function: bool,
+    pub add_check_constraints: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum NewTableElementItem {
+    Column {
+        name: String,
+        data_type: String,
+        nullable: bool,
+        default: String,
+    },
+    Constraint {
+        name: String,
+        constraint_kind: String,
+        columns: Vec<String>,
+        expression: String,
+    },
+    ForeignKey {
+        name: String,
+        columns: Vec<String>,
+        referenced_schema: String,
+        referenced_table: String,
+        referenced_columns: Vec<String>,
+    },
+    Index {
+        name: String,
+        columns: Vec<String>,
+        unique: bool,
+    },
+    Trigger {
+        name: String,
+        timing: String,
+        event: String,
+        body: String,
+    },
+}
+
+impl From<NewTableElementItem> for spelaion_core::NewTableElement {
+    fn from(item: NewTableElementItem) -> Self {
+        use spelaion_core::NewTableElement as Element;
+        match item {
+            NewTableElementItem::Column {
+                name,
+                data_type,
+                nullable,
+                default,
+            } => Element::Column {
+                name,
+                data_type,
+                nullable,
+                default,
+            },
+            NewTableElementItem::Constraint {
+                name,
+                constraint_kind,
+                columns,
+                expression,
+            } => Element::Constraint {
+                name,
+                kind: constraint_kind,
+                columns,
+                expression,
+            },
+            NewTableElementItem::ForeignKey {
+                name,
+                columns,
+                referenced_schema,
+                referenced_table,
+                referenced_columns,
+            } => Element::ForeignKey {
+                name,
+                columns,
+                referenced_schema,
+                referenced_table,
+                referenced_columns,
+            },
+            NewTableElementItem::Index {
+                name,
+                columns,
+                unique,
+            } => Element::Index {
+                name,
+                columns,
+                unique,
+            },
+            NewTableElementItem::Trigger {
+                name,
+                timing,
+                event,
+                body,
+            } => Element::Trigger {
+                name,
+                timing,
+                event,
+                body,
+            },
+        }
+    }
 }
 
 /// What can be added on the columns chosen in the explorer (see `spelaion_core::NewIndexKind`).
@@ -369,6 +476,11 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             create,
             new_index,
             active_schema,
+            add_constraints,
+            add_triggers,
+            before_triggers,
+            trigger_function,
+            add_check_constraints,
         } = actions;
         Self {
             rename_views,
@@ -377,6 +489,11 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             create: create.into_iter().map(CreateKindItem::from).collect(),
             new_index: new_index.into_iter().map(NewIndexKindItem::from).collect(),
             active_schema,
+            add_constraints,
+            add_triggers,
+            before_triggers,
+            trigger_function,
+            add_check_constraints,
         }
     }
 }

@@ -293,6 +293,252 @@ pub enum NewIndexKind {
     PrimaryKey,
 }
 
+/// A table element to prepare in the SQL editor. Expressions and trigger bodies remain
+/// editable SQL; creating an element never executes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewTableElement {
+    Column {
+        name: String,
+        data_type: String,
+        nullable: bool,
+        default: String,
+    },
+    Constraint {
+        name: String,
+        kind: String,
+        columns: Vec<String>,
+        expression: String,
+    },
+    ForeignKey {
+        name: String,
+        columns: Vec<String>,
+        referenced_schema: String,
+        referenced_table: String,
+        referenced_columns: Vec<String>,
+    },
+    Index {
+        name: String,
+        columns: Vec<String>,
+        unique: bool,
+    },
+    Trigger {
+        name: String,
+        timing: String,
+        event: String,
+        body: String,
+    },
+}
+
+/// Writes the requested creation statement for review in the editor (ADR-026).
+pub fn new_table_element_sql(
+    dialect: &dyn Dialect,
+    server_version: &str,
+    schema: &str,
+    table: &str,
+    element: &NewTableElement,
+) -> Result<String, ObjectError> {
+    let engine = dialect.name();
+    let identifier = |s: &str| -> Result<String, ObjectError> {
+        if s.trim().is_empty() {
+            return Err(ObjectError::NoName);
+        }
+        Ok(dialect.quote_identifier(s))
+    };
+    let list = |items: &[String]| -> Result<String, ObjectError> {
+        if items.is_empty() {
+            return Err(ObjectError::NoColumns);
+        }
+        items
+            .iter()
+            .map(|s| identifier(s))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|v| v.join(", "))
+    };
+    let required = |s: &str| -> Result<String, ObjectError> {
+        if s.trim().is_empty() {
+            Err(ObjectError::Unsupported(
+                "complete the required fields".into(),
+            ))
+        } else {
+            Ok(s.trim().to_string())
+        }
+    };
+    let target = qualified_name(dialect, schema, &[table.to_string()]);
+    let sql = match element {
+        NewTableElement::Column {
+            name,
+            data_type,
+            nullable,
+            default,
+        } => {
+            let ty = required(data_type)?;
+            let nullability = if *nullable { "" } else { " NOT NULL" };
+            let default = if default.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" DEFAULT {}", default.trim())
+            };
+            let add = if engine == "sqlserver" {
+                "ADD"
+            } else {
+                "ADD COLUMN"
+            };
+            format!(
+                "ALTER TABLE {target} {add} {} {ty}{default}{nullability};\n",
+                identifier(name)?
+            )
+        }
+        NewTableElement::Constraint {
+            name,
+            kind,
+            columns,
+            expression,
+        } => {
+            if matches!(engine, "sqlite" | "duckdb") {
+                return Err(ObjectError::Unsupported(
+                    "this engine cannot add constraints to an existing table".into(),
+                ));
+            }
+            let clause = match kind.as_str() {
+                "unique" => format!("UNIQUE ({})", list(columns)?),
+                "primaryKey" => format!("PRIMARY KEY ({})", list(columns)?),
+                "check" if supports_added_checks(dialect, server_version) => {
+                    format!("CHECK ({})", required(expression)?)
+                }
+                "check" => {
+                    return Err(ObjectError::Unsupported(
+                        "this server does not enforce added CHECK constraints".into(),
+                    ));
+                }
+                _ => return Err(ObjectError::Unsupported("unknown constraint kind".into())),
+            };
+            if engine == "mysql" && kind == "primaryKey" {
+                format!("ALTER TABLE {target} ADD {clause};\n")
+            } else {
+                format!(
+                    "ALTER TABLE {target} ADD CONSTRAINT {} {clause};\n",
+                    identifier(name)?
+                )
+            }
+        }
+        NewTableElement::ForeignKey {
+            name,
+            columns,
+            referenced_schema,
+            referenced_table,
+            referenced_columns,
+        } => {
+            if matches!(engine, "sqlite" | "duckdb") {
+                return Err(ObjectError::Unsupported(
+                    "this engine cannot add foreign keys to an existing table".into(),
+                ));
+            }
+            if columns.len() != referenced_columns.len() {
+                return Err(ObjectError::Unsupported(
+                    "choose the same number of local and referenced columns".into(),
+                ));
+            }
+            let referenced = qualified_name(
+                dialect,
+                &required(referenced_schema)?,
+                &[required(referenced_table)?],
+            );
+            format!(
+                "ALTER TABLE {target} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {referenced} ({});\n",
+                identifier(name)?,
+                list(columns)?,
+                list(referenced_columns)?
+            )
+        }
+        NewTableElement::Index {
+            name,
+            columns,
+            unique,
+        } => {
+            let unique = if *unique { "UNIQUE " } else { "" };
+            let (index, on) = if engine == "sqlite" {
+                (
+                    qualified_name(dialect, schema, &[required(name)?]),
+                    identifier(table)?,
+                )
+            } else {
+                (identifier(name)?, target)
+            };
+            format!(
+                "CREATE {unique}INDEX {index} ON {on} ({});\n",
+                list(columns)?
+            )
+        }
+        NewTableElement::Trigger {
+            name,
+            timing,
+            event,
+            body,
+        } => {
+            if engine == "duckdb" {
+                return Err(ObjectError::Unsupported(
+                    "this engine does not support triggers".into(),
+                ));
+            }
+            let timing = match timing.as_str() {
+                "before" => "BEFORE",
+                "after" => "AFTER",
+                _ => return Err(ObjectError::Unsupported("unknown trigger timing".into())),
+            };
+            let event = match event.as_str() {
+                "insert" => "INSERT",
+                "update" => "UPDATE",
+                "delete" => "DELETE",
+                _ => return Err(ObjectError::Unsupported("unknown trigger event".into())),
+            };
+            let body = required(body)?;
+            if engine == "sqlserver" && timing == "BEFORE" {
+                return Err(ObjectError::Unsupported(
+                    "SQL Server does not have BEFORE triggers".into(),
+                ));
+            }
+            match engine {
+                "postgres" => {
+                    let function = match body.split_once('.') {
+                        Some((function_schema, function_name)) => qualified_name(
+                            dialect,
+                            &required(function_schema)?,
+                            &[required(function_name)?],
+                        ),
+                        None => identifier(&body)?,
+                    };
+                    format!(
+                        "CREATE TRIGGER {} {timing} {event} ON {target} FOR EACH ROW EXECUTE FUNCTION {function}();\n",
+                        identifier(name)?
+                    )
+                }
+                "mysql" => format!(
+                    "DELIMITER $$\nCREATE TRIGGER {} {timing} {event} ON {target} FOR EACH ROW {}$$\nDELIMITER ;\n",
+                    identifier(name)?,
+                    body.trim_end_matches(';')
+                ),
+                "sqlite" => format!(
+                    "CREATE TRIGGER {} {timing} {event} ON {} FOR EACH ROW BEGIN\n  {};\nEND;\n",
+                    qualified_name(dialect, schema, &[required(name)?]),
+                    identifier(table)?,
+                    body.trim_end_matches(';')
+                ),
+                "sqlserver" => format!(
+                    "CREATE TRIGGER {} ON {target} {timing} {event} AS\nBEGIN\n  {};\nEND;\n",
+                    qualified_name(dialect, schema, &[required(name)?]),
+                    body.trim_end_matches(';')
+                ),
+                _ => {
+                    return Err(ObjectError::Unsupported(
+                        "this engine does not support trigger creation".into(),
+                    ));
+                }
+            }
+        }
+    };
+    Ok(sql)
+}
+
 /// What the explorer may offer on this engine; the UI shows only these.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectActions {
@@ -311,6 +557,11 @@ pub struct ObjectActions {
     /// An editor tab's schema can be set from the tree: not on SQL Server or SQLite, which
     /// have no schema per session.
     pub active_schema: bool,
+    pub add_constraints: bool,
+    pub add_triggers: bool,
+    pub before_triggers: bool,
+    pub trigger_function: bool,
+    pub add_check_constraints: bool,
 }
 
 pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
@@ -339,6 +590,11 @@ pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
         drop_constraints: !matches!(engine, "sqlite" | "duckdb"),
         create,
         active_schema: matches!(engine, "postgres" | "mysql" | "duckdb"),
+        add_constraints: matches!(engine, "postgres" | "mysql" | "sqlserver"),
+        add_triggers: matches!(engine, "postgres" | "mysql" | "sqlserver" | "sqlite"),
+        before_triggers: matches!(engine, "postgres" | "mysql" | "sqlite"),
+        trigger_function: engine == "postgres",
+        add_check_constraints: matches!(engine, "postgres" | "sqlserver"),
         new_index: if matches!(engine, "sqlite" | "duckdb") {
             vec![NewIndexKind::Index, NewIndexKind::UniqueIndex]
         } else {
@@ -349,6 +605,45 @@ pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
                 NewIndexKind::PrimaryKey,
             ]
         },
+    }
+}
+
+/// Older MySQL releases parse CHECK but silently ignore it. MariaDB may include a
+/// 5.5.5 compatibility prefix in its reported version.
+pub fn supports_added_checks(dialect: &dyn Dialect, version: &str) -> bool {
+    match dialect.name() {
+        "postgres" | "sqlserver" => true,
+        "mysql" => {
+            let mariadb = version.to_ascii_lowercase().contains("mariadb");
+            let part = if mariadb {
+                version
+                    .split('-')
+                    .rev()
+                    .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            } else {
+                Some(version)
+            };
+            let parsed = part.and_then(|part| {
+                let mut numbers = part.split('.');
+                let major = numbers.next()?.parse::<u32>().ok()?;
+                let minor = numbers.next()?.parse::<u32>().ok()?;
+                let patch = numbers
+                    .next()?
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()?
+                    .parse::<u32>()
+                    .ok()?;
+                Some((major, minor, patch))
+            });
+            parsed.is_some_and(|v| {
+                if mariadb {
+                    v >= (10, 2, 1)
+                } else {
+                    v >= (8, 0, 16)
+                }
+            })
+        }
+        _ => false,
     }
 }
 
@@ -786,6 +1081,26 @@ mod tests {
     use spelaion_driver_postgres::PostgresDialect;
     use spelaion_driver_sqlite::SqliteDialect;
     use spelaion_driver_sqlserver::SqlServerDialect;
+
+    #[test]
+    fn added_checks_require_a_server_that_enforces_them() {
+        for version in ["5.7.44", "8.0.15", "unknown", "5.5.5-10.1.48-MariaDB"] {
+            assert!(!supports_added_checks(&MysqlDialect, version), "{version}");
+        }
+        for version in ["8.0.16", "8.4.0", "10.2.1-MariaDB", "5.5.5-10.11.6-MariaDB"] {
+            assert!(supports_added_checks(&MysqlDialect, version), "{version}");
+        }
+        assert!(!supports_added_checks(&SqliteDialect, "3.46.0"));
+        assert!(supports_added_checks(&PostgresDialect, "16.0"));
+        let element = NewTableElement::Constraint {
+            name: "check_it".into(),
+            kind: "check".into(),
+            columns: vec![],
+            expression: "id > 0".into(),
+        };
+        assert!(new_table_element_sql(&MysqlDialect, "5.7.44", "s", "t", &element).is_err());
+        assert!(new_table_element_sql(&MysqlDialect, "8.0.16", "s", "t", &element).is_ok());
+    }
 
     fn names(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|p| p.to_string()).collect()

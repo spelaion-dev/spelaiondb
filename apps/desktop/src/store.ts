@@ -60,6 +60,7 @@ export interface RunState {
 }
 
 export type TabStatus = "disconnected" | "connecting" | "connected";
+export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers";
 
 export interface Tab {
   id: string;
@@ -75,6 +76,7 @@ export interface Tab {
   snippetName?: string;
   /** A table data tab (pages of one table) instead of an SQL editor. */
   table?: TableView;
+  tableDetails?: { schema: string; name: string; kind: TableDetailKind };
   /** Pending row changes are kept in the mounted editor until saved or discarded. */
   pendingEdits?: boolean;
   savingEdits?: boolean;
@@ -158,6 +160,7 @@ interface AppStore {
   addTab(connectionId: string | null, sql?: string): string;
   /** Opens a table data tab on a table (its first page loads when it appears). */
   addTableTab(connectionId: string, schema: string, name: string): string;
+  addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
   closeTab(id: string): void;
   /** Opens again the last closed query tab (its connection and SQL, not its results). */
   reopenTab(): void;
@@ -235,13 +238,21 @@ export const useApp = create<AppStore>((set) => ({
     app.updateTab(id, { table: { schema, name, filter: "", orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
     return id;
   },
+  addTableDetailsTab: (connectionId, schema, name, kind): string => {
+    const app = useApp.getState();
+    const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === schema && tab.tableDetails.name === name && tab.tableDetails.kind === kind);
+    if (existing) { app.setActiveTab(existing.id); return existing.id; }
+    const id = app.addTab(connectionId);
+    app.updateTab(id, { tableDetails: { schema, name, kind } });
+    return id;
+  },
   closedTabs: [],
   closeTab: (id) =>
     set((s) => {
       const closed = s.tabs.find((t) => t.id === id);
       const tabs = s.tabs.filter((t) => t.id !== id);
       const fallback = tabs[tabs.length - 1]?.id ?? null;
-      const closedTabs = closed
+      const closedTabs = closed && !closed.tableDetails
         ? [...s.closedTabs, { connectionId: closed.connectionId, sql: closed.sql }].slice(-MAX_CLOSED_TABS)
         : s.closedTabs;
       return { tabs, closedTabs, activeTab: s.activeTab === id ? fallback : s.activeTab };

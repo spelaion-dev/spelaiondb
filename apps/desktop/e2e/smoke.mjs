@@ -319,6 +319,7 @@ try {
   assert.equal(lightKeywordColor, "rgb(119, 0, 136)");
   await setTheme("dark", "dark");
   assert.equal(await keywords.first().evaluate((el) => getComputedStyle(el).color), "rgb(199, 146, 234)");
+  await shot("03-grid-dark");
   await setTheme("light", "light");
   assert.equal(await keywords.first().evaluate((el) => getComputedStyle(el).color), lightKeywordColor);
   await panel.locator(".cm-content").click();
@@ -953,24 +954,51 @@ try {
   assert.notEqual(await activeName(), reopened);
   await page.keyboard.press("Control+Shift+Tab");
   assert.equal(await activeName(), reopened);
+  await page.locator(".tabbar .tab.active").focus();
+  await page.keyboard.press("ArrowRight");
+  assert.notEqual(await activeName(), reopened);
+  await page.keyboard.press("ArrowLeft");
+  assert.equal(await activeName(), reopened);
+  const addTabButton = page.getByRole("button", { name: "New query (Ctrl+T)" });
+  assert.ok(await addTabButton.isVisible());
+  assert.equal(await addTabButton.evaluate((el) => el.parentElement.classList.contains("tab-strip")), true);
+  await addTabButton.click();
+  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 1, queryTabCount);
+  await page.locator(".tabbar .tab.active .close").click();
+  await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, queryTabCount);
+  assert.equal(await activeName(), reopened);
+  await shot("05e-tabs-light");
+  await setTheme("dark", "dark");
+  await shot("05e-tabs-dark");
+  await setTheme("light", "light");
 
   step("explorer: view rows and generate SQL written by the core");
   await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
-  await page.getByRole("button", { name: "Expand or collapse schema main" }).click();
+  const mainSchemaNode = page.getByRole("button", { name: "Expand or collapse schema main" });
+  assert.equal(await mainSchemaNode.evaluate((el) => getComputedStyle(el).cursor), "pointer");
+  await mainSchemaNode.click();
   // Objects are in folders by type (ADR-024), with how many each holds.
   const tablesFolder = page.getByRole("button", { name: "Expand or collapse Tables", exact: true });
+  assert.equal(await tablesFolder.evaluate((el) => getComputedStyle(el).cursor), "pointer");
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   await tablesFolder.click();
   await page.getByRole("button", { name: "Expand or collapse Views", exact: true }).click();
   const ordersNode = page.getByRole("button", { name: "Expand or collapse orders", exact: true });
+  const tabsBeforeGeneratedSql = await page.getByRole("tab").count();
   await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate SQL" }).click();
   await page.getByRole("menuitem", { name: "Generate UPDATE", exact: true }).click();
-  await panel.locator(".cm-content", { hasText: "UPDATE orders" }).waitFor();
-  assert.equal(
-    (await panel.locator(".cm-content").innerText()).trimEnd(),
-    "UPDATE orders\nSET\n  customer_id = :customer_id,\n  created = :created,\n  total = :total\nWHERE id = :id;",
-  );
+  const generatedDialog = page.getByRole("dialog", { name: "Generated SQL" });
+  const generatedEditor = generatedDialog.getByRole("textbox", { name: "SQL editor" });
+  await generatedEditor.waitFor();
+  assert.match(await generatedEditor.inputValue(), /^UPDATE orders\nSET\n/);
+  assert.equal(await page.getByRole("tab").count(), tabsBeforeGeneratedSql);
+  const copiedBeforeSql = await page.evaluate(() => window.__copied.length);
+  await generatedEditor.fill("SELECT 42;");
+  await generatedDialog.getByRole("button", { name: "Copy", exact: true }).click();
+  assert.equal(await copied(copiedBeforeSql + 1), "SELECT 42;");
   await shot("05f-generated-update");
+  await generatedDialog.getByRole("button", { name: "Close" }).click();
   await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).click({ button: "right" });
   assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE", exact: true }).count(), 0);
   await page.getByRole("menuitem", { name: "Open as SQL" }).click();
@@ -984,8 +1012,112 @@ try {
   await panel.locator(".cm-content", { hasText: "CREATE TRIGGER product_stock_check" }).waitFor();
   assert.match((await panel.locator(".cm-content").innerText()).trimEnd(), /^CREATE TRIGGER product_stock_check before update of stock on product[\s\S]*end;$/);
   await shot("05g-trigger-definition");
+  // A table exposes all five detail folders, including its own triggers.
+  const productNode = page.getByRole("button", { name: "Expand or collapse product", exact: true });
+  assert.equal(await productNode.locator(".twisty").evaluate((el) => getComputedStyle(el).cursor), "pointer");
+  assert.equal(await productNode.locator(".label").evaluate((el) => getComputedStyle(el).cursor), "pointer");
+  await productNode.locator(".label").click();
+  assert.equal(await productNode.getAttribute("aria-expanded"), "false");
+  await productNode.locator(".twisty").click();
+  assert.equal(await productNode.getAttribute("aria-expanded"), "true");
+  await productNode.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await productNode.getAttribute("aria-expanded"), "false");
+  await productNode.locator(".twisty").click();
+  const productChildren = productNode.locator("xpath=..");
+  for (const folder of ["Columns", "Constraints", "Foreign keys", "Indexes", "Triggers"]) {
+    const folderNode = productChildren.getByRole("button", { name: `Expand or collapse ${folder}`, exact: true });
+    await folderNode.waitFor();
+    const expanded = await folderNode.getAttribute("aria-expanded");
+    await folderNode.locator(".label").click();
+    assert.equal(await folderNode.getAttribute("aria-expanded"), expanded);
+    await folderNode.locator(".label").dblclick();
+    const overview = page.getByRole("region", { name: `${folder} of product` });
+    await overview.waitFor();
+    if (folder === "Columns") {
+      await page.waitForFunction(() => {
+        const bar = document.querySelector(".tabbar")?.getBoundingClientRect();
+        const active = document.querySelector(".tabbar .tab.active")?.getBoundingClientRect();
+        return bar && active && active.left >= bar.left && active.right <= bar.right;
+      });
+      await shot("05f-tabs-metadata");
+    }
+    const overviewWidth = await overview.evaluate((el) => ({ view: el.getBoundingClientRect().width, panel: el.parentElement.getBoundingClientRect().width }));
+    assert.ok(Math.abs(overviewWidth.view - overviewWidth.panel) < 1, JSON.stringify(overviewWidth));
+    assert.equal(await folderNode.getAttribute("aria-expanded"), expanded);
+    if (folder === "Triggers") await overview.getByText("product_stock_check", { exact: true }).waitFor();
+    if (folder === "Columns") {
+      await overview.getByText("stock", { exact: true }).waitFor();
+      await overview.getByRole("row").filter({ hasText: "stock" }).getByRole("button", { name: "Rename…" }).click();
+      const rename = page.getByRole("dialog", { name: "Rename column stock of product" });
+      await rename.getByLabel("SQL that will run").waitFor();
+      await rename.getByRole("button", { name: "Cancel" }).click();
+      await overview.getByRole("checkbox", { name: "Select column stock" }).check();
+      await overview.getByRole("button", { name: "New index on (stock)" }).click();
+      await panel.locator(".cm-content", { hasText: "CREATE INDEX" }).waitFor();
+      await page.keyboard.press("Control+w");
+      await overview.waitFor();
+      // Create a column via the form; SQL is reviewed and run in an editor first.
+      await overview.getByRole("button", { name: "Add…" }).click();
+      const addColumn = page.getByRole("dialog", { name: "Add to Columns of product" });
+      await addColumn.getByLabel("Name", { exact: true }).fill("smoke_added");
+      await addColumn.getByRole("combobox", { name: "Data type", exact: true }).selectOption("INTEGER");
+      await addColumn.getByRole("combobox", { name: "Data type", exact: true }).selectOption("__custom__");
+      await addColumn.getByLabel("Custom data type").fill("INTEGER");
+      await shot("05f-add-column-form");
+      const previousTheme = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+      await shot("05f-add-column-form-dark");
+      await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, previousTheme);
+      await addColumn.getByRole("button", { name: "Open SQL" }).click();
+      await panel.locator(".cm-content", { hasText: "ALTER TABLE product ADD COLUMN smoke_added INTEGER;" }).waitFor();
+      await run(panel);
+      await panel.getByText(/Statement 1: (OK|0 rows)/).waitFor();
+      await page.keyboard.press("Control+w");
+      await overview.getByRole("button", { name: "Refresh" }).click();
+      const addedRow = overview.getByText("smoke_added", { exact: true }).locator("xpath=..");
+      await addedRow.getByRole("button", { name: "Drop…" }).click();
+      const dropAdded = page.getByRole("dialog", { name: "Drop smoke_added" });
+      await dropAdded.getByLabel("SQL that will run").filter({ hasText: "DROP COLUMN smoke_added" }).waitFor();
+      await dropAdded.getByRole("button", { name: "Drop", exact: true }).click();
+      await overview.getByText("smoke_added", { exact: true }).waitFor({ state: "detached" });
+      // A lost metadata session must not reconnect or repeat its catalog read by itself.
+      const detailsSession = (await page.locator(".tabbar .tab.active").getAttribute("id")).replace("workspace-", "");
+      await page.evaluate((session) => window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+        event: "session-lost", payload: { session, reason: "Test connection lost" },
+      }), detailsSession);
+      await overview.getByRole("button", { name: "Reconnect" }).waitFor();
+      await folderNode.locator(".label").dblclick();
+      await overview.getByRole("button", { name: "Reconnect" }).waitFor();
+      await overview.getByRole("button", { name: "Reconnect" }).click();
+      await overview.getByText("Reconnected. Refresh to load the metadata again.").waitFor();
+      assert.equal(await overview.getByText("stock", { exact: true }).count(), 0);
+      await overview.getByRole("button", { name: "Refresh" }).click();
+      await overview.getByText("stock", { exact: true }).waitFor();
+    }
+    if (folder === "Constraints" || folder === "Foreign keys") assert.ok(await overview.getByRole("button", { name: "Add…" }).isDisabled());
+    if (folder === "Indexes" || folder === "Triggers") {
+      await overview.getByRole("button", { name: "Add…" }).click();
+      const add = page.getByRole("dialog", { name: `Add to ${folder} of product` });
+      await add.getByLabel("Name", { exact: true }).fill(folder === "Indexes" ? "smoke_new_index" : "smoke_new_trigger");
+      if (folder === "Indexes") await add.getByLabel("stock", { exact: true }).check();
+      else await add.getByLabel("Trigger statement").fill("SELECT 1");
+      if (folder === "Triggers") await shot("05f-add-trigger-form");
+      await add.getByRole("button", { name: "Open SQL" }).click();
+      await panel.locator(".cm-content", { hasText: folder === "Indexes" ? "CREATE INDEX smoke_new_index" : "CREATE TRIGGER smoke_new_trigger" }).waitFor();
+      await page.keyboard.press("Control+w");
+      await overview.waitFor();
+    }
+    await page.keyboard.press("Control+w");
+    await overview.waitFor({ state: "detached" });
+  }
+  // The arrow still expands the folder and exposes its entries.
+  const productTriggers = productChildren.getByRole("button", { name: "Expand or collapse Triggers", exact: true });
+  if (await productTriggers.getAttribute("aria-expanded") === "true") await productTriggers.locator(".twisty").click();
+  await productTriggers.locator(".twisty").click();
+  await productChildren.getByRole("button", { name: "product_stock_check: open its definition", exact: true }).waitFor();
+  await productNode.locator(".twisty").click();
   // A table holds folders of its columns (open), constraints, foreign keys and indexes.
-  await ordersNode.click();
+  await ordersNode.locator(".twisty").click();
   const ordersChildren = ordersNode.locator("xpath=..");
   const columnsFolder = ordersChildren.getByRole("button", { name: "Expand or collapse Columns", exact: true });
   await columnsFolder.waitFor();
@@ -995,41 +1127,55 @@ try {
   await ordersChildren.locator(".leaf-row", { hasText: "customer_id" }).first().focus();
   await page.keyboard.press("Control+Shift+c");
   assert.equal(await copied(copiedBeforeColumn + 1), "orders.customer_id");
-  await ordersChildren.getByRole("button", { name: "Expand or collapse Constraints", exact: true }).click();
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Constraints", exact: true }).locator(".twisty").click();
   await ordersChildren.locator(".row", { hasText: "PRIMARY KEY (id)" }).waitFor();
-  await ordersChildren.getByRole("button", { name: "Expand or collapse Foreign keys", exact: true }).click();
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Foreign keys", exact: true }).locator(".twisty").click();
   await ordersChildren.locator(".row", { hasText: "(customer_id) → customer (id)" }).waitFor();
-  await ordersChildren.getByRole("button", { name: "Expand or collapse Indexes", exact: true }).click();
+  await ordersChildren.getByRole("button", { name: "Expand or collapse Indexes", exact: true }).locator(".twisty").click();
   await ordersChildren.getByRole("button", { name: "orders_customer: open its definition", exact: true }).dblclick();
   await panel.locator(".cm-content", { hasText: "CREATE INDEX orders_customer" }).waitFor();
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "CREATE INDEX orders_customer on orders (customer_id);");
   await shot("05g-table-folders");
-  await ordersNode.click();
-  // "Generate DDL": the table's CREATE, then its own indexes, in a new tab (nothing runs).
+  await ordersNode.locator(".twisty").click();
+  // "Generate DDL": the table's CREATE and indexes in an editable preview.
   await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate SQL" }).click();
+  const generateMenu = page.getByRole("menu", { name: "Generate SQL" });
+  await generateMenu.waitFor();
+  assert.equal(await generateMenu.evaluate((el) => getComputedStyle(el).overflowY), "auto");
+  assert.equal(await generateMenu.evaluate((el) => el.parentElement === document.body), true);
   await page.getByRole("menuitem", { name: "Generate DDL" }).click();
-  await panel.locator(".cm-content", { hasText: "CREATE TABLE orders" }).waitFor();
-  const ordersDdl = (await panel.locator(".cm-content").innerText()).trimEnd();
+  await generatedEditor.waitFor();
+  const ordersDdl = (await generatedEditor.inputValue()).trimEnd();
   assert.match(ordersDdl, /^CREATE TABLE orders \(/);
   assert.ok(ordersDdl.endsWith("CREATE INDEX orders_customer on orders (customer_id);"), ordersDdl);
+  await generatedDialog.getByRole("button", { name: "Close" }).click();
   // Rows by a list of keys.
   await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate SQL" }).click();
   await page.getByRole("menuitem", { name: "Generate SELECT … WHERE key IN" }).click();
-  await panel.locator(".cm-content", { hasText: "WHERE id IN" }).waitFor();
-  assert.ok((await panel.locator(".cm-content").innerText()).trimEnd().endsWith("FROM orders\nWHERE id IN (:id_1, :id_2, :id_3);"));
+  await generatedEditor.waitFor();
+  assert.ok((await generatedEditor.inputValue()).trimEnd().endsWith("FROM orders\nWHERE id IN (:id_1, :id_2, :id_3);"));
+  await generatedDialog.getByRole("button", { name: "Close" }).click();
   // The engine decides what else: SQLite has an upsert, and no MERGE.
   await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate SQL" }).click();
   await page.getByRole("menuitem", { name: "Generate upsert (INSERT or UPDATE)" }).waitFor();
   assert.equal(await page.getByRole("menuitem", { name: "Generate MERGE" }).count(), 0);
   await page.getByRole("menuitem", { name: "Generate upsert (INSERT or UPDATE)" }).click();
-  await panel.locator(".cm-content", { hasText: "ON CONFLICT (id) DO UPDATE SET" }).waitFor();
+  await generatedEditor.waitFor();
+  assert.ok((await generatedEditor.inputValue()).includes("ON CONFLICT (id) DO UPDATE SET"));
+  await generatedDialog.getByRole("button", { name: "Close" }).click();
   // UPDATE … FROM a source of values; SQLite has no DELETE … USING.
   await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate SQL" }).click();
   await page.getByRole("menuitem", { name: "Generate UPDATE … FROM" }).waitFor();
   assert.equal(await page.getByRole("menuitem", { name: "Generate DELETE … USING" }).count(), 0);
   await page.getByRole("menuitem", { name: "Generate UPDATE … FROM" }).click();
-  await panel.locator(".cm-content", { hasText: "WHERE target.id = source.id" }).waitFor();
-  assert.match(await panel.locator(".cm-content").innerText(), /^UPDATE orders AS target\nSET\n/);
+  await generatedEditor.waitFor();
+  assert.match(await generatedEditor.inputValue(), /^UPDATE orders AS target\nSET\n/);
+  assert.ok((await generatedEditor.inputValue()).includes("WHERE target.id = source.id"));
+  await generatedDialog.getByRole("button", { name: "Close" }).click();
   // Ctrl+click chooses tables; their menu joins them on the foreign keys between them.
   const customerRow = page.getByRole("button", { name: "Expand or collapse customer", exact: true });
   await ordersNode.click({ modifiers: ["Control"] });
@@ -1037,18 +1183,20 @@ try {
   assert.equal(await ordersNode.getAttribute("aria-selected"), "true");
   assert.equal(await customerRow.getAttribute("aria-selected"), "true");
   await ordersNode.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Generate SQL" }).click();
   await page.getByRole("menuitem", { name: "Generate INNER JOIN of the 2 chosen tables" }).click();
-  await panel.locator(".cm-content", { hasText: "INNER JOIN customer c ON c.id = o.customer_id" }).waitFor();
-  assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM orders o\nINNER JOIN customer c ON c.id = o.customer_id;");
+  await generatedEditor.waitFor();
+  assert.equal((await generatedEditor.inputValue()).trimEnd(), "SELECT *\nFROM orders o\nINNER JOIN customer c ON c.id = o.customer_id;");
+  await generatedDialog.getByRole("button", { name: "Close" }).click();
   // Copy takes every chosen table, one name per line.
   const copiedBeforeNames = await page.evaluate(() => window.__copied.length);
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy 2 names" }).click();
   assert.equal(await copied(copiedBeforeNames + 1), "orders\ncustomer");
-  // A plain click forgets the choice (and expands the table, collapsed again).
+  // A plain click forgets the choice without expanding the table.
   await ordersNode.click();
   assert.equal(await customerRow.getAttribute("aria-selected"), "false");
-  await ordersNode.click();
+  assert.equal(await ordersNode.getAttribute("aria-expanded"), "false");
   // Refresh: a table created from a query tab appears with F5 on its schema, and "Refresh all
   // schemas" sees it go; open folders stay open.
   const mainSchema = page.getByRole("button", { name: "Expand or collapse schema main" });
@@ -1090,8 +1238,28 @@ try {
   const renamedProbe = page.getByRole("button", { name: "Expand or collapse renamed_probe", exact: true });
   await renamedProbe.waitFor();
   assert.equal(await renameProbe.count(), 0);
+  // Metadata tabs apply the existing reviewed object action and refresh both views.
+  await renamedProbe.locator(".twisty").click();
+  const renamedChildren = renamedProbe.locator("xpath=..");
+  await renamedChildren.getByRole("button", { name: "Expand or collapse Columns", exact: true }).locator(".label").dblclick();
+  const renamedOverview = page.getByRole("region", { name: "Columns of renamed_probe" });
+  await renamedOverview.getByText("a", { exact: true }).waitFor();
+  await renamedOverview.getByText("a", { exact: true }).locator("xpath=..").getByRole("button", { name: "Rename…" }).click();
+  const renameFromOverview = page.getByRole("dialog", { name: "Rename column a of renamed_probe" });
+  await renameFromOverview.locator('input[name="newName"]').fill("a_temp");
+  await renameFromOverview.getByLabel("SQL that will run").filter({ hasText: "RENAME COLUMN a TO a_temp" }).waitFor();
+  await renameFromOverview.getByRole("button", { name: "Rename", exact: true }).click();
+  await renamedOverview.getByText("a_temp", { exact: true }).waitFor();
+  await renamedOverview.getByRole("row").filter({ hasText: "a_temp" }).getByRole("button", { name: "Rename…" }).click();
+  const restoreColumn = page.getByRole("dialog", { name: "Rename column a_temp of renamed_probe" });
+  await restoreColumn.locator('input[name="newName"]').fill("a");
+  await restoreColumn.getByLabel("SQL that will run").filter({ hasText: "RENAME COLUMN a_temp TO a" }).waitFor();
+  await restoreColumn.getByRole("button", { name: "Rename", exact: true }).click();
+  await renamedOverview.getByText("a", { exact: true }).waitFor();
+  await page.keyboard.press("Control+w");
+  await renamedProbe.locator(".twisty").click();
   // F2 on a column renames it; its table reads its columns again.
-  await renamedProbe.click();
+  await renamedProbe.locator(".twisty").click();
   const probeColumns = renamedProbe.locator("xpath=..");
   await probeColumns.locator(".leaf-row", { hasText: /^a/ }).focus();
   await page.keyboard.press("F2");
@@ -1128,7 +1296,7 @@ try {
   assert.equal(await dropColumn.locator('input[name="cascade"]').count(), 0);
   await dropColumn.getByRole("button", { name: "Drop", exact: true }).click();
   await amountColumn.waitFor({ state: "detached" });
-  await renamedProbe.click();
+  await renamedProbe.locator(".twisty").click();
   await renamedProbe.focus();
   await page.keyboard.press("Delete");
   const dropTable = page.getByRole("dialog", { name: "Drop renamed_probe" });
@@ -1203,7 +1371,7 @@ try {
   await page.keyboard.press("Control+Shift+F");
   const quickFilter = page.getByRole("searchbox", { name: "Filter the explorer" });
   await quickFilter.waitFor();
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Filter the explorer");
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Filter the explorer");
   await page.keyboard.insertText("ord");
   await page.getByRole("button", { name: "Expand or collapse customer", exact: true }).waitFor({ state: "detached" });
   await ordersNode.waitFor();
@@ -1288,7 +1456,8 @@ try {
   await setLanguage("en");
 
   step("table data: pages, WHERE and ORDER BY written and checked by the core");
-  await ordersNode.dblclick();
+  await ordersNode.locator(".label").dblclick();
+  assert.equal(await ordersNode.getAttribute("aria-expanded"), "false");
   await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
   const range = panel.locator(".table-range");
   await range.filter({ hasText: "rows 1–500" }).waitFor();
@@ -1714,6 +1883,43 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const estimate = smokeEditNode.locator('[title^="Estimated rows (from the planner, not counted): "]');
   await estimate.waitFor();
   assert.match(await estimate.innerText(), /^~\d/);
+  // The MySQL forms prepare constraints and foreign keys in the SQL editor.
+  await smokeEditNode.locator(".twisty").click();
+  const mysqlDetails = smokeEditNode.locator("xpath=..");
+  await mysqlDetails.getByRole("button", { name: "Expand or collapse Columns", exact: true }).locator(".label").dblclick();
+  const mysqlColumnsView = page.getByRole("region", { name: "Columns of smoke_edit" });
+  await mysqlColumnsView.getByRole("button", { name: "Add…" }).click();
+  const mysqlColumnForm = page.getByRole("dialog", { name: "Add to Columns of smoke_edit" });
+  await mysqlColumnForm.getByLabel("Name", { exact: true }).fill("new_counter");
+  const mysqlDataType = mysqlColumnForm.getByRole("combobox", { name: "Data type", exact: true });
+  assert.equal(await mysqlDataType.locator('option[value="VARCHAR(255)"]').count(), 1);
+  assert.equal(await mysqlDataType.locator('option[value="JSONB"]').count(), 0);
+  await mysqlDataType.selectOption("__custom__");
+  await mysqlColumnForm.getByLabel("Custom data type").fill("BIGINT UNSIGNED");
+  await mysqlColumnForm.getByRole("button", { name: "Open SQL" }).click();
+  await panel.locator(".cm-content", { hasText: "`new_counter` BIGINT UNSIGNED" }).waitFor();
+  await page.keyboard.press("Control+w");
+  await mysqlColumnsView.waitFor();
+  await page.keyboard.press("Control+w");
+  for (const section of ["Constraints", "Foreign keys"]) {
+    await mysqlDetails.getByRole("button", { name: `Expand or collapse ${section}`, exact: true }).locator(".label").dblclick();
+    const view = page.getByRole("region", { name: `${section} of smoke_edit` });
+    await view.getByRole("button", { name: "Add…" }).click();
+    const form = page.getByRole("dialog", { name: `Add to ${section} of smoke_edit` });
+    await form.getByLabel("Name", { exact: true }).fill(section === "Constraints" ? "smoke_unique" : "smoke_fk");
+    await form.locator("fieldset").getByLabel(section === "Constraints" ? "name" : "id", { exact: true }).check();
+    if (section === "Foreign keys") {
+      await form.getByLabel("Referenced table").fill("smoke_pages");
+      await form.getByLabel("Referenced columns", { exact: false }).fill("id");
+      await shot("05f-add-foreign-key-form");
+    }
+    await form.getByRole("button", { name: "Open SQL" }).click();
+    await panel.locator(".cm-content", { hasText: section === "Constraints" ? "UNIQUE (`name`)" : "REFERENCES `spelaion`.`smoke_pages` (`id`)" }).waitFor();
+    await page.keyboard.press("Control+w");
+    await view.waitFor();
+    await page.keyboard.press("Control+w");
+  }
+  await smokeEditNode.locator(".twisty").click();
   await smokeEditNode.dblclick();
   await page.locator(".tabbar .tab.active", { hasText: "smoke_edit" }).waitFor();
   await panel.locator(".status-connected").waitFor();
@@ -2195,7 +2401,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const userToml = readFileSync(join(userDir, "user.toml"), "utf8");
   assert.match(userToml, /\[tunnels\]\s*port_min = 20000\s*port_max = 20100/, userToml);
   await withSettings("network", async (settings) => {
-    assert.equal(await settings.getByLabel("Lowest port").inputValue(), "20000");
+    const lowestPort = settings.getByLabel("Lowest port");
+    await page.waitForFunction((input) => input.value === "20000", await lowestPort.elementHandle());
     await settings.getByRole("button", { name: "Any free port" }).click();
     await settings.getByRole("status").filter({ hasText: "Saved" }).waitFor();
   });

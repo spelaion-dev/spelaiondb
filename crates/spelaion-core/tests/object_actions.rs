@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    CoreEvent, CreateKind, FoundObject, NewIndexKind, ObjectChange, ObjectError, ObjectTarget,
-    ResultStore, SEARCH_LIMIT, Session, active_schema, apply_change, create_sql, new_index_sql,
-    object_actions, search_objects, set_active_schema,
+    CoreEvent, CreateKind, FoundObject, NewIndexKind, NewTableElement, ObjectChange, ObjectError,
+    ObjectTarget, ResultStore, SEARCH_LIMIT, Session, active_schema, apply_change, create_sql,
+    new_index_sql, new_table_element_sql, object_actions, search_objects, set_active_schema,
+    supports_added_checks,
 };
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, NameFilter, ObjectKind, SchemaObject, SchemaObjectKind,
@@ -736,6 +737,151 @@ async fn indexes_and_constraints_on_chosen_columns_run_on_each_engine() {
             }
         }
         run(label, &session, &["DROP TABLE oa_index_t"], true).await;
+    }
+}
+
+#[tokio::test]
+async fn new_table_elements_run_on_supported_engines() {
+    for (label, session, schema) in engines().await {
+        let dialect = session.dialect().clone();
+        let capabilities = object_actions(dialect.as_ref());
+        let version = session.connection().server_version().await.unwrap();
+        run(
+            label,
+            &session,
+            &["DROP TABLE oa_new_child", "DROP TABLE oa_new_parent"],
+            true,
+        )
+        .await;
+        if label == "postgres" {
+            run(
+                label,
+                &session,
+                &["DROP FUNCTION oa_new_trigger_fn()"],
+                true,
+            )
+            .await;
+        }
+        run(
+            label,
+            &session,
+            &[
+                "CREATE TABLE oa_new_parent (id INT PRIMARY KEY)",
+                "CREATE TABLE oa_new_child (id INT, parent_id INT)",
+            ],
+            false,
+        )
+        .await;
+        let mut elements = vec![
+            NewTableElement::Column {
+                name: "extra".into(),
+                data_type: "INTEGER".into(),
+                nullable: true,
+                default: "3".into(),
+            },
+            NewTableElement::Index {
+                name: "oa new idx".into(),
+                columns: vec!["extra".into()],
+                unique: false,
+            },
+        ];
+        if capabilities.add_constraints {
+            elements.push(NewTableElement::Constraint {
+                name: "oa_new_unique".into(),
+                kind: "unique".into(),
+                columns: vec!["id".into()],
+                expression: String::new(),
+            });
+            if supports_added_checks(dialect.as_ref(), &version) {
+                elements.push(NewTableElement::Constraint {
+                    name: "oa_new_check".into(),
+                    kind: "check".into(),
+                    columns: vec![],
+                    expression: "extra >= 0".into(),
+                });
+            }
+            elements.push(NewTableElement::ForeignKey {
+                name: "oa_new_fk".into(),
+                columns: vec!["parent_id".into()],
+                referenced_schema: schema.into(),
+                referenced_table: "oa_new_parent".into(),
+                referenced_columns: vec!["id".into()],
+            });
+        }
+        if capabilities.add_triggers {
+            let body = match label {
+                "postgres" => {
+                    run(label, &session, &["CREATE FUNCTION oa_new_trigger_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$"], false).await;
+                    "oa_new_trigger_fn"
+                }
+                "mysql" | "mariadb" => {
+                    "BEGIN SET @oa_trigger_seen = 1; SET @oa_trigger_other = 2; END"
+                }
+                "sqlserver" => "SET NOCOUNT ON",
+                _ => "SELECT 1",
+            };
+            elements.push(NewTableElement::Trigger {
+                name: "oa_new_trigger".into(),
+                timing: "after".into(),
+                event: "insert".into(),
+                body: body.into(),
+            });
+        }
+        for element in &elements {
+            let sql =
+                new_table_element_sql(dialect.as_ref(), &version, schema, "oa_new_child", element)
+                    .unwrap();
+            run(label, &session, &[&sql], false).await;
+        }
+        let info = session
+            .connection()
+            .describe_table(schema, "oa_new_child")
+            .await
+            .unwrap();
+        assert!(info.columns.iter().any(|c| c.name == "extra"), "{label}");
+        assert!(
+            info.indexes.iter().any(|i| i.name == "oa new idx"),
+            "{label}"
+        );
+        if capabilities.add_constraints {
+            assert!(
+                info.foreign_keys.iter().any(|fk| fk.name == "oa_new_fk"),
+                "{label}"
+            );
+            assert!(
+                info.constraints
+                    .iter()
+                    .any(|c| c.name.as_deref() == Some("oa_new_unique")),
+                "{label}"
+            );
+        }
+        if capabilities.add_triggers {
+            let objects = session
+                .connection()
+                .list_schema_objects(schema)
+                .await
+                .unwrap();
+            assert!(
+                objects.iter().any(|o| o.name == "oa_new_trigger"),
+                "{label}"
+            );
+        }
+        run(
+            label,
+            &session,
+            &["DROP TABLE oa_new_child", "DROP TABLE oa_new_parent"],
+            false,
+        )
+        .await;
+        if label == "postgres" {
+            run(
+                label,
+                &session,
+                &["DROP FUNCTION oa_new_trigger_fn()"],
+                false,
+            )
+            .await;
+        }
     }
 }
 
