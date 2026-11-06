@@ -143,8 +143,13 @@ async fn no_keep_alive_is_sent_inside_a_transaction() {
 
     // Inside one: nothing more is sent.
     run(&idle, "begin; select 1").await.unwrap();
+    let after_begin = last_query().await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let in_transaction = last_query().await;
+    assert_eq!(
+        in_transaction, after_begin,
+        "even the first keep-alive must not enter the transaction"
+    );
     tokio::time::sleep(Duration::from_millis(3000)).await;
     assert_eq!(
         last_query().await,

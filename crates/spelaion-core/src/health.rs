@@ -17,7 +17,7 @@ use spelaion_driver_api::{
     NameFilter, ObjectInfo, Result, SchemaInfo, SchemaObject, ServerObject, TableInfo,
 };
 use spelaion_ssh::TunnelState;
-use tokio::sync::watch;
+use tokio::sync::{OwnedRwLockReadGuard, RwLock, watch};
 use tokio::time::Instant;
 
 /// How long a keep-alive may wait for its answer before the session counts as lost: packets
@@ -36,6 +36,7 @@ pub enum SessionHealth {
 /// When the connection was last used, and whether something is using it now.
 pub(crate) struct Activity {
     busy: AtomicUsize,
+    gate: Arc<RwLock<()>>,
     /// Bumped by every use: a keep-alive paused by an open transaction resumes after one.
     uses: AtomicU64,
     last: Mutex<Instant>,
@@ -45,15 +46,17 @@ impl Activity {
     fn new() -> Self {
         Self {
             busy: AtomicUsize::new(0),
+            gate: Arc::new(RwLock::new(())),
             uses: AtomicU64::new(0),
             last: Mutex::new(Instant::now()),
         }
     }
 
-    fn begin(self: &Arc<Self>) -> Busy {
+    async fn begin(self: &Arc<Self>) -> Busy {
+        let guard = self.gate.clone().read_owned().await;
         self.busy.fetch_add(1, Ordering::SeqCst);
         self.uses.fetch_add(1, Ordering::SeqCst);
-        Busy(self.clone())
+        Busy(self.clone(), guard)
     }
 
     fn last(&self) -> Instant {
@@ -62,7 +65,7 @@ impl Activity {
 }
 
 /// Marks the connection busy until dropped (for a statement, until its rows are read).
-struct Busy(Arc<Activity>);
+struct Busy(Arc<Activity>, #[allow(dead_code)] OwnedRwLockReadGuard<()>);
 
 impl Drop for Busy {
     fn drop(&mut self) {
@@ -204,14 +207,26 @@ async fn keep_alive_loop(
         if !idle {
             continue;
         }
+        let Some(connection) = connection.upgrade() else {
+            return;
+        };
+        if connection.is_closed() {
+            health.lose("the server closed the connection");
+            return;
+        }
         if paused_at == Some(uses) {
             // Still the same open transaction: wait a whole interval again.
             *activity.last.lock().expect("lock poisoned") = Instant::now();
             continue;
         }
-        let Some(connection) = connection.upgrade() else {
-            return;
+        // Reserve the idle connection before starting the timeout. User operations acquire a
+        // read permit, held until their result stream is dropped, so no query can race a ping.
+        let Ok(_permit) = activity.gate.clone().try_write_owned() else {
+            continue;
         };
+        if activity.busy.load(Ordering::SeqCst) != 0 || activity.last().elapsed() < interval {
+            continue;
+        }
         let answer = tokio::time::timeout(KEEPALIVE_ANSWER_TIMEOUT, connection.keep_alive()).await;
         // A keep-alive is not a use: the next one is due a whole interval from now.
         *activity.last.lock().expect("lock poisoned") = Instant::now();
@@ -242,7 +257,7 @@ impl Connection for Tracked {
     }
 
     async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
-        let busy = self.activity.begin();
+        let busy = self.activity.begin().await;
         let events = self.observe(self.inner.execute(sql, opts).await)?;
         let inner = self.inner.clone();
         let health = self.health.clone();
@@ -259,12 +274,12 @@ impl Connection for Tracked {
     }
 
     async fn server_version(&self) -> Result<String> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.server_version().await)
     }
 
     async fn keep_alive(&self) -> Result<KeepAlive> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.keep_alive().await)
     }
 
@@ -273,47 +288,47 @@ impl Connection for Tracked {
     }
 
     async fn current_database(&self) -> Result<Option<String>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.current_database().await)
     }
 
     async fn select_database(&self, database: &str) -> Result<()> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.select_database(database).await)
     }
 
     async fn list_databases(&self) -> Result<Vec<String>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.list_databases().await)
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.list_schemas().await)
     }
 
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.list_objects(schema).await)
     }
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.describe_table(schema, name).await)
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.list_schema_objects(schema).await)
     }
 
     async fn list_server_objects(&self) -> Result<Vec<ServerObject>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.list_server_objects().await)
     }
 
     async fn list_schemas_matching(&self, filter: &NameFilter) -> Result<Vec<SchemaInfo>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.list_schemas_matching(filter).await)
     }
 
@@ -322,7 +337,7 @@ impl Connection for Tracked {
         schema: &str,
         filter: &NameFilter,
     ) -> Result<Vec<ObjectInfo>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.list_objects_matching(schema, filter).await)
     }
 
@@ -331,7 +346,7 @@ impl Connection for Tracked {
         schema: &str,
         filter: &NameFilter,
     ) -> Result<Vec<SchemaObject>> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(
             self.inner
                 .list_schema_objects_matching(schema, filter)
@@ -340,17 +355,17 @@ impl Connection for Tracked {
     }
 
     async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.object_definition(object).await)
     }
 
     async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.relation_definition(schema, name).await)
     }
 
     async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
-        let _busy = self.activity.begin();
+        let _busy = self.activity.begin().await;
         self.observe(self.inner.procedure_call(object).await)
     }
 }
@@ -447,6 +462,26 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(25)).await;
         assert!(inner.pings.load(Ordering::SeqCst) >= 1, "idle again");
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn keep_alive_reservation_and_user_operations_exclude_each_other() {
+        let activity = Arc::new(Activity::new());
+        let ping = activity.gate.clone().try_write_owned().unwrap();
+        let operation = tokio::spawn({
+            let activity = activity.clone();
+            async move { activity.begin().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !operation.is_finished(),
+            "a user operation must wait for the ping"
+        );
+        drop(ping);
+        let busy = operation.await.unwrap();
+        assert!(activity.gate.clone().try_write_owned().is_err());
+        drop(busy);
+        assert!(activity.gate.clone().try_write_owned().is_ok());
     }
 
     #[tokio::test]

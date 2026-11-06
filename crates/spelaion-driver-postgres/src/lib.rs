@@ -208,30 +208,24 @@ impl Connection for PgConnection {
     }
 
     async fn keep_alive(&self) -> Result<KeepAlive> {
-        // Outside a transaction every statement is the first of its own, so both clocks are
-        // the same; inside one, `now()` is when it began. One simple-protocol round trip.
-        let messages = self
-            .client
-            .simple_query("select now() <> statement_timestamp()")
-            .await;
-        match messages {
-            Ok(messages) => {
-                let open = messages.iter().any(|message| match message {
-                    tokio_postgres::SimpleQueryMessage::Row(row) => row.get(0) == Some("t"),
-                    _ => false,
-                });
-                Ok(if open {
-                    KeepAlive::InTransaction
-                } else {
-                    KeepAlive::Alive
-                })
+        // ReadyForQuery exposes the server's actual transaction state without a query.
+        // A dropped prepared statement may still be awaiting its close response: wait for
+        // the protocol to settle rather than treating that transient state as a transaction.
+        loop {
+            if self.client.is_closed() {
+                return Err(DriverError::Connection("the connection is closed".into()));
             }
-            // A failed transaction refuses every statement until it ends: it is still open.
-            Err(e) if e.code() == Some(&SqlState::IN_FAILED_SQL_TRANSACTION) => {
-                Ok(KeepAlive::InTransaction)
+            match self.client.transaction_status() {
+                Some(b'I') => break,
+                Some(_) => return Ok(KeepAlive::InTransaction),
+                None => tokio::time::sleep(Duration::from_millis(5)).await,
             }
-            Err(e) => Err(map_error(e)),
         }
+        self.client
+            .simple_query("select 1")
+            .await
+            .map_err(map_error)?;
+        Ok(KeepAlive::Alive)
     }
 
     fn is_closed(&self) -> bool {

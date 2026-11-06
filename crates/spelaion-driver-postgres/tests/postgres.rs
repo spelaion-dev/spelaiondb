@@ -1263,6 +1263,7 @@ async fn keep_alives_answer_and_say_when_a_transaction_is_open() {
     let Some(conn) = connect().await else { return };
     assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::Alive);
     run(&*conn, "begin").await.unwrap();
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::InTransaction);
     run(&*conn, "select 1").await.unwrap();
     assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::InTransaction);
     // A failed transaction is still open.

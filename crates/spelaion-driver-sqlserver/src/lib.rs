@@ -158,6 +158,9 @@ enum Request {
         events: mpsc::Sender<Result<ExecEvent>>,
     },
     /// Small catalog queries: every value as text, parameters as `@P1`, `@P2`…
+    KeepAlive {
+        reply: oneshot::Sender<Result<KeepAlive>>,
+    },
     Rows {
         sql: String,
         params: Vec<String>,
@@ -171,6 +174,9 @@ async fn actor(
     mut requests: mpsc::Receiver<Request>,
     mut cancels: watch::Receiver<u64>,
 ) {
+    // An interrupted or failed response may have hidden transaction ENVCHANGE tokens.
+    // Stay conservative until a later user operation completes cleanly.
+    let mut transaction_state_unknown = false;
     while let Some(request) = requests.recv().await {
         match request {
             Request::Execute {
@@ -189,10 +195,14 @@ async fn actor(
                     std::future::pending::<()>().await;
                 };
                 let finished = tokio::select! {
-                    () = execute(&mut client, &sql, batch_size, &events) => true,
-                    () = cancelled => false,
+                    outcome = execute(&mut client, &sql, batch_size, &events) => outcome,
+                    () = cancelled => ExecutionOutcome::Cancelled,
                 };
-                if !finished {
+                transaction_state_unknown = !matches!(finished, ExecutionOutcome::Complete);
+                if matches!(
+                    finished,
+                    ExecutionOutcome::Cancelled | ExecutionOutcome::Abandoned
+                ) {
                     // The batch's stream is dropped: the Attention stops it on the server and
                     // drains what was left, so the session goes on.
                     let result = client.cancel_query().await;
@@ -205,7 +215,23 @@ async fn actor(
                 }
             }
             Request::Rows { sql, params, reply } => {
-                let _ = reply.send(rows(&mut client, &sql, &params).await);
+                let result = rows(&mut client, &sql, &params).await;
+                transaction_state_unknown = result.is_err();
+                let _ = reply.send(result);
+            }
+            Request::KeepAlive { reply } => {
+                let result = match if transaction_state_unknown {
+                    Ok(true)
+                } else {
+                    client.in_transaction().await
+                } {
+                    Ok(true) => Ok(KeepAlive::InTransaction),
+                    Ok(false) => rows(&mut client, "select 1", &[])
+                        .await
+                        .map(|_| KeepAlive::Alive),
+                    Err(error) => Err(map_error(error, None)),
+                };
+                let _ = reply.send(result);
             }
         }
     }
@@ -256,32 +282,43 @@ impl Current {
     }
 }
 
-/// Runs one batch and streams every result set it returns. If the receiver goes away (tab
-/// closed), sending stops; the connection discards the rest before the next statement.
+enum ExecutionOutcome {
+    Complete,
+    Failed,
+    Abandoned,
+    Cancelled,
+}
+
+/// Runs one batch and streams every result set. A dropped receiver asks the actor to cancel
+/// the remaining server work; transaction state then stays unknown until another user request.
 async fn execute(
     client: &mut SqlClient,
     sql: &str,
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
-) {
+) -> ExecutionOutcome {
     let send = |event| async move { events.send(event).await.is_ok() };
     let mut stream = match client.simple_query(sql).await {
         Ok(stream) => stream,
         Err(e) => {
             send(Err(map_error(e, Some(sql)))).await;
-            return;
+            return ExecutionOutcome::Failed;
         }
     };
     let mut current: Option<Current> = None;
     let mut total_rows: u64 = 0;
     let mut any_result = false;
     loop {
-        let item = match stream.try_next().await {
+        let next = tokio::select! {
+            result = stream.try_next() => result,
+            () = events.closed() => return ExecutionOutcome::Abandoned,
+        };
+        let item = match next {
             Ok(Some(item)) => item,
             Ok(None) => break,
             Err(e) => {
                 send(Err(map_error(e, Some(sql)))).await;
-                return;
+                return ExecutionOutcome::Failed;
             }
         };
         match item {
@@ -290,7 +327,7 @@ async fn execute(
                     && previous.pending > 0
                     && !send(previous.finish().map(ExecEvent::Batch)).await
                 {
-                    return;
+                    return ExecutionOutcome::Abandoned;
                 }
                 any_result = true;
                 let metas: Vec<_> = meta
@@ -308,7 +345,7 @@ async fn execute(
                     .map(|(meta, ty)| decode::ColumnBuilder::new(meta, *ty, batch_size))
                     .collect();
                 if !send(Ok(ExecEvent::Columns(schema.clone()))).await {
-                    return;
+                    return ExecutionOutcome::Abandoned;
                 }
                 current = Some(Current {
                     schema,
@@ -331,7 +368,7 @@ async fn execute(
                             column.name, result.types[i]
                         ))))
                         .await;
-                        return;
+                        return ExecutionOutcome::Abandoned;
                     }
                 }
                 result.pending += 1;
@@ -339,7 +376,7 @@ async fn execute(
                 if result.pending == batch_size
                     && !send(result.finish().map(ExecEvent::Batch)).await
                 {
-                    return;
+                    return ExecutionOutcome::Abandoned;
                 }
             }
         }
@@ -349,7 +386,7 @@ async fn execute(
         && last.pending > 0
         && !send(last.finish().map(ExecEvent::Batch)).await
     {
-        return;
+        return ExecutionOutcome::Complete;
     }
     let rows_affected = if any_result {
         Some(total_rows)
@@ -362,13 +399,14 @@ async fn execute(
                 .and_then(|n| n.parse().ok()),
             Err(e) => {
                 send(Err(e)).await;
-                return;
+                return ExecutionOutcome::Failed;
             }
         }
     } else {
         None
     };
     send(Ok(ExecEvent::Done { rows_affected })).await;
+    ExecutionOutcome::Complete
 }
 
 struct SqlServerConnection {
@@ -435,17 +473,12 @@ impl Connection for SqlServerConnection {
     }
 
     async fn keep_alive(&self) -> Result<KeepAlive> {
-        let rows = self.rows("select @@trancount", vec![]).await?;
-        let count = rows
-            .into_iter()
-            .next()
-            .and_then(|row| row.into_iter().next().flatten())
-            .unwrap_or_default();
-        Ok(if count.trim() == "0" {
-            KeepAlive::Alive
-        } else {
-            KeepAlive::InTransaction
-        })
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::KeepAlive { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
     }
 
     fn is_closed(&self) -> bool {
