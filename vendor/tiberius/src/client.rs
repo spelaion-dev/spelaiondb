@@ -82,6 +82,13 @@ pub struct Client<S: AsyncRead + AsyncWrite + Unpin + Send> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
+    /// Whether TDS reports an active transaction on this connection (SpelaionDB patch).
+    pub async fn in_transaction(&mut self) -> crate::Result<bool> {
+        // A previously dropped result stream can still contain transaction ENVCHANGE tokens.
+        self.connection.flush_stream().await?;
+        Ok(self.connection.context().transaction_descriptor() != [0; 8])
+    }
+
     /// Uses an instance of [`Config`] to specify the connection
     /// options required to connect to the database using an established
     /// tcp connection

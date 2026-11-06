@@ -1094,6 +1094,19 @@ async fn keep_alives_answer_and_say_when_a_transaction_is_open() {
 }
 
 #[tokio::test]
+async fn keep_alive_pauses_after_a_dropped_batch_with_a_transaction() {
+    use spelaion_driver_api::KeepAlive;
+    let Some(conn) = connect().await else { return };
+    let events = conn.execute(
+        "begin transaction; select top (1000) a.object_id from sys.all_objects a cross join sys.all_objects b",
+        &ExecOptions { batch_size: 1 },
+    ).await.unwrap();
+    drop(events);
+    assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::InTransaction);
+    run(&*conn, "rollback").await.unwrap();
+}
+
+#[tokio::test]
 async fn a_session_the_server_ended_is_a_connection_error() {
     let Some(conn) = connect().await else { return };
     let Some(admin) = connect().await else { return };
