@@ -8,6 +8,7 @@ import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta, SortState } from "../store";
+import { useExport } from "./ExportDialog";
 import { CellViewer, type ViewerMode } from "./CellViewer";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
@@ -188,6 +189,7 @@ export function ResultGrid({
   onCountQuery,
   onQueryPageSize,
   tableData,
+  onHiddenColumns,
 }: {
   result: ResultMeta;
   session: string;
@@ -205,6 +207,8 @@ export function ResultGrid({
   onLoadMore(): Promise<number>;
   onCountQuery(): void;
   onQueryPageSize(size: number): void;
+  /** The columns hidden in this grid changed (for the export dialog). */
+  onHiddenColumns?(hidden: number[]): void;
   /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
    *  core writes the condition; the page's SELECT is checked when it loads). */
   tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void };
@@ -643,6 +647,9 @@ export function ResultGrid({
   useEffect(() => {
     // A selection on a column just hidden would act on what is not shown.
     setSelection((current) => (current && (hidden.has(current.anchor.col) || hidden.has(current.focus.col)) ? null : current));
+    onHiddenColumns?.([...hidden].sort((a, b) => a - b));
+    // Only when the hidden columns change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hidden]);
 
   useEffect(() => {
@@ -1526,6 +1533,23 @@ export function ResultGrid({
               </button>
             ))}
           </GridSubmenu>
+          {selection && result.complete && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                const b = bounds(selection);
+                useExport.getState().open({
+                  kind: "selection",
+                  session,
+                  result,
+                  range: { firstRow: b.r0, rows: b.r1 - b.r0 + 1, columns: shownIn(b) },
+                });
+              }}
+            >
+              {t("results.exportSelection")}
+            </button>
+          )}
           {selection && (
             <GridSubmenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (

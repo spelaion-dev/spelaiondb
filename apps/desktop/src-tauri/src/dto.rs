@@ -3538,3 +3538,180 @@ pub enum AuditFormatItem {
     Csv,
     Json,
 }
+
+/// Character encoding of an exported file (see `spelaion_core::TextEncoding`).
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TextEncodingItem {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+    Windows1252,
+}
+
+impl From<TextEncodingItem> for spelaion_core::TextEncoding {
+    fn from(item: TextEncodingItem) -> Self {
+        match item {
+            TextEncodingItem::Utf8 => Self::Utf8,
+            TextEncodingItem::Utf8Bom => Self::Utf8Bom,
+            TextEncodingItem::Utf16Le => Self::Utf16Le,
+            TextEncodingItem::Windows1252 => Self::Windows1252,
+        }
+    }
+}
+
+/// How an export writes its file (ADR-034). The core checks the delimiter.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportFileOptions {
+    pub format: TextFormat,
+    /// Column names as the first line (CSV and TSV).
+    pub header: bool,
+    /// One character (CSV only).
+    pub delimiter: String,
+    pub null_text: String,
+    pub escape_formulas: bool,
+    pub encoding: TextEncodingItem,
+    /// Columns of the result by position, in order (the shown ones); `None`: all.
+    pub columns: Option<Vec<u32>>,
+}
+
+impl ExportFileOptions {
+    pub fn csv(&self) -> Result<spelaion_core::CsvOptions, String> {
+        let mut chars = self.delimiter.chars();
+        let (Some(delimiter), None) = (chars.next(), chars.next()) else {
+            return Err("the delimiter must be exactly one character".into());
+        };
+        let csv = spelaion_core::CsvOptions {
+            delimiter,
+            null_text: self.null_text.clone(),
+            escape_formulas: self.escape_formulas,
+        };
+        csv.check()?;
+        Ok(csv)
+    }
+}
+
+/// What writing an export file did.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSummaryItem {
+    pub rows: f64,
+    pub bytes: f64,
+    /// Characters the encoding lacks, written as `?`.
+    pub replaced: f64,
+}
+
+impl From<spelaion_core::FileSummary> for ExportSummaryItem {
+    fn from(summary: spelaion_core::FileSummary) -> Self {
+        Self {
+            rows: summary.rows as f64,
+            bytes: summary.bytes as f64,
+            replaced: summary.replaced as f64,
+        }
+    }
+}
+
+/// Rows and bytes written so far by a streaming export; `table` is the position of the table
+/// being written when several are exported.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportProgressItem {
+    pub table: Option<u32>,
+    pub rows: f64,
+    pub bytes: f64,
+}
+
+/// How a streaming export ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ExportOutcome {
+    Done {
+        summary: ExportSummaryItem,
+    },
+    Cancelled,
+    /// The connection's type confirms execution: ask, then export again with `confirmed`.
+    NeedsConfirmation,
+    /// Not a read: only the loaded rows can be exported.
+    NotARead {
+        message: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+impl From<Result<spelaion_core::FileSummary, spelaion_core::ExportError>> for ExportOutcome {
+    fn from(result: Result<spelaion_core::FileSummary, spelaion_core::ExportError>) -> Self {
+        use spelaion_core::ExportError;
+        match result {
+            Ok(summary) => Self::Done {
+                summary: summary.into(),
+            },
+            Err(ExportError::Cancelled) => Self::Cancelled,
+            Err(ExportError::NeedsConfirmation) => Self::NeedsConfirmation,
+            Err(e @ ExportError::NotARead(_)) => Self::NotARead {
+                message: e.to_string(),
+            },
+            Err(
+                e @ (ExportError::Table(_)
+                | ExportError::Database(_)
+                | ExportError::Io { .. }
+                | ExportError::Invalid(_)),
+            ) => Self::Failed {
+                message: e.to_string(),
+            },
+        }
+    }
+}
+
+/// A table data tab's view to export: every row its filter keeps, in its order.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableExportItem {
+    pub schema: String,
+    pub name: String,
+    pub filter: String,
+    pub order_by: String,
+}
+
+/// A table or view chosen in the explorer.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationRefItem {
+    pub schema: String,
+    pub name: String,
+}
+
+/// A file written by `export_tables`.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedFileItem {
+    pub schema: String,
+    pub name: String,
+    pub path: String,
+    pub summary: ExportSummaryItem,
+}
+
+/// How exporting several tables ended: the files written, and where it stopped if it did.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportTablesOutcome {
+    pub files: Vec<ExportedFileItem>,
+    pub cancelled: bool,
+    /// Position of the table that failed, with why.
+    pub failed_table: Option<u32>,
+    pub error: Option<String>,
+}
+
+/// What the export dialog says before running a query again (see `spelaion_core::RerunCheck`).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RerunCheckItem {
+    pub refused: Option<String>,
+    pub open_transaction: bool,
+}

@@ -42,6 +42,7 @@ import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInf
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
+import { useExport } from "./ExportDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard, pasteIsForText } from "../connectionCopies";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
@@ -2267,6 +2268,18 @@ function ObjectNode({
           </button>
           <button role="menuitem" onClick={() => void countRows()}>
             {t("sql.count")}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              const tables = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, name: o.name }));
+              useExport.getState().open({ kind: "tables", session, connectionId, tables });
+            }}
+          >
+            {chosen && selection.length > 1
+              ? t("exportTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
+              : t("exportTable")}
           </button>
           <button role="menuitem" onClick={refresh}>
             {t("refresh")}

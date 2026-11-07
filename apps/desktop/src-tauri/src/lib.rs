@@ -20,9 +20,9 @@ use spelaion_config::{
     default_user_dir, load,
 };
 use spelaion_core::{
-    Engines, ExportFormat, ExportOptions, FindQuery, GenericDialect, OpenConnection, OpenError,
-    OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth, SortKey, TunnelPool,
-    open_connection, write_result,
+    Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect, OpenConnection,
+    OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth, SortKey,
+    StreamExport, TunnelPool, open_connection, write_result,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -51,6 +51,8 @@ struct AppState {
     /// The user confirmed quitting with transactions open (ADR-031).
     quitting: AtomicBool,
     tests: ConnectionTests,
+    /// Streaming exports running, by the id the UI gave them (ADR-034).
+    exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
 }
 
 struct DesktopSession {
@@ -2228,47 +2230,359 @@ async fn copy_rows(
         rows: range.first_row as usize..range.first_row as usize + range.rows as usize,
         columns: range.columns.iter().map(|&c| c as usize).collect(),
         header,
+        csv: spelaion_core::CsvOptions::default(),
     };
     let mut out = Vec::new();
     write_result(&stored, &options, dialect.as_ref(), &mut out).map_err(|e| e.to_string())?;
     String::from_utf8(out).map_err(|e| e.to_string())
 }
 
-/// Writes a whole result to a file the user chose (in a blocking task: it may be millions of
-/// rows). Returns how many rows were written.
+/// Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
+/// rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
+/// are the shown columns, in order.
 #[tauri::command]
 #[specta::specta]
 async fn export_result(
     result: u32,
     session: String,
     path: String,
-    format: TextFormat,
+    options: ExportFileOptions,
+    range: Option<CellRange>,
     state: State<'_, AppState>,
-) -> CmdResult<f64> {
+) -> CmdResult<ExportSummaryItem> {
     let dialect = dialect_for(&state, &session).await;
+    let csv = options.csv()?;
     let stored = state
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
-    let rows = tokio::task::spawn_blocking(move || {
+    let summary = tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
             .map_err(|_| "result lock poisoned".to_string())?;
         if !stored.is_complete() {
             return Err("the result is still loading: export it when every row has arrived".into());
         }
-        let options = ExportOptions {
-            format: export_format(format),
-            rows: 0..stored.rows(),
-            columns: (0..stored.schema().columns.len()).collect(),
-            header: true,
+        let all = (0..stored.schema().columns.len()).collect::<Vec<_>>();
+        let (rows, columns) = match range {
+            Some(range) => (
+                range.first_row as usize..range.first_row as usize + range.rows as usize,
+                range.columns.iter().map(|&c| c as usize).collect(),
+            ),
+            None => (
+                0..stored.rows(),
+                options
+                    .columns
+                    .as_ref()
+                    .map(|c| c.iter().map(|&c| c as usize).collect())
+                    .unwrap_or(all),
+            ),
         };
-        spelaion_core::export_to_file(&stored, &options, dialect.as_ref(), Path::new(&path))
-            .map_err(|e| format!("could not write {path}: {e}"))
+        let export = ExportOptions {
+            format: export_format(options.format),
+            rows,
+            columns,
+            header: options.header,
+            csv,
+        };
+        spelaion_core::export_to_file(
+            &stored,
+            &export,
+            options.encoding.into(),
+            dialect.as_ref(),
+            Path::new(&path),
+        )
+        .map_err(|e| format!("could not write {path}: {e}"))
     })
     .await
     .map_err(|e| e.to_string())??;
-    Ok(rows as f64)
+    Ok(summary.into())
+}
+
+/// Before offering to run a query (or a table data tab) again for an export: whether it may
+/// be (only a single read), and whether the tab has an open transaction whose uncommitted
+/// changes the export will not see (ADR-034).
+#[tauri::command]
+#[specta::specta]
+async fn export_rerun_check(
+    session: String,
+    sql: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<RerunCheckItem> {
+    let open = state.session(&session).await?;
+    let check = spelaion_core::rerun_check(&open.session, sql.as_deref());
+    Ok(RerunCheckItem {
+        refused: check.refused,
+        open_transaction: check.open_transaction,
+    })
+}
+
+/// A streaming export's file options, for the core.
+fn stream_export(options: &ExportFileOptions, table: &str) -> CmdResult<StreamExport> {
+    Ok(StreamExport {
+        format: match options.format {
+            TextFormat::SqlInsert => ExportFormat::SqlInsert {
+                table: table.into(),
+            },
+            other => export_format(other),
+        },
+        header: options.header,
+        csv: options.csv()?,
+        encoding: options.encoding.into(),
+        columns: options
+            .columns
+            .as_ref()
+            .map(|c| c.iter().map(|&c| c as usize).collect()),
+        batch_size: spelaion_core::DEFAULT_BATCH_ROWS,
+    })
+}
+
+/// A new session for an export (ADR-034), opened like `connect_from_session` from the
+/// `source` session's resolved connection and in-memory password, and registered under
+/// `export_id` so `cancel_export` can stop it. Never the tab's own session.
+async fn open_export_session(
+    state: &AppState,
+    app: &AppHandle,
+    source: &str,
+    export_id: u32,
+) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>, Arc<ExportCancel>)> {
+    let (source_open, password) = {
+        let sessions = state.sessions.lock().await;
+        let source = sessions
+            .get(source)
+            .ok_or("the connection of this export is closed")?;
+        (source.open.clone(), source.password.clone())
+    };
+    let cancel = Arc::new(ExportCancel::new());
+    {
+        let mut exports = state.exports.lock().expect("lock poisoned");
+        if exports.contains_key(&export_id) {
+            return Err("an export with this id is already running".into());
+        }
+        exports.insert(export_id, cancel.clone());
+    }
+    let options = OpenOptions {
+        tunnels: state.tunnels.clone(),
+        known_hosts: KnownHosts::for_user(&state.user_dir),
+        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        password,
+    };
+    match open_connection(
+        source_open.resolved.clone(),
+        &state.engines,
+        options,
+        state.results.clone(),
+    )
+    .await
+    {
+        Ok(open) => {
+            cancel.attach(&open.session);
+            Ok((source_open, Arc::new(open), cancel))
+        }
+        Err(e) => {
+            state
+                .exports
+                .lock()
+                .expect("lock poisoned")
+                .remove(&export_id);
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Closes an export's session and forgets its cancel.
+async fn close_export_session(state: &AppState, export_id: u32, open: Arc<OpenConnection>) {
+    state
+        .exports
+        .lock()
+        .expect("lock poisoned")
+        .remove(&export_id);
+    if let Ok(open) = Arc::try_unwrap(open) {
+        open.close().await;
+    }
+}
+
+fn progress_sender(
+    channel: Channel<ExportProgressItem>,
+    table: Option<u32>,
+) -> impl Fn(spelaion_core::ExportProgress) + Send + Sync {
+    move |p| {
+        let _ = channel.send(ExportProgressItem {
+            table,
+            rows: p.rows as f64,
+            bytes: p.bytes as f64,
+        });
+    }
+}
+
+/// Runs a query again in a new session and streams every row to `path` (ADR-034). Only a single
+/// read is run; a connection type that confirms execution needs `confirmed`.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn export_query(
+    source: String,
+    export_id: u32,
+    sql: String,
+    path: String,
+    options: ExportFileOptions,
+    confirmed: bool,
+    on_progress: Channel<ExportProgressItem>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<ExportOutcome> {
+    let settings = stream_export(&options, INSERT_TABLE)?;
+    // Refused before connecting: nothing that is not a read reaches a new session either.
+    {
+        let tab = state.session(&source).await?;
+        let check = spelaion_core::rerun_check(&tab.session, Some(&sql));
+        if let Some(message) = check.refused {
+            return Ok(ExportOutcome::NotARead { message });
+        }
+    }
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    // The tab is only asked where it finds unqualified names; it is not held during the export.
+    let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
+    let safeguards = tab.resolved.safeguards();
+    drop(tab);
+    let outcome = match context {
+        Err(message) => Err(spelaion_core::ExportError::Invalid(message)),
+        Ok(()) => {
+            spelaion_core::export_query(
+                &open.session,
+                &sql,
+                &safeguards,
+                confirmed,
+                Path::new(&path),
+                &settings,
+                &cancel,
+                &progress_sender(on_progress, None),
+            )
+            .await
+        }
+    };
+    close_export_session(&state, export_id, open).await;
+    Ok(outcome.into())
+}
+
+/// Streams every row of a table data tab's view (its filter and order, not just the loaded
+/// page) to `path`, through the core's own SELECT.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn export_table_data(
+    source: String,
+    export_id: u32,
+    view: TableExportItem,
+    path: String,
+    options: ExportFileOptions,
+    on_progress: Channel<ExportProgressItem>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<ExportOutcome> {
+    let settings = stream_export(&options, &view.name)?;
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    drop(tab);
+    let table = spelaion_core::TableSource {
+        schema: view.schema,
+        name: view.name,
+        filter: view.filter,
+        order_by: view.order_by,
+    };
+    let outcome = spelaion_core::export_table(
+        &open.session,
+        &table,
+        Path::new(&path),
+        &settings,
+        &cancel,
+        &progress_sender(on_progress, None),
+    )
+    .await;
+    close_export_session(&state, export_id, open).await;
+    Ok(outcome.into())
+}
+
+/// Streams explorer tables and views, one file each, into `folder`, never over an existing
+/// file. Stops at a cancel or an error; the files written before stay.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn export_tables(
+    source: String,
+    export_id: u32,
+    tables: Vec<RelationRefItem>,
+    folder: String,
+    extension: String,
+    options: ExportFileOptions,
+    on_progress: Channel<ExportProgressItem>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<ExportTablesOutcome> {
+    if extension.is_empty() || !extension.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("the file extension must be letters and digits".into());
+    }
+    let settings = stream_export(&options, "")?;
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, export_id).await?;
+    drop(tab);
+    let list: Vec<(String, String)> = tables.into_iter().map(|t| (t.schema, t.name)).collect();
+    let progress = move |table: usize, p: spelaion_core::ExportProgress| {
+        let _ = on_progress.send(ExportProgressItem {
+            table: Some(u32::try_from(table).unwrap_or(u32::MAX)),
+            rows: p.rows as f64,
+            bytes: p.bytes as f64,
+        });
+    };
+    let result = spelaion_core::export_tables(
+        &open.session,
+        &list,
+        Path::new(&folder),
+        &extension,
+        &settings,
+        &cancel,
+        &progress,
+    )
+    .await;
+    close_export_session(&state, export_id, open).await;
+    let file = |f: spelaion_core::ExportedFile| ExportedFileItem {
+        schema: f.schema,
+        name: f.name,
+        path: f.path.display().to_string(),
+        summary: f.summary.into(),
+    };
+    Ok(match result {
+        Ok(files) => ExportTablesOutcome {
+            files: files.into_iter().map(file).collect(),
+            cancelled: false,
+            failed_table: None,
+            error: None,
+        },
+        Err(stopped) => {
+            let cancelled = matches!(*stopped.error, spelaion_core::ExportError::Cancelled);
+            ExportTablesOutcome {
+                files: stopped.done.into_iter().map(file).collect(),
+                cancelled,
+                failed_table: (!cancelled)
+                    .then(|| u32::try_from(stopped.table).unwrap_or(u32::MAX)),
+                error: (!cancelled).then(|| stopped.error.to_string()),
+            }
+        }
+    })
+}
+
+/// Stops a running streaming export: its statement and its writer; no file is left.
+#[tauri::command]
+#[specta::specta]
+async fn cancel_export(export_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    let cancel = state
+        .exports
+        .lock()
+        .expect("lock poisoned")
+        .get(&export_id)
+        .cloned();
+    if let Some(cancel) = cancel {
+        cancel.cancel().await;
+    }
+    Ok(())
 }
 
 /// Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form.
@@ -3626,6 +3940,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             clear_find,
             table_filter_condition,
             export_result,
+            export_rerun_check,
+            export_query,
+            export_table_data,
+            export_tables,
+            cancel_export,
             cell_value,
             sort_result,
             filter_result,
@@ -3793,6 +4112,7 @@ pub fn run() {
         pending: Pending::default(),
         quitting: AtomicBool::new(false),
         tests: ConnectionTests::default(),
+        exports: std::sync::Mutex::new(HashMap::new()),
     };
 
     let typed = builder.invoke_handler();

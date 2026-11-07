@@ -367,5 +367,8 @@
       "disconnect": "Desconectar y deshacer",
       "quit": "Salir y deshacer"
     }
-  }
+  },
+  "exportTable": "Exportar…",
+  "exportTables_one": "Exportar {{formattedCount}} tabla…",
+  "exportTables_other": "Exportar {{formattedCount}} tablas…"
 }

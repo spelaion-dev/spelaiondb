@@ -367,5 +367,8 @@
       "disconnect": "Disconnect and roll back",
       "quit": "Quit and roll back"
     }
-  }
+  },
+  "exportTable": "Export…",
+  "exportTables_one": "Export {{formattedCount}} table…",
+  "exportTables_other": "Export {{formattedCount}} tables…"
 }
