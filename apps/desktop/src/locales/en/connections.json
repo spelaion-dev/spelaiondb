@@ -295,6 +295,18 @@
     "read_only": "read-only",
     "mcp": "agents' access"
   },
+  "copies": {
+    "duplicate": "Duplicate",
+    "copy": "Copy",
+    "paste": "Paste connection",
+    "duplicated": "“{{copy}}” is a copy of “{{name}}”, already saved. Its password will be asked when connecting. Change what differs, or close.",
+    "duplicatedWithPassword": "“{{copy}}” is a copy of “{{name}}”, already saved, with its own copy of the stored password. Change what differs, or close.",
+    "copied": "“{{name}}” copied, without its password.",
+    "copiedWithout": "“{{name}}” copied, without its password. Left out: {{fields}}.",
+    "pasted": "“{{name}}” was pasted as a personal connection, already saved. Its password is asked when connecting. Check it, or close.",
+    "pastedWithout": "“{{name}}” was pasted as a personal connection, already saved. Its password is asked when connecting. Not taken from the clipboard: {{fields}}. Check it, or close.",
+    "clipboardUnavailable": "The clipboard could not be read: select a connection and press Ctrl+V."
+  },
   "engineChange": {
     "title": "Engine change",
     "summary": "Engine: {{from}} → {{to}}. Nothing is saved until you save.",

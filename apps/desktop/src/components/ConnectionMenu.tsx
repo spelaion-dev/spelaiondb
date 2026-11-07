@@ -5,18 +5,22 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ConnectionItem } from "../api";
 import { useApp } from "../store";
+import { duplicateConnection } from "../connectionCopies";
 import { HistoryPreference } from "./HistoryPreference";
 
 export function ConnectionMenu({
   connection,
   onRefresh,
   onConfigureFilters,
+  onError,
 }: {
   connection: ConnectionItem;
   /** Reloads everything the explorer shows of this connection; absent until it is opened. */
   onRefresh?: () => void;
   /** Opens the dialog of the explorer's include and exclude patterns. */
   onConfigureFilters?: () => void;
+  /** Shows what went wrong with an action of the menu. */
+  onError?: (message: string) => void;
 }) {
   const { t } = useTranslation(["editor", "connections"]);
   const [open, setOpen] = useState(false);
@@ -82,6 +86,15 @@ export function ConnectionMenu({
             }}
           >
             {t("connections:edit")}
+          </button>
+          <button
+            className="menu-item"
+            onClick={() => {
+              setOpen(false);
+              duplicateConnection(connection).catch((e: unknown) => onError?.(e instanceof Error ? e.message : String(e)));
+            }}
+          >
+            {t("connections:copies.duplicate")}
           </button>
           <button
             className="menu-item danger-text"

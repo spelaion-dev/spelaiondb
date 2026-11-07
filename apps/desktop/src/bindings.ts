@@ -58,6 +58,15 @@ export const commands = {
 	 *  changed or dropped by the core; nothing is saved until the form is.
 	 */
 	changeConnectionEngine: (draft: ConnectionDraftItem_Deserialize, engine: string) => typedError<MappedConnectionItem_Serialize, string>(__TAURI_INVOKE("change_connection_engine", { draft, engine })),
+	/**
+	 *  Duplicates a connection next to the original (ADR-030). A stored password is copied to the
+	 *  copy's own keychain entry by the core; a repository connection must be as trusted.
+	 */
+	duplicateConnection: (connection: string) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
+	/**  The text Ctrl+C puts on the clipboard for a connection: without secrets or programs. */
+	copyConnection: (connection: string) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
+	/**  A personal connection from clipboard text, checked by the core as untrusted input. */
+	pasteConnection: (text: string) => typedError<PastedItem, string>(__TAURI_INVOKE("paste_connection", { text })),
 	/**  The pattern new connections are named with (ADR-030). */
 	getConnectionNamePattern: () => typedError<string, string>(__TAURI_INVOKE("get_connection_name_pattern")),
 	/**  Sets the pattern (checked by the core) or, with null, goes back to the default. */
@@ -374,6 +383,13 @@ export type CellRange = {
 	columns: number,
 };
 
+/**  The clipboard form of a connection: no secrets, nothing that runs a program. */
+export type ClipboardConnectionItem = {
+	text: string,
+	/**  Settings left out of the text, by the file's field names. */
+	leftOut: string[],
+};
+
 export type ColumnDetails = ColumnDetails_Serialize | ColumnDetails_Deserialize;
 
 export type ColumnDetails_Deserialize = {
@@ -648,6 +664,14 @@ export type DbeaverScan_Deserialize = {
 export type DbeaverScan_Serialize = {
 	dir: string,
 	connections: DbeaverItem_Serialize[],
+};
+
+/**  A connection made by "Duplicate" (ADR-030). */
+export type DuplicatedItem = {
+	id: string,
+	name: string,
+	/**  Its password was in the keychain and the copy has its own entry now. */
+	passwordCopied: boolean,
 };
 
 export type EditableTableItem = {
@@ -1093,6 +1117,14 @@ export type PasswordMode = "none" | "keychain" | "prompt" | "env" |
 "other" | 
 /**  Short-lived tokens from a cloud provider's CLI (ADR-022). */
 "awsRds" | "azureAd" | "googleCloudSql";
+
+/**  A personal connection made from clipboard text (ADR-030). */
+export type PastedItem = {
+	id: string,
+	name: string,
+	/**  Settings of the text that were not taken, by the file's field names. */
+	leftOut: string[],
+};
 
 export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;
 

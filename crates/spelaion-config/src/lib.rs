@@ -12,6 +12,7 @@
 mod accounts;
 mod check;
 mod conn_url;
+mod copy;
 mod dbeaver;
 mod draft;
 mod edit;
@@ -30,6 +31,10 @@ mod vars;
 pub use accounts::{connection_account, proxy_account, tunnel_account};
 pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
+pub use copy::{
+    ClipboardConnection, Duplicated, MAX_CLIPBOARD_TEXT, Pasted, connection_clipboard_text,
+    duplicate_connection, paste_connection,
+};
 pub use dbeaver::{
     DbeaverConnection, DbeaverError, DbeaverProxy, DbeaverSsh, ImportPlan, dbeaver_workspace,
     import_plan, read_dbeaver,

@@ -2038,6 +2038,35 @@ pub struct MappedConnectionItem {
     pub change: EngineChangeItem,
 }
 
+/// A connection made by "Duplicate" (ADR-030).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicatedItem {
+    pub id: String,
+    pub name: String,
+    /// Its password was in the keychain and the copy has its own entry now.
+    pub password_copied: bool,
+}
+
+/// The clipboard form of a connection: no secrets, nothing that runs a program.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardConnectionItem {
+    pub text: String,
+    /// Settings left out of the text, by the file's field names.
+    pub left_out: Vec<String>,
+}
+
+/// A personal connection made from clipboard text (ADR-030).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PastedItem {
+    pub id: String,
+    pub name: String,
+    /// Settings of the text that were not taken, by the file's field names.
+    pub left_out: Vec<String>,
+}
+
 /// A connection name pattern checked and shown for two sample connections.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

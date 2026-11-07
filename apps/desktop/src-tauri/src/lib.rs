@@ -846,6 +846,72 @@ fn change_connection_engine(
     })
 }
 
+/// Duplicates a connection next to the original (ADR-030). A stored password is copied to the
+/// copy's own keychain entry by the core; a repository connection must be as trusted.
+#[tauri::command]
+#[specta::specta]
+async fn duplicate_connection(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<DuplicatedItem> {
+    let duplicated = {
+        let config = state.config.read().await;
+        let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+        spelaion_config::duplicate_connection(
+            &config,
+            &mut trust,
+            &parse_id(&connection),
+            &SystemBackend,
+        )
+        .map_err(|e| e.to_string())?
+    };
+    state.reload().await;
+    Ok(DuplicatedItem {
+        id: duplicated.id.to_string(),
+        name: duplicated.name,
+        password_copied: duplicated.password_copied,
+    })
+}
+
+/// The text Ctrl+C puts on the clipboard for a connection: without secrets or programs.
+#[tauri::command]
+#[specta::specta]
+async fn copy_connection(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ClipboardConnectionItem> {
+    let config = state.config.read().await;
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let copied = spelaion_config::connection_clipboard_text(
+        &config,
+        &trust,
+        &parse_id(&connection),
+        &SystemBackend,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(ClipboardConnectionItem {
+        text: copied.text,
+        left_out: copied.left_out,
+    })
+}
+
+/// A personal connection from clipboard text, checked by the core as untrusted input.
+#[tauri::command]
+#[specta::specta]
+async fn paste_connection(text: String, state: State<'_, AppState>) -> CmdResult<PastedItem> {
+    let pasted = {
+        let config = state.config.read().await;
+        spelaion_config::paste_connection(&config, &text, &SystemBackend)
+            .map_err(|e| e.to_string())?
+    };
+    state.reload().await;
+    Ok(PastedItem {
+        id: pasted.id.to_string(),
+        name: pasted.name,
+        left_out: pasted.left_out,
+    })
+}
+
 /// The display name of an engine, as the catalog shows it.
 fn engine_display_name(engine: spelaion_config::Engine) -> String {
     spelaion_core::engine_catalog()
@@ -2892,6 +2958,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update_connection,
             delete_connection,
             change_connection_engine,
+            duplicate_connection,
+            copy_connection,
+            paste_connection,
             get_connection_name_pattern,
             set_connection_name_pattern,
             preview_connection_name_pattern,
