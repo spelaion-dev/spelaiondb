@@ -29,7 +29,6 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 pub use dialect::SqlServerDialect;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// SQL Server's "chosen as deadlock victim" error.
 const DEADLOCK_VICTIM: &str = "1205";
 
@@ -113,11 +112,10 @@ async fn open(params: &ConnectParams) -> Result<SqlClient> {
                 other => map_error(other, None),
             })
     };
-    tokio::time::timeout(CONNECT_TIMEOUT, connect)
+    let timeout = params.connect_timeout();
+    tokio::time::timeout(timeout, connect)
         .await
-        .map_err(|_| {
-            DriverError::Connection(format!("no response in {} s", CONNECT_TIMEOUT.as_secs()))
-        })?
+        .map_err(|_| DriverError::Connection(format!("no response in {} s", timeout.as_secs())))?
 }
 
 #[async_trait]

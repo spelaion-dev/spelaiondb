@@ -312,6 +312,10 @@ impl<'a> Resolver<'a> {
             },
             read_only: file.read_only,
             connect_addr: None,
+            connect_timeout: file
+                .connect_timeout
+                .filter(|s| *s > 0)
+                .map(|s| Duration::from_secs(s.into())),
         };
         let password = self.password(
             &entry.file_path,

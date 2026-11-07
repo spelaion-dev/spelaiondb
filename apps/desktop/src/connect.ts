@@ -2,7 +2,7 @@
 // trusted repository items (ADR-022) and the password. Passwords go straight to the
 // backend; they are never kept in the state.
 
-import { call, commands, type ConnectResult } from "./api";
+import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
 import { useApp, useDialogs } from "./store";
@@ -31,20 +31,23 @@ export const SET_ACTIVE_SCHEMA_EVENT = "spelaion-set-active-schema";
  *  is new or changed (shown, and recorded if accepted) and personal `${user.…}` variables
  *  that are not defined yet (asked for and saved). Tries again after each answer; returns
  *  null if the user refused. */
-export async function reviewChanges(
-  outcome: ConnectResult,
-  retry: () => Promise<ConnectResult>,
-): Promise<ConnectResult | null> {
+export async function reviewChanges<T extends ConnectResult | ConnectionTestResult>(
+  outcome: T,
+  retry: () => Promise<T>,
+): Promise<T | null> {
   // A connection and its tunnel may both have changed: one dialog each.
-  for (let i = 0; (outcome.kind === "changed" || outcome.kind === "missingVariables") && i < 10; i++) {
-    if (outcome.kind === "changed") {
-      const accepted = await useDialogs.getState().askChange({ item: outcome.item, isNew: outcome.new, fields: outcome.fields });
+  for (let i = 0; i < 10; i++) {
+    const current: ConnectResult | ConnectionTestResult = outcome;
+    if (current.kind === "changed") {
+      const accepted = await useDialogs.getState().askChange({ item: current.item, isNew: current.new, fields: current.fields });
       if (!accepted) return null;
-      await call(commands.acceptChange(outcome.root, outcome.item, outcome.new, outcome.fields));
-    } else {
-      const values = await useDialogs.getState().askVariables(outcome.names);
+      await call(commands.acceptChange(current.root, current.item, current.new, current.fields));
+    } else if (current.kind === "missingVariables") {
+      const values = await useDialogs.getState().askVariables(current.names);
       if (!values) return null;
       await call(commands.setUserVars(values));
+    } else {
+      break;
     }
     outcome = await retry();
   }

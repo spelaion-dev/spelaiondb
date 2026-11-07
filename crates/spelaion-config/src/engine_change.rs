@@ -156,6 +156,7 @@ impl ConnectionDraft {
             report.keep_if("local_port", self.local_port.is_some() && tunnel.is_some());
             report.keep_if("kubernetes", self.kubernetes.is_some());
             report.keep_if("keepalive", self.keepalive.is_some_and(|s| s > 0));
+            report.keep_if("connect_timeout", self.connect_timeout.is_some());
             report.keep_if("tls.mode", tls_set);
             report.keep_if("tls.ca", filled(&self.tls_ca).is_some());
             if passwordless(to) {
@@ -175,6 +176,7 @@ impl ConnectionDraft {
             report.drop_if("local_port", self.local_port.is_some() && tunnel.is_some());
             report.drop_if("kubernetes", self.kubernetes.is_some());
             report.drop_if("keepalive", self.keepalive.is_some_and(|s| s > 0));
+            report.drop_if("connect_timeout", self.connect_timeout.is_some());
             report.drop_if("tls.mode", tls_set);
             report.drop_if("tls.ca", filled(&self.tls_ca).is_some());
             report.drop_if("tls.cert", cert_set);
@@ -186,6 +188,7 @@ impl ConnectionDraft {
             next.local_port = None;
             next.kubernetes = None;
             next.keepalive = None;
+            next.connect_timeout = None;
             next.tls_mode = TlsModeConfig::default();
             next.tls_ca.clear();
             next.tls_cert.clear();

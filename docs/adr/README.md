@@ -39,3 +39,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [028](0028-idle-sessions.md) | Idle database sessions: keep them alive, notice when one dies, reconnect only on a click | Accepted |
 | [029](0029-connection-types.md) | Connection types: a badge and safeguards per environment, decided in the core; safeguards only add up | Accepted |
 | [030](0030-copying-connections-and-changing-engines.md) | Copying connections, changing their engine, and naming new ones | Accepted |
+| [031](0031-connection-test-diagnostics.md) | The connection test says which step failed, why, and what to try | Accepted |

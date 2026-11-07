@@ -147,6 +147,15 @@
   "additionalProperties": false,
   "description": "A connection: `.spelaion/connections/<folders>/<id>.toml`.",
   "properties": {
+    "connect_timeout": {
+      "description": "Seconds the database may take to answer when connecting: the TCP connection, TLS and\nthe login (ADR-031). 15 when absent; database servers only. A tunnel's hops have their\nown `connect_timeout` in the tunnel file.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "database": {
       "description": "Database; for SQLite and DuckDB, the file path (relative to the repository root).",
       "type": [

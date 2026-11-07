@@ -13,7 +13,7 @@ use tauri::AppHandle;
 use tauri_specta::Event;
 use tokio::sync::oneshot;
 
-use crate::dto::{InteractionKind, InteractionRequest, SecretLabel};
+use crate::dto::{InteractionClosed, InteractionKind, InteractionRequest, SecretLabel};
 
 /// Without an answer within this time, it is taken as "no".
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(300);
@@ -40,6 +40,31 @@ impl Pending {
             let _ = tx.send((accept, secret));
         }
     }
+
+    /// Forgets a question nobody waits for; whether it was still unanswered.
+    fn forget(&self, id: u32) -> bool {
+        self.waiting
+            .lock()
+            .expect("lock poisoned")
+            .remove(&id)
+            .is_some()
+    }
+}
+
+/// While a question is asked. Dropped before its answer (the test that asked was stopped, or
+/// it waited too long), it tells the UI to close the dialog (ADR-031).
+struct Asking<'a> {
+    id: u32,
+    pending: &'a Pending,
+    app: &'a AppHandle,
+}
+
+impl Drop for Asking<'_> {
+    fn drop(&mut self) {
+        if self.pending.forget(self.id) {
+            let _ = InteractionClosed { id: self.id }.emit(self.app);
+        }
+    }
 }
 
 pub struct AppInteraction {
@@ -54,6 +79,11 @@ impl AppInteraction {
 
     async fn ask(&self, request: InteractionKind) -> Answer {
         let (id, rx) = self.pending.register();
+        let _asking = Asking {
+            id,
+            pending: &self.pending,
+            app: &self.app,
+        };
         let event = InteractionRequest { id, request };
         if event.emit(&self.app).is_err() {
             return (false, None);

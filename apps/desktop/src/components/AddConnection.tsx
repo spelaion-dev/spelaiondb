@@ -30,6 +30,7 @@ import { fieldList } from "../fieldNames";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
+import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -274,12 +275,6 @@ function EnginePicker({
   );
 }
 
-type TestState =
-  | { kind: "idle" }
-  | { kind: "testing" }
-  | { kind: "ok"; version: string }
-  | { kind: "error"; message: string };
-
 /** How the form asks for credentials, like DBeaver's "Authentication" selector. */
 type AuthMethod = "password" | "env" | "none" | "other" | "token";
 /** Short-lived tokens from a cloud provider's CLI (ADR-022): the core writes the command. */
@@ -395,7 +390,9 @@ function ConnectionForm(props: {
   /** The user typed a name: the pattern stops filling it (until the field is emptied). */
   const [nameTyped, setNameTyped] = useState(Boolean(editing));
   const [engineError, setEngineError] = useState<string | null>(null);
-  const [test, setTest] = useState<TestState>({ kind: "idle" });
+  // The step-by-step test (ADR-031); `testError` is a failure before any step could run.
+  const test = useConnectionTest();
+  const [testError, setTestError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -424,6 +421,7 @@ function ConnectionForm(props: {
     localPort: null,
     // New connections keep idle sessions alive (ADR-028); 0 or empty turns it off.
     keepalive: network ? 300 : null,
+    connectTimeout: null,
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
   // Types and what they do come from the core (ADR-029).
@@ -447,7 +445,8 @@ function ConnectionForm(props: {
   const selectedTunnel = tunnels.find((item) => item.name === tunnel);
 
   const changed = () => {
-    setTest({ kind: "idle" });
+    test.clear();
+    setTestError(null);
     setSaveError(null);
   };
   const update = (patch: Partial<typeof draft>) => {
@@ -456,7 +455,8 @@ function ConnectionForm(props: {
   };
   const setPort = useCallback((port: number) => {
     setDraft((d) => ({ ...d, port }));
-    setTest({ kind: "idle" });
+    test.clear();
+    setTestError(null);
     setSaveError(null);
   }, []);
 
@@ -486,7 +486,7 @@ function ConnectionForm(props: {
     kubernetes: network && useKubernetes ? kubernetes : null,
   };
   const typedPassword = auth === "password" ? password : "";
-  const busy = saving || test.kind === "testing";
+  const busy = saving || test.running;
 
   // A new connection is named by the personal pattern (ADR-030) until the user types a name.
   const suggestKey = JSON.stringify([request.engine, request.host, request.port, request.database, request.user, request.env]);
@@ -553,45 +553,32 @@ function ConnectionForm(props: {
     }
   }
 
-  async function runTest() {
-    setTest({ kind: "testing" });
+  /** The step-by-step test (ADR-031): the core runs and classifies each step and builds the
+   *  diagnostics; this answers the questions that come before it and shows the log. */
+  async function runTest(networkOnly: boolean) {
+    setTestError(null);
     try {
-      let outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
+      const attempt = () =>
+        test.run((id, onStep) => call(commands.testConnection(request, typedPassword || null, editing ?? null, networkOnly, id, onStep)));
+      let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
-          setTest({ kind: "idle" });
+          test.clear();
           return;
         }
         useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
-        outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
+        outcome = await attempt();
       }
       // The tunnel this connection uses may have changed in the repository.
-      const reviewed = await reviewChanges(outcome, () =>
-        call(commands.testConnection(request, typedPassword || null, editing ?? null)),
-      );
-      if (!reviewed) {
-        setTest({ kind: "idle" });
+      const reviewed = await reviewChanges(outcome, attempt);
+      if (!reviewed || reviewed.kind !== "tested") {
+        test.clear();
         return;
       }
-      outcome = reviewed;
-      switch (outcome.kind) {
-        case "connected":
-          setTest({ kind: "ok", version: outcome.serverVersion });
-          break;
-        case "passwordRequired":
-          setTest({ kind: "error", message: t("test.passwordRequired") });
-          break;
-        case "authFailed":
-          setTest({ kind: "error", message: outcome.message });
-          break;
-        case "untrusted":
-        case "changed":
-        case "missingVariables":
-          setTest({ kind: "idle" });
-          break;
-      }
+      test.finish(reviewed.report);
     } catch (e) {
-      setTest({ kind: "error", message: errorText(e) });
+      test.clear();
+      setTestError(errorText(e));
     }
   }
 
@@ -1019,6 +1006,17 @@ function ConnectionForm(props: {
                 />
               </Field>
               <p className="muted small">{t("fields.keepaliveHint")}</p>
+              <Field label={t("fields.connectTimeout")} className="port">
+                <input
+                  type="number"
+                  min={1}
+                  max={600}
+                  value={draft.connectTimeout ?? ""}
+                  placeholder="15"
+                  onChange={(e) => update({ connectTimeout: e.target.value ? Math.max(1, Math.trunc(Number(e.target.value))) : null })}
+                />
+              </Field>
+              <p className="muted small">{t("fields.connectTimeoutHint")}</p>
             </fieldset>
           )}
           <fieldset>
@@ -1050,14 +1048,26 @@ function ConnectionForm(props: {
         </div>
       </div>
 
+      {test.steps && (
+        <ConnectionTestLog steps={test.steps} report={test.report} running={test.running} onStop={test.stop} onClose={test.clear} />
+      )}
       <div className="wizard-footer">
-        <button type="button" onClick={() => void runTest()} disabled={busy}>
+        <button type="button" onClick={() => void runTest(false)} disabled={busy}>
           {t("test.button")}
         </button>
+        {(network || onServer) && (
+          <button type="button" onClick={() => void runTest(true)} disabled={busy}>
+            {t("test.network")}
+          </button>
+        )}
         <div className="test-result" role="status">
-          {test.kind === "testing" && <span className="muted">{t("test.testing")}</span>}
-          {test.kind === "ok" && <span className="ok">{t("test.ok", { version: test.version })}</span>}
-          {test.kind === "error" && <span className="error">{test.message}</span>}
+          <TestSummary
+            steps={test.steps}
+            report={test.report}
+            running={test.running}
+            okText={(report) => (report.networkOnly ? t("testLog.okNetwork") : t("test.ok", { version: report.serverVersion ?? "" }))}
+          />
+          {testError && <span className="error">{testError}</span>}
           {saveError && <span className="error">{saveError}</span>}
         </div>
         {props.onBack && (

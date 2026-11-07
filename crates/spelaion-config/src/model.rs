@@ -68,6 +68,11 @@ pub struct ConnectionFile {
     /// transaction is open. Off when absent or 0; database servers only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keepalive: Option<u32>,
+    /// Seconds the database may take to answer when connecting: the TCP connection, TLS and
+    /// the login (ADR-031). 15 when absent; database servers only. A tunnel's hops have their
+    /// own `connect_timeout` in the tunnel file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_timeout: Option<u32>,
     #[serde(default, skip_serializing_if = "TlsConfig::is_default")]
     pub tls: TlsConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_default")]
@@ -83,6 +88,8 @@ impl ConnectionFile {
     pub const SUGGESTED_KEEPALIVE: u32 = 300;
     /// Longest keep-alive interval accepted: a day.
     pub const MAX_KEEPALIVE: u32 = 86_400;
+    /// Longest connect timeout accepted, in seconds: ten minutes.
+    pub const MAX_CONNECT_TIMEOUT: u32 = 600;
     /// Longest description accepted, in characters: a few paragraphs.
     pub const MAX_DESCRIPTION: usize = 2_000;
     /// Most tags on one connection.

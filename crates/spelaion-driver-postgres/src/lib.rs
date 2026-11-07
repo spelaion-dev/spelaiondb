@@ -55,7 +55,7 @@ impl Driver for PostgresDriver {
             .user(&params.user)
             .dbname(&params.database)
             .application_name(params.application_name.as_deref().unwrap_or("SpelaionDB"))
-            .connect_timeout(Duration::from_secs(15))
+            .connect_timeout(params.connect_timeout())
             // TCP keepalive after a minute idle, so a NAT in front of the server does not drop
             // a direct connection (ADR-028); tokio-postgres waits two hours by default.
             .keepalives(true)

@@ -2,13 +2,15 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use spelaion_config::{
     Engine, Password, ProxyType, ResolvedConnection, ResolvedHop, ResolvedProxy, ResolvedTunnel,
     SshAuth, TunnelPasswords,
 };
 use spelaion_driver_api::{
-    Driver, DriverError, Remote, RemoteCommand, RemoteControl, RemoteProcess, Secret,
+    ConnectParams, Connection, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
+    RemoteProcess, Secret,
 };
 use spelaion_driver_duckdb::DuckdbDriver;
 use spelaion_driver_mysql::MysqlDriver;
@@ -68,6 +70,10 @@ pub enum OpenError {
 
     #[error("{0}")]
     Driver(#[from] DriverError),
+
+    /// The database did not finish connecting within the connection's `connect_timeout`.
+    #[error("the database did not answer in {} s", after.as_secs())]
+    Timeout { after: Duration },
 }
 
 /// Open tunnels, shared between connections (ADR-004): two tabs against the same database,
@@ -276,11 +282,7 @@ pub async fn open_connection(
             Some(ActiveTunnel::Kube(tunnel))
         }
         (Some(resolved_tunnel), None) => {
-            let spec = TunnelSpec {
-                hops: resolved_tunnel.hops.iter().map(hop_spec).collect(),
-                proxy: resolved_tunnel.proxy.as_ref().map(proxy_spec),
-                options: tunnel_options(resolved_tunnel),
-            };
+            let spec = tunnel_spec(resolved_tunnel);
             // Same layer, name, settings, proxy and hops = same tunnel. Secrets are not part of
             // the key (their Debug is `***`).
             let key = format!(
@@ -291,38 +293,27 @@ pub async fn open_connection(
                 resolved_tunnel.proxy,
                 resolved_tunnel.hops
             );
-            // The team's reviewed server keys come first (ADR-022).
-            let known_hosts = KnownHosts {
-                team_file: resolved_tunnel.known_hosts.clone(),
-                ..options.known_hosts.clone()
-            };
+            let known_hosts = team_known_hosts(resolved_tunnel, &options.known_hosts);
             let tunnel = options
                 .tunnels
                 .get_or_connect(key, &spec, &known_hosts, options.interaction)
                 .await?;
             if resolved.engine == Engine::Sqlite {
                 // The file is on the last hop: its sqlite3 is run there (ADR-018).
-                params.remote = Some(Remote {
-                    command: Arc::new(TunnelCommand(tunnel.clone())),
-                    program: resolved.sqlite3.clone(),
-                });
+                params.remote = Some(remote_sqlite(&tunnel, &resolved));
             } else {
-                let target = Target {
-                    host: params.host.clone(),
-                    port: params.port,
-                };
                 let port = match resolved.local_port {
                     spelaion_config::LocalPort::Any => LocalPort::Any,
                     spelaion_config::LocalPort::Fixed(port) => LocalPort::Fixed(port),
                     spelaion_config::LocalPort::Range { min, max } => LocalPort::Range { min, max },
                 };
-                params.connect_addr = Some(tunnel.forward_on(target, port).await?);
+                params.connect_addr = Some(tunnel.forward_on(target(&params), port).await?);
             }
             Some(ActiveTunnel::Ssh(tunnel))
         }
     };
 
-    let connection = driver.connect(&params).await?;
+    let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
     let session = Session::new(connection, driver.dialect(), results);
     // A tunnel that goes down takes its sessions with it (ADR-028).
     match &tunnel {
@@ -347,6 +338,16 @@ pub async fn test_tunnel(
     known_hosts: &KnownHosts,
     interaction: Arc<dyn Interaction>,
 ) -> Result<(), OpenError> {
+    let spec = typed_tunnel_spec(tunnel, passwords);
+    let known_hosts = team_known_hosts(tunnel, known_hosts);
+    let opened = Tunnel::connect(&spec, &known_hosts, interaction).await?;
+    opened.close().await;
+    Ok(())
+}
+
+/// A tunnel's spec with the passwords typed in a form (`passwords.hops[i]` for hop `i`,
+/// `passwords.proxy`) where the file has none to give.
+pub(crate) fn typed_tunnel_spec(tunnel: &ResolvedTunnel, passwords: TunnelPasswords) -> TunnelSpec {
     let TunnelPasswords {
         hops: typed_hops,
         proxy: typed_proxy,
@@ -359,7 +360,7 @@ pub async fn test_tunnel(
         }
         spec
     });
-    let spec = TunnelSpec {
+    TunnelSpec {
         hops: tunnel
             .hops
             .iter()
@@ -374,14 +375,57 @@ pub async fn test_tunnel(
             .collect(),
         proxy,
         options: tunnel_options(tunnel),
-    };
-    let known_hosts = KnownHosts {
+    }
+}
+
+/// What a tunnel file asks of `spelaion-ssh`; passwords to be asked stay `None`.
+pub(crate) fn tunnel_spec(tunnel: &ResolvedTunnel) -> TunnelSpec {
+    TunnelSpec {
+        hops: tunnel.hops.iter().map(hop_spec).collect(),
+        proxy: tunnel.proxy.as_ref().map(proxy_spec),
+        options: tunnel_options(tunnel),
+    }
+}
+
+/// The team's reviewed server keys come first (ADR-022).
+pub(crate) fn team_known_hosts(tunnel: &ResolvedTunnel, base: &KnownHosts) -> KnownHosts {
+    KnownHosts {
         team_file: tunnel.known_hosts.clone(),
-        ..known_hosts.clone()
-    };
-    let opened = Tunnel::connect(&spec, &known_hosts, interaction).await?;
-    opened.close().await;
-    Ok(())
+        ..base.clone()
+    }
+}
+
+/// The database's address, as the tunnel's last hop must reach it.
+pub(crate) fn target(params: &ConnectParams) -> Target {
+    Target {
+        host: params.host.clone(),
+        port: params.port,
+    }
+}
+
+/// SQLite on the tunnel's last hop (ADR-018): its sqlite3 is run there.
+pub(crate) fn remote_sqlite(tunnel: &Arc<Tunnel>, resolved: &ResolvedConnection) -> Remote {
+    Remote {
+        command: Arc::new(TunnelCommand(tunnel.clone())),
+        program: resolved.sqlite3.clone(),
+    }
+}
+
+/// Connects the driver within the connection's `connect_timeout` (ADR-031). A local file is
+/// opened, not connected to: no limit there (DuckDB waits for another process's lock itself).
+pub(crate) async fn connect_driver(
+    driver: &dyn Driver,
+    engine: Engine,
+    params: &ConnectParams,
+) -> Result<Box<dyn Connection>, OpenError> {
+    if engine.is_file() && params.remote.is_none() {
+        return Ok(driver.connect(params).await?);
+    }
+    let after = params.connect_timeout();
+    match tokio::time::timeout(after, driver.connect(params)).await {
+        Ok(connected) => Ok(connected?),
+        Err(_) => Err(OpenError::Timeout { after }),
+    }
 }
 
 fn proxy_spec(proxy: &ResolvedProxy) -> ProxySpec {

@@ -32,11 +32,18 @@ export const commands = {
 	/**  Tunnels a new connection can use (from the repository and the personal directory). */
 	listTunnels: () => typedError<TunnelItem[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**
-	 *  Opens and closes a connection that has not been saved yet. Nothing is written: neither
-	 *  the file nor the keychain. `editing` is the connection being edited, if any: its stored
-	 *  password is used when none is typed.
+	 *  Tests a connection that may not be saved yet, step by step (ADR-031): every change to its
+	 *  steps goes through `on_step`, and `stop_connection_test(test)` stops it. Nothing is
+	 *  written: neither the file nor the keychain. `editing` is the connection being edited, if
+	 *  any: its stored password is used when none is typed. `network_only` stops before logging
+	 *  in. The steps, their errors and the diagnostics come from the core, redacted.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing })),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null, networkOnly: boolean, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, test, onStep })),
+	/**
+	 *  Stops a running connection or network profile test: the running step is dropped and
+	 *  whatever it opened is closed. Nothing is retried.
+	 */
+	stopConnectionTest: (test: number) => __TAURI_INVOKE<void>("stop_connection_test", { test }),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
 	 *  configuration. Returns the new connection's identifier.
@@ -81,10 +88,12 @@ export const commands = {
 	/**  The form of an existing tunnel, to edit it. */
 	tunnelDraft: (name: string, personal: boolean) => typedError<[TunnelDraftItem_Serialize, string], string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
 	/**
-	 *  Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
-	 *  password typed for hop `i`; stored ones are used when none is typed.
+	 *  Tests a network profile step by step (ADR-031): its proxy and each hop, opened and closed
+	 *  again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
+	 *  are used when none is typed. Steps go through `on_step`; `stop_connection_test(test)`
+	 *  stops it.
 	 */
-	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelTestOutcome, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword })),
+	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<TunnelTestOutcome_Serialize, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword, test, onStep })),
 	/**  Saves a new tunnel (and its `keychain` passwords) and reloads the configuration. */
 	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelItem, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords, proxyPassword })),
 	/**  Saves an edited tunnel (same file and name) and reloads the configuration. */
@@ -359,6 +368,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
 };
@@ -523,6 +533,8 @@ export type ConnectionDraftItem_Deserialize = {
 	readOnly: boolean,
 	/**  Seconds idle before a keep-alive (ADR-028); null or 0 for off. */
 	keepalive?: number | null,
+	/**  Seconds the database may take to connect (ADR-031); null for the default. */
+	connectTimeout?: number | null,
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
@@ -565,6 +577,8 @@ export type ConnectionDraftItem_Serialize = {
 	readOnly: boolean,
 	/**  Seconds idle before a keep-alive (ADR-028); null or 0 for off. */
 	keepalive: number | null,
+	/**  Seconds the database may take to connect (ADR-031); null for the default. */
+	connectTimeout: number | null,
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
@@ -611,6 +625,36 @@ export type ConnectionItem_Serialize = {
 	historyEnabled: boolean,
 	readOnly: boolean,
 };
+
+/**
+ *  What testing a connection from its form gives (ADR-031). The steps arrive as they change
+ *  through the command's channel; this is the end.
+ */
+export type ConnectionTestOutcome = ConnectionTestOutcome_Serialize | ConnectionTestOutcome_Deserialize;
+
+/**
+ *  What testing a connection from its form gives (ADR-031). The steps arrive as they change
+ *  through the command's channel; this is the end.
+ */
+export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" } | 
+/**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
+{ kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string } | 
+/**  Personal `${user.…}` variables to ask for first (ADR-022). */
+{ kind: "missingVariables"; names: string[] };
+
+/**
+ *  What testing a connection from its form gives (ADR-031). The steps arrive as they change
+ *  through the command's channel; this is the end.
+ */
+export type ConnectionTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" } | 
+/**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
+{ kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string } | 
+/**  Personal `${user.…}` variables to ask for first (ADR-022). */
+{ kind: "missingVariables"; names: string[] };
 
 /**
  *  One type as the Settings page edits it: what the personal layer says (empty texts and
@@ -886,6 +930,8 @@ export type ExplorerPreferencesItem = {
 	linkWithEditor: boolean,
 };
 
+export type FailureKindItem = "config" | "passwordRequired" | "cancelled" | "proxyAuth" | "sshAuth" | "hostUnreachable" | "hostKeyChanged" | "hostKeyRejected" | "dbAuth" | "dbNotFound" | "tls" | "timeout" | "kubernetes" | "other";
+
 /**
  *  One field of a changed repository item. Repository files hold secret references, never
  *  secrets.
@@ -1018,6 +1064,14 @@ export type IndexDetails = {
 	primary: boolean,
 	/**  `CREATE INDEX …` as the engine writes it (or a comment for SQLite's automatic ones). */
 	definition: string,
+};
+
+/**
+ *  A dialog nobody waits for any more (the connection test that asked was stopped, or
+ *  the answer took too long): the UI closes it.
+ */
+export type InteractionClosed = {
+	id: number,
 };
 
 export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; port: number; algorithm: string; fingerprint: string } | { kind: "secret"; title: string; prompt: string; echo: boolean; label: SecretLabel };
@@ -1528,6 +1582,71 @@ export type TableRefItem = {
 	name: string,
 };
 
+export type TestFailureItem = {
+	kind: FailureKindItem,
+	message: string,
+	/**  The core's English hint; the UI shows its translation of `kind`. */
+	hint: string,
+};
+
+/**  The end of a connection test: its steps and the diagnostics to copy, redacted by the core. */
+export type TestReportItem = TestReportItem_Serialize | TestReportItem_Deserialize;
+
+/**  The end of a connection test: its steps and the diagnostics to copy, redacted by the core. */
+export type TestReportItem_Deserialize = {
+	ok: boolean,
+	stopped: boolean,
+	networkOnly: boolean,
+	serverVersion?: string | null,
+	steps: TestStepItem_Deserialize[],
+	diagnostics: string,
+};
+
+/**  The end of a connection test: its steps and the diagnostics to copy, redacted by the core. */
+export type TestReportItem_Serialize = {
+	ok: boolean,
+	stopped: boolean,
+	networkOnly: boolean,
+	serverVersion: string | null,
+	steps: TestStepItem_Serialize[],
+	diagnostics: string,
+};
+
+/**  One line of the connection test's log. */
+export type TestStepItem = TestStepItem_Serialize | TestStepItem_Deserialize;
+
+/**  One line of the connection test's log. */
+export type TestStepItem_Deserialize = {
+	kind: TestStepKindItem_Deserialize,
+	status: TestStepStatusItem,
+	failure?: TestFailureItem | null,
+	elapsedMs?: number | null,
+	/**  The core's English line, for anything the UI does not translate. */
+	title: string,
+};
+
+/**  One line of the connection test's log. */
+export type TestStepItem_Serialize = {
+	kind: TestStepKindItem_Serialize,
+	status: TestStepStatusItem,
+	failure: TestFailureItem | null,
+	elapsedMs: number | null,
+	/**  The core's English line, for anything the UI does not translate. */
+	title: string,
+};
+
+export type TestStepKindItem = TestStepKindItem_Serialize | TestStepKindItem_Deserialize;
+
+export type TestStepKindItem_Deserialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
+/**  `hop` counts from 1. */
+{ kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context?: string | null; namespace?: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
+
+export type TestStepKindItem_Serialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
+/**  `hop` counts from 1. */
+{ kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context: string | null; namespace: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
+
+export type TestStepStatusItem = "pending" | "running" | "ok" | "failed" | "skipped" | "stopped";
+
 /**  Text format to copy or export rows in. */
 export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList";
 
@@ -1584,8 +1703,16 @@ export type TunnelPortsItem = {
 	max: number,
 };
 
-/**  Result of testing a tunnel from the editor. */
-export type TunnelTestOutcome = { kind: "connected" } | 
+/**  Result of testing a network profile from its editor (ADR-031). */
+export type TunnelTestOutcome = TunnelTestOutcome_Serialize | TunnelTestOutcome_Deserialize;
+
+/**  Result of testing a network profile from its editor (ADR-031). */
+export type TunnelTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" };
+
+/**  Result of testing a network profile from its editor (ADR-031). */
+export type TunnelTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
 

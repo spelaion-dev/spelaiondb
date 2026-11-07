@@ -78,6 +78,19 @@ pub struct ConnectParams {
     /// The database is on another machine and is reached by running a program there
     /// (SQLite on a server, ADR-018); `database` is its path on that machine.
     pub remote: Option<Remote>,
+    /// How long connecting may take: the TCP connection, TLS and the login. `None` for
+    /// [`ConnectParams::DEFAULT_CONNECT_TIMEOUT`] (ADR-031).
+    pub connect_timeout: Option<std::time::Duration>,
+}
+
+impl ConnectParams {
+    pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+    /// The connect timeout that applies.
+    pub fn connect_timeout(&self) -> std::time::Duration {
+        self.connect_timeout
+            .unwrap_or(Self::DEFAULT_CONNECT_TIMEOUT)
+    }
 }
 
 /// Connection encryption. Same names and meaning as libpq's `sslmode`.
