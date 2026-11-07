@@ -485,6 +485,7 @@ pub(crate) async fn run_one(session: &Session, sql: &str) -> Result<Option<u64>,
             | CoreEvent::Rows { .. }
             | CoreEvent::Notice { .. }
             | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::ErrorPaused { .. }
             | CoreEvent::HistoryWarning { .. } => {}
         }
     }

@@ -263,6 +263,15 @@
         "null"
       ]
     },
+    "statement_timeout": {
+      "description": "Seconds a statement run from the editor may take before it is cancelled and fails as\ntimed out (ADR-035); none when absent or 0. A run can set its own. Unlike\n`connect_timeout`, it counts once connected, for every engine.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "tags": {
       "description": "Short labels to find and group connections (`billing`, `eu`, `reporting`…): at most\n20, of up to 32 characters each, without commas, and unique ignoring case.",
       "items": {

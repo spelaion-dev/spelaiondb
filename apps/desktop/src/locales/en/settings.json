@@ -145,5 +145,15 @@
     "installing": "Installing…",
     "hint": "Updates are signed and installed only when you click “Install and restart”. Open tabs come back with their SQL, not run.",
     "error": "Could not check for updates:"
+  },
+  "scripts": {
+    "title": "Scripts",
+    "onError": "When a statement fails",
+    "mode": {
+      "stop": "Stop the script",
+      "continue": "Continue with the next statement",
+      "ask": "Ask: stop, skip or skip all"
+    },
+    "onErrorHint": "Each editor tab can choose another mode for its runs. A cancelled run always stops, and so does a failed statement that aborted or rolled back its transaction. Risky statements are still confirmed before the run."
   }
 }

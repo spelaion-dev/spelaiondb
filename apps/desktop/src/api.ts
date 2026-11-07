@@ -80,6 +80,11 @@ import {
   type AuditEventItem_Serialize,
   type AuditSessionItem,
   type AuditStatusItem,
+  type ErrorAnswerItem,
+  type OnErrorItem,
+  type RunOptionsItem_Deserialize,
+  type ScriptPreferencesItem,
+  type ScriptSummaryItem_Deserialize,
 } from "./bindings";
 
 export { commands, events };
@@ -131,6 +136,10 @@ export type ConnectResult = ConnectOutcome_Serialize;
 /** What `testConnection` returns; its steps arrive through a channel (ADR-032). */
 export type ConnectionTestResult = ConnectionTestOutcome_Serialize;
 export type { TestReportItem, TestStepItem };
+export type { ErrorAnswerItem, OnErrorItem, ScriptPreferencesItem };
+/** How one run goes (ADR-035). */
+export type RunOptionsItem = RunOptionsItem_Deserialize;
+export type ScriptSummaryItem = ScriptSummaryItem_Deserialize;
 
 type Typed<T> = { status: "ok"; data: T } | { status: "error"; error: string };
 

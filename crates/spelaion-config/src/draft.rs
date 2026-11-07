@@ -136,6 +136,8 @@ pub struct ConnectionDraft {
     pub keepalive: Option<u32>,
     /// Seconds the database may take to connect (ADR-032); `None` for the default.
     pub connect_timeout: Option<u32>,
+    /// Seconds a statement may run from the editor (ADR-035); `None` or 0 for no limit.
+    pub statement_timeout: Option<u32>,
     pub mcp_exposed: bool,
     /// Agents may write through `execute_write` (ADR-019); otherwise they only read.
     pub mcp_writes: bool,
@@ -399,6 +401,7 @@ impl ConnectionDraft {
             read_only: self.read_only,
             keepalive: self.keepalive.filter(|s| network && *s > 0),
             connect_timeout: self.connect_timeout.filter(|s| network && *s > 0),
+            statement_timeout: self.statement_timeout.filter(|s| *s > 0),
             tls: if network {
                 TlsConfig {
                     mode: self.tls_mode,
@@ -517,6 +520,7 @@ impl ConnectionDraft {
             local_port: file.local_port,
             keepalive: file.keepalive,
             connect_timeout: file.connect_timeout,
+            statement_timeout: file.statement_timeout,
             sqlite3: file.sqlite3.clone().unwrap_or_default(),
             kubernetes: file.kubernetes.as_ref().map(|k| KubernetesDraft {
                 context: k.context.clone().unwrap_or_default(),
@@ -737,6 +741,14 @@ pub fn update_connection(
             &mut doc,
             &["connect_timeout"],
             new.connect_timeout
+                .map(|s| toml_edit::Value::from(i64::from(s))),
+        );
+    }
+    if old.statement_timeout != new.statement_timeout {
+        put(
+            &mut doc,
+            &["statement_timeout"],
+            new.statement_timeout
                 .map(|s| toml_edit::Value::from(i64::from(s))),
         );
     }

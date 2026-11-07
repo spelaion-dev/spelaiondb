@@ -422,6 +422,7 @@ function ConnectionForm(props: {
     // New connections keep idle sessions alive (ADR-028); 0 or empty turns it off.
     keepalive: network ? 300 : null,
     connectTimeout: null,
+    statementTimeout: null,
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
   // Types and what they do come from the core (ADR-029).
@@ -1024,6 +1025,21 @@ function ConnectionForm(props: {
               <p className="muted small">{t("fields.connectTimeoutHint")}</p>
             </fieldset>
           )}
+          <fieldset>
+            <legend>{t("sections.statements")}</legend>
+            <Field label={t("fields.statementTimeout")} className="port">
+              <input
+                type="number"
+                name="statementTimeout"
+                min={0}
+                max={86400}
+                value={draft.statementTimeout ?? ""}
+                placeholder={t("fields.statementTimeoutNone")}
+                onChange={(e) => update({ statementTimeout: e.target.value ? Math.max(0, Math.trunc(Number(e.target.value))) : null })}
+              />
+            </Field>
+            <p className="muted small">{t("fields.statementTimeoutHint")}</p>
+          </fieldset>
           <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">

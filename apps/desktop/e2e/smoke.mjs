@@ -201,7 +201,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, history: 6, network: 7 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, history: 6, network: 7, scripts: 9 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -1093,7 +1093,7 @@ try {
 
   step("editor toolbar: run the current statement or selection, and run the whole script");
   const actions = panel.getByRole("toolbar", { name: "Query actions" });
-  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Format", "Save"]);
+  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Format", "Save"]);
   for (const button of await actions.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   await sqlEditor.click();
   await page.keyboard.press("Control+Home");
@@ -1149,6 +1149,80 @@ try {
   await risk.getByRole("button", { name: "Run anyway" }).click();
   await risk.waitFor({ state: "detached" });
   await panel.getByText("Statement 3: 2 rows", { exact: false }).waitFor();
+
+  step("script runs: continue, ask (skip, stop), the summary, and the guard in every mode");
+  // The tab's run options choose; the core runs the statements and counts them (ADR-035).
+  async function runOptions(choose) {
+    await actions.getByRole("button", { name: "Run options" }).click();
+    const options = page.getByRole("dialog", { name: "Run options for this tab" });
+    await options.waitFor();
+    await choose(options);
+    await page.keyboard.press("Escape");
+    await options.waitFor({ state: "detached" });
+  }
+  async function showMessages() {
+    await panel.locator(".result-tabs button", { hasText: /^Messages/ }).click();
+  }
+  await runOptions((options) => options.getByRole("radio", { name: "Continue", exact: true }).check());
+  assert.match(await actions.getByRole("button", { name: "Run options" }).getAttribute("title"), /Continue/);
+  await replaceQuery(panel, "create temp table runs (id integer primary key);\ninsert into runs values (1);\ninsert into runs values (1);\ninsert into runs values (2);\nselect count(*) from runs;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "4 OK, 1 failed, 0 not run" }).waitFor();
+  await showMessages();
+  await panel.getByText("Statement 3: UNIQUE constraint failed", { exact: false }).waitFor();
+  await panel.getByText("5 statements: 4 OK, 1 failed, 0 not run", { exact: false }).waitFor();
+  await panel.getByText("Statement 4: 1 row (", { exact: false }).waitFor();
+  assert.ok(await panel.getByText(/ms execute, \d+ ms fetch/).first().isVisible(), "timing split into execute and fetch");
+  // Continue never skips the confirmation of a risky statement.
+  await replaceQuery(panel, "delete from runs;\nselect 1;");
+  await run(panel);
+  risk = page.getByRole("dialog", { name: "Run these statements?" });
+  await risk.getByText("DELETE without WHERE: deletes every row").waitFor();
+  await risk.getByRole("button", { name: "Cancel" }).click();
+  await risk.waitFor({ state: "detached" });
+  // Ask: the run pauses on the error and waits for the answer.
+  await runOptions((options) => options.getByRole("radio", { name: "Ask", exact: true }).check());
+  await replaceQuery(panel, "insert into runs values (2);\nselect 1;\nselect 2;");
+  await run(panel);
+  let paused = page.getByRole("dialog", { name: "Statement 1 failed" });
+  await paused.getByText("2 statements after it have not run yet.").waitFor();
+  await paused.getByText("UNIQUE constraint failed", { exact: false }).waitFor();
+  await shot("05e-script-error-ask");
+  await paused.getByRole("button", { name: "Skip and continue" }).click();
+  await paused.waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "2 OK, 1 failed, 0 not run" }).waitFor();
+  // Stop has the focus; Escape stops too.
+  await run(panel);
+  paused = page.getByRole("dialog", { name: "Statement 1 failed" });
+  await paused.waitFor();
+  await page.keyboard.press("Escape");
+  await paused.waitFor({ state: "detached" });
+  await panel.locator(".statusline", { hasText: "0 OK, 1 failed, 2 not run" }).waitFor();
+  await showMessages();
+  await panel.getByText("Stopped at statement 1, which failed.").waitFor();
+  // A statement timeout of this tab: the endless query is cancelled and the run goes on.
+  await runOptions(async (options) => {
+    await options.getByRole("radio", { name: "Continue", exact: true }).check();
+    await options.getByLabel("Statement timeout (seconds)").fill("1");
+    await options.getByLabel("Statement timeout (seconds)").press("Enter");
+  });
+  await replaceQuery(panel, "with recursive r(i) as (select 1 union all select i + 1 from r) select count(*) from r;\nselect 'after the timeout';");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "1 OK, 1 failed, 0 not run" }).waitFor({ timeout: 30_000 });
+  await showMessages();
+  await panel.getByText("Statement 1: timed out.", { exact: false }).waitFor();
+  await runOptions((options) => options.getByRole("button", { name: "Use the defaults" }).click());
+  assert.match(await actions.getByRole("button", { name: "Run options" }).getAttribute("title"), /Stop/);
+  // The default comes from Settings › Scripts.
+  await withSettings("scripts", async (settings) => {
+    await settings.getByRole("radio", { name: "Continue with the next statement" }).check();
+    await page.waitForFunction(() => document.querySelector('input[name="scriptOnError"][value="continue"]')?.checked && !document.querySelector('input[name="scriptOnError"]')?.matches(":disabled"));
+  });
+  assert.match(await actions.getByRole("button", { name: "Run options" }).getAttribute("title"), /Continue/);
+  await withSettings("scripts", async (settings) => {
+    await settings.getByRole("radio", { name: "Stop the script" }).check();
+    await page.waitForFunction(() => document.querySelector('input[name="scriptOnError"][value="stop"]')?.checked && !document.querySelector('input[name="scriptOnError"]')?.matches(":disabled"));
+  });
 
   step("SQL editor: VS Code line and multi-cursor shortcuts");
   await replaceQuery(panel, "first\nsecond");
@@ -2819,6 +2893,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.waitForFunction((el) => !el.disabled && el.value === "master", await sqlServerDatabase.elementHandle());
   await sqlServerDatabase.selectOption("tempdb");
   await page.waitForFunction((el) => !el.disabled && el.value === "tempdb", await sqlServerDatabase.elementHandle());
+  // PRINT and low-severity RAISERROR reach the Messages tab (ADR-035).
+  await replaceQuery(panel, "print 'hello from the smoke test'\nraiserror('a low severity message', 10, 1)");
+  await run(panel);
+  await panel.getByText("INFO: hello from the smoke test").waitFor();
+  await panel.getByText("INFO: a low severity message").waitFor();
   await shot("12a4-sqlserver");
   step("process monitor: SQL Server sessions and supported actions");
   await activities.getByRole("button", { name: "Processes", exact: true }).click();

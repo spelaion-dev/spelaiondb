@@ -22,6 +22,7 @@
     "organization": "Where to save it",
     "idle": "Idle sessions",
     "safety": "Safety",
+    "statements": "Statements",
     "general": "General",
     "kubernetes": "Kubernetes port-forward",
     "about": "About this connection"
@@ -75,6 +76,9 @@
     "keepaliveHint": "A query tab left open sends the server a tiny query after this long without use, so a firewall or the server's idle timeout does not end it overnight. Never while a transaction is open. Empty or 0: off.",
     "connectTimeout": "Connect timeout (seconds)",
     "connectTimeoutHint": "How long the database may take to accept the connection and the login before the attempt fails. Empty: 15 s. A network profile's hops have their own timeout.",
+    "statementTimeout": "Statement timeout (seconds)",
+    "statementTimeoutNone": "No limit",
+    "statementTimeoutHint": "A statement run from the editor that takes longer is cancelled and fails as timed out. Empty or 0: no limit. A run can set its own in the editor.",
     "localPort": "Local port",
     "localPortPlaceholder": "Any free",
     "localPortHint": "Fixed port on 127.0.0.1 where the tunnel listens for this connection, so other tools can use it too. Empty: any free port (or one from the range in Settings → Network).",

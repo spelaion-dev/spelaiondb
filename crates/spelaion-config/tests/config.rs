@@ -531,6 +531,7 @@ fn creates_new_connection_files() {
         read_only: true,
         keepalive: None,
         connect_timeout: None,
+        statement_timeout: None,
         tls: Default::default(),
         mcp: Default::default(),
     };
@@ -637,6 +638,7 @@ fn postgres_draft() -> ConnectionDraft {
         read_only: false,
         keepalive: None,
         connect_timeout: None,
+        statement_timeout: None,
         mcp_exposed: true,
         mcp_writes: false,
     }
@@ -1460,6 +1462,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         read_only: false,
         keepalive: None,
         connect_timeout: None,
+        statement_timeout: None,
         mcp_exposed: false,
         mcp_writes: false,
     }
@@ -2166,6 +2169,7 @@ fn connect_timeouts_are_written_resolved_and_validated() {
     let config = load(Some(&fx.repo()), &fx.user());
     let cleared = ConnectionDraft {
         connect_timeout: None,
+        statement_timeout: None,
         ..draft
     };
     spelaion_config::update_connection(&config, &id, &cleared, None, &backend).unwrap();
@@ -2204,6 +2208,91 @@ fn connect_timeouts_are_written_resolved_and_validated() {
         );
         std::fs::remove_file(written).unwrap();
     }
+}
+
+#[test]
+fn statement_timeouts_are_written_resolved_and_validated() {
+    let fx = Fixture::new("statement-timeout");
+    let path = fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
+    fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
+    fx.write(
+        "user/user.toml",
+        "[vars]
+db_user = \"ana\"
+",
+    );
+    let backend = FakeBackend {
+        env: BTreeMap::from([("REGION".into(), "eu".into())]),
+        ..Default::default()
+    };
+    let id = ws("prod/orders");
+    let resolve = |fx: &Fixture| {
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        Resolver::new(&config, &fx.trusted(), &backend)
+            .resolve(&ws("prod/orders"))
+            .unwrap()
+            .statement_timeout
+    };
+    assert_eq!(resolve(&fx), None, "no limit by default");
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        statement_timeout: Some(90),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("statement_timeout = 90")
+    );
+    assert_eq!(resolve(&fx), Some(std::time::Duration::from_secs(90)));
+    // 0 means no limit, and leaves the file.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let off = ConnectionDraft {
+        statement_timeout: Some(0),
+        ..draft
+    };
+    spelaion_config::update_connection(&config, &id, &off, None, &backend).unwrap();
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("statement_timeout")
+    );
+    assert_eq!(resolve(&fx), None);
+
+    // Files have statements too; more than a day is refused.
+    let file = fx.write(
+        "repo/.spelaion/connections/file.toml",
+        "schema_version = 1
+engine = \"sqlite\"
+database = \"app.db\"
+statement_timeout = 5
+",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    std::fs::remove_file(file).unwrap();
+    fx.write(
+        "repo/.spelaion/connections/long.toml",
+        "schema_version = 1
+engine = \"postgres\"
+host = \"h\"
+database = \"d\"
+user = \"u\"
+statement_timeout = 86401
+",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(
+        config
+            .problems
+            .iter()
+            .any(|p| p.file.ends_with("long.toml") && p.message.contains("at most 86400")),
+        "{:?}",
+        config.problems
+    );
 }
 
 #[test]

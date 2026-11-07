@@ -2,6 +2,7 @@
 //! In the app there is one per editor tab (ADR-004).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -13,6 +14,10 @@ use spelaion_driver_api::{
 
 use crate::health::{Health, SessionHealth, Tracked};
 use crate::results::{ResultId, ResultStore};
+pub use crate::script::{
+    AnswerError, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop, ScriptSummary,
+};
+use crate::script::{Pause, Resume};
 use crate::transaction::{
     self, StatementKind, TransactionError, TransactionOutcome, TransactionState, TransactionStatus,
 };
@@ -43,16 +48,33 @@ pub enum CoreEvent {
     StatementFinished {
         index: usize,
         rows_affected: Option<u64>,
+        /// The whole statement, with the manual-commit `BEGIN` sent before it.
         elapsed: Duration,
+        /// Until the engine's first answer (its columns, its row count or its error).
+        execution: Duration,
+        /// From that first answer until its last row.
+        fetch: Duration,
     },
-    /// The statement failed and the script stops here.
+    /// The statement failed. What follows depends on the run's [`OnError`]: the script stops,
+    /// goes on, or pauses with [`CoreEvent::ErrorPaused`].
     StatementFailed {
         index: usize,
         error: StatementError,
     },
+    /// The run waits for [`Session::answer_error`] with this ticket (the [`OnError::Ask`]
+    /// mode): stop, skip the failed statement or skip every later error. Cancelling or closing
+    /// the session stops it.
+    ErrorPaused {
+        index: usize,
+        ticket: ErrorTicket,
+        /// Statements after the failed one that have not run.
+        remaining: usize,
+    },
     ScriptFinished {
         executed: usize,
+        /// At least one statement failed.
         failed: bool,
+        summary: ScriptSummary,
     },
     /// The query still ran, but its history could not be saved.
     HistoryWarning {
@@ -69,7 +91,10 @@ pub struct StatementError {
     pub hint: Option<String>,
     /// Error position in bytes **within the full script**, to underline it in the editor.
     pub script_offset: Option<usize>,
+    /// The user cancelled the statement.
     pub cancelled: bool,
+    /// The statement ran longer than the run's statement timeout and was cancelled.
+    pub timed_out: bool,
 }
 
 impl StatementError {
@@ -81,6 +106,7 @@ impl StatementError {
             hint: None,
             script_offset: None,
             cancelled: matches!(error, DriverError::Cancelled),
+            timed_out: false,
         };
         if let DriverError::Database {
             code,
@@ -118,10 +144,15 @@ pub struct Session {
     /// Held while a script runs: one at a time, and no Commit or Rollback meanwhile.
     control: Arc<tokio::sync::Mutex<()>>,
     transaction: Arc<tokio::sync::watch::Sender<TransactionStatus>>,
+    /// The run that waits for an answer after an error ([`OnError::Ask`]), if any.
+    pause: Arc<Pause>,
+    /// How many times the user asked to cancel: a run that sees it change stops.
+    cancels: Arc<AtomicU64>,
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
+        self.pause.resume(Resume::Closed);
         if let Some(task) = self.keep_alive.lock().expect("lock poisoned").take() {
             task.abort();
         }
@@ -150,6 +181,8 @@ impl Session {
             options: ExecOptions::default(),
             control: Arc::new(tokio::sync::Mutex::new(())),
             transaction: Arc::new(tokio::sync::watch::Sender::new(TransactionStatus::default())),
+            pause: Arc::new(Pause::default()),
+            cancels: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -205,9 +238,32 @@ impl Session {
         &self.results
     }
 
-    /// Cancels the running statement. The script stops with `StatementFailed { cancelled }`.
+    /// Cancels the running statement, and the run that sent it: a cancelled script always
+    /// stops, whatever its [`OnError`]. A run waiting for an answer after an error stops at
+    /// once, without asking the engine anything.
     pub async fn cancel(&self) -> Result<(), DriverError> {
+        self.cancels.fetch_add(1, Ordering::SeqCst);
+        if self.pause.resume(Resume::Cancelled) {
+            return Ok(());
+        }
         self.connection.cancel_handle().cancel().await
+    }
+
+    /// Answers the run that paused after an error ([`CoreEvent::ErrorPaused`]). The ticket
+    /// must be the one it paused with: an answer to an older pause, or after the run stopped,
+    /// is refused.
+    pub fn answer_error(
+        &self,
+        ticket: ErrorTicket,
+        answer: ErrorAnswer,
+    ) -> Result<(), AnswerError> {
+        self.pause.answer(ticket, answer)
+    }
+
+    /// Stops a run that waits for an answer, as when its tab closes: nothing else runs.
+    /// Returns whether one was waiting.
+    pub fn stop_paused_run(&self) -> bool {
+        self.pause.resume(Resume::Closed)
     }
 
     /// What the session shows about its transaction (ADR-031). Changes are sent to every
@@ -335,17 +391,34 @@ impl Session {
     /// statement that runs while none is open, smart commit switches to manual before the
     /// first write, and the state is read after every statement.
     pub fn run_script(&self, script: &str) -> BoxStream<'static, CoreEvent> {
-        self.run(script, true)
+        self.run(script, true, ScriptOptions::default())
+    }
+
+    /// [`Session::run_script`] with its error mode and statement timeout (ADR-035). Whatever
+    /// the mode, a cancelled run stops, and a failed statement that aborted or rolled back the
+    /// transaction it ran in stops the run: going on would only run statements that fail, or
+    /// run them without the ones before.
+    pub fn run_script_with(
+        &self,
+        script: &str,
+        options: ScriptOptions,
+    ) -> BoxStream<'static, CoreEvent> {
+        self.run(script, true, options)
     }
 
     /// Runs statements the core wrote itself (table edits, object actions, pages, the process
     /// list) as written: never preceded by the manual-commit `BEGIN`, never switching smart
     /// commit. The transaction state is still read afterwards.
     pub(crate) fn run_generated(&self, script: &str) -> BoxStream<'static, CoreEvent> {
-        self.run(script, false)
+        self.run(script, false, ScriptOptions::default())
     }
 
-    fn run(&self, script: &str, managed: bool) -> BoxStream<'static, CoreEvent> {
+    fn run(
+        &self,
+        script: &str,
+        managed: bool,
+        run_options: ScriptOptions,
+    ) -> BoxStream<'static, CoreEvent> {
         let script = script.to_string();
         let spans = self.dialect.split_statements(&script);
         let engine = self.dialect.name();
@@ -354,16 +427,27 @@ impl Session {
         let options = self.options.clone();
         let control = self.control.clone();
         let transaction = self.transaction.clone();
+        let pause = self.pause.clone();
+        let cancels = self.cancels.clone();
+        let mut health = self.health.subscribe();
 
         Box::pin(async_stream::stream! {
             // One script at a time; Commit, Rollback and the toggle wait for none.
             let _running = control.lock_owned().await;
+            let cancels_at_start = cancels.load(Ordering::SeqCst);
+            let cancelled = || cancels.load(Ordering::SeqCst) != cancels_at_start;
             let follow = transaction.borrow().supported;
-            let mut executed = 0;
+            let mut on_error = run_options.on_error;
+            let mut summary = ScriptSummary { statements: spans.len(), ..Default::default() };
+            let total = spans.len();
             for (index, span) in spans.into_iter().enumerate() {
+                if cancelled() {
+                    summary.stop = Some(ScriptStop::Cancelled { index });
+                    break;
+                }
                 yield CoreEvent::StatementStarted { index, span };
                 let started = Instant::now();
-                executed += 1;
+                summary.executed += 1;
                 let text = span.text(&script);
                 let kind = transaction::statement_kind(engine, text);
 
@@ -390,9 +474,12 @@ impl Session {
                             let mut error = StatementError::from_driver(e, &script, span);
                             error.message = format!("could not open a transaction: {}", error.message);
                             error.script_offset = None;
+                            summary.failed += 1;
+                            if index + 1 < total {
+                                summary.stop = Some(ScriptStop::Failed { index });
+                            }
                             yield CoreEvent::StatementFailed { index, error };
-                            yield CoreEvent::ScriptFinished { executed, failed: true };
-                            return;
+                            break;
                         }
                         status.state = Some(TransactionState::Open);
                         status.statements = 0;
@@ -401,14 +488,46 @@ impl Session {
                     before = Some(status);
                 }
 
+                // The statement, with its timeout: once it fires the statement is cancelled
+                // and its error says it timed out.
+                let deadline = run_options
+                    .statement_timeout
+                    .map(|timeout| tokio::time::Instant::now() + timeout);
+                let mut timed_out = false;
+                let sent = Instant::now();
+                let mut answered: Option<Instant> = None;
                 let mut failure = None;
                 let mut rows_affected = None;
                 let mut notices = Vec::new();
-                match connection.execute(text, &options).await {
-                    Err(e) => failure = Some(StatementError::from_driver(e, &script, span)),
+                let execute = connection.execute(text, &options);
+                tokio::pin!(execute);
+                let opened = loop {
+                    match until(&mut execute, deadline, timed_out).await {
+                        Waited::Ready(opened) => break opened,
+                        Waited::TimedOut => {
+                            timed_out = true;
+                            let _ = connection.cancel_handle().cancel().await;
+                        }
+                    }
+                };
+                match opened {
+                    Err(e) => {
+                        answered = Some(Instant::now());
+                        failure = Some(StatementError::from_driver(e, &script, span));
+                    }
                     Ok(mut events) => {
                         let mut current: Option<ResultId> = None;
-                        while let Some(event) = events.next().await {
+                        loop {
+                            let event = match until(events.next(), deadline, timed_out).await {
+                                Waited::Ready(event) => event,
+                                Waited::TimedOut => {
+                                    timed_out = true;
+                                    let _ = connection.cancel_handle().cancel().await;
+                                    continue;
+                                }
+                            };
+                            let Some(event) = event else { break };
+                            answered.get_or_insert_with(Instant::now);
                             match event {
                                 Ok(ExecEvent::Columns(schema)) => {
                                     // A batch may return several result sets (SQL Server).
@@ -443,14 +562,38 @@ impl Session {
                         }
                     }
                 }
+                let finished = Instant::now();
+                let answered = answered.unwrap_or(finished);
+                let execution = answered.saturating_duration_since(sent);
+                let fetch = finished.saturating_duration_since(answered);
+                summary.execution += execution;
+                summary.fetch += fetch;
+                let user_cancelled = cancelled();
+                if let Some(error) = failure.as_mut() {
+                    if user_cancelled {
+                        // Some engines report a cancel as an ordinary error (PostgreSQL's 57014).
+                        error.cancelled = true;
+                    } else if timed_out {
+                        error.cancelled = false;
+                        error.timed_out = true;
+                        let limit = run_options.statement_timeout.unwrap_or_default();
+                        error.message = format!(
+                            "the statement ran longer than its timeout ({}) and was cancelled: {}",
+                            seconds(limit),
+                            error.message
+                        );
+                    }
+                }
                 for notice in notices {
                     yield CoreEvent::Notice { index, notice };
                 }
 
                 // After: what the driver says now.
+                let mut after = None;
                 if let Some(before) = before
                     && let Ok(state) = connection.transaction_state().await
                 {
+                    after = Some(state);
                     let had_work = before.state == Some(TransactionState::Open) && before.statements > 0;
                     let ended = state == TransactionState::Idle && kind != StatementKind::End;
                     // MySQL commits the open transaction when a new one begins: the state
@@ -473,15 +616,113 @@ impl Session {
                     });
                 }
 
-                if let Some(error) = failure {
-                    yield CoreEvent::StatementFailed { index, error };
-                    yield CoreEvent::ScriptFinished { executed, failed: true };
-                    return;
+                let Some(error) = failure else {
+                    summary.succeeded += 1;
+                    yield CoreEvent::StatementFinished {
+                        index,
+                        rows_affected,
+                        elapsed: started.elapsed(),
+                        execution,
+                        fetch,
+                    };
+                    continue;
+                };
+                summary.failed += 1;
+                yield CoreEvent::StatementFailed { index, error };
+                let remaining = total - index - 1;
+                if remaining == 0 {
+                    break;
                 }
-                yield CoreEvent::StatementFinished { index, rows_affected, elapsed: started.elapsed() };
+                if user_cancelled {
+                    summary.stop = Some(ScriptStop::Cancelled { index });
+                    break;
+                }
+                if on_error == OnError::Stop {
+                    summary.stop = Some(ScriptStop::Failed { index });
+                    break;
+                }
+                // Going on must respect the transaction the statement ran in. A session that
+                // does not follow its transaction is still asked whether one was aborted.
+                if after.is_none() && !follow {
+                    after = connection.transaction_state().await.ok();
+                }
+                if after == Some(TransactionState::Failed) {
+                    summary.stop = Some(ScriptStop::TransactionAborted { index });
+                    break;
+                }
+                if before.is_some_and(|b| b.in_transaction())
+                    && after == Some(TransactionState::Idle)
+                    && kind != StatementKind::End
+                {
+                    summary.stop = Some(ScriptStop::TransactionRolledBack { index });
+                    break;
+                }
+                if on_error == OnError::Ask {
+                    let (ticket, answer) = pause.wait();
+                    yield CoreEvent::ErrorPaused { index, ticket, remaining };
+                    let lost = health.wait_for(|h| *h != SessionHealth::Alive);
+                    let resume = tokio::select! {
+                        answer = answer => answer.unwrap_or(Resume::Closed),
+                        _ = lost => Resume::Closed,
+                    };
+                    pause.clear(ticket);
+                    match resume {
+                        Resume::Answer(ErrorAnswer::Skip) => {}
+                        Resume::Answer(ErrorAnswer::SkipAll) => on_error = OnError::Continue,
+                        Resume::Answer(ErrorAnswer::Stop) => {
+                            summary.stop = Some(ScriptStop::Failed { index });
+                            break;
+                        }
+                        Resume::Cancelled => {
+                            summary.stop = Some(ScriptStop::Cancelled { index });
+                            break;
+                        }
+                        Resume::Closed => {
+                            summary.stop = Some(ScriptStop::Closed { index });
+                            break;
+                        }
+                    }
+                }
             }
-            yield CoreEvent::ScriptFinished { executed, failed: false };
+            yield CoreEvent::ScriptFinished {
+                executed: summary.executed,
+                failed: summary.failed > 0,
+                summary,
+            };
         })
+    }
+}
+
+/// What [`until`] got.
+enum Waited<T> {
+    Ready(T),
+    /// The deadline passed first; the future is still there to be awaited again.
+    TimedOut,
+}
+
+/// Awaits `future` until `deadline`, unless the deadline already fired (`fired`): then it
+/// waits for as long as it takes (the engine is answering the cancel).
+async fn until<F: std::future::Future>(
+    future: F,
+    deadline: Option<tokio::time::Instant>,
+    fired: bool,
+) -> Waited<F::Output> {
+    match deadline {
+        Some(deadline) if !fired => tokio::select! {
+            output = future => Waited::Ready(output),
+            () = tokio::time::sleep_until(deadline) => Waited::TimedOut,
+        },
+        _ => Waited::Ready(future.await),
+    }
+}
+
+/// A duration as the editor writes it: "1.5 s", "30 s".
+fn seconds(duration: Duration) -> String {
+    let secs = duration.as_secs_f64();
+    if secs.fract() == 0.0 {
+        format!("{secs:.0} s")
+    } else {
+        format!("{secs:.1} s")
     }
 }
 

@@ -260,6 +260,32 @@ async fn set_grid_preferences(
         .map_err(|e| e.to_string())
 }
 
+/// How scripts run from the editor: the default error mode and the opt-in notification
+/// (ADR-035).
+#[tauri::command]
+#[specta::specta]
+async fn get_script_preferences(state: State<'_, AppState>) -> CmdResult<ScriptPreferencesItem> {
+    state
+        .history
+        .script_preferences()
+        .await
+        .map(ScriptPreferencesItem::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_script_preferences(
+    preferences: ScriptPreferencesItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_script_preferences(preferences.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
@@ -1849,6 +1875,11 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
 #[specta::specta]
 async fn disconnect(session: String, state: State<'_, AppState>) -> CmdResult<()> {
     let removed = state.sessions.lock().await.remove(&session);
+    // A run waiting for an answer after an error stops: its tab is gone (ADR-035). A run
+    // that is executing goes on to its end, as before.
+    if let Some(open) = &removed {
+        open.open.session.stop_paused_run();
+    }
     if let Some(open) = removed.and_then(|o| Arc::try_unwrap(o.open).ok()) {
         open.close().await;
     }
@@ -1920,10 +1951,27 @@ async fn run_script(
     session: String,
     sql: String,
     confirmed: bool,
+    options: RunOptionsItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    start_script(&state, &session, sql, confirmed, on_event, None).await
+    start_script(&state, &session, sql, confirmed, options, on_event, None).await
+}
+
+/// Answers a run paused after an error (ADR-035). The core refuses a ticket that is not the
+/// pause it is waiting on.
+#[tauri::command]
+#[specta::specta]
+async fn answer_script_error(
+    session: String,
+    ticket: u32,
+    answer: ErrorAnswerItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    let open = state.session(&session).await?;
+    open.session
+        .answer_error(spelaion_core::ErrorTicket(ticket.into()), answer.into())
+        .map_err(|e| e.to_string())
 }
 
 async fn start_script(
@@ -1931,6 +1979,7 @@ async fn start_script(
     session: &str,
     sql: String,
     confirmed: bool,
+    options: RunOptionsItem,
     on_event: Channel<ScriptEvent>,
     original: Option<String>,
 ) -> CmdResult<()> {
@@ -1942,7 +1991,7 @@ async fn start_script(
         (session.open.clone(), session.history_workspace.clone())
     };
     // The core decides what needs confirmation; the UI asks first (`script_risks`), and a
-    // run that skipped the question is refused by the core.
+    // run that skipped the question is refused by the core, whatever its error mode.
     spelaion_core::check_script(
         open.session.dialect().as_ref(),
         &sql,
@@ -1956,6 +2005,15 @@ async fn start_script(
         workspace,
         open.resolved.id.to_string(),
         original,
+        spelaion_core::ScriptOptions {
+            on_error: options.on_error.into(),
+            // The run's own timeout wins over the connection's; 0 is none.
+            statement_timeout: match options.timeout_seconds {
+                Some(0) => None,
+                Some(seconds) => Some(std::time::Duration::from_secs(seconds.into())),
+                None => open.resolved.statement_timeout,
+            },
+        },
     );
     tauri::async_runtime::spawn(async move {
         // `open` lives while the script runs, even if the UI closes the tab halfway.
@@ -1988,6 +2046,7 @@ async fn run_query_page(
     session: String,
     sql: String,
     limit: u32,
+    options: RunOptionsItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
@@ -1995,7 +2054,7 @@ async fn run_query_page(
     let paged =
         spelaion_core::query_page_sql(open.session.dialect().as_ref(), &sql, limit.into(), 0)
             .ok_or("this query cannot be paged")?;
-    start_script(&state, &session, paged, false, on_event, Some(sql)).await
+    start_script(&state, &session, paged, false, options, on_event, Some(sql)).await
 }
 
 #[tauri::command]
@@ -3515,6 +3574,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_explorer_preferences,
             get_grid_preferences,
             set_grid_preferences,
+            get_script_preferences,
+            set_script_preferences,
             update::update_check,
             update::update_install,
             engine_catalog,
@@ -3605,6 +3666,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             list_processes,
             control_process,
             run_script,
+            answer_script_error,
             query_page_supported,
             run_query_page,
             append_query_page,

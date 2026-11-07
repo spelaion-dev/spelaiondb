@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
-use spelaion_core::{CoreEvent, HistoryEntry, QueryHistory, ResultStore, Session};
+use spelaion_core::{CoreEvent, HistoryEntry, QueryHistory, ResultStore, ScriptOptions, Session};
 use spelaion_driver_api::{ConnectParams, Driver, ExecOptions};
 use spelaion_driver_sqlite::SqliteDriver;
 
@@ -60,7 +60,8 @@ async fn records_each_executed_statement_and_counts_returned_rows_once() {
         events.last(),
         Some(CoreEvent::ScriptFinished {
             executed: 3,
-            failed: false
+            failed: false,
+            ..
         })
     ));
     assert!(
@@ -108,6 +109,7 @@ async fn paged_queries_keep_the_original_sql_in_history() {
             "/repo".into(),
             "shop".into(),
             Some(original.into()),
+            ScriptOptions::default(),
         )
         .collect()
         .await;
@@ -130,7 +132,8 @@ async fn records_errors_without_recording_the_unexecuted_remainder() {
         events.last(),
         Some(CoreEvent::ScriptFinished {
             executed: 2,
-            failed: true
+            failed: true,
+            ..
         })
     ));
     let saved = entries(&history).await;
@@ -149,6 +152,42 @@ async fn records_errors_without_recording_the_unexecuted_remainder() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn a_run_that_continues_records_the_statements_after_the_error() {
+    let (history, _) = history("continue");
+    let session = session().await;
+    let sql = "select 'ñ';
+select * from missing_table;
+select 'after the error'";
+    let events: Vec<_> = history
+        .run_script_with_original(
+            &session,
+            sql,
+            "/repo".into(),
+            "shop".into(),
+            None,
+            ScriptOptions {
+                on_error: spelaion_core::OnError::Continue,
+                statement_timeout: None,
+            },
+        )
+        .collect()
+        .await;
+    assert!(matches!(
+        events.last(),
+        Some(CoreEvent::ScriptFinished {
+            executed: 3,
+            failed: true,
+            ..
+        })
+    ));
+    let saved = entries(&history).await;
+    assert_eq!(saved.len(), 3);
+    assert!(saved[0].statement.contains("after the error"));
+    assert_eq!(saved[0].error, None);
+    assert!(saved[1].error.as_ref().unwrap().contains("missing_table"));
 }
 
 #[tokio::test]

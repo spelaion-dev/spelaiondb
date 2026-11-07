@@ -73,6 +73,11 @@ pub struct ConnectionFile {
     /// own `connect_timeout` in the tunnel file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connect_timeout: Option<u32>,
+    /// Seconds a statement run from the editor may take before it is cancelled and fails as
+    /// timed out (ADR-035); none when absent or 0. A run can set its own. Unlike
+    /// `connect_timeout`, it counts once connected, for every engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement_timeout: Option<u32>,
     #[serde(default, skip_serializing_if = "TlsConfig::is_default")]
     pub tls: TlsConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_default")]
@@ -90,6 +95,8 @@ impl ConnectionFile {
     pub const MAX_KEEPALIVE: u32 = 86_400;
     /// Longest connect timeout accepted, in seconds: ten minutes.
     pub const MAX_CONNECT_TIMEOUT: u32 = 600;
+    /// Longest statement timeout accepted, in seconds: a day.
+    pub const MAX_STATEMENT_TIMEOUT: u32 = 86_400;
     /// Longest description accepted, in characters: a few paragraphs.
     pub const MAX_DESCRIPTION: usize = 2_000;
     /// Most tags on one connection.

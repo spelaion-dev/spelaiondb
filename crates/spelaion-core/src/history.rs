@@ -9,12 +9,12 @@ use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
     AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, ExplorerFilter,
-    ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store,
-    StoreError, ToolOutput,
+    ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry, ScriptPreferences,
+    Snippet, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{CoreEvent, ResultId, Session};
+use crate::{CoreEvent, ResultId, ScriptOptions, Session};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
@@ -76,6 +76,13 @@ enum Request {
     },
     SetGrid {
         preferences: GridPreferences,
+        reply: Reply<()>,
+    },
+    GetScript {
+        reply: Reply<ScriptPreferences>,
+    },
+    SetScript {
+        preferences: ScriptPreferences,
         reply: Reply<()>,
     },
     SetUpdateCheck {
@@ -227,6 +234,12 @@ impl QueryHistory {
                         }
                         Request::SetGrid { preferences, reply } => {
                             let _ = reply.send(store.set_grid_preferences(&preferences));
+                        }
+                        Request::GetScript { reply } => {
+                            let _ = reply.send(store.get_script_preferences());
+                        }
+                        Request::SetScript { preferences, reply } => {
+                            let _ = reply.send(store.set_script_preferences(&preferences));
                         }
                         Request::SetUpdateCheck { enabled, reply } => {
                             let _ = reply.send(store.set_update_check(enabled));
@@ -518,6 +531,20 @@ impl QueryHistory {
             .await
     }
 
+    /// How scripts run from the editor (ADR-035): the default error mode and the opt-in
+    /// notification.
+    pub async fn script_preferences(&self) -> Result<ScriptPreferences, HistoryError> {
+        self.request(|reply| Request::GetScript { reply }).await
+    }
+
+    pub async fn set_script_preferences(
+        &self,
+        preferences: ScriptPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetScript { preferences, reply })
+            .await
+    }
+
     pub async fn set_update_check(&self, enabled: bool) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetUpdateCheck { enabled, reply })
             .await
@@ -687,10 +714,18 @@ impl QueryHistory {
         workspace: String,
         connection: String,
     ) -> BoxStream<'static, CoreEvent> {
-        self.run_script_with_original(session, sql, workspace, connection, None)
+        self.run_script_with_original(
+            session,
+            sql,
+            workspace,
+            connection,
+            None,
+            ScriptOptions::default(),
+        )
     }
 
-    /// Execute generated pagination SQL while recording the user's original SELECT.
+    /// Runs a script with its error mode and timeout (ADR-035); `original` is the SQL to record
+    /// instead (generated pagination SQL records the user's SELECT).
     pub fn run_script_with_original(
         &self,
         session: &Session,
@@ -698,8 +733,9 @@ impl QueryHistory {
         workspace: String,
         connection: String,
         original: Option<String>,
+        options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
-        let mut events = session.run_script(sql);
+        let mut events = session.run_script_with(sql, options);
         let sql = sql.to_string();
         let history = self.clone();
         Box::pin(async_stream::stream! {
@@ -759,7 +795,8 @@ impl QueryHistory {
                     CoreEvent::ResultStarted { .. }
                     | CoreEvent::Notice { .. }
                     | CoreEvent::ScriptFinished { .. }
-                    | CoreEvent::HistoryWarning { .. } => {}
+                    | CoreEvent::ErrorPaused { .. }
+            | CoreEvent::HistoryWarning { .. } => {}
                 }
                 yield event;
             }
@@ -1024,7 +1061,8 @@ mod tests {
             events.last(),
             Some(CoreEvent::ScriptFinished {
                 executed: 1,
-                failed: false
+                failed: false,
+                ..
             })
         ));
         assert!(

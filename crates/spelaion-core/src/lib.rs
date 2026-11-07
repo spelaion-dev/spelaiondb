@@ -24,6 +24,7 @@ mod processes;
 mod query_page;
 mod readonly;
 mod results;
+mod script;
 mod session;
 mod sort;
 mod table_data;
@@ -66,14 +67,18 @@ pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, li
 pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use results::{ResultId, ResultStore, StoredResult};
-pub use session::{CoreEvent, Session, StatementError};
+pub use session::{
+    AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
+    ScriptSummary, Session, StatementError,
+};
 pub use sort::{SortKey, ViewError};
 pub use spelaion_store::{
     AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, Snippet,
     ToolOutput,
 };
 pub use spelaion_store::{
-    Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences,
+    Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences, ScriptErrorMode,
+    ScriptPreferences,
 };
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,

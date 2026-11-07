@@ -22,6 +22,7 @@
     "organization": "Dónde guardarla",
     "idle": "Sesiones inactivas",
     "safety": "Seguridad",
+    "statements": "Sentencias",
     "general": "General",
     "kubernetes": "Port-forward de Kubernetes",
     "about": "Sobre esta conexión"
@@ -75,6 +76,9 @@
     "keepaliveHint": "Una pestaña de consultas abierta envía al servidor una consulta mínima tras este tiempo sin uso, para que un firewall o el timeout de inactividad del servidor no la corte durante la noche. Nunca con una transacción abierta. Vacío o 0: desactivado.",
     "connectTimeout": "Tiempo máximo de conexión (segundos)",
     "connectTimeoutHint": "Cuánto puede tardar la base de datos en aceptar la conexión y el inicio de sesión antes de que el intento falle. Vacío: 15 s. Los saltos de un perfil de red tienen su propio tiempo máximo.",
+    "statementTimeout": "Tiempo máximo por sentencia (segundos)",
+    "statementTimeoutNone": "Sin límite",
+    "statementTimeoutHint": "Una sentencia ejecutada desde el editor que tarde más se cancela y falla por tiempo agotado. Vacío o 0: sin límite. Cada ejecución puede fijar el suyo en el editor.",
     "localPort": "Puerto local",
     "localPortPlaceholder": "Cualquiera libre",
     "localPortHint": "Puerto fijo en 127.0.0.1 en el que escucha el túnel para esta conexión, para que otras herramientas también puedan usarlo. Vacío: cualquier puerto libre (o uno del rango de Ajustes → Red).",

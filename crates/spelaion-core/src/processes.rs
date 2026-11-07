@@ -122,6 +122,7 @@ async fn read_processes(session: &Session, sql: &str) -> Result<Vec<Process>, St
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::ErrorPaused { .. }
             | CoreEvent::HistoryWarning { .. } => {}
         }
     }

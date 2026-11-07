@@ -1056,6 +1056,10 @@ pub enum ScriptEvent {
         index: u32,
         rows_affected: Option<f64>,
         elapsed_ms: f64,
+        /// Until the engine's first answer.
+        execution_ms: f64,
+        /// Reading the rows after it.
+        fetch_ms: f64,
     },
     StatementFailed {
         index: u32,
@@ -1066,10 +1070,19 @@ pub enum ScriptEvent {
         /// Error position in bytes within the script, to underline it.
         script_offset: Option<u32>,
         cancelled: bool,
+        /// It ran longer than the run's statement timeout.
+        timed_out: bool,
+    },
+    /// The run waits for `answer_script_error` with this ticket (ADR-035).
+    ErrorPaused {
+        index: u32,
+        ticket: u32,
+        remaining: u32,
     },
     ScriptFinished {
         executed: u32,
         failed: bool,
+        summary: ScriptSummaryItem,
     },
     HistoryWarning {
         message: String,
@@ -1078,6 +1091,171 @@ pub enum ScriptEvent {
 
 fn u32_of(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+fn millis(duration: std::time::Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+/// "N statements: X ok, Y failed", and where the time went (ADR-035).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptSummaryItem {
+    pub statements: u32,
+    pub executed: u32,
+    pub succeeded: u32,
+    pub failed: u32,
+    pub not_run: u32,
+    pub stop: Option<ScriptStopItem>,
+    pub execution_ms: f64,
+    pub fetch_ms: f64,
+}
+
+impl From<spelaion_core::ScriptSummary> for ScriptSummaryItem {
+    fn from(s: spelaion_core::ScriptSummary) -> Self {
+        Self {
+            statements: u32_of(s.statements),
+            executed: u32_of(s.executed),
+            succeeded: u32_of(s.succeeded),
+            failed: u32_of(s.failed),
+            not_run: u32_of(s.not_run()),
+            stop: s.stop.map(ScriptStopItem::from),
+            execution_ms: millis(s.execution),
+            fetch_ms: millis(s.fetch),
+        }
+    }
+}
+
+/// Why a run stopped with statements left.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptStopItem {
+    pub kind: ScriptStopKind,
+    /// The statement it stopped at.
+    pub index: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ScriptStopKind {
+    Failed,
+    Cancelled,
+    TransactionAborted,
+    TransactionRolledBack,
+    Closed,
+}
+
+impl From<spelaion_core::ScriptStop> for ScriptStopItem {
+    fn from(stop: spelaion_core::ScriptStop) -> Self {
+        use spelaion_core::ScriptStop;
+        let kind = match stop {
+            ScriptStop::Failed { .. } => ScriptStopKind::Failed,
+            ScriptStop::Cancelled { .. } => ScriptStopKind::Cancelled,
+            ScriptStop::TransactionAborted { .. } => ScriptStopKind::TransactionAborted,
+            ScriptStop::TransactionRolledBack { .. } => ScriptStopKind::TransactionRolledBack,
+            ScriptStop::Closed { .. } => ScriptStopKind::Closed,
+        };
+        Self {
+            kind,
+            index: u32_of(stop.index()),
+        }
+    }
+}
+
+/// What a run does when a statement fails (ADR-035).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum OnErrorItem {
+    Stop,
+    Continue,
+    Ask,
+}
+
+impl From<OnErrorItem> for spelaion_core::OnError {
+    fn from(mode: OnErrorItem) -> Self {
+        match mode {
+            OnErrorItem::Stop => spelaion_core::OnError::Stop,
+            OnErrorItem::Continue => spelaion_core::OnError::Continue,
+            OnErrorItem::Ask => spelaion_core::OnError::Ask,
+        }
+    }
+}
+
+impl From<spelaion_core::ScriptErrorMode> for OnErrorItem {
+    fn from(mode: spelaion_core::ScriptErrorMode) -> Self {
+        match mode {
+            spelaion_core::ScriptErrorMode::Stop => OnErrorItem::Stop,
+            spelaion_core::ScriptErrorMode::Continue => OnErrorItem::Continue,
+            spelaion_core::ScriptErrorMode::Ask => OnErrorItem::Ask,
+        }
+    }
+}
+
+impl From<OnErrorItem> for spelaion_core::ScriptErrorMode {
+    fn from(mode: OnErrorItem) -> Self {
+        match mode {
+            OnErrorItem::Stop => spelaion_core::ScriptErrorMode::Stop,
+            OnErrorItem::Continue => spelaion_core::ScriptErrorMode::Continue,
+            OnErrorItem::Ask => spelaion_core::ScriptErrorMode::Ask,
+        }
+    }
+}
+
+/// How one run goes: its error mode and, if set, its own statement timeout.
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RunOptionsItem {
+    pub on_error: OnErrorItem,
+    /// Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run.
+    pub timeout_seconds: Option<u32>,
+}
+
+/// The answer to a paused run.
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorAnswerItem {
+    Stop,
+    Skip,
+    SkipAll,
+}
+
+impl From<ErrorAnswerItem> for spelaion_core::ErrorAnswer {
+    fn from(answer: ErrorAnswerItem) -> Self {
+        match answer {
+            ErrorAnswerItem::Stop => spelaion_core::ErrorAnswer::Stop,
+            ErrorAnswerItem::Skip => spelaion_core::ErrorAnswer::Skip,
+            ErrorAnswerItem::SkipAll => spelaion_core::ErrorAnswer::SkipAll,
+        }
+    }
+}
+
+/// How scripts run from the editor, shared by every workspace.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptPreferencesItem {
+    pub on_error: OnErrorItem,
+    pub notify: bool,
+    pub notify_after_seconds: u32,
+}
+
+impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
+    fn from(p: spelaion_core::ScriptPreferences) -> Self {
+        Self {
+            on_error: p.on_error.into(),
+            notify: p.notify,
+            notify_after_seconds: p.notify_after_seconds,
+        }
+    }
+}
+
+impl From<ScriptPreferencesItem> for spelaion_core::ScriptPreferences {
+    fn from(p: ScriptPreferencesItem) -> Self {
+        Self {
+            on_error: p.on_error.into(),
+            notify: p.notify,
+            notify_after_seconds: p.notify_after_seconds,
+        }
+    }
 }
 
 impl From<CoreEvent> for ScriptEvent {
@@ -1123,10 +1301,14 @@ impl From<CoreEvent> for ScriptEvent {
                 index,
                 rows_affected,
                 elapsed,
+                execution,
+                fetch,
             } => ScriptEvent::StatementFinished {
                 index: u32_of(index),
                 rows_affected: rows_affected.map(|n| n as f64),
-                elapsed_ms: elapsed.as_secs_f64() * 1000.0,
+                elapsed_ms: millis(elapsed),
+                execution_ms: millis(execution),
+                fetch_ms: millis(fetch),
             },
             CoreEvent::StatementFailed { index, error } => ScriptEvent::StatementFailed {
                 index: u32_of(index),
@@ -1136,10 +1318,25 @@ impl From<CoreEvent> for ScriptEvent {
                 hint: error.hint,
                 script_offset: error.script_offset.map(u32_of),
                 cancelled: error.cancelled,
+                timed_out: error.timed_out,
             },
-            CoreEvent::ScriptFinished { executed, failed } => ScriptEvent::ScriptFinished {
+            CoreEvent::ErrorPaused {
+                index,
+                ticket,
+                remaining,
+            } => ScriptEvent::ErrorPaused {
+                index: u32_of(index),
+                ticket: u32::try_from(ticket.0).unwrap_or(u32::MAX),
+                remaining: u32_of(remaining),
+            },
+            CoreEvent::ScriptFinished {
+                executed,
+                failed,
+                summary,
+            } => ScriptEvent::ScriptFinished {
                 executed: u32_of(executed),
                 failed,
+                summary: ScriptSummaryItem::from(summary),
             },
             CoreEvent::HistoryWarning { message } => ScriptEvent::HistoryWarning { message },
         }
@@ -1765,6 +1962,8 @@ pub struct ConnectionDraftItem {
     pub keepalive: Option<u32>,
     /// Seconds the database may take to connect (ADR-032); null for the default.
     pub connect_timeout: Option<u32>,
+    /// Seconds a statement may run from the editor (ADR-035); `None` or 0 for no limit.
+    pub statement_timeout: Option<u32>,
     pub mcp_exposed: bool,
     /// Agents may write (`[mcp] writes = "allow"`, ADR-019).
     pub mcp_writes: bool,
@@ -1821,6 +2020,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             read_only: item.read_only,
             keepalive: item.keepalive,
             connect_timeout: item.connect_timeout,
+            statement_timeout: item.statement_timeout,
             mcp_exposed: item.mcp_exposed,
             mcp_writes: item.mcp_writes,
         })
@@ -1871,6 +2071,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             read_only: draft.read_only,
             keepalive: draft.keepalive,
             connect_timeout: draft.connect_timeout,
+            statement_timeout: draft.statement_timeout,
             mcp_exposed: draft.mcp_exposed,
             mcp_writes: draft.mcp_writes,
         }

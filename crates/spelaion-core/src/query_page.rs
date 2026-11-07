@@ -176,6 +176,7 @@ pub async fn append_query_page(
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::ErrorPaused { .. }
             | CoreEvent::HistoryWarning { .. } => {}
         }
     }

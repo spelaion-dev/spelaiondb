@@ -51,6 +51,8 @@ pub struct ResolvedConnection {
     pub local_port: LocalPort,
     /// Keep the session alive after this long idle (ADR-028); `None`: off.
     pub keepalive: Option<Duration>,
+    /// Statements run from the editor are cancelled after this long (ADR-035); `None`: never.
+    pub statement_timeout: Option<Duration>,
     pub mcp: McpConfig,
 }
 
@@ -377,6 +379,10 @@ impl<'a> Resolver<'a> {
             },
             keepalive: file
                 .keepalive
+                .filter(|s| *s > 0)
+                .map(|s| Duration::from_secs(s.into())),
+            statement_timeout: file
+                .statement_timeout
                 .filter(|s| *s > 0)
                 .map(|s| Duration::from_secs(s.into())),
             mcp: file.mcp.clone(),
