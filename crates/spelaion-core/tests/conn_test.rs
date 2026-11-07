@@ -464,11 +464,13 @@ fn assert_no_leak(report: &TestReport, seen: &Seen, secrets: &[&str]) {
 async fn secrets_in_error_output_are_redacted() {
     let ws = Workspace::new("leak-command");
     let noise = "hop-secret-1234 db-secret-5678 password=kv-secret-9 http://bob:url-secret-0@proxy.example:3128/ token=tok-secret-7";
+    // Written into a TOML literal string ('…'): no single quotes in either shell's command.
     let command = if cfg!(windows) {
         format!("echo {noise} 1>&2 & exit 1")
     } else {
-        format!("echo '{noise}' 1>&2; exit 1")
+        format!("echo \"{noise}\" 1>&2; exit 1")
     };
+    assert!(!command.contains('\''));
     ws.write(
         ".spelaion/tunnels/leaky.toml",
         &format!(
