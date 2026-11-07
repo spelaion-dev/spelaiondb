@@ -463,6 +463,83 @@ select {
   border-color: var(--prod);
   color: var(--prod);
 }
+/* A connection's own tags: quiet text among its marks (`.connection-marks`, which keeps the
+   name whole and shows each mark whole or not at all). */
+.connection-tag,
+.connection-tag-more {
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.connection-tag {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.connection-tag:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.tag-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.tag-filter-chip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tag-filter-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+/* The connection form's tag input: chips and a box that grows to the end of the line. */
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 2px 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.tag-input:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  padding: 0 2px 0 6px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+}
+.tag-chip button {
+  padding: 0 4px;
+  line-height: 1;
+}
+.connection-form .tag-input input[type="text"] {
+  flex: 1;
+  min-width: 120px;
+  width: auto;
+  height: 24px;
+  border: 0;
+  outline: none;
+  background: transparent;
+}
 .row.selected {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);

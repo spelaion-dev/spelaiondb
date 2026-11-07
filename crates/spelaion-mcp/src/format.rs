@@ -22,7 +22,8 @@ fn cell(value: &Value) -> String {
 }
 
 /// One connection of `list_connections`: identifier, name, engine, environment and what the
-/// agent may do, then the user's description (what the database is for), indented.
+/// agent may do, then its tags and the user's description (what the database is for),
+/// indented.
 pub fn connection_entry(c: &ConnectionEntry) -> String {
     let env = c
         .file
@@ -40,6 +41,9 @@ pub fn connection_entry(c: &ConnectionEntry) -> String {
         c.name(),
         c.file.engine.as_str()
     );
+    if !c.file.tags.is_empty() {
+        out.push_str(&format!("  Tags: {}\n", c.file.tags.join(", ")));
+    }
     if let Some(description) = c.file.description.as_deref() {
         let mut lines = description.lines().map(str::trim_end);
         out.push_str(&format!(
@@ -170,6 +174,13 @@ mod tests {
         assert_eq!(
             connection_entry(&described),
             "- prod/orders — Orders (sqlite, environment prod). Read and write: execute_write is allowed.\n  Description: Orders of the EU shop.\n    Ask #data first.\n"
+        );
+        let tagged = entry(
+            "schema_version = 1\nname = \"Orders\"\ndescription = \"Orders.\"\ntags = [\"billing\", \"eu\"]\nengine = \"sqlite\"\ndatabase = \"o.db\"\n",
+        );
+        assert_eq!(
+            connection_entry(&tagged),
+            "- prod/orders — Orders (sqlite). Read-only.\n  Tags: billing, eu\n  Description: Orders.\n"
         );
     }
 

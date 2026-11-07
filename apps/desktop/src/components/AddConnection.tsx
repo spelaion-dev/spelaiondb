@@ -16,9 +16,11 @@ import {
   type TunnelItem,
   type UrlFields,
 } from "../api";
+import { tagsInUse } from "../connectionInfo";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./ConnectionTypePicker";
 import { EngineIcon } from "./EngineIcon";
+import { TagInput } from "./TagInput";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath, openFilters } from "../dialogs";
 import { reviewChanges } from "../connect";
@@ -363,6 +365,9 @@ function ConnectionForm(props: {
   const { t } = useTranslation("connections");
   const workspace = useApp((s) => s.workspace);
   const hasWorkspace = Boolean(workspace?.workspace);
+  /** Tags other connections already use, offered while typing a new one. */
+  const connections = useApp((s) => s.connections);
+  const knownTags = tagsInUse(connections);
   const network = engine.access === "network";
   // A SQLite file may be on a server, opened there through an SSH tunnel (ADR-018).
   const remoteFile = engine.id === "sqlite";
@@ -399,6 +404,7 @@ function ConnectionForm(props: {
     folder: "",
     name: prefill ? prefill.database.split(/[\\/]/).pop() || prefill.host : "",
     description: "",
+    tags: [],
     engine: engine.id,
     env: "",
     host: prefill?.host || (network ? "localhost" : ""),
@@ -948,6 +954,10 @@ function ConnectionForm(props: {
         <div id="connection-tab-options" role="tabpanel" hidden={tab !== "options"}>
           <fieldset>
             <legend>{t("sections.about")}</legend>
+            {/* What kind of connection it is, what it is for, and labels to find it. */}
+            <Field label={t("fields.env")}>
+              <ConnectionTypePicker types={connectionTypes} env={draft.env} saved={savedType} onChange={(env) => update({ env })} />
+            </Field>
             <Field label={t("fields.description")}>
               <textarea
                 className="description"
@@ -959,6 +969,16 @@ function ConnectionForm(props: {
               />
             </Field>
             <p className="muted small">{t("fields.descriptionHint")}</p>
+            <div className="field">
+              <span>{t("fields.tags")}</span>
+              <TagInput
+                label={t("fields.tags")}
+                tags={draft.tags}
+                suggestions={knownTags}
+                onChange={(tags) => update({ tags })}
+              />
+            </div>
+            <p className="muted small">{t("fields.tagsHint")}</p>
           </fieldset>
           <fieldset>
             <legend>{t("sections.organization")}</legend>
@@ -981,14 +1001,9 @@ function ConnectionForm(props: {
             <p className="muted small">
               {editing ? t("fields.fixedLocationHint") : draft.personal ? t("fields.personalHint") : t("fields.projectHint")}
             </p>
-            <div className="form-pair">
-              <Field label={t("fields.folder")} className="grow">
-                <input type="text" value={draft.folder} disabled={Boolean(editing)} placeholder={t("fields.folderPlaceholder")} onChange={(e) => update({ folder: e.target.value })} />
-              </Field>
-              <Field label={t("fields.env")} className="grow">
-                <ConnectionTypePicker types={connectionTypes} env={draft.env} saved={savedType} onChange={(env) => update({ env })} />
-              </Field>
-            </div>
+            <Field label={t("fields.folder")}>
+              <input type="text" value={draft.folder} disabled={Boolean(editing)} placeholder={t("fields.folderPlaceholder")} onChange={(e) => update({ folder: e.target.value })} />
+            </Field>
           </fieldset>
           {network && (
             <fieldset>

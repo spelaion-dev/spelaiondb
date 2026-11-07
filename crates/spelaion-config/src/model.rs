@@ -23,6 +23,10 @@ pub struct ConnectionFile {
     /// to agents in `list_connections`. It may span lines; at most 2000 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Short labels to find and group connections (`billing`, `eu`, `reporting`…): at most
+    /// 20, of up to 32 characters each, without commas, and unique ignoring case.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub engine: Engine,
     /// Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type
     /// in `connection-types.toml`; its badge and safeguards apply. Any other text is a plain
@@ -81,6 +85,10 @@ impl ConnectionFile {
     pub const MAX_KEEPALIVE: u32 = 86_400;
     /// Longest description accepted, in characters: a few paragraphs.
     pub const MAX_DESCRIPTION: usize = 2_000;
+    /// Most tags on one connection.
+    pub const MAX_TAGS: usize = 20;
+    /// Longest tag accepted, in characters.
+    pub const MAX_TAG: usize = 32;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

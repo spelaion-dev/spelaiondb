@@ -248,6 +248,7 @@ impl ConnectionDraft {
             }
         }
         report.keep_if("description", filled(&self.description).is_some());
+        report.keep_if("tags", !self.tags.is_empty());
         report.keep_if("env", filled(&self.env).is_some());
         report.keep_if("read_only", self.read_only);
         report.keep_if("mcp", self.mcp_exposed);
