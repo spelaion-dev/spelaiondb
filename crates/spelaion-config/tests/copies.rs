@@ -479,6 +479,8 @@ fn pasted_text_cannot_create_what_the_form_could_not_or_read_secrets() {
     ] {
         let err = paste(text).unwrap_err().to_string();
         assert!(err.contains(expected), "{text:?}: {err}");
+        // About the clipboard, never a path of the user's folders.
+        assert!(err.starts_with("clipboard: "), "{err}");
     }
     let huge = format!(
         "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"a.db\"\nname = \"{}\"\n",
