@@ -8,6 +8,7 @@ import { useKeychainAvailable } from "../keychain";
 import { open } from "@tauri-apps/plugin-dialog";
 import { call, commands, type HopDraft, type PasswordMode, type ProxyDraft, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
+import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 
 export type TunnelEditorMode = { kind: "add"; personal: boolean } | { kind: "edit"; name: string; personal: boolean };
 
@@ -142,7 +143,8 @@ export function TunnelEditor(props: {
   const [proxy, setProxy] = useState<ProxyState>(noProxy);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [status, setStatus] = useState<{ kind: "idle" | "testing" | "ok" } | { kind: "error"; message: string }>({ kind: "idle" });
+  const [status, setStatus] = useState<{ kind: "idle" } | { kind: "error"; message: string }>({ kind: "idle" });
+  const log = useConnectionTest();
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Without a system keychain a new tunnel asks for its passwords; an edited one keeps what
@@ -204,26 +206,33 @@ export function TunnelEditor(props: {
   /** A whole number typed in a field, or null when it is empty. */
   const numberOrNull = (text: string) => (text.trim() === "" ? null : Math.max(0, Math.trunc(Number(text))));
   const passwords = hops.map((hop) => hop.password || null);
+  // Any change to the profile makes the last test's log stale (and stops a running one).
+  const testedKey = JSON.stringify([draft, passwords, proxyPassword]);
+  useEffect(() => log.clear(), [testedKey]);
 
   async function browseKey(i: number) {
     const path = await open({ multiple: false, directory: false });
     if (typeof path === "string") updateHop(i, { identityFile: path });
   }
 
+  /** Tests the profile step by step (ADR-032): the proxy and each hop, in the log. */
   async function test() {
-    setStatus({ kind: "testing" });
+    setStatus({ kind: "idle" });
     try {
-      let outcome = await call(commands.testTunnel(draft, passwords, proxyPassword));
+      const attempt = () => log.run((id, onStep) => call(commands.testTunnel(draft, passwords, proxyPassword, id, onStep)));
+      let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
-          setStatus({ kind: "idle" });
+          log.clear();
           return;
         }
         useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
-        outcome = await call(commands.testTunnel(draft, passwords, proxyPassword));
+        outcome = await attempt();
       }
-      setStatus(outcome.kind === "connected" ? { kind: "ok" } : { kind: "idle" });
+      if (outcome.kind === "tested") log.finish(outcome.report);
+      else log.clear();
     } catch (e) {
+      log.clear();
       setStatus({ kind: "error", message: errorText(e) });
     }
   }
@@ -532,13 +541,18 @@ export function TunnelEditor(props: {
             </fieldset>
           </div>
 
+          {log.steps && <ConnectionTestLog steps={log.steps} report={log.report} running={log.running} onStop={log.stop} onClose={log.clear} />}
           <div className="wizard-footer">
-            <button type="button" onClick={() => void test()} disabled={busy || status.kind === "testing"}>
+            <button type="button" onClick={() => void test()} disabled={busy || log.running}>
               {t("tunnel.test")}
             </button>
             <div className="test-result" role="status">
-              {status.kind === "testing" && <span className="muted">{t("test.testing")}</span>}
-              {status.kind === "ok" && <span className="ok">{hops.length === 0 ? t("tunnel.okProxy") : t("tunnel.ok", { count: hops.length })}</span>}
+              <TestSummary
+                steps={log.steps}
+                report={log.report}
+                running={log.running}
+                okText={() => (hops.length === 0 ? t("tunnel.okProxy") : t("tunnel.ok", { count: hops.length }))}
+              />
               {status.kind === "error" && <span className="error">{status.message}</span>}
             </div>
             {editing && (

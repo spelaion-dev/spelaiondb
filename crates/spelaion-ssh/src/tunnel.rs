@@ -148,7 +148,7 @@ impl Tunnel {
     }
 
     /// Like [`Tunnel::connect`], telling `observe` each part as it starts, so the connection
-    /// test can say which one failed (ADR-031). An error belongs to the last part started.
+    /// test can say which one failed (ADR-032). An error belongs to the last part started.
     pub async fn connect_observed(
         spec: &TunnelSpec,
         known_hosts: &KnownHosts,
@@ -406,7 +406,7 @@ the server refused to run a command (it may allow only port forwarding)
 
     /// Checks that the tunnel reaches `target`: opens a connection to it from the last hop
     /// (or through the proxy alone) and closes it at once, within `timeout`. Nothing is sent
-    /// to the target. The connection test's "reach the database" step (ADR-031).
+    /// to the target. The connection test's "reach the database" step (ADR-032).
     pub async fn probe(&self, target: &Target, timeout: Duration) -> Result<(), SshError> {
         if let TunnelState::Down { reason } = &*self.state.borrow() {
             return Err(SshError::Other(format!("the tunnel is down: {reason}")));

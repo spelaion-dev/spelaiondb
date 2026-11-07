@@ -40,3 +40,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [029](0029-connection-types.md) | Connection types: a badge and safeguards per environment, decided in the core; safeguards only add up | Accepted |
 | [030](0030-copying-connections-and-changing-engines.md) | Copying connections, changing their engine, and naming new ones | Accepted |
 | [031](0031-transactions.md) | Transactions you can see and control: manual commit per tab, smart commit per type | Accepted |
+| [032](0032-connection-test-diagnostics.md) | The connection test says which step failed, why, and what to try | Accepted |

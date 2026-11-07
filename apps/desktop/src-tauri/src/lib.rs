@@ -49,6 +49,7 @@ struct AppState {
     pending: Pending,
     /// The user confirmed quitting with transactions open (ADR-031).
     quitting: AtomicBool,
+    tests: ConnectionTests,
 }
 
 struct DesktopSession {
@@ -57,6 +58,34 @@ struct DesktopSession {
     password: Option<Secret>,
     /// Captured when connecting: changing folders must not reattribute an existing tab.
     history_workspace: String,
+}
+
+/// Connection tests running now, by the id the UI gave them, to stop them (ADR-032).
+#[derive(Default)]
+struct ConnectionTests(std::sync::Mutex<HashMap<u32, tokio::sync::oneshot::Sender<()>>>);
+
+impl ConnectionTests {
+    /// Registers a test; the future completes when it is stopped.
+    fn start(&self, test: u32) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.0.lock().expect("lock poisoned").insert(test, tx);
+        async move {
+            // Forgotten without a stop (the test ended): never completes.
+            if rx.await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+
+    fn stop(&self, test: u32) {
+        if let Some(tx) = self.0.lock().expect("lock poisoned").remove(&test) {
+            let _ = tx.send(());
+        }
+    }
+
+    fn end(&self, test: u32) {
+        self.0.lock().expect("lock poisoned").remove(&test);
+    }
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -723,19 +752,26 @@ async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkPr
         .collect())
 }
 
-/// Opens and closes a connection that has not been saved yet. Nothing is written: neither
-/// the file nor the keychain. `editing` is the connection being edited, if any: its stored
-/// password is used when none is typed.
+/// Tests a connection that may not be saved yet, step by step (ADR-032): every change to its
+/// steps goes through `on_step`, and `stop_connection_test(test)` stops it. Nothing is
+/// written: neither the file nor the keychain. `editing` is the connection being edited, if
+/// any: its stored password is used when none is typed. `network_only` stops before logging
+/// in. The steps, their errors and the diagnostics come from the core, redacted.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 async fn test_connection(
     draft: ConnectionDraftItem,
     password: Option<String>,
     editing: Option<String>,
+    network_only: bool,
+    test: u32,
+    on_step: Channel<Vec<TestStepItem>>,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CmdResult<ConnectOutcome> {
+) -> CmdResult<ConnectionTestOutcome> {
     let draft = ConnectionDraft::try_from(draft)?;
+    let name = draft.name.clone();
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let resolved = {
         let config = state.config.read().await;
@@ -745,50 +781,48 @@ async fn test_connection(
             None => resolver.resolve_draft(&draft),
         };
         match resolved {
-            Ok(resolved) => resolved,
             Err(spelaion_config::ResolveError::Untrusted { .. }) => {
-                return Ok(ConnectOutcome::Untrusted);
+                return Ok(ConnectionTestOutcome::Untrusted);
             }
             Err(spelaion_config::ResolveError::Changed { root, change }) => {
-                return Ok(ConnectOutcome::changed(root, change));
+                return Ok(ConnectionTestOutcome::changed(root, change));
             }
             Err(spelaion_config::ResolveError::MissingVariables { names }) => {
-                return Ok(ConnectOutcome::MissingVariables { names });
+                return Ok(ConnectionTestOutcome::MissingVariables { names });
             }
-            Err(e) => return Err(e.to_string()),
+            // Any other error is the test's first step.
+            other => other,
         }
     };
-    let options = OpenOptions {
-        tunnels: state.tunnels.clone(),
+    let options = spelaion_core::TestOptions {
+        scope: if network_only {
+            spelaion_core::TestScope::Network
+        } else {
+            spelaion_core::TestScope::Full
+        },
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app, state.pending.clone())),
         password: password.filter(|p| !p.is_empty()).map(Secret::new),
+        name,
     };
-    let open = match open_connection(resolved, &state.engines, options, state.results.clone()).await
-    {
-        Ok(open) => open,
-        Err(OpenError::PasswordRequired { .. }) => {
-            return Ok(ConnectOutcome::PasswordRequired {
-                can_remember: false,
-            });
-        }
-        Err(OpenError::Driver(DriverError::Database {
-            code: Some(code),
-            message,
-            ..
-        })) if code.starts_with("28") => {
-            return Ok(ConnectOutcome::AuthFailed {
-                message,
-                can_remember: false,
-            });
-        }
-        Err(e) => return Err(e.to_string()),
+    let stop = state.tests.start(test);
+    let observer = |steps: &[spelaion_core::TestStep]| {
+        let _ = on_step.send(steps.iter().map(TestStepItem::from).collect());
     };
-    let version = open.session.connection().server_version().await;
-    open.close().await;
-    Ok(ConnectOutcome::Connected {
-        server_version: version.map_err(|e| e.to_string())?,
+    let report =
+        spelaion_core::test_connection(resolved, &state.engines, options, &observer, stop).await;
+    state.tests.end(test);
+    Ok(ConnectionTestOutcome::Tested {
+        report: report.into(),
     })
+}
+
+/// Stops a running connection or network profile test: the running step is dropped and
+/// whatever it opened is closed. Nothing is retried.
+#[tauri::command]
+#[specta::specta]
+fn stop_connection_test(test: u32, state: State<'_, AppState>) {
+    state.tests.stop(test);
 }
 
 /// Saves a new connection file (and, for `keychain`, its password) and reloads the
@@ -1156,14 +1190,19 @@ async fn tunnel_draft(
     ))
 }
 
-/// Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
-/// password typed for hop `i`; stored ones are used when none is typed.
+/// Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
+/// again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
+/// are used when none is typed. Steps go through `on_step`; `stop_connection_test(test)`
+/// stops it.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 async fn test_tunnel(
     draft: TunnelDraftItem,
     passwords: Vec<Option<String>>,
     proxy_password: Option<String>,
+    test: u32,
+    on_step: Channel<Vec<TestStepItem>>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<TunnelTestOutcome> {
@@ -1172,22 +1211,29 @@ async fn test_tunnel(
     let resolved = {
         let config = state.config.read().await;
         match Resolver::new(&config, &trust, &SystemBackend).resolve_tunnel_draft(&draft) {
-            Ok(resolved) => resolved,
             Err(spelaion_config::ResolveError::Untrusted { .. }) => {
                 return Ok(TunnelTestOutcome::Untrusted);
             }
-            Err(e) => return Err(e.to_string()),
+            other => other,
         }
     };
-    spelaion_core::test_tunnel(
-        &resolved,
+    let stop = state.tests.start(test);
+    let observer = |steps: &[spelaion_core::TestStep]| {
+        let _ = on_step.send(steps.iter().map(TestStepItem::from).collect());
+    };
+    let report = spelaion_core::test_network_profile(
+        resolved,
         tunnel_passwords(passwords, proxy_password),
         &KnownHosts::for_user(&state.user_dir),
         Arc::new(AppInteraction::new(app, state.pending.clone())),
+        &observer,
+        stop,
     )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(TunnelTestOutcome::Connected)
+    .await;
+    state.tests.end(test);
+    Ok(TunnelTestOutcome::Tested {
+        report: report.into(),
+    })
 }
 
 /// What `kubectl` is asked with, from the Kubernetes tab: empty fields mean the defaults.
@@ -3247,6 +3293,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             keychain_available,
             list_tunnels,
             test_connection,
+            stop_connection_test,
             add_connection,
             connection_editor_access,
             connection_draft,
@@ -3359,6 +3406,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         ])
         .events(tauri_specta::collect_events![
             InteractionRequest,
+            InteractionClosed,
             SessionLost,
             TransactionChanged,
             QuitBlocked
@@ -3431,6 +3479,7 @@ pub fn run() {
         history,
         pending: Pending::default(),
         quitting: AtomicBool::new(false),
+        tests: ConnectionTests::default(),
     };
 
     let typed = builder.invoke_handler();

@@ -1544,6 +1544,14 @@ pub struct QuitBlocked {
     pub sessions: Vec<String>,
 }
 
+/// A dialog nobody waits for any more (the connection test that asked was stopped, or
+/// the answer took too long): the UI closes it.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionClosed {
+    pub id: u32,
+}
+
 /// Dialog the tunnel needs to show. The UI answers with `answer_interaction`.
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
@@ -1755,6 +1763,8 @@ pub struct ConnectionDraftItem {
     pub read_only: bool,
     /// Seconds idle before a keep-alive (ADR-028); null or 0 for off.
     pub keepalive: Option<u32>,
+    /// Seconds the database may take to connect (ADR-032); null for the default.
+    pub connect_timeout: Option<u32>,
     pub mcp_exposed: bool,
     /// Agents may write (`[mcp] writes = "allow"`, ADR-019).
     pub mcp_writes: bool,
@@ -1810,6 +1820,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             sqlite3: item.sqlite3,
             read_only: item.read_only,
             keepalive: item.keepalive,
+            connect_timeout: item.connect_timeout,
             mcp_exposed: item.mcp_exposed,
             mcp_writes: item.mcp_writes,
         })
@@ -1859,6 +1870,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             sqlite3: draft.sqlite3,
             read_only: draft.read_only,
             keepalive: draft.keepalive,
+            connect_timeout: draft.connect_timeout,
             mcp_exposed: draft.mcp_exposed,
             mcp_writes: draft.mcp_writes,
         }
@@ -2025,11 +2037,17 @@ impl NetworkProfileItem {
     }
 }
 
-/// Result of testing a tunnel from the editor.
+/// Result of testing a network profile from its editor (ADR-032).
 #[derive(Debug, Clone, Serialize, Type)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum TunnelTestOutcome {
-    Connected,
+    Tested {
+        report: TestReportItem,
+    },
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
 }
@@ -2621,4 +2639,263 @@ pub struct CellRange {
     pub first_row: u32,
     pub rows: u32,
     pub columns: Vec<u32>,
+}
+
+/// What testing a connection from its form gives (ADR-032). The steps arrive as they change
+/// through the command's channel; this is the end.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConnectionTestOutcome {
+    Tested {
+        report: TestReportItem,
+    },
+    /// The repository is not trusted: ask before resolving anything.
+    Untrusted,
+    /// A repository connection or tunnel is new or changed since it was trusted (ADR-022).
+    Changed {
+        item: String,
+        new: bool,
+        fields: Vec<FieldChangeItem>,
+        root: String,
+    },
+    /// Personal `${user.…}` variables to ask for first (ADR-022).
+    MissingVariables {
+        names: Vec<String>,
+    },
+}
+
+impl ConnectionTestOutcome {
+    pub fn changed(root: std::path::PathBuf, change: spelaion_config::ItemChange) -> Self {
+        Self::Changed {
+            item: change.item,
+            new: change.new,
+            fields: change
+                .fields
+                .into_iter()
+                .map(|f| FieldChangeItem {
+                    field: f.field,
+                    before: f.before,
+                    after: f.after,
+                })
+                .collect(),
+            root: root.to_string_lossy().into_owned(),
+        }
+    }
+}
+
+/// The end of a connection test: its steps and the diagnostics to copy, redacted by the core.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TestReportItem {
+    pub ok: bool,
+    pub stopped: bool,
+    pub network_only: bool,
+    pub server_version: Option<String>,
+    pub steps: Vec<TestStepItem>,
+    pub diagnostics: String,
+}
+
+impl From<spelaion_core::TestReport> for TestReportItem {
+    fn from(report: spelaion_core::TestReport) -> Self {
+        Self {
+            ok: report.ok,
+            stopped: report.stopped,
+            network_only: match report.scope {
+                spelaion_core::TestScope::Full => false,
+                spelaion_core::TestScope::Network => true,
+            },
+            server_version: report.server_version,
+            steps: report.steps.iter().map(TestStepItem::from).collect(),
+            diagnostics: report.diagnostics,
+        }
+    }
+}
+
+/// One line of the connection test's log.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TestStepItem {
+    pub kind: TestStepKindItem,
+    pub status: TestStepStatusItem,
+    pub failure: Option<TestFailureItem>,
+    pub elapsed_ms: Option<u32>,
+    /// The core's English line, for anything the UI does not translate.
+    pub title: String,
+}
+
+impl From<&spelaion_core::TestStep> for TestStepItem {
+    fn from(step: &spelaion_core::TestStep) -> Self {
+        use spelaion_core::{StepKind, StepStatus};
+        Self {
+            kind: match &step.kind {
+                StepKind::Resolve => TestStepKindItem::Resolve,
+                StepKind::Proxy {
+                    proxy_type,
+                    host,
+                    port,
+                } => TestStepKindItem::Proxy {
+                    proxy_type: proxy_type.clone(),
+                    host: host.clone(),
+                    port: *port,
+                },
+                StepKind::Hop {
+                    hop,
+                    user,
+                    host,
+                    port,
+                    command,
+                } => TestStepKindItem::Hop {
+                    hop: u32::try_from(*hop).unwrap_or(u32::MAX).saturating_add(1),
+                    user: user.clone(),
+                    host: host.clone(),
+                    port: *port,
+                    command: *command,
+                },
+                StepKind::Kubernetes {
+                    resource,
+                    context,
+                    namespace,
+                } => TestStepKindItem::Kubernetes {
+                    resource: resource.clone(),
+                    context: context.clone(),
+                    namespace: namespace.clone(),
+                },
+                StepKind::Target { host, port } => TestStepKindItem::Target {
+                    host: host.clone(),
+                    port: *port,
+                },
+                StepKind::Database {
+                    engine,
+                    database,
+                    user,
+                    file,
+                } => TestStepKindItem::Database {
+                    engine: engine.clone(),
+                    database: database.clone(),
+                    user: user.clone(),
+                    file: *file,
+                },
+            },
+            status: match step.status {
+                StepStatus::Pending => TestStepStatusItem::Pending,
+                StepStatus::Running => TestStepStatusItem::Running,
+                StepStatus::Ok => TestStepStatusItem::Ok,
+                StepStatus::Failed => TestStepStatusItem::Failed,
+                StepStatus::Skipped => TestStepStatusItem::Skipped,
+                StepStatus::Stopped => TestStepStatusItem::Stopped,
+            },
+            failure: step.failure.as_ref().map(|f| TestFailureItem {
+                kind: f.kind.into(),
+                message: f.message.clone(),
+                hint: f.kind.hint().to_string(),
+            }),
+            elapsed_ms: step
+                .elapsed
+                .map(|e| u32::try_from(e.as_millis()).unwrap_or(u32::MAX)),
+            title: step.title(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TestStepKindItem {
+    Resolve,
+    Proxy {
+        proxy_type: String,
+        host: String,
+        port: u16,
+    },
+    /// `hop` counts from 1.
+    Hop {
+        hop: u32,
+        user: String,
+        host: String,
+        port: u16,
+        command: bool,
+    },
+    Kubernetes {
+        resource: String,
+        context: Option<String>,
+        namespace: Option<String>,
+    },
+    Target {
+        host: String,
+        port: u16,
+    },
+    Database {
+        engine: String,
+        database: String,
+        user: String,
+        file: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TestStepStatusItem {
+    Pending,
+    Running,
+    Ok,
+    Failed,
+    Skipped,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TestFailureItem {
+    pub kind: FailureKindItem,
+    pub message: String,
+    /// The core's English hint; the UI shows its translation of `kind`.
+    pub hint: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FailureKindItem {
+    Config,
+    PasswordRequired,
+    Cancelled,
+    ProxyAuth,
+    SshAuth,
+    HostUnreachable,
+    HostKeyChanged,
+    HostKeyRejected,
+    DbAuth,
+    DbNotFound,
+    Tls,
+    Timeout,
+    Kubernetes,
+    Other,
+}
+
+impl From<spelaion_core::FailureKind> for FailureKindItem {
+    fn from(kind: spelaion_core::FailureKind) -> Self {
+        use spelaion_core::FailureKind;
+        match kind {
+            FailureKind::Config => Self::Config,
+            FailureKind::PasswordRequired => Self::PasswordRequired,
+            FailureKind::Cancelled => Self::Cancelled,
+            FailureKind::ProxyAuth => Self::ProxyAuth,
+            FailureKind::SshAuth => Self::SshAuth,
+            FailureKind::HostUnreachable => Self::HostUnreachable,
+            FailureKind::HostKeyChanged => Self::HostKeyChanged,
+            FailureKind::HostKeyRejected => Self::HostKeyRejected,
+            FailureKind::DbAuth => Self::DbAuth,
+            FailureKind::DbNotFound => Self::DbNotFound,
+            FailureKind::Tls => Self::Tls,
+            FailureKind::Timeout => Self::Timeout,
+            FailureKind::Kubernetes => Self::Kubernetes,
+            FailureKind::Other => Self::Other,
+        }
+    }
 }

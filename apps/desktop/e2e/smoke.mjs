@@ -2567,10 +2567,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // and never stored (not even in the keychain).
   await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
   await wizard.getByRole("button", { name: "Test connection" }).click();
-  await wizard.locator(".test-result", { hasText: "Enter the password" }).waitFor();
+  // The test log (ADR-032): the address is reached, the login needs the password.
+  await wizard.locator(".test-result", { hasText: "Failed at step 3: Password required" }).waitFor();
+  await wizard.locator(".test-log .step.ok", { hasText: "Reach 127.0.0.1:15432" }).waitFor();
+  await wizard.locator(".test-log .step.failed", { hasText: "type it in the form" }).waitFor();
   await wizard.getByLabel("Password", { exact: true }).fill("wrong");
   await wizard.getByRole("button", { name: "Test connection" }).click();
-  await wizard.locator(".test-result", { hasText: "password authentication failed" }).waitFor();
+  await wizard.locator(".test-result", { hasText: "Database authentication" }).waitFor();
+  await wizard.locator(".test-log .step.failed", { hasText: "password authentication failed" }).waitFor();
   await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
   await shot("12b-add-connection-main");
   await wizard.getByRole("tab", { name: "SSL" }).click();
@@ -2947,6 +2951,72 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     .map((name) => readFileSync(join(userDir, "connections", name), "utf8"))
     .find((text) => text.includes('tunnel = "wizard-bastions"'));
   assert.match(throughTunnel ?? "", new RegExp(`local_port = ${localPort}\\b`), throughTunnel);
+
+  step("connection test: the failing step, its hint, network only, Stop and Copy diagnostics");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard").first();
+  await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+  await wizard.getByLabel("Name", { exact: true }).fill("Failing test");
+  await wizard.getByLabel("Host", { exact: true }).fill("postgres");
+  await wizard.getByLabel("Database", { exact: true }).fill("no_such_database");
+  await wizard.getByLabel("User", { exact: true }).fill("spelaion");
+  await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+  await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+  await wizard.getByRole("tab", { name: "SSH" }).click();
+  await wizard.getByRole("checkbox", { name: "Connect through a network profile (SSH tunnel or proxy)" }).check();
+  await wizard.getByLabel("Network profile", { exact: true }).selectOption("wizard-bastions");
+  // Through both bastions to the server, which has no such database: step 5 of 5.
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await wizard.locator(".test-result", { hasText: "Failed at step 5: Database not found" }).waitFor();
+  const log = wizard.locator(".test-log");
+  assert.equal(await log.locator(".step.ok").count(), 4);
+  await log.locator(".step.ok", { hasText: "SSH hop 2: " }).waitFor();
+  await log.locator(".step.failed", { hasText: "does not exist" }).waitFor();
+  await log.locator(".step.failed", { hasText: "check its name" }).waitFor();
+  await shot("14b-connection-test-log");
+  // The diagnostics come from the core, redacted: the password (here also the user's name)
+  // is never in them.
+  const diagnosticsBefore = await page.evaluate(() => window.__copied.length);
+  await log.getByRole("button", { name: "Copy diagnostics" }).click();
+  await page.waitForFunction((n) => window.__copied.length === n + 1, diagnosticsBefore);
+  const diagnostics = await page.evaluate(() => window.__copied[window.__copied.length - 1]);
+  assert.match(diagnostics, /Result: failed at step 5/);
+  assert.match(diagnostics, /5\. \[FAILED\] Log in to postgres/);
+  assert.match(diagnostics, /Hint: /);
+  assert.doesNotMatch(diagnostics, /spelaion/);
+  // Network only: the same route, without logging in.
+  await wizard.getByRole("button", { name: "Test network only" }).click();
+  await wizard.locator(".test-result", { hasText: "The network reaches the database" }).waitFor();
+  assert.equal(await log.locator(".step").count(), 4);
+  // Stop: a server that accepts the connection and never answers keeps the login waiting.
+  const silentSockets = [];
+  const silent = createServer((socket) => {
+    silentSockets.push(socket);
+    // Read (and drop) what arrives, so the client closing its end is noticed.
+    socket.resume();
+    socket.on("error", () => {});
+  });
+  silent.listen(0, "127.0.0.1");
+  await once(silent, "listening");
+  await wizard.getByRole("checkbox", { name: "Connect through a network profile (SSH tunnel or proxy)" }).uncheck();
+  await wizard.getByRole("tab", { name: "Main" }).click();
+  await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+  await wizard.getByLabel("Port", { exact: true }).fill(String(silent.address().port));
+  await wizard.getByRole("button", { name: "Test connection" }).click();
+  await log.locator(".step.running", { hasText: "Log in to postgres" }).waitFor();
+  await log.getByRole("button", { name: "Stop" }).click();
+  await wizard.locator(".test-result", { hasText: "Stopped" }).waitFor();
+  await log.locator(".step.stopped", { hasText: "Log in to postgres" }).waitFor();
+  // Reaching the address opened and closed one connection; the stopped login's is closed too.
+  assert.ok(silentSockets.length >= 2, `connections: ${silentSockets.length}`);
+  await Promise.race([
+    Promise.all(silentSockets.map((socket) => (socket.closed ? null : once(socket, "close")))),
+    new Promise((_, fail) => setTimeout(() => fail(new Error("the stopped login left its connection open")), 10_000)),
+  ]);
+  silent.close();
+  for (const socket of silentSockets) socket.destroy();
+  await wizard.getByRole("button", { name: "Cancel" }).click();
+  await wizard.waitFor({ state: "detached" });
 
   step("Settings → Network: a range of local ports for tunnels");
   await withSettings("network", async (settings) => {

@@ -1644,6 +1644,74 @@ select {
 .test-result .ok {
   color: #2f9e44;
 }
+
+/* The connection test's log (ADR-032): one line per step, above the form's buttons. */
+.test-log {
+  border-top: 1px solid var(--line);
+  padding: 8px 18px;
+  max-height: 40%;
+  overflow: auto;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.test-log header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.test-log header .grow {
+  flex: 1;
+}
+.test-log header .ok {
+  color: #2f9e44;
+}
+.test-log ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.test-log .step {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 2px 6px;
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+.test-log .step .icon {
+  text-align: center;
+  font-weight: 600;
+}
+.test-log .step.ok .icon {
+  color: #2f9e44;
+}
+.test-log .step.failed .icon,
+.test-log .step.failed .title {
+  color: var(--danger);
+}
+.test-log .step.running .icon {
+  color: var(--accent);
+}
+.test-log .step.skipped,
+.test-log .step.pending {
+  color: var(--muted);
+}
+.test-log .failure {
+  grid-column: 2 / 4;
+  padding: 4px 0 6px;
+}
+.test-log .failure .failure-kind {
+  font-weight: 600;
+}
+.test-log .failure .message {
+  margin: 2px 0;
+  white-space: pre-wrap;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+.test-log .failure .hint {
+  margin: 2px 0 0;
+}
 .sidebar .empty button {
   margin-top: 8px;
 }
