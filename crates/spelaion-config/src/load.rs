@@ -118,6 +118,28 @@ pub fn default_user_dir() -> Option<PathBuf> {
     base.map(|d| d.join("spelaion"))
 }
 
+/// Creates the personal directory if needed and keeps it private: it holds the query history,
+/// the audit and the personal variables. On Unix the default umask leaves a new folder
+/// readable by every local user (0755), so a folder open to its group or to others is closed
+/// to 0700; with the root private, nothing inside it is reachable, whatever each file's mode.
+/// Windows' per-user profile folders are already private.
+pub fn ensure_private_dir(dir: &Path) -> Result<(), ConfigError> {
+    std::fs::create_dir_all(dir).map_err(|e| ConfigError::new(dir, e.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir)
+            .map_err(|e| ConfigError::new(dir, e.to_string()))?
+            .permissions()
+            .mode();
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| ConfigError::new(dir, e.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
 /// The configuration folder of the repository at `root`: `.spelaion/`, or `.spelunk/` (its
 /// name before ADR-023) when only that one exists.
 pub fn workspace_dir(root: &Path) -> PathBuf {

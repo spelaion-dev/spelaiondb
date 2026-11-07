@@ -44,7 +44,7 @@ pub use edit::{
 pub use error::{ConfigError, ResolveError};
 pub use load::{
     Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, WORKSPACE_DIR, default_user_dir,
-    find_workspace, load, workspace_dir,
+    ensure_private_dir, find_workspace, load, workspace_dir,
 };
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{

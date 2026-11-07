@@ -104,16 +104,25 @@ fn check(path: Option<PathBuf>, strict: bool) -> Result<()> {
 }
 
 fn user_dir(cli: &Cli) -> Result<PathBuf> {
-    if let Some(dir) = &cli.user_dir {
-        return Ok(dir.clone());
-    }
-    let dir =
-        default_user_dir().ok_or_else(|| anyhow!("the configuration directory cannot be found"))?;
-    // First start after the rename (ADR-023): the old personal folder is copied, not moved.
-    if let Some(old) = spelaion_config::legacy_user_dir()
-        && let Err(e) = spelaion_config::migrate_user_dir(&old, &dir)
-    {
-        eprintln!("could not copy the old personal folder: {e}");
+    let dir = match &cli.user_dir {
+        Some(dir) => dir.clone(),
+        None => {
+            let dir = default_user_dir()
+                .ok_or_else(|| anyhow!("the configuration directory cannot be found"))?;
+            // First start after the rename (ADR-023): the old personal folder is copied, not
+            // moved.
+            if let Some(old) = spelaion_config::legacy_user_dir()
+                && let Err(e) = spelaion_config::migrate_user_dir(&old, &dir)
+            {
+                eprintln!("could not copy the old personal folder: {e}");
+            }
+            dir
+        }
+    };
+    // Query history and audit live there: other local users must not read them. On stderr:
+    // in `spelaiondb mcp`, stdout is the protocol.
+    if let Err(e) = spelaion_config::ensure_private_dir(&dir) {
+        eprintln!("could not make the personal folder private: {e}");
     }
     Ok(dir)
 }
