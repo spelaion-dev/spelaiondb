@@ -22,6 +22,7 @@ import { refreshConnections } from "./Sidebar";
 import { chooseSavePath, openFilters } from "../dialogs";
 import { reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
+import { ensureEditorAccess } from "../connectionCopies";
 import { fieldList } from "../fieldNames";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
@@ -63,26 +64,12 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
     setEngineChange(next.id === savedEngine ? null : mapped.change);
   }
 
-
   useEffect(() => {
     void commands.engineCatalog().then(async (catalog) => {
       setEngines(catalog);
       if (!editing) return;
       try {
-        let access = await call(commands.connectionEditorAccess(editing));
-        if (access.kind === "untrusted") {
-          const shown = useApp.getState().workspace?.workspace ?? null;
-          if (!(await useDialogs.getState().askTrust(shown))) { close(); return; }
-          useApp.getState().setWorkspace(await call(commands.trustWorkspace(shown ?? "")));
-          access = await call(commands.connectionEditorAccess(editing));
-        }
-        if (access.kind === "changed") {
-          const accepted = await useDialogs.getState().askChange({ item: access.item, isNew: access.new, fields: access.fields });
-          if (!accepted) { close(); return; }
-          await call(commands.acceptChange(access.root, access.item, access.new, access.fields));
-          access = await call(commands.connectionEditorAccess(editing));
-        }
-        if (access.kind !== "ready") { close(); return; }
+        if (!(await ensureEditorAccess(editing))) { close(); return; }
         // The "Serialize" variant only differs in optional markers: same fields.
         const [saved, revision] = await call(commands.connectionDraft(editing));
         const draft = saved as ConnectionDraft;
@@ -127,21 +114,28 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
           engine &&
           initial &&
           revision !== null && (
-            <ConnectionForm
-              // Another engine is another form, started from what the core mapped.
-              key={engine.id}
-              engine={engine}
-              editing={editing}
-              initial={initial}
-              initialPassword={carriedPassword}
-              revision={revision}
-              engines={engines.filter((e) => e.available)}
-              savedEngine={savedEngine ?? engine.id}
-              engineChange={engineChange}
-              onChangeEngine={changeEngine}
-              onCancel={close}
-              onSaved={close}
-            />
+            <>
+              {dialog.kind === "edit" && dialog.notice && (
+                <p className="banner wizard-notice" role="status">
+                  {dialog.notice}
+                </p>
+              )}
+              <ConnectionForm
+                // Another engine is another form, started from what the core mapped.
+                key={engine.id}
+                engine={engine}
+                editing={editing}
+                initial={initial}
+                initialPassword={carriedPassword}
+                revision={revision}
+                engines={engines.filter((e) => e.available)}
+                savedEngine={savedEngine ?? engine.id}
+                engineChange={engineChange}
+                onChangeEngine={changeEngine}
+                onCancel={close}
+                onSaved={close}
+              />
+            </>
           )
         ) : importing ? (
           <DbeaverImport onBack={() => setImporting(false)} onDone={close} />

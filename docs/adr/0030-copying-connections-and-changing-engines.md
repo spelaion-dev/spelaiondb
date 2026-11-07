@@ -35,9 +35,10 @@ lacked:
    - **The keychain password is copied inside the core**: read from the original's entry and
      written to the copy's own entry, so the copy connects like the original and deleting one
      never breaks the other. The value never reaches the UI, the clipboard or a file. Without a
-     stored password, or without a keychain, the copy asks for it like a new connection, and an
-     entry left under the copy's name by an older connection is deleted so it is never sent to
-     the copy's server. A named entry (`keychain:<name>`) is shared on purpose and is kept as it
+     stored password, or without a system keychain at all, the copy asks for it like a new
+     connection, and an entry left under the copy's name by an older connection is deleted so
+     it is never sent to the copy's server. A keychain that exists but fails (locked, refused)
+     is an error, and no copy is made. A named entry (`keychain:<name>`) is shared on purpose and is kept as it
      is; `env:`, `op://`, `cmd:` and `prompt` are references and are copied as such.
 2. **Ctrl+C / Ctrl+V on a connection** in the explorer use a text form (`connection_clipboard_text`):
    the connection file without anything that reads a secret, runs a program or lets agents in.

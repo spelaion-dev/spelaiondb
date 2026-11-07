@@ -522,7 +522,7 @@ impl ConnectionDraft {
     }
 }
 
-fn uses_default_keychain(file: &ConnectionFile) -> bool {
+pub(crate) fn uses_default_keychain(file: &ConnectionFile) -> bool {
     file.password
         .as_ref()
         .is_some_and(|p| p.secret == "keychain")
@@ -530,7 +530,7 @@ fn uses_default_keychain(file: &ConnectionFile) -> bool {
 
 /// Sets (or removes, with `None`) one key of the document, creating parent tables as needed
 /// and dropping tables left empty. The comment on an existing value is kept.
-fn put(doc: &mut toml_edit::DocumentMut, key: &[&str], value: Option<toml_edit::Value>) {
+pub(crate) fn put(doc: &mut toml_edit::DocumentMut, key: &[&str], value: Option<toml_edit::Value>) {
     use toml_edit::{Item, Table};
     let Some((last, parents)) = key.split_last() else {
         return;

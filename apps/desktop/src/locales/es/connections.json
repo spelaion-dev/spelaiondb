@@ -295,6 +295,18 @@
     "read_only": "solo lectura",
     "mcp": "acceso de los agentes"
   },
+  "copies": {
+    "duplicate": "Duplicar",
+    "copy": "Copiar",
+    "paste": "Pegar conexión",
+    "duplicated": "«{{copy}}» es una copia de «{{name}}», ya guardada. Su contraseña se pedirá al conectar. Cambia lo que sea distinto o cierra.",
+    "duplicatedWithPassword": "«{{copy}}» es una copia de «{{name}}», ya guardada, con su propia copia de la contraseña guardada. Cambia lo que sea distinto o cierra.",
+    "copied": "«{{name}}» copiada, sin su contraseña.",
+    "copiedWithout": "«{{name}}» copiada, sin su contraseña. Se ha quedado fuera: {{fields}}.",
+    "pasted": "«{{name}}» se ha pegado como conexión personal, ya guardada. Su contraseña se pide al conectar. Revísala o cierra.",
+    "pastedWithout": "«{{name}}» se ha pegado como conexión personal, ya guardada. Su contraseña se pide al conectar. No se ha tomado del portapapeles: {{fields}}. Revísala o cierra.",
+    "clipboardUnavailable": "No se ha podido leer el portapapeles: selecciona una conexión y pulsa Ctrl+V."
+  },
   "engineChange": {
     "title": "Cambio de motor",
     "summary": "Motor: {{from}} → {{to}}. No se guarda nada hasta que guardes.",

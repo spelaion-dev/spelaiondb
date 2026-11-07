@@ -68,10 +68,21 @@ pub struct FakeBackend {
     pub runs: Mutex<Vec<String>>,
     pub reads: Mutex<Vec<String>>,
     pub fail_set: bool,
+    /// No system keychain at all (Linux without a Secret Service).
+    pub no_keychain: bool,
+    /// The keychain exists but refuses to read (locked).
+    pub fail_get: bool,
 }
 
 impl SecretBackend for FakeBackend {
+    fn keychain_available(&self) -> bool {
+        !self.no_keychain
+    }
+
     fn keychain_get(&self, account: &str) -> Result<Option<String>, String> {
+        if self.no_keychain || self.fail_get {
+            return Err("keychain unavailable".into());
+        }
         self.reads.lock().unwrap().push(account.into());
         Ok(self.keychain.lock().unwrap().get(account).cloned())
     }

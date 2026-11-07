@@ -40,6 +40,7 @@ import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
 import { ConnectionMenu } from "./ConnectionMenu";
+import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard, pasteIsForText } from "../connectionCopies";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
@@ -946,6 +947,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   );
   const [showProblems, setShowProblems] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
+  /** What the last paste of a connection (Ctrl+V) went wrong with. */
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const filter = useApp((s) => s.explorerFilter);
   const openConnections = useApp((s) => s.openConnections);
   const filterBox = useRef<HTMLInputElement>(null);
@@ -1160,7 +1163,24 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           )}
         </div>
       )}
-      <div className="tree">
+      {pasteError && (
+        <div className="banner" role="alert">
+          {pasteError}
+          <button className="ghost small" aria-label={t("connections:close")} onClick={() => setPasteError(null)}>
+            ×
+          </button>
+        </div>
+      )}
+      <div
+        className="tree"
+        onPaste={(e) => {
+          // Ctrl+V in the explorer (not in a text field): a connection from the clipboard.
+          if (pasteIsForText(e.target)) return;
+          e.preventDefault();
+          setPasteError(null);
+          pasteConnection(e.clipboardData.getData("text/plain")).catch((err: unknown) => setPasteError(errorText(err)));
+        }}
+      >
         <BookmarksSection />
         {connections.length > 0 && filterText !== "" && !connections.some(shown) && (
           <div className="empty small">{t("quickFilterNothing")}</div>
@@ -1198,6 +1218,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
                   key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
                   connection={c}
                   filter={filterText}
+                  onPasteError={setPasteError}
                 />
               ))}
             </div>
@@ -1208,8 +1229,34 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   );
 }
 
-function ConnectionNode({ connection, filter }: { connection: ConnectionItem; filter: string }) {
+function ConnectionNode({
+  connection,
+  filter,
+  onPasteError,
+}: {
+  connection: ConnectionItem;
+  filter: string;
+  onPasteError(message: string | null): void;
+}) {
   const { t } = useTranslation("shell");
+  /** The outcome of copying this connection, or of an action of its menus, under its row. */
+  const [rowNote, setRowNote] = useState<{ error: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (!rowNote || rowNote.error) return;
+    const timer = window.setTimeout(() => setRowNote(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [rowNote]);
+  const rowError = (e: unknown) => setRowNote({ error: true, text: errorText(e) });
+  function copy() {
+    setRowNote(null);
+    copyConnection(connection)
+      .then((text) => text && setRowNote({ error: false, text }))
+      .catch(rowError);
+  }
+  function duplicate() {
+    setRowNote(null);
+    duplicateConnection(connection).catch(rowError);
+  }
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [schemas, setSchemas] = useState<SchemaItem[] | null>(null);
@@ -1373,9 +1420,17 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       <div
         ref={connectionRow}
         className={`row connection-row${connectionRevealed}`}
+        tabIndex={-1}
         onContextMenu={(e) => {
           e.preventDefault();
           setRowMenu({ x: e.clientX, y: e.clientY });
+        }}
+        onKeyDown={(e) => {
+          // Ctrl+C copies the connection (objects keep copying their names, ADR-026).
+          if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
+            e.preventDefault();
+            copy();
+          }
         }}
       >
         <button
@@ -1419,8 +1474,14 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
           connection={connection}
           onRefresh={schemas ? () => void refreshAll() : undefined}
           onConfigureFilters={() => configureFilter()}
+          onError={(message) => setRowNote({ error: true, text: message })}
         />
       </div>
+      {rowNote && (
+        <div className={`${rowNote.error ? "error" : "muted"} small row-note`} role={rowNote.error ? "alert" : "status"}>
+          {rowNote.text}
+        </div>
+      )}
       {rowMenu && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: rowMenu.x, top: rowMenu.y }}>
           {schemas && (
@@ -1438,6 +1499,38 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
           <button role="menuitem" onClick={() => configureFilter("schemas")}>
             {t("configureSchemaFilter")}
           </button>
+          <hr />
+          <button
+            role="menuitem"
+            onClick={() => {
+              setRowMenu(null);
+              duplicate();
+            }}
+          >
+            {t("connections:copies.duplicate")}
+          </button>
+          <button
+            role="menuitem"
+            title="Ctrl+C"
+            onClick={() => {
+              setRowMenu(null);
+              copy();
+            }}
+          >
+            {t("connections:copies.copy")}
+          </button>
+          <button
+            role="menuitem"
+            title="Ctrl+V"
+            onClick={() => {
+              setRowMenu(null);
+              onPasteError(null);
+              pasteFromClipboard().catch((e: unknown) => onPasteError(errorText(e)));
+            }}
+          >
+            {t("connections:copies.paste")}
+          </button>
+          <hr />
           {schemas && (
             <button
               role="menuitem"

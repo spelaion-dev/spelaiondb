@@ -103,7 +103,10 @@ export const DEFAULT_PAGE_SIZE = 500;
 
 let tabCounter = 0;
 
-export type ConnectionDialog = { kind: "add" } | { kind: "edit"; id: string };
+export type ConnectionDialog =
+  | { kind: "add" }
+  /** `notice`: shown above the form, such as "this is the copy just made". */
+  | { kind: "edit"; id: string; notice?: string };
 
 /** An object to show in the explorer: its connection expands (if it is connected there), then
  *  its schema and the folder holding the object, which is scrolled into view. */
