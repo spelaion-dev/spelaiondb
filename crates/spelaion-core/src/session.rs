@@ -4,7 +4,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use arrow::util::display::array_value_to_string;
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_config::Safeguards;
@@ -320,10 +319,8 @@ impl Session {
         if commit && before == TransactionState::Failed {
             notices.push(transaction::failed_commit_notice());
         }
-        // MyISAM ignores transactions: the server warns that its changes stayed (ADR-031).
-        if !commit && engine == "mysql" {
-            notices.extend(mysql_warnings(&*self.connection, &self.options).await);
-        }
+        // MyISAM ignores transactions: the server's warning that its changes stayed comes with
+        // the ROLLBACK's notices (ADR-031), as every MySQL warning does (ADR-035).
         let after = self.connection.transaction_state().await.map_err(failed)?;
         self.transaction.send_modify(|s| s.observe(after));
         Ok(TransactionOutcome {
@@ -504,31 +501,4 @@ async fn run_control(
         }
     }
     Ok(notices)
-}
-
-/// MySQL's warnings of the last statement (`SHOW WARNINGS`), as notices: after a `ROLLBACK`,
-/// the one that says non-transactional tables (MyISAM) kept their changes.
-async fn mysql_warnings(connection: &dyn Connection, options: &ExecOptions) -> Vec<Notice> {
-    let Ok(mut events) = connection.execute("SHOW WARNINGS", options).await else {
-        return Vec::new();
-    };
-    let mut notices = Vec::new();
-    while let Some(Ok(event)) = events.next().await {
-        if let ExecEvent::Batch(batch) = event {
-            for row in 0..batch.num_rows() {
-                let cell = |column: usize| {
-                    batch
-                        .columns()
-                        .get(column)
-                        .and_then(|array| array_value_to_string(array, row).ok())
-                        .unwrap_or_default()
-                };
-                notices.push(Notice {
-                    severity: cell(0).to_uppercase(),
-                    message: format!("{} ({})", cell(2), cell(1)),
-                });
-            }
-        }
-    }
-    notices
 }

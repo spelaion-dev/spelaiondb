@@ -19,8 +19,9 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, ObjectInfo, Result,
-    ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
+    EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, Notice, ObjectInfo,
+    Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
+    TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -323,21 +324,85 @@ enum ExecutionOutcome {
     Cancelled,
 }
 
-/// Runs one batch and streams every result set. A dropped receiver asks the actor to cancel
-/// the remaining server work; transaction state then stays unknown until another user request.
+/// Runs one batch and streams every result set, then the server's messages (`PRINT`,
+/// `RAISERROR` with severity 10 or less) and its end. A dropped receiver asks the actor to
+/// cancel the remaining server work; transaction state then stays unknown until another user
+/// request.
 async fn execute(
     client: &mut SqlClient,
     sql: &str,
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
 ) -> ExecutionOutcome {
+    // Messages of the driver's own queries and of the login are not this batch's.
+    let _ = client.take_info_messages();
+    let streamed = stream_batch(client, sql, batch_size, events).await;
+    if matches!(streamed, Streamed::Abandoned) {
+        return ExecutionOutcome::Abandoned;
+    }
+    for notice in info_notices(client) {
+        if events.send(Ok(ExecEvent::Notice(notice))).await.is_err() {
+            return ExecutionOutcome::Complete;
+        }
+    }
+    match streamed {
+        Streamed::Done(rows_affected) => {
+            let _ = events.send(Ok(ExecEvent::Done { rows_affected })).await;
+            ExecutionOutcome::Complete
+        }
+        Streamed::Failed(error) => {
+            let _ = events.send(Err(error)).await;
+            ExecutionOutcome::Failed
+        }
+        Streamed::Gone => ExecutionOutcome::Complete,
+        Streamed::Abandoned => ExecutionOutcome::Abandoned,
+    }
+}
+
+/// How [`stream_batch`] ended.
+enum Streamed {
+    /// Every row was sent; the batch's row count, if it has one.
+    Done(Option<u64>),
+    Failed(DriverError),
+    /// The receiver went away mid-batch: the server's work must be cancelled.
+    Abandoned,
+    /// The receiver went away after the last row.
+    Gone,
+}
+
+/// The server's informational messages since the batch started, as notices.
+fn info_notices(client: &mut SqlClient) -> Vec<Notice> {
+    let (messages, dropped) = client.take_info_messages();
+    let mut notices: Vec<Notice> = messages
+        .into_iter()
+        .map(|m| Notice {
+            severity: "INFO".into(),
+            message: m.message,
+        })
+        .collect();
+    if dropped > 0 {
+        notices.push(Notice {
+            severity: "WARNING".into(),
+            message: format!(
+                "{dropped} more messages from the server were not kept (the first {} are above)",
+                tiberius::MAX_INFO_MESSAGES
+            ),
+        });
+    }
+    notices
+}
+
+/// Streams one batch's result sets; the caller sends its messages and its end.
+async fn stream_batch(
+    client: &mut SqlClient,
+    sql: &str,
+    batch_size: usize,
+    events: &mpsc::Sender<Result<ExecEvent>>,
+) -> Streamed {
     let send = |event| async move { events.send(event).await.is_ok() };
     let mut stream = match client.simple_query(sql).await {
         Ok(stream) => stream,
-        Err(e) => {
-            send(Err(map_error(e, Some(sql)))).await;
-            return ExecutionOutcome::Failed;
-        }
+        Err(e) => return Streamed::Failed(map_error(e, Some(sql))),
     };
     let mut current: Option<Current> = None;
     let mut total_rows: u64 = 0;
@@ -345,15 +410,12 @@ async fn execute(
     loop {
         let next = tokio::select! {
             result = stream.try_next() => result,
-            () = events.closed() => return ExecutionOutcome::Abandoned,
+            () = events.closed() => return Streamed::Abandoned,
         };
         let item = match next {
             Ok(Some(item)) => item,
             Ok(None) => break,
-            Err(e) => {
-                send(Err(map_error(e, Some(sql)))).await;
-                return ExecutionOutcome::Failed;
-            }
+            Err(e) => return Streamed::Failed(map_error(e, Some(sql))),
         };
         match item {
             QueryItem::Metadata(meta) => {
@@ -361,7 +423,7 @@ async fn execute(
                     && previous.pending > 0
                     && !send(previous.finish().map(ExecEvent::Batch)).await
                 {
-                    return ExecutionOutcome::Abandoned;
+                    return Streamed::Abandoned;
                 }
                 any_result = true;
                 let metas: Vec<_> = meta
@@ -379,7 +441,7 @@ async fn execute(
                     .map(|(meta, ty)| decode::ColumnBuilder::new(meta, *ty, batch_size))
                     .collect();
                 if !send(Ok(ExecEvent::Columns(schema.clone()))).await {
-                    return ExecutionOutcome::Abandoned;
+                    return Streamed::Abandoned;
                 }
                 current = Some(Current {
                     schema,
@@ -402,7 +464,7 @@ async fn execute(
                             column.name, result.types[i]
                         ))))
                         .await;
-                        return ExecutionOutcome::Abandoned;
+                        return Streamed::Abandoned;
                     }
                 }
                 result.pending += 1;
@@ -410,7 +472,7 @@ async fn execute(
                 if result.pending == batch_size
                     && !send(result.finish().map(ExecEvent::Batch)).await
                 {
-                    return ExecutionOutcome::Abandoned;
+                    return Streamed::Abandoned;
                 }
             }
         }
@@ -420,7 +482,7 @@ async fn execute(
         && last.pending > 0
         && !send(last.finish().map(ExecEvent::Batch)).await
     {
-        return ExecutionOutcome::Complete;
+        return Streamed::Gone;
     }
     let rows_affected = if any_result {
         Some(total_rows)
@@ -431,16 +493,12 @@ async fn execute(
                 .first()
                 .and_then(|r| r.first().cloned().flatten())
                 .and_then(|n| n.parse().ok()),
-            Err(e) => {
-                send(Err(e)).await;
-                return ExecutionOutcome::Failed;
-            }
+            Err(e) => return Streamed::Failed(e),
         }
     } else {
         None
     };
-    send(Ok(ExecEvent::Done { rows_affected })).await;
-    ExecutionOutcome::Complete
+    Streamed::Done(rows_affected)
 }
 
 struct SqlServerConnection {

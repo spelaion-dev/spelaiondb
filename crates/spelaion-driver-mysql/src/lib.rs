@@ -22,7 +22,7 @@ use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, LogicalType,
-    NameFilter, ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject,
+    NameFilter, Notice, ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject,
     TableInfo, TlsMode, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -389,8 +389,38 @@ async fn execute(
         return false;
     }
     let rows_affected = (columns.is_empty() && reports_row_count(sql)).then_some(affected);
+    // The server counts the statement's warnings and notes in its last OK packet: only when
+    // there are some does it cost a round trip to read them (ADR-035).
+    if conn.get_warnings() > 0 && dialect::first_word(sql) != "show" {
+        for notice in warnings(conn).await {
+            if !send(Ok(ExecEvent::Notice(notice))).await {
+                return true;
+            }
+        }
+    }
     send(Ok(ExecEvent::Done { rows_affected })).await;
     true
+}
+
+/// Most warnings read after one statement.
+const MAX_WARNINGS: usize = 100;
+
+/// The last statement's warnings and notes (`SHOW WARNINGS`), as notices: "Warning: Data
+/// truncated for column 'v' at row 1 (1265)". A failure to read them is not the statement's.
+async fn warnings(conn: &mut Conn) -> Vec<Notice> {
+    let rows: Vec<(String, u32, String)> = match conn
+        .query(format!("SHOW WARNINGS LIMIT {MAX_WARNINGS}"))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return Vec::new(),
+    };
+    rows.into_iter()
+        .map(|(level, code, message)| Notice {
+            severity: level.to_uppercase(),
+            message: format!("{message} ({code})"),
+        })
+        .collect()
 }
 
 fn raw_values(row: mysql_async::Row) -> Vec<Option<Vec<u8>>> {

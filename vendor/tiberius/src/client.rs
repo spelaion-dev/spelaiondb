@@ -89,6 +89,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         Ok(self.connection.context().transaction_descriptor() != [0; 8])
     }
 
+    /// The server's informational messages (`PRINT`, `RAISERROR` with severity 10 or less,
+    /// "Changed database context…") received since the last call, and how many more were
+    /// dropped once [`MAX_INFO_MESSAGES`](crate::MAX_INFO_MESSAGES) were kept (SpelaionDB
+    /// patch).
+    pub fn take_info_messages(&mut self) -> (Vec<crate::InfoMessage>, usize) {
+        self.connection.context_mut().take_info()
+    }
+
     /// Uses an instance of [`Config`] to specify the connection
     /// options required to connect to the database using an established
     /// tcp connection
