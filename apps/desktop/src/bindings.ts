@@ -16,6 +16,8 @@ export const commands = {
 	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
 	getExplorerPreferences: () => typedError<ExplorerPreferencesItem, string>(__TAURI_INVOKE("get_explorer_preferences")),
 	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
+	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
+	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
@@ -391,12 +393,14 @@ export type CellEditItem_Serialize = {
 	value: string | null,
 };
 
-/**  A rectangle of a result: rows and columns by position. */
+/**
+ *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
+ *  out the columns it hides).
+ */
 export type CellRange = {
 	firstRow: number,
 	rows: number,
-	firstColumn: number,
-	columns: number,
+	columns: number[],
 };
 
 /**  The clipboard form of a connection: no secrets, nothing that runs a program. */
@@ -942,6 +946,13 @@ export type FoundObjectItem_Deserialize = { kind: "relation"; object: ObjectItem
 
 /**  What "Open object by name" found: a relation or another object of a schema. */
 export type FoundObjectItem_Serialize = { kind: "relation"; object: ObjectItem_Serialize } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
+
+/**  How the result grid draws its cells; personal, like the theme. */
+export type GridPreferencesItem = {
+	zebra: boolean,
+	nullText: boolean,
+	boolCheckboxes: boolean,
+};
 
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
 

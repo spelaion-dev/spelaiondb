@@ -287,7 +287,7 @@ async fn results_sort_by_typed_values_across_batches() {
             &spelaion_core::ExportOptions {
                 format: spelaion_core::ExportFormat::Tsv,
                 rows,
-                columns: column..column + 1,
+                columns: vec![column],
                 header: false,
             },
             &spelaion_core::GenericDialect,

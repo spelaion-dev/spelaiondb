@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type TextFormat } from "../api";
-import { THEME_CHANGE_EVENT } from "../preferences";
+import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta, SortState } from "../store";
 import { CellViewer, type ViewerMode } from "./CellViewer";
@@ -26,6 +26,10 @@ const ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
 const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
 const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
 const NUMERIC = new Set(["int", "float", "decimal"]);
+/** Texts of a boolean cell, as each engine's text reads (`t`, `true`, a `bit`'s `1`). */
+const BOOL_TRUE = new Set(["t", "true", "1"]);
+const BOOL_FALSE = new Set(["f", "false", "0"]);
+const CHECK = 12;
 const MENU_MARGIN = 8;
 
 /** Keep a measured popup inside the window, including when the window is resized. */
@@ -201,8 +205,16 @@ export function ResultGrid({
   const [selection, setSelection] = useState<Selection | null>(null);
   const [queryPage, setQueryPage] = useState(0);
   const requestedPageScroll = useRef<number | null>(null);
-  /** The context menu, with the cell it was opened on (for the Filter submenu). */
-  const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell | null } | null>(null);
+  /** The context menu, with the cell it was opened on (for the Filter submenu), or the column
+   *  whose header it was opened on. */
+  const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell | null; header?: number } | null>(null);
+  /** Columns hidden in this result tab (in memory), by position in the result. */
+  const [hidden, setHidden] = useState<ReadonlySet<number>>(() => new Set());
+  /** The first shown column stays on the left while scrolling sideways. */
+  const [frozen, setFrozen] = useState(false);
+  /** The column chooser, where it was opened. */
+  const [chooser, setChooser] = useState<{ x: number; y: number } | null>(null);
+  const gridLook = usePreferences((s) => s.grid);
   const menuRef = useRef<HTMLDivElement>(null);
   /** The custom filter dialog, starting from a column and a value. */
   const [customFilter, setCustomFilter] = useState<ColumnFilterItem | null>(null);
@@ -310,7 +322,13 @@ export function ResultGrid({
       return Math.round(Math.min(MAX_COL, Math.max(MIN_COL, name + PAD * 2 + 8, type + PAD * 2, base)));
     });
   }, [result.columns]);
-  const widths = useMemo(() => automatic.map((w, i) => resized[i] ?? w), [automatic, resized]);
+  // A hidden column keeps its place with no width: nothing is drawn or hit there.
+  const widths = useMemo(() => automatic.map((w, i) => (hidden.has(i) ? 0 : resized[i] ?? w)), [automatic, resized, hidden]);
+  const visibleCols = useMemo(() => result.columns.map((_, i) => i).filter((i) => !hidden.has(i)), [result.columns, hidden]);
+  const firstVisible = visibleCols[0] ?? 0;
+  const lastVisible = visibleCols[visibleCols.length - 1] ?? 0;
+  const frozenCol = frozen && visibleCols.length > 1 ? firstVisible : null;
+  const frozenW = frozenCol === null ? 0 : (widths[frozenCol] ?? 0);
   const offsets = useMemo(() => {
     const out = [0];
     for (const w of widths) out.push((out[out.length - 1] ?? 0) + w);
@@ -321,14 +339,14 @@ export function ResultGrid({
   const totalH = HEADER_H + result.rows * ROW_H;
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing });
-  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol };
 
   function draw() {
     const canvas = canvasRef.current;
     const scroller = scrollerRef.current;
     if (!canvas || !scroller) return;
-    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing } = live.current;
+    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol } = live.current;
     const deletedRows = new Set(editing?.deleted ?? []);
     const range = selection ? bounds(selection) : null;
     const dpr = window.devicePixelRatio || 1;
@@ -356,17 +374,84 @@ export function ResultGrid({
     ctx.fillRect(0, 0, size.w, size.h);
     ctx.textBaseline = "middle";
 
+    // A frozen column is drawn last, over the columns that scroll under it.
+    const frozenW = frozenCol === null ? 0 : (widths[frozenCol] ?? 0);
+    const fixedRight = rowNumW + frozenW;
     const first = Math.floor(top / ROW_H);
     const visible = Math.ceil((size.h - HEADER_H) / ROW_H) + 1;
     const last = Math.min(result.rows, first + visible);
     let firstCol = 0;
-    while (firstCol < widths.length && rowNumW + (offsets[firstCol + 1] ?? 0) - left < rowNumW) firstCol++;
+    while (firstCol < widths.length && rowNumW + (offsets[firstCol + 1] ?? 0) - left < fixedRight) firstCol++;
+
+    const drawCell = (row: number, col: number, x: number, y: number, w: number) => {
+      if (range && inside(range, row, col)) {
+        ctx.fillStyle = c.select;
+        ctx.fillRect(x, y, w, ROW_H);
+      }
+      if (selection && selection.focus.row === row && selection.focus.col === col) {
+        ctx.strokeStyle = c.accent;
+        ctx.strokeRect(x + 0.5, y + 0.5, w - 1, ROW_H - 1);
+      }
+      const editKey = `${row}:${col}`;
+      const edited = editing !== undefined && editKey in editing.cells;
+      if (edited) {
+        ctx.fillStyle = EDITED_BG;
+        ctx.fillRect(x, y, w, ROW_H);
+      }
+      const value = edited ? (editing?.cells[editKey] ?? null) : cache.get(row, col);
+      const logical = result.columns[col]?.logical ?? "";
+      const lower = value?.toLowerCase();
+      if (gridLook.boolCheckboxes && logical === "bool" && lower !== undefined && (BOOL_TRUE.has(lower) || BOOL_FALSE.has(lower))) {
+        // A checkbox in the middle of the cell, ticked for true.
+        const bx = Math.round(x + w / 2 - CHECK / 2) + 0.5;
+        const by = Math.round(y + ROW_H / 2 - CHECK / 2) + 0.5;
+        ctx.lineWidth = 1;
+        if (BOOL_TRUE.has(lower)) {
+          ctx.fillStyle = c.accent;
+          ctx.fillRect(bx - 0.5, by - 0.5, CHECK, CHECK);
+          ctx.strokeStyle = c.bg;
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.moveTo(bx + 2.5, by + CHECK / 2);
+          ctx.lineTo(bx + CHECK / 2 - 0.5, by + CHECK - 3.5);
+          ctx.lineTo(bx + CHECK - 2.5, by + 2.5);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        } else {
+          ctx.strokeStyle = c.muted;
+          ctx.strokeRect(bx, by, CHECK - 1, CHECK - 1);
+        }
+        return;
+      }
+      const numeric = NUMERIC.has(logical);
+      let text: string;
+      if (value === undefined) {
+        ctx.fillStyle = c.muted;
+        text = "…";
+      } else if (value === null) {
+        ctx.fillStyle = c.muted;
+        text = gridLook.nullText ? "NULL" : "";
+      } else {
+        ctx.fillStyle = c.text;
+        text = value.replace(/[\r\n\t]+/g, " ");
+      }
+      if (!text) return;
+      const shown = fit(ctx, text, w - PAD * 2);
+      if (numeric && value !== null && value !== undefined) {
+        ctx.textAlign = "right";
+        ctx.fillText(shown, x + w - PAD, y + ROW_H / 2);
+        ctx.textAlign = "left";
+      } else {
+        ctx.fillText(shown, x + PAD, y + ROW_H / 2);
+      }
+    };
 
     // Cells.
     ctx.font = DATA_FONT;
     for (let row = first; row < last; row++) {
       const y = HEADER_H + row * ROW_H - top;
-      if (row % 2 === 1) {
+      const striped = gridLook.zebra && row % 2 === 1;
+      if (striped) {
         ctx.fillStyle = c.stripe;
         ctx.fillRect(rowNumW, y, size.w, ROW_H);
       }
@@ -379,41 +464,21 @@ export function ResultGrid({
         const x = rowNumW + (offsets[col] ?? 0) - left;
         if (x > size.w) break;
         const w = widths[col] ?? 0;
-        if (range && inside(range, row, col)) {
-          ctx.fillStyle = c.select;
-          ctx.fillRect(x, y, w, ROW_H);
+        if (w === 0 || col === frozenCol) continue;
+        drawCell(row, col, x, y, w);
+      }
+      if (frozenCol !== null) {
+        ctx.fillStyle = c.bg;
+        ctx.fillRect(rowNumW, y, frozenW, ROW_H);
+        if (striped) {
+          ctx.fillStyle = c.stripe;
+          ctx.fillRect(rowNumW, y, frozenW, ROW_H);
         }
-        if (selection && selection.focus.row === row && selection.focus.col === col) {
-          ctx.strokeStyle = c.accent;
-          ctx.strokeRect(x + 0.5, y + 0.5, w - 1, ROW_H - 1);
+        if (deleted) {
+          ctx.fillStyle = DELETED_BG;
+          ctx.fillRect(rowNumW, y, frozenW, ROW_H);
         }
-        const editKey = `${row}:${col}`;
-        const edited = editing !== undefined && editKey in editing.cells;
-        if (edited) {
-          ctx.fillStyle = EDITED_BG;
-          ctx.fillRect(x, y, w, ROW_H);
-        }
-        const value = edited ? (editing?.cells[editKey] ?? null) : cache.get(row, col);
-        const numeric = NUMERIC.has(result.columns[col]?.logical ?? "");
-        let text: string;
-        if (value === undefined) {
-          ctx.fillStyle = c.muted;
-          text = "…";
-        } else if (value === null) {
-          ctx.fillStyle = c.muted;
-          text = "NULL";
-        } else {
-          ctx.fillStyle = c.text;
-          text = value.replace(/[\r\n\t]+/g, " ");
-        }
-        const shown = fit(ctx, text, w - PAD * 2);
-        if (numeric && value !== null && value !== undefined) {
-          ctx.textAlign = "right";
-          ctx.fillText(shown, x + w - PAD, y + ROW_H / 2);
-          ctx.textAlign = "left";
-        } else {
-          ctx.fillText(shown, x + PAD, y + ROW_H / 2);
-        }
+        drawCell(row, frozenCol, rowNumW, y, frozenW);
       }
       if (deleted) {
         // Struck through until the change is applied or reverted.
@@ -428,7 +493,11 @@ export function ResultGrid({
     for (let col = firstCol; col <= widths.length; col++) {
       const x = rowNumW + (offsets[col] ?? 0) - left;
       if (x > size.w) break;
-      ctx.fillRect(Math.round(x) - 1, HEADER_H, 1, size.h);
+      if (x > fixedRight) ctx.fillRect(Math.round(x) - 1, HEADER_H, 1, size.h);
+    }
+    if (frozenCol !== null) {
+      // A double line marks where the frozen column ends.
+      ctx.fillRect(Math.round(fixedRight) - 2, HEADER_H, 2, size.h);
     }
 
     // Row number column (fixed on the left).
@@ -449,15 +518,15 @@ export function ResultGrid({
     ctx.fillStyle = c.line;
     ctx.fillRect(rowNumW - 1, 0, 1, size.h);
 
-    // Header (fixed at the top): name and native type.
-    ctx.fillStyle = c.header;
-    ctx.fillRect(0, 0, size.w, HEADER_H);
-    for (let col = firstCol; col < widths.length; col++) {
-      const x = rowNumW + (offsets[col] ?? 0) - left;
-      if (x > size.w) break;
-      const w = widths[col] ?? 0;
+    // Header (fixed at the top): name and native type; tinted where whole columns are selected.
+    const wholeColumns = range !== null && result.rows > 0 && range.r0 === 0 && range.r1 === result.rows - 1;
+    const drawHeader = (col: number, x: number, w: number) => {
       const meta = result.columns[col];
-      if (!meta) continue;
+      if (!meta) return;
+      if (wholeColumns && range && col >= range.c0 && col <= range.c1) {
+        ctx.fillStyle = c.select;
+        ctx.fillRect(x, 0, w, HEADER_H);
+      }
       ctx.font = HEADER_FONT;
       ctx.fillStyle = c.text;
       const sorted = sortShown?.column === col;
@@ -473,6 +542,22 @@ export function ResultGrid({
       ctx.fillText(fit(ctx, meta.nativeType, w - PAD * 2), x + PAD, 27);
       ctx.fillStyle = c.line;
       ctx.fillRect(Math.round(x + w) - 1, 0, 1, HEADER_H);
+    };
+    ctx.fillStyle = c.header;
+    ctx.fillRect(0, 0, size.w, HEADER_H);
+    for (let col = firstCol; col < widths.length; col++) {
+      const x = rowNumW + (offsets[col] ?? 0) - left;
+      if (x > size.w) break;
+      const w = widths[col] ?? 0;
+      if (w === 0 || col === frozenCol) continue;
+      drawHeader(col, x, w);
+    }
+    if (frozenCol !== null) {
+      ctx.fillStyle = c.header;
+      ctx.fillRect(rowNumW, 0, frozenW, HEADER_H);
+      drawHeader(frozenCol, rowNumW, frozenW);
+      ctx.fillStyle = c.line;
+      ctx.fillRect(Math.round(fixedRight) - 2, 0, 2, HEADER_H);
     }
     ctx.fillStyle = c.header;
     ctx.fillRect(0, 0, rowNumW, HEADER_H);
@@ -511,6 +596,23 @@ export function ResultGrid({
     setQueryPage(0);
   }, [result.filter, filtersKey]);
 
+  // Hidden and frozen columns belong to the tab: running the query again (the same columns)
+  // keeps them; another set of columns starts with every column shown.
+  const columnNames = result.columns.map((c) => c.name).join("\u0000");
+  const shownColumnNames = useRef(columnNames);
+  useEffect(() => {
+    if (shownColumnNames.current === columnNames) return;
+    shownColumnNames.current = columnNames;
+    setHidden(new Set());
+    setFrozen(false);
+    setChooser(null);
+  }, [columnNames]);
+
+  useEffect(() => {
+    // A selection on a column just hidden would act on what is not shown.
+    setSelection((current) => (current && (hidden.has(current.anchor.col) || hidden.has(current.focus.col)) ? null : current));
+  }, [hidden]);
+
   useEffect(() => {
     // New result: scroll to the top and clear the selection.
     setResized({});
@@ -541,10 +643,49 @@ export function ResultGrid({
     const row = Math.min(result.rows - 1, Math.max(0, Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H)));
     if (!clamp && Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H) >= result.rows) return null;
     const gutter = x < rowNumW;
-    const dataX = x - rowNumW + scroller.scrollLeft;
-    let col = offsets.findIndex((o, i) => i < widths.length && dataX >= o && dataX < (offsets[i + 1] ?? 0));
-    if (col < 0) col = dataX < 0 ? 0 : widths.length - 1;
+    let col = columnAtX(x, scroller.scrollLeft);
+    if (col < 0) col = x - rowNumW + scroller.scrollLeft < 0 ? firstVisible : lastVisible;
     return { row, col, gutter };
+  }
+
+  /** The column drawn `x` pixels from the grid's left edge, -1 if none: the frozen column
+   *  first, then the shown columns under the scroll. */
+  function columnAtX(x: number, scrollLeft: number): number {
+    if (x < rowNumW) return -1;
+    if (frozenCol !== null && x < rowNumW + frozenW) return frozenCol;
+    const dataX = x - rowNumW + scrollLeft;
+    return offsets.findIndex((o, i) => i < widths.length && (widths[i] ?? 0) > 0 && dataX >= o && dataX < (offsets[i + 1] ?? 0));
+  }
+
+  /** The next shown column `delta` steps away (stopping at the first and the last). */
+  function stepCol(col: number, delta: number): number {
+    const at = visibleCols.indexOf(col);
+    if (at < 0) return firstVisible;
+    return visibleCols[Math.max(0, Math.min(visibleCols.length - 1, at + delta))] ?? col;
+  }
+
+  /** Shown columns inside a selection, in order (hidden ones are left out of copies). */
+  const shownIn = (b: Bounds) => visibleCols.filter((c) => c >= b.c0 && c <= b.c1);
+
+  function hideColumn(col: number) {
+    setMenu(null);
+    if (visibleCols.length <= 1 || hidden.has(col)) return;
+    setHidden(new Set([...hidden, col]));
+  }
+
+  function showColumn(col: number) {
+    if (!hidden.has(col)) return;
+    setHidden(new Set([...hidden].filter((c) => c !== col)));
+  }
+
+  /** Selects whole columns from the anchor's column (with `extend`) to `col`. */
+  function selectColumn(col: number, extend: boolean) {
+    setMenu(null);
+    if (result.rows === 0) return;
+    setSelection((current) => ({
+      anchor: { row: result.rows - 1, col: extend && current ? current.anchor.col : col },
+      focus: { row: 0, col },
+    }));
   }
 
   /** Applies the column conditions in the core (an empty list removes them). */
@@ -579,8 +720,14 @@ export function ResultGrid({
     const x = clientX - rect.left;
     const y = clientY - rect.top;
     if (y < 0 || y >= HEADER_H || x < rowNumW) return null;
+    if (frozenCol !== null) {
+      if (Math.abs(rowNumW + frozenW - x) <= EDGE) return frozenCol;
+      // Edges that scrolled under the frozen column cannot be grabbed.
+      if (x < rowNumW + frozenW) return null;
+    }
     const dataX = x - rowNumW + scroller.scrollLeft;
     for (let col = 0; col < widths.length; col++) {
+      if ((widths[col] ?? 0) === 0 || col === frozenCol) continue;
       if (Math.abs((offsets[col + 1] ?? 0) - dataX) <= EDGE) return col;
     }
     return null;
@@ -615,8 +762,7 @@ export function ResultGrid({
     const x = clientX - rect.left;
     const y = clientY - rect.top;
     if (y < 0 || y >= HEADER_H || x < rowNumW || x > scroller.clientWidth) return null;
-    const dataX = x - rowNumW + scroller.scrollLeft;
-    const col = offsets.findIndex((o, i) => i < widths.length && dataX >= o && dataX < (offsets[i + 1] ?? 0));
+    const col = columnAtX(x, scroller.scrollLeft);
     return col < 0 ? null : col;
   }
 
@@ -676,6 +822,7 @@ export function ResultGrid({
   /** Moves the active cell to `col` in the same row (the first row if none) and shows it. */
   function jumpTo(col: number) {
     setJump(null);
+    showColumn(col);
     if (result.rows === 0) return;
     const cell = { row: selection?.focus.row ?? 0, col };
     setSelection({ anchor: cell, focus: cell });
@@ -690,9 +837,11 @@ export function ResultGrid({
     if (y < scroller.scrollTop) scroller.scrollTop = y;
     else if (y + ROW_H > scroller.scrollTop + scroller.clientHeight - HEADER_H)
       scroller.scrollTop = y + ROW_H - scroller.clientHeight + HEADER_H;
+    // The frozen column is always in view; the others scroll into the part it leaves.
+    if (cell.col === frozenCol) return;
     const x = offsets[cell.col] ?? 0;
     const w = widths[cell.col] ?? 0;
-    if (x < scroller.scrollLeft) scroller.scrollLeft = x;
+    if (x - frozenW < scroller.scrollLeft) scroller.scrollLeft = x - frozenW;
     else if (x + w > scroller.scrollLeft + scroller.clientWidth - rowNumW)
       scroller.scrollLeft = x + w - scroller.clientWidth + rowNumW;
   }
@@ -701,12 +850,11 @@ export function ResultGrid({
     editRequest.current += 1;
     const cell = cellAt(e.clientX, e.clientY, extend);
     if (!cell) return;
-    const last = widths.length - 1;
     setSelection((current) => {
       if (cell.gutter) {
         // The row-number gutter selects whole rows.
-        const anchor = extend && current ? { row: current.anchor.row, col: 0 } : { row: cell.row, col: 0 };
-        return { anchor, focus: { row: cell.row, col: last } };
+        const anchor = extend && current ? { row: current.anchor.row, col: firstVisible } : { row: cell.row, col: firstVisible };
+        return { anchor, focus: { row: cell.row, col: lastVisible } };
       }
       return extend && current ? { anchor: current.anchor, focus: cell } : { anchor: cell, focus: cell };
     });
@@ -716,15 +864,15 @@ export function ResultGrid({
     setMenu(null);
     if (!selection) return;
     const b = bounds(selection);
-    const range: CellRange = { firstRow: b.r0, rows: b.r1 - b.r0 + 1, firstColumn: b.c0, columns: b.c1 - b.c0 + 1 };
+    const range: CellRange = { firstRow: b.r0, rows: b.r1 - b.r0 + 1, columns: shownIn(b) };
     try {
       const text = await call(commands.copyRows(result.id, session, range, format, header));
       await navigator.clipboard.writeText(text);
       setNotice({
-        text: t(range.columns === 1 ? "results.copiedOneColumn" : "results.copied", {
+        text: t(range.columns.length === 1 ? "results.copiedOneColumn" : "results.copied", {
           count: range.rows,
           formattedCount: numbers.format(range.rows),
-          columns: numbers.format(range.columns),
+          columns: numbers.format(range.columns.length),
         }),
         error: false,
       });
@@ -791,29 +939,46 @@ export function ResultGrid({
     }
     if (mod && e.key.toLowerCase() === "a" && result.rows > 0) {
       e.preventDefault();
-      setSelection({ anchor: { row: 0, col: 0 }, focus: { row: result.rows - 1, col: widths.length - 1 } });
+      setSelection({ anchor: { row: 0, col: firstVisible }, focus: { row: result.rows - 1, col: lastVisible } });
       return;
     }
-    if (!selection) return;
+    if (!selection || result.rows === 0) return;
     if (mod && e.key.toLowerCase() === "c") {
       e.preventDefault();
       void copy("tsv", e.shiftKey);
       return;
     }
-    const moves: Record<string, [number, number]> = {
-      ArrowUp: [-1, 0],
-      ArrowDown: [1, 0],
-      ArrowLeft: [0, -1],
-      ArrowRight: [0, 1],
-    };
-    const move = moves[e.key];
-    if (!move) return;
+    if (e.key === " " && !e.altKey && (mod || e.shiftKey) && !(mod && e.shiftKey)) {
+      // Spreadsheet keys: Shift+Space selects the selection's whole rows, Ctrl+Space its
+      // whole columns.
+      e.preventDefault();
+      if (e.shiftKey) {
+        setSelection({ anchor: { row: selection.anchor.row, col: firstVisible }, focus: { row: selection.focus.row, col: lastVisible } });
+      } else {
+        setSelection({ anchor: { row: result.rows - 1, col: selection.anchor.col }, focus: { row: 0, col: selection.focus.col } });
+      }
+      return;
+    }
+    // Arrows move one cell; with Ctrl, to the first or last row or column (a result has no
+    // empty cells to stop at). Home / End go along the row, Ctrl+Home / Ctrl+End to the
+    // corners, Page Up / Down by a screenful. Shift extends the selection with any of them.
+    const lastRow = result.rows - 1;
+    const page = Math.max(1, Math.floor((size.h - HEADER_H) / ROW_H) - 1);
+    const { row, col } = selection.focus;
+    let next: Cell;
+    switch (e.key) {
+      case "ArrowUp": next = { row: mod ? 0 : row - 1, col }; break;
+      case "ArrowDown": next = { row: mod ? lastRow : row + 1, col }; break;
+      case "ArrowLeft": next = { row, col: mod ? firstVisible : stepCol(col, -1) }; break;
+      case "ArrowRight": next = { row, col: mod ? lastVisible : stepCol(col, 1) }; break;
+      case "Home": next = { row: mod ? 0 : row, col: firstVisible }; break;
+      case "End": next = { row: mod ? lastRow : row, col: lastVisible }; break;
+      case "PageUp": next = { row: row - page, col }; break;
+      case "PageDown": next = { row: row + page, col }; break;
+      default: return;
+    }
     e.preventDefault();
-    const next = {
-      row: Math.min(result.rows - 1, Math.max(0, selection.focus.row + move[0])),
-      col: Math.min(widths.length - 1, Math.max(0, selection.focus.col + move[1])),
-    };
-    // Shift extends the selection; plain arrows move a single cell.
+    next = { row: Math.min(lastRow, Math.max(0, next.row)), col: next.col };
     setSelection(e.shiftKey ? { anchor: selection.anchor, focus: next } : { anchor: next, focus: next });
     scrollIntoView(next);
   }
@@ -839,6 +1004,31 @@ export function ResultGrid({
       window.removeEventListener("mouseup", up);
     };
   });
+
+  /** "3 rows selected", "2 columns selected", "4 rows × 3 columns (12 cells)"… */
+  function selectionSummary(): string {
+    if (!selection || result.rows === 0) return "";
+    const b = bounds(selection);
+    const rows = b.r1 - b.r0 + 1;
+    const columns = shownIn(b).length;
+    const allRows = rows === result.rows;
+    const allColumns = columns === visibleCols.length;
+    const n = (value: number) => numbers.format(value);
+    if (rows * columns === 1) return t("results.selectedCell");
+    if (allRows && allColumns) return t("results.selectedAll", { count: rows, formattedCount: n(rows) });
+    if (allColumns) return t("results.selectedRows", { count: rows, formattedCount: n(rows) });
+    if (allRows) return t("results.selectedColumns", { count: columns, formattedCount: n(columns) });
+    return t("results.selectedCells", {
+      rows: t("results.rowCount", { count: rows, formattedCount: n(rows) }),
+      columns: t("results.columnCount", { count: columns, formattedCount: n(columns) }),
+      cells: n(rows * columns),
+    });
+  }
+
+  const closeChooser = useCallback(() => {
+    setChooser(null);
+    scrollerRef.current?.focus();
+  }, []);
 
   const focusMeta = selection ? result.columns[selection.focus.col] : undefined;
   const viewerMax = wrapWidth ? Math.max(0, wrapWidth - 36 - 5 - 220) : 1200;
@@ -968,7 +1158,9 @@ export function ResultGrid({
           const header = headerAt(e.clientX, e.clientY);
           if (header !== null) {
             e.preventDefault();
-            cycleSort(header);
+            // Ctrl+click selects the column (Ctrl+Shift+click up to it); a plain click sorts.
+            if (e.ctrlKey || e.metaKey) selectColumn(header, e.shiftKey);
+            else cycleSort(header);
             return;
           }
           dragging.current = true;
@@ -976,6 +1168,11 @@ export function ResultGrid({
         }}
         onContextMenu={(e) => {
           e.preventDefault();
+          const header = headerAt(e.clientX, e.clientY);
+          if (header !== null) {
+            setMenu({ x: e.clientX, y: e.clientY, cell: null, header });
+            return;
+          }
           const cell = cellAt(e.clientX, e.clientY);
           if (!cell) return;
           // Right-click outside the selection selects that cell first.
@@ -1021,7 +1218,39 @@ export function ResultGrid({
       >
         <div style={{ width: totalW, height: totalH }} />
       </div>
-      {menu && (
+      {menu && menu.header !== undefined && (
+        <div ref={menuRef} className="grid-menu result-grid-menu" role="menu" aria-label={result.columns[menu.header]?.name} style={{ left: menu.x, top: menu.y }}>
+          <HeaderMenuItems
+            column={menu.header}
+            names={result.columns.map((c) => c.name)}
+            hiddenCount={hidden.size}
+            canHide={visibleCols.length > 1}
+            frozen={frozen}
+            sorted={!!sortShown}
+            onSelect={() => selectColumn(menu.header ?? 0, false)}
+            onFit={() => {
+              const col = menu.header ?? 0;
+              setMenu(null);
+              setResized((r) => ({ ...r, [col]: fitWidth(col) }));
+            }}
+            onHide={() => hideColumn(menu.header ?? 0)}
+            onChooser={() => {
+              setMenu(null);
+              setChooser({ x: menu.x, y: menu.y });
+            }}
+            onShowAll={() => {
+              setMenu(null);
+              setHidden(new Set());
+            }}
+            onFreeze={() => {
+              setMenu(null);
+              setFrozen(!frozen);
+            }}
+            onSort={(sort) => sortBy(sort)}
+          />
+        </div>
+      )}
+      {menu && menu.header === undefined && (
         <div ref={menuRef} className="grid-menu result-grid-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
           {editing && !editing.busy && !sorting && menu.cell && (
             <>
@@ -1125,7 +1354,7 @@ export function ResultGrid({
           autoFocus
           spellCheck={false}
           style={{
-            left: rowNumW + (offsets[cellEditor.col] ?? 0) - (scrollerRef.current?.scrollLeft ?? 0),
+            left: cellEditor.col === frozenCol ? rowNumW : rowNumW + (offsets[cellEditor.col] ?? 0) - (scrollerRef.current?.scrollLeft ?? 0),
             top: HEADER_H + cellEditor.row * ROW_H - (scrollerRef.current?.scrollTop ?? 0),
             width: widths[cellEditor.col] ?? MIN_COL,
             height: ROW_H,
@@ -1158,6 +1387,16 @@ export function ResultGrid({
           }}
         />
       )}
+      {chooser && (
+        <ColumnChooser
+          x={chooser.x}
+          y={chooser.y}
+          names={result.columns.map((c) => c.name)}
+          hidden={hidden}
+          onChange={setHidden}
+          onClose={closeChooser}
+        />
+      )}
       {notice && (
         <div className={`grid-notice ${notice.error ? "error" : ""}`} role="status">
           {notice.text}
@@ -1174,6 +1413,23 @@ export function ResultGrid({
           }}
         />
       )}
+    </div>
+    <div className="grid-footer">
+      {hidden.size > 0 && (
+        <button
+          type="button"
+          className="ghost small grid-hidden"
+          title={t("results.hiddenHint")}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            const box = e.currentTarget.getBoundingClientRect();
+            setChooser({ x: box.left, y: box.top - 8 });
+          }}
+        >
+          {t("results.hiddenColumns", { count: hidden.size, formattedCount: numbers.format(hidden.size) })}
+        </button>
+      )}
+      <span className="grid-selection">{selectionSummary()}</span>
     </div>
     {(editing || paging) && (
       <div className="result-editing">
@@ -1272,6 +1528,7 @@ export function ResultGrid({
           scrollerRef.current?.focus();
         }}
         onPickColumn={(col) => {
+          showColumn(col);
           const cell = { row: selection.focus.row, col };
           setSelection({ anchor: cell, focus: cell });
           scrollIntoView(cell);
@@ -1368,6 +1625,123 @@ function ColumnJump(props: {
         ))}
         {matches.length === 0 && <li className="muted">{t("results.jumpNone")}</li>}
       </ul>
+    </div>
+  );
+}
+
+/** The menu of a column header: select, fit, hide or freeze columns, and sort. */
+function HeaderMenuItems(props: {
+  column: number;
+  names: string[];
+  hiddenCount: number;
+  canHide: boolean;
+  frozen: boolean;
+  sorted: boolean;
+  onSelect(): void;
+  onFit(): void;
+  onHide(): void;
+  onChooser(): void;
+  onShowAll(): void;
+  onFreeze(): void;
+  onSort(sort: SortState | undefined): void;
+}) {
+  const { t, i18n } = useTranslation("editor");
+  const numbers = new Intl.NumberFormat(i18n.language);
+  return (
+    <>
+      <button role="menuitem" onClick={props.onSelect}>{t("results.selectColumn")}</button>
+      <button role="menuitem" onClick={props.onFit}>{t("results.fitColumn")}</button>
+      <hr />
+      <button role="menuitem" disabled={!props.canHide} onClick={props.onHide}>
+        {t("results.hideColumn", { column: props.names[props.column] ?? "" })}
+      </button>
+      <button role="menuitem" onClick={props.onChooser}>{t("results.columnsMenu")}</button>
+      {props.hiddenCount > 0 && (
+        <button role="menuitem" onClick={props.onShowAll}>
+          {t("results.showAllColumns", { count: props.hiddenCount, formattedCount: numbers.format(props.hiddenCount) })}
+        </button>
+      )}
+      <button role="menuitemcheckbox" aria-checked={props.frozen} onClick={props.onFreeze}>
+        {props.frozen ? "\u2713 " : ""}
+        {t("results.freezeFirst")}
+      </button>
+      <hr />
+      <button role="menuitem" onClick={() => props.onSort({ column: props.column, descending: false })}>{t("results.sortAsc")}</button>
+      <button role="menuitem" onClick={() => props.onSort({ column: props.column, descending: true })}>{t("results.sortDesc")}</button>
+      {props.sorted && <button role="menuitem" onClick={() => props.onSort(undefined)}>{t("results.sortClear")}</button>}
+    </>
+  );
+}
+
+/** Which columns the grid shows: one checkbox each, a search, and "show all". At least one
+ *  column stays shown. */
+function ColumnChooser(props: {
+  x: number;
+  y: number;
+  names: string[];
+  hidden: ReadonlySet<number>;
+  onChange(hidden: ReadonlySet<number>): void;
+  onClose(): void;
+}) {
+  const { t } = useTranslation("editor");
+  const [search, setSearch] = useState("");
+  const box = useRef<HTMLDivElement>(null);
+  const { onClose } = props;
+  useLayoutEffect(() => {
+    if (box.current) placeMenu(box.current, props.x, props.y);
+  }, [props.x, props.y]);
+  useEffect(() => {
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (e instanceof MouseEvent && box.current?.contains(e.target as Node)) return;
+      onClose();
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [onClose]);
+  const query = search.trim().toLowerCase();
+  const shown = props.names.length - props.hidden.size;
+  return (
+    <div ref={box} className="grid-menu column-chooser" role="dialog" aria-label={t("results.columnsTitle")} style={{ left: props.x, top: props.y }}>
+      <input
+        autoFocus
+        type="search"
+        value={search}
+        placeholder={t("results.columnsSearch")}
+        aria-label={t("results.columnsSearch")}
+        spellCheck={false}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <div className="column-chooser-list">
+        {props.names.map((name, col) => ({ name, col })).filter((c) => c.name.toLowerCase().includes(query)).map(({ name, col }) => {
+          const visible = !props.hidden.has(col);
+          return (
+            <label key={col} className="check">
+              <input
+                type="checkbox"
+                checked={visible}
+                disabled={visible && shown <= 1}
+                onChange={() => {
+                  const next = new Set(props.hidden);
+                  if (visible) next.add(col);
+                  else next.delete(col);
+                  props.onChange(next);
+                }}
+              />
+              {name}
+            </label>
+          );
+        })}
+      </div>
+      <div className="column-chooser-actions">
+        <button className="ghost small" disabled={props.hidden.size === 0} onClick={() => props.onChange(new Set())}>
+          {t("results.showAll")}
+        </button>
+      </div>
     </div>
   );
 }

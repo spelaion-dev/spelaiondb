@@ -11,7 +11,12 @@
     "system": "Igual que el sistema",
     "light": "Claro",
     "dark": "Oscuro",
-    "hint": "Se aplica a todos los espacios de trabajo y se guarda en tu configuración personal."
+    "hint": "Se aplica a todos los espacios de trabajo y se guarda en tu configuración personal.",
+    "grid": "Rejilla de resultados",
+    "zebra": "Filas alternas sombreadas",
+    "nullText": "Mostrar NULL como texto (desactivado: celda vacía)",
+    "boolCheckboxes": "Mostrar los booleanos como casillas",
+    "gridHint": "Solo cambia cómo se dibujan las celdas: al copiar y exportar se conservan los valores."
   },
   "language": {
     "title": "Idioma",

@@ -360,6 +360,37 @@ try {
     await page.waitForFunction((n) => window.__copied.length === n, count);
     return page.evaluate(() => window.__copied[window.__copied.length - 1]);
   };
+  // The grid is a canvas: what it draws is read back as pixels (CSS coordinates).
+  const pixel = (target, x, y) =>
+    target.locator(".grid-canvas").evaluate((canvas, [x, y]) => {
+      const dpr = window.devicePixelRatio || 1;
+      const d = canvas.getContext("2d").getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data;
+      return `${d[0]},${d[1]},${d[2]}`;
+    }, [x, y]);
+  // Pixels of a rectangle that differ clearly from its top-left one (text, a checkbox…).
+  const inked = (target, x0, y0, x1, y1) =>
+    target.locator(".grid-canvas").evaluate((canvas, [x0, y0, x1, y1]) => {
+      const dpr = window.devicePixelRatio || 1;
+      const ctx = canvas.getContext("2d");
+      const d = ctx.getImageData(Math.round(x0 * dpr), Math.round(y0 * dpr), Math.round((x1 - x0) * dpr), Math.round((y1 - y0) * dpr)).data;
+      let count = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - d[0]) + Math.abs(d[i + 1] - d[1]) + Math.abs(d[i + 2] - d[2]) > 60) count++;
+      }
+      return count;
+    }, [x0, y0, x1, y1]);
+  async function setGridLook(look) {
+    await withSettings("appearance", async (settings) => {
+      for (const [name, on] of Object.entries(look)) {
+        const box = settings.locator(`input[name="${name}"]`);
+        if ((await box.isChecked()) !== on) await box.click();
+        await page.waitForFunction(([n, v]) => {
+          const input = document.querySelector(`input[name="${n}"]`);
+          return input?.checked === v && !input.matches(":disabled");
+        }, [name, on]);
+      }
+    });
+  }
   const grid = panel.locator(".grid-scroller");
   const gridBox = await grid.boundingBox();
   // First data cell: below the 36 px header, right of the row numbers.
@@ -655,6 +686,130 @@ try {
     await page.keyboard.press("Control+Shift+c");
     assert.equal((await copied(before + 1)).split("\n")[0], "total");
   }
+
+  step("grid: spreadsheet keys select cells, rows and columns, and the footer counts them");
+  const selectionText = panel.locator(".grid-selection");
+  const topLeftCell = () => page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+  await sortGrid.evaluate((el) => {
+    el.scrollTop = 0;
+    el.scrollLeft = 0;
+  });
+  await topLeftCell();
+  await selectionText.getByText("1 cell selected", { exact: true }).waitFor();
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.keyboard.press("Shift+ArrowRight");
+  await selectionText.getByText("3 rows × 2 columns selected (6 cells)", { exact: true }).waitFor();
+  await page.keyboard.press("Shift+Space");
+  await selectionText.getByText("3 rows selected", { exact: true }).waitFor();
+  await topLeftCell();
+  await page.keyboard.press("Control+Space");
+  await selectionText.getByText("1 column selected", { exact: true }).waitFor();
+  // Ctrl+arrows go to the edge; Ctrl+Shift+arrows select up to it.
+  await topLeftCell();
+  await page.keyboard.press("Control+ArrowDown");
+  {
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Control+c");
+    assert.equal((await copied(before + 1)).trimEnd(), "50000");
+  }
+  await page.keyboard.press("Control+Shift+ArrowUp");
+  await selectionText.getByText("1 column selected", { exact: true }).waitFor();
+  // From the last row: to the last column of that row.
+  await page.keyboard.press("Control+Shift+End");
+  await selectionText.getByText("1 row selected", { exact: true }).waitFor();
+  await page.keyboard.press("Control+Home");
+  await selectionText.getByText("1 cell selected", { exact: true }).waitFor();
+  await page.keyboard.press("Shift+End");
+  await selectionText.getByText("1 row selected", { exact: true }).waitFor();
+  await page.keyboard.press("Control+a");
+  await selectionText.getByText("All 50,000 rows selected", { exact: true }).waitFor();
+  // Ctrl+click on a header selects the column instead of sorting.
+  await page.keyboard.down("Control");
+  await clickHeader(TOTAL_X);
+  await page.keyboard.up("Control");
+  await selectionText.getByText("1 column selected", { exact: true }).waitFor();
+  await sortedAs("");
+  await shot("04b2-grid-column-selected");
+
+  step("grid: hide a column from its header, the footer shows it, the chooser brings it back");
+  const CUSTOMER_X = 64 + (await widthsNow())[0] + 20;
+  await page.mouse.click(sortBox.x + CUSTOMER_X, sortBox.y + 18, { button: "right" });
+  const headerMenu = panel.locator(".result-grid-menu");
+  await headerMenu.getByRole("menuitem", { name: "Hide customer_id" }).click();
+  await headerMenu.waitFor({ state: "detached" });
+  assert.equal((await widthsNow())[1], 0, "customer_id has no width while hidden");
+  const hiddenButton = panel.locator(".grid-footer .grid-hidden");
+  await hiddenButton.getByText("1 hidden column", { exact: true }).waitFor();
+  // Selections and copies skip it: id, then created.
+  await topLeftCell();
+  await page.keyboard.press("Shift+ArrowRight");
+  await selectionText.getByText("1 row × 2 columns selected (2 cells)", { exact: true }).waitFor();
+  {
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Control+Shift+c");
+    const [header, row] = (await copied(before + 1)).trimEnd().split("\n");
+    assert.equal(header, "id\tcreated");
+    assert.match(row, /^1\t\d{4}-\d{2}-\d{2}/);
+  }
+  await shot("04b3-grid-hidden-column");
+  await hiddenButton.click();
+  const chooser = panel.getByRole("dialog", { name: "Columns" });
+  await chooser.getByRole("searchbox").fill("cust");
+  await chooser.getByRole("checkbox", { name: "customer_id" }).check();
+  await hiddenButton.waitFor({ state: "detached" });
+  assert.ok((await widthsNow())[1] > 0, "customer_id is shown again");
+  await page.keyboard.press("Escape");
+  await chooser.waitFor({ state: "detached" });
+
+  step("grid: freeze the first column, it stays while the others scroll");
+  // "total" made wide enough for the grid to scroll sideways.
+  const totalEdge = sortBox.x + 64 + (await widthsNow()).reduce((a, b) => a + b, 0);
+  await page.mouse.move(totalEdge - 1, sortBox.y + 18);
+  await page.mouse.down();
+  await page.mouse.move(totalEdge + 1200, sortBox.y + 18, { steps: 5 });
+  await page.mouse.up();
+  await sortedAs("");
+  assert.ok((await sortGrid.evaluate((el) => el.scrollWidth - el.clientWidth)) > 400, "the grid scrolls sideways");
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 18, { button: "right" });
+  await headerMenu.getByRole("menuitemcheckbox", { name: "Freeze first column" }).click();
+  await sortGrid.evaluate((el) => (el.scrollLeft = 400));
+  await page.waitForTimeout(100);
+  assert.equal(await sortGrid.evaluate((el) => el.scrollLeft), 400);
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+  {
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Control+c");
+    assert.equal((await copied(before + 1)).trimEnd(), "1", "the frozen id column is still under the pointer");
+  }
+  await shot("04b4-grid-frozen");
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 18, { button: "right" });
+  const unfreeze = headerMenu.getByRole("menuitemcheckbox", { name: "Freeze first column" });
+  assert.equal(await unfreeze.getAttribute("aria-checked"), "true");
+  await unfreeze.click();
+  // Unfrozen, the same place shows a column that scrolled in.
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+  {
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Control+c");
+    assert.notEqual((await copied(before + 1)).trimEnd(), "1", "id scrolled away");
+  }
+  // Fit "total" back to its content, from its edge at the far right.
+  const farLeft = await sortGrid.evaluate((el) => (el.scrollLeft = el.scrollWidth - el.clientWidth));
+  await page.waitForTimeout(100);
+  await page.mouse.dblclick(sortBox.x + 64 + (await widthsNow()).reduce((a, b) => a + b, 0) - farLeft - 1, sortBox.y + 18);
+  for (let i = 0; i < 20 && (await widthsNow())[3] > 400; i++) await page.waitForTimeout(100);
+  assert.ok((await widthsNow())[3] < 400, "total fitted back");
+  await sortGrid.evaluate((el) => (el.scrollLeft = 0));
+  await sortedAs("");
+
+  step("grid look: zebra rows switched off in Settings repaint the grid");
+  const createdRight = 64 + (await widthsNow()).slice(0, 3).reduce((a, b) => a + b, 0) - 4;
+  const rowY = (row) => 36 + row * 26 + 13;
+  assert.notEqual(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "odd rows are tinted");
+  await setGridLook({ zebra: false });
+  assert.equal(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "no tint without zebra rows");
+  await setGridLook({ zebra: true });
 
   step("filter: the core keeps the rows with the text, sorting and copy follow");
   const filterBox = panel.getByRole("searchbox", { name: "Filter rows" });
@@ -2240,6 +2395,28 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await run(panel);
   await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
   await shot("12a3-duckdb");
+  step("grid look: booleans as checkboxes and NULL drawn empty, from Settings");
+  {
+    const looks = await newQuery("analytics", "select true as yes, false as no, cast(null as varchar) as nothing;");
+    await run(looks);
+    await looks.locator(".statusline", { hasText: "1 row" }).waitFor();
+    const [yesW, noW] = (await looks.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+    const ROW_NUM = 52;
+    const middle = 36 + 13;
+    const yesCentre = ROW_NUM + yesW / 2;
+    const nothingX = ROW_NUM + yesW + noW;
+    const nullInk = () => inked(looks, nothingX + 4, middle - 6, nothingX + 40, middle + 6);
+    // Text by default: "true" starts on the left, the middle of the cell is empty.
+    const bg = await pixel(looks, yesCentre + 30, middle);
+    assert.equal(await pixel(looks, yesCentre - 3, middle + 3), bg);
+    assert.ok((await nullInk()) > 0, "NULL is written");
+    await setGridLook({ boolCheckboxes: true, nullText: false });
+    assert.notEqual(await pixel(looks, yesCentre - 3, middle + 3), bg, "a ticked checkbox in the middle of true");
+    assert.equal(await nullInk(), 0, "NULL drawn empty");
+    await shot("12a4-grid-checkboxes");
+    await setGridLook({ boolCheckboxes: false, nullText: true });
+    await page.keyboard.press("Control+w");
+  }
   // A second tab on the same file (DuckDB opens a file once per process: they share it).
   const second = await newQuery("analytics", "select count(*) as n from sales;");
   await run(second);

@@ -364,6 +364,27 @@ impl Default for ExplorerPreferences {
     }
 }
 
+/// How the result grid draws its cells, shared by every workspace in this user directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridPreferences {
+    /// Every other row tinted; on by default.
+    pub zebra: bool,
+    /// NULL cells read `NULL` (dimmed); on by default. Off, they are drawn empty.
+    pub null_text: bool,
+    /// Boolean columns drawn as checkboxes instead of `true` / `false`; off by default.
+    pub bool_checkboxes: bool,
+}
+
+impl Default for GridPreferences {
+    fn default() -> Self {
+        Self {
+            zebra: true,
+            null_text: true,
+            bool_checkboxes: false,
+        }
+    }
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -799,6 +820,27 @@ impl Store {
         self.set_flag("explorer.connected_only", connected_only)?;
         self.set_flag("explorer.server_side_filters", server_side_filters)?;
         self.set_flag("explorer.link_with_editor", link_with_editor)
+    }
+
+    /// The result grid's display preferences, each one at its default until it is changed.
+    pub fn get_grid_preferences(&self) -> Result<GridPreferences, StoreError> {
+        let defaults = GridPreferences::default();
+        Ok(GridPreferences {
+            zebra: self.get_flag("grid.zebra", defaults.zebra)?,
+            null_text: self.get_flag("grid.null_text", defaults.null_text)?,
+            bool_checkboxes: self.get_flag("grid.bool_checkboxes", defaults.bool_checkboxes)?,
+        })
+    }
+
+    pub fn set_grid_preferences(&self, preferences: &GridPreferences) -> Result<(), StoreError> {
+        let GridPreferences {
+            zebra,
+            null_text,
+            bool_checkboxes,
+        } = *preferences;
+        self.set_flag("grid.zebra", zebra)?;
+        self.set_flag("grid.null_text", null_text)?;
+        self.set_flag("grid.bool_checkboxes", bool_checkboxes)
     }
 
     fn get_flag(&self, key: &str, default: bool) -> Result<bool, StoreError> {
@@ -1478,6 +1520,36 @@ mod tests {
         // Another setting does not touch them.
         reopened.set_theme("light").unwrap();
         assert_eq!(reopened.get_explorer_preferences().unwrap(), changed);
+    }
+
+    #[test]
+    fn grid_preferences_start_at_their_defaults_and_persist() {
+        let path = temp("grid");
+        let store = Store::open(&path).unwrap();
+        let defaults = GridPreferences::default();
+        assert_eq!(store.get_grid_preferences().unwrap(), defaults);
+        assert!(defaults.zebra && defaults.null_text && !defaults.bool_checkboxes);
+        // Every field is saved on its own: each one flipped from its default.
+        let changed = GridPreferences {
+            zebra: false,
+            null_text: false,
+            bool_checkboxes: true,
+        };
+        store.set_grid_preferences(&changed).unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.get_grid_preferences().unwrap(), changed);
+        // The explorer's preferences are kept apart.
+        assert_eq!(
+            reopened.get_explorer_preferences().unwrap(),
+            ExplorerPreferences::default()
+        );
+        let one = GridPreferences {
+            null_text: true,
+            ..changed
+        };
+        reopened.set_grid_preferences(&one).unwrap();
+        assert_eq!(reopened.get_grid_preferences().unwrap(), one);
     }
 
     #[test]

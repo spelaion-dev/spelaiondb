@@ -8,8 +8,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
-    Bookmark, ExplorerFilter, ExplorerPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store,
-    StoreError,
+    Bookmark, ExplorerFilter, ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry,
+    Snippet, Store, StoreError,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -68,6 +68,13 @@ enum Request {
     },
     SetExplorer {
         preferences: ExplorerPreferences,
+        reply: Reply<()>,
+    },
+    GetGrid {
+        reply: Reply<GridPreferences>,
+    },
+    SetGrid {
+        preferences: GridPreferences,
         reply: Reply<()>,
     },
     SetUpdateCheck {
@@ -182,6 +189,12 @@ impl QueryHistory {
                         }
                         Request::SetExplorer { preferences, reply } => {
                             let _ = reply.send(store.set_explorer_preferences(&preferences));
+                        }
+                        Request::GetGrid { reply } => {
+                            let _ = reply.send(store.get_grid_preferences());
+                        }
+                        Request::SetGrid { preferences, reply } => {
+                            let _ = reply.send(store.set_grid_preferences(&preferences));
                         }
                         Request::SetUpdateCheck { enabled, reply } => {
                             let _ = reply.send(store.set_update_check(enabled));
@@ -362,6 +375,19 @@ impl QueryHistory {
         preferences: ExplorerPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetExplorer { preferences, reply })
+            .await
+    }
+
+    /// How the result grid draws its cells (zebra rows, NULL, booleans).
+    pub async fn grid_preferences(&self) -> Result<GridPreferences, HistoryError> {
+        self.request(|reply| Request::GetGrid { reply }).await
+    }
+
+    pub async fn set_grid_preferences(
+        &self,
+        preferences: GridPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetGrid { preferences, reply })
             .await
     }
 

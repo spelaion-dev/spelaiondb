@@ -11,7 +11,12 @@
     "system": "Same as the system",
     "light": "Light",
     "dark": "Dark",
-    "hint": "Applies to every workspace and is saved in your personal settings."
+    "hint": "Applies to every workspace and is saved in your personal settings.",
+    "grid": "Result grid",
+    "zebra": "Zebra rows",
+    "nullText": "Show NULL as text (off: an empty cell)",
+    "boolCheckboxes": "Show booleans as checkboxes",
+    "gridHint": "Only changes how cells are drawn: copies and exports keep the values."
   },
   "language": {
     "title": "Language",

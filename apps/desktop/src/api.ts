@@ -33,6 +33,7 @@ import {
   type ObjectItem_Serialize,
   type ObjectPathItem,
   type ExplorerPreferencesItem,
+  type GridPreferencesItem,
   type ExplorerFilterItem,
   type NameFilterItem,
   type NewIndexKindItem,
@@ -90,6 +91,7 @@ export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
 export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
+export type GridPreferences = GridPreferencesItem;
 export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
 export type { BookmarkItem, CreateKindItem, FilterActionItem, FilterKindItem, NewIndexKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };

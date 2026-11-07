@@ -5,7 +5,7 @@
 use std::io::{self, Write};
 use std::ops::Range;
 
-use spelaion_driver_api::{Dialect, LogicalType, Value};
+use spelaion_driver_api::{ColumnMeta, Dialect, LogicalType, Value};
 
 use crate::results::StoredResult;
 
@@ -33,8 +33,9 @@ pub struct ExportOptions {
     pub format: ExportFormat,
     /// Rows of the result (clipped at its end).
     pub rows: Range<usize>,
-    /// Columns of the result, by position (clipped).
-    pub columns: Range<usize>,
+    /// Columns of the result, by position and in this order; positions past the end are left
+    /// out.
+    pub columns: Vec<usize>,
     /// Column names as the first line (TSV/CSV). JSON and SQL always name the columns.
     pub header: bool,
 }
@@ -71,9 +72,14 @@ pub fn write_result(
 ) -> io::Result<usize> {
     let schema = result.schema();
     let total_columns = schema.columns.len();
-    let columns = options.columns.start.min(total_columns)..options.columns.end.min(total_columns);
+    let columns: Vec<usize> = options
+        .columns
+        .iter()
+        .copied()
+        .filter(|&c| c < total_columns)
+        .collect();
     let rows = options.rows.start.min(result.rows())..options.rows.end.min(result.rows());
-    let metas = &schema.columns[columns.clone()];
+    let metas: Vec<&ColumnMeta> = columns.iter().map(|&c| &schema.columns[c]).collect();
     let names: Vec<String> = unique_names(metas.iter().map(|m| m.name.as_str()));
 
     match &options.format {
@@ -122,8 +128,8 @@ pub fn write_result(
         for batch in result.window(start, len) {
             for row in 0..batch.num_rows() {
                 let values: Vec<Value> = columns
-                    .clone()
-                    .map(|c| {
+                    .iter()
+                    .map(|&c| {
                         Value::from_array(batch.column(c).as_ref(), row, schema.columns[c].logical)
                             .unwrap_or(Value::Null)
                     })
@@ -531,7 +537,7 @@ mod tests {
             &ExportOptions {
                 format,
                 rows,
-                columns,
+                columns: columns.collect(),
                 header,
             },
             &Quoted(dialect),
@@ -546,6 +552,30 @@ mod tests {
         assert_eq!(
             render(ExportFormat::Tsv, 0..3, 0..2, true, "postgres"),
             "id\tname\n1\tplain\n2\t\"a,b \"\"q\"\"\tc\nd\"\n\tit's \\ x\n"
+        );
+    }
+
+    #[test]
+    fn columns_are_taken_in_the_order_given_and_hidden_ones_left_out() {
+        let result = sample();
+        let result = result.read().unwrap();
+        let mut out = Vec::new();
+        write_result(
+            &result,
+            &ExportOptions {
+                format: ExportFormat::Tsv,
+                rows: 0..2,
+                // The grid hides "name": the selection id..price sends 0 and 2; 99 is gone.
+                columns: vec![2, 0, 99],
+                header: true,
+            },
+            &Quoted("postgres"),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "price\tid\n1.5\t1\nNaN\t2\n"
         );
     }
 
@@ -687,7 +717,7 @@ mod tests {
                     table: "items".into(),
                 },
                 rows: 0..2_500,
-                columns: 0..1,
+                columns: vec![0],
                 header: false,
             },
             &Quoted("sqlserver"),
@@ -745,7 +775,7 @@ mod tests {
                     table: "items".into(),
                 },
                 rows: 0..CHUNK + 1,
-                columns: 0..1,
+                columns: vec![0],
                 header: false,
             },
             &Quoted("sqlite"),
@@ -768,7 +798,7 @@ mod tests {
         let options = |format| ExportOptions {
             format,
             rows: 0..usize::MAX,
-            columns: 0..2,
+            columns: vec![0, 1],
             header: true,
         };
         let csv = dir.join("out.csv");
