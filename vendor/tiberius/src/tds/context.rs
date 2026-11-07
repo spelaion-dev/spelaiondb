@@ -28,6 +28,10 @@ pub(crate) struct Context {
     /// [`Config::lossy_utf16_decoding`](crate::Config::lossy_utf16_decoding) at
     /// connect time. Defaults to `false` (strict decoding).
     lossy_utf16: bool,
+    /// INFO tokens received since the caller last took them (SpelaionDB patch).
+    info_messages: Vec<crate::InfoMessage>,
+    /// INFO tokens dropped because `info_messages` was full (SpelaionDB patch).
+    info_dropped: usize,
 }
 
 impl Context {
@@ -50,7 +54,26 @@ impl Context {
             spn: None,
             command_timeout: None,
             lossy_utf16: false,
+            info_messages: Vec::new(),
+            info_dropped: 0,
         }
+    }
+
+    /// Keeps an INFO token for the caller (SpelaionDB patch).
+    pub fn push_info(&mut self, message: crate::InfoMessage) {
+        if self.info_messages.len() < crate::MAX_INFO_MESSAGES {
+            self.info_messages.push(message);
+        } else {
+            self.info_dropped += 1;
+        }
+    }
+
+    /// The INFO messages kept so far and how many were dropped, emptied (SpelaionDB patch).
+    pub fn take_info(&mut self) -> (Vec<crate::InfoMessage>, usize) {
+        (
+            std::mem::take(&mut self.info_messages),
+            std::mem::take(&mut self.info_dropped),
+        )
     }
 
     pub fn next_packet_id(&mut self) -> u8 {

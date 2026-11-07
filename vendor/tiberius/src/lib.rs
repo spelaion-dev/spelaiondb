@@ -256,6 +256,21 @@ pub use tds::{
     time, xml, EncryptionLevel,
 };
 pub use to_sql::{IntoSql, ToSql};
+
+/// A server's informational message: an INFO token (SpelaionDB patch).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoMessage {
+    pub number: u32,
+    /// Severity, 10 or less for an INFO token (`PRINT` is 0).
+    pub class: u8,
+    pub message: String,
+    pub procedure: String,
+    pub line: u32,
+}
+
+/// Most INFO messages kept until [`Client::take_info_messages`] takes them (SpelaionDB
+/// patch): a `PRINT` in a long loop must not fill the memory.
+pub const MAX_INFO_MESSAGES: usize = 1000;
 pub use uuid::Uuid;
 
 use sql_read_bytes::*;

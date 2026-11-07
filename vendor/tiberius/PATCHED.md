@@ -36,3 +36,13 @@ the features SpelaionDB leaves out (Windows authentication) some code is unused:
 ## Also: transaction state without a query
 
 `Client::in_transaction` drains a previously dropped response and exposes the TDS transaction descriptor, so an idle keep-alive never enters an open transaction. Test it against a real SQL Server before upgrading.
+
+## Also: the server's informational messages (ADR-035)
+
+Upstream decodes INFO tokens (`PRINT`, `RAISERROR` with severity 10 or less, "Changed database
+context…") and only logs them. `TokenStream::get_info` (`src/tds/stream/token.rs`) now also keeps
+each one in the connection's `Context` (at most `MAX_INFO_MESSAGES`, counting the rest), and
+`Client::take_info_messages` hands them over and empties the buffer. `InfoMessage` and
+`MAX_INFO_MESSAGES` are exported from `src/lib.rs`. They are kept on any path, also when the batch
+fails before its first result set. `crates/spelaion-core/tests/server_messages.rs` checks `PRINT`, a
+low-severity `RAISERROR` and messages before an error against a real SQL Server.
