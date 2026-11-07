@@ -55,8 +55,6 @@ impl MysqlDriver {
     }
 }
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// Server error "Query execution was interrupted" (after `KILL QUERY`).
 const ER_QUERY_INTERRUPTED: u16 = 1317;
 
@@ -116,13 +114,13 @@ fn tls_opts(params: &ConnectParams) -> Option<SslOpts> {
     }
 }
 
-async fn open(opts: Opts) -> std::result::Result<Conn, mysql_async::Error> {
-    match tokio::time::timeout(CONNECT_TIMEOUT, Conn::new(opts)).await {
+async fn open(opts: Opts, timeout: Duration) -> std::result::Result<Conn, mysql_async::Error> {
+    match tokio::time::timeout(timeout, Conn::new(opts)).await {
         Ok(result) => result,
         Err(_) => Err(mysql_async::Error::Io(mysql_async::IoError::Io(
             std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                format!("no response in {} s", CONNECT_TIMEOUT.as_secs()),
+                format!("no response in {} s", timeout.as_secs()),
             ),
         ))),
     }
@@ -146,19 +144,21 @@ impl Driver for MysqlDriver {
         // drivers (with more than one compiled in, rustls would not choose).
         let _ = rustls::crypto::ring::default_provider().install_default();
         let mut opts = opts(params, tls_opts(params));
-        let conn = match open(opts.clone()).await {
+        let timeout = params.connect_timeout();
+        let conn = match open(opts.clone(), timeout).await {
             // `prefer`: without TLS only if the server does not offer it.
             Err(mysql_async::Error::Driver(
                 mysql_async::DriverError::NoClientSslFlagFromServer,
             )) if params.tls == TlsMode::Prefer => {
                 opts = self::opts(params, None);
-                open(opts.clone()).await
+                open(opts.clone(), timeout).await
             }
             other => other,
         }
         .map_err(map_error)?;
         let cancel = Arc::new(MysqlCancel {
             opts,
+            timeout,
             id: conn.id(),
         });
         let (requests, receiver) = mpsc::channel(8);
@@ -607,13 +607,16 @@ fn tokio_stream_from<T: Send + 'static>(
 /// `KILL QUERY` from a second connection with the same options (and the same tunnel).
 struct MysqlCancel {
     opts: Opts,
+    timeout: Duration,
     id: u32,
 }
 
 #[async_trait]
 impl CancelHandle for MysqlCancel {
     async fn cancel(&self) -> Result<()> {
-        let mut conn = open(self.opts.clone()).await.map_err(map_error)?;
+        let mut conn = open(self.opts.clone(), self.timeout)
+            .await
+            .map_err(map_error)?;
         let result = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
         let _ = conn.disconnect().await;
         result.map_err(map_error)

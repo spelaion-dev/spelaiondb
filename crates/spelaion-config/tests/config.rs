@@ -530,6 +530,7 @@ fn creates_new_connection_files() {
         sqlite3: None,
         read_only: true,
         keepalive: None,
+        connect_timeout: None,
         tls: Default::default(),
         mcp: Default::default(),
     };
@@ -635,6 +636,7 @@ fn postgres_draft() -> ConnectionDraft {
         sqlite3: String::new(),
         read_only: false,
         keepalive: None,
+        connect_timeout: None,
         mcp_exposed: true,
         mcp_writes: false,
     }
@@ -1457,6 +1459,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         }),
         read_only: false,
         keepalive: None,
+        connect_timeout: None,
         mcp_exposed: false,
         mcp_writes: false,
     }
@@ -2103,6 +2106,90 @@ fn session_keepalives_are_written_resolved_and_refused_for_files() {
             "long.toml",
             "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nkeepalive = 100000\n",
             "at most",
+        ),
+    ] {
+        let written = fx.write(&format!("repo/.spelaion/connections/{file}"), content);
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(
+            config
+                .problems
+                .iter()
+                .any(|p| p.file.ends_with(file) && p.message.contains(expected)),
+            "{file}: {:?}",
+            config.problems
+        );
+        std::fs::remove_file(written).unwrap();
+    }
+}
+
+/// A connection's own connect timeout (ADR-032): written by the form, resolved into the
+/// driver's parameters, refused for local files and out of range.
+#[test]
+fn connect_timeouts_are_written_resolved_and_validated() {
+    let fx = Fixture::new("connect-timeout");
+    let path = fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
+    fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
+    fx.write("user/user.toml", "[vars]\ndb_user = \"ana\"\n");
+    let backend = FakeBackend {
+        env: BTreeMap::from([("REGION".into(), "eu".into())]),
+        ..Default::default()
+    };
+    let id = ws("prod/orders");
+    let resolve = |fx: &Fixture| {
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        Resolver::new(&config, &fx.trusted(), &backend)
+            .resolve(&ws("prod/orders"))
+            .unwrap()
+            .params
+    };
+    let params = resolve(&fx);
+    assert_eq!(params.connect_timeout, None);
+    assert_eq!(params.connect_timeout(), std::time::Duration::from_secs(15));
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        connect_timeout: Some(40),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("connect_timeout = 40")
+    );
+    assert_eq!(
+        resolve(&fx).connect_timeout(),
+        std::time::Duration::from_secs(40)
+    );
+    // Emptied in the form: back to the default, and out of the file.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let cleared = ConnectionDraft {
+        connect_timeout: None,
+        ..draft
+    };
+    spelaion_config::update_connection(&config, &id, &cleared, None, &backend).unwrap();
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("connect_timeout")
+    );
+
+    for (file, content, expected) in [
+        (
+            "file.toml",
+            "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"app.db\"\nconnect_timeout = 5\n",
+            "database servers",
+        ),
+        (
+            "zero.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nconnect_timeout = 0\n",
+            "from 1 to 600",
+        ),
+        (
+            "long.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nconnect_timeout = 601\n",
+            "from 1 to 600",
         ),
     ] {
         let written = fx.write(&format!("repo/.spelaion/connections/{file}"), content);

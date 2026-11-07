@@ -527,6 +527,23 @@ pub(crate) fn validate_connection(
             ));
         }
     }
+    if let Some(seconds) = file.connect_timeout {
+        if file.engine.is_file() {
+            return Err(ConfigError::new(
+                path,
+                "connect_timeout is for database servers: a local file is opened, not connected to",
+            ));
+        }
+        if seconds == 0 || seconds > ConnectionFile::MAX_CONNECT_TIMEOUT {
+            return Err(ConfigError::new(
+                path,
+                format!(
+                    "connect_timeout is in seconds, from 1 to {}",
+                    ConnectionFile::MAX_CONNECT_TIMEOUT
+                ),
+            ));
+        }
+    }
     if let Some(port) = file.local_port {
         if file.tunnel.is_none() || remote_sqlite {
             return Err(ConfigError::new(

@@ -186,7 +186,7 @@ pub trait Interaction: Send + Sync {
     async fn ask_secret(&self, request: &SecretRequest) -> Option<Secret>;
 }
 
-/// What went wrong with a proxy, for the connection test's hints (ADR-031).
+/// What went wrong with a proxy, for the connection test's hints (ADR-032).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyFailure {
     /// The proxy itself could not be reached.

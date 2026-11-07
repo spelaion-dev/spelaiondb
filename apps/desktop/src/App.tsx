@@ -92,6 +92,8 @@ export default function App() {
     const unlisten = events.interactionRequest.listen((e) =>
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );
+    // Nobody waits for that answer any more (a stopped connection test, ADR-032).
+    const unlistenClosed = events.interactionClosed.listen((e) => useDialogs.getState().popInteraction(e.payload.id));
     // A tab whose session died, or was closed for being idle (ADR-029), shows it; nothing
     // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses.
     const unlistenLost = events.sessionLost.listen((e) => {
@@ -156,6 +158,7 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => {
       void unlisten.then((f) => f());
+      void unlistenClosed.then((f) => f());
       void unlistenLost.then((f) => f());
       void unlistenTransaction.then((f) => f());
       void unlistenQuit.then((f) => f());

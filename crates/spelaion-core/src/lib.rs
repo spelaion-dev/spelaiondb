@@ -5,6 +5,7 @@
 
 mod catalog;
 mod classify;
+mod conn_test;
 mod cursor;
 mod edit;
 mod export;
@@ -30,6 +31,11 @@ mod write;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
+pub use conn_test::{
+    FailureKind, REDACTED, Redactor, StepFailure, StepKind, StepObserver, StepStatus, TestOptions,
+    TestReport, TestScope, TestStep, classify_driver, classify_ssh, test_connection,
+    test_network_profile,
+};
 pub use cursor::statement_at;
 pub use edit::{
     CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements,

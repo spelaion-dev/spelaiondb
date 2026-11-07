@@ -68,6 +68,9 @@ import {
   type UrlFields_Serialize,
   type PasswordMode,
   type WorkspaceInfo_Serialize,
+  type ConnectionTestOutcome_Serialize,
+  type TestReportItem,
+  type TestStepItem,
 } from "./bindings";
 
 export { commands, events };
@@ -108,8 +111,11 @@ export type TableDetails = TableDetails_Serialize;
 export type IndexDetails = TableDetails["indexes"][number];
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
 export type UpdateStatus = UpdateStatus_Serialize;
-/** What `connect` and `testConnection` return. */
+/** What `connect` returns. */
 export type ConnectResult = ConnectOutcome_Serialize;
+/** What `testConnection` returns; its steps arrive through a channel (ADR-032). */
+export type ConnectionTestResult = ConnectionTestOutcome_Serialize;
+export type { TestReportItem, TestStepItem };
 
 type Typed<T> = { status: "ok"; data: T } | { status: "error"; error: string };
 

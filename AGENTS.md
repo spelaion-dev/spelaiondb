@@ -111,6 +111,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   database, one transaction, one row per statement).
   `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
   create, new index…); `tests/object_actions.rs` runs each engine's statements on that engine.
+  `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
+  hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
+  `Tunnel::probe`, login), its own tunnel, Stop that closes what it opened, failures classified
+  there and a `Redactor` every label, message and the diagnostics text pass through: any change
+  there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
+  `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
+  `open.rs`); a tunnel file's is per SSH hop.
   `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like

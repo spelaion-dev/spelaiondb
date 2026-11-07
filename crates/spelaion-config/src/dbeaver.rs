@@ -529,6 +529,7 @@ pub fn import_plan(
             read_only: false,
             // Like a connection made in the form: idle sessions are kept alive (ADR-028).
             keepalive: (!sqlite).then_some(ConnectionFile::SUGGESTED_KEEPALIVE),
+            connect_timeout: None,
             mcp_exposed: false,
             mcp_writes: false,
         },
