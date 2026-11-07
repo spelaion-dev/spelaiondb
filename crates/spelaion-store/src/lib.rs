@@ -113,7 +113,17 @@ const MIGRATIONS: &[&str] = &["create table audit (
         detail      text not null,
         created_ms  integer not null,
         primary key (workspace, connection, schema, name, kind, detail)
-    );"
+    );",
+    // The MCP server's settings (ADR-033): read by `spelaiondb mcp` on every call, so a value
+    // it does not know must never get in.
+    "create trigger personal_settings_mcp_insert before insert on personal_settings
+        when (new.key = 'mcp.read_only' and new.value not in ('on', 'off'))
+          or (new.key = 'mcp.output_format' and new.value not in ('json', 'toon'))
+        begin select raise(abort, 'unsupported MCP setting'); end;
+    create trigger personal_settings_mcp_update before update on personal_settings
+        when (new.key = 'mcp.read_only' and new.value not in ('on', 'off'))
+          or (new.key = 'mcp.output_format' and new.value not in ('json', 'toon'))
+        begin select raise(abort, 'unsupported MCP setting'); end;"
 ];
 
 /// Milliseconds since 1970 (UTC); 0 if the clock is before it.
@@ -222,6 +232,34 @@ impl AuditEntry {
             rows: None,
             duration_ms: None,
             detail: None,
+        }
+    }
+}
+
+/// How `spelaiondb mcp` writes a query's rows for the agent when the call does not say
+/// (ADR-033).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ToolOutput {
+    /// An object with the columns and the rows as arrays.
+    #[default]
+    Json,
+    /// TOON: one header with the column names, then one line of values per row.
+    Toon,
+}
+
+impl ToolOutput {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolOutput::Json => "json",
+            ToolOutput::Toon => "toon",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "json" => Some(ToolOutput::Json),
+            "toon" => Some(ToolOutput::Toon),
+            _ => None,
         }
     }
 }
@@ -841,6 +879,43 @@ impl Store {
         self.set_flag("grid.zebra", zebra)?;
         self.set_flag("grid.null_text", null_text)?;
         self.set_flag("grid.bool_checkboxes", bool_checkboxes)
+    }
+
+    /// The user's read-only mode for every agent (ADR-033). Off until turned on; any value
+    /// other than `off` counts as on, so a damaged setting never lets agents write.
+    pub fn mcp_read_only(&self) -> Result<bool, StoreError> {
+        Ok(match self.personal_setting("mcp.read_only")? {
+            None => false,
+            Some(value) => value != "off",
+        })
+    }
+
+    pub fn set_mcp_read_only(&self, read_only: bool) -> Result<(), StoreError> {
+        self.set_flag("mcp.read_only", read_only)
+    }
+
+    /// The default output of the MCP server's query tools (ADR-033): JSON until changed.
+    pub fn mcp_output_format(&self) -> Result<ToolOutput, StoreError> {
+        Ok(self
+            .personal_setting("mcp.output_format")?
+            .as_deref()
+            .and_then(ToolOutput::parse)
+            .unwrap_or_default())
+    }
+
+    pub fn set_mcp_output_format(&self, format: ToolOutput) -> Result<(), StoreError> {
+        self.set_personal_setting("mcp.output_format", format.as_str())
+    }
+
+    fn personal_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "select value from personal_settings where key = ?1",
+                [key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
     }
 
     fn get_flag(&self, key: &str, default: bool) -> Result<bool, StoreError> {
@@ -1676,5 +1751,50 @@ mod tests {
         let store = Store::open(&path).unwrap();
         assert_eq!(store.get_language().unwrap(), "es");
         assert_eq!(store.get_theme().unwrap(), "system");
+    }
+
+    #[test]
+    fn mcp_settings_start_permissive_as_before_and_persist() {
+        let path = temp("mcp-settings");
+        let store = Store::open(&path).unwrap();
+        assert!(!store.mcp_read_only().unwrap());
+        assert_eq!(store.mcp_output_format().unwrap(), ToolOutput::Json);
+        store.set_mcp_read_only(true).unwrap();
+        store.set_mcp_output_format(ToolOutput::Toon).unwrap();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert!(reopened.mcp_read_only().unwrap());
+        assert_eq!(reopened.mcp_output_format().unwrap(), ToolOutput::Toon);
+        reopened.set_mcp_read_only(false).unwrap();
+        assert!(!reopened.mcp_read_only().unwrap());
+    }
+
+    #[test]
+    fn mcp_read_only_cannot_be_switched_off_by_a_strange_value() {
+        let path = temp("mcp-read-only-values");
+        let store = Store::open(&path).unwrap();
+        store.set_mcp_read_only(true).unwrap();
+        store.set_mcp_output_format(ToolOutput::Json).unwrap();
+        // The database refuses any other value, through any statement.
+        for sql in [
+            "update personal_settings set value = 'no' where key = 'mcp.read_only'",
+            "update personal_settings set value = 'OFF' where key = 'mcp.read_only'",
+            "update personal_settings set value = '' where key = 'mcp.read_only'",
+            "insert or replace into personal_settings (key, value) values ('mcp.read_only', 'false')",
+            "update personal_settings set value = 'yaml' where key = 'mcp.output_format'",
+            "insert into personal_settings (key, value) values ('mcp.output_format', 'markdown')",
+        ] {
+            assert!(store.conn.execute(sql, []).is_err(), "{sql}");
+        }
+        assert!(store.mcp_read_only().unwrap());
+        // Even if one got in (an older or damaged database), only `off` lets agents write.
+        store
+            .conn
+            .execute_batch(
+                "drop trigger personal_settings_mcp_update;
+                 update personal_settings set value = 'false' where key = 'mcp.read_only';",
+            )
+            .unwrap();
+        assert!(store.mcp_read_only().unwrap());
     }
 }

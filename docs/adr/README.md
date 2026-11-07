@@ -41,3 +41,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [030](0030-copying-connections-and-changing-engines.md) | Copying connections, changing their engine, and naming new ones | Accepted |
 | [031](0031-transactions.md) | Transactions you can see and control: manual commit per tab, smart commit per type | Accepted |
 | [032](0032-connection-test-diagnostics.md) | The connection test says which step failed, why, and what to try | Accepted |
+| [033](0033-mcp-page.md) | The MCP server page: read-only mode for every agent, and query rows as JSON or TOON | Accepted |

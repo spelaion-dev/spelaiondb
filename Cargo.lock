@@ -5576,6 +5576,7 @@ dependencies = [
  "sqlparser",
  "thiserror 2.0.21",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]
@@ -5690,7 +5691,9 @@ name = "spelaion-mcp"
 version = "0.6.0"
 dependencies = [
  "rmcp",
+ "rusqlite",
  "serde",
+ "serde_json",
  "spelaion-config",
  "spelaion-core",
  "spelaion-driver-api",

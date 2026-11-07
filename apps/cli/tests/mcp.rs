@@ -61,9 +61,14 @@ struct Agent {
 
 impl Agent {
     fn start(fx: &Fixture) -> Self {
+        Self::start_with(fx, &[])
+    }
+
+    fn start_with(fx: &Fixture, extra: &[&str]) -> Self {
         let mut child = Command::new(BIN)
             .args(["mcp", "--workspace"])
             .arg(fx.repo())
+            .args(extra)
             .env("SPELAION_USER_DIR", fx.user())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -223,11 +228,11 @@ fn an_agent_can_read_but_never_write() {
     );
     assert!(!is_error, "{text}");
     assert!(
-        text.contains("| lamp | 19.9 |") && text.contains("| table | 120 |"),
+        text.contains(r#""rows":[["lamp",19.9],["table",120]]"#),
         "{text}"
     );
     assert!(
-        !text.contains("chair") && text.contains("there are more"),
+        !text.contains("chair") && text.contains(r#""more_rows":true"#),
         "{text}"
     );
 
@@ -299,6 +304,66 @@ fn an_agent_can_read_but_never_write() {
 }
 
 #[test]
+fn read_only_mode_and_toon_over_the_protocol() {
+    // A trusted repository's connection that lets agents write (ADR-033).
+    let fx = Fixture::new("mcp-read-only");
+    create_db(&fx.repo().join("shop.db"));
+    std::fs::write(
+        fx.repo().join(".spelaion/connections/shop.toml"),
+        "schema_version = 1\nname = \"Shop\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\nenv = \"prod\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
+    )
+    .unwrap();
+    fx.spelaion(&["trust", fx.repo().to_str().unwrap()]);
+    let count = || -> i64 {
+        rusqlite::Connection::open(fx.repo().join("shop.db"))
+            .unwrap()
+            .query_row("select count(*) from products", [], |r| r.get(0))
+            .unwrap()
+    };
+
+    // `--read-only`: the repository's choice does not bring writes back.
+    let mut agent = Agent::start_with(&fx, &["--read-only"]);
+    let (text, _) = agent.call("list_connections", json!({}));
+    assert!(text.contains("every agent read-only"), "{text}");
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "insert into products (name) values ('desk')" }),
+    );
+    assert!(is_error && text.contains("every agent read-only"), "{text}");
+    assert_eq!(count(), 3);
+
+    // Rows as TOON when the call asks; an unknown format is refused by the schema.
+    let (text, is_error) = agent.call(
+        "run_query",
+        json!({ "connection": "shop", "sql": "select id, name from products order by id", "output_format": "toon" }),
+    );
+    assert!(!is_error, "{text}");
+    assert!(
+        text.contains("rows[3]{id,name}:\n  1,lamp\n  2,table\n  3,chair\n"),
+        "{text}"
+    );
+    let result = agent.request(
+        "tools/call",
+        json!({ "name": "run_query", "arguments": { "connection": "shop", "sql": "select 1", "output_format": "csv" } }),
+    );
+    assert!(
+        result["isError"].as_bool() == Some(true) || result.get("content").is_none(),
+        "{result}"
+    );
+    agent.stop();
+
+    // Without the flag, the repository's choice applies again.
+    let mut agent = Agent::start(&fx);
+    let (text, is_error) = agent.call(
+        "execute_write",
+        json!({ "connection": "shop", "sql": "insert into products (name) values ('desk')" }),
+    );
+    assert!(!is_error, "{text}");
+    assert_eq!(count(), 4);
+    agent.stop();
+}
+
+#[test]
 fn an_agent_writes_only_where_the_user_allowed_it() {
     let fx = Fixture::new("mcp-write");
     create_db(&fx.repo().join("shop.db"));
@@ -354,7 +419,7 @@ fn an_agent_writes_only_where_the_user_allowed_it() {
         "run_query",
         json!({ "connection": "shop", "sql": "select count(*) as n from products" }),
     );
-    assert!(!is_error && text.contains("| 5 |"), "{text}");
+    assert!(!is_error && text.contains(r#""rows":[[5]]"#), "{text}");
     let (text, is_error) = agent.call(
         "run_query",
         json!({ "connection": "shop", "sql": "delete from products" }),
@@ -467,7 +532,7 @@ fn duckdb_connections_serve_agents_without_files() {
         "run_query",
         json!({ "connection": "shop", "sql": "select name from products order by id" }),
     );
-    assert!(!is_error && text.contains("| lamp |"), "{text}");
+    assert!(!is_error && text.contains(r#"["lamp"]"#), "{text}");
     let (text, is_error) = agent.call(
         "execute_write",
         json!({ "connection": "shop", "sql": "insert into products values (4, 'desk')" }),
@@ -478,7 +543,7 @@ fn duckdb_connections_serve_agents_without_files() {
         "run_query",
         json!({ "connection": "shop", "sql": "select count(*) as n from products" }),
     );
-    assert!(!is_error && text.contains("| 4 |"), "{text}");
+    assert!(!is_error && text.contains(r#""rows":[[4]]"#), "{text}");
     let (text, is_error) = agent.call(
         "explain_query",
         json!({ "connection": "shop", "sql": "select * from products" }),
@@ -515,7 +580,7 @@ fn duckdb_connections_serve_agents_without_files() {
         "run_query",
         json!({ "connection": "archive", "sql": "select count(*) as n from products" }),
     );
-    assert!(!is_error && text.contains("| 1 |"), "{text}");
+    assert!(!is_error && text.contains(r#""rows":[[1]]"#), "{text}");
     agent.stop();
 
     assert_eq!(
@@ -564,7 +629,7 @@ fn a_connection_changed_after_trusting_is_refused_until_reviewed() {
     );
     let mut agent = Agent::start(&fx);
     let (text, is_error) = agent.call("run_query", query);
-    assert!(!is_error && text.contains("| 3 |"), "{text}");
+    assert!(!is_error && text.contains(r#""rows":[[3]]"#), "{text}");
     agent.stop();
 }
 
@@ -599,6 +664,6 @@ fn a_connection_missing_personal_variables_says_which_ones() {
     .unwrap();
     let mut agent = Agent::start(&fx);
     let (text, is_error) = agent.call("run_query", query);
-    assert!(!is_error && text.contains("| 3 |"), "{text}");
+    assert!(!is_error && text.contains(r#""rows":[[3]]"#), "{text}");
     agent.stop();
 }

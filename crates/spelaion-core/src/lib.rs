@@ -70,13 +70,15 @@ pub use sort::{SortKey, ViewError};
 pub use spelaion_store::{
     Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences,
 };
-pub use spelaion_store::{HistoryEntry, Snippet};
+pub use spelaion_store::{HistoryEntry, Snippet, ToolOutput};
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
     table_count_sql, table_page_sql, typed_value, value_condition,
 };
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
-pub use write::{WriteError, WriteLimits, WriteResult, check_write};
+pub use write::{
+    AgentAccess, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access, check_write,
+};
 
 /// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file
 /// is never touched.
