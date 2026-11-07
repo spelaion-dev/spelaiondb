@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
     Bookmark, ExplorerFilter, ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry,
-    Snippet, Store, StoreError,
+    Snippet, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -79,6 +79,17 @@ enum Request {
     },
     SetUpdateCheck {
         enabled: bool,
+        reply: Reply<()>,
+    },
+    GetMcp {
+        reply: Reply<(bool, ToolOutput)>,
+    },
+    SetMcpReadOnly {
+        read_only: bool,
+        reply: Reply<()>,
+    },
+    SetMcpOutput {
+        format: ToolOutput,
         reply: Reply<()>,
     },
     List {
@@ -198,6 +209,19 @@ impl QueryHistory {
                         }
                         Request::SetUpdateCheck { enabled, reply } => {
                             let _ = reply.send(store.set_update_check(enabled));
+                        }
+                        Request::GetMcp { reply } => {
+                            let _ = reply.send(
+                                store
+                                    .mcp_read_only()
+                                    .and_then(|r| Ok((r, store.mcp_output_format()?))),
+                            );
+                        }
+                        Request::SetMcpReadOnly { read_only, reply } => {
+                            let _ = reply.send(store.set_mcp_read_only(read_only));
+                        }
+                        Request::SetMcpOutput { format, reply } => {
+                            let _ = reply.send(store.set_mcp_output_format(format));
                         }
                         Request::List {
                             workspace,
@@ -388,6 +412,22 @@ impl QueryHistory {
         preferences: GridPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetGrid { preferences, reply })
+            .await
+    }
+
+    /// The MCP server's settings (ADR-033): read-only mode for every agent, and the default
+    /// output of query tools.
+    pub async fn mcp_settings(&self) -> Result<(bool, ToolOutput), HistoryError> {
+        self.request(|reply| Request::GetMcp { reply }).await
+    }
+
+    pub async fn set_mcp_read_only(&self, read_only: bool) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetMcpReadOnly { read_only, reply })
+            .await
+    }
+
+    pub async fn set_mcp_output_format(&self, format: ToolOutput) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetMcpOutput { format, reply })
             .await
     }
 

@@ -1,4 +1,4 @@
-# ADR-033: The MCP server page: read-only mode for every agent, and compact output
+# ADR-033: The MCP server page: read-only mode for every agent, compact output, and one-click setup of AI clients
 
 - **Status:** Accepted
 - **Date:** 2026-11-07
@@ -18,6 +18,10 @@ page can offer them:
   padding and separators cost tokens, and nothing in a cell is quoted, so a client cannot read
   it back reliably. Formats made for models, such as TOON (Token-Oriented Object Notation),
   name the columns once and write one line per row.
+
+Setting the server up is manual today: the user installs the CLI and edits each client's
+configuration file by hand. Those files belong to the clients and hold the user's other
+servers, so the app must change them without breaking anything and only with the user's say.
 
 ## Decision
 ### Read-only mode for every agent
@@ -68,6 +72,60 @@ page can offer them:
 8. Other tools (`list_connections`, `list_objects`, `describe_table`, `search_schema`) keep
    their short text answers: they are lists, not tables of data.
 
+### Installing the server in AI clients
+9. **Six clients, each with its own file,** found by the core (`spelaion-config::mcp_clients`):
+
+   | Client | File |
+   |---|---|
+   | Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` on Windows (the Microsoft Store version's private copy, `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\`, when it exists: that version reads it first), `~/Library/Application Support/Claude/` on macOS, `~/.config/Claude/` on Linux (unofficial builds) |
+   | Claude Code | `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), its top-level `mcpServers`: the user scope, for every project |
+   | Codex | `~/.codex/config.toml` (or `$CODEX_HOME`), `[mcp_servers.spelaiondb]` |
+   | Cursor | `~/.cursor/mcp.json` |
+   | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+   | Antigravity | `~/.gemini/antigravity/mcp_config.json` |
+
+   Every JSON client keeps its servers under `mcpServers`; our entry is `spelaiondb` with
+   `command` (the binary's absolute path) and `args = ["mcp"]`, plus `"type": "stdio"` for
+   Claude Code, which is what `claude mcp add --scope user` writes. The page also shows that
+   command, and the manual configuration of the selected client to copy.
+10. **Nothing is written without showing it first, and only our entry changes.**
+    - The core computes the new file and a line diff of it; the app shows the diff and writes
+      only on the user's click.
+    - JSON files are edited as text: `serde_json` checks the file, a small scanner finds the
+      spans of `mcpServers` and of our entry, and only those bytes change (our `command`,
+      `args` and `type`; any other key the user added to our entry, such as `env`, stays).
+      Indentation and line endings follow the file's. Rewriting the whole file through a
+      parser would reorder or reformat other servers, and `~/.claude.json` is a large file
+      Claude Code rewrites all the time.
+    - Codex's TOML goes through `toml_edit`, which keeps comments and formatting.
+    - A file that does not parse (including JSON with comments) is never written: the page
+      says so and shows the manual configuration.
+    - The change written is the change shown: the app sends back the diff's fingerprint, and
+      the core re-reads the file, recomputes the change and refuses if either differs ("look
+      at it again"). The file is written beside itself and moved over the old one, so a client
+      never reads half of it.
+    - The old file is kept as `<file>.spelaion-backup-<YYYYMMDD-HHMMSS>` (UTC; `-2`, `-3`… if
+      taken), next to it. Backups are not cleaned up: they are small and the user's.
+11. **Which `spelaiondb` the clients run:** the app looks for, in order, `SPELAION_CLI`
+    (an explicit override), a `spelaiondb` binary next to its own executable, and the first one
+    on the `PATH`. Without one, nothing can be installed and the page says how to get it.
+    - **The installers ship the CLI next to the app** (Tauri's `externalBin`, set only in
+      `tauri.release.conf.json`): the release workflow builds `spelaion-cli` for each target
+      first. That is what makes one click enough on a clean machine. Local and CI builds do
+      not bundle it, so they need no extra build step.
+    - **A development build** finds `target/<profile>/spelaiondb` next to
+      `spelaion-desktop` once `cargo build -p spelaion-cli` has run in the same target
+      directory, or one on the `PATH`.
+    - **An AppImage** runs from a mount that changes on every start, so its neighbour is never
+      used: the `.deb` or the CLI on the `PATH` are the way on Linux.
+    - Moving the app (or a new install path) leaves the old path in the clients' files; the
+      card then says "Set up with another command" and offers to update it.
+12. **Tests and the smoke test never touch the user's files:** `SPELAION_MCP_CLIENTS_HOME`
+    points every client's file under a directory of their own.
+
+### The page
+13. **A chip icon in the activity bar, above Settings,** opens the page in place of the editor, with a short intro and its tabs: *Configuration* (one card per client: its file, whether it is set up, "Install configuration"; the selected client's manual configuration with a copy button, and `claude mcp add` for Claude Code), *Security* (the default output, the read-only switch, and every connection with what agents can do there, as `agent_view` decides, and its type's safeguards in the app). The approval gate waits for SDB-38.
+
 ## Alternatives
 - **The switch in `user.toml`:** visible and editable by hand, but the app would rewrite a file
   the user edits, and the server would have to re-read and re-validate it on every call.
@@ -77,6 +135,15 @@ page can offer them:
   needs.
 - **Keeping Markdown as a third format:** it is what agents got until now, but it cannot be
   read back and costs more tokens than TOON; two formats are enough.
+- **Rewriting client files through a JSON parser:** simpler, but it reformats and reorders the
+  user's file (`~/.claude.json` is large and Claude Code's own); editing spans keeps every
+  other byte.
+- **Downloading the CLI on first use, or asking users to install it:** a download from the app
+  needs a trusted source and a signature check of its own; shipping it in the installer, signed
+  with the app's update artifacts, is simpler and works offline.
+- **Pointing clients at the app's own executable with an `mcp` argument:** one binary fewer,
+  but the GUI binary would then start (and link WebView) for every agent; the CLI stays small
+  and headless (ADR-004).
 - **CSV instead of TOON:** as compact, but without a header that says how many rows follow,
   and with quoting rules clients disagree on.
 

@@ -132,6 +132,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   for every agent (ADR-033, `mcp.read_only` in the store, read on every call, failing closed)
   only takes writes away. Query rows go out as JSON or TOON (`format.rs`); any change there
   keeps every cell quoted so data cannot add rows or fields.
+  `spelaion-config::mcp_clients` finds each AI client's file and writes our entry there for the
+  app's MCP page (ADR-033): only our entry changes, JSON edited as text at the spans it finds,
+  Codex's TOML with `toml_edit`, a backup first, and only the change the user saw (its
+  fingerprint). Tests and the smoke test point it at `SPELAION_MCP_CLIENTS_HOME`, never at the
+  user's files; `SPELAION_CLI` names the `spelaiondb` it installs. The installers ship the CLI
+  next to the app (`externalBin`, only in `tauri.release.conf.json`).
 - `apps/desktop`: Tauri 2 + React app. `src-tauri` is a thin adapter over the core; the
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).

@@ -77,7 +77,8 @@ pub use table_data::{
 };
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use write::{
-    AgentAccess, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access, check_write,
+    AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
+    agent_view, check_write,
 };
 
 /// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file

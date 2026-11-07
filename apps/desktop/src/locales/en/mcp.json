@@ -1,0 +1,92 @@
+{
+  "title": "MCP server",
+  "intro": "MCP (Model Context Protocol) lets AI assistants such as Claude, Codex or Cursor use tools. SpelaionDB's server, spelaiondb mcp, gives them the connections you expose to agents: they can list and describe objects and run read-only queries, and write only on connections you allow. Every call is recorded on this computer.",
+  "sections": "MCP server sections",
+  "tabs": {
+    "configuration": "Configuration",
+    "security": "Security"
+  },
+  "config": {
+    "clients": "AI clients",
+    "noCli": "The spelaiondb command was not found next to the app or on the PATH, so no client can be set up from here. Install SpelaionDB with its installer, or the spelaiondb command line, and come back.",
+    "cli": {
+      "bundled": "Clients will run the command that came with the app:",
+      "path": "Clients will run the command found on the PATH:",
+      "override": "Clients will run the command set by SPELAION_CLI:"
+    },
+    "state": {
+      "noFile": "Not set up",
+      "notInstalled": "Not set up",
+      "installed": "Set up",
+      "different": "Set up with another command",
+      "unreadable": "File cannot be read"
+    },
+    "install": "Install configuration",
+    "update": "Update configuration",
+    "manualFor": "Manual configuration for {{client}}",
+    "manualJson": "To set it up by hand, add this to {{path}}, inside its mcpServers if it already has one.",
+    "manualToml": "To set it up by hand, add this table to {{path}}.",
+    "manualConfig": "Manual configuration",
+    "orCommand": "Or run this in a terminal:",
+    "addCommand": "claude mcp add command",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyConfig": "Copy the configuration",
+    "copyCommand": "Copy the command"
+  },
+  "install": {
+    "title": "Set up {{client}}",
+    "creates": "This file will be created:",
+    "changes": "Only SpelaionDB's entry changes in:",
+    "backup": "A copy of the current file is kept next to it before it is written.",
+    "diff": "Change to the file",
+    "gap_one": "… {{count}} unchanged line",
+    "gap_other": "… {{count}} unchanged lines",
+    "restart": "Restart {{client}} for it to load SpelaionDB's tools.",
+    "cancel": "Cancel",
+    "write": "Write the file",
+    "done": "{{client}} is set up. Restart it to load SpelaionDB's tools.",
+    "doneBackup": "{{client}} is set up; the previous file was kept as {{backup}}. Restart it to load SpelaionDB's tools."
+  },
+  "security": {
+    "output": {
+      "title": "Tool output",
+      "intro": "How query results reach the agent when a call does not ask for a format.",
+      "json": "JSON",
+      "jsonHint": "Columns and rows as arrays; every client reads it.",
+      "toon": "TOON",
+      "toonHint": "Compact: the column names once, then one line per row. Fewer tokens for big results."
+    },
+    "readOnly": {
+      "title": "Read-only mode",
+      "switch": "Every agent is read-only",
+      "hint": "Turned on, agents can only read, on every connection, whatever the connection allows, including the project's and Production. It applies at once, also to clients already running. Turned off, each connection decides."
+    },
+    "access": {
+      "title": "What agents can do on each connection",
+      "connection": "Connection",
+      "agents": "Agents can",
+      "type": "Type and its safeguards in the app",
+      "none": "No connections yet.",
+      "readOnly": "Read only",
+      "readWrite": "Read and write",
+      "notExposed": "Nothing: not exposed to agents",
+      "untrusted": "Nothing: the project is not trusted",
+      "because": {
+        "allAgents": "Read-only mode is on.",
+        "connection": "The connection is read-only.",
+        "writesDenied": "The connection does not let agents write.",
+        "confirmUnsupported": "The connection asks to confirm each write, which is not supported yet."
+      },
+      "change": "To change what agents can do on one connection, edit it: “Expose to AI agents” and “Agents can”. This page can only make agents stricter."
+    },
+    "safeguards": {
+      "confirmExecution": "asks before running SQL",
+      "confirmDataChanges": "asks before changing data",
+      "manualCommit": "auto-commit off",
+      "smartCommit": "smart commit",
+      "closeIdle": "closes after {{minutes}} min idle",
+      "none": "no safeguards"
+    }
+  }
+}

@@ -267,6 +267,7 @@
     "run": "Ejecutar"
   },
   "savedQueries": "Consultas guardadas",
+  "mcpServer": "Servidor MCP",
   "change": {
     "title": "Esto ha cambiado desde que confiaste en el repositorio",
     "newTitle": "Nuevo en el repositorio",

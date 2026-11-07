@@ -2954,3 +2954,245 @@ impl From<spelaion_core::FailureKind> for FailureKindItem {
         }
     }
 }
+
+// --- The MCP server page (ADR-033) ---------------------------------------------------------
+
+/// Where the `spelaiondb` the clients will run was found.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum McpCliSourceItem {
+    Bundled,
+    Path,
+    Override,
+}
+
+impl From<spelaion_config::mcp_clients::CliSource> for McpCliSourceItem {
+    fn from(source: spelaion_config::mcp_clients::CliSource) -> Self {
+        use spelaion_config::mcp_clients::CliSource;
+        match source {
+            CliSource::Bundled => Self::Bundled,
+            CliSource::Path => Self::Path,
+            CliSource::Override => Self::Override,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCliItem {
+    pub path: String,
+    pub source: McpCliSourceItem,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum McpInstallStateItem {
+    NoFile,
+    NotInstalled,
+    Installed,
+    Different,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum McpConfigLanguageItem {
+    Json,
+    Toml,
+}
+
+/// One AI client's card.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpClientItem {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub state: McpInstallStateItem,
+    /// Why the file cannot be read, if it cannot.
+    pub problem: Option<String>,
+    /// The whole configuration, to copy into the file by hand.
+    pub manual_config: String,
+    pub manual_language: McpConfigLanguageItem,
+    /// `claude mcp add …`, for Claude Code.
+    pub add_command: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpClientsItem {
+    /// `None`: no `spelaiondb` was found, so nothing can be installed.
+    pub cli: Option<McpCliItem>,
+    pub clients: Vec<McpClientItem>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum McpDiffKindItem {
+    Same,
+    Added,
+    Removed,
+    Gap,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDiffLineItem {
+    pub kind: McpDiffKindItem,
+    pub text: String,
+    /// Lines left out, for a gap.
+    pub skipped: u32,
+}
+
+impl From<spelaion_config::mcp_clients::DiffLine> for McpDiffLineItem {
+    fn from(line: spelaion_config::mcp_clients::DiffLine) -> Self {
+        use spelaion_config::mcp_clients::DiffLine;
+        let (kind, text, skipped) = match line {
+            DiffLine::Same(text) => (McpDiffKindItem::Same, text, 0),
+            DiffLine::Added(text) => (McpDiffKindItem::Added, text, 0),
+            DiffLine::Removed(text) => (McpDiffKindItem::Removed, text, 0),
+            DiffLine::Gap(n) => (
+                McpDiffKindItem::Gap,
+                String::new(),
+                u32::try_from(n).unwrap_or(u32::MAX),
+            ),
+        };
+        Self {
+            kind,
+            text,
+            skipped,
+        }
+    }
+}
+
+/// The change that installs our server in one client, shown before it is written.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpInstallPlanItem {
+    pub client: String,
+    pub path: String,
+    /// The file does not exist yet.
+    pub creates: bool,
+    pub diff: Vec<McpDiffLineItem>,
+    /// Sent back to write exactly this change.
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpInstallDoneItem {
+    /// Where the previous file was kept, if there was one.
+    pub backup: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolOutputItem {
+    Json,
+    Toon,
+}
+
+impl From<spelaion_core::ToolOutput> for ToolOutputItem {
+    fn from(format: spelaion_core::ToolOutput) -> Self {
+        match format {
+            spelaion_core::ToolOutput::Json => Self::Json,
+            spelaion_core::ToolOutput::Toon => Self::Toon,
+        }
+    }
+}
+
+impl From<ToolOutputItem> for spelaion_core::ToolOutput {
+    fn from(format: ToolOutputItem) -> Self {
+        match format {
+            ToolOutputItem::Json => Self::Json,
+            ToolOutputItem::Toon => Self::Toon,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpSettingsItem {
+    pub read_only: bool,
+    pub output_format: ToolOutputItem,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum McpVisibilityItem {
+    Visible,
+    NotExposed,
+    Untrusted,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum McpAccessKindItem {
+    ReadOnly,
+    ReadWrite,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum McpReadOnlyReasonItem {
+    AllAgents,
+    Connection,
+    WritesDenied,
+    ConfirmUnsupported,
+}
+
+/// What agents can do on one connection, as the core decides it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAccessItem {
+    pub id: String,
+    pub name: String,
+    pub engine: String,
+    pub personal: bool,
+    pub visibility: McpVisibilityItem,
+    /// For a visible connection.
+    pub access: Option<McpAccessKindItem>,
+    pub reason: Option<McpReadOnlyReasonItem>,
+    pub kind: Option<ConnectionTypeItem>,
+}
+
+impl McpAccessItem {
+    pub fn new(
+        entry: &spelaion_config::ConnectionEntry,
+        view: spelaion_core::AgentView,
+        kind: Option<ConnectionTypeItem>,
+    ) -> Self {
+        use spelaion_core::{AgentAccess, AgentView, ReadOnlyBecause};
+        let (visibility, access, reason) = match view {
+            AgentView::NotExposed => (McpVisibilityItem::NotExposed, None, None),
+            AgentView::UntrustedRepository => (McpVisibilityItem::Untrusted, None, None),
+            AgentView::Visible(AgentAccess::ReadWrite) => (
+                McpVisibilityItem::Visible,
+                Some(McpAccessKindItem::ReadWrite),
+                None,
+            ),
+            AgentView::Visible(AgentAccess::ReadOnly(because)) => (
+                McpVisibilityItem::Visible,
+                Some(McpAccessKindItem::ReadOnly),
+                Some(match because {
+                    ReadOnlyBecause::AllAgents => McpReadOnlyReasonItem::AllAgents,
+                    ReadOnlyBecause::Connection => McpReadOnlyReasonItem::Connection,
+                    ReadOnlyBecause::WritesDenied => McpReadOnlyReasonItem::WritesDenied,
+                    ReadOnlyBecause::ConfirmUnsupported => {
+                        McpReadOnlyReasonItem::ConfirmUnsupported
+                    }
+                }),
+            ),
+        };
+        Self {
+            id: entry.id.to_string(),
+            name: entry.name(),
+            engine: entry.file.engine.as_str().into(),
+            personal: entry.id.source == spelaion_config::Source::User,
+            visibility,
+            access,
+            reason,
+            kind,
+        }
+    }
+}

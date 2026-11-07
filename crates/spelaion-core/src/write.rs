@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use spelaion_config::{ConnectionFile, WritePolicy};
+use spelaion_config::{ConnectionEntry, ConnectionFile, Source, WritePolicy};
 use spelaion_driver_api::{Dialect, DriverError, ExecEvent, ExecOptions};
 use sqlparser::ast::{AlterTableOperation, Statement, visit_statements};
 use sqlparser::parser::Parser;
@@ -90,6 +90,33 @@ pub fn agent_access(file: &ConnectionFile, all_read_only: bool) -> AgentAccess {
         WritePolicy::Allow => AgentAccess::ReadWrite,
         WritePolicy::Deny => AgentAccess::ReadOnly(ReadOnlyBecause::WritesDenied),
         WritePolicy::Confirm => AgentAccess::ReadOnly(ReadOnlyBecause::ConfirmUnsupported),
+    }
+}
+
+/// What an agent sees of a connection: nothing, or the connection with what it may do there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentView {
+    /// Not `[mcp] exposed = true`.
+    NotExposed,
+    /// A repository's connection while the repository is not trusted (ADR-022).
+    UntrustedRepository,
+    Visible(AgentAccess),
+}
+
+/// What agents see of `entry` (ADR-008, ADR-022) and may do on it (ADR-019, ADR-033).
+pub fn agent_view(
+    entry: &ConnectionEntry,
+    repository_trusted: bool,
+    all_read_only: bool,
+) -> AgentView {
+    if !entry.file.mcp.exposed {
+        return AgentView::NotExposed;
+    }
+    match entry.id.source {
+        Source::Workspace if !repository_trusted => AgentView::UntrustedRepository,
+        Source::Workspace | Source::User => {
+            AgentView::Visible(agent_access(&entry.file, all_read_only))
+        }
     }
 }
 
@@ -563,6 +590,40 @@ mod tests {
         assert_eq!(
             agent_access(&connection("[mcp]\nwrites = \"confirm\"\n"), false),
             AgentAccess::ReadOnly(ReadOnlyBecause::ConfirmUnsupported)
+        );
+    }
+
+    #[test]
+    fn agents_see_only_exposed_connections_of_trusted_repositories() {
+        let entry = |source, extra: &str| ConnectionEntry {
+            id: spelaion_config::ConnectionId {
+                source,
+                path: "orders".into(),
+            },
+            file_path: "orders.toml".into(),
+            file: connection(extra),
+        };
+        let writable = "[mcp]\nexposed = true\nwrites = \"allow\"\n";
+        assert_eq!(
+            agent_view(&entry(Source::Workspace, ""), true, false),
+            AgentView::NotExposed
+        );
+        assert_eq!(
+            agent_view(&entry(Source::Workspace, writable), false, false),
+            AgentView::UntrustedRepository
+        );
+        assert_eq!(
+            agent_view(&entry(Source::Workspace, writable), true, false),
+            AgentView::Visible(AgentAccess::ReadWrite)
+        );
+        assert_eq!(
+            agent_view(&entry(Source::Workspace, writable), true, true),
+            AgentView::Visible(AgentAccess::ReadOnly(ReadOnlyBecause::AllAgents))
+        );
+        // A personal connection needs no trust.
+        assert_eq!(
+            agent_view(&entry(Source::User, writable), false, false),
+            AgentView::Visible(AgentAccess::ReadWrite)
         );
     }
 }

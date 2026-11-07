@@ -383,8 +383,11 @@ SQLite and DuckDB), each behind its own read-only barrier (ADR-020); for DuckDB,
 reach files or the network. A read-only database user is still the safest choice for agents
 that only read. One switch makes every agent read-only, whatever each connection allows
 (ADR-033; `spelaiondb mcp --read-only` does the same for one server). Query rows come back as
-JSON or as compact TOON (`output_format`, or your default). Install the binary and add it to
-Claude Code:
+JSON or as compact TOON (`output_format`, or your default). The app's **MCP server** page
+(the chip icon above Settings) sets it up in Claude Desktop, Claude Code, Codex, Cursor,
+Windsurf and Antigravity with one click: it shows the change to the client's file first, keeps
+a backup, and touches only its own entry. The installers ship the `spelaiondb` command next to
+the app. Without the app, install the binary and add it to Claude Code:
 
 ```bash
 cargo install --path apps/cli

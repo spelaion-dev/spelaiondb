@@ -8,6 +8,18 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	workspaceInfo: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("workspace_info")),
+	/**  Every AI client: its file, whether our server is there, and its manual configuration. */
+	mcpClients: () => typedError<McpClientsItem_Serialize, string>(__TAURI_INVOKE("mcp_clients")),
+	/**  The change that installs our server in one client, to show before writing it. */
+	mcpPlanInstall: (clientId: string) => typedError<McpInstallPlanItem, string>(__TAURI_INVOKE("mcp_plan_install", { clientId })),
+	/**  Writes the change the user was shown, and nothing else (the core checks the fingerprint). */
+	mcpApplyInstall: (clientId: string, fingerprint: string) => typedError<McpInstallDoneItem_Serialize, string>(__TAURI_INVOKE("mcp_apply_install", { clientId, fingerprint })),
+	mcpSettings: () => typedError<McpSettingsItem, string>(__TAURI_INVOKE("mcp_settings")),
+	/**  Read-only mode for every agent (ADR-033): `spelaiondb mcp` reads it on every call. */
+	setMcpReadOnly: (readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_read_only", { readOnly })),
+	setMcpOutputFormat: (format: ToolOutputItem) => typedError<null, string>(__TAURI_INVOKE("set_mcp_output_format", { format })),
+	/**  What agents can do on each connection, as the core decides it. */
+	mcpAccess: () => typedError<McpAccessItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -1213,6 +1225,137 @@ export type MappedConnectionItem_Serialize = {
 	change: EngineChangeItem_Serialize,
 };
 
+/**  What agents can do on one connection, as the core decides it. */
+export type McpAccessItem = McpAccessItem_Serialize | McpAccessItem_Deserialize;
+
+/**  What agents can do on one connection, as the core decides it. */
+export type McpAccessItem_Deserialize = {
+	id: string,
+	name: string,
+	engine: string,
+	personal: boolean,
+	visibility: McpVisibilityItem,
+	/**  For a visible connection. */
+	access?: McpAccessKindItem | null,
+	reason?: McpReadOnlyReasonItem | null,
+	kind?: ConnectionTypeItem_Deserialize | null,
+};
+
+/**  What agents can do on one connection, as the core decides it. */
+export type McpAccessItem_Serialize = {
+	id: string,
+	name: string,
+	engine: string,
+	personal: boolean,
+	visibility: McpVisibilityItem,
+	/**  For a visible connection. */
+	access: McpAccessKindItem | null,
+	reason: McpReadOnlyReasonItem | null,
+	kind: ConnectionTypeItem_Serialize | null,
+};
+
+export type McpAccessKindItem = "readOnly" | "readWrite";
+
+export type McpCliItem = {
+	path: string,
+	source: McpCliSourceItem,
+};
+
+/**  Where the `spelaiondb` the clients will run was found. */
+export type McpCliSourceItem = "bundled" | "path" | "override";
+
+/**  One AI client's card. */
+export type McpClientItem = McpClientItem_Serialize | McpClientItem_Deserialize;
+
+/**  One AI client's card. */
+export type McpClientItem_Deserialize = {
+	id: string,
+	name: string,
+	path: string,
+	state: McpInstallStateItem,
+	/**  Why the file cannot be read, if it cannot. */
+	problem?: string | null,
+	/**  The whole configuration, to copy into the file by hand. */
+	manualConfig: string,
+	manualLanguage: McpConfigLanguageItem,
+	/**  `claude mcp add …`, for Claude Code. */
+	addCommand?: string | null,
+};
+
+/**  One AI client's card. */
+export type McpClientItem_Serialize = {
+	id: string,
+	name: string,
+	path: string,
+	state: McpInstallStateItem,
+	/**  Why the file cannot be read, if it cannot. */
+	problem: string | null,
+	/**  The whole configuration, to copy into the file by hand. */
+	manualConfig: string,
+	manualLanguage: McpConfigLanguageItem,
+	/**  `claude mcp add …`, for Claude Code. */
+	addCommand: string | null,
+};
+
+export type McpClientsItem = McpClientsItem_Serialize | McpClientsItem_Deserialize;
+
+export type McpClientsItem_Deserialize = {
+	/**  `None`: no `spelaiondb` was found, so nothing can be installed. */
+	cli?: McpCliItem | null,
+	clients: McpClientItem_Deserialize[],
+};
+
+export type McpClientsItem_Serialize = {
+	/**  `None`: no `spelaiondb` was found, so nothing can be installed. */
+	cli: McpCliItem | null,
+	clients: McpClientItem_Serialize[],
+};
+
+export type McpConfigLanguageItem = "json" | "toml";
+
+export type McpDiffKindItem = "same" | "added" | "removed" | "gap";
+
+export type McpDiffLineItem = {
+	kind: McpDiffKindItem,
+	text: string,
+	/**  Lines left out, for a gap. */
+	skipped: number,
+};
+
+export type McpInstallDoneItem = McpInstallDoneItem_Serialize | McpInstallDoneItem_Deserialize;
+
+export type McpInstallDoneItem_Deserialize = {
+	/**  Where the previous file was kept, if there was one. */
+	backup?: string | null,
+};
+
+export type McpInstallDoneItem_Serialize = {
+	/**  Where the previous file was kept, if there was one. */
+	backup: string | null,
+};
+
+/**  The change that installs our server in one client, shown before it is written. */
+export type McpInstallPlanItem = {
+	client: string,
+	path: string,
+	/**  The file does not exist yet. */
+	creates: boolean,
+	diff: McpDiffLineItem[],
+	/**  Sent back to write exactly this change. */
+	fingerprint: string,
+};
+
+export type McpInstallStateItem = "noFile" | "notInstalled" | "installed" | "different" | "unreadable";
+
+export type McpReadOnlyReasonItem = "allAgents" | "connection" | "writesDenied" | "confirmUnsupported";
+
+export type McpSettingsItem = {
+	readOnly: boolean,
+	outputFormat: ToolOutputItem,
+};
+
+export type McpVisibilityItem = "visible" | "notExposed" | "untrusted";
+
 /**  Include and exclude patterns for one kind of name (ADR-025). */
 export type NameFilterItem = {
 	include: string[],
@@ -1784,6 +1927,8 @@ export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "veri
 
 /**  The tone of a connection type's badge, from the app's fixed palette (ADR-029). */
 export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";
+
+export type ToolOutputItem = "json" | "toon";
 
 /**
  *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the

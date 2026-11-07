@@ -31,8 +31,9 @@ use spelaion_config::{
     Config, ConnectionEntry, Engine, Resolver, Source, SystemBackend, TrustStore, WritePolicy,
 };
 use spelaion_core::{
-    AgentAccess, Engines, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits,
-    ResultStore, ToolOutput, TunnelPool, WriteError, WriteLimits, agent_access, open_connection,
+    AgentAccess, AgentView, Engines, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits,
+    ResultStore, ToolOutput, TunnelPool, WriteError, WriteLimits, agent_access, agent_view,
+    open_connection,
 };
 use spelaion_ssh::{KnownHosts, NonInteractive};
 use spelaion_store::{AuditEntry, Decision, Store};
@@ -205,7 +206,7 @@ impl SpelaionMcp {
             .config
             .connections
             .iter()
-            .filter(|c| c.file.mcp.exposed && (c.id.source == Source::User || trusted))
+            .filter(|c| matches!(agent_view(c, trusted, false), AgentView::Visible(_)))
             .collect()
     }
 
