@@ -291,6 +291,7 @@ async fn results_sort_by_typed_values_across_batches() {
                 rows,
                 columns: vec![column],
                 header: false,
+                csv: spelaion_core::CsvOptions::default(),
             },
             &spelaion_core::GenericDialect,
             &mut out,

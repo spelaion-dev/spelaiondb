@@ -10,6 +10,7 @@ mod conn_test;
 mod cursor;
 mod edit;
 mod export;
+mod export_stream;
 mod filter;
 mod find;
 mod generate;
@@ -44,8 +45,14 @@ pub use edit::{
     editable_query_source, editable_query_table,
 };
 pub use export::{
-    CopyError, ExportFormat, ExportOptions, GenericDialect, MAX_IN_LIST, NameStyle, column_in_list,
-    column_names, export_to_file, write_result,
+    CopyError, CsvOptions, ExportFormat, ExportOptions, FileSummary, GenericDialect, MAX_IN_LIST,
+    NameStyle, TextEncoding, column_in_list, column_names, export_to_file, formula_escaped,
+    write_result,
+};
+pub use export_stream::{
+    DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, RerunCheck,
+    StreamExport, TableSource, TablesError, export_query, export_table, export_tables, file_name,
+    follow_session_context, rerun_check,
 };
 pub use filter::{ColumnFilter, FilterOp};
 pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
@@ -82,7 +89,7 @@ pub use spelaion_store::{
 };
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
-    table_count_sql, table_page_sql, typed_value, value_condition,
+    table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
 };
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use write::{
