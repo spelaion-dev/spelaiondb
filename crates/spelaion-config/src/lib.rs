@@ -15,6 +15,7 @@ mod conn_url;
 mod dbeaver;
 mod draft;
 mod edit;
+mod engine_change;
 mod error;
 mod load;
 mod migrate;
@@ -42,6 +43,7 @@ pub use edit::{
     CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_vars,
     set_value,
 };
+pub use engine_change::EngineChange;
 pub use error::{ConfigError, ResolveError};
 pub use load::{
     Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, WORKSPACE_DIR, default_user_dir,

@@ -53,6 +53,11 @@ export const commands = {
 	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
 	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
 	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
+	/**
+	 *  The form mapped to another engine (ADR-030): what still applies is kept, the rest is
+	 *  changed or dropped by the core; nothing is saved until the form is.
+	 */
+	changeConnectionEngine: (draft: ConnectionDraftItem_Deserialize, engine: string) => typedError<MappedConnectionItem_Serialize, string>(__TAURI_INVOKE("change_connection_engine", { draft, engine })),
 	/**  The pattern new connections are named with (ADR-030). */
 	getConnectionNamePattern: () => typedError<string, string>(__TAURI_INVOKE("get_connection_name_pattern")),
 	/**  Sets the pattern (checked by the core) or, with null, goes back to the default. */
@@ -664,6 +669,38 @@ export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrust
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string };
 
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem = EngineChangeItem_Serialize | EngineChangeItem_Deserialize;
+
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem_Deserialize = {
+	from: string,
+	to: string,
+	kept: string[],
+	changed: FieldChangeItem_Deserialize[],
+	dropped: string[],
+	required: string[],
+};
+
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem_Serialize = {
+	from: string,
+	to: string,
+	kept: string[],
+	changed: FieldChangeItem_Serialize[],
+	dropped: string[],
+	required: string[],
+};
+
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
 export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;
 
@@ -875,6 +912,21 @@ export type KubernetesDraftItem = {
 	resource: string,
 	kubeconfig: string,
 	kubectl: string,
+};
+
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem = MappedConnectionItem_Serialize | MappedConnectionItem_Deserialize;
+
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem_Deserialize = {
+	draft: ConnectionDraftItem_Deserialize,
+	change: EngineChangeItem_Deserialize,
+};
+
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem_Serialize = {
+	draft: ConnectionDraftItem_Serialize,
+	change: EngineChangeItem_Serialize,
 };
 
 /**  Include and exclude patterns for one kind of name (ADR-025). */

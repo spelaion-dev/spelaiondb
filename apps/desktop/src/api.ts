@@ -12,6 +12,7 @@ import {
   type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
   type EngineItem_Serialize,
+  type EngineChangeItem_Serialize,
   type NamePatternPreview_Serialize,
   type HopDraftItem_Deserialize,
   type SshAuthItem,
@@ -66,6 +67,7 @@ import {
 
 export { commands, events };
 export type { ImportReport, KubernetesDraftItem };
+export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
 export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;

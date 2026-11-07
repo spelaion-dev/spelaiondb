@@ -2219,7 +2219,13 @@ select {
 .new-table-element > .modal-actions { margin: 0; padding: 12px 20px; border-top: 1px solid var(--line); }
 @media (max-width: 540px) { .new-table-element-fields { grid-template-columns: minmax(0, 1fr); } .new-table-element-wide { grid-column: auto; } }
 
-/* The name pattern of new connections (ADR-030). */
+/* Engine changes and the name pattern (ADR-030). */
+.engine-change {
+  margin: 8px 18px 0;
+}
+.engine-change p {
+  margin: 4px 0 0;
+}
 .pattern-variables {
   display: flex;
   flex-wrap: wrap;

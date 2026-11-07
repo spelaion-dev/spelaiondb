@@ -81,7 +81,8 @@
     "tlsKey": "Client key (PEM)",
     "tlsKeyPlaceholder": "~/.ssl/me.key",
     "clientCertHint": "Logs in with a certificate instead of a password (the server must accept it for this user). The key stays on your computer: keep it in your personal folder, never in the repository.",
-    "cloudToken": "Provider"
+    "cloudToken": "Provider",
+    "engine": "Engine"
   },
   "tls": {
     "disable": "Disabled",
@@ -273,5 +274,35 @@
     "awsRdsHint": "Runs “aws rds generate-db-auth-token” on every connection: the AWS CLI must be signed in on this computer. Tokens last 15 minutes and need TLS.",
     "azureAdHint": "Runs “az account get-access-token” on every connection: the Azure CLI must be signed in on this computer. Use your Entra ID user as the user.",
     "googleCloudSqlHint": "Runs “gcloud sql generate-login-token” on every connection: the gcloud CLI must be signed in on this computer. Use your IAM user as the user."
+  },
+  "fieldNames": {
+    "host": "host",
+    "port": "port",
+    "database": "database",
+    "user": "user",
+    "password": "password",
+    "tunnel": "SSH tunnel",
+    "local_port": "local port",
+    "kubernetes": "Kubernetes",
+    "kubernetes.kubeconfig": "kubeconfig file",
+    "kubernetes.kubectl": "kubectl program",
+    "sqlite3": "sqlite3 program on the server",
+    "keepalive": "keep-alive",
+    "tls.mode": "TLS mode",
+    "tls.ca": "CA certificate",
+    "tls.cert": "client certificate",
+    "env": "environment",
+    "read_only": "read-only",
+    "mcp": "agents' access"
+  },
+  "engineChange": {
+    "title": "Engine change",
+    "summary": "Engine: {{from}} → {{to}}. Nothing is saved until you save.",
+    "kept": "Kept: {{fields}}.",
+    "changed": "Changed: {{fields}}.",
+    "dropped": "Removed: {{fields}}.",
+    "required": "To fill in: {{fields}}.",
+    "none": "(none)",
+    "hint": "The connection keeps its file, filters, bookmarks and history. Saving closes its open sessions: they belong to the old engine, and its tabs connect again when run."
   }
 }

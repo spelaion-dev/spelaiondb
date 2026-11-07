@@ -830,6 +830,22 @@ async fn update_connection(
     Ok(())
 }
 
+/// The form mapped to another engine (ADR-030): what still applies is kept, the rest is
+/// changed or dropped by the core; nothing is saved until the form is.
+#[tauri::command]
+#[specta::specta]
+fn change_connection_engine(
+    draft: ConnectionDraftItem,
+    engine: String,
+) -> CmdResult<MappedConnectionItem> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let (mapped, change) = draft.with_engine(engine_named(&engine)?);
+    Ok(MappedConnectionItem {
+        draft: mapped.into(),
+        change: change.into(),
+    })
+}
+
 /// The display name of an engine, as the catalog shows it.
 fn engine_display_name(engine: spelaion_config::Engine) -> String {
     spelaion_core::engine_catalog()
@@ -2875,6 +2891,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connection_draft,
             update_connection,
             delete_connection,
+            change_connection_engine,
             get_connection_name_pattern,
             set_connection_name_pattern,
             preview_connection_name_pattern,

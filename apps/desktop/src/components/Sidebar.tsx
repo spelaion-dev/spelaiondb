@@ -1194,7 +1194,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
               {label && <div className="group-title">{label}</div>}
               {items.map((c) => (
                 <ConnectionNode
-                  key={`${workspace?.workspace ?? ""}:${c.id}`}
+                  // A new engine starts the node again: what it showed belongs to the old one.
+                  key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
                   connection={c}
                   filter={filterText}
                 />
