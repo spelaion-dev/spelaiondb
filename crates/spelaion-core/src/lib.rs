@@ -3,6 +3,7 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+pub mod audit;
 mod catalog;
 mod classify;
 mod conn_test;
@@ -68,9 +69,12 @@ pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{CoreEvent, Session, StatementError};
 pub use sort::{SortKey, ViewError};
 pub use spelaion_store::{
+    AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, Snippet,
+    ToolOutput,
+};
+pub use spelaion_store::{
     Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences,
 };
-pub use spelaion_store::{HistoryEntry, Snippet, ToolOutput};
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
     table_count_sql, table_page_sql, typed_value, value_condition,

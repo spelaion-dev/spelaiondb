@@ -4,6 +4,7 @@
 - **Date:** 2026-11-07
 - **Builds on:** ADR-008 (MCP), ADR-019 (agents' writes), ADR-022 (repository trust),
   ADR-029 (connection types)
+- **Amends:** ADR-008's append-only audit log: the user may clear all of it, leaving a record
 
 ## Context
 The app gets a page of its own for the MCP server (`spelaiondb mcp`): installing it in AI
@@ -123,8 +124,30 @@ servers, so the app must change them without breaking anything and only with the
 12. **Tests and the smoke test never touch the user's files:** `SPELAION_MCP_CLIENTS_HOME`
     points every client's file under a directory of their own.
 
+### The activity log
+13. **Every tool call is recorded,** not only queries and writes: `list_connections`,
+    `list_objects`, `describe_table` and `search_schema` too, with a short description in place
+    of a statement (`schema=public filter=ord`). Each entry now carries the **tool** and the
+    **session**: an id made when a `spelaiondb mcp` process starts (its start time and process
+    id), so the page groups calls per process. Two nullable columns added to the `audit` table by
+    a migration; older entries have neither and belong to no session.
+14. **The page reads it through the core:** filters (text in the statement, tool, status,
+    session), counts, sessions (client, first and last call, calls, refused, failed) and exports
+    are store queries and core functions; React holds only the rows on screen (500 at a time).
+15. **Secrets are masked before anything leaves the core** (`spelaion_core::audit::redacted`):
+    quoted literals after `PASSWORD`, `IDENTIFIED BY`, `SECRET`, `PWD` or `TOKEN`, and the
+    password of URLs (`user:pass@host`). The log keeps what the agent sent (it is the user's own
+    record on their computer); the page, the CSV and the JSON never show those parts. A heuristic:
+    it catches what statements usually carry. The CSV is quoted and never starts a cell with a
+    formula character (`=`, `+`, `-`, `@`), since statements come from agents.
+16. **Clearing amends ADR-008's "append-only":** the user may empty the whole log, after a
+    confirmation. The core does it in one transaction that lifts the delete trigger, deletes
+    every entry, puts the trigger back and inserts a record saying when and how many entries
+    went (status *cleared*). Nothing else can delete or change an entry: single entries cannot be
+    removed or edited, from the app or from `spelaiondb`, and the record of the clearing stays.
+
 ### The page
-13. **A chip icon in the activity bar, above Settings,** opens the page in place of the editor, with a short intro and its tabs: *Configuration* (one card per client: its file, whether it is set up, "Install configuration"; the selected client's manual configuration with a copy button, and `claude mcp add` for Claude Code), *Security* (the default output, the read-only switch, and every connection with what agents can do there, as `agent_view` decides, and its type's safeguards in the app). The approval gate waits for SDB-38.
+17. **A chip icon in the activity bar, above Settings,** opens the page in place of the editor, with a short intro and its tabs: *Configuration* (one card per client: its file, whether it is set up, "Install configuration"; the selected client's manual configuration with a copy button, and `claude mcp add` for Claude Code), *Activity* (Events: time, connection, tool, statement, status and duration, with search, filters by tool and status, a count, CSV and JSON export, and Clear; Sessions: the calls per `spelaiondb mcp` process, opening into its events), *Security* (the default output, the read-only switch, and every connection with what agents can do there, as `agent_view` decides, and its type's safeguards in the app). The approval gate waits for SDB-38.
 
 ## Alternatives
 - **The switch in `user.toml`:** visible and editable by hand, but the app would rewrite a file

@@ -3196,3 +3196,144 @@ impl McpAccessItem {
         }
     }
 }
+
+// --- The MCP activity (ADR-033) -----------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AuditStatusItem {
+    Ok,
+    Error,
+    Refused,
+    Cleared,
+}
+
+impl From<spelaion_core::AuditDecision> for AuditStatusItem {
+    fn from(decision: spelaion_core::AuditDecision) -> Self {
+        use spelaion_core::AuditDecision;
+        match decision {
+            AuditDecision::Executed => Self::Ok,
+            AuditDecision::Failed => Self::Error,
+            AuditDecision::Rejected => Self::Refused,
+            AuditDecision::Cleared => Self::Cleared,
+        }
+    }
+}
+
+impl From<AuditStatusItem> for spelaion_core::AuditDecision {
+    fn from(status: AuditStatusItem) -> Self {
+        match status {
+            AuditStatusItem::Ok => Self::Executed,
+            AuditStatusItem::Error => Self::Failed,
+            AuditStatusItem::Refused => Self::Rejected,
+            AuditStatusItem::Cleared => Self::Cleared,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditFilterItem {
+    pub search: String,
+    pub tool: Option<String>,
+    pub status: Option<AuditStatusItem>,
+    pub session: Option<String>,
+}
+
+impl From<AuditFilterItem> for spelaion_core::AuditFilter {
+    fn from(f: AuditFilterItem) -> Self {
+        Self {
+            search: f.search,
+            tool: f.tool,
+            decision: f.status.map(Into::into),
+            session: f.session,
+        }
+    }
+}
+
+/// One MCP call, with its secrets already masked by the core.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEventItem {
+    #[specta(type = specta_typescript::Number)]
+    pub id: i64,
+    #[specta(type = specta_typescript::Number)]
+    pub at_ms: i64,
+    pub session: Option<String>,
+    pub client: String,
+    pub connection: String,
+    pub tool: Option<String>,
+    pub statement: String,
+    pub status: AuditStatusItem,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub rows: Option<i64>,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub duration_ms: Option<i64>,
+    pub detail: Option<String>,
+}
+
+impl From<spelaion_core::AuditRecord> for AuditEventItem {
+    fn from(record: spelaion_core::AuditRecord) -> Self {
+        let e = spelaion_core::audit::redacted(&record.entry);
+        Self {
+            id: record.id,
+            at_ms: e.at_ms,
+            session: e.session,
+            client: e.client,
+            connection: e.connection,
+            tool: e.tool,
+            statement: e.statement,
+            status: e.decision.into(),
+            rows: e.rows,
+            duration_ms: e.duration_ms,
+            detail: e.detail,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditPageItem {
+    pub events: Vec<AuditEventItem>,
+    /// How many the filter keeps in all.
+    #[specta(type = specta_typescript::Number)]
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditSessionItem {
+    pub session: String,
+    pub client: String,
+    #[specta(type = specta_typescript::Number)]
+    pub started_ms: i64,
+    #[specta(type = specta_typescript::Number)]
+    pub ended_ms: i64,
+    #[specta(type = specta_typescript::Number)]
+    pub calls: i64,
+    #[specta(type = specta_typescript::Number)]
+    pub refused: i64,
+    #[specta(type = specta_typescript::Number)]
+    pub failed: i64,
+}
+
+impl From<spelaion_core::AuditSession> for AuditSessionItem {
+    fn from(s: spelaion_core::AuditSession) -> Self {
+        Self {
+            session: s.session,
+            client: s.client,
+            started_ms: s.started_ms,
+            ended_ms: s.ended_ms,
+            calls: s.calls,
+            refused: s.refused,
+            failed: s.failed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AuditFormatItem {
+    Csv,
+    Json,
+}

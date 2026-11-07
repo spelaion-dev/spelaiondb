@@ -123,7 +123,12 @@ const MIGRATIONS: &[&str] = &["create table audit (
     create trigger personal_settings_mcp_update before update on personal_settings
         when (new.key = 'mcp.read_only' and new.value not in ('on', 'off'))
           or (new.key = 'mcp.output_format' and new.value not in ('json', 'toon'))
-        begin select raise(abort, 'unsupported MCP setting'); end;"
+        begin select raise(abort, 'unsupported MCP setting'); end;",
+    // The MCP activity (ADR-033): which `spelaiondb mcp` process and which tool made each call.
+    // Still append-only: the triggers above stay; clearing is `clear_audit`.
+    "alter table audit add column session text;
+    alter table audit add column tool text;
+    create index audit_session on audit (session, at_ms);"
 ];
 
 /// Milliseconds since 1970 (UTC); 0 if the clock is before it.
@@ -185,6 +190,8 @@ pub enum Decision {
     Rejected,
     /// It reached the server and failed.
     Failed,
+    /// The user cleared the log: this record says when and how many entries went.
+    Cleared,
 }
 
 impl Decision {
@@ -193,6 +200,7 @@ impl Decision {
             Decision::Executed => "executed",
             Decision::Rejected => "rejected",
             Decision::Failed => "failed",
+            Decision::Cleared => "cleared",
         }
     }
 
@@ -201,6 +209,7 @@ impl Decision {
             "executed" => Some(Decision::Executed),
             "rejected" => Some(Decision::Rejected),
             "failed" => Some(Decision::Failed),
+            "cleared" => Some(Decision::Cleared),
             _ => None,
         }
     }
@@ -219,6 +228,10 @@ pub struct AuditEntry {
     pub duration_ms: Option<i64>,
     /// Reason for the rejection or error message.
     pub detail: Option<String>,
+    /// The `spelaiondb mcp` process that made the call (ADR-033); `None` before 0.7.
+    pub session: Option<String>,
+    /// The MCP tool called (`run_query`, `execute_write`…); `None` before 0.7.
+    pub tool: Option<String>,
 }
 
 impl AuditEntry {
@@ -232,8 +245,91 @@ impl AuditEntry {
             rows: None,
             duration_ms: None,
             detail: None,
+            session: None,
+            tool: None,
         }
     }
+}
+
+/// Which audit entries to show.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditFilter {
+    /// Text the statement contains (literal, case-insensitive for ASCII).
+    pub search: String,
+    pub tool: Option<String>,
+    pub decision: Option<Decision>,
+    pub session: Option<String>,
+}
+
+/// An audit entry with its position in the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditRecord {
+    pub id: i64,
+    pub entry: AuditEntry,
+}
+
+/// The calls of one `spelaiondb mcp` process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditSession {
+    pub session: String,
+    pub client: String,
+    pub started_ms: i64,
+    pub ended_ms: i64,
+    pub calls: i64,
+    pub refused: i64,
+    pub failed: i64,
+}
+
+/// `where …` and its parameters for a filter.
+fn audit_where(filter: &AuditFilter) -> (String, Vec<String>) {
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+    if !filter.search.is_empty() {
+        let escaped = filter
+            .search
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        params.push(format!("%{escaped}%"));
+        clauses.push(format!("statement like ?{} escape '\\'", params.len()));
+    }
+    if let Some(tool) = &filter.tool {
+        params.push(tool.clone());
+        clauses.push(format!("tool = ?{}", params.len()));
+    }
+    if let Some(decision) = filter.decision {
+        params.push(decision.as_str().into());
+        clauses.push(format!("decision = ?{}", params.len()));
+    }
+    if let Some(session) = &filter.session {
+        params.push(session.clone());
+        clauses.push(format!("session = ?{}", params.len()));
+    }
+    let clause = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("where {}", clauses.join(" and "))
+    };
+    (clause, params)
+}
+
+fn audit_row(r: &rusqlite::Row) -> rusqlite::Result<AuditRecord> {
+    let decision: String = r.get(5)?;
+    Ok(AuditRecord {
+        id: r.get(0)?,
+        entry: AuditEntry {
+            at_ms: r.get(1)?,
+            client: r.get(2)?,
+            connection: r.get(3)?,
+            statement: r.get(4)?,
+            decision: Decision::parse(&decision).unwrap_or(Decision::Failed),
+            rows: r.get(6)?,
+            duration_ms: r.get(7)?,
+            detail: r.get(8)?,
+            session: r.get(9)?,
+            tool: r.get(10)?,
+        },
+    })
 }
 
 /// How `spelaiondb mcp` writes a query's rows for the agent when the call does not say
@@ -463,8 +559,8 @@ impl Store {
 
     pub fn record(&self, entry: &AuditEntry) -> Result<(), StoreError> {
         self.conn.execute(
-            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 entry.at_ms,
                 entry.client,
@@ -473,7 +569,9 @@ impl Store {
                 entry.decision.as_str(),
                 entry.rows,
                 entry.duration_ms,
-                entry.detail
+                entry.detail,
+                entry.session,
+                entry.tool
             ],
         )?;
         Ok(())
@@ -481,24 +579,105 @@ impl Store {
 
     /// Latest entries, from newest to oldest.
     pub fn recent(&self, limit: usize) -> Result<Vec<AuditEntry>, StoreError> {
+        Ok(self
+            .audit_events(&AuditFilter::default(), limit, 0)?
+            .into_iter()
+            .map(|r| r.entry)
+            .collect())
+    }
+
+    /// The entries `filter` keeps, newest first.
+    pub fn audit_events(
+        &self,
+        filter: &AuditFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AuditRecord>, StoreError> {
+        let (clause, mut params) = audit_where(filter);
+        params.push(limit.min(i64::MAX as usize).to_string());
+        params.push(offset.min(i64::MAX as usize).to_string());
+        let sql = format!(
+            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool
+             from audit {clause} order by id desc limit cast(?{} as integer) offset cast(?{} as integer)",
+            params.len() - 1,
+            params.len()
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), audit_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// How many entries `filter` keeps.
+    pub fn audit_count(&self, filter: &AuditFilter) -> Result<i64, StoreError> {
+        let (clause, params) = audit_where(filter);
+        Ok(self.conn.query_row(
+            &format!("select count(*) from audit {clause}"),
+            rusqlite::params_from_iter(params.iter()),
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The tools seen in the log, for the page's filter.
+    pub fn audit_tools(&self) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("select distinct tool from audit where tool is not null order by tool")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// The latest `spelaiondb mcp` processes and their calls, newest first. Calls recorded
+    /// before sessions were (0.7) belong to none.
+    pub fn audit_sessions(&self, limit: usize) -> Result<Vec<AuditSession>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "select at_ms, client, connection, statement, decision, rows, duration_ms, detail
-             from audit order by id desc limit ?1",
+            "select session, min(client), min(at_ms), max(at_ms), count(*),
+                    sum(decision = 'rejected'), sum(decision = 'failed')
+             from audit where session is not null
+             group by session order by max(id) desc limit ?1",
         )?;
-        let rows = stmt.query_map([limit as i64], |r| {
-            let decision: String = r.get(4)?;
-            Ok(AuditEntry {
-                at_ms: r.get(0)?,
+        let rows = stmt.query_map([limit.min(i64::MAX as usize) as i64], |r| {
+            Ok(AuditSession {
+                session: r.get(0)?,
                 client: r.get(1)?,
-                connection: r.get(2)?,
-                statement: r.get(3)?,
-                decision: Decision::parse(&decision).unwrap_or(Decision::Failed),
-                rows: r.get(5)?,
-                duration_ms: r.get(6)?,
-                detail: r.get(7)?,
+                started_ms: r.get(2)?,
+                ended_ms: r.get(3)?,
+                calls: r.get(4)?,
+                refused: r.get(5)?,
+                failed: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Empties the audit log at the user's request, leaving one record that says when and how
+    /// many entries went. The triggers that keep the log append-only are lifted only inside
+    /// this transaction, so nothing else can delete or change an entry.
+    pub fn clear_audit(&mut self, client: &str) -> Result<i64, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let removed: i64 = tx.query_row("select count(*) from audit", [], |r| r.get(0))?;
+        tx.execute_batch(
+            "drop trigger audit_no_delete;
+             delete from audit;
+             create trigger audit_no_delete before delete on audit begin select raise(abort, 'the audit log cannot be deleted'); end;",
+        )?;
+        let mut record = AuditEntry::now(client, "", "", Decision::Cleared);
+        record.detail = Some(format!("{removed} entries cleared"));
+        tx.execute(
+            "insert into audit (at_ms, client, connection, statement, decision, detail)
+             values (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                record.at_ms,
+                record.client,
+                record.connection,
+                record.statement,
+                record.decision.as_str(),
+                record.detail
+            ],
+        )?;
+        tx.commit()?;
+        Ok(removed)
     }
 
     /// Saves a query under `name` in `workspace`, replacing one with the same name there.
@@ -1796,5 +1975,201 @@ mod tests {
             )
             .unwrap();
         assert!(store.mcp_read_only().unwrap());
+    }
+
+    fn call(session: &str, tool: &str, statement: &str, decision: Decision) -> AuditEntry {
+        let mut entry = AuditEntry::now("claude-code", "~/shop", statement, decision);
+        entry.session = Some(session.into());
+        entry.tool = Some(tool.into());
+        entry
+    }
+
+    #[test]
+    fn audit_events_are_filtered_counted_and_grouped_by_session() {
+        let path = temp("audit-activity");
+        let store = Store::open(&path).unwrap();
+        // An entry from before sessions were recorded.
+        store
+            .record(&AuditEntry::now("old", "c", "select 0", Decision::Executed))
+            .unwrap();
+        store
+            .record(&call("s1", "run_query", "select 1", Decision::Executed))
+            .unwrap();
+        store
+            .record(&call(
+                "s1",
+                "execute_write",
+                "drop table t",
+                Decision::Rejected,
+            ))
+            .unwrap();
+        store
+            .record(&call(
+                "s2",
+                "run_query",
+                "select 100% of_it",
+                Decision::Failed,
+            ))
+            .unwrap();
+        store
+            .record(&call("s2", "list_objects", "schemas", Decision::Executed))
+            .unwrap();
+
+        let all = AuditFilter::default();
+        assert_eq!(store.audit_count(&all).unwrap(), 5);
+        let newest = store.audit_events(&all, 2, 0).unwrap();
+        assert_eq!(newest[0].entry.statement, "schemas");
+        assert_eq!(newest[1].entry.statement, "select 100% of_it");
+        assert_eq!(store.audit_events(&all, 2, 4).unwrap().len(), 1);
+
+        let by = |filter: AuditFilter| {
+            store
+                .audit_events(&filter, 100, 0)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.entry.statement)
+                .collect::<Vec<_>>()
+        };
+        // Search is literal: `%` and `_` are not wildcards.
+        assert_eq!(
+            by(AuditFilter {
+                search: "100%".into(),
+                ..all.clone()
+            }),
+            ["select 100% of_it"]
+        );
+        assert_eq!(
+            by(AuditFilter {
+                search: "_".into(),
+                ..all.clone()
+            }),
+            ["select 100% of_it"]
+        );
+        assert_eq!(
+            by(AuditFilter {
+                search: "DROP Table".into(),
+                ..all.clone()
+            }),
+            ["drop table t"]
+        );
+        assert_eq!(
+            by(AuditFilter {
+                tool: Some("run_query".into()),
+                ..all.clone()
+            }),
+            ["select 100% of_it", "select 1"]
+        );
+        assert_eq!(
+            by(AuditFilter {
+                decision: Some(Decision::Rejected),
+                ..all.clone()
+            }),
+            ["drop table t"]
+        );
+        assert_eq!(
+            by(AuditFilter {
+                session: Some("s1".into()),
+                ..all.clone()
+            }),
+            ["drop table t", "select 1"]
+        );
+        assert_eq!(
+            store
+                .audit_count(&AuditFilter {
+                    session: Some("s2".into()),
+                    ..all.clone()
+                })
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store.audit_tools().unwrap(),
+            ["execute_write", "list_objects", "run_query"]
+        );
+        let sessions = store.audit_sessions(10).unwrap();
+        assert_eq!(
+            sessions.len(),
+            2,
+            "entries without a session belong to none"
+        );
+        assert_eq!(sessions[0].session, "s2");
+        assert_eq!(
+            (sessions[0].calls, sessions[0].refused, sessions[0].failed),
+            (2, 0, 1)
+        );
+        assert_eq!(
+            (sessions[1].calls, sessions[1].refused, sessions[1].failed),
+            (2, 1, 0)
+        );
+        assert!(sessions[1].started_ms <= sessions[1].ended_ms);
+    }
+
+    #[test]
+    fn clearing_the_audit_log_leaves_a_record_and_keeps_it_append_only() {
+        let path = temp("audit-clear");
+        let mut store = Store::open(&path).unwrap();
+        for n in 0..3 {
+            store
+                .record(&call(
+                    "s1",
+                    "run_query",
+                    &format!("select {n}"),
+                    Decision::Executed,
+                ))
+                .unwrap();
+        }
+        assert_eq!(store.clear_audit("SpelaionDB").unwrap(), 3);
+        let left = store.audit_events(&AuditFilter::default(), 10, 0).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].entry.decision, Decision::Cleared);
+        assert_eq!(left[0].entry.detail.as_deref(), Some("3 entries cleared"));
+        assert_eq!(left[0].entry.client, "SpelaionDB");
+        // The protections are back: the record of the clearing cannot go either.
+        assert!(store.conn.execute("delete from audit", []).is_err());
+        assert!(
+            store
+                .conn
+                .execute("update audit set detail = 'x'", [])
+                .is_err()
+        );
+        assert!(
+            store
+                .conn
+                .execute("delete from audit where decision = 'cleared'", [])
+                .is_err()
+        );
+        // A second clear removes that record and leaves its own.
+        assert_eq!(store.clear_audit("SpelaionDB").unwrap(), 1);
+        assert_eq!(store.audit_count(&AuditFilter::default()).unwrap(), 1);
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert!(reopened.conn.execute("delete from audit", []).is_err());
+    }
+
+    #[test]
+    fn the_activity_migration_keeps_the_old_audit_log() {
+        let path = temp("audit-upgrade");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            let before = MIGRATIONS.len() - 1;
+            for migration in &MIGRATIONS[..before] {
+                tx.execute_batch(migration).unwrap();
+            }
+            tx.pragma_update(None, "user_version", before as i64)
+                .unwrap();
+            tx.execute(
+                "insert into audit (at_ms, client, connection, statement, decision)
+                 values (1, 'old', 'c', 'select 1', 'executed')",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let old = &store.recent(1).unwrap()[0];
+        assert_eq!(old.statement, "select 1");
+        assert_eq!((old.session.as_deref(), old.tool.as_deref()), (None, None));
+        assert!(store.conn.execute("delete from audit", []).is_err());
     }
 }

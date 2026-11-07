@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 spelaion-config.workspace = true
+spelaion-core.workspace = true
 spelaion-mcp.workspace = true
 spelaion-store.workspace = true
 anyhow.workspace = true

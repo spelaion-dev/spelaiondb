@@ -1,5 +1,5 @@
-// The MCP server page (ADR-033): installing `spelaiondb mcp` in AI clients, and what agents may
-// do. A thin adapter: the core finds the files, computes the change, writes it, and decides
+// The MCP server page (ADR-033): installing `spelaiondb mcp` in AI clients, what it did, and
+// what agents may do. A thin adapter: the core finds the files, computes the change, writes it, and decides
 // every permission; this page only shows them and asks.
 
 import { useCallback, useEffect, useState } from "react";
@@ -15,10 +15,11 @@ import {
   type ToolOutputItem,
 } from "../api";
 import { useApp } from "../store";
+import { ActivityTab } from "./ActivityTab";
 import { TypeBadge } from "./TypeBadge";
 
-type McpTab = "configuration" | "security";
-const TABS: McpTab[] = ["configuration", "security"];
+type McpTab = "configuration" | "activity" | "security";
+const TABS: McpTab[] = ["configuration", "activity", "security"];
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -55,6 +56,7 @@ export function McpPage() {
       </div>
       <div className="mcp-panel" role="tabpanel" id={`mcp-panel-${tab}`} aria-labelledby={`mcp-tab-${tab}`}>
         {tab === "configuration" && <ConfigurationTab />}
+        {tab === "activity" && <ActivityTab />}
         {tab === "security" && <SecurityTab />}
       </div>
     </section>

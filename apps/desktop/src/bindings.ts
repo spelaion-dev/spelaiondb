@@ -20,6 +20,18 @@ export const commands = {
 	setMcpOutputFormat: (format: ToolOutputItem) => typedError<null, string>(__TAURI_INVOKE("set_mcp_output_format", { format })),
 	/**  What agents can do on each connection, as the core decides it. */
 	mcpAccess: () => typedError<McpAccessItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
+	/**  The MCP activity the filter keeps, newest first (ADR-033); secrets masked by the core. */
+	auditEvents: (filter: AuditFilterItem_Deserialize, offset: number, limit: number) => typedError<AuditPageItem_Serialize, string>(__TAURI_INVOKE("audit_events", { filter, offset, limit })),
+	auditTools: () => typedError<string[], string>(__TAURI_INVOKE("audit_tools")),
+	/**  The latest `spelaiondb mcp` processes and their calls. */
+	auditSessions: () => typedError<AuditSessionItem[], string>(__TAURI_INVOKE("audit_sessions")),
+	/**
+	 *  Writes the activity the filter keeps to a file the user chose; the core masks secrets and
+	 *  writes it. Returns how many events were written.
+	 */
+	exportAudit: (filter: AuditFilterItem_Deserialize, format: AuditFormatItem, path: string) => typedError<number, string>(__TAURI_INVOKE("export_audit", { filter, format, path })),
+	/**  Empties the MCP activity log, leaving a record that it was cleared (done by the core). */
+	clearAudit: () => typedError<number, string>(__TAURI_INVOKE("clear_audit")),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -440,6 +452,83 @@ export const events = {
 };
 
 /* Types */
+/**  One MCP call, with its secrets already masked by the core. */
+export type AuditEventItem = AuditEventItem_Serialize | AuditEventItem_Deserialize;
+
+/**  One MCP call, with its secrets already masked by the core. */
+export type AuditEventItem_Deserialize = {
+	id: number,
+	atMs: number,
+	session?: string | null,
+	client: string,
+	connection: string,
+	tool?: string | null,
+	statement: string,
+	status: AuditStatusItem,
+	rows?: number | null,
+	durationMs?: number | null,
+	detail?: string | null,
+};
+
+/**  One MCP call, with its secrets already masked by the core. */
+export type AuditEventItem_Serialize = {
+	id: number,
+	atMs: number,
+	session: string | null,
+	client: string,
+	connection: string,
+	tool: string | null,
+	statement: string,
+	status: AuditStatusItem,
+	rows: number | null,
+	durationMs: number | null,
+	detail: string | null,
+};
+
+export type AuditFilterItem = AuditFilterItem_Serialize | AuditFilterItem_Deserialize;
+
+export type AuditFilterItem_Deserialize = {
+	search: string,
+	tool?: string | null,
+	status?: AuditStatusItem | null,
+	session?: string | null,
+};
+
+export type AuditFilterItem_Serialize = {
+	search: string,
+	tool: string | null,
+	status: AuditStatusItem | null,
+	session: string | null,
+};
+
+export type AuditFormatItem = "csv" | "json";
+
+export type AuditPageItem = AuditPageItem_Serialize | AuditPageItem_Deserialize;
+
+export type AuditPageItem_Deserialize = {
+	events: AuditEventItem_Deserialize[],
+	/**  How many the filter keeps in all. */
+	total: number,
+};
+
+export type AuditPageItem_Serialize = {
+	events: AuditEventItem_Serialize[],
+	/**  How many the filter keeps in all. */
+	total: number,
+};
+
+export type AuditSessionItem = {
+	session: string,
+	client: string,
+	startedMs: number,
+	endedMs: number,
+	calls: number,
+	refused: number,
+	failed: number,
+};
+
+export type AuditStatusItem = "ok" | "error" | "refused" | "cleared";
+
 /**  An object bookmarked in the explorer (ADR-026). */
 export type BookmarkItem = {
 	connection: string,

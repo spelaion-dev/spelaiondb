@@ -60,6 +60,8 @@ struct State {
     engines: Engines,
     tunnels: Arc<TunnelPool>,
     store: Mutex<Option<Store>>,
+    /// This process in the audit log (ADR-033): its calls are grouped by it.
+    audit_session: String,
     /// One session per connection and use, opened on first use. The Mutex serializes the
     /// statements of one session (each opens and closes its own transaction).
     sessions: tokio::sync::Mutex<HashMap<(String, Use), Shared>>,
@@ -93,6 +95,18 @@ pub async fn serve_stdio(options: ServerOptions) -> Result<(), String> {
     Ok(())
 }
 
+/// Identifies this `spelaiondb mcp` process in the audit log: when it started, a counter (a
+/// test may start several servers in one process) and its process id.
+fn audit_session_id() -> String {
+    static STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let n = STARTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{started:x}-{n}-{}", std::process::id())
+}
+
 /// The client the agent says it is (informational: the client itself says so).
 fn client_name(peer: &Peer<RoleServer>) -> String {
     peer.peer_info()
@@ -107,6 +121,21 @@ fn text(message: impl Into<String>) -> Result<CallToolResult, ErrorData> {
 /// Error visible to the agent (not a protocol failure).
 fn tool_error(message: impl Into<String>) -> Result<CallToolResult, ErrorData> {
     Ok(CallToolResult::error(vec![ContentBlock::text(message)]))
+}
+
+/// Who called which tool, for the audit log.
+struct Call {
+    client: String,
+    tool: &'static str,
+}
+
+impl Call {
+    fn new(peer: &Peer<RoleServer>, tool: &'static str) -> Self {
+        Self {
+            client: client_name(peer),
+            tool,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -188,6 +217,7 @@ impl SpelaionMcp {
                 engines: Engines::builtin(),
                 tunnels: Arc::new(TunnelPool::new()),
                 store: Mutex::new(Some(store)),
+                audit_session: audit_session_id(),
                 sessions: tokio::sync::Mutex::new(HashMap::new()),
             }),
             tool_router: Self::tool_router(),
@@ -238,13 +268,15 @@ impl SpelaionMcp {
 
     fn audit(
         &self,
-        client: &str,
+        call: &Call,
         connection: &str,
         statement: &str,
         decision: Decision,
         fill: impl FnOnce(&mut AuditEntry),
     ) {
-        let mut entry = AuditEntry::now(client, connection, statement, decision);
+        let mut entry = AuditEntry::now(&call.client, connection, statement, decision);
+        entry.session = Some(self.state.audit_session.clone());
+        entry.tool = Some(call.tool.into());
         fill(&mut entry);
         if let Some(store) = self.state.store.lock().expect("lock poisoned").as_ref()
             && let Err(e) = store.record(&entry)
@@ -309,9 +341,46 @@ impl SpelaionMcp {
         Ok((open, max_rows))
     }
 
+    /// Runs a tool that is not a query and records it (ADR-033): refused if the connection is
+    /// not available to agents, failed if the tool answered with an error.
+    async fn audited(
+        &self,
+        call: Call,
+        connection: &str,
+        what: String,
+        run: impl std::future::Future<Output = Result<CallToolResult, ErrorData>>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if !connection.is_empty()
+            && let Err(message) = self.session(connection).await
+        {
+            self.audit(&call, connection, &what, Decision::Rejected, |e| {
+                e.detail = Some(message.clone())
+            });
+            return tool_error(message);
+        }
+        let started = std::time::Instant::now();
+        let result = run.await;
+        let (decision, detail) = match &result {
+            Ok(done) if done.is_error == Some(true) => (
+                Decision::Failed,
+                done.content
+                    .first()
+                    .and_then(|c| c.as_text())
+                    .map(|t| t.text.clone()),
+            ),
+            Ok(_) => (Decision::Executed, None),
+            Err(e) => (Decision::Failed, Some(e.message.to_string())),
+        };
+        self.audit(&call, connection, &what, decision, |e| {
+            e.duration_ms = Some(started.elapsed().as_millis() as i64);
+            e.detail = detail;
+        });
+        result
+    }
+
     async fn write(
         &self,
-        client: &str,
+        client: &Call,
         connection: &str,
         sql: &str,
     ) -> Result<CallToolResult, ErrorData> {
@@ -364,7 +433,7 @@ impl SpelaionMcp {
 
     async fn read(
         &self,
-        client: &str,
+        client: &Call,
         connection: &str,
         sql: &str,
         format: Option<OutputFormat>,
@@ -414,7 +483,18 @@ impl SpelaionMcp {
         description = "Lists the available database connections (only those exposed to the MCP).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn list_connections(&self) -> Result<CallToolResult, ErrorData> {
+    async fn list_connections(&self, peer: Peer<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let run = self.list_connections_inner();
+        self.audited(
+            Call::new(&peer, "list_connections"),
+            "",
+            "list_connections".into(),
+            run,
+        )
+        .await
+    }
+
+    async fn list_connections_inner(&self) -> Result<CallToolResult, ErrorData> {
         let exposed = self.exposed();
         let mut out = String::new();
         if let Some(root) = &self.state.config.workspace_root
@@ -453,6 +533,27 @@ impl SpelaionMcp {
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_objects(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(args): Parameters<ListObjectsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let what = match &args.schema {
+            Some(schema) => format!(
+                "schema={schema}{}",
+                args.filter
+                    .as_deref()
+                    .map(|f| format!(" filter={f}"))
+                    .unwrap_or_default()
+            ),
+            None => "schemas".to_string(),
+        };
+        let connection = args.connection.clone();
+        let run = self.list_objects_inner(Parameters(args));
+        self.audited(Call::new(&peer, "list_objects"), &connection, what, run)
+            .await
+    }
+
+    async fn list_objects_inner(
         &self,
         Parameters(args): Parameters<ListObjectsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -507,6 +608,18 @@ impl SpelaionMcp {
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn describe_table(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(args): Parameters<DescribeArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let what = format!("{}.{}", args.schema, args.table);
+        let connection = args.connection.clone();
+        let run = self.describe_table_inner(Parameters(args));
+        self.audited(Call::new(&peer, "describe_table"), &connection, what, run)
+            .await
+    }
+
+    async fn describe_table_inner(
         &self,
         Parameters(args): Parameters<DescribeArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -576,6 +689,18 @@ impl SpelaionMcp {
     )]
     async fn search_schema(
         &self,
+        peer: Peer<RoleServer>,
+        Parameters(args): Parameters<SearchArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let what = format!("search {}", args.query);
+        let connection = args.connection.clone();
+        let run = self.search_schema_inner(Parameters(args));
+        self.audited(Call::new(&peer, "search_schema"), &connection, what, run)
+            .await
+    }
+
+    async fn search_schema_inner(
+        &self,
         Parameters(args): Parameters<SearchArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let (open, _) = match self.session(&args.connection).await {
@@ -628,7 +753,7 @@ impl SpelaionMcp {
         Parameters(args): Parameters<QueryArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         self.read(
-            &client_name(&peer),
+            &Call::new(&peer, "run_query"),
             &args.connection,
             &args.sql,
             args.output_format,
@@ -649,8 +774,12 @@ impl SpelaionMcp {
         peer: Peer<RoleServer>,
         Parameters(args): Parameters<WriteArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.write(&client_name(&peer), &args.connection, &args.sql)
-            .await
+        self.write(
+            &Call::new(&peer, "execute_write"),
+            &args.connection,
+            &args.sql,
+        )
+        .await
     }
 
     #[tool(
@@ -664,7 +793,7 @@ impl SpelaionMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let sql = format!("explain {}", args.sql.trim());
         self.read(
-            &client_name(&peer),
+            &Call::new(&peer, "explain_query"),
             &args.connection,
             &sql,
             args.output_format,

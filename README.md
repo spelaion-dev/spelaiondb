@@ -397,7 +397,8 @@ cargo install --path apps/cli
 claude mcp add spelaiondb -- spelaiondb mcp
 ```
 
-Every query and write, run or refused, is recorded: `spelaiondb audit`.
+Every tool call, run or refused, is recorded on your computer: the MCP page's Activity tab
+shows, filters, exports and clears it (secrets masked), and so does `spelaiondb audit`.
 
 - Architecture: [`docs/architecture.md`](docs/architecture.md)
 - Decisions: [`docs/adr/`](docs/adr/README.md)

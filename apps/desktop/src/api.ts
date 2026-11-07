@@ -77,6 +77,9 @@ import {
   type McpInstallPlanItem,
   type McpSettingsItem,
   type ToolOutputItem,
+  type AuditEventItem_Serialize,
+  type AuditSessionItem,
+  type AuditStatusItem,
 } from "./bindings";
 
 export { commands, events };
@@ -120,6 +123,8 @@ export type McpAccessItem = McpAccessItem_Serialize;
 export type McpClientItem = McpClientItem_Serialize;
 export type McpClientsItem = McpClientsItem_Serialize;
 export type { McpInstallPlanItem, McpSettingsItem, ToolOutputItem };
+export type AuditEventItem = AuditEventItem_Serialize;
+export type { AuditSessionItem, AuditStatusItem };
 export type UpdateStatus = UpdateStatus_Serialize;
 /** What `connect` returns. */
 export type ConnectResult = ConnectOutcome_Serialize;
