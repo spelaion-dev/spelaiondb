@@ -1258,6 +1258,11 @@ input[type="search"] {
   overflow: auto;
   min-height: 0;
   flex: 1;
+  /* WebKitGTK draws overlay scrollbars on top of the content, at the container's edge: the
+     container reaches into the picker's padding and gives that space back inside, so the
+     scrollbar lies over the gap and the cards keep the width they have on Windows. */
+  margin-right: -12px;
+  padding-right: 12px;
 }
 .engine-groups h3 {
   margin: 12px 0 8px;
