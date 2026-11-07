@@ -114,7 +114,7 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   only change through pull requests whose CI is green (the four jobs of `ci.yml`), and they
   cannot be force-pushed or deleted.
 - **One task, one short branch**, named after who works on it and what (`pablo/filters`,
-  `paco/issue-11`, `claude/…`, `codex/…`), from an up-to-date `dev`. Never work on someone
+  `paco/sdb-11`, `claude/…`, `codex/…`), from an up-to-date `dev`. Never work on someone
   else's branch.
 - **Fetch before starting and before pushing** (`git fetch` and rebase on `origin/dev`):
   someone else may have merged in the meantime. Never force-push a branch someone else uses,
@@ -128,13 +128,33 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   `.github/CODEOWNERS` (the read-only and write barriers, secrets, trust, SSH host keys, the
   patched TLS libraries, updates, CI itself) waits for an owner's approval. The author cannot
   approve their own: the other owner does.
-- An issue is the unit of work: assign it to yourself before starting, so two people do not
-  change the same thing.
+- A Plane work item is the unit of work (see "Work tracking" below).
 - To release, open a pull request `dev` → `main` and merge nothing else into `dev` until it is
   tagged (fixes for the release only). Merge it when green, with a merge commit; a maintainer
   then fast-forwards `dev` to `main` (`git merge --ff-only origin/main`, the one push to `dev`
   that is not a pull request), so they stay in step, and tags `main` with `vX.Y.Z`. Never turn
   on "delete branch on merge": it would delete `dev`.
+
+## Work tracking
+The team's tracker is **Plane**: workspace `spelaion`, project `spelaiondb`, identifier `SDB`
+(agents reach it through the `plane` MCP server). GitHub issues are for reports from people
+outside the team.
+- Each release is a Plane module (`v0.7 — …`). Labels give the type, the area and the size
+  (S / M / L); `adr-needed` marks a change of direction.
+- **Before starting:** take an item, assign it to yourself and move it to *In Progress*, so
+  two people do not change the same thing. Read its description: its "Constraints" and "Done
+  when" are part of the task.
+- **Opening the pull request:** move the item to *In Review*, link the pull request from the
+  item, and write the item's identifier (`SDB-12`) in the pull request's description. Keep it
+  out of commit subjects: they go into the release notes as they are.
+- **Merged:** move the item to *Done*. Dropped: *Cancelled*, with a comment saying why.
+- Work found along the way becomes a new item in *Backlog*, not part of the current pull
+  request.
+- "Decide: …" items end in an ADR. ADRs live in `docs/adr/`, never only in Plane: the item
+  links to the ADR's pull request, and any work that follows gets its own items.
+- An external GitHub issue that we accept gets a Plane item that links to it. When its fix is
+  merged into `dev`, close the issue by hand ("Fixed by #N"): closing keywords only act when
+  the change reaches `main`.
 
 ## Non-negotiable rules
 - `spelaion-core` does not depend on Tauri. The app, the CLI and the MCP are thin adapters.
