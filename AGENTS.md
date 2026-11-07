@@ -83,8 +83,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   ports for the form's Kubernetes tab; tests against a kind cluster with
   `SPELAION_TEST_K8S=<kubeconfig>` (see `testing/k8s`).
 - `crates/spelaion-core`: `open_connection` (resolved configuration → tunnel from the
-  `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts, stops at
-  the first error) and `ResultStore` (results in the core, served in Arrow IPC windows).
+  `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts: stop,
+  continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
+  ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
+  IPC windows).
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app

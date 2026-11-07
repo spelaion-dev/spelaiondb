@@ -182,7 +182,8 @@ async fn runs_a_script_statement_by_statement() {
         events.last(),
         Some(CoreEvent::ScriptFinished {
             executed: 4,
-            failed: false
+            failed: false,
+            ..
         })
     ));
 
@@ -235,7 +236,8 @@ async fn stops_at_the_first_error_and_points_to_it() {
         events.last(),
         Some(CoreEvent::ScriptFinished {
             executed: 2,
-            failed: true
+            failed: true,
+            ..
         })
     ));
 }

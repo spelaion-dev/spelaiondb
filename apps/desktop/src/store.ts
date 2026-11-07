@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
-import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FieldChangeItem, InteractionKind, RiskKind, TransactionStatusItem, WorkspaceInfo } from "./api";
+import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, ErrorAnswerItem, FieldChangeItem, InteractionKind, OnErrorItem, RiskKind, ScriptSummaryItem, TransactionStatusItem, WorkspaceInfo } from "./api";
 
 export interface ResultMeta {
   id: number;
@@ -58,6 +58,8 @@ export interface RunState {
   } | null;
   startedAt: number;
   elapsedMs: number | null;
+  /** What the core counted when the run ended (ADR-035). */
+  summary?: ScriptSummaryItem;
 }
 
 export type TabStatus = "disconnected" | "connecting" | "connected";
@@ -87,6 +89,8 @@ export interface Tab {
   /** Pending row changes are kept in the mounted editor until saved or discarded. */
   pendingEdits?: boolean;
   savingEdits?: boolean;
+  /** This tab's own run options (ADR-035); `null` fields take the defaults. */
+  runOptions?: { onError: OnErrorItem | null; timeoutSeconds: number | null };
 }
 
 /** What a table data tab shows: the core writes and checks the page's SELECT. */
@@ -377,6 +381,16 @@ export interface OpenTransactionsRequest {
   resolve(proceed: boolean): void;
 }
 
+/** A run paused after an error (ADR-035): the core waits for the answer to its ticket. */
+export interface ScriptErrorRequest {
+  tab: string;
+  /** 1-based. */
+  statement: number;
+  message: string;
+  remaining: number;
+  resolve(answer: ErrorAnswerItem): void;
+}
+
 /** Statements the core wants confirmed before they run. */
 export interface RiskRequest {
   connection: string;
@@ -395,6 +409,7 @@ interface DialogStore {
   change: ChangeRequest | null;
   variables: VariablesRequest | null;
   risk: RiskRequest | null;
+  scriptError: ScriptErrorRequest | null;
   openTransactions: OpenTransactionsRequest | null;
   params: ParamsRequest | null;
   text: TextRequest | null;
@@ -403,6 +418,7 @@ interface DialogStore {
   askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
   askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
+  askScriptError(request: Omit<ScriptErrorRequest, "resolve">): Promise<ErrorAnswerItem>;
   askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
   askTrust(workspace: string | null): Promise<boolean>;
   askChange(change: Omit<ChangeRequest, "resolve">): Promise<boolean>;
@@ -417,6 +433,7 @@ export const useDialogs = create<DialogStore>((set) => ({
   change: null,
   variables: null,
   risk: null,
+  scriptError: null,
   openTransactions: null,
   params: null,
   text: null,
@@ -442,6 +459,18 @@ export const useDialogs = create<DialogStore>((set) => ({
           resolve: (values) => {
             set({ params: null });
             resolve(values);
+          },
+        },
+      }),
+    ),
+  askScriptError: (request) =>
+    new Promise((resolve) =>
+      set({
+        scriptError: {
+          ...request,
+          resolve: (answer) => {
+            set({ scriptError: null });
+            resolve(answer);
           },
         },
       }),

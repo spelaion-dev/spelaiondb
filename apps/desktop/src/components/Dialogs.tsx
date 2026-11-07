@@ -1,5 +1,5 @@
 // Modal dialogs: password, repository trust, changes to trusted repository items, query
-// parameters, risky statements and SSH tunnel questions.
+// parameters, risky statements, a script paused after an error and SSH tunnel questions.
 
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -12,6 +12,7 @@ export function Dialogs() {
   const change = useDialogs((s) => s.change);
   const variables = useDialogs((s) => s.variables);
   const risk = useDialogs((s) => s.risk);
+  const scriptError = useDialogs((s) => s.scriptError);
   const openTransactions = useDialogs((s) => s.openTransactions);
   const params = useDialogs((s) => s.params);
   const text = useDialogs((s) => s.text);
@@ -23,6 +24,7 @@ export function Dialogs() {
   if (params) return <ParamsDialog />;
   if (text) return <TextDialog />;
   if (risk) return <RiskDialog />;
+  if (scriptError) return <ScriptErrorDialog key={`${scriptError.tab}-${scriptError.statement}`} />;
   if (openTransactions) return <OpenTransactionsDialog />;
   if (password) return <PasswordDialog key={password.connectionName + (password.error ?? "")} />;
   return null;
@@ -304,6 +306,30 @@ function RiskDialog() {
         <button className={onlyExecution ? undefined : "danger"} onClick={() => request.resolve(true)}>
           {t(onlyExecution ? "risk.runConfirmed" : "risk.run")}
         </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** A run paused after an error (ADR-035). Stop has the focus and Escape stops: going on is
+ *  always a choice. The core decides what each answer runs. */
+function ScriptErrorDialog() {
+  const { t } = useTranslation("editor");
+  const request = useDialogs((s) => s.scriptError);
+  const stop = useRef<HTMLButtonElement>(null);
+  useEffect(() => stop.current?.focus(), []);
+  if (!request) return null;
+  return (
+    <Modal title={t("scriptError.title", { index: request.statement })}>
+      <pre className="error-box">{request.message}</pre>
+      <p>{t("scriptError.remaining", { count: request.remaining })}</p>
+      <p className="muted small">{t("scriptError.hint")}</p>
+      <div className="modal-actions" onKeyDown={(e) => e.key === "Escape" && request.resolve("stop")}>
+        <button ref={stop} onClick={() => request.resolve("stop")}>
+          {t("scriptError.stop")}
+        </button>
+        <button onClick={() => request.resolve("skip")}>{t("scriptError.skip")}</button>
+        <button onClick={() => request.resolve("skipAll")}>{t("scriptError.skipAll")}</button>
       </div>
     </Modal>
   );

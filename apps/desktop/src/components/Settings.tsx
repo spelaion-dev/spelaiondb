@@ -13,8 +13,8 @@ import { call, commands, type NamePatternPreview, type NetworkProfileItem } from
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates" | "scripts";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates", "scripts"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -66,6 +66,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "history" && <HistorySettings />}
         {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}
+        {category === "scripts" && <ScriptSettings />}
       </section>
     </div>
   );
@@ -131,6 +132,29 @@ function AppearanceSettings() {
       <p className="muted small">{t("appearance.hint")}</p>
       <SaveError setting="theme" />
       <GridSettings />
+    </>
+  );
+}
+
+/** How scripts run from the editor (ADR-035): what a run does when a statement fails. */
+function ScriptSettings() {
+  const { t } = useTranslation("settings");
+  const script = usePreferences((s) => s.script);
+  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const setScript = usePreferences((s) => s.setScript);
+  return (
+    <>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("scripts.onError")}</legend>
+        {(["stop", "continue", "ask"] as const).map((mode) => (
+          <label key={mode} className="check">
+            <input type="radio" name="scriptOnError" value={mode} checked={script.onError === mode} onChange={() => void setScript({ ...script, onError: mode })} />
+            {t(`scripts.mode.${mode}`)}
+          </label>
+        ))}
+      </fieldset>
+      <p className="muted small">{t("scripts.onErrorHint")}</p>
+      <SaveError setting="script" />
     </>
   );
 }

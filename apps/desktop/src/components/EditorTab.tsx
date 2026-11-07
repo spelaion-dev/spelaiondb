@@ -13,6 +13,8 @@ import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
+import { RunOptionsButton, runOptionsOf } from "./RunOptions";
+import { summaryMessages, summaryShort } from "../scriptRun";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
@@ -614,10 +616,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
       run: { running: true, results: [], activeResult: null, messages: [], error: null, startedAt, elapsedMs: null },
     });
     const channel = new Channel<ScriptEvent>();
-    channel.onmessage = (event) => handle(event, sent, startedAt, queryPage);
+    // The last error, for the question a paused run asks (ADR-035).
+    const failures = new Map<number, string>();
+    channel.onmessage = (event) => handle(event, sent, startedAt, queryPage, failures);
+    const options = runOptionsOf(tab);
     try {
-      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, channel));
-      else await call(commands.runScript(tab.id, sent.text, confirmed, channel));
+      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, options, channel));
+      else await call(commands.runScript(tab.id, sent.text, confirmed, options, channel));
     } catch (e) {
       const detail = message(e);
       updateRun(tab.id, (r) => ({ ...r, running: false, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));
@@ -627,7 +632,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
   }
 
-  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null) {
+  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null, failures: Map<number, string>) {
     switch (event.kind) {
       case "statementStarted":
         break;
@@ -651,10 +656,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: event.message, translation: { key: "messages.historySaveFailed", values: { detail: event.message } } }] }));
         break;
       case "statementFinished": {
-        const ms = Math.round(event.elapsedMs ?? 0);
+        const timing = { duration: Math.round(event.elapsedMs ?? 0), execution: Math.round(event.executionMs ?? 0), fetch: Math.round(event.fetchMs ?? 0) };
         const translation: Translation = event.rowsAffected == null
-          ? { key: "messages.statementOk", values: { index: event.index + 1, duration: ms } }
-          : { key: "messages.statementRows", values: { index: event.index + 1, count: event.rowsAffected, duration: ms } };
+          ? { key: "messages.statementOk", values: { index: event.index + 1, ...timing } }
+          : { key: "messages.statementRows", values: { index: event.index + 1, count: event.rowsAffected, ...timing } };
         updateRun(tab.id, (r) => ({
           ...r,
           results: r.results.map((x) => (x.statement === event.index ? { ...x, complete: true, ...(x.paging ? { paging: { ...x.paging, hasMore: x.rows === x.paging.pageSize } } : {}) } : x)),
@@ -666,17 +671,38 @@ export function EditorTab({ tab }: { tab: Tab }) {
         const offset =
           event.scriptOffset == null || request.bound ? null : request.from + byteToIndex(request.text, event.scriptOffset);
         const diagnostic = { message: event.message, detail: event.detail, hint: event.hint, code: event.code, cancelled: event.cancelled };
+        failures.set(event.index, event.message);
+        const key = event.cancelled ? "messages.statementCancelled" : event.timedOut ? "messages.statementTimedOut" : "messages.statementFailed";
         updateRun(tab.id, (r) => ({
           ...r,
           error: { message: event.message, offset, diagnostic },
-          messages: [...r.messages, { kind: "error", text: event.message, translation: { key: event.cancelled ? "messages.statementCancelled" : "messages.statementFailed", values: { index: event.index + 1, reason: event.message } } }],
+          messages: [...r.messages, { kind: "error", text: event.message, translation: { key, values: { index: event.index + 1, reason: event.message } } }],
         }));
         break;
       }
-      case "scriptFinished":
-        updateRun(tab.id, (r) => ({ ...r, running: false, elapsedMs: performance.now() - startedAt }));
+      case "errorPaused": {
+        // The core waits for the answer to this ticket; the dialog only asks (ADR-035).
+        const ticket = event.ticket;
+        updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: "", translation: { key: "messages.paused", values: { index: event.index + 1 } } }] }));
+        void useDialogs.getState()
+          .askScriptError({ tab: tab.id, statement: event.index + 1, message: failures.get(event.index) ?? "", remaining: event.remaining })
+          .then((answer) => call(commands.answerScriptError(tab.id, ticket, answer)))
+          .catch(() => undefined);
+        break;
+      }
+      case "scriptFinished": {
+        const elapsedMs = performance.now() - startedAt;
+        const summary = event.summary;
+        updateRun(tab.id, (r) => ({
+          ...r,
+          running: false,
+          elapsedMs,
+          summary,
+          messages: summary.statements > 1 || summary.stop ? [...r.messages, ...summaryMessages(summary)] : r.messages,
+        }));
         useApp.getState().refreshHistory();
         break;
+      }
     }
   }
 
@@ -801,6 +827,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint")} disabled={running || historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
               <EditorActionIcon name="script" />
             </button>
+            <RunOptionsButton tab={tab} disabled={running} />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
               <EditorActionIcon name="format" />
@@ -984,6 +1011,10 @@ function Results({
                     : t("results.rows", { count: active.rows, formattedCount: numbers.format(active.rows) })
                 }${active.complete ? "" : t("results.loading")} · `
               : ""}
+            {(() => {
+              const short = summaryShort(run.summary);
+              return short ? `${translated(short, t, numbers)} · ` : "";
+            })()}
             {run.elapsedMs != null ? t("results.duration", { duration: numbers.format(Math.round(run.elapsedMs)) }) : ""}
           </span>
         )}

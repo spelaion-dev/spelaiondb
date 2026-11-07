@@ -519,6 +519,52 @@ impl Default for GridPreferences {
     }
 }
 
+/// What a script run does by default when a statement fails (ADR-035); each run may choose
+/// another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScriptErrorMode {
+    #[default]
+    Stop,
+    Continue,
+    Ask,
+}
+
+impl ScriptErrorMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            ScriptErrorMode::Stop => "stop",
+            ScriptErrorMode::Continue => "continue",
+            ScriptErrorMode::Ask => "ask",
+        }
+    }
+}
+
+/// How scripts run from the editor, shared by every workspace in this user directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScriptPreferences {
+    /// What a run does when a statement fails; stop by default.
+    pub on_error: ScriptErrorMode,
+    /// A system notification when a run that took at least `notify_after_seconds` finishes
+    /// while the app is in the background; off by default.
+    pub notify: bool,
+    pub notify_after_seconds: u32,
+}
+
+impl ScriptPreferences {
+    /// Longest notification threshold accepted: a day.
+    pub const MAX_NOTIFY_AFTER: u32 = 86_400;
+}
+
+impl Default for ScriptPreferences {
+    fn default() -> Self {
+        Self {
+            on_error: ScriptErrorMode::Stop,
+            notify: false,
+            notify_after_seconds: 30,
+        }
+    }
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -1084,6 +1130,46 @@ impl Store {
 
     pub fn set_mcp_output_format(&self, format: ToolOutput) -> Result<(), StoreError> {
         self.set_personal_setting("mcp.output_format", format.as_str())
+    }
+
+    /// How scripts run, each preference at its default until it is changed.
+    pub fn get_script_preferences(&self) -> Result<ScriptPreferences, StoreError> {
+        let defaults = ScriptPreferences::default();
+        let on_error = match self.personal_setting("script.on_error")?.as_deref() {
+            Some("continue") => ScriptErrorMode::Continue,
+            Some("ask") => ScriptErrorMode::Ask,
+            Some(_) | None => defaults.on_error,
+        };
+        let notify_after_seconds = self
+            .personal_setting("script.notify_after")?
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|s| (1..=ScriptPreferences::MAX_NOTIFY_AFTER).contains(s))
+            .unwrap_or(defaults.notify_after_seconds);
+        Ok(ScriptPreferences {
+            on_error,
+            notify: self.get_flag("script.notify", defaults.notify)?,
+            notify_after_seconds,
+        })
+    }
+
+    pub fn set_script_preferences(
+        &self,
+        preferences: &ScriptPreferences,
+    ) -> Result<(), StoreError> {
+        let ScriptPreferences {
+            on_error,
+            notify,
+            notify_after_seconds,
+        } = *preferences;
+        if !(1..=ScriptPreferences::MAX_NOTIFY_AFTER).contains(&notify_after_seconds) {
+            return Err(StoreError(format!(
+                "the notification threshold is in seconds, from 1 to {}",
+                ScriptPreferences::MAX_NOTIFY_AFTER
+            )));
+        }
+        self.set_personal_setting("script.on_error", on_error.as_str())?;
+        self.set_flag("script.notify", notify)?;
+        self.set_personal_setting("script.notify_after", &notify_after_seconds.to_string())
     }
 
     fn personal_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
@@ -1804,6 +1890,57 @@ mod tests {
         };
         reopened.set_grid_preferences(&one).unwrap();
         assert_eq!(reopened.get_grid_preferences().unwrap(), one);
+    }
+
+    #[test]
+    fn script_preferences_start_at_their_defaults_and_persist() {
+        let path = temp("script");
+        let store = Store::open(&path).unwrap();
+        let defaults = ScriptPreferences::default();
+        assert_eq!(store.get_script_preferences().unwrap(), defaults);
+        assert_eq!(defaults.on_error, ScriptErrorMode::Stop);
+        assert!(!defaults.notify, "notifications are opt-in");
+        for on_error in [
+            ScriptErrorMode::Continue,
+            ScriptErrorMode::Ask,
+            ScriptErrorMode::Stop,
+        ] {
+            let changed = ScriptPreferences {
+                on_error,
+                notify: true,
+                notify_after_seconds: 120,
+            };
+            store.set_script_preferences(&changed).unwrap();
+            assert_eq!(store.get_script_preferences().unwrap(), changed);
+        }
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .get_script_preferences()
+                .unwrap()
+                .notify_after_seconds,
+            120
+        );
+        // A threshold out of range never reaches the store.
+        for bad in [0, ScriptPreferences::MAX_NOTIFY_AFTER + 1] {
+            let wrong = ScriptPreferences {
+                notify_after_seconds: bad,
+                ..defaults
+            };
+            assert!(reopened.set_script_preferences(&wrong).is_err());
+        }
+        assert_eq!(
+            reopened
+                .get_script_preferences()
+                .unwrap()
+                .notify_after_seconds,
+            120
+        );
+        assert_eq!(
+            reopened.get_grid_preferences().unwrap(),
+            GridPreferences::default()
+        );
     }
 
     #[test]

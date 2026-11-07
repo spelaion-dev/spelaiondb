@@ -138,23 +138,35 @@
     "findOf": "{{current}} of {{total}}",
     "findCount_one": "{{total}} match",
     "findCount_other": "{{total}} matches",
-    "findWhenComplete": "The result can be searched once every row has arrived"
+    "findWhenComplete": "The result can be searched once every row has arrived",
+    "summary": "{{ok}} OK, {{failed}} failed, {{notRun}} not run"
   },
   "messages": {
     "connectionLost": "The connection was lost: {{detail}}. Nothing ran. Reconnect, then run it again: nothing is re-run on its own.",
     "idleClosed": "The connection was closed after {{minutes}} min without use, as its connection type asks. Nothing ran. Reconnect, then run it again: nothing is re-run on its own.",
     "connectionFailed": "Could not connect: {{detail}}",
     "runFailed": "Could not run the query: {{detail}}",
-    "statementOk": "Statement {{index}}: OK ({{duration}} ms)",
-    "statementRows_one": "Statement {{index}}: {{formattedCount}} row ({{duration}} ms)",
-    "statementRows_other": "Statement {{index}}: {{formattedCount}} rows ({{duration}} ms)",
+    "statementOk": "Statement {{index}}: OK ({{duration}} ms: {{execution}} ms execute, {{fetch}} ms fetch)",
+    "statementRows_one": "Statement {{index}}: {{formattedCount}} row ({{duration}} ms: {{execution}} ms execute, {{fetch}} ms fetch)",
+    "statementRows_other": "Statement {{index}}: {{formattedCount}} rows ({{duration}} ms: {{execution}} ms execute, {{fetch}} ms fetch)",
     "statementFailed": "Statement {{index}}: {{reason}}",
     "statementCancelled": "Statement {{index}}: Query cancelled",
     "cancelled": "Query cancelled",
     "detail": "Detail: {{detail}}",
     "hint": "Hint: {{hint}}",
     "code": "Code: {{code}}",
-    "historySaveFailed": "Could not save query history: {{detail}}"
+    "historySaveFailed": "Could not save query history: {{detail}}",
+    "statementTimedOut": "Statement {{index}}: timed out. {{reason}}",
+    "summary_one": "{{formattedCount}} statement: {{ok}} OK, {{failed}} failed, {{notRun}} not run ({{execution}} ms execute, {{fetch}} ms fetch)",
+    "summary_other": "{{formattedCount}} statements: {{ok}} OK, {{failed}} failed, {{notRun}} not run ({{execution}} ms execute, {{fetch}} ms fetch)",
+    "stop": {
+      "failed": "Stopped at statement {{index}}, which failed.",
+      "cancelled": "Cancelled at statement {{index}}.",
+      "transactionAborted": "Statement {{index}} aborted the transaction: the server will only roll it back, so the rest was not run. Roll back, then run the rest again.",
+      "transactionRolledBack": "Statement {{index}} rolled back the transaction, so the rest was not run: it would have run without the statements before it.",
+      "closed": "The tab closed while statement {{index}}'s error waited for an answer."
+    },
+    "paused": "Statement {{index}} failed: waiting for your answer."
   },
   "history": {
     "title": "Query history",
@@ -348,5 +360,29 @@
     "rolledBack": "Transaction rolled back.",
     "lostWithTransaction": "A transaction was open: the server rolled back what was not committed.",
     "tabBadge": "Transaction open"
+  },
+  "runOptions": {
+    "button": "Run options",
+    "title": "Run options for this tab",
+    "onError": "When a statement fails",
+    "default": "Default ({{mode}})",
+    "mode": {
+      "stop": "Stop",
+      "continue": "Continue",
+      "ask": "Ask"
+    },
+    "timeout": "Statement timeout (seconds)",
+    "timeoutConnection": "Connection's setting",
+    "timeoutHint": "Empty: the connection's statement timeout. 0: no limit in this tab.",
+    "reset": "Use the defaults"
+  },
+  "scriptError": {
+    "title": "Statement {{index}} failed",
+    "remaining_one": "{{count}} statement after it has not run yet.",
+    "remaining_other": "{{count}} statements after it have not run yet.",
+    "stop": "Stop",
+    "skip": "Skip and continue",
+    "skipAll": "Skip all errors",
+    "hint": "Skip all goes on without asking again in this run."
   }
 }

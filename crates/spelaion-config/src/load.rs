@@ -544,6 +544,18 @@ pub(crate) fn validate_connection(
             ));
         }
     }
+    if file
+        .statement_timeout
+        .is_some_and(|s| s > ConnectionFile::MAX_STATEMENT_TIMEOUT)
+    {
+        return Err(ConfigError::new(
+            path,
+            format!(
+                "statement_timeout is in seconds, at most {} (0 turns it off)",
+                ConnectionFile::MAX_STATEMENT_TIMEOUT
+            ),
+        ));
+    }
     if let Some(port) = file.local_port {
         if file.tunnel.is_none() || remote_sqlite {
             return Err(ConfigError::new(

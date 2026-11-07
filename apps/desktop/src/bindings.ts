@@ -42,6 +42,12 @@ export const commands = {
 	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
 	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
 	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
+	/**
+	 *  How scripts run from the editor: the default error mode and the opt-in notification
+	 *  (ADR-035).
+	 */
+	getScriptPreferences: () => typedError<ScriptPreferencesItem, string>(__TAURI_INVOKE("get_script_preferences")),
+	setScriptPreferences: (preferences: ScriptPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_script_preferences", { preferences })),
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
@@ -362,11 +368,16 @@ export const commands = {
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
-	runScript: (session: string, sql: string, confirmed: boolean, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, onEvent })),
+	runScript: (session: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, options, onEvent })),
+	/**
+	 *  Answers a run paused after an error (ADR-035). The core refuses a ticket that is not the
+	 *  pause it is waiting on.
+	 */
+	answerScriptError: (session: string, ticket: number, answer: ErrorAnswerItem) => typedError<null, string>(__TAURI_INVOKE("answer_script_error", { session, ticket, answer })),
 	/**  Whether a SELECT matches the conservative rules for fetching pages. */
 	queryPageSupported: (session: string, sql: string) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql })),
 	/**  Run the first page, keeping the original SQL in the user's query history. */
-	runQueryPage: (session: string, sql: string, limit: number, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, onEvent })),
+	runQueryPage: (session: string, sql: string, limit: number, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, options, onEvent })),
 	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset })),
 	countQueryRows: (session: string, sql: string) => typedError<number | null, string>(__TAURI_INVOKE("count_query_rows", { session, sql })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
@@ -692,6 +703,8 @@ export type ConnectionDraftItem_Deserialize = {
 	keepalive?: number | null,
 	/**  Seconds the database may take to connect (ADR-032); null for the default. */
 	connectTimeout?: number | null,
+	/**  Seconds a statement may run from the editor (ADR-035); `None` or 0 for no limit. */
+	statementTimeout?: number | null,
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
@@ -736,6 +749,8 @@ export type ConnectionDraftItem_Serialize = {
 	keepalive: number | null,
 	/**  Seconds the database may take to connect (ADR-032); null for the default. */
 	connectTimeout: number | null,
+	/**  Seconds a statement may run from the editor (ADR-035); `None` or 0 for no limit. */
+	statementTimeout: number | null,
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
@@ -1072,6 +1087,9 @@ export type EngineItem_Serialize = {
 	defaultPort: number | null,
 	available: boolean,
 };
+
+/**  The answer to a paused run. */
+export type ErrorAnswerItem = "stop" | "skip" | "skipAll";
 
 /**  A connection's explorer filter: personal, per workspace and connection (ADR-025). */
 export type ExplorerFilterItem = {
@@ -1612,6 +1630,9 @@ export type ObjectTargetItem_Serialize = { kind: "schema"; name: string } |
 /**  `relation` is the `kind` of an `ObjectItem`: `table`, `view`… */
 { kind: "relation"; schema: string; name: string; relation: string } | { kind: "column"; schema: string; table: string; name: string } | { kind: "index"; schema: string; table: string; name: string; primary: boolean } | { kind: "constraint"; schema: string; table: string; name: string; constraint: ConstraintKindItem } | { kind: "foreignKey"; schema: string; table: string; name: string } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
 
+/**  What a run does when a statement fails (ADR-035). */
+export type OnErrorItem = "stop" | "continue" | "ask";
+
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */
 "other" | 
@@ -1743,6 +1764,23 @@ export type RowChangeItem_Deserialize = { kind: "update"; row: number; values: C
 /**  A pending change of a table data tab (ADR-014), by position in the page shown. */
 export type RowChangeItem_Serialize = { kind: "update"; row: number; values: CellEditItem_Serialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Serialize[] };
 
+/**  How one run goes: its error mode and, if set, its own statement timeout. */
+export type RunOptionsItem = RunOptionsItem_Serialize | RunOptionsItem_Deserialize;
+
+/**  How one run goes: its error mode and, if set, its own statement timeout. */
+export type RunOptionsItem_Deserialize = {
+	onError: OnErrorItem,
+	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
+	timeoutSeconds?: number | null,
+};
+
+/**  How one run goes: its error mode and, if set, its own statement timeout. */
+export type RunOptionsItem_Serialize = {
+	onError: OnErrorItem,
+	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
+	timeoutSeconds: number | null,
+};
+
 /**  What a connection type asks for (ADR-029). */
 export type SafeguardsItem = SafeguardsItem_Serialize | SafeguardsItem_Deserialize;
 
@@ -1814,15 +1852,74 @@ export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
 export type ScriptEvent_Deserialize = 
 /**  Byte range of the statement within the script. */
-{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null } | { kind: "statementFailed"; index: number; message: string; code?: string | null; detail?: string | null; hint?: string | null; 
+{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
+/**  Until the engine's first answer. */
+executionMs: number | null; 
+/**  Reading the rows after it. */
+fetchMs: number | null } | { kind: "statementFailed"; index: number; message: string; code?: string | null; detail?: string | null; hint?: string | null; 
 /**  Error position in bytes within the script, to underline it. */
-scriptOffset?: number | null; cancelled: boolean } | { kind: "scriptFinished"; executed: number; failed: boolean } | { kind: "historyWarning"; message: string };
+scriptOffset?: number | null; cancelled: boolean; 
+/**  It ran longer than the run's statement timeout. */
+timedOut: boolean } | 
+/**  The run waits for `answer_script_error` with this ticket (ADR-035). */
+{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
 
 export type ScriptEvent_Serialize = 
 /**  Byte range of the statement within the script. */
-{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null } | { kind: "statementFailed"; index: number; message: string; code: string | null; detail: string | null; hint: string | null; 
+{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
+/**  Until the engine's first answer. */
+executionMs: number | null; 
+/**  Reading the rows after it. */
+fetchMs: number | null } | { kind: "statementFailed"; index: number; message: string; code: string | null; detail: string | null; hint: string | null; 
 /**  Error position in bytes within the script, to underline it. */
-scriptOffset: number | null; cancelled: boolean } | { kind: "scriptFinished"; executed: number; failed: boolean } | { kind: "historyWarning"; message: string };
+scriptOffset: number | null; cancelled: boolean; 
+/**  It ran longer than the run's statement timeout. */
+timedOut: boolean } | 
+/**  The run waits for `answer_script_error` with this ticket (ADR-035). */
+{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string };
+
+/**  How scripts run from the editor, shared by every workspace. */
+export type ScriptPreferencesItem = {
+	onError: OnErrorItem,
+	notify: boolean,
+	notifyAfterSeconds: number,
+};
+
+/**  Why a run stopped with statements left. */
+export type ScriptStopItem = {
+	kind: ScriptStopKind,
+	/**  The statement it stopped at. */
+	index: number,
+};
+
+export type ScriptStopKind = "failed" | "cancelled" | "transactionAborted" | "transactionRolledBack" | "closed";
+
+/**  "N statements: X ok, Y failed", and where the time went (ADR-035). */
+export type ScriptSummaryItem = ScriptSummaryItem_Serialize | ScriptSummaryItem_Deserialize;
+
+/**  "N statements: X ok, Y failed", and where the time went (ADR-035). */
+export type ScriptSummaryItem_Deserialize = {
+	statements: number,
+	executed: number,
+	succeeded: number,
+	failed: number,
+	notRun: number,
+	stop?: ScriptStopItem | null,
+	executionMs: number | null,
+	fetchMs: number | null,
+};
+
+/**  "N statements: X ok, Y failed", and where the time went (ADR-035). */
+export type ScriptSummaryItem_Serialize = {
+	statements: number,
+	executed: number,
+	succeeded: number,
+	failed: number,
+	notRun: number,
+	stop: ScriptStopItem | null,
+	executionMs: number | null,
+	fetchMs: number | null,
+};
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };

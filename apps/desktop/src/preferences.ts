@@ -2,7 +2,7 @@
 // personal state.db; this module only applies them to the document and keeps the UI state.
 
 import { create } from "zustand";
-import { call, commands, type ExplorerPreferences, type GridPreferences } from "./api";
+import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -27,7 +27,7 @@ export function applyTheme(preference: ThemePreference): void {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export type PreferenceSetting = "language" | "theme" | "explorer" | "grid";
+export type PreferenceSetting = "language" | "theme" | "explorer" | "grid" | "script";
 
 export interface PreferenceError {
   setting: PreferenceSetting;
@@ -42,6 +42,8 @@ interface PreferencesStore {
   explorer: ExplorerPreferences;
   /** How the result grid draws its cells. */
   grid: GridPreferences;
+  /** How scripts run: the default error mode and the opt-in notification (ADR-035). */
+  script: ScriptPreferencesItem;
   loading: boolean;
   saving: PreferenceSetting | null;
   error: PreferenceError | null;
@@ -50,6 +52,7 @@ interface PreferencesStore {
   setTheme(next: ThemePreference): Promise<void>;
   setExplorer(next: ExplorerPreferences): Promise<void>;
   setGrid(next: GridPreferences): Promise<void>;
+  setScript(next: ScriptPreferencesItem): Promise<void>;
   clearError(): void;
 }
 
@@ -58,17 +61,21 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
   theme: "system",
   explorer: { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false },
   grid: { zebra: true, nullText: true, boolCheckboxes: false },
+  script: { onError: "stop", notify: false, notifyAfterSeconds: 30 },
   loading: true,
   saving: null,
   error: null,
   async load() {
-    const [language, theme, explorer, grid] = await Promise.allSettled([
+    const [language, theme, explorer, grid, script] = await Promise.allSettled([
       call(commands.getLanguage()),
       call(commands.getTheme()),
       call(commands.getExplorerPreferences()),
       call(commands.getGridPreferences()),
+      call(commands.getScriptPreferences()),
     ]);
     let error: PreferenceError | null = null;
+    if (script.status === "fulfilled") set({ script: script.value });
+    else error = { setting: "script", phase: "load", detail: errorText(script.reason) };
     if (grid.status === "fulfilled") set({ grid: grid.value });
     else error = { setting: "grid", phase: "load", detail: errorText(grid.reason) };
     if (explorer.status === "fulfilled") set({ explorer: explorer.value });
@@ -124,6 +131,18 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
       await call(commands.setExplorerPreferences(next));
     } catch (e) {
       set({ explorer: previous, error: { setting: "explorer", phase: "save", detail: errorText(e) } });
+    } finally {
+      set({ saving: null });
+    }
+  },
+  async setScript(next) {
+    if (get().saving) return;
+    const previous = get().script;
+    set({ script: next, saving: "script", error: null });
+    try {
+      await call(commands.setScriptPreferences(next));
+    } catch (e) {
+      set({ script: previous, error: { setting: "script", phase: "save", detail: errorText(e) } });
     } finally {
       set({ saving: null });
     }

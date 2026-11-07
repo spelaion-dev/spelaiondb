@@ -1912,6 +1912,33 @@ select {
   color: var(--fg) !important;
 }
 
+/* A tab's run options (ADR-035): a panel beside the editor toolbar. */
+.editor-actions .editor-action-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.run-options-panel {
+  position: fixed;
+  z-index: 20;
+  width: 260px;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.run-options-panel fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.run-options-panel .field input {
+  width: 100%;
+}
+.run-options-panel p {
+  margin: 0;
+}
+
 /* ---------------------------------------------------------------- cell viewer */
 .grid-wrap {
   display: flex;

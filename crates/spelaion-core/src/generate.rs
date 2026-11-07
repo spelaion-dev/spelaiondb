@@ -511,6 +511,7 @@ pub(crate) async fn scalar_value(session: &Session, sql: &str) -> Result<Option<
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::ErrorPaused { .. }
             | CoreEvent::HistoryWarning { .. } => {}
         }
     }
