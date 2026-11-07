@@ -206,6 +206,30 @@ async fn set_explorer_preferences(
 
 #[tauri::command]
 #[specta::specta]
+async fn get_grid_preferences(state: State<'_, AppState>) -> CmdResult<GridPreferencesItem> {
+    state
+        .history
+        .grid_preferences()
+        .await
+        .map(GridPreferencesItem::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_grid_preferences(
+    preferences: GridPreferencesItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_grid_preferences(preferences.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
     state
         .history
@@ -1893,8 +1917,8 @@ async fn copy_rows(
             },
             other => export_format(other),
         },
-        rows: range.first_row as usize..(range.first_row + range.rows) as usize,
-        columns: range.first_column as usize..(range.first_column + range.columns) as usize,
+        rows: range.first_row as usize..range.first_row as usize + range.rows as usize,
+        columns: range.columns.iter().map(|&c| c as usize).collect(),
         header,
     };
     let mut out = Vec::new();
@@ -1928,7 +1952,7 @@ async fn export_result(
         let options = ExportOptions {
             format: export_format(format),
             rows: 0..stored.rows(),
-            columns: 0..stored.schema().columns.len(),
+            columns: (0..stored.schema().columns.len()).collect(),
             header: true,
         };
         spelaion_core::export_to_file(&stored, &options, dialect.as_ref(), Path::new(&path))
@@ -3029,6 +3053,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_update_check,
             get_explorer_preferences,
             set_explorer_preferences,
+            get_grid_preferences,
+            set_grid_preferences,
             update::update_check,
             update::update_install,
             engine_catalog,

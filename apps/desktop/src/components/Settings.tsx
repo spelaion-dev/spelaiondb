@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
-import { usePreferences, type ThemePreference } from "../preferences";
+import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
 import { useUpdate } from "../update";
@@ -98,7 +98,7 @@ function Choice<T extends string>(props: {
   );
 }
 
-function SaveError({ setting }: { setting: "language" | "theme" | "explorer" }) {
+function SaveError({ setting }: { setting: PreferenceSetting }) {
   const { t } = useTranslation("settings");
   const error = usePreferences((s) => s.error);
   if (error?.setting !== setting) return null;
@@ -130,6 +130,36 @@ function AppearanceSettings() {
       />
       <p className="muted small">{t("appearance.hint")}</p>
       <SaveError setting="theme" />
+      <GridSettings />
+    </>
+  );
+}
+
+/** How the result grid draws its cells: zebra rows, NULL and booleans. */
+function GridSettings() {
+  const { t } = useTranslation("settings");
+  const grid = usePreferences((s) => s.grid);
+  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const setGrid = usePreferences((s) => s.setGrid);
+  return (
+    <>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("appearance.grid")}</legend>
+        <label className="check">
+          <input type="checkbox" name="zebra" checked={grid.zebra} onChange={(e) => void setGrid({ ...grid, zebra: e.target.checked })} />
+          {t("appearance.zebra")}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="nullText" checked={grid.nullText} onChange={(e) => void setGrid({ ...grid, nullText: e.target.checked })} />
+          {t("appearance.nullText")}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="boolCheckboxes" checked={grid.boolCheckboxes} onChange={(e) => void setGrid({ ...grid, boolCheckboxes: e.target.checked })} />
+          {t("appearance.boolCheckboxes")}
+        </label>
+      </fieldset>
+      <p className="muted small">{t("appearance.gridHint")}</p>
+      <SaveError setting="grid" />
     </>
   );
 }

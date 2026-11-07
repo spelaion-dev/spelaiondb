@@ -614,6 +614,45 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
     }
 }
 
+/// How the result grid draws its cells; personal, like the theme.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GridPreferencesItem {
+    pub zebra: bool,
+    pub null_text: bool,
+    pub bool_checkboxes: bool,
+}
+
+impl From<spelaion_core::GridPreferences> for GridPreferencesItem {
+    fn from(p: spelaion_core::GridPreferences) -> Self {
+        let spelaion_core::GridPreferences {
+            zebra,
+            null_text,
+            bool_checkboxes,
+        } = p;
+        Self {
+            zebra,
+            null_text,
+            bool_checkboxes,
+        }
+    }
+}
+
+impl From<GridPreferencesItem> for spelaion_core::GridPreferences {
+    fn from(p: GridPreferencesItem) -> Self {
+        let GridPreferencesItem {
+            zebra,
+            null_text,
+            bool_checkboxes,
+        } = p;
+        Self {
+            zebra,
+            null_text,
+            bool_checkboxes,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
@@ -2465,12 +2504,12 @@ pub struct TextSpan {
     pub end: u32,
 }
 
-/// A rectangle of a result: rows and columns by position.
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+/// Rows of a result by position, and the columns taken from each, in order (the grid leaves
+/// out the columns it hides).
+#[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CellRange {
     pub first_row: u32,
     pub rows: u32,
-    pub first_column: u32,
-    pub columns: u32,
+    pub columns: Vec<u32>,
 }
