@@ -18,6 +18,7 @@ use crate::auth::authenticate;
 use crate::hostkeys::{self, KnownHosts};
 use crate::{
     HopSpec, Interaction, LocalPort, ProxySpec, SecretRequest, SshError, Target, TunnelSpec,
+    TunnelStage,
 };
 
 /// A command running on a tunnel's last hop ([`Tunnel::exec`]).
@@ -143,6 +144,17 @@ impl Tunnel {
         known_hosts: &KnownHosts,
         ui: Arc<dyn Interaction>,
     ) -> Result<Tunnel, SshError> {
+        Self::connect_observed(spec, known_hosts, ui, &|_| {}).await
+    }
+
+    /// Like [`Tunnel::connect`], telling `observe` each part as it starts, so the connection
+    /// test can say which one failed (ADR-031). An error belongs to the last part started.
+    pub async fn connect_observed(
+        spec: &TunnelSpec,
+        known_hosts: &KnownHosts,
+        ui: Arc<dyn Interaction>,
+        observe: &(dyn Fn(TunnelStage) + Send + Sync),
+    ) -> Result<Tunnel, SshError> {
         if spec.hops.is_empty() && spec.proxy.is_none() {
             return Err(SshError::Other("the tunnel has no hops".into()));
         }
@@ -153,12 +165,16 @@ impl Tunnel {
             ));
         }
         if spec.hops.is_empty() {
+            observe(TunnelStage::Proxy);
             return Self::proxy_only(spec, &ui).await;
         }
         if spec.hops.iter().skip(1).any(|h| h.command.is_some()) {
             return Err(SshError::Other(
                 "only the first hop can use an external command (command)".into(),
             ));
+        }
+        if spec.proxy.is_some() {
+            observe(TunnelStage::Proxy);
         }
         // Human interaction is not part of the network handshake timeout.
         let mut proxy = spec.proxy.clone();
@@ -188,6 +204,10 @@ impl Tunnel {
         let mut child = None;
 
         for (hop, hop_spec) in spec.hops.iter().enumerate() {
+            // The first hop behind a proxy starts once the proxy has let us through.
+            if hop > 0 || proxy.is_none() {
+                observe(TunnelStage::Hop(hop));
+            }
             let outcome = Arc::new(Mutex::new(None));
             let handler = HopHandler {
                 hop,
@@ -225,6 +245,7 @@ impl Tunnel {
                                 &ui,
                             )
                             .await?;
+                            observe(TunnelStage::Hop(hop));
                             Ok(client::connect_stream(config.clone(), stream, handler)
                                 .await
                                 .map_err(|e| e.to_string()))
@@ -263,7 +284,13 @@ impl Tunnel {
             };
             let connected = match tokio::time::timeout(timeout, handshake).await {
                 Ok(result) => result?,
-                Err(_) => Err(format!("no response in {}", seconds(timeout))),
+                Err(_) => {
+                    return Err(SshError::Timeout {
+                        hop,
+                        host: hop_spec.host.clone(),
+                        after: timeout,
+                    });
+                }
             };
             let mut session = match connected {
                 Ok(session) => session,
@@ -375,6 +402,46 @@ the server refused to run a command (it may allow only port forwarding)
             stdout: Box::pin(stdout),
             control: RemoteSignals(write),
         })
+    }
+
+    /// Checks that the tunnel reaches `target`: opens a connection to it from the last hop
+    /// (or through the proxy alone) and closes it at once, within `timeout`. Nothing is sent
+    /// to the target. The connection test's "reach the database" step (ADR-031).
+    pub async fn probe(&self, target: &Target, timeout: Duration) -> Result<(), SshError> {
+        if let TunnelState::Down { reason } = &*self.state.borrow() {
+            return Err(SshError::Other(format!("the tunnel is down: {reason}")));
+        }
+        let failed = |message: String, timed_out: bool| SshError::Target {
+            host: target.host.clone(),
+            port: target.port,
+            message,
+            timed_out,
+        };
+        match (&self.proxy_only, self.sessions.last()) {
+            (Some((proxy, _)), _) => {
+                // Its password was asked when the tunnel opened.
+                let ui: Arc<dyn Interaction> = Arc::new(crate::NonInteractive);
+                crate::proxy::connect(proxy, &target.host, target.port, timeout, &ui).await?;
+                Ok(())
+            }
+            (None, Some(last)) => {
+                let open = last.channel_open_direct_tcpip(
+                    target.host.clone(),
+                    target.port.into(),
+                    "127.0.0.1",
+                    0,
+                );
+                match tokio::time::timeout(timeout, open).await {
+                    Ok(Ok(channel)) => {
+                        let _ = channel.close().await;
+                        Ok(())
+                    }
+                    Ok(Err(e)) => Err(failed(e.to_string(), false)),
+                    Err(_) => Err(failed(format!("no answer in {}", seconds(timeout)), true)),
+                }
+            }
+            (None, None) => Err(SshError::Other("the tunnel has no hops".into())),
+        }
     }
 
     /// Local port that leads to `target` through the last session, on any free port.
@@ -577,7 +644,7 @@ async fn forward(
 }
 
 /// `15 s`, or `1.5 s` for a fraction.
-fn seconds(duration: Duration) -> String {
+pub(crate) fn seconds(duration: Duration) -> String {
     let secs = duration.as_secs_f64();
     if secs.fract() == 0.0 {
         format!("{secs:.0} s")
