@@ -156,6 +156,14 @@ pub trait Connection: Send + Sync {
     async fn keep_alive(&self) -> Result<KeepAlive> {
         Err(DriverError::Other("this engine has no keep-alive".into()))
     }
+    /// Whether a transaction is open on this session, as the server says it (ADR-031). Where the
+    /// protocol carries it, no round trip is made. Engines that cannot tell do not support it:
+    /// the session then stays in auto-commit.
+    async fn transaction_state(&self) -> Result<TransactionState> {
+        Err(DriverError::Other(
+            "this engine cannot tell whether a transaction is open".into(),
+        ))
+    }
     /// The connection is known to be closed (the server ended it, the network dropped it),
     /// without asking the server.
     fn is_closed(&self) -> bool {
@@ -267,6 +275,17 @@ pub enum KeepAlive {
     Alive,
     /// A transaction is open: the core sends no more keep-alives until the session is used.
     InTransaction,
+}
+
+/// What [`Connection::transaction_state`] found (ADR-031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    /// No transaction is open: each statement commits as it runs.
+    Idle,
+    /// A transaction is open: its changes wait for `COMMIT` or `ROLLBACK`.
+    Open,
+    /// A transaction is open but failed: the engine will only roll it back.
+    Failed,
 }
 
 #[async_trait]
