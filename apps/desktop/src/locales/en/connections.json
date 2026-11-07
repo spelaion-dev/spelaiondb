@@ -115,6 +115,7 @@
     "none": "No password",
     "savedHint": "The password goes to the system keychain (Credential Manager, Keychain or Secret Service), never to the connection file.",
     "askHint": "Not saved: it will be asked each time you connect. The password typed here is only used to test.",
+    "noKeychainHint": "There is no system keychain to save it in (on Linux a Secret Service such as GNOME Keyring, KWallet or KeePassXC must be running): it will be asked each time you connect.",
     "envHint": "Read from this variable when connecting; the file only stores its name.",
     "other": "Defined in the file",
     "otherHint": "This password comes from a reference the form cannot edit (1Password, a command or a named keychain entry). It is kept as is; edit the file to change it.",

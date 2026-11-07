@@ -596,6 +596,19 @@ async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<S
     Ok(history_workspace(&config, id.source))
 }
 
+/// Whether there is a system keychain. Without one (Linux with no Secret Service running) the
+/// forms cannot offer to save a password: it is asked when connecting.
+#[tauri::command]
+#[specta::specta]
+async fn keychain_available() -> bool {
+    // Over D-Bus on Linux: kept off the async runtime.
+    tokio::task::spawn_blocking(|| {
+        spelaion_config::SecretBackend::keychain_available(&SystemBackend)
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Engines shown when adding a connection, including the ones not supported yet.
 #[tauri::command]
 #[specta::specta]
@@ -2747,6 +2760,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update::update_check,
             update::update_install,
             engine_catalog,
+            keychain_available,
             list_tunnels,
             test_connection,
             add_connection,

@@ -20,6 +20,7 @@ import { EngineIcon } from "./EngineIcon";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath } from "../dialogs";
 import { reviewChanges } from "../connect";
+import { useKeychainAvailable } from "../keychain";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
@@ -312,6 +313,12 @@ function ConnectionForm(props: {
   );
   const passwordless = PASSWORDLESS_ENGINES.includes(engine.id);
   const [savePassword, setSavePassword] = useState(initial ? initial.passwordMode !== "prompt" : true);
+  // Without a system keychain a new connection asks for its password; an edited one keeps
+  // what its file says (a repository file is the team's) unless the user unticks it.
+  const keychain = useKeychainAvailable();
+  useEffect(() => {
+    if (keychain === false && !initial) setSavePassword(false);
+  }, [keychain, initial]);
   const [useTunnel, setUseTunnel] = useState(Boolean(initial?.tunnel));
   // Kubernetes and an SSH tunnel exclude each other (the core rejects both).
   const [useKubernetes, setUseKubernetes] = useState(Boolean(initial?.kubernetes));
@@ -603,10 +610,15 @@ function ConnectionForm(props: {
                       />
                     </Field>
                     <label className="check">
-                      <input type="checkbox" checked={savePassword} onChange={(e) => { setSavePassword(e.target.checked); changed(); }} />
+                      <input
+                        type="checkbox"
+                        checked={savePassword}
+                        disabled={keychain === false && !savePassword}
+                        onChange={(e) => { setSavePassword(e.target.checked); changed(); }}
+                      />
                       {t("fields.savePassword")}
                     </label>
-                    <p className="muted small">{savePassword ? t("auth.savedHint") : t("auth.askHint")}</p>
+                    <p className="muted small">{keychain === false ? t("auth.noKeychainHint") : savePassword ? t("auth.savedHint") : t("auth.askHint")}</p>
                   </>
                 )}
                 {auth === "other" && (

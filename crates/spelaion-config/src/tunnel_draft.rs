@@ -609,7 +609,7 @@ pub fn update_tunnel(
             });
             if !keep {
                 let account = tunnel_account(config, source, name, i);
-                if let Err(message) = backend.keychain_delete(&account) {
+                if let Err(message) = crate::secrets::forget(backend, &account) {
                     result = Err(ResolveError::Secret {
                         reference: format!("keychain:{account}"),
                         message,
@@ -630,7 +630,7 @@ pub fn update_tunnel(
                 || matches!((&old.proxy, &new.proxy), (Some(a), Some(b)) if same(a, b)));
         if !keep {
             let account = proxy_account(config, source, name);
-            if let Err(message) = backend.keychain_delete(&account) {
+            if let Err(message) = crate::secrets::forget(backend, &account) {
                 result = Err(ResolveError::Secret {
                     reference: format!("keychain:{account}"),
                     message,
@@ -691,12 +691,10 @@ pub fn delete_tunnel(
         accounts.push(proxy_account(config, source, name));
     }
     for account in accounts {
-        backend
-            .keychain_delete(&account)
-            .map_err(|message| ResolveError::Secret {
-                reference: format!("keychain:{account}"),
-                message,
-            })?;
+        crate::secrets::forget(backend, &account).map_err(|message| ResolveError::Secret {
+            reference: format!("keychain:{account}"),
+            message,
+        })?;
     }
     Ok(())
 }

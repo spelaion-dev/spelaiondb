@@ -10,7 +10,8 @@ use spelaion_config::{
     Password, PasswordChoice, ProxyDraft, ProxyType, ResolveError, Resolver, SecretBackend, Source,
     SshAuth, SystemBackend, TlsModeConfig, TrustStore, TunnelDraft, TunnelDraftOptions, TunnelFile,
     TunnelPasswords, TunnelSettings, WritePolicy, add_connection, add_tunnel, connection_account,
-    create_connection, delete_tunnel, load, set_value, slug, tunnel_account, update_tunnel,
+    create_connection, delete_connection, delete_tunnel, load, set_value, slug, tunnel_account,
+    update_tunnel,
 };
 use spelaion_driver_api::{Secret, TlsMode};
 
@@ -66,14 +67,31 @@ struct FakeBackend {
     env: BTreeMap<String, String>,
     runs: Mutex<Vec<String>>,
     fail_keychain: bool,
+    /// There is no keychain at all (Linux without a Secret Service).
+    no_keychain: bool,
+    /// The keychain is there, but reading fails (locked, refused).
+    locked_read: bool,
 }
 
 impl SecretBackend for FakeBackend {
     fn keychain_get(&self, account: &str) -> Result<Option<String>, String> {
+        if self.no_keychain {
+            return Err(spelaion_config::KEYCHAIN_UNAVAILABLE.into());
+        }
+        if self.locked_read {
+            return Err("keychain locked".into());
+        }
         Ok(self.keychain.lock().unwrap().get(account).cloned())
     }
 
+    fn keychain_available(&self) -> bool {
+        !self.no_keychain
+    }
+
     fn keychain_set(&self, account: &str, secret: &str) -> Result<(), String> {
+        if self.no_keychain {
+            return Err(spelaion_config::KEYCHAIN_UNAVAILABLE.into());
+        }
         if self.fail_keychain {
             return Err("keychain locked".into());
         }
@@ -85,6 +103,9 @@ impl SecretBackend for FakeBackend {
     }
 
     fn keychain_delete(&self, account: &str) -> Result<(), String> {
+        if self.no_keychain {
+            return Err(spelaion_config::KEYCHAIN_UNAVAILABLE.into());
+        }
         if self.fail_keychain {
             return Err("keychain locked".into());
         }
@@ -3333,5 +3354,93 @@ fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
             .problems
             .iter()
             .any(|p| p.to_string().contains("both .spelaion/ and .spelunk/"))
+    );
+}
+
+#[test]
+fn without_a_keychain_the_password_is_asked_and_not_remembered() {
+    let fx = Fixture::new("no-keychain");
+    let backend = FakeBackend {
+        no_keychain: true,
+        ..FakeBackend::default()
+    };
+    for reference in ["keychain", "keychain:shared-db"] {
+        let config = with_password(&fx, reference);
+        // Each reference is a new version of the file: trusted as written.
+        let trust = fx.trusted();
+        let resolved = Resolver::new(&config, &trust, &backend)
+            .resolve(&ws("db"))
+            .unwrap();
+        // Asked like "prompt": nowhere to remember it, so nothing is offered.
+        assert_eq!(
+            resolved.password,
+            Password::Prompt { save_to: None },
+            "{reference}"
+        );
+    }
+}
+
+#[test]
+fn a_keychain_that_fails_is_still_an_error() {
+    let fx = Fixture::new("locked-keychain");
+    // There is a keychain, but reading it fails: that is reported, never turned into a prompt.
+    let backend = FakeBackend {
+        locked_read: true,
+        ..FakeBackend::default()
+    };
+    let config = with_password(&fx, "keychain");
+    let trust = fx.trusted();
+    let err = Resolver::new(&config, &trust, &backend)
+        .resolve(&ws("db"))
+        .unwrap_err();
+    assert!(matches!(err, ResolveError::Secret { .. }), "{err}");
+}
+
+#[test]
+fn without_a_keychain_deleting_a_connection_does_not_fail() {
+    let fx = Fixture::new("no-keychain-delete");
+    let config = with_password(&fx, "keychain");
+    let file = fx.repo().join(".spelaion/connections/db.toml");
+    let backend = FakeBackend {
+        no_keychain: true,
+        ..FakeBackend::default()
+    };
+    delete_connection(&config, &ws("db"), &backend).unwrap();
+    assert!(!file.exists());
+
+    // A keychain that is there but refuses to delete is still reported.
+    let config = with_password(&fx, "keychain");
+    let locked = FakeBackend {
+        fail_keychain: true,
+        ..FakeBackend::default()
+    };
+    let err = delete_connection(&config, &ws("db"), &locked).unwrap_err();
+    assert!(matches!(err, ResolveError::Secret { .. }), "{err}");
+}
+
+#[test]
+fn without_a_keychain_saving_a_password_is_refused_and_undone() {
+    let fx = Fixture::new("no-keychain-save");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend {
+        no_keychain: true,
+        ..FakeBackend::default()
+    };
+    let err = add_connection(
+        &config,
+        &postgres_draft(),
+        Some(&Secret::new("x")),
+        &backend,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("no system keychain"),
+        "it says why: {err}"
+    );
+    assert!(
+        !fx.repo()
+            .join(".spelaion/connections/prod/eu/orders-prod.toml")
+            .exists(),
+        "nothing is left half saved"
     );
 }

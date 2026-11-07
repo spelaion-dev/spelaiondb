@@ -56,7 +56,9 @@ pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
     ResolvedTunnel, Resolver, TunnelSettings,
 };
-pub use secrets::{KEYCHAIN_SERVICE, SecretBackend, SecretRef, SystemBackend};
+pub use secrets::{
+    KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef, SystemBackend,
+};
 pub use trust::{
     FieldChange, ItemChange, KNOWN_HOSTS_ITEM, TrustStore, connection_item, team_known_hosts,
     tunnel_item,

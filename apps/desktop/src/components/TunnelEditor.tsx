@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useKeychainAvailable } from "../keychain";
 import { open } from "@tauri-apps/plugin-dialog";
 import { call, commands, type HopDraft, type PasswordMode, type ProxyDraft, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
@@ -31,7 +32,7 @@ interface HopState {
 
 const usesPassword = (auth: SshAuthItem[]) => auth.includes("password") || auth.includes("keyboard-interactive");
 
-function emptyHop(): HopState {
+function emptyHop(savePassword = true): HopState {
   return {
     host: "",
     port: null,
@@ -39,7 +40,7 @@ function emptyHop(): HopState {
     method: "agent",
     auth: ["agent"],
     identityFile: "",
-    savePassword: true,
+    savePassword,
     fixedMode: null,
     passwordEnv: "",
     passwordOther: "",
@@ -144,6 +145,14 @@ export function TunnelEditor(props: {
   const [status, setStatus] = useState<{ kind: "idle" | "testing" | "ok" } | { kind: "error"; message: string }>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Without a system keychain a new tunnel asks for its passwords; an edited one keeps what
+  // its file says (a repository file is the team's) unless the user unticks it.
+  const keychain = useKeychainAvailable();
+  useEffect(() => {
+    if (keychain !== false || editing) return;
+    setHops((list) => list.map((hop) => ({ ...hop, savePassword: false })));
+    setProxy((current) => ({ ...current, savePassword: false }));
+  }, [keychain, editing]);
 
   useEffect(() => {
     if (mode.kind !== "edit") return;
@@ -385,16 +394,23 @@ export function TunnelEditor(props: {
                           />
                         </label>
                         <label className="check">
-                          <input type="checkbox" aria-label={`${label} ${t("fields.savePassword")}`} checked={hop.savePassword} onChange={(e) => updateHop(i, { savePassword: e.target.checked })} />
+                          <input
+                            type="checkbox"
+                            aria-label={`${label} ${t("fields.savePassword")}`}
+                            checked={hop.savePassword}
+                            disabled={keychain === false && !hop.savePassword}
+                            onChange={(e) => updateHop(i, { savePassword: e.target.checked })}
+                          />
                           {t("fields.savePassword")}
                         </label>
+                        {keychain === false && <p className="muted small">{t("auth.noKeychainHint")}</p>}
                       </>
                     ))}
                   <p className="muted small">{t(`tunnel.methodHints.${hop.method}`)}</p>
                 </fieldset>
               );
             })}
-            <button type="button" className="add-hop" onClick={() => setHops((list) => [...list, emptyHop()])}>
+            <button type="button" className="add-hop" onClick={() => setHops((list) => [...list, emptyHop(keychain !== false)])}>
               {t("tunnel.addHop")}
             </button>
 
@@ -449,10 +465,17 @@ export function TunnelEditor(props: {
                   </div>
                   {proxy.user.trim() && !proxy.fixedMode && (
                     <label className="check">
-                      <input type="checkbox" aria-label={t("tunnel.proxySavePassword")} checked={proxy.savePassword} onChange={(e) => updateProxy({ savePassword: e.target.checked })} />
+                      <input
+                        type="checkbox"
+                        aria-label={t("tunnel.proxySavePassword")}
+                        checked={proxy.savePassword}
+                        disabled={keychain === false && !proxy.savePassword}
+                        onChange={(e) => updateProxy({ savePassword: e.target.checked })}
+                      />
                       {t("tunnel.proxySavePassword")}
                     </label>
                   )}
+                  {proxy.user.trim() && !proxy.fixedMode && keychain === false && <p className="muted small">{t("auth.noKeychainHint")}</p>}
                   <p className="muted small">{hops.length === 0 ? t("tunnel.proxyAloneHint") : t("tunnel.proxyHint")}</p>
                 </>
               )}
