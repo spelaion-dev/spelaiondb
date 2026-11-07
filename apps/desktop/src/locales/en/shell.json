@@ -267,6 +267,7 @@
     "run": "Run"
   },
   "savedQueries": "Saved queries",
+  "mcpServer": "MCP server",
   "change": {
     "title": "This changed since you trusted the repository",
     "newTitle": "New in the repository",

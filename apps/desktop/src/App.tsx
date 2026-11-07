@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ActivityBar } from "./components/ActivityBar";
+import { McpPage } from "./components/McpPage";
 import { AddConnection } from "./components/AddConnection";
 import { DeleteConnection } from "./components/DeleteConnection";
 import { Dialogs } from "./components/Dialogs";
@@ -52,11 +53,16 @@ export default function App() {
   const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
-  const [sidebarSection, setSidebarSection] = useState<"connections" | "processes" | null>("connections");
+  const [sidebarSection, setSidebarSection] = useState<"connections" | "processes" | "mcp" | null>("connections");
   const [processConnection, setProcessConnection] = useState<string | null>(null);
   const connections = useApp((s) => s.connections);
   const workspaceChanging = useApp((s) => s.workspaceChanging);
-  const sidebarOpen = sidebarSection !== null;
+  // The MCP server page fills the window: it has no sidebar.
+  const sidebarOpen = sidebarSection !== null && sidebarSection !== "mcp";
+  // Opening or switching a query tab (from history, a shortcut…) leaves the MCP page.
+  useEffect(() => {
+    setSidebarSection((section) => (section === "mcp" ? "connections" : section));
+  }, [activeTab, tabs.length]);
   const selectedProcessConnection = connections.find((connection) => connection.id === processConnection);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
@@ -168,7 +174,7 @@ export default function App() {
 
   return (
     <div className="app" style={{ gridTemplateColumns: `${ACTIVITY_WIDTH}px ${sidebarOpen ? shownSidebarWidth : 0}px 0px minmax(0, 1fr)` }}>
-      <ActivityBar connectionsOpen={sidebarSection === "connections"} processesOpen={sidebarSection === "processes"} onToggleConnections={() => setSidebarSection((section) => section === "connections" ? null : "connections")} onToggleProcesses={() => setSidebarSection((section) => section === "processes" ? null : "processes")} />
+      <ActivityBar connectionsOpen={sidebarSection === "connections"} processesOpen={sidebarSection === "processes"} mcpOpen={sidebarSection === "mcp"} onToggleConnections={() => setSidebarSection((section) => section === "connections" ? null : "connections")} onToggleProcesses={() => setSidebarSection((section) => section === "processes" ? null : "processes")} onToggleMcp={() => setSidebarSection((section) => section === "mcp" ? "connections" : "mcp")} />
       <Sidebar hidden={sidebarSection !== "connections"} />
       {sidebarSection === "processes" && <ProcessSidebar selected={processConnection} onSelect={setProcessConnection} />}
       <div
@@ -213,7 +219,7 @@ export default function App() {
         {loadError && <div className="banner" role="alert">{loadError}<button onClick={() => void loadConnections()}>{t("retryConnections")}</button></div>}
         {preferenceError && <div className="banner" role="alert">{t("preferenceLoadError")} {preferenceError.detail}</div>}
         <UpdateNotice />
-        <div className="tab-strip" hidden={sidebarSection === "processes"}>
+        <div className="tab-strip" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
         <div className="tabbar" role="tablist">
           {tabs.map((tab, index) => (
             <div
@@ -262,7 +268,7 @@ export default function App() {
         <button className="new-tab" type="button" onClick={() => addTab(null)} title={t("newQueryShortcut")} aria-label={t("newQueryShortcut")}>+</button>
         </div>
         <div className="workspace-content">
-          <div className="editor-workspace" hidden={sidebarSection === "processes"}>
+          <div className="editor-workspace" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
             {tabs.length === 0 ? (
               <div className="welcome">
                 <h1>SpelaionDB</h1>
@@ -283,6 +289,7 @@ export default function App() {
           {sidebarSection === "processes" && (selectedProcessConnection
             ? <ProcessMonitor key={selectedProcessConnection.id} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} />
             : <div className="process-welcome"><h2>{t("shell:processMonitor.title")}</h2><p>{t("shell:processMonitor.choose")}</p></div>)}
+          {sidebarSection === "mcp" && <McpPage />}
           {historyOpen && <HistoryPanel />}
           {snippetsOpen && <SnippetsPanel />}
         </div>

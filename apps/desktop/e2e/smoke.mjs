@@ -13,7 +13,7 @@ import { createServer } from "node:net";
 import { createCipheriv } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -22,6 +22,10 @@ const demo = join(root, "examples/demo");
 const shots = resolve(process.argv[2] ?? join(import.meta.dirname, "screenshots"));
 const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
 const port = 9333;
+// The MCP page's AI clients: their files under this folder, and a stand-in for the CLI.
+const clientsHome = join(userDir, "ai-clients");
+const fakeCli = join(userDir, process.platform === "win32" ? "spelaiondb.exe" : "spelaiondb");
+writeFileSync(fakeCli, "");
 const editSmokeComplete = Symbol("edit smoke complete");
 mkdirSync(shots, { recursive: true });
 
@@ -49,6 +53,9 @@ function startApp() {
       KUBECONFIG: process.env.SPELAION_TEST_K8S ?? join(userDir, "no-kubeconfig"),
       // No request to GitHub for updates: the run must not depend on the network (ADR-021).
       SPELAION_NO_UPDATES: "1",
+      // The MCP page never reads or writes the user's AI clients' files (ADR-033).
+      SPELAION_MCP_CLIENTS_HOME: clientsHome,
+      SPELAION_CLI: fakeCli,
     },
     stdio: "inherit",
   });
@@ -235,7 +242,7 @@ try {
   step("connections sidebar: drag, keyboard resizing, limits and reset");
   const sidebar = page.locator(".sidebar");
   const activities = page.getByRole("navigation", { name: "Activity bar" });
-  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Query history", "Saved queries", "Settings"]);
+  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Query history", "Saved queries", "MCP server", "Settings"]);
   for (const button of await activities.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   const connectionsActivity = activities.getByRole("button", { name: "Connections" });
   assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "true");
@@ -3683,6 +3690,93 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await variables.waitFor({ state: "detached" });
   await varsPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
   assert.match(readFileSync(join(userDir, "user.toml"), "utf8"), /demo_db = ".*shop\.db"/);
+
+  step("MCP server page: a client is set up only after its change is shown, with a backup");
+  // Every client file lives under this run's own folder (SPELAION_MCP_CLIENTS_HOME), and the
+  // command written is a stand-in (SPELAION_CLI): the user's real files are never touched.
+  const desktopFile = join(clientsHome, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
+  if (process.platform === "win32") {
+    mkdirSync(dirname(desktopFile), { recursive: true });
+    writeFileSync(desktopFile, '{\n  "globalShortcut": "",\n  "mcpServers": {\n    "other": { "command": "other-server" }\n  }\n}\n');
+  }
+  await page.getByRole("button", { name: "MCP server", exact: true }).click();
+  const mcp = page.locator(".mcp-page");
+  await mcp.getByRole("heading", { name: "MCP server", level: 1 }).waitFor();
+  await mcp.getByRole("tab", { name: "Configuration", selected: true }).waitFor();
+  await mcp.locator(".mcp-cli code", { hasText: fakeCli }).waitFor();
+  const clientCards = mcp.getByRole("list", { name: "AI clients" }).getByRole("group");
+  await clientCards.first().waitFor();
+  assert.equal(await clientCards.count(), 6);
+  for (const path of await mcp.locator(".mcp-client-path").allTextContents()) {
+    assert.ok(path.startsWith(clientsHome), `${path} is outside the run's folder`);
+  }
+  await shot("mcp-configuration");
+  if (process.platform === "win32") {
+    const desktop = clientCards.filter({ hasText: "Claude Desktop" });
+    await desktop.locator(".mcp-state", { hasText: "Not set up" }).waitFor();
+    await desktop.getByRole("button", { name: "Install configuration" }).click();
+    const install = page.getByRole("dialog", { name: "Set up Claude Desktop" });
+    await install.getByText("Only SpelaionDB's entry changes in:").waitFor();
+    await install.locator(".diff-added", { hasText: '"spelaiondb": {' }).waitFor();
+    assert.equal(await install.locator(".diff-removed", { hasText: "globalShortcut" }).count(), 0);
+    await shot("mcp-install-diff");
+    // Cancel writes nothing.
+    await install.getByRole("button", { name: "Cancel" }).click();
+    await install.waitFor({ state: "detached" });
+    assert.ok(!readFileSync(desktopFile, "utf8").includes("spelaiondb"));
+    await desktop.getByRole("button", { name: "Install configuration" }).click();
+    await install.getByRole("button", { name: "Write the file" }).click();
+    await install.waitFor({ state: "detached" });
+    await mcp.getByRole("status").filter({ hasText: "Claude Desktop is set up" }).waitFor();
+    await desktop.locator(".mcp-state", { hasText: /^Set up$/ }).waitFor();
+    assert.equal(await desktop.getByRole("button", { name: "Install configuration" }).isDisabled(), true);
+    const written = JSON.parse(readFileSync(desktopFile, "utf8"));
+    assert.equal(written.mcpServers.spelaiondb.command, fakeCli);
+    assert.deepEqual(written.mcpServers.spelaiondb.args, ["mcp"]);
+    assert.equal(written.mcpServers.other.command, "other-server");
+    assert.equal(written.globalShortcut, "");
+    assert.ok(
+      readdirSync(dirname(desktopFile)).some((name) => name.startsWith("claude_desktop_config.json.spelaion-backup-")),
+      "a backup of the previous file is kept",
+    );
+  }
+  // A client without a file: it is created with only our server.
+  const cursor = clientCards.filter({ hasText: "Cursor" });
+  await cursor.getByRole("button", { name: "Install configuration" }).click();
+  const cursorInstall = page.getByRole("dialog", { name: "Set up Cursor" });
+  await cursorInstall.getByText("This file will be created:").waitFor();
+  await cursorInstall.getByRole("button", { name: "Write the file" }).click();
+  await cursorInstall.waitFor({ state: "detached" });
+  await cursor.locator(".mcp-state", { hasText: /^Set up$/ }).waitFor();
+  assert.deepEqual(JSON.parse(readFileSync(join(clientsHome, ".cursor", "mcp.json"), "utf8")), {
+    mcpServers: { spelaiondb: { command: fakeCli, args: ["mcp"] } },
+  });
+  // The manual configuration of the selected client, and Claude Code's command.
+  await clientCards.filter({ hasText: "Codex" }).getByRole("button", { name: "Codex", exact: true }).click();
+  await mcp.getByRole("complementary", { name: "Manual configuration for Codex" }).getByText("[mcp_servers.spelaiondb]").waitFor();
+  await clientCards.filter({ hasText: "Claude Code" }).getByRole("button", { name: "Claude Code", exact: true }).click();
+  await mcp.getByLabel("claude mcp add command").getByText("claude mcp add --scope user spelaiondb --", { exact: false }).waitFor();
+  assert.ok(!existsSync(join(clientsHome, ".claude.json")), "nothing is written without a click");
+
+  step("MCP server page, Security: default tool output and read-only mode for every agent");
+  await mcp.getByRole("tab", { name: "Security" }).click();
+  const shopAccess = mcp.locator('tr[data-connection="shop"]');
+  await shopAccess.getByText("The connection does not let agents write.").waitFor();
+  await mcp.getByRole("radio", { name: /TOON/ }).check();
+  await mcp.getByRole("switch", { name: "Every agent is read-only" }).check();
+  await shopAccess.getByText("Read-only mode is on.").waitFor();
+  await shot("mcp-security");
+  // Both are kept: leave the page and come back.
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await mcp.waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "MCP server", exact: true }).click();
+  await mcp.getByRole("tab", { name: "Security" }).click();
+  await mcp.getByRole("switch", { name: "Every agent is read-only" }).and(page.locator(":checked")).waitFor();
+  await mcp.getByRole("radio", { name: /TOON/ }).and(page.locator(":checked")).waitFor();
+  await mcp.getByRole("switch", { name: "Every agent is read-only" }).uncheck();
+  await shopAccess.getByText("The connection does not let agents write.").waitFor();
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await mcp.waitFor({ state: "detached" });
 
   step("quitting with a transaction open asks first: Cancel keeps the app, the dialog quits");
   const quitPanel = await newQuery("Shop (SQLite)", "create temp table quit_tx (x);");

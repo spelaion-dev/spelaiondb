@@ -3,6 +3,7 @@
 
 mod dto;
 mod interaction;
+mod mcp;
 mod update;
 
 use std::collections::HashMap;
@@ -3492,6 +3493,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![
             workspace_info,
+            mcp::mcp_clients,
+            mcp::mcp_plan_install,
+            mcp::mcp_apply_install,
+            mcp::mcp_settings,
+            mcp::set_mcp_read_only,
+            mcp::set_mcp_output_format,
+            mcp::mcp_access,
             get_language,
             set_language,
             get_theme,

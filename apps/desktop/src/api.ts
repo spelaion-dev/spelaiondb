@@ -71,6 +71,12 @@ import {
   type ConnectionTestOutcome_Serialize,
   type TestReportItem,
   type TestStepItem,
+  type McpAccessItem_Serialize,
+  type McpClientItem_Serialize,
+  type McpClientsItem_Serialize,
+  type McpInstallPlanItem,
+  type McpSettingsItem,
+  type ToolOutputItem,
 } from "./bindings";
 
 export { commands, events };
@@ -110,6 +116,10 @@ export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
 export type IndexDetails = TableDetails["indexes"][number];
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
+export type McpAccessItem = McpAccessItem_Serialize;
+export type McpClientItem = McpClientItem_Serialize;
+export type McpClientsItem = McpClientsItem_Serialize;
+export type { McpInstallPlanItem, McpSettingsItem, ToolOutputItem };
 export type UpdateStatus = UpdateStatus_Serialize;
 /** What `connect` returns. */
 export type ConnectResult = ConnectOutcome_Serialize;

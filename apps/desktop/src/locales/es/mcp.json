@@ -1,0 +1,92 @@
+{
+  "title": "Servidor MCP",
+  "intro": "MCP (Model Context Protocol) permite a asistentes de IA como Claude, Codex o Cursor usar herramientas. El servidor de SpelaionDB, spelaiondb mcp, les da las conexiones que expones a los agentes: pueden listar y describir objetos y lanzar consultas de solo lectura, y solo escriben en las conexiones que lo permiten. Cada llamada queda registrada en este equipo.",
+  "sections": "Secciones del servidor MCP",
+  "tabs": {
+    "configuration": "Configuración",
+    "security": "Seguridad"
+  },
+  "config": {
+    "clients": "Clientes de IA",
+    "noCli": "No se ha encontrado el comando spelaiondb junto a la aplicación ni en el PATH, así que no se puede configurar ningún cliente desde aquí. Instala SpelaionDB con su instalador, o la línea de comandos spelaiondb, y vuelve.",
+    "cli": {
+      "bundled": "Los clientes ejecutarán el comando que viene con la aplicación:",
+      "path": "Los clientes ejecutarán el comando encontrado en el PATH:",
+      "override": "Los clientes ejecutarán el comando indicado por SPELAION_CLI:"
+    },
+    "state": {
+      "noFile": "Sin configurar",
+      "notInstalled": "Sin configurar",
+      "installed": "Configurado",
+      "different": "Configurado con otro comando",
+      "unreadable": "No se puede leer el archivo"
+    },
+    "install": "Instalar configuración",
+    "update": "Actualizar configuración",
+    "manualFor": "Configuración manual para {{client}}",
+    "manualJson": "Para configurarlo a mano, añade esto a {{path}}, dentro de su mcpServers si ya tiene uno.",
+    "manualToml": "Para configurarlo a mano, añade esta tabla a {{path}}.",
+    "manualConfig": "Configuración manual",
+    "orCommand": "O ejecuta esto en un terminal:",
+    "addCommand": "Comando claude mcp add",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "copyConfig": "Copiar la configuración",
+    "copyCommand": "Copiar el comando"
+  },
+  "install": {
+    "title": "Configurar {{client}}",
+    "creates": "Se creará este archivo:",
+    "changes": "Solo cambia la entrada de SpelaionDB en:",
+    "backup": "Antes de escribirlo se guarda una copia del archivo actual a su lado.",
+    "diff": "Cambio en el archivo",
+    "gap_one": "… {{count}} línea sin cambios",
+    "gap_other": "… {{count}} líneas sin cambios",
+    "restart": "Reinicia {{client}} para que cargue las herramientas de SpelaionDB.",
+    "cancel": "Cancelar",
+    "write": "Escribir el archivo",
+    "done": "{{client}} está configurado. Reinícialo para que cargue las herramientas de SpelaionDB.",
+    "doneBackup": "{{client}} está configurado; el archivo anterior se ha guardado como {{backup}}. Reinícialo para que cargue las herramientas de SpelaionDB."
+  },
+  "security": {
+    "output": {
+      "title": "Salida de las herramientas",
+      "intro": "Cómo llegan los resultados de las consultas al agente cuando una llamada no pide un formato.",
+      "json": "JSON",
+      "jsonHint": "Columnas y filas como arrays; lo lee cualquier cliente.",
+      "toon": "TOON",
+      "toonHint": "Compacto: los nombres de columna una vez y una línea por fila. Menos tokens con resultados grandes."
+    },
+    "readOnly": {
+      "title": "Modo solo lectura",
+      "switch": "Todos los agentes son de solo lectura",
+      "hint": "Activado, los agentes solo pueden leer, en todas las conexiones, permita lo que permita cada una, incluidas las del proyecto y Producción. Se aplica al instante, también a los clientes ya abiertos. Desactivado, decide cada conexión."
+    },
+    "access": {
+      "title": "Qué pueden hacer los agentes en cada conexión",
+      "connection": "Conexión",
+      "agents": "Los agentes pueden",
+      "type": "Tipo y sus salvaguardas en la aplicación",
+      "none": "Todavía no hay conexiones.",
+      "readOnly": "Solo leer",
+      "readWrite": "Leer y escribir",
+      "notExposed": "Nada: no está expuesta a los agentes",
+      "untrusted": "Nada: el proyecto no es de confianza",
+      "because": {
+        "allAgents": "El modo solo lectura está activado.",
+        "connection": "La conexión es de solo lectura.",
+        "writesDenied": "La conexión no deja escribir a los agentes.",
+        "confirmUnsupported": "La conexión pide confirmar cada escritura, y eso aún no está disponible."
+      },
+      "change": "Para cambiar lo que pueden hacer los agentes en una conexión, edítala: «Exponer a agentes de IA» y «Los agentes pueden». Esta página solo puede hacer a los agentes más estrictos."
+    },
+    "safeguards": {
+      "confirmExecution": "pregunta antes de ejecutar SQL",
+      "confirmDataChanges": "pregunta antes de cambiar datos",
+      "manualCommit": "auto-commit desactivado",
+      "smartCommit": "smart commit",
+      "closeIdle": "se cierra tras {{minutes}} min inactiva",
+      "none": "sin salvaguardas"
+    }
+  }
+}
