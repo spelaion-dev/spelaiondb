@@ -355,6 +355,10 @@ try {
       window.__copied.push(text);
       return Promise.resolve();
     };
+    // HTML copies go through write(): what is kept is the HTML.
+    navigator.clipboard.write = async (items) => {
+      window.__copied.push(await (await items[0].getType("text/html")).text());
+    };
   });
   const copied = async (count) => {
     await page.waitForFunction((n) => window.__copied.length === n, count);
@@ -379,6 +383,28 @@ try {
       }
       return count;
     }, [x0, y0, x1, y1]);
+  // The longest time between two painted frames while `action` runs: the UI must not freeze.
+  async function longestFrameGap(action) {
+    await page.evaluate(() => {
+      window.__gaps = [];
+      window.__gapsOn = true;
+      let last = performance.now();
+      const tick = (now) => {
+        window.__gaps.push(now - last);
+        last = now;
+        if (window.__gapsOn) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    const started = Date.now();
+    await action();
+    const elapsed = Date.now() - started;
+    const gap = await page.evaluate(() => {
+      window.__gapsOn = false;
+      return Math.round(Math.max(0, ...window.__gaps));
+    });
+    return { elapsed, gap };
+  }
   async function setGridLook(look) {
     await withSettings("appearance", async (settings) => {
       for (const [name, on] of Object.entries(look)) {
@@ -810,6 +836,94 @@ try {
   await setGridLook({ zebra: false });
   assert.equal(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "no tint without zebra rows");
   await setGridLook({ zebra: true });
+
+  step("find: Ctrl+F searches the 50,000 rows in the core, Enter and F3 step through the matches");
+  await sortGrid.evaluate((el) => {
+    el.scrollTop = 0;
+    el.scrollLeft = 0;
+  });
+  await topLeftCell();
+  await page.keyboard.press("Control+f");
+  const findBar = panel.getByRole("search", { name: "Find in results" });
+  const findStatus = findBar.getByRole("status");
+  // 4999, 14999, 24999, 34999, 44999 and 49990–49999: only ids hold it.
+  await findBar.getByRole("searchbox").fill("4999");
+  await findStatus.getByText("1 of 15", { exact: true }).waitFor();
+  await page.keyboard.press("Enter");
+  await findStatus.getByText("2 of 15", { exact: true }).waitFor();
+  await sortGrid.focus();
+  {
+    // The active cell follows the match.
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Control+c");
+    assert.equal((await copied(before + 1)).trimEnd(), "14999");
+  }
+  await page.keyboard.press("F3");
+  await findStatus.getByText("3 of 15", { exact: true }).waitFor();
+  await page.keyboard.press("Shift+F3");
+  await page.keyboard.press("Shift+F3");
+  await page.keyboard.press("Shift+F3");
+  // Before the first comes the last.
+  await findStatus.getByText("15 of 15", { exact: true }).waitFor();
+  await shot("04b5-grid-find");
+  // Hidden columns are not searched.
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 18, { button: "right" });
+  await headerMenu.getByRole("menuitem", { name: "Hide id" }).click();
+  await findStatus.getByText("No results", { exact: true }).waitFor();
+  await hiddenButton.click();
+  await chooser.getByRole("button", { name: "Show all" }).click();
+  await page.keyboard.press("Escape");
+  await findStatus.getByText(/^\d+ of 15$/).waitFor();
+  await findBar.getByRole("searchbox").focus();
+  await page.keyboard.press("Escape");
+  await findBar.waitFor({ state: "detached" });
+
+  step("copy: an HTML table, column names quoted, and every value of a column as an IN list");
+  // The search scrolled to its last match: back to the first rows.
+  await sortGrid.evaluate((el) => {
+    el.scrollTop = 0;
+    el.scrollLeft = 0;
+  });
+  await page.waitForTimeout(100);
+  await topLeftCell();
+  await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13, { button: "right" });
+  const cellMenu = panel.locator(".result-grid-menu");
+  {
+    const before = await page.evaluate(() => window.__copied.length);
+    await cellMenu.getByRole("menuitem", { name: "Copy ▸" }).hover();
+    await panel.getByRole("menuitem", { name: "Copy as HTML table" }).click();
+    const html = await copied(before + 1);
+    assert.ok(html.startsWith("<table>\n  <thead>\n    <tr><th>id</th><th>customer_id</th></tr>"), html);
+    assert.match(html, /<tr><td>1<\/td><td>\d+<\/td><\/tr>\n    <tr><td>2<\/td>/);
+  }
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13, { button: "right" });
+  {
+    const before = await page.evaluate(() => window.__copied.length);
+    await cellMenu.getByRole("menuitem", { name: "Copy column names ▸" }).hover();
+    await panel.getByRole("menuitem", { name: "Quoted for this database" }).click();
+    assert.equal(await copied(before + 1), '"id", "customer_id"');
+  }
+  await page.mouse.click(sortBox.x + CUSTOMER_X, sortBox.y + 18, { button: "right" });
+  {
+    const before = await page.evaluate(() => window.__copied.length);
+    await headerMenu.getByRole("menuitem", { name: "Copy all values as SQL IN list" }).click();
+    const list = await copied(before + 1);
+    assert.match(list, /^\(\d+(, \d+)*\)$/);
+    const values = list.slice(1, -1).split(", ");
+    assert.equal(new Set(values).size, values.length, "each customer once");
+    assert.ok(values.length > 100 && values.length <= 500, `${values.length} customers`);
+  }
+
+  step("filter by this value: contains, from the cell menu, on the loaded rows");
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13, { button: "right" });
+  await cellMenu.getByRole("menuitem", { name: "Filter ▸" }).hover();
+  await panel.getByRole("menuitem", { name: "id contains '1'" }).click();
+  await panel.locator(".filter-chip", { hasText: "id contains '1'" }).waitFor();
+  await panel.locator(".statusline", { hasText: /^[\d,]+ of 50,000 rows/ }).waitFor();
+  await panel.getByRole("button", { name: "Reset filters" }).click();
+  await panel.locator(".statusline", { hasText: /^50,000 rows/ }).waitFor();
 
   step("filter: the core keeps the rows with the text, sorting and copy follow");
   const filterBox = panel.getByRole("searchbox", { name: "Filter rows" });
@@ -1658,6 +1772,37 @@ try {
     }
     assert.equal(firstId, "50000");
   }
+  // "Filter by this value" goes to the table's WHERE, written by the core.
+  {
+    const grid = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.click(grid.x + 52 + 20, grid.y + 36 + 13, { button: "right" });
+    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await panel.getByText("Added to the table's WHERE").waitFor();
+    await panel.getByRole("menuitem", { name: "id = 50000", exact: true }).click();
+    await range.filter({ hasText: "rows 1–1" }).waitFor();
+    assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), "id = 50000");
+    let box = null;
+    for (let i = 0; i < 40 && !box; i++) {
+      box = await panel.locator(".grid-scroller").boundingBox();
+      if (!box) await page.waitForTimeout(100);
+    }
+    const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+    const createdX = box.x + 52 + widths[0] + widths[1] + 20;
+    await page.mouse.click(createdX, box.y + 36 + 13, { button: "right" });
+    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await panel.getByRole("menuitem", { name: /^created contains '/ }).click();
+    await page.waitForFunction(() => document.querySelector('input[aria-label="WHERE"]')?.value.includes(" AND "));
+    assert.match(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), /^id = 50000 AND created LIKE '%\d{4}-\d{2}-\d{2}%' ESCAPE '!'$/);
+    await range.filter({ hasText: "rows 1–1" }).waitFor();
+    await shot("05i2-table-filter-by-value");
+    // Names qualified with the table, written like the explorer's.
+    box = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.click(box.x + 52 + 20, box.y + 18, { button: "right" });
+    const before = await page.evaluate(() => window.__copied.length);
+    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Copy column names ▸" }).hover();
+    await panel.getByRole("menuitem", { name: "Qualified with the table" }).click();
+    assert.equal(await copied(before + 1), "orders.id");
+  }
   // What is typed cannot turn the page into another statement.
   await panel.getByRole("textbox", { name: "WHERE" }).fill("1=1); drop table orders; select (1");
   await page.keyboard.press("Enter");
@@ -2415,6 +2560,97 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.equal(await nullInk(), 0, "NULL drawn empty");
     await shot("12a4-grid-checkboxes");
     await setGridLook({ boolCheckboxes: false, nullText: true });
+    await page.keyboard.press("Control+w");
+  }
+
+  step("a million rows: select, find, sort, filter by value and copy a column, the UI painting all along");
+  {
+    const big = await newQuery(
+      "analytics",
+      "select range as id, 'item ' || range as name, range * 1.5 as price, range % 7 = 0 as lucky from range(1000000) limit 1000000;",
+    );
+    const timings = {};
+    let measured = await longestFrameGap(async () => {
+      await run(big);
+      await big.locator(".statusline", { hasText: "1,000,000 rows" }).waitFor({ timeout: 120_000 });
+    });
+    timings.load = measured;
+    const grid = big.locator(".grid-scroller");
+    const box = await grid.boundingBox();
+    const rowNum = 9 * 8 + 16; // "1,000,000" in the row-number gutter
+    const widths = async () => (await grid.getAttribute("data-column-widths")).split(",").map(Number);
+    const status = big.locator(".grid-selection");
+    // Scrolling to the middle and the end.
+    timings.scroll = await longestFrameGap(async () => {
+      for (const at of [0.5, 1]) {
+        await grid.evaluate((el, f) => (el.scrollTop = (el.scrollHeight - el.clientHeight) * f), at);
+        await page.waitForTimeout(300);
+      }
+      await grid.evaluate((el) => (el.scrollTop = 0));
+      await page.waitForTimeout(200);
+    });
+    await page.mouse.click(box.x + rowNum + 20, box.y + 36 + 13);
+    timings.selectAll = await longestFrameGap(async () => {
+      await page.keyboard.press("Control+a");
+      await status.getByText("All 1,000,000 rows selected", { exact: true }).waitFor();
+      await page.keyboard.press("Control+End");
+      await status.getByText("1 cell selected", { exact: true }).waitFor();
+      await page.keyboard.press("Control+Shift+Home");
+      await status.getByText("All 1,000,000 rows selected", { exact: true }).waitFor();
+    });
+    await page.mouse.click(box.x + rowNum + 20, box.y + 36 + 13);
+    // Find: the core reads every cell of the million rows.
+    await page.keyboard.press("Control+f");
+    const bar = big.getByRole("search", { name: "Find in results" });
+    timings.find = await longestFrameGap(async () => {
+      await bar.getByRole("searchbox").fill("item 99999");
+      // Only names hold "item": 99999 and 999990–999999.
+      await bar.getByRole("status").getByText("1 of 11", { exact: true }).waitFor({ timeout: 60_000 });
+    });
+    await bar.getByRole("searchbox").focus();
+    await page.keyboard.press("Escape");
+    await grid.evaluate((el) => (el.scrollTop = 0));
+    // Sort in the core by a header click, then back.
+    const [idW, nameW] = await widths();
+    timings.sort = await longestFrameGap(async () => {
+      await page.mouse.click(box.x + rowNum + idW + nameW + 20, box.y + 18);
+      await big.locator('.grid-scroller[aria-label="Result with 1,000,000 rows, sorted by price, ascending"]').waitFor({ timeout: 60_000 });
+      await page.mouse.click(box.x + rowNum + idW + nameW + 20, box.y + 18);
+      await big.locator('.grid-scroller[aria-label="Result with 1,000,000 rows, sorted by price, descending"]').waitFor({ timeout: 60_000 });
+      await page.mouse.click(box.x + rowNum + idW + nameW + 20, box.y + 18);
+      await big.locator('.grid-scroller[aria-label="Result with 1,000,000 rows"]').waitFor({ timeout: 60_000 });
+    });
+    // Filter by this value: name contains "item 12345" (12345 and 123450–123459).
+    timings.filter = await longestFrameGap(async () => {
+      await grid.evaluate((el) => (el.scrollTop = 26 * 12_345));
+      await page.waitForTimeout(300);
+      // The row at the top is 12345 (rows are 26 px high).
+      await page.mouse.click(box.x + rowNum + idW + 20, box.y + 36 + 13, { button: "right" });
+      await big.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+      await big.getByRole("menuitem", { name: "name contains 'item 12345'" }).click();
+      await big.locator(".statusline", { hasText: "11 of 1,000,000 rows" }).waitFor({ timeout: 60_000 });
+    });
+    await big.getByRole("button", { name: "Reset filters" }).click();
+    await big.locator(".statusline", { hasText: /^1,000,000 rows/ }).waitFor({ timeout: 60_000 });
+    // Every value of a column as an IN list: two for "lucky", too many for "id".
+    const luckyX = box.x + rowNum + (await widths()).slice(0, 3).reduce((a, b) => a + b, 0) + 20;
+    timings.inList = await longestFrameGap(async () => {
+      const before = await page.evaluate(() => window.__copied.length);
+      await page.mouse.click(luckyX, box.y + 18, { button: "right" });
+      await big.locator(".result-grid-menu").getByRole("menuitem", { name: "Copy all values as SQL IN list" }).click();
+      assert.equal(await copied(before + 1), "(TRUE, FALSE)");
+    });
+    await page.mouse.click(box.x + rowNum + 20, box.y + 18, { button: "right" });
+    await big.locator(".result-grid-menu").getByRole("menuitem", { name: "Copy all values as SQL IN list" }).click();
+    await big.locator(".grid-notice.error", { hasText: "more than 10000 different values" }).waitFor();
+    await shot("12a5-grid-million");
+    const report = Object.entries(timings).map(([name, t]) => `${name} ${t.elapsed} ms (longest frame gap ${t.gap} ms)`).join(", ");
+    console.log(`  1M rows: ${report}`);
+    writeFileSync(join(shots, "million-rows.json"), JSON.stringify(timings, null, 2));
+    for (const [name, t] of Object.entries(timings)) {
+      // The query itself streams a million rows in: only the rest must keep painting.
+      if (name !== "load") assert.ok(t.gap < 1000, `${name}: the UI froze for ${t.gap} ms`);
+    }
     await page.keyboard.press("Control+w");
   }
   // A second tab on the same file (DuckDB opens a file once per process: they share it).

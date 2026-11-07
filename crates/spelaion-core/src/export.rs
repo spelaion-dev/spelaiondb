@@ -2,6 +2,7 @@
 //! result to a file. The rows come from the result store (ADR-010), so typed data is used:
 //! numbers stay numbers in JSON, NULL is `NULL` in SQL and literals follow the engine.
 
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::ops::Range;
 
@@ -26,6 +27,9 @@ pub enum ExportFormat {
     /// The values as an SQL list for `IN`: `(1, 'a')`, or `((1, 'a'), (2, 'b'))` with several
     /// columns; duplicates kept once, in order.
     InList,
+    /// An HTML table (header row and one row per result row), for pasting into documents and
+    /// spreadsheets. NULL is an empty cell.
+    Html,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +95,13 @@ pub fn write_result(
             write_line(out, &options.format, &fields)?;
         }
         ExportFormat::Json => out.write_all(b"[")?,
+        ExportFormat::Html => {
+            out.write_all(b"<table>\n  <thead>\n    <tr>")?;
+            for name in &names {
+                write!(out, "<th>{}</th>", html_text(name))?;
+            }
+            out.write_all(b"</tr>\n  </thead>\n  <tbody>\n")?;
+        }
         ExportFormat::Markdown => {
             let cells: Vec<String> = names.iter().map(|n| markdown_cell(n)).collect();
             writeln!(out, "| {} |", cells.join(" | "))?;
@@ -121,6 +132,7 @@ pub fn write_result(
     };
 
     let mut items: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut written = 0usize;
     let mut start = rows.start;
     while start < rows.end {
@@ -195,9 +207,17 @@ pub fn write_result(
                         } else {
                             format!("({})", literals.join(", "))
                         };
-                        if !items.contains(&item) {
+                        if seen.insert(item.clone()) {
                             items.push(item);
                         }
+                    }
+                    ExportFormat::Html => {
+                        out.write_all(b"    <tr>")?;
+                        for value in &values {
+                            let cell = text(value).map(|t| html_text(&t)).unwrap_or_default();
+                            write!(out, "<td>{cell}</td>")?;
+                        }
+                        out.write_all(b"</tr>\n")?;
                     }
                     ExportFormat::Markdown => {
                         let cells: Vec<String> = values
@@ -217,6 +237,9 @@ pub fn write_result(
     }
     if options.format == ExportFormat::InList {
         write!(out, "({})", items.join(", "))?;
+    }
+    if options.format == ExportFormat::Html {
+        out.write_all(b"  </tbody>\n</table>\n")?;
     }
     if matches!(options.format, ExportFormat::SqlInsertBatch { .. }) && written > 0 {
         out.write_all(b";\n")?;
@@ -255,6 +278,121 @@ pub fn export_to_file(
             Err(e)
         }
     }
+}
+
+/// How [`column_names`] writes the names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameStyle {
+    /// `id, name`.
+    Plain,
+    /// Always quoted, the engine's way: `"id", "name"` (`` `id` `` in MySQL and MariaDB,
+    /// `[id]` in SQL Server).
+    Quoted,
+    /// With the table they come from, quoted: `"public"."users"."id"`.
+    Qualified,
+    /// One plain name per line.
+    List,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum CopyError {
+    #[error("qualified names need the table the columns come from (open the table's data)")]
+    NoTable,
+    #[error("the result has no column {0}")]
+    NoSuchColumn(usize),
+    #[error(
+        "the column holds more than {MAX_IN_LIST:} different values: too many for an IN list (filter the rows first)"
+    )]
+    TooManyValues,
+}
+
+/// Most different values [`column_in_list`] writes: a longer `IN` list is better done as a
+/// join, and some engines refuse it.
+pub const MAX_IN_LIST: usize = 10_000;
+
+/// The names of `columns` (by position, in this order) for the clipboard. `table` is the
+/// schema and name of the table they come from, for [`NameStyle::Qualified`]; qualified names
+/// are written like the explorer's (ADR-026).
+pub fn column_names(
+    result: &StoredResult,
+    columns: &[usize],
+    style: NameStyle,
+    dialect: &dyn Dialect,
+    table: Option<(&str, &str)>,
+) -> Result<String, CopyError> {
+    let metas = &result.schema().columns;
+    let mut names = Vec::with_capacity(columns.len());
+    for &column in columns {
+        let name = &metas
+            .get(column)
+            .ok_or(CopyError::NoSuchColumn(column))?
+            .name;
+        names.push(match style {
+            NameStyle::Plain | NameStyle::List => name.clone(),
+            NameStyle::Quoted => always_quoted(dialect, name),
+            NameStyle::Qualified => {
+                let (schema, table) = table.ok_or(CopyError::NoTable)?;
+                crate::objects::qualified_name(dialect, schema, &[table.to_string(), name.clone()])
+            }
+        });
+    }
+    Ok(names.join(if style == NameStyle::List { "\n" } else { ", " }))
+}
+
+/// An identifier quoted even where the engine would not need it.
+fn always_quoted(dialect: &dyn Dialect, name: &str) -> String {
+    match dialect.name() {
+        "mysql" | "mariadb" => format!("`{}`", name.replace('`', "``")),
+        "sqlserver" => format!("[{}]", name.replace(']', "]]")),
+        _ => format!("\"{}\"", name.replace('"', "\"\"")),
+    }
+}
+
+/// Every different value of one column, in the order of the current view, as an SQL list for
+/// `IN`: `(1, 2, 3)` or `('a', 'b')`, with the engine's literals for each type. Reads the
+/// whole column in the core (a million rows included); more than [`MAX_IN_LIST`] different
+/// values is refused rather than written.
+pub fn column_in_list(
+    result: &StoredResult,
+    column: usize,
+    dialect: &dyn Dialect,
+) -> Result<String, CopyError> {
+    let meta = result
+        .schema()
+        .columns
+        .get(column)
+        .ok_or(CopyError::NoSuchColumn(column))?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut items: Vec<String> = Vec::new();
+    for position in 0..result.rows() {
+        let (batch, row) = result.locate(result.original_row(position));
+        let value = Value::from_array(batch.column(column).as_ref(), row, meta.logical)
+            .unwrap_or(Value::Null);
+        let literal = sql_literal(&value, dialect.name());
+        if seen.insert(literal.clone()) {
+            if items.len() == MAX_IN_LIST {
+                return Err(CopyError::TooManyValues);
+            }
+            items.push(literal);
+        }
+    }
+    Ok(format!("({})", items.join(", ")))
+}
+
+/// Text for an HTML cell: `&`, `<`, `>` and quotes escaped, line breaks as `<br>`.
+fn html_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out.replace("\r\n", "<br>").replace(['\n', '\r'], "<br>")
 }
 
 /// A Markdown table cell: `|` escaped, line breaks as `<br>`, backslashes kept literal.
@@ -553,6 +691,137 @@ mod tests {
             render(ExportFormat::Tsv, 0..3, 0..2, true, "postgres"),
             "id\tname\n1\tplain\n2\t\"a,b \"\"q\"\"\tc\nd\"\n\tit's \\ x\n"
         );
+    }
+
+    #[test]
+    fn html_tables_escape_markup_and_leave_null_empty() {
+        let result = sample();
+        let result = result.read().unwrap();
+        let mut out = Vec::new();
+        write_result(
+            &result,
+            &ExportOptions {
+                format: ExportFormat::Html,
+                rows: 0..3,
+                columns: vec![0, 1],
+                header: false,
+            },
+            &Quoted("postgres"),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "<table>\n  <thead>\n    <tr><th>id</th><th>name</th></tr>\n  </thead>\n  <tbody>\n    \
+             <tr><td>1</td><td>plain</td></tr>\n    \
+             <tr><td>2</td><td>a,b &quot;q&quot;\tc<br>d</td></tr>\n    \
+             <tr><td></td><td>it&#39;s \\ x</td></tr>\n  </tbody>\n</table>\n"
+        );
+        assert_eq!(html_text("<b>&</b>"), "&lt;b&gt;&amp;&lt;/b&gt;");
+    }
+
+    #[test]
+    fn column_names_plain_quoted_qualified_and_as_a_list() {
+        let result = sample();
+        let result = result.read().unwrap();
+        let names =
+            |style, dialect, table| column_names(&result, &[1, 0], style, &Quoted(dialect), table);
+        assert_eq!(
+            names(NameStyle::Plain, "postgres", None),
+            Ok("name, id".into())
+        );
+        assert_eq!(
+            names(NameStyle::List, "postgres", None),
+            Ok("name\nid".into())
+        );
+        assert_eq!(
+            names(NameStyle::Quoted, "mysql", None),
+            Ok("`name`, `id`".into())
+        );
+        // Quoted even where the engine would not need it.
+        assert_eq!(
+            names(NameStyle::Quoted, "sqlite", None),
+            Ok("\"name\", \"id\"".into())
+        );
+        assert_eq!(
+            names(NameStyle::Quoted, "sqlserver", None),
+            Ok("[name], [id]".into())
+        );
+        assert_eq!(always_quoted(&Quoted("postgres"), "a\"b"), "\"a\"\"b\"");
+        assert_eq!(always_quoted(&Quoted("sqlserver"), "a]b"), "[a]]b]");
+        assert_eq!(
+            names(NameStyle::Qualified, "postgres", Some(("public", "items"))),
+            Ok("\"public\".\"items\".\"name\", \"public\".\"items\".\"id\"".into())
+        );
+        assert_eq!(
+            names(NameStyle::Qualified, "postgres", None),
+            Err(CopyError::NoTable)
+        );
+        assert_eq!(
+            column_names(&result, &[9], NameStyle::Plain, &Quoted("postgres"), None),
+            Err(CopyError::NoSuchColumn(9))
+        );
+    }
+
+    #[test]
+    fn a_columns_values_as_an_in_list_once_each_and_capped() {
+        let result = sample();
+        let result = result.read().unwrap();
+        assert_eq!(
+            column_in_list(&result, 0, &Quoted("postgres")),
+            Ok("(1, 2, NULL)".into())
+        );
+        assert_eq!(
+            column_in_list(&result, 1, &Quoted("mysql")),
+            Ok("('plain', 'a,b \"q\"\tc\nd', 'it''s \\\\ x')".into())
+        );
+        assert_eq!(
+            column_in_list(&result, 3, &Quoted("sqlserver")),
+            Ok("(1, 0, NULL)".into())
+        );
+        assert_eq!(
+            column_in_list(&result, 9, &Quoted("postgres")),
+            Err(CopyError::NoSuchColumn(9))
+        );
+
+        // A column with more different values than an IN list takes is refused, not cut.
+        let schema = Arc::new(ResultSchema::new(vec![ColumnMeta {
+            name: "n".into(),
+            logical: LogicalType::Int,
+            native_type: "int8".into(),
+            native_id: None,
+        }]));
+        let store = ResultStore::new();
+        let id = store.create(schema.clone());
+        let values: ArrayRef = Arc::new(Int64Array::from_iter_values(
+            (0..MAX_IN_LIST as i64 + 1).chain(0..5),
+        ));
+        store
+            .append(
+                id,
+                RecordBatch::try_new(schema.arrow.clone(), vec![values]).unwrap(),
+            )
+            .unwrap();
+        let big = store.get(id).unwrap();
+        let big = big.read().unwrap();
+        assert_eq!(
+            column_in_list(&big, 0, &Quoted("postgres")),
+            Err(CopyError::TooManyValues)
+        );
+        // Repeated values count once: exactly the limit fits.
+        let id = store.create(schema.clone());
+        let values: ArrayRef = Arc::new(Int64Array::from_iter_values(
+            (0..MAX_IN_LIST as i64).chain(0..MAX_IN_LIST as i64),
+        ));
+        store
+            .append(
+                id,
+                RecordBatch::try_new(schema.arrow.clone(), vec![values]).unwrap(),
+            )
+            .unwrap();
+        let fits = store.get(id).unwrap();
+        let list = column_in_list(&fits.read().unwrap(), 0, &Quoted("postgres")).unwrap();
+        assert_eq!(list.matches(", ").count(), MAX_IN_LIST - 1);
     }
 
     #[test]

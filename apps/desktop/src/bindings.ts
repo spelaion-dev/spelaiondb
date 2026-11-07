@@ -99,6 +99,39 @@ export const commands = {
 	 */
 	copyRows: (result: number, session: string, range: CellRange, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
 	/**
+	 *  Column names for the clipboard: plain, quoted for the engine, qualified with the table
+	 *  (a table data tab's) or one per line; written by the core.
+	 */
+	copyColumnNames: (result: number, session: string, columns: number[], style: NameStyleItem, table: TableRefItem | null) => typedError<string, string>(__TAURI_INVOKE("copy_column_names", { result, session, columns, style, table })),
+	/**
+	 *  Every different value of a column (all its rows, in the current view) as an SQL `IN`
+	 *  list with the engine's literals; refused beyond the core's limit rather than cut.
+	 */
+	copyColumnInList: (result: number, session: string, column: number) => typedError<string, string>(__TAURI_INVOKE("copy_column_in_list", { result, session, column })),
+	/**
+	 *  Searches a result's loaded rows in the core (Ctrl+F) and keeps the matches for
+	 *  `find_matches` and `find_step`. A newer search on the same result stops this one (`None`).
+	 */
+	findInResult: (result: number, text: string, matchCase: boolean, columns: number[]) => typedError<FindOutcome | null, string>(__TAURI_INVOKE("find_in_result", { result, text, matchCase, columns })),
+	/**
+	 *  The matches of the last search in rows `[first_row, first_row + rows)`, to highlight
+	 *  what the grid shows.
+	 */
+	findMatches: (result: number, firstRow: number, rows: number) => typedError<FindMatchItem[], string>(__TAURI_INVOKE("find_matches", { result, firstRow, rows })),
+	/**
+	 *  The next match after the cell (`row`, `column`), or the previous one with `backwards`,
+	 *  going round; `None` without matches (or once the rows moved).
+	 */
+	findStep: (result: number, row: number, column: number, backwards: boolean) => typedError<FindStepItem | null, string>(__TAURI_INVOKE("find_step", { result, row, column, backwards })),
+	/**  Forgets a result's search (the find bar closed). */
+	clearFind: (result: number) => typedError<null, string>(__TAURI_INVOKE("clear_find", { result })),
+	/**
+	 *  "Filter by this value" in a table data tab: the core writes the condition from the typed
+	 *  value (the cell at `row` of the page, or `value` typed for the column) and returns the
+	 *  tab's filter with it added. The page's SELECT is checked when it loads.
+	 */
+	tableFilterCondition: (session: string, result: number, column: number, op: FilterOpItem, row: number | null, value: string, filter: string) => typedError<string, string>(__TAURI_INVOKE("table_filter_condition", { session, result, column, op, row, value, filter })),
+	/**
 	 *  Writes a whole result to a file the user chose (in a blocking task: it may be millions of
 	 *  rows). Returns how many rows were written.
 	 */
@@ -922,12 +955,35 @@ export type FilterActionItem = "hide" | "showOnly";
 export type FilterKindItem = "schemas" | "objects" | "columns";
 
 /**  A column filter operator (see `spelaion_core::FilterOp`). */
-export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "isNull" | "isNotNull";
+export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "contains" | "notContains" | "isNull" | "isNotNull";
 
 /**  Rows left after filtering a result, out of all it has. */
 export type FilterOutcome = {
 	rows: number,
 	total: number,
+};
+
+/**  A cell that matches the search: its row in the current view and its column. */
+export type FindMatchItem = {
+	row: number,
+	column: number,
+};
+
+/**
+ *  What a search in a result found (`None` from `find_in_result` when a newer search on the
+ *  same result replaced it).
+ */
+export type FindOutcome = {
+	count: number,
+	/**  More matches than the core keeps: the count reads "N+". */
+	truncated: boolean,
+};
+
+/**  The match stepped to, and its place among all of them (from 0). */
+export type FindStepItem = {
+	index: number,
+	row: number,
+	column: number,
 };
 
 export type ForeignKeyDetails = {
@@ -1116,6 +1172,9 @@ export type NamePatternPreview_Serialize = {
 	/**  Every variable a pattern can use. */
 	variables: string[],
 };
+
+/**  How column names are copied (see `spelaion_core::NameStyle`). */
+export type NameStyleItem = "plain" | "quoted" | "qualified" | "list";
 
 /**
  *  A tunnel file shown as a network profile (ADR-027), for Settings → Network. Only what the
@@ -1540,7 +1599,7 @@ export type TableRefItem = {
 };
 
 /**  Text format to copy or export rows in. */
-export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList";
+export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList" | "html";
 
 /**  A piece of a script, in UTF-8 bytes like every position the core gives. */
 export type TextSpan = {
