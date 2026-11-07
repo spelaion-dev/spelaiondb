@@ -19,6 +19,7 @@ mod error;
 mod load;
 mod migrate;
 mod model;
+mod name_pattern;
 mod resolve;
 mod secrets;
 mod trust;
@@ -51,6 +52,10 @@ pub use model::{
     ConnectionFile, Engine, HopConfig, KubernetesConfig, McpConfig, ProxyConfig, ProxyType,
     SCHEMA_VERSION, SecretSpec, SshAuth, TlsConfig, TlsModeConfig, TunnelFile, TunnelPreferences,
     UserFile, WritePolicy,
+};
+pub use name_pattern::{
+    DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
+    NameValues,
 };
 pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,

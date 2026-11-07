@@ -53,6 +53,17 @@ export const commands = {
 	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
 	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
 	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
+	/**  The pattern new connections are named with (ADR-030). */
+	getConnectionNamePattern: () => typedError<string, string>(__TAURI_INVOKE("get_connection_name_pattern")),
+	/**  Sets the pattern (checked by the core) or, with null, goes back to the default. */
+	setConnectionNamePattern: (pattern: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_name_pattern", { pattern })),
+	/**  Checks a pattern and shows what it gives for two sample connections, for Settings. */
+	previewConnectionNamePattern: (pattern: string) => __TAURI_INVOKE<NamePatternPreview_Serialize>("preview_connection_name_pattern", { pattern }),
+	/**
+	 *  The name the user's pattern gives the connection being added, as the form is now; null
+	 *  when the pattern is empty (no suggestions).
+	 */
+	suggestConnectionName: (draft: ConnectionDraftItem_Deserialize) => typedError<string | null, string>(__TAURI_INVOKE("suggest_connection_name", { draft })),
 	/**  The form of an existing tunnel, to edit it. */
 	tunnelDraft: (name: string, personal: boolean) => typedError<[TunnelDraftItem_Serialize, string], string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
 	/**
@@ -870,6 +881,37 @@ export type KubernetesDraftItem = {
 export type NameFilterItem = {
 	include: string[],
 	exclude: string[],
+};
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview = NamePatternPreview_Serialize | NamePatternPreview_Deserialize;
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview_Deserialize = {
+	/**  For a PostgreSQL server; empty when the pattern is not valid. */
+	server: string,
+	/**  For a SQLite file. */
+	file: string,
+	/**  Why the pattern is not valid. */
+	error?: string | null,
+	/**  Unknown variables, each shown to the user. */
+	unknown: string[],
+	/**  Every variable a pattern can use. */
+	variables: string[],
+};
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview_Serialize = {
+	/**  For a PostgreSQL server; empty when the pattern is not valid. */
+	server: string,
+	/**  For a SQLite file. */
+	file: string,
+	/**  Why the pattern is not valid. */
+	error: string | null,
+	/**  Unknown variables, each shown to the user. */
+	unknown: string[],
+	/**  Every variable a pattern can use. */
+	variables: string[],
 };
 
 /**

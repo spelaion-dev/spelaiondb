@@ -31,6 +31,32 @@
     "serverSideFilters": "Use server-side filters",
     "serverSideFiltersHint": "A connection's filters go into the database's catalog queries, so a server with thousands of schemas or tables only sends what passes them. Turned off, every name is read and filtered on this computer; what you see is the same."
   },
+  "connections": {
+    "title": "Connections",
+    "namePattern": "Name of new connections",
+    "namePatternIntro": "The add-connection form names a new connection with this pattern as you fill it in, until you type a name of your own.",
+    "pattern": "Pattern",
+    "variables": "Variables",
+    "variable": {
+      "host": "The server's host name",
+      "port": "The port (the engine's default when left empty)",
+      "database": "The database, or a file's name without its extension",
+      "user": "The user",
+      "engine": "The engine's name, such as PostgreSQL",
+      "env": "The environment label (dev, staging, prod…)",
+      "file": "A SQLite or DuckDB file's name"
+    },
+    "syntax": "Click a variable to add it. {a|b} takes the first one with a value; a doubled brace writes a brace. An empty pattern suggests no name.",
+    "unknown": "Unknown variables: {{names}}",
+    "preview": "Preview",
+    "previewServer": "A PostgreSQL server",
+    "previewFile": "A SQLite file",
+    "previewEmpty": "(no name)",
+    "save": "Save",
+    "reset": "Back to the default",
+    "saved": "Saved.",
+    "hint": "Only new connections: editing and importing from DBeaver keep their names."
+  },
   "history": {
     "title": "History",
     "stored": "Every query you run from the app is saved on this computer with its connection, time, duration, row count and error. Opening a saved query never runs it.",

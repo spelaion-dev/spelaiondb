@@ -29,6 +29,8 @@ pub enum HistoryError {
     UnsupportedTheme,
     #[error("a saved query needs a name of 1 to {MAX_SNIPPET_NAME} characters")]
     InvalidSnippetName,
+    #[error("{0}")]
+    NamePattern(#[from] spelaion_config::NamePatternError),
 }
 
 /// Longest name of a saved query, in characters.
@@ -53,6 +55,13 @@ enum Request {
     },
     GetUpdateCheck {
         reply: Reply<bool>,
+    },
+    GetNamePattern {
+        reply: Reply<Option<String>>,
+    },
+    SetNamePattern {
+        pattern: Option<String>,
+        reply: Reply<()>,
     },
     GetExplorer {
         reply: Reply<ExplorerPreferences>,
@@ -160,6 +169,13 @@ impl QueryHistory {
                         }
                         Request::GetUpdateCheck { reply } => {
                             let _ = reply.send(store.get_update_check());
+                        }
+                        Request::GetNamePattern { reply } => {
+                            let _ = reply.send(store.get_connection_name_pattern());
+                        }
+                        Request::SetNamePattern { pattern, reply } => {
+                            let _ =
+                                reply.send(store.set_connection_name_pattern(pattern.as_deref()));
                         }
                         Request::GetExplorer { reply } => {
                             let _ = reply.send(store.get_explorer_preferences());
@@ -311,6 +327,28 @@ impl QueryHistory {
     /// Whether the app checks for updates when it starts (ADR-021), defaulting to on.
     pub async fn update_check(&self) -> Result<bool, HistoryError> {
         self.request(|reply| Request::GetUpdateCheck { reply })
+            .await
+    }
+
+    /// The pattern the connection form names new connections with (ADR-030): the user's,
+    /// or [`spelaion_config::DEFAULT_NAME_PATTERN`] until they choose one.
+    pub async fn connection_name_pattern(&self) -> Result<String, HistoryError> {
+        Ok(self
+            .request(|reply| Request::GetNamePattern { reply })
+            .await?
+            .unwrap_or_else(|| spelaion_config::DEFAULT_NAME_PATTERN.to_string()))
+    }
+
+    /// Checks the pattern before it reaches the store: an unknown variable is refused, never
+    /// dropped. `None` goes back to the default; an empty pattern suggests no name.
+    pub async fn set_connection_name_pattern(
+        &self,
+        pattern: Option<String>,
+    ) -> Result<(), HistoryError> {
+        if let Some(pattern) = &pattern {
+            spelaion_config::NamePattern::parse(pattern)?;
+        }
+        self.request(|reply| Request::SetNamePattern { pattern, reply })
             .await
     }
 
@@ -730,6 +768,46 @@ mod tests {
             history.set_theme("dark".into()).await,
             Err(HistoryError::Closed)
         ));
+    }
+
+    #[tokio::test]
+    async fn connection_name_patterns_are_checked_and_persistent() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "spelaion-core-name-pattern-{}-{nonce}/state.db",
+            std::process::id()
+        ));
+        let history = QueryHistory::open(path.clone()).unwrap();
+        assert_eq!(
+            history.connection_name_pattern().await.unwrap(),
+            spelaion_config::DEFAULT_NAME_PATTERN
+        );
+        for invalid in ["{hots}", "{database", "x}", "{}"] {
+            assert!(matches!(
+                history
+                    .set_connection_name_pattern(Some(invalid.into()))
+                    .await,
+                Err(HistoryError::NamePattern(_))
+            ));
+        }
+        history
+            .set_connection_name_pattern(Some("{engine} · {host}".into()))
+            .await
+            .unwrap();
+        drop(history);
+        let reopened = QueryHistory::open(path).unwrap();
+        assert_eq!(
+            reopened.connection_name_pattern().await.unwrap(),
+            "{engine} · {host}"
+        );
+        reopened.set_connection_name_pattern(None).await.unwrap();
+        assert_eq!(
+            reopened.connection_name_pattern().await.unwrap(),
+            spelaion_config::DEFAULT_NAME_PATTERN
+        );
     }
 
     #[tokio::test]
