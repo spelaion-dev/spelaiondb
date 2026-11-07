@@ -384,5 +384,10 @@
     "skip": "Skip and continue",
     "skipAll": "Skip all errors",
     "hint": "Skip all goes on without asking again in this run."
+  },
+  "notification": {
+    "ok": "{{tab}} finished",
+    "failed": "{{tab}} finished with errors",
+    "body": "{{summary}} in {{duration}}"
   }
 }

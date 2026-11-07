@@ -48,6 +48,12 @@ export const commands = {
 	 */
 	getScriptPreferences: () => typedError<ScriptPreferencesItem, string>(__TAURI_INVOKE("get_script_preferences")),
 	setScriptPreferences: (preferences: ScriptPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_script_preferences", { preferences })),
+	/**
+	 *  A system notification that a long run finished in the background (ADR-035). The app sends
+	 *  it only when the user turned it on; its text names the tab and counts statements, never SQL,
+	 *  data or error text.
+	 */
+	notifyRunFinished: (title: string, body: string) => typedError<null, string>(__TAURI_INVOKE("notify_run_finished", { title, body })),
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs

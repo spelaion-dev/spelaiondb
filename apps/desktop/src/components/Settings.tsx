@@ -136,12 +136,23 @@ function AppearanceSettings() {
   );
 }
 
-/** How scripts run from the editor (ADR-035): what a run does when a statement fails. */
+/** How scripts run from the editor (ADR-035): what a run does when a statement fails, and the
+ *  opt-in notification when a long run finishes in the background. */
 function ScriptSettings() {
   const { t } = useTranslation("settings");
   const script = usePreferences((s) => s.script);
   const busy = usePreferences((s) => s.loading || s.saving !== null);
   const setScript = usePreferences((s) => s.setScript);
+  const [after, setAfter] = useState(String(script.notifyAfterSeconds));
+  useEffect(() => setAfter(String(script.notifyAfterSeconds)), [script.notifyAfterSeconds]);
+  const saveAfter = () => {
+    const seconds = Math.trunc(Number(after));
+    if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 86400) {
+      if (seconds !== script.notifyAfterSeconds) void setScript({ ...script, notifyAfterSeconds: seconds });
+    } else {
+      setAfter(String(script.notifyAfterSeconds));
+    }
+  };
   return (
     <>
       <fieldset className="settings-choice" disabled={busy}>
@@ -154,6 +165,28 @@ function ScriptSettings() {
         ))}
       </fieldset>
       <p className="muted small">{t("scripts.onErrorHint")}</p>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("scripts.notifications")}</legend>
+        <label className="check">
+          <input type="checkbox" name="scriptNotify" checked={script.notify} onChange={(e) => void setScript({ ...script, notify: e.target.checked })} />
+          {t("scripts.notify")}
+        </label>
+        <label className="field port">
+          <span>{t("scripts.notifyAfter")}</span>
+          <input
+            type="number"
+            name="scriptNotifyAfter"
+            min={1}
+            max={86400}
+            value={after}
+            disabled={!script.notify}
+            onChange={(e) => setAfter(e.target.value)}
+            onBlur={saveAfter}
+            onKeyDown={(e) => e.key === "Enter" && saveAfter()}
+          />
+        </label>
+      </fieldset>
+      <p className="muted small">{t("scripts.notifyHint")}</p>
       <SaveError setting="script" />
     </>
   );
