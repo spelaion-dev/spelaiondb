@@ -751,7 +751,7 @@ pub fn update_connection(
             None => Ok(()),
         }
     } else if uses_default_keychain(old) {
-        backend.keychain_delete(&account)
+        crate::secrets::forget(backend, &account)
     } else {
         Ok(())
     };
@@ -787,12 +787,10 @@ pub fn delete_connection(
     }
     if uses_default_keychain(&entry.file) {
         let account = connection_account(config, &entry.id);
-        backend
-            .keychain_delete(&account)
-            .map_err(|message| ResolveError::Secret {
-                reference: format!("keychain:{account}"),
-                message,
-            })?;
+        crate::secrets::forget(backend, &account).map_err(|message| ResolveError::Secret {
+            reference: format!("keychain:{account}"),
+            message,
+        })?;
     }
     Ok(())
 }

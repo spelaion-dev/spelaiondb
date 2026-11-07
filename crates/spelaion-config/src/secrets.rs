@@ -78,27 +78,52 @@ pub trait SecretBackend: Send + Sync {
     fn run(&self, program: &str, args: &[&str]) -> Result<String, String>;
     /// Runs a shell command (`sh -c` or `cmd /C`) and returns its standard output.
     fn run_shell(&self, command: &str) -> Result<String, String>;
+    /// Whether there is a system keychain at all. Without one (Linux with no Secret Service
+    /// running) a keychain password is asked when connecting instead of read, and nothing
+    /// can be remembered. A keychain that exists but fails (locked, refused) is still an
+    /// error: only its absence is.
+    fn keychain_available(&self) -> bool {
+        true
+    }
+}
+
+/// Why the keychain cannot be used when there is none, for every message that mentions it.
+pub const KEYCHAIN_UNAVAILABLE: &str = "no system keychain is available (on Linux a Secret Service such as GNOME Keyring, KWallet or KeePassXC must be running); until there is one, passwords are asked when connecting";
+
+/// Forgets a keychain entry. Without a keychain there is nothing it could reach, so that is
+/// not an error: deleting or editing a connection or a tunnel must not fail because of it.
+pub(crate) fn forget(backend: &dyn SecretBackend, account: &str) -> Result<(), String> {
+    if !backend.keychain_available() {
+        return Ok(());
+    }
+    backend.keychain_delete(account)
 }
 
 /// The system's real keychain, environment and commands.
 pub struct SystemBackend;
 
-/// Picks the platform's keychain store (once per process).
+/// Picks the platform's keychain store. Only a success is kept: a Secret Service started
+/// after the app (or unlocked later) is found on the next use, without restarting.
+fn ensure_store() -> Result<(), String> {
+    static STORE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if STORE.get().is_some() {
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    let store = windows_native_keyring_store::Store::new();
+    #[cfg(target_os = "macos")]
+    let store = apple_native_keyring_store::keychain::Store::new();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let store = dbus_secret_service_keyring_store::Store::new();
+    let store = store.map_err(|e| format!("{KEYCHAIN_UNAVAILABLE}: {e}"))?;
+    // Two threads may both get here first: they set the same kind of store, harmlessly.
+    keyring_core::set_default_store(store);
+    let _ = STORE.set(());
+    Ok(())
+}
+
 fn keychain_entry(account: &str) -> Result<keyring_core::Entry, String> {
-    static STORE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
-    STORE
-        .get_or_init(|| {
-            #[cfg(target_os = "windows")]
-            let store = windows_native_keyring_store::Store::new();
-            #[cfg(target_os = "macos")]
-            let store = apple_native_keyring_store::keychain::Store::new();
-            #[cfg(all(unix, not(target_os = "macos")))]
-            let store = dbus_secret_service_keyring_store::Store::new();
-            store
-                .map(|s| keyring_core::set_default_store(s))
-                .map_err(|e| format!("system keychain not available: {e}"))
-        })
-        .clone()?;
+    ensure_store()?;
     keyring_core::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| e.to_string())
 }
 
@@ -139,6 +164,10 @@ impl SecretBackend for SystemBackend {
             Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    fn keychain_available(&self) -> bool {
+        ensure_store().is_ok()
     }
 
     fn env(&self, name: &str) -> Option<String> {
