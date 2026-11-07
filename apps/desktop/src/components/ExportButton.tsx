@@ -40,13 +40,19 @@ export function ExportButton({ result, session }: { result: ResultMeta; session:
 
   async function exportAs(format: TextFormat, extension: string) {
     setOpen(null);
-    const path = await chooseSavePath({
-      defaultPath: `result.${extension}`,
-      filters: [{ name: t(`results.export.${format}`), extensions: [extension] }],
-    });
+    setNotice(null);
+    let path: string | null;
+    try {
+      path = await chooseSavePath({
+        defaultPath: `result.${extension}`,
+        filters: [{ name: t(`results.export.${format}`), extensions: [extension] }],
+      });
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+      return;
+    }
     if (!path) return;
     setBusy(true);
-    setNotice(null);
     try {
       const rows = (await call(commands.exportResult(result.id, session, path, format))) ?? 0;
       setNotice({

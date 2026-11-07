@@ -436,12 +436,14 @@ function ConnectionForm(props: {
   /** A new, empty database file created by the core (never over an existing one). */
   async function createDatabase() {
     setFileError(null);
-    const path = await chooseSavePath({
-      defaultPath: DATABASE_FILES[engine.id]?.fallback ?? "database.db",
-      filters: databaseFilters(),
-    });
-    if (!path) return;
     try {
+      // Inside the try: a dialog that fails (a missing permission, no portal on Linux)
+      // must show its error, not leave the button doing nothing.
+      const path = await chooseSavePath({
+        defaultPath: DATABASE_FILES[engine.id]?.fallback ?? "database.db",
+        filters: databaseFilters(),
+      });
+      if (!path) return;
       await call(commands.createDatabase(engine.id, path));
       const stem = (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]*$/, "");
       update(draft.name.trim() ? { database: path } : { database: path, name: stem });
