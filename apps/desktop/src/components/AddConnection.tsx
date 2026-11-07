@@ -257,6 +257,9 @@ const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
 const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
 type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "options";
 
+/** The core's limit (`ConnectionFile::MAX_DESCRIPTION`); the core checks it again. */
+const DESCRIPTION_MAX = 2000;
+
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
     <label className={`field ${className ?? ""}`}>
@@ -332,6 +335,7 @@ function ConnectionForm(props: {
     personal: !hasWorkspace,
     folder: "",
     name: prefill ? prefill.database.split(/[\\/]/).pop() || prefill.host : "",
+    description: "",
     engine: engine.id,
     env: "",
     host: prefill?.host || (network ? "localhost" : ""),
@@ -814,6 +818,20 @@ function ConnectionForm(props: {
         )}
 
         <div id="connection-tab-options" role="tabpanel" hidden={tab !== "options"}>
+          <fieldset>
+            <legend>{t("sections.about")}</legend>
+            <Field label={t("fields.description")}>
+              <textarea
+                className="description"
+                rows={3}
+                maxLength={DESCRIPTION_MAX}
+                value={draft.description}
+                placeholder={t("fields.descriptionPlaceholder")}
+                onChange={(e) => update({ description: e.target.value })}
+              />
+            </Field>
+            <p className="muted small">{t("fields.descriptionHint")}</p>
+          </fieldset>
           <fieldset>
             <legend>{t("sections.organization")}</legend>
             <div className="form-row" role="radiogroup" aria-label={t("fields.saveIn")}>

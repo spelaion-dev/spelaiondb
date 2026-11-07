@@ -23,7 +23,8 @@
     "idle": "Idle sessions",
     "safety": "Safety",
     "general": "General",
-    "kubernetes": "Kubernetes port-forward"
+    "kubernetes": "Kubernetes port-forward",
+    "about": "About this connection"
   },
   "fields": {
     "name": "Name",
@@ -81,7 +82,10 @@
     "tlsKey": "Client key (PEM)",
     "tlsKeyPlaceholder": "~/.ssl/me.key",
     "clientCertHint": "Logs in with a certificate instead of a password (the server must accept it for this user). The key stays on your computer: keep it in your personal folder, never in the repository.",
-    "cloudToken": "Provider"
+    "cloudToken": "Provider",
+    "description": "Description",
+    "descriptionPlaceholder": "What is this database for? Who owns it?",
+    "descriptionHint": "Shown as the connection's tooltip and, if it is exposed, to AI agents, so they know what the database is for. Never put passwords here."
   },
   "tls": {
     "disable": "Disabled",

@@ -36,6 +36,7 @@ import {
   SCHEMAS_REFRESHED_EVENT,
   SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
+import { connectionTooltip } from "../connectionInfo";
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
@@ -1389,7 +1390,7 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
         <span
           className="label"
           onDoubleClick={newQuery}
-          title={connection.id}
+          title={connectionTooltip(connection)}
         >
           {connection.name}
         </span>

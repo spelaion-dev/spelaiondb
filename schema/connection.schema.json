@@ -154,6 +154,13 @@
         "null"
       ]
     },
+    "description": {
+      "description": "What the database is for, in the user's words: shown as the connection's tooltip and\nto agents in `list_connections`. It may span lines; at most 2000 characters.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "engine": {
       "$ref": "#/$defs/Engine"
     },

@@ -15,7 +15,7 @@ use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
 use crate::draft::{ConnectionDraft, PasswordChoice, slug};
-use crate::load::Source;
+use crate::load::{Source, is_hidden_char};
 use crate::model::{ConnectionFile, Engine, ProxyType, SshAuth, TlsModeConfig, TunnelFile};
 use crate::tunnel_draft::{HopDraft, ProxyDraft, TunnelDraft, TunnelDraftOptions, TunnelPasswords};
 
@@ -30,6 +30,8 @@ pub struct DbeaverConnection {
     /// DBeaver's own identifier (`mysql8-18f…`), to pick connections to import.
     pub id: String,
     pub name: String,
+    /// DBeaver's description of the connection; empty for none.
+    pub description: String,
     /// DBeaver folder, `a/b` for nested ones.
     pub folder: String,
     /// The engine, or why SpelaionDB cannot open it (yet).
@@ -260,6 +262,7 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
     DbeaverConnection {
         id: id.to_string(),
         name: text(json.get("name")),
+        description: text(json.get("description")),
         folder: text(json.get("folder")),
         engine,
         host: text(config.get("host")),
@@ -437,6 +440,7 @@ pub fn import_plan(
             source,
             folder: connection.folder.to_lowercase(),
             name: connection.name.clone(),
+            description: importable_description(&connection.description),
             engine,
             env: connection.env.clone(),
             host: if sqlite {
@@ -483,6 +487,18 @@ pub fn import_plan(
     }
 }
 
+/// A DBeaver description as SpelaionDB accepts it: without hidden characters and cut to the
+/// longest description, so one long note does not stop the connection from being imported.
+fn importable_description(description: &str) -> String {
+    description
+        .chars()
+        .filter(|c| !is_hidden_char(*c) || matches!(c, '\n' | '\r' | '\t'))
+        .take(ConnectionFile::MAX_DESCRIPTION)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,6 +519,7 @@ mod tests {
               "connections": {
                 "postgres-jdbc-1": {
                   "provider": "postgresql", "driver": "postgres-jdbc", "name": "Orders PG",
+                  "description": "Orders of the EU shop.\nAsk #data before heavy queries.",
                   "folder": "Prod", "save-password": true,
                   "configuration": {
                     "host": "db.internal", "port": "5432", "database": "orders", "type": "prod",
@@ -577,6 +594,11 @@ mod tests {
             ("app", "prod", "Prod")
         );
         assert_eq!(pg.password.as_ref().map(Secret::expose), Some("s3cret"));
+        assert_eq!(
+            pg.description,
+            "Orders of the EU shop.\nAsk #data before heavy queries."
+        );
+        assert_eq!(by_id("mariaDB-2").description, "");
         let ssh = pg.ssh.as_ref().unwrap();
         assert_eq!(
             (ssh.host.as_str(), ssh.port, ssh.user.as_str()),
@@ -705,6 +727,10 @@ mod tests {
         assert_eq!(kept.connection.local_port, Some(15432));
         assert_eq!(kept.connection.keepalive, Some(300));
         assert_eq!(
+            kept.connection.description,
+            "Orders of the EU shop.\nAsk #data before heavy queries."
+        );
+        assert_eq!(
             secrets.hops[0].as_ref().map(Secret::expose),
             Some("hop-pass")
         );
@@ -717,5 +743,23 @@ mod tests {
         assert_eq!(plan.connection.password, PasswordChoice::None);
         assert!(plan.connection.host.is_empty() && plan.tunnel.is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn descriptions_are_imported_as_spelaiondb_accepts_them() {
+        assert_eq!(
+            importable_description("  Sales\r\n\tby region "),
+            "Sales\r\n\tby region"
+        );
+        // Escapes and bidirectional overrides are dropped; the text around them stays.
+        assert_eq!(
+            importable_description("safe\u{1b}[2J text \u{202e}desrever"),
+            "safe[2J text desrever"
+        );
+        let long = "x".repeat(ConnectionFile::MAX_DESCRIPTION + 50);
+        assert_eq!(
+            importable_description(&long).chars().count(),
+            ConnectionFile::MAX_DESCRIPTION
+        );
     }
 }

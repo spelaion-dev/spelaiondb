@@ -421,6 +421,9 @@ pub(crate) fn validate_connection(
             "sqlite3 only applies to a SQLite file on a server (a connection with a tunnel)",
         ));
     }
+    if let Some(description) = &file.description {
+        check_description(description).map_err(|m| ConfigError::new(path, m))?;
+    }
     if let Some(kubernetes) = &file.kubernetes {
         if file.tunnel.is_some() {
             return Err(ConfigError::new(
@@ -501,6 +504,31 @@ pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFil
         ));
     }
     Ok(file)
+}
+
+/// Characters that change how the text around them is shown without being seen themselves:
+/// control characters (terminal escapes, NUL…) and Unicode's bidirectional overrides and
+/// zero-width marks. They could hide text in a terminal or in an agent's listing.
+pub(crate) fn is_hidden_char(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// A description: plain text over lines and tabs, of a bounded length.
+fn check_description(description: &str) -> Result<(), String> {
+    if description.chars().count() > ConnectionFile::MAX_DESCRIPTION {
+        return Err(format!(
+            "description is at most {} characters",
+            ConnectionFile::MAX_DESCRIPTION
+        ));
+    }
+    if description
+        .chars()
+        .any(|c| is_hidden_char(c) && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err("description can only hold text, line breaks and tabs".into());
+    }
+    Ok(())
 }
 
 /// `svc/<name>`, `pod/<name>` or `deployment/<name>` (and kubectl's other spellings).

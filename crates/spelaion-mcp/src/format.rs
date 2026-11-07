@@ -1,5 +1,6 @@
 //! Compact text responses for the agent: Markdown tables with size limits.
 
+use spelaion_config::{ConnectionEntry, WritePolicy};
 use spelaion_core::ReadResult;
 use spelaion_driver_api::Value;
 
@@ -18,6 +19,38 @@ fn cell(value: &Value) -> String {
     } else {
         text
     }
+}
+
+/// One connection of `list_connections`: identifier, name, engine, environment and what the
+/// agent may do, then the user's description (what the database is for), indented.
+pub fn connection_entry(c: &ConnectionEntry) -> String {
+    let env = c
+        .file
+        .env
+        .as_deref()
+        .map(|e| format!(", environment {e}"))
+        .unwrap_or_default();
+    let access = match c.file.mcp.writes {
+        WritePolicy::Allow => "Read and write: execute_write is allowed.",
+        WritePolicy::Deny | WritePolicy::Confirm => "Read-only.",
+    };
+    let mut out = format!(
+        "- {} — {} ({}{env}). {access}\n",
+        c.id,
+        c.name(),
+        c.file.engine.as_str()
+    );
+    if let Some(description) = c.file.description.as_deref() {
+        let mut lines = description.lines().map(str::trim_end);
+        out.push_str(&format!(
+            "  Description: {}\n",
+            lines.next().unwrap_or_default()
+        ));
+        for line in lines {
+            out.push_str(&format!("    {line}\n"));
+        }
+    }
+    out
 }
 
 /// Markdown table of a result, with a notice if it was cut.
@@ -109,6 +142,35 @@ mod tests {
         assert!(text.contains(&format!("{}…", "x".repeat(200))));
         assert!(text.contains("| NULL | NULL |"));
         assert!(text.contains("3 rows."));
+    }
+
+    fn entry(toml: &str) -> ConnectionEntry {
+        ConnectionEntry {
+            id: spelaion_config::ConnectionId {
+                source: spelaion_config::Source::Workspace,
+                path: "prod/orders".into(),
+            },
+            file_path: "orders.toml".into(),
+            file: toml::from_str(toml).unwrap(),
+        }
+    }
+
+    #[test]
+    fn connections_are_listed_with_their_description() {
+        let plain = entry(
+            "schema_version = 1\nname = \"Orders\"\nengine = \"sqlite\"\ndatabase = \"o.db\"\n",
+        );
+        assert_eq!(
+            connection_entry(&plain),
+            "- prod/orders — Orders (sqlite). Read-only.\n"
+        );
+        let described = entry(
+            "schema_version = 1\nname = \"Orders\"\nengine = \"sqlite\"\ndatabase = \"o.db\"\nenv = \"prod\"\ndescription = \"\"\"\nOrders of the EU shop.\nAsk #data first.\"\"\"\n\n[mcp]\nwrites = \"allow\"\n",
+        );
+        assert_eq!(
+            connection_entry(&described),
+            "- prod/orders — Orders (sqlite, environment prod). Read and write: execute_write is allowed.\n  Description: Orders of the EU shop.\n    Ask #data first.\n"
+        );
     }
 
     #[test]
