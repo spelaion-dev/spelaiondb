@@ -63,7 +63,7 @@ export function NewTableElementDialog({ session, connectionId, schema, table, ki
 
   return <div className="modal-backdrop">
     <form className="modal new-table-element" role="dialog" aria-modal="true" aria-label={t("newTableElement.title", { section: t(`folders.${kind}`), table })}
-      onSubmit={(e) => void submit(e)} onKeyDown={(e) => { if (e.key === "Escape" && !busy) onClose(); }}>
+      onSubmit={(e) => void submit(e)} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); if (!busy) onClose(); } }}>
       <header className="new-table-element-header">
         <div>
           <p className="new-table-element-path"><span>{schema}</span><span aria-hidden="true">/</span><span>{table}</span></p>

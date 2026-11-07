@@ -330,6 +330,10 @@ try {
   await page.keyboard.press("Control+,");
   const settingsDialog = page.getByRole("dialog", { name: "Settings" });
   await settingsDialog.getByRole("heading", { name: "Appearance" }).waitFor();
+  for (let i = 0; i < 20; i++) {
+    await page.keyboard.press("Tab");
+    assert.ok(await settingsDialog.evaluate((dialog) => dialog.contains(document.activeElement)), "Tab stays in the modal");
+  }
   assert.equal(await page.locator(".tabbar [role=tab]").count(), tabsWithoutSettings, "no settings tab");
   assert.equal(await page.locator(".activity-bar .settings-button").getAttribute("aria-pressed"), "true");
   // Updates (ADR-021): switched off for this run (SPELAION_NO_UPDATES), so it says so and
@@ -341,6 +345,12 @@ try {
   assert.equal(await page.locator(".update-notice").count(), 0, "no update notice");
   await page.keyboard.press("Escape");
   await settingsDialog.waitFor({ state: "detached" });
+  await page.locator(".activity-bar .settings-button").click();
+  await settingsDialog.getByRole("button", { name: "History", exact: true }).click();
+  await settingsDialog.getByRole("button", { name: "Open query history" }).click();
+  await settingsDialog.waitFor({ state: "detached" });
+  await page.getByRole("complementary", { name: "Query history", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close query history" }).click();
   const systemTheme = await page.evaluate(() => (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   assert.equal(await page.locator("html").getAttribute("data-theme"), systemTheme);
   await setTheme("dark", "dark");
@@ -360,6 +370,17 @@ try {
     "Shop (SQLite)",
     "select c.country, count(*) as orders, round(sum(o.total), 2) as total\nfrom orders o\njoin customer c on c.id = o.customer_id\ngroup by c.country\norder by total desc;",
   );
+  const editorDivider = panel.getByRole("separator", { name: "Resize editor and results" });
+  assert.equal(await editorDivider.getAttribute("aria-valuenow"), "42");
+  await editorDivider.focus();
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await editorDivider.getAttribute("aria-valuenow"), "44");
+  await page.keyboard.press("Home");
+  assert.equal(await editorDivider.getAttribute("aria-valuenow"), "12");
+  await page.keyboard.press("End");
+  assert.equal(await editorDivider.getAttribute("aria-valuenow"), "85");
+  await editorDivider.dblclick();
+  assert.equal(await editorDivider.getAttribute("aria-valuenow"), "42");
   await run(panel);
   await panel.locator(".statusline", { hasText: "6 rows" }).waitFor();
   step("SQL keywords remain legible when switching themes");
@@ -636,7 +657,8 @@ try {
   assert.deepEqual(await viewer.locator(".row-field dt").allInnerTexts(), ["doc TEXT", "raw BLOB", "txt TEXT"]);
   assert.equal(await viewer.locator(".row-field dd").nth(1).innerText(), "\\x48656c6c6f00ff");
   await shot("03e-row-view");
-  await viewer.locator(".row-field").first().click();
+  await viewer.getByRole("button", { name: "Show the value of doc" }).focus();
+  await page.keyboard.press("Enter");
   await viewer.locator(".cell-viewer-json").waitFor();
   await page.keyboard.press("Escape");
   await viewer.waitFor({ state: "detached" });
@@ -686,6 +708,13 @@ try {
   await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
   const queryPages = panel.getByRole("group", { name: "Query result pages" });
   await queryPages.getByText("rows 1–500").waitFor();
+  const accessibleGrid = panel.getByRole("grid");
+  await accessibleGrid.focus();
+  await accessibleGrid.getByRole("gridcell", { name: /Row 1, id \(INTEGER\): 1/ }).waitFor();
+  await page.keyboard.press("ArrowRight");
+  await accessibleGrid.getByRole("gridcell", { name: /Row 1, customer_id/ }).waitFor();
+  await panel.getByText("Loaded rows only", { exact: true }).waitFor();
+  assert.match(await panel.getByRole("searchbox", { name: "Filter rows" }).getAttribute("aria-describedby"), /.+/);
   const countButton = queryPages.getByRole("button", { name: "Count", exact: true });
   const nextButton = queryPages.getByRole("button", { name: "Next page" });
   const countBefore = await countButton.boundingBox();
@@ -727,6 +756,7 @@ try {
   panel = await newQuery("Shop (SQLite)", "select * from orders limit 50000;");
   await run(panel);
   await panel.locator(".statusline", { hasText: "50,000 rows" }).waitFor();
+  assert.equal(await panel.getByText("Loaded rows only", { exact: true }).count(), 0);
   await panel.locator(".grid-scroller").evaluate((el) => (el.scrollTop = 26 * 25_000));
   await page.waitForTimeout(500);
   await shot("04-grid-scroll");
@@ -1511,6 +1541,8 @@ try {
       const addedRow = overview.getByText("smoke_added", { exact: true }).locator("xpath=..");
       await addedRow.getByRole("button", { name: "Drop…" }).click();
       const dropAdded = page.getByRole("dialog", { name: "Drop smoke_added" });
+      await dropAdded.getByRole("button", { name: "Cancel" }).waitFor();
+      assert.ok(await dropAdded.getByRole("button", { name: "Cancel" }).evaluate((button) => document.activeElement === button), "destructive confirmation starts on Cancel");
       await dropAdded.getByLabel("SQL that will run").filter({ hasText: "DROP COLUMN smoke_added" }).waitFor();
       await dropAdded.getByRole("button", { name: "Drop", exact: true }).click();
       await overview.getByText("smoke_added", { exact: true }).waitFor({ state: "detached" });
@@ -1932,6 +1964,7 @@ try {
   await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
   const range = panel.locator(".table-range");
   await range.filter({ hasText: "rows 1–500" }).waitFor();
+  await panel.getByText("This page only", { exact: true }).waitFor();
   // Export takes every row the WHERE keeps, in the ORDER BY, not only the page on screen.
   await panel.getByRole("textbox", { name: "WHERE" }).fill("id > 49000");
   await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id desc");
@@ -2537,7 +2570,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.press("Enter");
     const viewer = panel.locator(".cell-viewer");
     const fullValue = viewer.getByRole("textbox", { name: "New value for name" });
+    await viewer.getByText("Edit value", { exact: true }).waitFor();
     await fullValue.fill("edited from viewer");
+    await viewer.getByText("Change pending; save it from the results toolbar.").waitFor();
     await viewer.getByRole("button", { name: "Close the cell viewer (Esc)" }).click();
     // Duplicating a row copies its pending values but leaves the key for the new row.
     await page.keyboard.press("Control+Alt+Insert");
@@ -2599,14 +2634,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await editor.fill("123");
     await editor.press("Enter");
     await page.keyboard.press("Control+z");
-    await panel.getByText("Inserted: 0 · Deleted: 0 · Updated: 0").waitFor();
+    await panel.getByText("No pending changes").waitFor();
     await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 36 + 13);
     await editor.fill("lots");
     await editor.press("Enter");
     await panel.getByRole("button", { name: "Save changes" }).click();
     await panel.getByRole("alert").filter({ hasText: "is not a whole number" }).waitFor();
     await page.keyboard.press("Control+r");
-    await panel.getByText("Inserted: 0 · Deleted: 0 · Updated: 0").waitFor();
+    await panel.getByText("No pending changes").waitFor();
   }
   await page.keyboard.press("Control+w");
 
@@ -3274,6 +3309,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await settings.getByRole("listitem", { name: "Production" }).waitFor();
     await settings.getByRole("button", { name: "New type…" }).click();
     const typeEditor = page.getByRole("dialog", { name: "New connection type" });
+    await typeEditor.getByLabel("Id", { exact: true }).focus();
+    await page.keyboard.press("Escape");
+    await typeEditor.waitFor({ state: "detached" });
+    assert.ok(await settings.getByRole("button", { name: "New type…" }).evaluate((button) => document.activeElement === button), "closing a nested dialog restores focus");
+    await settings.getByRole("button", { name: "New type…" }).click();
     await typeEditor.getByLabel("Id", { exact: true }).fill("careful");
     await typeEditor.getByLabel("Name", { exact: true }).fill("Careful");
     await typeEditor.getByLabel("Badge tone", { exact: true }).selectOption("amber");

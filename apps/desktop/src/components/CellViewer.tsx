@@ -65,10 +65,12 @@ export function CellViewer(props: {
   const cell = `${resultId}:${row}:${column}`;
   const [loaded, setLoaded] = useState<{ cell: string; text: string | null; error: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setCopied(false);
+    setCopyError(null);
     call(commands.cellValue(resultId, row, column))
       .then((text) => active && setLoaded({ cell, text, error: null }))
       .catch((e: unknown) => active && setLoaded({ cell, text: null, error: e instanceof Error ? e.message : String(e) }));
@@ -104,14 +106,14 @@ export function CellViewer(props: {
     return (
       <aside className="cell-viewer" aria-label={t("viewer.title")} onKeyDown={(e) => e.key === "Escape" && props.onClose()}>
         <header>
-          <div className="cell-viewer-title">
-            <strong>{t("viewer.rowTitle", { number: (row + 1).toLocaleString(i18n.language) })}</strong>
-            <span className="muted small">{t("viewer.columns", { count: props.columns.length })}</span>
+          <div className="cell-viewer-heading">
+            <div className="cell-viewer-title">
+              <strong>{t("viewer.rowTitle", { number: (row + 1).toLocaleString(i18n.language) })}</strong>
+              <span className="muted small">{t("viewer.columns", { count: props.columns.length })}</span>
+            </div>
+            <button className="ghost cell-viewer-close" aria-label={t("viewer.close")} onClick={props.onClose}>×</button>
           </div>
-          {modes}
-          <button className="ghost" aria-label={t("viewer.close")} onClick={props.onClose}>
-            ×
-          </button>
+          <div className="cell-viewer-controls">{modes}</div>
         </header>
         <RowFields resultId={resultId} row={row} columns={props.columns} active={column} edits={props.edits} onPick={props.onPickColumn} />
       </aside>
@@ -121,41 +123,46 @@ export function CellViewer(props: {
   return (
     <aside className="cell-viewer" aria-label={t("viewer.title")} onKeyDown={(e) => e.key === "Escape" && props.onClose()}>
       <header>
-        <div className="cell-viewer-title">
-          <strong>{meta.name}</strong>
-          <span className="muted small">
-            {meta.nativeType} · {t("viewer.row", { number: (row + 1).toLocaleString(i18n.language) })}
-            {length ? ` · ${length}` : ""}
-          </span>
+        <div className="cell-viewer-heading">
+          <div className="cell-viewer-title">
+            <strong title={meta.name}>{meta.name}</strong>
+            <span className="muted small" title={`${meta.nativeType} · ${t("viewer.row", { number: (row + 1).toLocaleString(i18n.language) })}${length ? ` · ${length}` : ""}`}>
+              {meta.nativeType} · {t("viewer.row", { number: (row + 1).toLocaleString(i18n.language) })}
+              {length ? ` · ${length}` : ""}
+            </span>
+          </div>
+          <button className="ghost cell-viewer-close" aria-label={t("viewer.close")} onClick={props.onClose}>×</button>
         </div>
-        {modes}
-        <button
-          className="ghost small"
-          disabled={!value || value.text === null}
-          onClick={() => {
-            if (value?.text != null) void navigator.clipboard.writeText(value.text).then(() => setCopied(true));
-          }}
-        >
-          {copied ? t("viewer.copied") : t("viewer.copy")}
-        </button>
-        <button className="ghost" aria-label={t("viewer.close")} onClick={props.onClose}>
-          ×
-        </button>
+        <div className="cell-viewer-controls">
+          {modes}
+          <button
+            className="ghost small"
+            disabled={!value || value.text === null}
+            onClick={() => {
+              if (value?.text != null) void navigator.clipboard.writeText(value.text).then(() => { setCopied(true); setCopyError(null); }, (e: unknown) => { setCopied(false); setCopyError(e instanceof Error ? e.message : String(e)); });
+            }}
+          >
+            {copied ? t("viewer.copied") : t("viewer.copy")}
+          </button>
+        </div>
       </header>
       {error && <p className="error small" role="alert">{error}</p>}
+      {copyError && <p className="error small" role="alert">{t("viewer.copyError", { detail: copyError })}</p>}
       {!value && !error && <p className="muted small">{t("viewer.loading")}</p>}
       {value && props.editable && props.onEdit && (
         <>
+          <div className="viewer-value-heading">{t("viewer.editValue")}</div>
           <textarea
             className="cell-viewer-value cell-viewer-editor"
             aria-label={t("edit.cellLabel", { column: meta.name })}
             spellCheck={false}
             value={value.text ?? ""}
-            onChange={(e) => props.onEdit?.(row, column, e.target.value === current?.text ? undefined : e.target.value)}
+            placeholder={value.text === null ? "NULL" : undefined}
+            onChange={(e) => { setCopied(false); setCopyError(null); props.onEdit?.(row, column, e.target.value === current?.text ? undefined : e.target.value); }}
           />
           <footer className="viewer-edit-actions" role="toolbar" aria-label={t("viewer.editActions")}>
-            {value.text === null && <span className="muted small">NULL</span>}
-            <button className="ghost small" title={t("edit.setNullHint")} onClick={() => props.onEdit?.(row, column, current?.text === null ? undefined : null)}>{t("edit.setNull")}</button>
+            <span className="muted small">{t(hasEdit ? "viewer.pendingEdit" : "viewer.editHint")}</span>
+            <button className="ghost small" title={t("edit.setNullHint")} disabled={value.text === null} onClick={() => props.onEdit?.(row, column, current?.text === null ? undefined : null)}>{t("edit.setNull")}</button>
           </footer>
         </>
       )}
@@ -196,7 +203,7 @@ function RowFields(props: { resultId: number; row: number; columns: ColumnItem[]
         return (
           <div key={i} className={`row-field ${i === props.active ? "active" : ""}`} onClick={() => props.onPick(i)} title={t("viewer.pick")}>
             <dt>
-              {c.name} <span className="muted small">{c.nativeType}</span>
+              <button type="button" className="row-field-button" aria-label={t("viewer.pickColumn", { name: c.name })}>{c.name}</button> <span className="muted small">{c.nativeType}</span>
             </dt>
             <dd className={value === null ? "muted" : ""}>
               {value === null ? "NULL" : value.length > ROW_VIEW_CHARS ? `${value.slice(0, ROW_VIEW_CHARS)}…` : value}

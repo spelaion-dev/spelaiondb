@@ -232,6 +232,7 @@ outside the team.
 ## Frontend style
 - React + strict TypeScript. Types that cross from Rust are generated, not handwritten.
 - Result data never goes into React state: it lives in the core and is requested in windows.
+- Follow `docs/ui-guidelines.md` for desktop UI/UX patterns and verification.
 
 ## Before calling something done
 - `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`.
