@@ -260,6 +260,21 @@ async fn set_grid_preferences(
         .map_err(|e| e.to_string())
 }
 
+/// A system notification that a long run finished in the background (ADR-035). The app sends
+/// it only when the user turned it on; its text names the tab and counts statements, never SQL,
+/// data or error text.
+#[tauri::command]
+#[specta::specta]
+async fn notify_run_finished(title: String, body: String, app: tauri::AppHandle) -> CmdResult<()> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 /// How scripts run from the editor: the default error mode and the opt-in notification
 /// (ADR-035).
 #[tauri::command]
@@ -3576,6 +3591,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_grid_preferences,
             get_script_preferences,
             set_script_preferences,
+            notify_run_finished,
             update::update_check,
             update::update_install,
             engine_catalog,
@@ -3782,6 +3798,7 @@ pub fn run() {
     let typed = builder.invoke_handler();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .manage(update::PendingUpdate::default())

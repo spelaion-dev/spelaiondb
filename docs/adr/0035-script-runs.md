@@ -94,10 +94,10 @@ statement, and smart commit before the first write.
 8. **An opt-in system notification** when a run that took longer than a threshold (30 s by
    default) finishes while the app is not in front (another window has the focus, it is
    minimised, or another tab is shown). It names the tab and counts what ran; it never contains
-   SQL, data or error text. Its preference (off, 30 s) is stored with the others; the
-   notification itself comes with `tauri-plugin-notification`, whose Linux side (notify-rust,
-   zbus 5) brings crates that `cargo deny` reports as unmaintained: it lands once an owner
-   accepts them in `deny.toml` or notify-rust moves to zbus 6.
+   SQL, data or error text. It is sent through `tauri-plugin-notification` from a Rust command
+   (no JavaScript permission). Its Linux side (notify-rust, zbus 5) brings three crates that
+   `cargo deny` reports as unmaintained (merged into zbus 6, not vulnerable); `deny.toml` lists
+   them with that reason until notify-rust moves to zbus 6.
 
 ## Left out
 - **Rollback to the last good statement** (psql's `ON_ERROR_ROLLBACK`, savepoints around each

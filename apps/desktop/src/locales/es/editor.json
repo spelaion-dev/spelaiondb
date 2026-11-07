@@ -384,5 +384,10 @@
     "skip": "Saltar y seguir",
     "skipAll": "Saltar todos los errores",
     "hint": "Saltar todos sigue sin volver a preguntar en esta ejecución."
+  },
+  "notification": {
+    "ok": "{{tab}} terminó",
+    "failed": "{{tab}} terminó con errores",
+    "body": "{{summary}} en {{duration}}"
   }
 }

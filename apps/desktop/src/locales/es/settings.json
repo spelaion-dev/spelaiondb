@@ -154,6 +154,10 @@
       "continue": "Seguir con la siguiente sentencia",
       "ask": "Preguntar: detener, saltar o saltar todos"
     },
-    "onErrorHint": "Cada pestaña del editor puede elegir otro modo para sus ejecuciones. Una ejecución cancelada siempre se detiene, igual que una sentencia fallida que abortó o deshizo su transacción. Las sentencias peligrosas se siguen confirmando antes de ejecutar."
+    "onErrorHint": "Cada pestaña del editor puede elegir otro modo para sus ejecuciones. Una ejecución cancelada siempre se detiene, igual que una sentencia fallida que abortó o deshizo su transacción. Las sentencias peligrosas se siguen confirmando antes de ejecutar.",
+    "notifications": "Notificaciones",
+    "notify": "Avisarme cuando termine una ejecución larga con la aplicación en segundo plano",
+    "notifyAfter": "Solo ejecuciones de más de (segundos)",
+    "notifyHint": "La notificación dice qué pestaña terminó y si algo falló; nunca incluye SQL ni datos."
   }
 }

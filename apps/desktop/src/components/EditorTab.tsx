@@ -15,6 +15,7 @@ import { ResultFilter } from "./ResultFilter";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { summaryMessages, summaryShort } from "../scriptRun";
+import { notifyFinished } from "../notify";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
@@ -701,6 +702,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           messages: summary.statements > 1 || summary.stop ? [...r.messages, ...summaryMessages(summary)] : r.messages,
         }));
         useApp.getState().refreshHistory();
+        notifyFinished(tab, summary, elapsedMs);
         break;
       }
     }

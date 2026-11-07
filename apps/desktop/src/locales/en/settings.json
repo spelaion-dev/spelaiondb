@@ -154,6 +154,10 @@
       "continue": "Continue with the next statement",
       "ask": "Ask: stop, skip or skip all"
     },
-    "onErrorHint": "Each editor tab can choose another mode for its runs. A cancelled run always stops, and so does a failed statement that aborted or rolled back its transaction. Risky statements are still confirmed before the run."
+    "onErrorHint": "Each editor tab can choose another mode for its runs. A cancelled run always stops, and so does a failed statement that aborted or rolled back its transaction. Risky statements are still confirmed before the run.",
+    "notifications": "Notifications",
+    "notify": "Notify me when a long run finishes while the app is in the background",
+    "notifyAfter": "Only runs longer than (seconds)",
+    "notifyHint": "The notification says which tab finished and whether something failed; it never contains SQL or data."
   }
 }

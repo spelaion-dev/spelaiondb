@@ -1217,6 +1217,7 @@ try {
   await withSettings("scripts", async (settings) => {
     await settings.getByRole("radio", { name: "Continue with the next statement" }).check();
     await page.waitForFunction(() => document.querySelector('input[name="scriptOnError"][value="continue"]')?.checked && !document.querySelector('input[name="scriptOnError"]')?.matches(":disabled"));
+    assert.equal(await settings.getByRole("checkbox", { name: /Notify me when a long run finishes/ }).isChecked(), false, "notifications are opt-in");
   });
   assert.match(await actions.getByRole("button", { name: "Run options" }).getAttribute("title"), /Continue/);
   await withSettings("scripts", async (settings) => {
