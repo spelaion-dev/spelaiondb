@@ -14,6 +14,12 @@ ignore = [
   # stack on Linux. Revisit when those dependencies migrate.
   { id = "RUSTSEC-2024-0436", reason = "paste: compile-time macro through specta" },
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: compile-time macro through GTK/Tauri" },
+  # Unmaintained (not vulnerable): zbus 5 sub-crates, merged into zbus 6. They come only through
+  # tauri-plugin-notification -> notify-rust on Linux (the opt-in "run finished" notification,
+  # ADR-035). Remove when notify-rust moves to zbus 6 (Plane SDB-79).
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained zbus 5 sub-crate via tauri-plugin-notification -> notify-rust (Linux), merged into zbus 6; remove when notify-rust moves to zbus 6 (SDB-79)" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained zbus 5 sub-crate via tauri-plugin-notification -> notify-rust (Linux), merged into zbus 6; remove when notify-rust moves to zbus 6 (SDB-79)" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained zbus 5 sub-crate via tauri-plugin-notification -> notify-rust (Linux), merged into zbus 6; remove when notify-rust moves to zbus 6 (SDB-79)" },
 ]
 
 [licenses]
