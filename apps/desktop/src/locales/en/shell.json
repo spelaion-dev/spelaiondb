@@ -76,7 +76,7 @@
   "loadingDetails": "Loading table details…",
   "connecting": "Connecting…",
   "quickFilter": "Filter the explorer",
-  "quickFilterHint": "Filter the explorer by name (Ctrl+Shift+F)",
+  "quickFilterHint": "Filter the explorer by name or tag (Ctrl+Shift+F)",
   "quickFilterPlaceholder": "Filter by name",
   "quickFilterNothing": "No connection, schema or loaded object matches the filter.",
   "connectedOnly": "Show only connected connections",
@@ -347,5 +347,8 @@
   "bookmarkOpenMenu": "Open",
   "bookmarkHint": "Click to show it in the explorer, double-click to open it",
   "showInExplorer": "Show in explorer",
-  "idleClosed": "Closed after {{minutes}} min without use, as its connection type asks. Expand it to reconnect."
+  "idleClosed": "Closed after {{minutes}} min without use, as its connection type asks. Expand it to reconnect.",
+  "tagFilter": "Filter connections by tag",
+  "tagFilterHint": "Show only connections tagged {{tag}}",
+  "tagsTooltip": "Tags: {{tags}}"
 }

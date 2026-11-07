@@ -151,7 +151,7 @@ fn an_agent_can_read_but_never_write() {
     create_db(&fx.repo().join("shop.db"));
     std::fs::write(
         fx.repo().join(".spelaion/connections/shop.toml"),
-        "schema_version = 1\nname = \"Shop\"\ndescription = \"\"\"\nProducts of the demo shop.\nPrices in euros.\"\"\"\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\nmax_rows = 2\n",
+        "schema_version = 1\nname = \"Shop\"\ndescription = \"\"\"\nProducts of the demo shop.\nPrices in euros.\"\"\"\ntags = [\"demo\", \"eu\"]\nengine = \"sqlite\"\ndatabase = \"shop.db\"\n\n[mcp]\nexposed = true\nmax_rows = 2\n",
     )
     .unwrap();
     std::fs::write(
@@ -196,17 +196,17 @@ fn an_agent_can_read_but_never_write() {
         );
     }
 
-    // Only exposed connections, with what the user wrote they are for.
+    // Only exposed connections, with their tags and what the user wrote they are for.
     let (text, _) = agent.call("list_connections", json!({}));
     assert!(
-        text.contains("- shop — Shop (sqlite). Read-only.\n  Description: Products of the demo shop.\n    Prices in euros.\n")
+        text.contains("- shop — Shop (sqlite). Read-only.\n  Tags: demo, eu\n  Description: Products of the demo shop.\n    Prices in euros.\n")
             && !text.contains("hidden"),
         "{text}"
     );
     let listed = fx.spelaion(&["connections", "--workspace", fx.repo().to_str().unwrap()]);
     assert!(
         listed.contains(
-            "Shop — exposed to the MCP\n    Products of the demo shop.\n    Prices in euros.\n"
+            "Shop — exposed to the MCP\n    tags: demo, eu\n    Products of the demo shop.\n    Prices in euros.\n"
         ),
         "{listed}"
     );

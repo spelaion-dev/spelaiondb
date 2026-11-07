@@ -516,6 +516,7 @@ fn creates_new_connection_files() {
         schema_version: 1,
         name: Some("Analytics".into()),
         description: None,
+        tags: Vec::new(),
         engine: Engine::Sqlite,
         env: None,
         host: None,
@@ -616,6 +617,7 @@ fn postgres_draft() -> ConnectionDraft {
         folder: "Prod/EU".into(),
         name: "Orders (prod)".into(),
         description: String::new(),
+        tags: Vec::new(),
         engine: Engine::Postgres,
         env: "prod".into(),
         host: " db.internal ".into(),
@@ -1045,6 +1047,137 @@ fn descriptions_are_saved_edited_and_validated() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HAND_WRITTEN);
 }
 
+fn tags(list: &[&str]) -> Vec<String> {
+    list.iter().map(|t| t.to_string()).collect()
+}
+
+#[test]
+fn tags_are_normalised_validated_and_edited() {
+    let fx = Fixture::new("draft-tags");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+
+    // Trimmed, single spaces, empty ones dropped, the first spelling of a repeat kept.
+    let draft = ConnectionDraft {
+        tags: tags(&[" billing ", "EU", "", "eu", "  ", "team  data", "Billing"]),
+        ..postgres_draft()
+    };
+    assert_eq!(
+        draft.to_file(&config).unwrap().tags,
+        ["billing", "EU", "team data"]
+    );
+    let id = add_connection(&config, &draft, None, &backend).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.connection(&id).unwrap();
+    assert_eq!(
+        ConnectionDraft::from_entry(entry).tags,
+        ["billing", "EU", "team data"]
+    );
+    let content = std::fs::read_to_string(&entry.file_path).unwrap();
+    assert!(
+        content.contains("tags = [") && content.contains("\"team data\""),
+        "{content}"
+    );
+
+    // Limits: length, count, commas and hidden characters.
+    let error = |list: Vec<String>| {
+        ConnectionDraft {
+            tags: list,
+            ..postgres_draft()
+        }
+        .to_file(&config)
+        .unwrap_err()
+        .to_string()
+    };
+    let longest = "x".repeat(ConnectionFile::MAX_TAG);
+    let at_most: Vec<String> = (0..ConnectionFile::MAX_TAGS)
+        .map(|i| format!("t{i}"))
+        .collect();
+    assert!(
+        ConnectionDraft {
+            tags: [vec![longest.clone()], at_most[1..].to_vec()].concat(),
+            ..postgres_draft()
+        }
+        .to_file(&config)
+        .is_ok()
+    );
+    assert!(error(vec![format!("{longest}x")]).contains("longer than 32"));
+    let too_many: Vec<String> = (0..=ConnectionFile::MAX_TAGS)
+        .map(|i| format!("t{i}"))
+        .collect();
+    assert!(error(too_many).contains("at most 20 tags"));
+    assert!(error(tags(&["a,b"])).contains("without commas"));
+    assert!(error(tags(&["esc\u{1b}[8m"])).contains("without commas"));
+    assert!(error(tags(&["rtl\u{202e}"])).contains("without commas"));
+
+    // Hand-written files are held to the same rules: no repeats ignoring case, no padding.
+    for (name, list) in [
+        ("repeated", "[\"eu\", \"EU\"]"),
+        ("padded", "[\" eu\"]"),
+        ("empty", "[\"\"]"),
+        ("tab", "[\"a\\tb\"]"),
+        ("newline", "[\"a\\nb\"]"),
+    ] {
+        fx.write(
+            &format!("repo/.spelaion/connections/{name}.toml"),
+            &format!(
+                "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"a.db\"\ntags = {list}\n"
+            ),
+        );
+    }
+    let config = load(Some(&fx.repo()), &fx.user());
+    for name in ["repeated", "padded", "empty", "tab", "newline"] {
+        assert!(
+            config.connection(&ws(name)).is_none(),
+            "{name} was accepted"
+        );
+    }
+    assert!(
+        config
+            .problems
+            .iter()
+            .any(|p| p.to_string().contains("tag \"EU\" is repeated")),
+        "{:?}",
+        config.problems
+    );
+
+    // Editing adds them after the description (or the name), changes and removes them.
+    let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
+    let id = ws("orders");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let tagged = ConnectionDraft {
+        tags: tags(&["billing", "eu"]),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &tagged, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.starts_with("# Orders database: owned by the data team\nschema_version = 1\nname = \"Orders\"\ntags = [\"billing\", \"eu\"]\nengine"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let described = ConnectionDraft {
+        description: "Orders".into(),
+        tags: tags(&["eu"]),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &described, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.contains("name = \"Orders\"\ndescription = \"Orders\"\ntags = [\"eu\"]\n"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let cleared = ConnectionDraft {
+        description: String::new(),
+        tags: Vec::new(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &cleared, None, &backend).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), HAND_WRITTEN);
+}
+
 #[test]
 fn the_form_lets_agents_write_or_only_read() {
     let fx = Fixture::new("draft-mcp-writes");
@@ -1300,6 +1433,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         folder: String::new(),
         name: "Orders in cluster".into(),
         description: String::new(),
+        tags: Vec::new(),
         engine: Engine::Postgres,
         env: String::new(),
         host: String::new(),
