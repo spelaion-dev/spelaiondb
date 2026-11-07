@@ -625,6 +625,141 @@ pub struct WorkspaceInfo {
     pub problems: Vec<String>,
 }
 
+/// What a connection type asks for (ADR-029).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SafeguardsItem {
+    pub confirm_execution: bool,
+    pub confirm_data_changes: bool,
+    /// Seconds.
+    pub close_idle_after: Option<u32>,
+}
+
+impl From<spelaion_config::Safeguards> for SafeguardsItem {
+    fn from(s: spelaion_config::Safeguards) -> Self {
+        Self {
+            confirm_execution: s.confirm_execution,
+            confirm_data_changes: s.confirm_data_changes,
+            close_idle_after: s.close_idle_after,
+        }
+    }
+}
+
+/// The tone of a connection type's badge, from the app's fixed palette (ADR-029).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ToneItem {
+    Neutral,
+    Green,
+    Blue,
+    Amber,
+    Red,
+}
+
+impl From<spelaion_config::Tone> for ToneItem {
+    fn from(tone: spelaion_config::Tone) -> Self {
+        use spelaion_config::Tone;
+        match tone {
+            Tone::Neutral => Self::Neutral,
+            Tone::Green => Self::Green,
+            Tone::Blue => Self::Blue,
+            Tone::Amber => Self::Amber,
+            Tone::Red => Self::Red,
+        }
+    }
+}
+
+impl From<ToneItem> for spelaion_config::Tone {
+    fn from(tone: ToneItem) -> Self {
+        match tone {
+            ToneItem::Neutral => Self::Neutral,
+            ToneItem::Green => Self::Green,
+            ToneItem::Blue => Self::Blue,
+            ToneItem::Amber => Self::Amber,
+            ToneItem::Red => Self::Red,
+        }
+    }
+}
+
+/// One type as the Settings page edits it: what the personal layer says (empty texts and
+/// `null` for what it leaves to the team or the built-in definition).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionTypeDraft {
+    pub name: String,
+    pub tone: Option<ToneItem>,
+    pub description: String,
+    pub confirm_execution: bool,
+    pub confirm_data_changes: bool,
+    pub close_idle_after: Option<u32>,
+}
+
+impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
+    fn from(c: &spelaion_config::ConnectionTypeConfig) -> Self {
+        let text = |v: &Option<String>| v.clone().unwrap_or_default();
+        Self {
+            name: text(&c.name),
+            tone: c.tone.map(ToneItem::from),
+            description: text(&c.description),
+            confirm_execution: c.confirm_execution,
+            confirm_data_changes: c.confirm_data_changes,
+            close_idle_after: c.close_idle_after,
+        }
+    }
+}
+
+impl From<ConnectionTypeDraft> for spelaion_config::ConnectionTypeConfig {
+    fn from(d: ConnectionTypeDraft) -> Self {
+        let text = |v: String| Some(v).filter(|v| !v.trim().is_empty());
+        Self {
+            name: text(d.name),
+            tone: d.tone.map(spelaion_config::Tone::from),
+            description: text(d.description),
+            confirm_execution: d.confirm_execution,
+            confirm_data_changes: d.confirm_data_changes,
+            close_idle_after: d.close_idle_after,
+        }
+    }
+}
+
+/// A connection type with every layer applied (ADR-029). The UI shows it; the core decides
+/// what it does.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionTypeItem {
+    pub id: String,
+    pub name: String,
+    /// The tone of its badge.
+    pub tone: ToneItem,
+    pub description: Option<String>,
+    pub built_in: bool,
+    pub team: bool,
+    /// Production: every change is confirmed.
+    pub production: bool,
+    pub safeguards: SafeguardsItem,
+    /// What the built-in and team definitions turn on: the user cannot switch it off.
+    pub inherited: SafeguardsItem,
+    /// The user's own definition or changes, if any.
+    pub personal: Option<ConnectionTypeDraft>,
+}
+
+impl From<&spelaion_config::ConnectionType> for ConnectionTypeItem {
+    fn from(t: &spelaion_config::ConnectionType) -> Self {
+        Self {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            tone: t.tone.into(),
+            description: t.description.clone(),
+            built_in: t.built_in,
+            team: t.team,
+            production: t.is_production(),
+            safeguards: t.safeguards.into(),
+            inherited: t.inherited.into(),
+            personal: t.personal.as_ref().map(ConnectionTypeDraft::from),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionItem {
@@ -633,6 +768,8 @@ pub struct ConnectionItem {
     pub name: String,
     pub engine: String,
     pub env: Option<String>,
+    /// The type `env` names (ADR-029); `None` for no label or a plain one.
+    pub kind: Option<ConnectionTypeItem>,
     pub folders: Vec<String>,
     pub personal: bool,
     pub tunnel: Option<String>,
@@ -1251,6 +1388,8 @@ impl From<TableInfo> for TableDetails {
 pub struct SessionLost {
     pub session: String,
     pub reason: String,
+    /// Closed by its connection type after this many seconds idle (ADR-029), not lost.
+    pub idle_seconds: Option<u32>,
 }
 
 /// Dialog the tunnel needs to show. The UI answers with `answer_interaction`.
@@ -2092,7 +2231,8 @@ pub enum RiskKind {
     Drop,
     Truncate,
     UncheckedWrite,
-    ProductionWrite,
+    DataChange,
+    Execution,
 }
 
 impl From<spelaion_core::Risk> for RiskKind {
@@ -2104,7 +2244,8 @@ impl From<spelaion_core::Risk> for RiskKind {
             Risk::Drop => Self::Drop,
             Risk::Truncate => Self::Truncate,
             Risk::UncheckedWrite => Self::UncheckedWrite,
-            Risk::ProductionWrite => Self::ProductionWrite,
+            Risk::DataChange => Self::DataChange,
+            Risk::Execution => Self::Execution,
         }
     }
 }

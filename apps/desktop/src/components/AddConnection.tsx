@@ -17,6 +17,7 @@ import {
   type UrlFields,
 } from "../api";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
+import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./ConnectionTypePicker";
 import { EngineIcon } from "./EngineIcon";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath, openFilters } from "../dialogs";
@@ -415,6 +416,10 @@ function ConnectionForm(props: {
     keepalive: network ? 300 : null,
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
+  // Types and what they do come from the core (ADR-029).
+  const connectionTypes = useConnectionTypes();
+  const editedConnection = useApp((s) => s.connections.find((c) => c.id === editing));
+  const savedType = editing && initial ? { env: initial.env, kind: editedConnection?.kind ?? null } : null;
 
   const [tunnelEditor, setTunnelEditor] = useState<TunnelEditorMode | null>(null);
   async function loadTunnels(select?: string) {
@@ -447,6 +452,7 @@ function ConnectionForm(props: {
 
   // Agents write only on an exposed connection that is not read-only (ADR-019).
   const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly;
+  const selectedType = pickedType(connectionTypes, draft.env, savedType);
   // What the core receives: the form's choices mapped to the configuration format.
   const passwordMode: PasswordMode =
     !network || auth === "none"
@@ -962,12 +968,7 @@ function ConnectionForm(props: {
                 <input type="text" value={draft.folder} disabled={Boolean(editing)} placeholder={t("fields.folderPlaceholder")} onChange={(e) => update({ folder: e.target.value })} />
               </Field>
               <Field label={t("fields.env")} className="grow">
-                <input type="text" list="env-labels" value={draft.env} placeholder="dev, staging, prod…" onChange={(e) => update({ env: e.target.value })} />
-                <datalist id="env-labels">
-                  <option value="dev" />
-                  <option value="staging" />
-                  <option value="prod" />
-                </datalist>
+                <ConnectionTypePicker types={connectionTypes} env={draft.env} saved={savedType} onChange={(env) => update({ env })} />
               </Field>
             </div>
           </fieldset>
@@ -1008,7 +1009,7 @@ function ConnectionForm(props: {
                 <option value="write">{t("fields.mcpWrite")}</option>
               </select>
             </Field>
-            {agentsWrite && draft.env.trim().toLowerCase() === "prod" && (
+            {agentsWrite && selectedType?.safeguards.confirmDataChanges && (
               <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
             )}
             <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>

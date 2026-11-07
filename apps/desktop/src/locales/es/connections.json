@@ -34,7 +34,7 @@
     "personal": "Personal",
     "projectHint": "Se guarda en la carpeta .spelaion/ del repositorio y se comparte por git. Las contraseñas nunca se escriben ahí.",
     "personalHint": "Se guarda solo en este equipo, en tu carpeta de configuración personal.",
-    "env": "Entorno",
+    "env": "Tipo de conexión",
     "host": "Servidor",
     "port": "Puerto",
     "database": "Base de datos",
@@ -56,7 +56,7 @@
     "mcpRead": "Solo leer",
     "mcpWrite": "Leer y escribir",
     "mcpWriteHint": "Los agentes pueden ejecutar una escritura cada vez (INSERT, UPDATE, DELETE con WHERE, CREATE o ALTER de tablas, vistas e índices…), cada una en su propia transacción. DROP, TRUNCATE, los cambios a todas las filas, los procedimientos y los permisos se rechazan siempre, y todo queda auditado.",
-    "mcpProdWarning": "Es una conexión de producción: los agentes podrán cambiar sus datos.",
+    "mcpProdWarning": "El tipo de esta conexión pide confirmar los cambios de datos: los agentes podrán cambiar sus datos.",
     "namePlaceholder": "Mi base de datos {{engine}}",
     "authentication": "Método",
     "savePassword": "Guardar contraseña",
@@ -82,7 +82,15 @@
     "tlsKeyPlaceholder": "~/.ssl/yo.key",
     "clientCertHint": "Entra con un certificado en lugar de una contraseña (el servidor debe aceptarlo para este usuario). La clave se queda en tu ordenador: guárdala en tu carpeta personal, nunca en el repositorio.",
     "cloudToken": "Proveedor",
-    "engine": "Motor"
+    "engine": "Motor",
+    "noType": "Sin tipo",
+    "customLabel": "Otra etiqueta…",
+    "label": "Etiqueta",
+    "labelHint": "Una etiqueta propia solo nombra la conexión: no tiene color ni salvaguardas.",
+    "typeConfirmsExecution": "Pregunta antes de cada ejecución",
+    "typeConfirmsChanges": "Pregunta antes de cambiar datos",
+    "typeClosesIdle": "Se cierra tras {{minutes}} min inactiva",
+    "typeNoSafeguards": "Sin salvaguardas: solo su insignia"
   },
   "tls": {
     "disable": "Desactivado",
@@ -291,7 +299,7 @@
     "tls.mode": "modo TLS",
     "tls.ca": "certificado de la CA",
     "tls.cert": "certificado de cliente",
-    "env": "entorno",
+    "env": "tipo de conexión",
     "read_only": "solo lectura",
     "mcp": "acceso de los agentes"
   },

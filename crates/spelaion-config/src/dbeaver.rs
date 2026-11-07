@@ -40,7 +40,8 @@ pub struct DbeaverConnection {
     pub database: String,
     pub user: String,
     pub password: Option<Secret>,
-    /// DBeaver's connection type (`dev`, `test`, `prod` or a custom one).
+    /// The built-in type closest to DBeaver's connection type (`dev`, `test` or `prod`,
+    /// ADR-029); empty for none.
     pub env: String,
     pub ssh: Option<DbeaverSsh>,
     /// DBeaver's SOCKS proxy handler (`socks_proxy`), alone or in front of the SSH tunnel.
@@ -139,13 +140,18 @@ pub fn read_dbeaver(dir: &Path) -> Result<Vec<DbeaverConnection>, DbeaverError> 
             .collect();
         files.sort();
         for file in files {
-            let text = std::fs::read_to_string(&file).map_err(|e| unreadable(&file, e))?;
-            let json: Json = serde_json::from_str(&text).map_err(|e| unreadable(&file, e))?;
+            let content = std::fs::read_to_string(&file).map_err(|e| unreadable(&file, e))?;
+            let json: Json = serde_json::from_str(&content).map_err(|e| unreadable(&file, e))?;
             let Some(connections) = json.get("connections").and_then(Json::as_object) else {
                 continue;
             };
+            let types = json.get("connection-types");
             for (id, connection) in connections {
-                out.push(connection_of(id, connection, credentials.get(id)));
+                let mut found = connection_of(id, connection, credentials.get(id));
+                let dbeaver_type =
+                    text(connection.get("configuration").and_then(|c| c.get("type")));
+                found.env = closest_type(&dbeaver_type, types.and_then(|t| t.get(&dbeaver_type)));
+                out.push(found);
             }
         }
     }
@@ -225,6 +231,37 @@ fn seconds(value: Option<&Json>) -> Option<u32> {
     positive(value).map(|ms| u32::try_from(ms.div_ceil(1000)).unwrap_or(u32::MAX))
 }
 
+/// The built-in type closest to a DBeaver connection type (ADR-029): DBeaver's own `dev`,
+/// `test` and `prod` are ours; a custom one that asks before running or changing anything is
+/// Production (never looser than it was), otherwise its id or name decides, and Development
+/// when nothing does. DBeaver's colors are not imported.
+fn closest_type(dbeaver: &str, definition: Option<&Json>) -> String {
+    let id = crate::types::type_id(dbeaver);
+    if id.is_empty() {
+        return String::new();
+    }
+    if ["dev", "test", crate::types::PRODUCTION].contains(&id.as_str()) {
+        return id;
+    }
+    let flag =
+        |key: &str| definition.and_then(|d| d.get(key)).and_then(Json::as_bool) == Some(true);
+    if flag("confirm-data-change") || flag("confirm-execute") {
+        return crate::types::PRODUCTION.into();
+    }
+    let words = format!(
+        "{id} {}",
+        text(definition.and_then(|d| d.get("name"))).to_lowercase()
+    );
+    let has = |parts: &[&str]| parts.iter().any(|p| words.contains(p));
+    if has(&["prod", "live"]) {
+        crate::types::PRODUCTION.into()
+    } else if has(&["test", "qa", "uat", "stag", "preprod"]) {
+        "test".into()
+    } else {
+        "dev".into()
+    }
+}
+
 fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverConnection {
     let config = json.get("configuration").unwrap_or(&Json::Null);
     let provider = text(json.get("provider")).to_lowercase();
@@ -267,7 +304,7 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
         database,
         user,
         password,
-        env: text(config.get("type")),
+        env: closest_type(&text(config.get("type")), None),
         ssh: ssh_of(config, credentials),
         proxy: proxy_of(config, credentials),
     }
@@ -500,6 +537,14 @@ mod tests {
             dir.join("data-sources.json"),
             r#"{
               "folders": {"Prod": {}},
+              "connection-types": {
+                "prod": {"name": "Production", "color": "247,159,129", "confirm-execute": true},
+                "QA Team": {"name": "QA team", "color": "0,128,255", "description": "Shared QA",
+                  "auto-commit": false, "confirm-execute": true, "confirm-data-change": true,
+                  "smart-commit": true, "auto-close-transactions": true,
+                  "auto-close-connections": true, "close-connections-period": 900},
+                "white": {"name": "Plain", "color": "255,255,255"}
+              },
               "connections": {
                 "postgres-jdbc-1": {
                   "provider": "postgresql", "driver": "postgres-jdbc", "name": "Orders PG",
@@ -514,7 +559,7 @@ mod tests {
                 },
                 "mariaDB-2": {
                   "provider": "mysql", "driver": "mariaDB", "name": "Shop Maria",
-                  "configuration": {"host": "localhost", "port": "3306", "database": "shop", "type": "dev"}
+                  "configuration": {"host": "localhost", "port": "3306", "database": "shop", "type": "QA Team"}
                 },
                 "sqlite_jdbc-3": {
                   "provider": "sqlite", "driver": "sqlite_jdbc", "name": "Local file",
@@ -522,7 +567,7 @@ mod tests {
                 },
                 "oracle_thin-4": {
                   "provider": "oracle", "driver": "oracle_thin", "name": "Legacy",
-                  "configuration": {"host": "ora", "port": "1521"}
+                  "configuration": {"host": "ora", "port": "1521", "type": "white"}
                 },
                 "duckdb_jdbc-5": {
                   "provider": "duckdb", "driver": "duckdb_jdbc", "name": "Analytics",
@@ -596,6 +641,27 @@ mod tests {
             (Ok(Engine::Mariadb), "root")
         );
         assert!(maria.password.is_none() && maria.ssh.is_none());
+        // DBeaver's types map to the closest built-in one; its colors are ignored.
+        assert_eq!(pg.env, "prod");
+        assert_eq!(
+            maria.env, "prod",
+            "a custom type that confirms changes stays as strict"
+        );
+        assert_eq!(by_id("oracle_thin-4").env, "dev");
+        assert_eq!(by_id("sqlite_jdbc-3").env, "dev");
+        assert_eq!(
+            import_plan(maria, Engine::Mariadb, Source::User, false, "")
+                .connection
+                .env,
+            "prod"
+        );
+        let quiet = |name: &str| serde_json::json!({ "name": name });
+        assert_eq!(closest_type("QA", Some(&quiet("QA team"))), "test");
+        assert_eq!(closest_type("x1", Some(&quiet("Staging"))), "test");
+        assert_eq!(closest_type("x2", Some(&quiet("Live shop"))), "prod");
+        assert_eq!(closest_type("Production", None), "prod");
+        assert_eq!(closest_type("sandbox", Some(&quiet("Sandbox"))), "dev");
+        assert_eq!(closest_type("", None), "");
         assert_eq!(by_id("sqlite_jdbc-3").database, "C:\\data\\local.db");
         assert!(by_id("oracle_thin-4").engine.is_err());
         let duck = by_id("duckdb_jdbc-5");

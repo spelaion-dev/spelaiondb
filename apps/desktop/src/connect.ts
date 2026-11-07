@@ -12,6 +12,12 @@ import { useApp, useDialogs } from "./store";
  * tabs on that connection reload the names their autocompletion offers.
  */
 export const SCHEMAS_REFRESHED_EVENT = "spelaion-schemas-refreshed";
+/**
+ * Fired on `window` with `{ connectionId, idleSeconds }` when the explorer's own session of a
+ * connection is lost or closed for being idle (ADR-029): its tree collapses, and expanding it
+ * again reconnects.
+ */
+export const EXPLORER_SESSION_CLOSED_EVENT = "spelaion-explorer-session-closed";
 /** A catalog change in a metadata tab asks the explorer to reread its objects. */
 export const EXPLORER_REFRESH_EVENT = "spelaion-explorer-refresh";
 

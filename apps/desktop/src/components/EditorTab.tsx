@@ -14,6 +14,7 @@ import { ResultFilter } from "./ResultFilter";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
+import { TypeBadge } from "./TypeBadge";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 function databaseSwitching(engine: string | undefined): boolean {
@@ -188,9 +189,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
     ];
     try {
       let confirmed = false;
-      if (connection?.env?.toLowerCase().startsWith("prod")) {
+      // The core decided the type's safeguards; it refuses unconfirmed edits too.
+      if (connection?.kind?.safeguards.confirmDataChanges) {
         const statements = await call(commands.previewTableEdits(tab.id, result.id, view.schema, view.name, changes));
-        const ok = await useDialogs.getState().askRisks(connection.name, statements.map((sql) => ({ sql, risk: "productionWrite" as const })));
+        const ok = await useDialogs.getState().askRisks(connection.name, statements.map((sql) => ({ sql, risk: "dataChange" as const })));
         if (!ok) return;
         confirmed = true;
       }
@@ -515,7 +517,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const current = useApp.getState().tabs.find((t) => t.id === tab.id);
     // A lost session is reconnected only from its banner, and nothing is run then (ADR-028).
     if (current?.lost) {
-      updateTab(tab.id, { run: errorRun(current.lost, { key: "messages.connectionLost", values: { detail: current.lost } }) });
+      updateTab(tab.id, {
+        run: current.idleClosed
+          ? errorRun(current.lost, { key: "messages.idleClosed", values: { minutes: idleMinutes(current.idleClosed) } })
+          : errorRun(current.lost, { key: "messages.connectionLost", values: { detail: current.lost } }),
+      });
       return false;
     }
     const status = current?.status;
@@ -532,7 +538,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         updateTab(tab.id, { status: "disconnected" });
         return false;
       }
-      updateTab(tab.id, { status: "connected", serverVersion: version, lost: undefined });
+      updateTab(tab.id, { status: "connected", serverVersion: version, lost: undefined, idleClosed: undefined });
       return true;
     } catch (e) {
       const detail = message(e);
@@ -544,7 +550,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** Opens a new session for a tab whose session was lost. Nothing is run: the user runs
    *  the statement again. */
   async function reconnect() {
-    updateTab(tab.id, { lost: undefined });
+    updateTab(tab.id, { lost: undefined, idleClosed: undefined });
     if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
   }
 
@@ -553,7 +559,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     await call(commands.disconnect(tab.id)).catch(() => undefined);
     setTables({});
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
-    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined });
+    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined });
   }
 
   async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize) {
@@ -692,6 +698,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   const running = tab.run?.running ?? false;
+  const kind = connection?.kind ?? null;
   return (
     <div className="editor-tab">
       <div className="toolbar">
@@ -700,7 +707,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name} ({c.engine}
-              {c.env ? `, ${c.env}` : ""})
+              {c.kind ? `, ${c.kind.name}` : c.env ? `, ${c.env}` : ""})
             </option>
           ))}
         </select>
@@ -715,7 +722,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         ))}
         {tab.lost ? (
           <span className="status status-lost" role="alert" title={tab.lost}>
-            {t("status.lost")}
+            {tab.idleClosed ? t("status.idleClosed", { minutes: idleMinutes(tab.idleClosed) }) : t("status.lost")}
             <button className="ghost small" disabled={workspaceChanging} onClick={() => void reconnect()}>
               {t("reconnect")}
             </button>
@@ -725,7 +732,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
             {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
           </span>
         )}
-        {connection?.env?.toLowerCase().startsWith("prod") && <span className="badge badge-prod">{t("production")}</span>}
+        {kind && <TypeBadge type={kind} />}
         {notice && (
           <span className={`small format-error ${notice.error ? "error" : "muted"}`} role={notice.error ? "alert" : "status"}>
             {notice.text}
@@ -966,4 +973,9 @@ function Results({
       </div>
     </div>
   );
+}
+
+/** Whole minutes for an idle time in seconds, at least one. */
+function idleMinutes(seconds: number): number {
+  return Math.max(1, Math.round(seconds / 60));
 }

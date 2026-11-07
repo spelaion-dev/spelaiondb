@@ -13,7 +13,7 @@ import { SnippetsPanel } from "./components/SnippetsPanel";
 import { FOCUS_EXPLORER_FILTER_EVENT, Sidebar, refreshConnections } from "./components/Sidebar";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
-import { closeQueryTab } from "./connect";
+import { EXPLORER_SESSION_CLOSED_EVENT, closeQueryTab } from "./connect";
 import { usePreferences } from "./preferences";
 import { useUpdate } from "./update";
 import { SAVE_QUERY_EVENT, useApp, useDialogs } from "./store";
@@ -92,10 +92,15 @@ export default function App() {
     const unlisten = events.interactionRequest.listen((e) =>
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );
-    // A tab whose session died shows it; nothing reconnects or re-runs on its own (ADR-028).
-    const unlistenLost = events.sessionLost.listen((e) =>
-      useApp.getState().updateTab(e.payload.session, { status: "disconnected", lost: e.payload.reason }),
-    );
+    // A tab whose session died, or was closed for being idle (ADR-029), shows it; nothing
+    // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses.
+    const unlistenLost = events.sessionLost.listen((e) => {
+      const { session, reason, idleSeconds } = e.payload;
+      useApp.getState().updateTab(session, { status: "disconnected", lost: reason, idleClosed: idleSeconds ?? undefined });
+      if (session.startsWith("meta:")) {
+        window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: session.slice("meta:".length), idleSeconds } }));
+      }
+    });
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();

@@ -32,6 +32,7 @@ import {
   connectTabFromExplorer,
   explorerDatabase,
   EXPLORER_REFRESH_EVENT,
+  EXPLORER_SESSION_CLOSED_EVENT,
   openSession,
   SCHEMAS_REFRESHED_EVENT,
   SET_ACTIVE_SCHEMA_EVENT,
@@ -44,6 +45,7 @@ import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboar
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
+import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 
 function errorText(e: unknown): string {
@@ -1295,6 +1297,21 @@ function ConnectionNode({
     window.addEventListener(EXPLORER_REFRESH_EVENT, refresh);
     return () => window.removeEventListener(EXPLORER_REFRESH_EVENT, refresh);
   }, [connection.id, schemas]);
+  // The explorer's session was lost or closed for being idle (ADR-029): the tree collapses and
+  // says why; expanding it again reconnects, nothing else does.
+  useEffect(() => {
+    const closed = (event: Event) => {
+      const detail = (event as CustomEvent<{ connectionId: string; idleSeconds: number | null }>).detail;
+      if (detail.connectionId !== connection.id) return;
+      setSchemas(null);
+      setServerObjects([]);
+      setOpen(false);
+      useApp.getState().setExplorerConnected(connection.id, false);
+      setError(detail.idleSeconds != null ? t("idleClosed", { minutes: Math.max(1, Math.round(detail.idleSeconds / 60)) }) : null);
+    };
+    window.addEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
+    return () => window.removeEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
+  }, [connection.id, t]);
 
   function newQuery() {
     const tab = addTab(connection.id);
@@ -1409,7 +1426,8 @@ function ConnectionNode({
       onFilterName={filterName}
     />
   ));
-  const prod = connection.env?.toLowerCase().startsWith("prod");
+  // The type comes from the core (ADR-029).
+  const kind = connection.kind;
   return (
     <div
       className="node"
@@ -1445,19 +1463,31 @@ function ConnectionNode({
         <span
           className="label"
           onDoubleClick={newQuery}
-          title={connection.id}
+          // The marks after the name may not fit: what they say is here too.
+          title={[
+            connection.id,
+            kind ? t("typeTooltip", { name: kind.name }) : null,
+            connection.tunnel ? t("tunnel", { name: connection.tunnel }) : null,
+          ]
+            .filter(Boolean)
+            .join("\n")}
         >
           {connection.name}
         </span>
-        {connection.tunnel && (
-          <span
-            className="tag"
-            title={t("tunnel", { name: connection.tunnel })}
-          >
-            SSH
+        {(kind || connection.tunnel) && (
+          // The type first: it is the mark that matters most when only one fits.
+          <span className="connection-marks">
+            {kind && <TypeBadge type={kind} small />}
+            {connection.tunnel && (
+              <span
+                className="tag"
+                title={t("tunnel", { name: connection.tunnel })}
+              >
+                SSH
+              </span>
+            )}
           </span>
         )}
-        {prod && <span className="tag tag-prod">prod</span>}
         {!isFilterEmpty(filters, "schemas") && (
           <span className="tag" title={t("filteredHint")}>
             {t("filtered")}

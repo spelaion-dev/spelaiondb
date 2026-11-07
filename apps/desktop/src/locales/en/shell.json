@@ -63,6 +63,7 @@
   },
   "toggleConnection": "Expand or collapse {{connection}}",
   "tunnel": "Tunnel {{name}}",
+  "typeTooltip": "Type: {{name}}",
   "filtered": "filtered",
   "filteredHint": "Some schemas, objects or columns are hidden by this connection's filter (⋯ → Configure filters)",
   "configureFilter": "Configure filter…",
@@ -91,7 +92,13 @@
   "toggleFolder": "Expand or collapse {{name}}",
   "openObject": "{{name}}: open its definition",
   "openDefinition": "Generate DDL",
-  "generatedSql": { "title": "Generated SQL", "editor": "SQL editor", "copy": "Copy", "copied": "Copied", "close": "Close" },
+  "generatedSql": {
+    "title": "Generated SQL",
+    "editor": "SQL editor",
+    "copy": "Copy",
+    "copied": "Copied",
+    "close": "Close"
+  },
   "generateSql": "Generate SQL",
   "generateDdl": "Generate DDL",
   "generateCall": "Generate CALL",
@@ -224,7 +231,12 @@
     "drop": "DROP: removes the object and everything in it",
     "truncate": "TRUNCATE: empties the table",
     "uncheckedWrite": "DELETE or UPDATE that could not be checked for a WHERE",
-    "productionWrite": "Changes a production database",
+    "dataChange": "Changes data where the connection's type asks first",
+    "execution": "Runs on a connection that asks before every run",
+    "executionExplanation": "{{connection}} asks before running anything. Nothing has run yet.",
+    "more_one": "…and {{count}} more statement",
+    "more_other": "…and {{count}} more statements",
+    "runConfirmed": "Run",
     "cancel": "Cancel",
     "run": "Run anyway"
   },
@@ -334,5 +346,6 @@
   "bookmarkOpen": "Bookmark {{name}}: open it",
   "bookmarkOpenMenu": "Open",
   "bookmarkHint": "Click to show it in the explorer, double-click to open it",
-  "showInExplorer": "Show in explorer"
+  "showInExplorer": "Show in explorer",
+  "idleClosed": "Closed after {{minutes}} min without use, as its connection type asks. Expand it to reconnect."
 }

@@ -20,7 +20,9 @@ pub struct ConnectionFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub engine: Engine,
-    /// Environment label (`dev`, `staging`, `prod`…). `prod` tightens the MCP permissions.
+    /// Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type
+    /// in `connection-types.toml`; its badge and safeguards apply. Any other text is a plain
+    /// label with no behaviour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -306,6 +308,76 @@ pub enum SshAuth {
     Key,
     Password,
     KeyboardInteractive,
+}
+
+/// Connection types (ADR-029): `.spelaion/connection-types.toml` (the team's, shared in git)
+/// and `connection-types.toml` in the personal directory, with the same format.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionTypesFile {
+    #[serde(default = "current_version")]
+    pub schema_version: u32,
+    /// One table per type, by id (lowercase letters, digits, `-` and `_`). `dev`, `test` and
+    /// `prod` are the built-in ones: defining them changes their looks or adds safeguards.
+    #[serde(default)]
+    pub types: BTreeMap<String, ConnectionTypeConfig>,
+}
+
+/// One connection type. Safeguards only add up: a layer can turn one on, never off.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionTypeConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The tone of its badge, from the app's palette (it looks right in both themes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<Tone>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The editor asks before running any script.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub confirm_execution: bool,
+    /// The editor asks before any statement that is not a read, and table edits are
+    /// confirmed (what Production does).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub confirm_data_changes: bool,
+    /// Close a session after this many seconds without use. Never while a transaction is
+    /// open; nothing reconnects by itself. Off when absent or 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_idle_after: Option<u32>,
+}
+
+/// The tones a connection type's badge can have: a fixed palette the app draws for the light
+/// and the dark theme (ADR-029).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Tone {
+    #[default]
+    Neutral,
+    Green,
+    Blue,
+    Amber,
+    Red,
+}
+
+impl Tone {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tone::Neutral => "neutral",
+            Tone::Green => "green",
+            Tone::Blue => "blue",
+            Tone::Amber => "amber",
+            Tone::Red => "red",
+        }
+    }
+}
+
+impl ConnectionTypeConfig {
+    /// Longest idle time accepted: a day.
+    pub const MAX_CLOSE_IDLE_AFTER: u32 = 86_400;
+    /// Longest name and description accepted, in characters.
+    pub const MAX_NAME: usize = 40;
+    pub const MAX_DESCRIPTION: usize = 200;
 }
 
 /// Personal configuration: `<user config>/spelaiondb/user.toml`. Never goes to git.

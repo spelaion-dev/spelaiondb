@@ -14,7 +14,8 @@
     "connected": "Conectado",
     "connecting": "Conectando…",
     "disconnected": "Desconectado",
-    "lost": "Conexión perdida"
+    "lost": "Conexión perdida",
+    "idleClosed": "Cerrada tras {{minutes}} min inactiva"
   },
   "production": "PRODUCCIÓN",
   "cancel": "Cancelar",
@@ -93,6 +94,7 @@
   },
   "messages": {
     "connectionLost": "Se perdió la conexión: {{detail}}. No se ejecutó nada. Reconecta y vuelve a ejecutarlo: nada se repite solo.",
+    "idleClosed": "La conexión se cerró tras {{minutes}} min sin uso, como pide su tipo de conexión. No se ejecutó nada. Vuelve a conectar y ejecútalo de nuevo: nada se vuelve a ejecutar solo.",
     "connectionFailed": "No se pudo conectar: {{detail}}",
     "runFailed": "No se pudo ejecutar la consulta: {{detail}}",
     "statementOk": "Sentencia {{index}}: OK ({{duration}} ms)",
