@@ -1996,6 +1996,48 @@ pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
     })
 }
 
+/// What changing a connection's engine does to its settings (ADR-030), by the file's field
+/// names. Values are what the form shows: a password only as its reference.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineChangeItem {
+    pub from: String,
+    pub to: String,
+    pub kept: Vec<String>,
+    pub changed: Vec<FieldChangeItem>,
+    pub dropped: Vec<String>,
+    pub required: Vec<String>,
+}
+
+impl From<spelaion_config::EngineChange> for EngineChangeItem {
+    fn from(change: spelaion_config::EngineChange) -> Self {
+        Self {
+            from: change.from.as_str().into(),
+            to: change.to.as_str().into(),
+            kept: change.kept,
+            changed: change
+                .changed
+                .into_iter()
+                .map(|f| FieldChangeItem {
+                    field: f.field,
+                    before: f.before,
+                    after: f.after,
+                })
+                .collect(),
+            dropped: change.dropped,
+            required: change.required,
+        }
+    }
+}
+
+/// The form of a connection mapped to another engine, and what that did.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MappedConnectionItem {
+    pub draft: ConnectionDraftItem,
+    pub change: EngineChangeItem,
+}
+
 /// A connection name pattern checked and shown for two sample connections.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

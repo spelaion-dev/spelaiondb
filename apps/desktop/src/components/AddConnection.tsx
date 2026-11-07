@@ -9,6 +9,7 @@ import {
   call,
   commands,
   type ConnectionDraft,
+  type EngineChangeItem,
   type EngineItem,
   type PasswordMode,
   type TlsModeItem,
@@ -21,6 +22,7 @@ import { refreshConnections } from "./Sidebar";
 import { chooseSavePath, openFilters } from "../dialogs";
 import { reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
+import { fieldList } from "../fieldNames";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
@@ -47,6 +49,20 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** The engine the edited connection has on disk, and what switching it did (ADR-030). */
+  const [savedEngine, setSavedEngine] = useState<string | null>(null);
+  const [engineChange, setEngineChange] = useState<EngineChangeItem | null>(null);
+  const [carriedPassword, setCarriedPassword] = useState("");
+
+  /** The core maps the form to another engine; the form starts again with the result. */
+  async function changeEngine(next: EngineItem, current: ConnectionDraft, password: string) {
+    const mapped = await call(commands.changeConnectionEngine(current, next.id));
+    setInitial(mapped.draft as ConnectionDraft);
+    setEngine(next);
+    setCarriedPassword(password);
+    setEngineChange(next.id === savedEngine ? null : mapped.change);
+  }
+
 
   useEffect(() => {
     void commands.engineCatalog().then(async (catalog) => {
@@ -72,6 +88,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         const draft = saved as ConnectionDraft;
         setRevision(revision);
         setInitial(draft);
+        setSavedEngine(draft.engine);
         setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
       } catch (e) {
         setLoadError(errorText(e));
@@ -107,7 +124,25 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         {loadError ? (
           <p className="error wizard-error" role="alert">{loadError}</p>
         ) : editing ? (
-          engine && initial && revision !== null && <ConnectionForm engine={engine} editing={editing} initial={initial} revision={revision} onCancel={close} onSaved={close} />
+          engine &&
+          initial &&
+          revision !== null && (
+            <ConnectionForm
+              // Another engine is another form, started from what the core mapped.
+              key={engine.id}
+              engine={engine}
+              editing={editing}
+              initial={initial}
+              initialPassword={carriedPassword}
+              revision={revision}
+              engines={engines.filter((e) => e.available)}
+              savedEngine={savedEngine ?? engine.id}
+              engineChange={engineChange}
+              onChangeEngine={changeEngine}
+              onCancel={close}
+              onSaved={close}
+            />
+          )
         ) : importing ? (
           <DbeaverImport onBack={() => setImporting(false)} onDone={close} />
         ) : engine ? (
@@ -266,6 +301,29 @@ function Field({ label, children, className }: { label: string; children: React.
   );
 }
 
+/** What switching the engine kept, changed and dropped, shown before saving (ADR-030). */
+function EngineChangeSummary({ change, engines }: { change: EngineChangeItem; engines: EngineItem[] }) {
+  const { t } = useTranslation("connections");
+  const engineName = (id: string) => engines.find((e) => e.id === id)?.name ?? id;
+  const shown = (value: string | null) => value ?? t("engineChange.none");
+  return (
+    <div className="banner engine-change" role="status" aria-label={t("engineChange.title")}>
+      <strong>{t("engineChange.summary", { from: engineName(change.from), to: engineName(change.to) })}</strong>
+      {change.kept.length > 0 && <p>{t("engineChange.kept", { fields: fieldList(change.kept) })}</p>}
+      {change.changed.length > 0 && (
+        <p>
+          {t("engineChange.changed", {
+            fields: change.changed.map((c) => `${fieldList([c.field])}: ${shown(c.before)} → ${shown(c.after)}`).join("; "),
+          })}
+        </p>
+      )}
+      {change.dropped.length > 0 && <p>{t("engineChange.dropped", { fields: fieldList(change.dropped) })}</p>}
+      {change.required.length > 0 && <p className="error">{t("engineChange.required", { fields: fieldList(change.required) })}</p>}
+      <p className="muted small">{t("engineChange.hint")}</p>
+    </div>
+  );
+}
+
 function authFrom(mode: PasswordMode): AuthMethod {
   switch (mode) {
     case "keychain":
@@ -292,6 +350,13 @@ function ConnectionForm(props: {
   revision?: string;
   /** Values read from a pasted connection URL. */
   prefill?: UrlFields;
+  /** A password typed before the engine was switched, kept in the new form. */
+  initialPassword?: string;
+  /** Editing: the engines it can switch to, the one on disk, and what the last switch did. */
+  engines?: EngineItem[];
+  savedEngine?: string;
+  engineChange?: EngineChangeItem | null;
+  onChangeEngine?(engine: EngineItem, current: ConnectionDraft, password: string): Promise<void>;
   onBack?(): void;
   onCancel(): void;
   onSaved(): void;
@@ -323,9 +388,10 @@ function ConnectionForm(props: {
   // Kubernetes and an SSH tunnel exclude each other (the core rejects both).
   const [useKubernetes, setUseKubernetes] = useState(Boolean(initial?.kubernetes));
   const [kubernetes, setKubernetes] = useState(initial?.kubernetes ?? EMPTY_KUBERNETES);
-  const [password, setPassword] = useState(prefill?.password ?? "");
+  const [password, setPassword] = useState(prefill?.password ?? props.initialPassword ?? "");
   /** The user typed a name: the pattern stops filling it (until the field is emptied). */
   const [nameTyped, setNameTyped] = useState(Boolean(editing));
+  const [engineError, setEngineError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -526,6 +592,15 @@ function ConnectionForm(props: {
       // Only a saved password reaches the keychain; otherwise it was just for the test.
       const stored = passwordMode === "keychain" && password ? password : null;
       await call(editing ? commands.updateConnection(editing, request, stored, props.revision ?? "") : commands.addConnection(request, stored));
+      if (editing && props.savedEngine && props.savedEngine !== engine.id) {
+        // Its open sessions belong to the old engine: closed; tabs connect again when run.
+        const app = useApp.getState();
+        const tabs = app.tabs.filter((tab) => tab.connectionId === editing);
+        await Promise.all(
+          [...tabs.map((tab) => tab.id), `meta:${editing}`].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
+        );
+        for (const tab of tabs) app.updateTab(tab.id, { status: "disconnected", serverVersion: null });
+      }
       await refreshConnections();
       props.onSaved();
     } catch (e) {
@@ -564,7 +639,34 @@ function ConnectionForm(props: {
             }}
           />
         </Field>
+        {props.engines && props.onChangeEngine && (
+          <Field label={t("fields.engine")}>
+            <select
+              aria-label={t("fields.engine")}
+              value={engine.id}
+              disabled={busy}
+              onChange={(e) => {
+                const next = props.engines?.find((item) => item.id === e.target.value);
+                if (!next || !props.onChangeEngine) return;
+                setEngineError(null);
+                props.onChangeEngine(next, request, password).catch((err: unknown) => setEngineError(errorText(err)));
+              }}
+            >
+              {props.engines.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
+      {props.engineChange && <EngineChangeSummary change={props.engineChange} engines={props.engines ?? []} />}
+      {engineError && (
+        <p className="error small" role="alert">
+          {engineError}
+        </p>
+      )}
       <div className="form-tabs" role="tablist">
         {tabs.map((id) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} aria-controls={`connection-tab-${id}`} onClick={() => setTab(id)}>
