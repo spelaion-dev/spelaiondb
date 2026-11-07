@@ -20,7 +20,7 @@ use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
     EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, ObjectInfo, Result,
-    ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
+    ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -166,6 +166,10 @@ enum Request {
         params: Vec<String>,
         reply: oneshot::Sender<Result<Rows>>,
     },
+    /// The TDS transaction descriptor, or `XACT_STATE()` when it may be stale (ADR-031).
+    TransactionState {
+        reply: oneshot::Sender<Result<TransactionState>>,
+    },
 }
 
 /// Owns the connection until every handle is dropped.
@@ -230,6 +234,38 @@ async fn actor(
                         .await
                         .map(|_| KeepAlive::Alive),
                     Err(error) => Err(map_error(error, None)),
+                };
+                let _ = reply.send(result);
+            }
+            Request::TransactionState { reply } => {
+                let result = if transaction_state_unknown {
+                    // After an error or a cancel: ask the server. -1 is a transaction that
+                    // can only be rolled back (`XACT_ABORT`, some errors).
+                    let answer = rows(&mut client, "select xact_state()", &[]).await;
+                    transaction_state_unknown = answer.is_err();
+                    answer.map(|rows| {
+                        match rows
+                            .first()
+                            .and_then(|row| row.first())
+                            .and_then(|value| value.as_deref())
+                        {
+                            Some("0") => TransactionState::Idle,
+                            Some("-1") => TransactionState::Failed,
+                            _ => TransactionState::Open,
+                        }
+                    })
+                } else {
+                    client
+                        .in_transaction()
+                        .await
+                        .map(|open| {
+                            if open {
+                                TransactionState::Open
+                            } else {
+                                TransactionState::Idle
+                            }
+                        })
+                        .map_err(|error| map_error(error, None))
                 };
                 let _ = reply.send(result);
             }
@@ -476,6 +512,15 @@ impl Connection for SqlServerConnection {
         let (reply, response) = oneshot::channel();
         self.requests
             .send(Request::KeepAlive { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
+    }
+
+    async fn transaction_state(&self) -> Result<TransactionState> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::TransactionState { reply })
             .await
             .map_err(|_| closed())?;
         response.await.map_err(|_| closed())?

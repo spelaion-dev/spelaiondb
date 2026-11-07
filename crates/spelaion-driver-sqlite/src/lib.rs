@@ -17,7 +17,7 @@ use rusqlite::{InterruptHandle, OpenFlags};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
     EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, SchemaInfo,
-    SchemaObject, TableInfo,
+    SchemaObject, TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -143,6 +143,8 @@ enum Command {
     Describe(String, String, Reply<TableInfo>),
     /// A catalog query from `catalog.rs`.
     Catalog(String, Reply<Vec<catalog::Row>>),
+    /// `sqlite3_get_autocommit`: no query (ADR-031).
+    TransactionState(Reply<TransactionState>),
 }
 
 /// Loop of the connection thread. Ends when the `SqliteConnection` is dropped.
@@ -175,6 +177,14 @@ fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>
             }
             Command::Catalog(sql, reply) => {
                 let _ = reply.send(introspect::query(&conn, &sql));
+            }
+            Command::TransactionState(reply) => {
+                // SQLite has no failed transactions: an error that ends one rolls it back.
+                let _ = reply.send(Ok(if conn.is_autocommit() {
+                    TransactionState::Idle
+                } else {
+                    TransactionState::Open
+                }));
             }
         }
     }
@@ -226,6 +236,10 @@ impl Connection for SqliteConnection {
 
     async fn server_version(&self) -> Result<String> {
         self.ask(Command::Version).await
+    }
+
+    async fn transaction_state(&self) -> Result<TransactionState> {
+        self.ask(Command::TransactionState).await
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
