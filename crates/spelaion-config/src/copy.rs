@@ -62,6 +62,15 @@ pub struct Pasted {
 /// Longest clipboard text a paste reads.
 pub const MAX_CLIPBOARD_TEXT: usize = 64 * 1024;
 
+/// What the errors of a paste are about: the text, not a file of the user's.
+const CLIPBOARD: &str = "clipboard";
+
+/// An error checking pasted text, said of the clipboard rather than of the file it would
+/// have become (whose path means nothing to the user, and shows their folders).
+fn from_clipboard(error: ConfigError) -> ResolveError {
+    ConfigError::new(Path::new(CLIPBOARD), error.message).into()
+}
+
 /// First line of the clipboard form.
 const CLIPBOARD_HEADER: &str =
     "# A SpelaionDB connection, without secrets: its password is asked when connecting.";
@@ -358,7 +367,8 @@ pub fn paste_connection(
     backend: &dyn SecretBackend,
 ) -> Result<Pasted, ResolveError> {
     let here = config.user_dir.join("connections");
-    let error = |message: String| ResolveError::from(ConfigError::new(&here, message));
+    let error =
+        |message: String| ResolveError::from(ConfigError::new(Path::new(CLIPBOARD), message));
     if text.len() > MAX_CLIPBOARD_TEXT {
         return Err(error(
             "the clipboard text is too long for a connection".into(),
@@ -426,13 +436,16 @@ pub fn paste_connection(
             2 => format!("{base} (copy)"),
             n => format!("{base} (copy {})", n - 1),
         };
-        let id = draft.id()?;
+        let id = draft.id().map_err(from_clipboard)?;
         if config.connection(&id).is_some() || here.join(format!("{}.toml", id.path)).exists() {
             continue;
         }
         // The form's own checks and writing; no password is typed, so the keychain is not
         // touched.
-        let id = add_connection(config, &draft, None, backend)?;
+        let id = add_connection(config, &draft, None, backend).map_err(|e| match e {
+            ResolveError::Config(e) => from_clipboard(e),
+            other => other,
+        })?;
         return Ok(Pasted {
             id,
             name: draft.name,
