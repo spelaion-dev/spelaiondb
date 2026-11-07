@@ -1,36 +1,163 @@
 # Desktop UI guidelines
 
-These guidelines describe the direction for SpelaionDB's desktop app. They apply to new
-work and to the parts of an existing screen that a change touches; they are not a claim that
-every existing screen already meets them. Accepted ADRs and `AGENTS.md` take precedence.
+These guidelines set how SpelaionDB's desktop app looks and behaves. Read them before any UI
+change. They apply to new work and to every part of a screen that a change touches; they do not
+claim that every screen already meets them. Accepted ADRs and `AGENTS.md` take precedence.
+The values live in `apps/desktop/src/styles.css`, in its `:root` and `:root[data-theme="dark"]`
+blocks; this document names their roles and says how to use them.
 
-## Product character
+## Direction
 
-SpelaionDB is a database workbench, not a dashboard. Favor a calm, compact interface that
-keeps names, SQL, data and the current connection easy to scan during long sessions. Use
-space to separate tasks and establish hierarchy, not to add decorative cards or oversized
-headings. Preserve room for the explorer, editor and results at the same time.
+SpelaionDB is a database workbench, not a dashboard: people spend hours in it reading names,
+SQL and data. The goal is an interface that is calm, clear, compact and current, and each of
+those words is a rule:
 
-Start every change with the user's task and its consequences. The current connection,
-database or schema, selection, connection state, pending changes and primary action must be
-clear without relying on color alone. Keep frequently used actions close to the work they
-affect, and avoid moving established controls solely for visual novelty. The editor's
-compact vertical action column is an intentional part of the workspace.
+- **Calm.** Neutral surfaces and one accent. Color only carries meaning: selection, focus, the
+  primary action, status and a connection's type (ADR-029). No decorative gradients, shadows,
+  cards or tinted panels.
+- **Clear.** Hierarchy comes from size, weight and space, in that order, not from boxes, lines
+  or color. Each surface has one obvious primary action. State is written as text, never shown
+  by color alone.
+- **Compact.** The explorer, the editor and the results fit together at 1280×800. Density
+  comes from consistent heights and spacing, not from text smaller than 11px.
+- **Quiet until needed.** Secondary actions appear on hover, focus or selection and are always
+  reachable from the keyboard and the context menu. Advanced options start collapsed. Say
+  things once: a connection picker that reads `Payments (sqlite, Payments)` says it twice.
+- **Current.** The system font, one icon set, 6px corners, thin themed scrollbars, short
+  motion, and a dark theme designed on its own terms rather than inverted.
 
-## Visual system
+Start every change from the user's task and its consequences. The current connection, database
+or schema, selection, connection state, pending changes and primary action must be clear at a
+glance. Keep frequent actions next to the work they affect and do not move established
+controls for novelty: the editor's compact vertical action column stays.
 
-- Reuse the theme variables and existing control patterns in `apps/desktop/src/styles.css`.
-  Add semantic tokens when needed rather than scattering one-off colors and dimensions.
-- Support both light and dark themes. Check text, icons, selected states and focus indicators
-  against their actual backgrounds. Normal text should meet a 4.5:1 contrast ratio; do not
-  assume white text works on every colored badge or button.
-- Use the accent for selection, focus and primary actions; reserve danger styling for actions
-  or messages that need it. A connection type's badge follows ADR-029: do not add per-connection
-  color stripes or move safeguard decisions into the UI.
-- Keep typography and spacing consistent with nearby views. Use monospace for SQL, values,
-  paths and identifiers where it aids recognition; normal interface text remains proportional.
-- Icons used without visible text need an accessible name and a discoverable explanation or
-  shortcut. Do not rely on hover for essential status, errors or the only way to act.
+## Tokens
+
+Use tokens, never literals. Outside the two token blocks, neither `styles.css` nor the canvas
+code (`ResultGrid.tsx` reads the same variables) contains a color, font size, radius, shadow or
+z-index literal. The exceptions are the engine logos' brand colors and the SQL syntax theme,
+each in its own commented block. A value that is missing becomes a token named by its role,
+defined for both themes in the same change.
+
+### Spacing
+
+A 4px grid: `--space-2xs` 2px, `--space-xs` 4px, `--space-sm` 6px, `--space-md` 8px,
+`--space-lg` 12px, `--space-xl` 16px, `--space-2xl` 24px, `--space-3xl` 32px. The 2px and 6px
+steps are for the inside of dense controls (an icon and its label, a badge's padding). Related
+things sit closer than unrelated ones: 4–8px inside a group, 12–16px between groups, 24px
+between the sections of a page or dialog.
+
+### Type
+
+`--font-ui` is the system font (Segoe UI Variable, SF Pro, the desktop's font on Linux), with
+no web fonts; `--font-code` is the monospace stack. Each size has a matching line height,
+`--leading-xs` to `--leading-2xl`.
+
+| Token | Size / line height | Used for |
+|---|---|---|
+| `--text-xs` | 11 / 16px | badges, captions, section labels, a grid column's type |
+| `--text-sm` | 12 / 16px | secondary text, field labels, hints, metadata, the status bar |
+| `--text-md` | 13 / 18px | the default: controls, menus, explorer, tabs, grid cells, SQL |
+| `--text-lg` | 15 / 20px | dialog and panel titles |
+| `--text-xl` | 18 / 24px | page titles, such as Settings |
+| `--text-2xl` | 24 / 32px | the welcome screen's title only |
+
+- Two weights: 400 and 600. No 500, 650, 700 or `bold`.
+- Sentence case everywhere: titles, buttons, menu items, tabs and labels. Uppercase only for
+  `--text-xs` section labels (600, `letter-spacing: 0.04em`); ADR-029's `PRODUCTION` badge in
+  the editor's toolbar is the one other exception.
+- Monospace for SQL, cell values, fingerprints and identifiers shown as code (type ids, paths
+  in technical fields); proportional for names in the explorer, labels and prose.
+- `font-variant-numeric: tabular-nums` for counts, durations, row numbers and sizes.
+- Prose (dialog descriptions, help text) uses a 1.5 line height and lines of at most about 72
+  characters.
+
+### Color
+
+Each role is defined for both themes:
+
+| Role | Tokens | Rule |
+|---|---|---|
+| Surfaces | `--bg`, `--panel`, `--sidebar`, `--activity-bg` | flat; separate regions with a hairline or a change of surface, never both |
+| Text | `--fg`, `--muted`, `--faint` | `--fg` and `--muted` reach 4.5:1 on every surface they appear on; `--faint` is for placeholders and disabled text, never for information |
+| Lines | `--line`, `--line-strong` | `--line` for dividers; `--line-strong` for the borders of inputs, selects and secondary buttons, so a control is visible without hovering it |
+| Interaction | `--hover`, `--accent`, `--accent-soft`, `--accent-text` | hover is a neutral tint; a selected row or item is `--accent-soft` with `--fg` text; only the primary button is filled with the accent |
+| Status | `--success`, `--warning`, `--danger`, `--info`, each with `-soft` and `-fg` | always beside text or an icon; `-fg` text reaches 4.5:1 on `-soft` |
+| Connection types | `--tone-{neutral,green,blue,amber,red}`, each with `-soft` and `-fg` | ADR-029's fixed palette: no free colors, no stripes |
+
+- One accent, blue. Red is for destructive actions, errors and Production; amber for pending
+  or risky states; green for connected and completed. Never use a status color as decoration.
+- In the dark theme raised surfaces are lighter than the base, text is off-white rather than
+  pure white, and the accent and tones are lighter variants, each rechecked for contrast.
+
+### Shape, depth and size
+
+- Radius: `--radius-sm` 4px (badges, chips, checkboxes, the grid's selection), `--radius-md`
+  6px (buttons, inputs, tabs, list and menu items) and `--radius-lg` 10px (menus, popovers,
+  dialogs, toasts); dots are round.
+- The workspace is flat. Only layers above it cast a shadow: `--shadow-popover` for menus,
+  popovers, tooltips and autocompletion, and `--shadow-dialog` for dialogs, with `--backdrop`
+  behind modal ones. Panels, cards and buttons have no shadow.
+- Heights: `--control-sm` 24px (icon buttons in toolbars, inline controls), `--control-md`
+  28px (buttons, inputs and selects) and `--control-lg` 32px (welcome and empty-state
+  actions). Rows in lists, trees, menus and the grid are `--row-h` (26px); bars (the tab strip
+  and the editor's and the results' toolbars) are `--bar-h` (36px).
+- Stacking order, lowest first: `--z-sticky`, `--z-dropdown`, `--z-dialog`, `--z-popover` (a
+  menu opened from a dialog shows above it) and `--z-toast`.
+
+### Icons
+
+- One outline set for the whole app: Lucide (`lucide-react`, ISC license) at 16px with its
+  default stroke, 20px in the activity bar, in `currentColor`, centered in a square target of
+  at least 24px. An icon Lucide lacks is drawn on the same 24px grid with the same stroke.
+- No text characters as icons (`+`, `×`, `⋯`, `▸`, `▾`): their size and weight change with
+  the font and the system.
+- Engine logos keep their brand colors; nothing else in the interface is multicolored.
+- An icon without visible text has an accessible name and a tooltip with its name and
+  shortcut.
+
+### Motion
+
+`--duration-fast` (120ms) for hover, press and color changes; `--duration-overlay` (180ms) for
+an overlay appearing (opacity, and a move of at most 4px); always with `--ease-out`. Never
+animate data, the grid, layout changes or anything while the user types. Under
+`prefers-reduced-motion` only opacity changes remain. A spinner appears only after 300ms.
+
+## Components
+
+- **Buttons.** *Primary* (filled with the accent; at most one per dialog, page or toolbar
+  region), *secondary* (the default: panel with a `--line-strong` border), *ghost* (no border:
+  toolbars, icon buttons, inline actions) and *danger* (filled red; only the button that
+  confirms a destructive action). A label is a verb that names the result ("Delete
+  connection", "Run 3 statements"), never "OK" or "Yes", and ends with "…" (one character)
+  when it opens a dialog that asks for more.
+- **Toolbars.** Ghost icon buttons grouped by task, groups separated by 12px or a single
+  divider, never boxed. Text buttons only for the main action or where an icon would be
+  ambiguous.
+- **Tabs.** One active indicator: the `--panel` surface and a 2px accent edge. The close button
+  shows on the active tab and on hover or focus; `Ctrl+W` always closes the active tab.
+- **Explorer, lists and trees.** 26px rows, a 16px icon and the name in `--text-md`. The name
+  comes first: badges and metadata sit on the right, shrink first and collapse to a dot with a
+  tooltip when the sidebar is narrow. Row actions show on hover, focus and selection, and are
+  always in the context menu.
+- **Badges.** Soft: the tone's `-soft` background and `-fg` text, `--text-xs` at 600,
+  `--radius-sm`, 2px by 6px of padding, the type's name in sentence case. Production's badge
+  is the only solid one. One type badge per row at most; other flags (SSH, read-only) are
+  neutral chips or icons with a tooltip.
+- **Forms.** Labels above their fields in `--text-sm`; help under the field in `--muted`; an
+  error under the field in red with an icon, saying what is wrong and how to fix it. Group
+  fields with a heading and space rather than boxes: a `<fieldset>` keeps its meaning for
+  assistive technology but draws no border.
+- **Dialogs.** 400, 560 or 760px wide, 20–24px of padding, a `--text-lg` title and at most one
+  sentence of context before the content; the actions at the bottom right, Cancel before the
+  primary action. Lists inside a dialog are rows divided by hairlines, not a card per item.
+- **Menus.** `--radius-lg`, `--shadow-popover`, 4px of padding, 26px items with a
+  `--radius-md` hover, shortcuts right-aligned in `--muted`, 1px separators; destructive items
+  come last, in red.
+- **Empty states.** Centered in their region: an optional 24px icon in `--muted`, a one-line
+  title, one sentence and at most one primary action. No illustrations.
+- **Scrollbars.** Thin and themed in every scrolling region, the grid included: a transparent
+  track and a thumb from a token that widens on hover. Check them on WebKitGTK.
 
 ## Workspace and data
 
@@ -55,9 +182,9 @@ compact vertical action column is an intentional part of the workspace.
 
 ## Forms, dialogs and feedback
 
-- Group related fields under meaningful headings. Every field needs a visible label or, where
-  a compact technical control makes that impractical, a clear programmatic name. Place help
-  and validation errors next to the relevant control and make recovery possible.
+- Every field needs a visible label or, where a compact technical control makes that
+  impractical, a clear programmatic name. Recovering from a validation error never loses what
+  was typed.
 - Keep the principal action and a safe dismissal path visible. Destructive confirmations must
   identify the target and consequences, show the SQL when the core requires it, and start with
   the safe action focused. Never make a security decision in React.
@@ -75,12 +202,32 @@ compact vertical action column is an intentional part of the workspace.
 - Test the normal desktop layout and the configured minimum window size, including open side
   panels and long names. Important controls must remain reachable; wrap or scroll deliberately
   rather than clipping them. Resizable separators need a keyboard equivalent and visible focus.
-- Prefer native controls and semantic HTML. Interactive elements need accessible names,
-  discernible focus, a logical tab order and keyboard behavior matching their role. Avoid
-  placing interactive elements inside other interactive elements.
+- Prefer native controls and semantic HTML. Interactive elements need accessible names, a
+  logical tab order and keyboard behavior matching their role. Avoid placing interactive
+  elements inside other interactive elements.
+- Keyboard focus is a 2px `--accent` outline with a 2px offset (inset in dense lists and the tab
+  strip) on every focusable element. Never rely on hover alone for status, errors or the only
+  way to act.
 - Respect reduced motion. Do not use color as the sole indicator of status or risk.
 - All UI strings go through the existing English and Spanish translations. Allow for longer
   translations and platform-specific rendering; do not put user-facing strings in CSS.
+
+## App icon
+
+The icon is the first thing anyone sees of the brand, at 16px in a taskbar as often as at
+256px in an installer. The current one, a database cylinder lit by a caver's lamp and drawn
+with gradients, says "database" generically and loses its detail below 48px. Its replacement:
+
+- has one bold silhouette that is recognizable at 16px and in a single color (system trays,
+  monochrome taskbars);
+- uses at most two brand colors and a neutral, close to the interface's accent, in flat shapes
+  or one subtle gradient: no gloss and no thin lines that vanish when small;
+- carries the idea of Spelaion (from σπήλαιον, a cave: exploring, light in the dark, layers)
+  without the stock database cylinder;
+- works as a family: SpelaionSSH (ADR-023) shares the mark and changes one element or color;
+- has a single SVG source, `apps/desktop/src-tauri/icons/icon.svg`, from which
+  `npx tauri icon` generates every size, with hand-tuned 16px and 32px versions if the
+  generated ones blur, and is checked on light and dark taskbars on Windows, macOS and Linux.
 
 ## Verification
 
@@ -90,13 +237,25 @@ For each UI change:
    coverage for new interaction behavior where practical.
 2. Inspect the real Tauri app, not just source code, in light and dark themes and at a normal
    and constrained window size. Check relevant empty, loading, error, selected and disabled
-   states with representative data. Use isolated test data and configuration.
-3. Exercise keyboard focus, resizing, menus and dialogs, including nested dialogs where
+   states with representative data. Use isolated test data and configuration. Put
+   before-and-after screenshots of both themes in the pull request.
+3. Check every color you add or change against its real backgrounds in both themes: 4.5:1 for
+   text; 3:1 for icons, focus outlines and any border that alone shows a control's shape or
+   state, such as a checkbox's.
+4. Exercise keyboard focus, resizing, menus and dialogs, including nested dialogs where
    applicable. Check risky actions and unsaved changes without using a real production database.
-4. Run `node e2e/smoke.mjs` after a Tauri build where supported. The current smoke test uses
+5. Run `node e2e/smoke.mjs` after a Tauri build where supported. The current smoke test uses
    Windows/WebView2; report explicitly when it or a platform-specific check could not run.
 
 Visual review and automated tests complement each other. A screenshot does not verify
 accessibility, and a passing build or smoke test does not establish visual quality. Exercise
 canvas-grid announcements and modal focus with an actual screen reader as well; semantic markup
 alone does not demonstrate that the interaction is accessible.
+
+Before committing, check that:
+
+- no color, font size, radius, shadow or z-index is written outside the token blocks;
+- each surface has at most one primary button, and no text character stands in for an icon;
+- every action shown only on hover is also reachable from the keyboard and a context menu;
+- every new string exists in English and Spanish;
+- both themes were inspected, and anything that could not be checked is reported.
