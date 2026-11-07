@@ -2,7 +2,7 @@
 // so it answers through `window.__spelaionSavePath`; nothing else sets it, and a script able
 // to set it could already call every command directly.
 
-import { open, save, type SaveDialogOptions } from "@tauri-apps/plugin-dialog";
+import { type DialogFilter, open, save, type SaveDialogOptions } from "@tauri-apps/plugin-dialog";
 
 declare global {
   interface Window {
@@ -14,6 +14,17 @@ declare global {
 /** Asks where to save a file; `null` if the user cancelled. */
 export async function chooseSavePath(options: SaveDialogOptions): Promise<string | null> {
   return window.__spelaionSavePath ?? (await save(options));
+}
+
+/** GTK (Linux, BSD) turns each filter extension into a case-sensitive `*.ext` pattern: an
+ *  "All files" filter (`*`) becomes `*.*`, which hides files without an extension, and `db`
+ *  hides `DATA.DB`. */
+const gtkDialogs = /Linux|BSD/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
+
+/** The filters of an open dialog that offers "All files": none under GTK, where no filter is
+ *  the only way to show every file. */
+export function openFilters(filters: DialogFilter[]): DialogFilter[] | undefined {
+  return gtkDialogs ? undefined : filters;
 }
 
 /** Asks for a folder; `null` if the user cancelled. */

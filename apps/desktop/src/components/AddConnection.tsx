@@ -18,7 +18,7 @@ import {
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { EngineIcon } from "./EngineIcon";
 import { refreshConnections } from "./Sidebar";
-import { chooseSavePath } from "../dialogs";
+import { chooseSavePath, openFilters } from "../dialogs";
 import { reviewChanges } from "../connect";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
@@ -420,10 +420,11 @@ function ConnectionForm(props: {
     const path = await open({
       multiple: false,
       directory: false,
-      filters:
+      filters: openFilters(
         field === "database"
           ? [...databaseFilters(), { name: t("allFiles"), extensions: ["*"] }]
           : [{ name: t("certificates"), extensions: ["pem", "crt", "cer", "key"] }, { name: t("allFiles"), extensions: ["*"] }],
+      ),
     });
     if (typeof path === "string") update({ [field]: path });
   }
