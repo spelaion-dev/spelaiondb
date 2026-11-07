@@ -101,9 +101,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   closing a tab, disconnecting or quitting; core-written statements use `run_generated`, never
   the manual-commit `BEGIN`; `tests/transactions.rs` runs it on every engine. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
-  one view)
+  one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows)
   and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
-  the paged SELECT of the table data tab (the filter typed by the user cannot change it).
+  the paged SELECT of the table data tab (the filter typed by the user cannot change it), and
+  writes "filter by this value" conditions into its WHERE from the typed cell.
+  `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
+  runs those conditions, lists and names on every engine.
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
   `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,

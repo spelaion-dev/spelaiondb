@@ -12,6 +12,7 @@ use arrow::ipc::writer::StreamWriter;
 use spelaion_driver_api::{ResultSchema, Value};
 
 use crate::filter::{ColumnFilter, matches, validate};
+use crate::find::{FindMatches, FindQuery, FindTicket, search};
 use crate::sort::{SortKey, ViewError, sorted_rows};
 
 /// Identifier of a result within a [`ResultStore`].
@@ -34,6 +35,13 @@ pub struct StoredResult {
     column_filters: Option<(Vec<ColumnFilter>, Vec<bool>)>,
     /// With a sort or a filter, the original row shown at each position.
     view: Option<Vec<u32>>,
+    /// Changes whenever the row shown at some position may change (rows appended, a sort,
+    /// a filter): find matches of an older generation are stale.
+    generation: u64,
+    /// The matches of the last search (Ctrl+F) in the current view.
+    find: Option<FindMatches>,
+    /// The number of the latest search started, so a newer one stops an older one.
+    find_latest: Arc<AtomicU64>,
 }
 
 impl StoredResult {
@@ -48,6 +56,9 @@ impl StoredResult {
             filter: None,
             column_filters: None,
             view: None,
+            generation: 0,
+            find: None,
+            find_latest: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -188,9 +199,84 @@ impl StoredResult {
         Ok(())
     }
 
+    /// The batch holding an original row, and the row's index inside it.
+    pub(crate) fn locate(&self, row: usize) -> (&RecordBatch, usize) {
+        let batch = self.starts.partition_point(|&s| s <= row) - 1;
+        (&self.batches[batch], row - self.starts[batch])
+    }
+
+    /// The original row shown at a position of the current view.
+    pub(crate) fn original_row(&self, position: usize) -> usize {
+        self.view
+            .as_ref()
+            .map_or(position, |view| view[position] as usize)
+    }
+
+    /// The typed value of a cell of the current view (`None` past the end).
+    pub fn value_at(&self, position: usize, column: usize) -> Option<Value> {
+        if position >= self.rows() {
+            return None;
+        }
+        let meta = self.schema.columns.get(column)?;
+        let (batch, row) = self.locate(self.original_row(position));
+        Some(
+            Value::from_array(batch.column(column).as_ref(), row, meta.logical)
+                .unwrap_or(Value::Null),
+        )
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Rows changed place or were added: the search matches no longer point at them.
+    fn moved(&mut self) {
+        self.generation += 1;
+        self.find = None;
+    }
+
+    /// Starts a search: one still running on this result stops (its [`Self::find_matches`]
+    /// returns `None`).
+    pub fn find_ticket(&self) -> FindTicket {
+        FindTicket::new(&self.find_latest)
+    }
+
+    /// Searches the loaded rows for the query's text, in the current view's order, without
+    /// changing anything (a read lock is enough, so windows keep being served meanwhile).
+    /// Keep the result with [`Self::keep_find`]. `None`: a newer search replaced this one.
+    pub fn find_matches(
+        &self,
+        query: &FindQuery,
+        ticket: &FindTicket,
+    ) -> Result<Option<FindMatches>, ViewError> {
+        self.check_viewable()?;
+        search(self, query, ticket)
+    }
+
+    /// Keeps the matches of a search as the current ones, unless the rows moved since it ran
+    /// or a newer search started (then `false`, and nothing changes).
+    pub fn keep_find(&mut self, matches: FindMatches, ticket: &FindTicket) -> bool {
+        if matches.generation != self.generation || ticket.is_stale() {
+            return false;
+        }
+        self.find = Some(matches);
+        true
+    }
+
+    /// The matches of the last search, if the rows have not moved since.
+    pub fn find(&self) -> Option<&FindMatches> {
+        self.find.as_ref()
+    }
+
+    /// Forgets the search (the find bar was closed or emptied).
+    pub fn clear_find(&mut self) {
+        self.find = None;
+    }
+
     /// The order of the sort (or the server's) keeping only the rows both filters let
     /// through.
     fn rebuild_view(&mut self) {
+        self.moved();
         let text = self.filter.as_ref().map(|(_, m)| m);
         let columns = self.column_filters.as_ref().map(|(_, m)| m);
         let keep = |row: u32| {
@@ -279,6 +365,7 @@ impl ResultStore {
         r.starts.push(start);
         r.rows += batch.num_rows();
         r.batches.push(batch);
+        r.moved();
         Some(r.rows)
     }
 
@@ -306,6 +393,7 @@ impl ResultStore {
             target.rows += batch.num_rows();
             target.batches.push(batch.clone());
         }
+        target.moved();
         Ok(added)
     }
 

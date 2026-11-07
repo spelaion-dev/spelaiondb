@@ -1743,6 +1743,40 @@ select {
   display: flex;
   justify-content: flex-end;
 }
+.grid-find {
+  position: absolute;
+  top: 4px;
+  right: 20px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+  user-select: none;
+}
+.grid-find input {
+  width: 200px;
+}
+.grid-find-case {
+  font-weight: 600;
+  min-width: 28px;
+}
+.grid-find-case.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.grid-find-status {
+  min-width: 76px;
+  text-align: center;
+  white-space: nowrap;
+}
+.grid-menu-note {
+  margin: 2px 10px 4px;
+}
 .grid-footer {
   display: flex;
   align-items: center;

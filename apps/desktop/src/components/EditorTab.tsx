@@ -831,6 +831,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             run={tab.run}
             session={tab.id}
             serverSort={tab.table ? { sort: tab.table.sort, onSort: (sort) => void sortTable(sort) } : undefined}
+            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0 }) } : undefined}
             editing={editing}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
             pendingEdits={pendingCount > 0}
@@ -880,6 +881,7 @@ function Results({
   onFiltered,
   onColumnFiltered,
   serverSort,
+  tableData,
   editing,
   readOnlyHint,
   pendingEdits,
@@ -894,6 +896,7 @@ function Results({
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
   onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
   serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
+  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void };
   editing?: GridEditing;
   readOnlyHint?: boolean;
   pendingEdits: boolean;
@@ -947,6 +950,7 @@ function Results({
             onSorted={(sort) => onSorted(active.id, sort)}
             onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
             serverSort={serverSort}
+            tableData={tableData}
             editing={filteringResult === active.id ? undefined : editing}
             viewerOpen={viewerOpen}
             onViewerOpen={setViewerOpen}

@@ -9,6 +9,7 @@ mod cursor;
 mod edit;
 mod export;
 mod filter;
+mod find;
 mod generate;
 mod guard;
 mod health;
@@ -34,8 +35,12 @@ pub use edit::{
     CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements,
     editable_query_source, editable_query_table,
 };
-pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
+pub use export::{
+    CopyError, ExportFormat, ExportOptions, GenericDialect, MAX_IN_LIST, NameStyle, column_in_list,
+    column_names, export_to_file, write_result,
+};
 pub use filter::{ColumnFilter, FilterOp};
+pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use guard::{NeedsConfirmation, Risk, RiskyStatement, check_script, script_risks};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
@@ -61,7 +66,8 @@ pub use spelaion_store::{
 };
 pub use spelaion_store::{HistoryEntry, Snippet};
 pub use table_data::{
-    MAX_PAGE_ROWS, PageError, TablePage, count_table_rows, table_count_sql, table_page_sql,
+    ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
+    table_count_sql, table_page_sql, typed_value, value_condition,
 };
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use write::{WriteError, WriteLimits, WriteResult, check_write};

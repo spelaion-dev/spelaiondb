@@ -3,11 +3,13 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type TextFormat } from "../api";
+import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type NameStyleItem, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
+import { FindCache } from "../grid/findCache";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta, SortState } from "../store";
 import { CellViewer, type ViewerMode } from "./CellViewer";
+import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
 
 const ROW_H = 26;
@@ -76,6 +78,7 @@ const COPY_ITEMS: { key: string; format: TextFormat; header: boolean }[] = [
   { key: "copyJson", format: "json", header: false },
   { key: "copyMarkdown", format: "markdown", header: true },
   { key: "copyInList", format: "inList", header: false },
+  { key: "copyHtml", format: "html", header: true },
   { key: "copyInsert", format: "sqlInsert", header: false },
 ];
 
@@ -118,6 +121,16 @@ export interface GridEditing {
 }
 
 const EDITED_BG = "rgba(250, 204, 21, 0.30)";
+/** Cells the search found, and the one it is on. */
+const FOUND_BG = "rgba(234, 179, 8, 0.28)";
+const FOUND_CURRENT_BG = "rgba(234, 88, 12, 0.45)";
+/** Ways of copying column names, in menu order (qualified only with a known table). */
+const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
+  { style: "plain", key: "copyNamesPlain" },
+  { style: "quoted", key: "copyNamesQuoted" },
+  { style: "qualified", key: "copyNamesQualified" },
+  { style: "list", key: "copyNamesList" },
+];
 const DELETED_BG = "rgba(239, 68, 68, 0.20)";
 
 function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "save" | "cancel" }) {
@@ -141,6 +154,8 @@ const OPS: { op: FilterOpItem; sql: string }[] = [
   { op: "le", sql: "<=" },
   { op: "like", sql: "LIKE" },
   { op: "notLike", sql: "NOT LIKE" },
+  { op: "contains", sql: "contains" },
+  { op: "notContains", sql: "does not contain" },
   { op: "isNull", sql: "IS NULL" },
   { op: "isNotNull", sql: "IS NOT NULL" },
 ];
@@ -151,13 +166,11 @@ function filterLabel(filter: ColumnFilterItem, columns: ResultMeta["columns"]): 
   const column = columns[filter.column];
   const sql = OPS.find((o) => o.op === filter.op)?.sql ?? filter.op;
   if (!takesValue(filter.op)) return `${column?.name ?? "?"} ${sql}`;
-  const numeric = NUMERIC.has(column?.logical ?? "") && filter.op !== "like" && filter.op !== "notLike";
+  const numeric = NUMERIC.has(column?.logical ?? "") && !["like", "notLike", "contains", "notContains"].includes(filter.op);
   const value = numeric ? filter.value : `'${filter.value.replace(/'/g, "''")}'`;
   return `${column?.name ?? "?"} ${sql} ${value}`;
 }
 
-/** Text for `LIKE '%…%'`: its own `%`, `_` and `\` are escaped. */
-const likeContaining = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 export function ResultGrid({
   result,
@@ -174,6 +187,7 @@ export function ResultGrid({
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
+  tableData,
 }: {
   result: ResultMeta;
   session: string;
@@ -191,6 +205,9 @@ export function ResultGrid({
   onLoadMore(): Promise<number>;
   onCountQuery(): void;
   onQueryPageSize(size: number): void;
+  /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
+   *  core writes the condition; the page's SELECT is checked when it loads). */
+  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void };
 }) {
   const sortShown = serverSort ? serverSort.sort : result.sort;
   const { t, i18n } = useTranslation("editor");
@@ -215,6 +232,16 @@ export function ResultGrid({
   /** The column chooser, where it was opened. */
   const [chooser, setChooser] = useState<{ x: number; y: number } | null>(null);
   const gridLook = usePreferences((s) => s.grid);
+  /** The find bar (Ctrl+F): what is searched, and what the core found. */
+  const [find, setFind] = useState<{ text: string; matchCase: boolean } | null>(null);
+  const [found, setFound] = useState<{ count: number; truncated: boolean; busy: boolean; error?: string } | null>(null);
+  const [findCurrent, setFindCurrent] = useState<{ index: number; row: number; col: number } | null>(null);
+  const [findCache, setFindCache] = useState<FindCache | null>(null);
+  const findInput = useRef<HTMLInputElement>(null);
+  /** The match stepped to last, known before React renders it, and the steps in order: quick
+   *  F3 presses each start from where the previous one ended. */
+  const findAt = useRef<{ row: number; col: number } | null>(null);
+  const findSteps = useRef<Promise<void>>(Promise.resolve());
   const menuRef = useRef<HTMLDivElement>(null);
   /** The custom filter dialog, starting from a column and a value. */
   const [customFilter, setCustomFilter] = useState<ColumnFilterItem | null>(null);
@@ -339,14 +366,14 @@ export function ResultGrid({
   const totalH = HEADER_H + result.rows * ROW_H;
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol });
-  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent };
 
   function draw() {
     const canvas = canvasRef.current;
     const scroller = scrollerRef.current;
     if (!canvas || !scroller) return;
-    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol } = live.current;
+    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent } = live.current;
     const deletedRows = new Set(editing?.deleted ?? []);
     const range = selection ? bounds(selection) : null;
     const dpr = window.devicePixelRatio || 1;
@@ -382,10 +409,15 @@ export function ResultGrid({
     const last = Math.min(result.rows, first + visible);
     let firstCol = 0;
     while (firstCol < widths.length && rowNumW + (offsets[firstCol + 1] ?? 0) - left < fixedRight) firstCol++;
+    findCache?.load(first, last);
 
     const drawCell = (row: number, col: number, x: number, y: number, w: number) => {
       if (range && inside(range, row, col)) {
         ctx.fillStyle = c.select;
+        ctx.fillRect(x, y, w, ROW_H);
+      }
+      if (findCache?.has(row, col)) {
+        ctx.fillStyle = findCurrent && findCurrent.row === row && findCurrent.col === col ? FOUND_CURRENT_BG : FOUND_BG;
         ctx.fillRect(x, y, w, ROW_H);
       }
       if (selection && selection.focus.row === row && selection.focus.col === col) {
@@ -688,6 +720,162 @@ export function ResultGrid({
     }));
   }
 
+  // ---- Find (Ctrl+F): the core searches the whole result; the grid asks for the matches of
+  // the rows it shows and steps from one to the next.
+  const findRun = useRef(0);
+  const shownKey = visibleCols.join(",");
+  useEffect(() => {
+    const text = find?.text ?? "";
+    const run = ++findRun.current;
+    setFindCurrent(null);
+    findAt.current = null;
+    // Highlights of the previous search would point at rows that may have moved.
+    setFindCache(null);
+    if (!find || !text) {
+      setFound(null);
+      void call(commands.clearFind(result.id)).catch(() => undefined);
+      return;
+    }
+    if (!result.complete) {
+      setFound({ count: 0, truncated: false, busy: false, error: t("results.findWhenComplete") });
+      return;
+    }
+    setFound((current) => ({ count: current?.count ?? 0, truncated: current?.truncated ?? false, busy: true }));
+    // Typing fast searches once, for the last text.
+    const timer = setTimeout(() => {
+      call(commands.findInResult(result.id, text, find.matchCase, visibleCols))
+        .then(async (outcome) => {
+          if (run !== findRun.current || !outcome) return;
+          setFound({ count: outcome.count, truncated: outcome.truncated, busy: false });
+          setFindCache(new FindCache(result.id, result.columns.length, () => redraw()));
+          if (outcome.count > 0) await goToMatch("first", run);
+        })
+        .catch((e) => {
+          if (run === findRun.current) setFound({ count: 0, truncated: false, busy: false, error: e instanceof Error ? e.message : String(e) });
+        });
+    }, 200);
+    return () => clearTimeout(timer);
+    // A sort, a filter or more rows move the matches: the same search runs again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [find, result.id, result.complete, result.rows, view, shownKey]);
+
+  /** Moves to the next or previous match, or with "first" to the first one from the active
+   *  cell on; the active cell follows the match. */
+  function goToMatch(where: "first" | "next" | "previous", run = findRun.current): Promise<void> {
+    const selected = selection ? { row: selection.focus.row, col: selection.focus.col } : null;
+    findSteps.current = findSteps.current.then(() => stepMatch(where, run, selected));
+    return findSteps.current;
+  }
+
+  async function stepMatch(where: "first" | "next" | "previous", run: number, selected: { row: number; col: number } | null) {
+    if (run !== findRun.current) return;
+    const from = findAt.current ?? selected;
+    try {
+      let step;
+      if (where === "first") {
+        // The match before the active cell, then the one after it: the first at or after it.
+        const before = from ? await call(commands.findStep(result.id, from.row, from.col, true)) : null;
+        const start = before ?? { row: Math.max(0, result.rows - 1), column: Math.max(0, result.columns.length - 1) };
+        step = await call(commands.findStep(result.id, start.row, start.column, false));
+      } else {
+        const at = from ?? { row: result.rows - 1, col: result.columns.length - 1 };
+        step = await call(commands.findStep(result.id, at.row, at.col, where === "previous"));
+      }
+      if (run !== findRun.current || !step) return;
+      const cell = { row: step.row, col: step.column };
+      findAt.current = cell;
+      setFindCurrent({ index: step.index, ...cell });
+      setSelection({ anchor: cell, focus: cell });
+      scrollIntoView(cell);
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  function openFind() {
+    setFind((current) => current ?? { text: "", matchCase: false });
+    requestAnimationFrame(() => {
+      findInput.current?.focus();
+      findInput.current?.select();
+    });
+  }
+
+  function closeFind() {
+    setFind(null);
+    scrollerRef.current?.focus();
+  }
+
+  function findStatus(): string {
+    if (!found) return "";
+    if (found.error) return found.error;
+    if (found.busy) return t("results.findSearching");
+    if (found.count === 0) return t("results.findNone");
+    const total = `${numbers.format(found.count)}${found.truncated ? "+" : ""}`;
+    return findCurrent ? t("results.findOf", { current: numbers.format(findCurrent.index + 1), total }) : t("results.findCount", { count: found.count, total });
+  }
+
+  /** A table data tab filters in the server: the core writes the condition from the typed
+   *  value and adds it to the tab's WHERE. */
+  async function addServerFilter(filter: ColumnFilterItem, row: number | null) {
+    setMenu(null);
+    setCustomFilter(null);
+    if (!tableData) return;
+    try {
+      const next = await call(commands.tableFilterCondition(session, result.id, filter.column, filter.op, row, filter.value, tableData.filter));
+      tableData.onFilter(next);
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  async function writeClipboard(text: string, html?: string) {
+    if (html !== undefined && typeof ClipboardItem !== "undefined") {
+      await navigator.clipboard.write([
+        new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([text], { type: "text/plain" }) }),
+      ]);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
+  }
+
+  /** Column names of `columns` (shown ones, in order), written by the core. */
+  async function copyNames(columns: number[], style: NameStyleItem) {
+    setMenu(null);
+    try {
+      const table = tableData ? { schema: tableData.schema, name: tableData.name } : null;
+      const text = await call(commands.copyColumnNames(result.id, session, columns, style, table));
+      await writeClipboard(text);
+      setNotice({ text: t("results.copiedNames", { count: columns.length, formattedCount: numbers.format(columns.length) }), error: false });
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  /** Every different value of one column (all its rows) as an IN list, written by the core. */
+  async function copyColumnInList(col: number) {
+    setMenu(null);
+    if (!result.complete) {
+      setNotice({ text: t("results.filterWhenComplete"), error: true });
+      return;
+    }
+    try {
+      const text = await call(commands.copyColumnInList(result.id, session, col));
+      await writeClipboard(text);
+      setNotice({ text: t("results.copiedInList", { column: result.columns[col]?.name ?? "" }), error: false });
+    } catch (e) {
+      setNotice({ text: e instanceof Error ? e.message : String(e), error: true });
+    }
+  }
+
+  /** The columns a header's menu acts on: the selected whole columns if it is one of them. */
+  function headerColumns(col: number): number[] {
+    if (selection && result.rows > 0) {
+      const b = bounds(selection);
+      if (b.r0 === 0 && b.r1 === result.rows - 1 && col >= b.c0 && col <= b.c1) return shownIn(b);
+    }
+    return [col];
+  }
+
   /** Applies the column conditions in the core (an empty list removes them). */
   async function applyColumnFilters(filters: ColumnFilterItem[]) {
     setMenu(null);
@@ -848,6 +1036,8 @@ export function ResultGrid({
 
   function selectAt(e: React.MouseEvent | MouseEvent, extend: boolean) {
     editRequest.current += 1;
+    // The next F3 starts from the cell clicked.
+    findAt.current = null;
     const cell = cellAt(e.clientX, e.clientY, extend);
     if (!cell) return;
     setSelection((current) => {
@@ -867,7 +1057,9 @@ export function ResultGrid({
     const range: CellRange = { firstRow: b.r0, rows: b.r1 - b.r0 + 1, columns: shownIn(b) };
     try {
       const text = await call(commands.copyRows(result.id, session, range, format, header));
-      await navigator.clipboard.writeText(text);
+      // HTML goes to the clipboard as HTML (documents and spreadsheets paste a table) and as
+      // its source for plain text.
+      await writeClipboard(text, format === "html" ? text : undefined);
       setNotice({
         text: t(range.columns.length === 1 ? "results.copiedOneColumn" : "results.copied", {
           count: range.rows,
@@ -932,6 +1124,16 @@ export function ResultGrid({
       editing.onDelete(selectedRows());
       return;
     }
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f" && result.rows > 0) {
+      e.preventDefault();
+      openFind();
+      return;
+    }
+    if (e.key === "F3" && find) {
+      e.preventDefault();
+      void goToMatch(e.shiftKey ? "previous" : "next");
+      return;
+    }
     if (mod && e.shiftKey && e.key.toLowerCase() === "j" && widths.length > 0) {
       e.preventDefault();
       setJump("");
@@ -979,6 +1181,7 @@ export function ResultGrid({
     }
     e.preventDefault();
     next = { row: Math.min(lastRow, Math.max(0, next.row)), col: next.col };
+    findAt.current = null;
     setSelection(e.shiftKey ? { anchor: selection.anchor, focus: next } : { anchor: next, focus: next });
     scrollIntoView(next);
   }
@@ -1247,7 +1450,18 @@ export function ResultGrid({
               setFrozen(!frozen);
             }}
             onSort={(sort) => sortBy(sort)}
-          />
+          >
+            <GridSubmenu label={t("results.copyNamesMenu")}>
+              {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
+                <button key={n.style} role="menuitem" onClick={() => void copyNames(headerColumns(menu.header ?? 0), n.style)}>
+                  {t(`results.${n.key}`)}
+                </button>
+              ))}
+            </GridSubmenu>
+            <button role="menuitem" onClick={() => void copyColumnInList(menu.header ?? 0)}>
+              {t("results.copyColumnInList")}
+            </button>
+          </HeaderMenuItems>
         </div>
       )}
       {menu && menu.header === undefined && (
@@ -1312,6 +1526,15 @@ export function ResultGrid({
               </button>
             ))}
           </GridSubmenu>
+          {selection && (
+            <GridSubmenu label={t("results.copyNamesMenu")}>
+              {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
+                <button key={n.style} role="menuitem" onClick={() => void copyNames(shownIn(bounds(selection)), n.style)}>
+                  {t(`results.${n.key}`)}
+                </button>
+              ))}
+            </GridSubmenu>
+          )}
           {menu.cell && !(editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) && (
             <>
               <hr />
@@ -1320,7 +1543,8 @@ export function ResultGrid({
                 value={cache.get(menu.cell.row, menu.cell.col)}
                 columns={result.columns}
                 active={result.columnFilters ?? []}
-                onAdd={addColumnFilter}
+                server={!!tableData}
+                onAdd={(filter) => (tableData ? void addServerFilter(filter, menu.cell?.row ?? null) : addColumnFilter(filter))}
                 onCustom={(start) => {
                   setMenu(null);
                   setCustomFilter(start);
@@ -1387,6 +1611,20 @@ export function ResultGrid({
           }}
         />
       )}
+      {find && (
+        <FindBar
+          inputRef={findInput}
+          text={find.text}
+          matchCase={find.matchCase}
+          status={findStatus()}
+          canStep={!!found && !found.busy && found.count > 0}
+          onText={(text) => setFind({ ...find, text })}
+          onMatchCase={(matchCase) => setFind({ ...find, matchCase })}
+          onNext={() => void goToMatch("next")}
+          onPrevious={() => void goToMatch("previous")}
+          onClose={closeFind}
+        />
+      )}
       {chooser && (
         <ColumnChooser
           x={chooser.x}
@@ -1406,7 +1644,7 @@ export function ResultGrid({
         <CustomFilterDialog
           start={customFilter}
           columns={result.columns}
-          onApply={addColumnFilter}
+          onApply={(filter) => (tableData ? void addServerFilter(filter, null) : addColumnFilter(filter))}
           onCancel={() => {
             setCustomFilter(null);
             scrollerRef.current?.focus();
@@ -1644,6 +1882,8 @@ function HeaderMenuItems(props: {
   onShowAll(): void;
   onFreeze(): void;
   onSort(sort: SortState | undefined): void;
+  /** Column-wide copies, after the hide and freeze entries. */
+  children?: React.ReactNode;
 }) {
   const { t, i18n } = useTranslation("editor");
   const numbers = new Intl.NumberFormat(i18n.language);
@@ -1665,6 +1905,8 @@ function HeaderMenuItems(props: {
         {props.frozen ? "\u2713 " : ""}
         {t("results.freezeFirst")}
       </button>
+      {props.children && <hr />}
+      {props.children}
       <hr />
       <button role="menuitem" onClick={() => props.onSort({ column: props.column, descending: false })}>{t("results.sortAsc")}</button>
       <button role="menuitem" onClick={() => props.onSort({ column: props.column, descending: true })}>{t("results.sortDesc")}</button>
@@ -1789,6 +2031,8 @@ function FilterSubmenu(props: {
   value: string | null | undefined;
   columns: ResultMeta["columns"];
   active: ColumnFilterItem[];
+  /** Conditions go to the table's WHERE (table data tab), not to the loaded rows. */
+  server: boolean;
   onAdd(filter: ColumnFilterItem): void;
   onCustom(start: ColumnFilterItem): void;
   onReset(): void;
@@ -1806,13 +2050,14 @@ function FilterSubmenu(props: {
         ? []
         : [
             ...(["eq", "notEq", "gt", "lt"] as const).map((op) => ({ column, op, value })),
-            { column, op: "like" as const, value: likeContaining(value) },
-            { column, op: "notLike" as const, value: likeContaining(value) },
+            { column, op: "contains" as const, value },
+            { column, op: "notContains" as const, value },
             { column, op: "isNull" as const, value: "" },
             { column, op: "isNotNull" as const, value: "" },
           ];
   return (
     <GridSubmenu label={t("results.filterMenu")}>
+        {props.server && <p className="grid-menu-note muted small">{t("results.filterInServer")}</p>}
         {items.map((filter) => (
           <button key={filter.op} role="menuitem" onClick={() => props.onAdd(filter)}>
             <code>{filterLabel(filter, props.columns)}</code>
@@ -1822,7 +2067,7 @@ function FilterSubmenu(props: {
         <button role="menuitem" onClick={() => props.onCustom({ column, op: value === null ? "isNull" : "eq", value: value ?? "" })}>
           {t("results.customFilter")}
         </button>
-        {props.active.length > 0 && (
+        {props.active.length > 0 && !props.server && (
           <button role="menuitem" onClick={props.onReset}>
             {t("results.resetFilters")}
           </button>

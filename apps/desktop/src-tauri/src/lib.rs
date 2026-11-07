@@ -19,9 +19,9 @@ use spelaion_config::{
     default_user_dir, load,
 };
 use spelaion_core::{
-    Engines, ExportFormat, ExportOptions, GenericDialect, OpenConnection, OpenError, OpenOptions,
-    QueryHistory, ResultId, ResultStore, SessionHealth, SortKey, TunnelPool, open_connection,
-    write_result,
+    Engines, ExportFormat, ExportOptions, FindQuery, GenericDialect, OpenConnection, OpenError,
+    OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth, SortKey, TunnelPool,
+    open_connection, write_result,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -2058,6 +2058,7 @@ fn export_format(format: TextFormat) -> ExportFormat {
         TextFormat::Json => ExportFormat::Json,
         TextFormat::Markdown => ExportFormat::Markdown,
         TextFormat::InList => ExportFormat::InList,
+        TextFormat::Html => ExportFormat::Html,
         TextFormat::SqlInsert => ExportFormat::SqlInsert {
             table: INSERT_TABLE.into(),
         },
@@ -2410,6 +2411,220 @@ async fn filter_columns(
             rows: n(rows),
             total: n(stored.total_rows()),
         })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Searches a result's loaded rows in the core (Ctrl+F) and keeps the matches for
+/// `find_matches` and `find_step`. A newer search on the same result stops this one (`None`).
+#[tauri::command]
+#[specta::specta]
+async fn find_in_result(
+    result: u32,
+    text: String,
+    match_case: bool,
+    columns: Vec<u32>,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<FindOutcome>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let query = FindQuery {
+        text,
+        match_case,
+        columns: columns.into_iter().map(|c| c as usize).collect(),
+    };
+    tokio::task::spawn_blocking(move || {
+        let (ticket, found) = {
+            let read = stored
+                .read()
+                .map_err(|_| "result lock poisoned".to_string())?;
+            let ticket = read.find_ticket();
+            let found = read
+                .find_matches(&query, &ticket)
+                .map_err(|e| e.to_string())?;
+            (ticket, found)
+        };
+        let Some(found) = found else {
+            return Ok(None);
+        };
+        let outcome = FindOutcome {
+            count: u32::try_from(found.len()).unwrap_or(u32::MAX),
+            truncated: found.is_truncated(),
+        };
+        let kept = stored
+            .write()
+            .map_err(|_| "result lock poisoned".to_string())?
+            .keep_find(found, &ticket);
+        Ok(kept.then_some(outcome))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The matches of the last search in rows `[first_row, first_row + rows)`, to highlight
+/// what the grid shows.
+#[tauri::command]
+#[specta::specta]
+async fn find_matches(
+    result: u32,
+    first_row: u32,
+    rows: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<FindMatchItem>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    Ok(stored.find().map_or_else(Vec::new, |found| {
+        found
+            .window(first_row as usize, rows as usize)
+            .into_iter()
+            .map(|m| FindMatchItem {
+                row: n(m.row),
+                column: n(m.column),
+            })
+            .collect()
+    }))
+}
+
+/// The next match after the cell (`row`, `column`), or the previous one with `backwards`,
+/// going round; `None` without matches (or once the rows moved).
+#[tauri::command]
+#[specta::specta]
+async fn find_step(
+    result: u32,
+    row: u32,
+    column: u32,
+    backwards: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<FindStepItem>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    Ok(stored.find().and_then(|found| {
+        let index = found.step(row as usize, column as usize, backwards)?;
+        let m = found.get(index)?;
+        Some(FindStepItem {
+            index: n(index),
+            row: n(m.row),
+            column: n(m.column),
+        })
+    }))
+}
+
+/// Forgets a result's search (the find bar closed).
+#[tauri::command]
+#[specta::specta]
+async fn clear_find(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(stored) = state.results.get(ResultId(result.into())) {
+        stored
+            .write()
+            .map_err(|_| "result lock poisoned")?
+            .clear_find();
+    }
+    Ok(())
+}
+
+/// "Filter by this value" in a table data tab: the core writes the condition from the typed
+/// value (the cell at `row` of the page, or `value` typed for the column) and returns the
+/// tab's filter with it added. The page's SELECT is checked when it loads.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn table_filter_condition(
+    session: String,
+    result: u32,
+    column: u32,
+    op: FilterOpItem,
+    row: Option<u32>,
+    value: String,
+    filter: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let dialect = dialect_for(&state, &session).await;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let (name, logical, typed) = {
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        let meta = stored
+            .schema()
+            .columns
+            .get(column as usize)
+            .ok_or("no such column")?;
+        let typed = match row {
+            Some(row) => stored
+                .value_at(row as usize, column as usize)
+                .ok_or("no such row")?,
+            None => spelaion_core::typed_value(&value, meta.logical),
+        };
+        (meta.name.clone(), meta.logical, typed)
+    };
+    let condition =
+        spelaion_core::value_condition(dialect.as_ref(), &name, logical, op.into(), &typed)
+            .map_err(|e| e.to_string())?;
+    spelaion_core::add_condition(dialect.as_ref(), &filter, &condition).map_err(|e| e.to_string())
+}
+
+/// Column names for the clipboard: plain, quoted for the engine, qualified with the table
+/// (a table data tab's) or one per line; written by the core.
+#[tauri::command]
+#[specta::specta]
+async fn copy_column_names(
+    result: u32,
+    session: String,
+    columns: Vec<u32>,
+    style: NameStyleItem,
+    table: Option<TableRefItem>,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let dialect = dialect_for(&state, &session).await;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let columns: Vec<usize> = columns.into_iter().map(|c| c as usize).collect();
+    spelaion_core::column_names(
+        &stored,
+        &columns,
+        style.into(),
+        dialect.as_ref(),
+        table.as_ref().map(|t| (t.schema.as_str(), t.name.as_str())),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Every different value of a column (all its rows, in the current view) as an SQL `IN`
+/// list with the engine's literals; refused beyond the core's limit rather than cut.
+#[tauri::command]
+#[specta::specta]
+async fn copy_column_in_list(
+    result: u32,
+    session: String,
+    column: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let dialect = dialect_for(&state, &session).await;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        spelaion_core::column_in_list(&stored, column as usize, dialect.as_ref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3266,6 +3481,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             update_tunnel,
             delete_tunnel,
             copy_rows,
+            copy_column_names,
+            copy_column_in_list,
+            find_in_result,
+            find_matches,
+            find_step,
+            clear_find,
+            table_filter_condition,
             export_result,
             cell_value,
             sort_result,

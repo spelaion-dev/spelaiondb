@@ -59,6 +59,7 @@ import {
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
   type FilterOpItem,
+  type NameStyleItem,
   type SqlTemplateItem,
   type SnippetItem,
   type TextFormat,
@@ -73,7 +74,7 @@ export { commands, events };
 export type { ImportReport, KubernetesDraftItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
-export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
+export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ProxyDraft = ProxyDraftItem_Deserialize;

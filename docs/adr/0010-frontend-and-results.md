@@ -44,6 +44,23 @@
   indexes).
 - Tested end to end with a smoke test that drives the real app over CDP.
 
+## Grid quick wins (2026-11-07, SDB-5)
+- **Find (Ctrl+F) runs in the core** (`find.rs`): it reads every cell of the current view (after
+  the sort and the filters) as the grid shows it, keeps the matches in the stored result (at
+  most 1,000,000) and serves them in windows; the grid highlights only the rows on screen and
+  steps with `find_step`. A sort, a filter or appended rows drop the matches and the grid
+  searches again; a newer search stops an older one. React never holds rows.
+- **"Filter by this value"** builds a `filter.rs` column filter (new: contains / does not
+  contain, taken literally) on query results. In a **table data tab** it goes to the server
+  instead: the core writes the condition from the typed cell (quoted column, the engine's
+  literal) and adds it to the tab's WHERE, which `table_data.rs` checks as always. Filtering
+  only the loaded page of a big table would hide rows that match on other pages.
+- **Copies** are written by the core: HTML tables, column names (always quoted, or qualified
+  like the explorer's) and a column's distinct values as an `IN` list, refused beyond 10,000
+  values rather than cut.
+- Hidden and frozen columns are view state of the tab (in memory); display settings (zebra
+  rows, NULL text, boolean checkboxes) are personal settings in the store.
+
 ## Alternatives
 Monaco (heavier), AG Grid (DOM, more editing features, heavier).
 

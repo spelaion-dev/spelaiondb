@@ -1,5 +1,6 @@
 //! Column filters of a stored result, like SQLyog's: `column = 'value'`, `<>`, `>`, `<`,
-//! `>=`, `<=`, `LIKE`, `NOT LIKE`, `IS NULL`, `IS NOT NULL`, all of them combined with AND.
+//! `>=`, `<=`, `LIKE`, `NOT LIKE`, contains, does not contain, `IS NULL`, `IS NOT NULL`, all
+//! of them combined with AND.
 //! They follow SQL: a NULL cell only matches `IS NULL` (`NULL <> 'Sleep'` is not true).
 //! Numbers compare by value; everything else by the text the grid shows, ignoring case like
 //! MySQL's default collations. They run in the core on the loaded rows, so they also work
@@ -22,6 +23,10 @@ pub enum FilterOp {
     /// SQL `LIKE`: `%` any text, `_` one character, `\` escapes them.
     Like,
     NotLike,
+    /// The cell's text holds the value (ignoring case); no wildcards, so the UI passes the
+    /// value as it is ("filter by this value").
+    Contains,
+    NotContains,
     IsNull,
     IsNotNull,
 }
@@ -37,7 +42,9 @@ impl FilterOp {
             | Self::Ge
             | Self::Le
             | Self::Like
-            | Self::NotLike => true,
+            | Self::NotLike
+            | Self::Contains
+            | Self::NotContains => true,
             Self::IsNull | Self::IsNotNull => false,
         }
     }
@@ -55,7 +62,10 @@ pub struct ColumnFilter {
 pub(crate) fn validate(filter: &ColumnFilter, logical: LogicalType) -> Result<(), ViewError> {
     if filter.op.takes_value()
         && is_numeric(logical)
-        && !matches!(filter.op, FilterOp::Like | FilterOp::NotLike)
+        && !matches!(
+            filter.op,
+            FilterOp::Like | FilterOp::NotLike | FilterOp::Contains | FilterOp::NotContains
+        )
         && filter.value.trim().parse::<f64>().is_err()
     {
         return Err(ViewError::NotANumber {
@@ -77,6 +87,8 @@ pub(crate) fn matches(cell: &Value, logical: LogicalType, filter: &ColumnFilter)
         FilterOp::IsNotNull => true,
         FilterOp::Like => like(&text, &filter.value),
         FilterOp::NotLike => !like(&text, &filter.value),
+        FilterOp::Contains => contains(&text, &filter.value),
+        FilterOp::NotContains => !contains(&text, &filter.value),
         FilterOp::Eq => compare(cell, &text, logical, &filter.value) == Ordering::Equal,
         FilterOp::NotEq => compare(cell, &text, logical, &filter.value) != Ordering::Equal,
         FilterOp::Gt => compare(cell, &text, logical, &filter.value) == Ordering::Greater,
@@ -127,6 +139,11 @@ fn is_numeric(logical: LogicalType) -> bool {
         | LogicalType::Array
         | LogicalType::Native => false,
     }
+}
+
+/// The text holds `value`, ignoring case.
+fn contains(text: &str, value: &str) -> bool {
+    text.to_lowercase().contains(&value.to_lowercase())
 }
 
 /// SQL `LIKE`, ignoring case.
@@ -278,6 +295,45 @@ mod tests {
             &text("2026-03-01"),
             LogicalType::Date,
             &f(FilterOp::Lt, "2026-10-01")
+        ));
+    }
+
+    #[test]
+    fn contains_takes_the_value_literally_ignoring_case() {
+        let text = |s: &str| Value::Text(s.into());
+        assert!(matches(
+            &text("50% off"),
+            LogicalType::Text,
+            &f(FilterOp::Contains, "% OFF")
+        ));
+        // `%` and `_` are plain characters, unlike LIKE.
+        assert!(!matches(
+            &text("50 off"),
+            LogicalType::Text,
+            &f(FilterOp::Contains, "5_ off")
+        ));
+        assert!(matches(
+            &text("50 off"),
+            LogicalType::Text,
+            &f(FilterOp::NotContains, "%")
+        ));
+        // Numbers by their text, and words are fine for them.
+        assert!(matches(
+            &Value::Int(12345),
+            LogicalType::Int,
+            &f(FilterOp::Contains, "234")
+        ));
+        assert!(validate(&f(FilterOp::Contains, "abc"), LogicalType::Int).is_ok());
+        // NULL contains nothing and does not "not contain" either (SQL).
+        assert!(!matches(
+            &Value::Null,
+            LogicalType::Text,
+            &f(FilterOp::Contains, "")
+        ));
+        assert!(!matches(
+            &Value::Null,
+            LogicalType::Text,
+            &f(FilterOp::NotContains, "x")
         ));
     }
 

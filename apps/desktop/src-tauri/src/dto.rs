@@ -2198,6 +2198,52 @@ pub enum TextFormat {
     SqlInsert,
     Markdown,
     InList,
+    Html,
+}
+
+/// How column names are copied (see `spelaion_core::NameStyle`).
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum NameStyleItem {
+    Plain,
+    Quoted,
+    Qualified,
+    List,
+}
+
+impl From<NameStyleItem> for spelaion_core::NameStyle {
+    fn from(item: NameStyleItem) -> Self {
+        match item {
+            NameStyleItem::Plain => Self::Plain,
+            NameStyleItem::Quoted => Self::Quoted,
+            NameStyleItem::Qualified => Self::Qualified,
+            NameStyleItem::List => Self::List,
+        }
+    }
+}
+
+/// What a search in a result found (`None` from `find_in_result` when a newer search on the
+/// same result replaced it).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct FindOutcome {
+    pub count: u32,
+    /// More matches than the core keeps: the count reads "N+".
+    pub truncated: bool,
+}
+
+/// A cell that matches the search: its row in the current view and its column.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct FindMatchItem {
+    pub row: u32,
+    pub column: u32,
+}
+
+/// The match stepped to, and its place among all of them (from 0).
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct FindStepItem {
+    pub index: u32,
+    pub row: u32,
+    pub column: u32,
 }
 
 /// A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
@@ -2497,8 +2543,29 @@ pub enum FilterOpItem {
     Le,
     Like,
     NotLike,
+    Contains,
+    NotContains,
     IsNull,
     IsNotNull,
+}
+
+impl From<FilterOpItem> for spelaion_core::FilterOp {
+    fn from(item: FilterOpItem) -> Self {
+        match item {
+            FilterOpItem::Eq => Self::Eq,
+            FilterOpItem::NotEq => Self::NotEq,
+            FilterOpItem::Gt => Self::Gt,
+            FilterOpItem::Lt => Self::Lt,
+            FilterOpItem::Ge => Self::Ge,
+            FilterOpItem::Le => Self::Le,
+            FilterOpItem::Like => Self::Like,
+            FilterOpItem::NotLike => Self::NotLike,
+            FilterOpItem::Contains => Self::Contains,
+            FilterOpItem::NotContains => Self::NotContains,
+            FilterOpItem::IsNull => Self::IsNull,
+            FilterOpItem::IsNotNull => Self::IsNotNull,
+        }
+    }
 }
 
 /// One condition on a result column; all of them must hold.
@@ -2511,21 +2578,9 @@ pub struct ColumnFilterItem {
 
 impl From<ColumnFilterItem> for spelaion_core::ColumnFilter {
     fn from(item: ColumnFilterItem) -> Self {
-        use spelaion_core::FilterOp;
         Self {
             column: item.column as usize,
-            op: match item.op {
-                FilterOpItem::Eq => FilterOp::Eq,
-                FilterOpItem::NotEq => FilterOp::NotEq,
-                FilterOpItem::Gt => FilterOp::Gt,
-                FilterOpItem::Lt => FilterOp::Lt,
-                FilterOpItem::Ge => FilterOp::Ge,
-                FilterOpItem::Le => FilterOp::Le,
-                FilterOpItem::Like => FilterOp::Like,
-                FilterOpItem::NotLike => FilterOp::NotLike,
-                FilterOpItem::IsNull => FilterOp::IsNull,
-                FilterOpItem::IsNotNull => FilterOp::IsNotNull,
-            },
+            op: item.op.into(),
             value: item.value,
         }
     }
