@@ -186,7 +186,33 @@ pub trait Interaction: Send + Sync {
     async fn ask_secret(&self, request: &SecretRequest) -> Option<Secret>;
 }
 
+/// What went wrong with a proxy, for the connection test's hints (ADR-031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyFailure {
+    /// The proxy itself could not be reached.
+    Unreachable,
+    /// It rejected the username or password, or asks for some we do not have.
+    Rejected,
+    /// It answered, but could not reach the host behind it.
+    Target,
+    /// It did not answer in time.
+    Timeout,
+    /// It answered something we do not understand (not a SOCKS5 or HTTP proxy…).
+    Protocol,
+}
+
+/// The part of a tunnel being opened, reported to [`Tunnel::connect_observed`]'s observer as
+/// it starts. The previous part finished well when the next one starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TunnelStage {
+    /// Connecting through the proxy (to the first hop, or checking it when it is alone).
+    Proxy,
+    /// Connecting to and authenticating on a hop (0-based).
+    Hop(usize),
+}
+
 /// Headless: rejects unknown hosts and answers no question.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NonInteractive;
 
 #[async_trait]
@@ -235,8 +261,29 @@ pub enum SshError {
     #[error("cancelled")]
     Cancelled,
 
+    /// A hop did not answer, or did not finish the SSH handshake, in time.
+    #[error("hop {} ({host}): no response in {}", hop + 1, tunnel::seconds(*after))]
+    Timeout {
+        hop: usize,
+        host: String,
+        after: Duration,
+    },
+
     #[error("proxy {proxy}: {message}")]
-    Proxy { proxy: String, message: String },
+    Proxy {
+        proxy: String,
+        message: String,
+        failure: ProxyFailure,
+    },
+
+    /// The tunnel is open, but its last hop could not reach the target ([`Tunnel::probe`]).
+    #[error("the last hop could not reach {host}:{port}: {message}")]
+    Target {
+        host: String,
+        port: u16,
+        message: String,
+        timed_out: bool,
+    },
 
     #[error("hop {} ({host}): {message}", hop + 1)]
     Hop {

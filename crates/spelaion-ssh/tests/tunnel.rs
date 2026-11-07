@@ -786,10 +786,9 @@ async fn a_server_that_never_answers_times_out_as_configured() {
     let result = Tunnel::connect(&spec, &known.known(), TestUi::accepting()).await;
     let elapsed = started.elapsed();
     match result {
-        Err(SshError::Connect {
-            hop: 0, message, ..
-        }) => {
-            assert!(message.contains("no response in 1 s"), "{message}");
+        Err(error @ SshError::Timeout { hop: 0, after, .. }) => {
+            assert_eq!(after, Duration::from_secs(1));
+            assert!(error.to_string().contains("no response in 1 s"), "{error}");
         }
         other => panic!("expected a timeout at hop 1: {:?}", other.err()),
     }
