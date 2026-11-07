@@ -31,6 +31,32 @@
     "serverSideFilters": "Usar filtros en el servidor",
     "serverSideFiltersHint": "Los filtros de una conexión van dentro de las consultas al catálogo de la base de datos, así un servidor con miles de esquemas o tablas solo envía lo que los pasa. Desactivado, se leen todos los nombres y se filtran en este equipo; lo que ves es lo mismo."
   },
+  "connections": {
+    "title": "Conexiones",
+    "namePattern": "Nombre de las conexiones nuevas",
+    "namePatternIntro": "El formulario de nueva conexión pone este patrón como nombre mientras lo rellenas, hasta que escribas un nombre propio.",
+    "pattern": "Patrón",
+    "variables": "Variables",
+    "variable": {
+      "host": "El nombre del servidor",
+      "port": "El puerto (el del motor si se deja vacío)",
+      "database": "La base de datos, o el nombre de un archivo sin su extensión",
+      "user": "El usuario",
+      "engine": "El nombre del motor, como PostgreSQL",
+      "env": "La etiqueta de entorno (dev, staging, prod…)",
+      "file": "El nombre de un archivo de SQLite o DuckDB"
+    },
+    "syntax": "Pulsa una variable para añadirla. {a|b} toma la primera que tenga valor; una llave doble escribe una llave. Un patrón vacío no sugiere nombre.",
+    "unknown": "Variables desconocidas: {{names}}",
+    "preview": "Vista previa",
+    "previewServer": "Un servidor PostgreSQL",
+    "previewFile": "Un archivo SQLite",
+    "previewEmpty": "(sin nombre)",
+    "save": "Guardar",
+    "reset": "Volver al predeterminado",
+    "saved": "Guardado.",
+    "hint": "Solo para conexiones nuevas: al editar y al importar de DBeaver se mantienen sus nombres."
+  },
   "history": {
     "title": "Historial",
     "stored": "Cada consulta que ejecutas desde la app se guarda en este equipo con su conexión, hora, duración, número de filas y error. Abrir una consulta guardada nunca la ejecuta.",

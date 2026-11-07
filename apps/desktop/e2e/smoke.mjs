@@ -151,7 +151,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, history: 4, network: 5 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, history: 5, network: 6 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -2321,6 +2321,51 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const edited = readFileSync(join(userDir, "connections", "wizard", "docker-pg-wizard.toml"), "utf8");
   assert.match(edited, /name = "Docker PG \(edited\)"/);
   assert.doesNotMatch(edited, /\[tls\]|spelaion"\s*\n\s*password = "/);
+
+  step("name pattern: Settings checks and previews it, the add-connection form fills the name from it");
+  await withSettings("connections", async (settings) => {
+    const patternBox = settings.getByLabel("Pattern", { exact: true });
+    assert.equal(await patternBox.inputValue(), "{database|host}");
+    await patternBox.fill("{engine} {hots} {schema}");
+    await settings.getByRole("alert").filter({ hasText: "Unknown variables: {hots}, {schema}" }).waitFor();
+    assert.ok(await settings.getByRole("button", { name: "Save", exact: true }).isDisabled());
+    await patternBox.fill("{engine} - ");
+    await settings.getByRole("button", { name: "{database}", exact: true }).click();
+    assert.equal(await patternBox.inputValue(), "{engine} - {database}");
+    await patternBox.fill("{engine} - {database|host}");
+    const preview = settings.getByRole("definition");
+    await preview.filter({ hasText: "PostgreSQL - orders" }).waitFor();
+    await preview.filter({ hasText: "SQLite - shop" }).waitFor();
+    await shot("13c-name-pattern");
+    await settings.getByRole("button", { name: "Save", exact: true }).click();
+    await settings.getByRole("status").filter({ hasText: "Saved." }).waitFor();
+  });
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+  const nameBox = wizard.getByLabel("Name", { exact: true });
+  const waitName = async (expected) => {
+    for (let i = 0; i < 50 && (await nameBox.inputValue()) !== expected; i++) await page.waitForTimeout(100);
+    assert.equal(await nameBox.inputValue(), expected);
+  };
+  // The host starts as localhost; no database yet: the pattern's second choice.
+  await waitName("PostgreSQL - localhost");
+  await wizard.getByLabel("Database", { exact: true }).fill("sales");
+  await waitName("PostgreSQL - sales");
+  // A name of one's own stops it; emptying the field gives the name back to the pattern.
+  await nameBox.fill("Mine");
+  await wizard.getByLabel("Database", { exact: true }).fill("reports");
+  await page.waitForTimeout(300);
+  assert.equal(await nameBox.inputValue(), "Mine");
+  await nameBox.fill("");
+  await waitName("PostgreSQL - reports");
+  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  await withSettings("connections", async (settings) => {
+    await settings.getByRole("button", { name: "Back to the default" }).click();
+    await settings.getByRole("status").filter({ hasText: "Saved." }).waitFor();
+    assert.equal(await settings.getByLabel("Pattern", { exact: true }).inputValue(), "{database|host}");
+  });
 
   step("SSH tunnel editor: two hops with keys, tested, used by a new connection");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();

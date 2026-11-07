@@ -1996,6 +1996,22 @@ pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
     })
 }
 
+/// A connection name pattern checked and shown for two sample connections.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NamePatternPreview {
+    /// For a PostgreSQL server; empty when the pattern is not valid.
+    pub server: String,
+    /// For a SQLite file.
+    pub file: String,
+    /// Why the pattern is not valid.
+    pub error: Option<String>,
+    /// Unknown variables, each shown to the user.
+    pub unknown: Vec<String>,
+    /// Every variable a pattern can use.
+    pub variables: Vec<String>,
+}
+
 /// Why a statement asks for confirmation before running (see `spelaion_core::Risk`).
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

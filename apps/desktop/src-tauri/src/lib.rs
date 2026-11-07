@@ -830,6 +830,113 @@ async fn update_connection(
     Ok(())
 }
 
+/// The display name of an engine, as the catalog shows it.
+fn engine_display_name(engine: spelaion_config::Engine) -> String {
+    spelaion_core::engine_catalog()
+        .into_iter()
+        .find(|info| info.engine == Some(engine))
+        .map_or_else(|| engine.as_str().to_string(), |info| info.name.to_string())
+}
+
+/// The pattern new connections are named with (ADR-030).
+#[tauri::command]
+#[specta::specta]
+async fn get_connection_name_pattern(state: State<'_, AppState>) -> CmdResult<String> {
+    state
+        .history
+        .connection_name_pattern()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Sets the pattern (checked by the core) or, with null, goes back to the default.
+#[tauri::command]
+#[specta::specta]
+async fn set_connection_name_pattern(
+    pattern: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_connection_name_pattern(pattern)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Checks a pattern and shows what it gives for two sample connections, for Settings.
+#[tauri::command]
+#[specta::specta]
+fn preview_connection_name_pattern(pattern: String) -> NamePatternPreview {
+    use spelaion_config::{Engine, NamePattern, NamePatternError, NameValues};
+    let variables = spelaion_config::NAME_VARIABLES.map(String::from).to_vec();
+    match NamePattern::parse(&pattern) {
+        Ok(parsed) => {
+            let server = NameValues {
+                host: "db.example.com".into(),
+                port: "5432".into(),
+                database: "orders".into(),
+                user: "app".into(),
+                engine: engine_display_name(Engine::Postgres),
+                env: "prod".into(),
+                file: String::new(),
+            };
+            let file = NameValues {
+                database: "shop".into(),
+                file: "shop.sqlite".into(),
+                engine: engine_display_name(Engine::Sqlite),
+                env: "dev".into(),
+                ..NameValues::default()
+            };
+            NamePatternPreview {
+                server: parsed.render(&server),
+                file: parsed.render(&file),
+                error: None,
+                unknown: Vec::new(),
+                variables,
+            }
+        }
+        Err(error) => NamePatternPreview {
+            server: String::new(),
+            file: String::new(),
+            unknown: match &error {
+                NamePatternError::Unknown(names) => names.clone(),
+                NamePatternError::Unclosed
+                | NamePatternError::Unopened
+                | NamePatternError::Empty
+                | NamePatternError::TooLong => Vec::new(),
+            },
+            error: Some(error.to_string()),
+            variables,
+        },
+    }
+}
+
+/// The name the user's pattern gives the connection being added, as the form is now; null
+/// when the pattern is empty (no suggestions).
+#[tauri::command]
+#[specta::specta]
+async fn suggest_connection_name(
+    draft: ConnectionDraftItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let pattern = state
+        .history
+        .connection_name_pattern()
+        .await
+        .map_err(|e| e.to_string())?;
+    if pattern.trim().is_empty() {
+        return Ok(None);
+    }
+    // A pattern stored by an older version that no longer parses suggests nothing.
+    Ok(spelaion_config::NamePattern::parse(&pattern).ok().map(|p| {
+        p.render(&spelaion_config::NameValues::of_draft(
+            &draft,
+            &engine_display_name(draft.engine),
+        ))
+    }))
+}
+
 /// Deletes a connection file and its stored password. The UI closes its sessions first.
 #[tauri::command]
 #[specta::specta]
@@ -2768,6 +2875,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connection_draft,
             update_connection,
             delete_connection,
+            get_connection_name_pattern,
+            set_connection_name_pattern,
+            preview_connection_name_pattern,
+            suggest_connection_name,
             tunnel_draft,
             test_tunnel,
             add_tunnel,

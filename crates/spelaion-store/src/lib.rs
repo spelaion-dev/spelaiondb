@@ -734,6 +734,33 @@ impl Store {
         self.set_personal_setting("update_check", if enabled { "on" } else { "off" })
     }
 
+    /// The pattern the connection form names new connections with (ADR-030); `None` until
+    /// the user sets one (the app then uses its default). The core checks it before it is set.
+    pub fn get_connection_name_pattern(&self) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "select value from personal_settings where key = 'connection_name_pattern'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    /// Sets the pattern, or with `None` goes back to the app's default.
+    pub fn set_connection_name_pattern(&self, pattern: Option<&str>) -> Result<(), StoreError> {
+        match pattern {
+            Some(pattern) => self.set_personal_setting("connection_name_pattern", pattern),
+            None => {
+                self.conn.execute(
+                    "delete from personal_settings where key = 'connection_name_pattern'",
+                    [],
+                )?;
+                Ok(())
+            }
+        }
+    }
+
     /// The explorer's preferences, each one at its default until it is changed.
     pub fn get_explorer_preferences(&self) -> Result<ExplorerPreferences, StoreError> {
         let defaults = ExplorerPreferences::default();
@@ -1490,6 +1517,30 @@ mod tests {
         drop(store);
         let reopened = Store::open(&path).unwrap();
         assert_eq!(reopened.bookmarks("/repo").unwrap(), [orders]);
+    }
+
+    #[test]
+    fn connection_name_pattern_is_unset_until_chosen_and_persistent() {
+        let path = temp("connection-name-pattern");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_connection_name_pattern().unwrap(), None);
+        store
+            .set_connection_name_pattern(Some("{engine} {host}"))
+            .unwrap();
+        store.set_theme("dark").unwrap();
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened.get_connection_name_pattern().unwrap().as_deref(),
+            Some("{engine} {host}")
+        );
+        reopened.set_connection_name_pattern(Some("")).unwrap();
+        assert_eq!(
+            reopened.get_connection_name_pattern().unwrap().as_deref(),
+            Some("")
+        );
+        reopened.set_connection_name_pattern(None).unwrap();
+        assert_eq!(reopened.get_connection_name_pattern().unwrap(), None);
+        assert_eq!(reopened.get_theme().unwrap(), "dark");
     }
 
     #[test]

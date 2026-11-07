@@ -324,6 +324,8 @@ function ConnectionForm(props: {
   const [useKubernetes, setUseKubernetes] = useState(Boolean(initial?.kubernetes));
   const [kubernetes, setKubernetes] = useState(initial?.kubernetes ?? EMPTY_KUBERNETES);
   const [password, setPassword] = useState(prefill?.password ?? "");
+  /** The user typed a name: the pattern stops filling it (until the field is emptied). */
+  const [nameTyped, setNameTyped] = useState(Boolean(editing));
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -409,6 +411,21 @@ function ConnectionForm(props: {
   };
   const typedPassword = auth === "password" ? password : "";
   const busy = saving || test.kind === "testing";
+
+  // A new connection is named by the personal pattern (ADR-030) until the user types a name.
+  const suggestKey = JSON.stringify([request.engine, request.host, request.port, request.database, request.user, request.env]);
+  useEffect(() => {
+    if (nameTyped) return;
+    let current = true;
+    call(commands.suggestConnectionName(request))
+      .then((name) => {
+        if (current && name !== null) setDraft((d) => ({ ...d, name }));
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [suggestKey, nameTyped]);
 
   async function trustForKubernetes(): Promise<boolean> {
     if (useApp.getState().workspace?.trusted) return true;
@@ -536,7 +553,16 @@ function ConnectionForm(props: {
     >
       <div className="form-top">
         <Field label={t("fields.name")} className="grow">
-          <input type="text" autoFocus value={draft.name} placeholder={t("fields.namePlaceholder", { engine: engine.name })} onChange={(e) => update({ name: e.target.value })} />
+          <input
+            type="text"
+            autoFocus
+            value={draft.name}
+            placeholder={t("fields.namePlaceholder", { engine: engine.name })}
+            onChange={(e) => {
+              update({ name: e.target.value });
+              setNameTyped(e.target.value.trim() !== "");
+            }}
+          />
         </Field>
       </div>
       <div className="form-tabs" role="tablist">
