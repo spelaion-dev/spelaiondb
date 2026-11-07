@@ -23,7 +23,8 @@
     "idle": "Sesiones inactivas",
     "safety": "Seguridad",
     "general": "General",
-    "kubernetes": "Port-forward de Kubernetes"
+    "kubernetes": "Port-forward de Kubernetes",
+    "about": "Sobre esta conexión"
   },
   "fields": {
     "name": "Nombre",
@@ -90,7 +91,10 @@
     "typeConfirmsExecution": "Pregunta antes de cada ejecución",
     "typeConfirmsChanges": "Pregunta antes de cambiar datos",
     "typeClosesIdle": "Se cierra tras {{minutes}} min inactiva",
-    "typeNoSafeguards": "Sin salvaguardas: solo su insignia"
+    "typeNoSafeguards": "Sin salvaguardas: solo su insignia",
+    "description": "Descripción",
+    "descriptionPlaceholder": "¿Para qué es esta base de datos? ¿Quién la mantiene?",
+    "descriptionHint": "Se muestra como descripción emergente de la conexión y, si está expuesta, a los agentes de IA, para que sepan para qué sirve la base de datos. Nunca pongas contraseñas aquí."
   },
   "tls": {
     "disable": "Desactivado",
@@ -301,7 +305,8 @@
     "tls.cert": "certificado de cliente",
     "env": "tipo de conexión",
     "read_only": "solo lectura",
-    "mcp": "acceso de los agentes"
+    "mcp": "acceso de los agentes",
+    "description": "descripción"
   },
   "copies": {
     "duplicate": "Duplicar",

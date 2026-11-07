@@ -183,6 +183,10 @@ async fn main() -> Result<()> {
                     origin,
                     c.name()
                 );
+                // The user's description, indented under its connection.
+                for line in c.file.description.as_deref().unwrap_or_default().lines() {
+                    println!("    {}", line.trim_end());
+                }
             }
             for problem in &config.problems {
                 eprintln!("problem: {problem}");

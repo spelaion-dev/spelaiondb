@@ -37,6 +37,7 @@ import {
   SCHEMAS_REFRESHED_EVENT,
   SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
+import { connectionTooltip } from "../connectionInfo";
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
@@ -1463,14 +1464,11 @@ function ConnectionNode({
         <span
           className="label"
           onDoubleClick={newQuery}
-          // The marks after the name may not fit: what they say is here too.
-          title={[
-            connection.id,
+          // The description, then the marks after the name, which may not fit.
+          title={connectionTooltip(connection, [
             kind ? t("typeTooltip", { name: kind.name }) : null,
             connection.tunnel ? t("tunnel", { name: connection.tunnel }) : null,
-          ]
-            .filter(Boolean)
-            .join("\n")}
+          ])}
         >
           {connection.name}
         </span>

@@ -766,6 +766,8 @@ pub struct ConnectionItem {
     /// `prod/orders`, or `~/local` if it is personal.
     pub id: String,
     pub name: String,
+    /// What the database is for, in the user's words; may span lines.
+    pub description: Option<String>,
     pub engine: String,
     pub env: Option<String>,
     /// The type `env` names (ADR-029); `None` for no label or a plain one.
@@ -1574,6 +1576,8 @@ pub struct ConnectionDraftItem {
     pub personal: bool,
     pub folder: String,
     pub name: String,
+    /// Free text, over lines if needed; empty for none.
+    pub description: String,
     /// An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…).
     pub engine: String,
     pub env: String,
@@ -1618,6 +1622,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             },
             folder: item.folder,
             name: item.name,
+            description: item.description,
             engine,
             env: item.env,
             host: item.host,
@@ -1680,6 +1685,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             },
             folder: draft.folder,
             name: draft.name,
+            description: draft.description,
             engine: draft.engine.as_str().into(),
             env: draft.env,
             host: draft.host,
