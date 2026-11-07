@@ -1138,3 +1138,40 @@ async fn a_proxy_and_a_command_hop_do_not_mix() {
         Err(SshError::Other(m)) if m.contains("proxy")
     ));
 }
+
+/// A hop command that fails at once: what it wrote to its error output is in the error, on
+/// every system. `sh` exits before the handshake notices, faster than `cmd`, so this checks
+/// the output is waited for rather than read too early. Needs no server.
+#[tokio::test]
+async fn a_failing_hop_command_says_why() {
+    let known = TempKnownHosts::new("failing-command");
+    let said = "no-route-to-the-bastion-from-here";
+    let mut first = hop("bastion.example", 22, "id_ed25519");
+    first.command = Some(if cfg!(windows) {
+        format!("echo {said} 1>&2 & exit 1")
+    } else {
+        format!("echo {said} 1>&2; exit 1")
+    });
+    let spec = TunnelSpec {
+        hops: vec![first],
+        ..Default::default()
+    };
+    // Many at once, as under a busy test run, where the output task is scheduled late.
+    let known = known.known();
+    let attempts = (0..20).map(|_| Tunnel::connect(&spec, &known, Arc::new(NonInteractive)));
+    for (attempt, result) in futures_util::future::join_all(attempts)
+        .await
+        .into_iter()
+        .enumerate()
+    {
+        match result {
+            Err(SshError::Connect {
+                hop: 0, message, ..
+            }) => assert!(
+                message.contains(&format!("the command said: {said}")),
+                "attempt {attempt}: {message}"
+            ),
+            other => panic!("expected a connection error at hop 1: {:?}", other.err()),
+        }
+    }
+}

@@ -489,9 +489,12 @@ async fn secrets_in_error_output_are_redacted() {
     )
     .await;
     // The hop failed, and its message still says what the command printed, minus secrets.
+    // The planted output did reach the error ("proxy.example" is only in it), so what
+    // follows tests the redaction, not a message the output never got into.
     assert_eq!(failure(&report), (1, FailureKind::HostUnreachable));
     assert!(
-        report.diagnostics.contains("proxy.example"),
+        report.diagnostics.contains("the command said:")
+            && report.diagnostics.contains("proxy.example"),
         "{}",
         report.diagnostics
     );

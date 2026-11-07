@@ -222,17 +222,24 @@ impl Tunnel {
             let handshake = async {
                 match (sessions.last(), &hop_spec.command) {
                     (None, Some(command)) => {
-                        let (stream, process, stderr) = spawn_command(command, hop_spec, hop)?;
-                        child = Some(process);
-                        let result = client::connect_stream(config.clone(), stream, handler).await;
-                        Ok(result.map_err(|e| {
-                            let stderr = stderr.lock().expect("lock poisoned").trim().to_string();
-                            if stderr.is_empty() {
-                                e.to_string()
-                            } else {
-                                format!("{e} — the command said: {stderr}")
+                        let (stream, mut process, stderr) = spawn_command(command, hop_spec, hop)?;
+                        match client::connect_stream(config.clone(), stream, handler).await {
+                            Ok(session) => {
+                                child = Some(process);
+                                Ok(Ok(session))
                             }
-                        }))
+                            Err(e) => {
+                                // A command that failed may have just exited: its error output
+                                // is still on its way. Stop it and wait (briefly) for the rest.
+                                let _ = process.start_kill();
+                                let said = stderr.collect(COMMAND_STDERR_WAIT).await;
+                                Ok(Err(if said.is_empty() {
+                                    e.to_string()
+                                } else {
+                                    format!("{e} — the command said: {said}")
+                                }))
+                            }
+                        }
                     }
                     (None, None) => match &proxy {
                         // The first hop through the proxy (ADR-027).
@@ -655,12 +662,33 @@ pub(crate) fn seconds(duration: Duration) -> String {
 
 type CommandStream = tokio::io::Join<tokio::process::ChildStdout, tokio::process::ChildStdin>;
 
+/// How long a failed hop command's error output may take to arrive after it is stopped.
+const COMMAND_STDERR_WAIT: Duration = Duration::from_secs(2);
+
+/// A hop command's error output, read as it comes so the command never blocks on it.
+struct CommandStderr {
+    text: Arc<Mutex<String>>,
+    reader: Option<JoinHandle<()>>,
+}
+
+impl CommandStderr {
+    /// Everything it said, once its output ends or `wait` passes. Read as soon as the
+    /// handshake fails, a command that exits at once (`sh` does, faster than `cmd`) would
+    /// otherwise have said nothing yet.
+    async fn collect(self, wait: Duration) -> String {
+        if let Some(reader) = self.reader {
+            let _ = tokio::time::timeout(wait, reader).await;
+        }
+        self.text.lock().expect("lock poisoned").trim().to_string()
+    }
+}
+
 /// Launches a hop's command (`ProxyCommand`) and uses its stdin/stdout as the connection.
 fn spawn_command(
     command: &str,
     spec: &HopSpec,
     hop: usize,
-) -> Result<(CommandStream, Child, Arc<Mutex<String>>), SshError> {
+) -> Result<(CommandStream, Child, CommandStderr), SshError> {
     let command = command
         .replace("%h", &spec.host)
         .replace("%p", &spec.port.to_string());
@@ -680,7 +708,7 @@ fn spawn_command(
     let stdin = child.stdin.take().expect("piped stdin");
     // stderr is kept to explain failures (and must be read so the command does not block).
     let stderr_text = Arc::new(Mutex::new(String::new()));
-    if let Some(mut stderr) = child.stderr.take() {
+    let reader = child.stderr.take().map(|mut stderr| {
         let sink = stderr_text.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 4096];
@@ -693,9 +721,16 @@ fn spawn_command(
                     text.push_str(&String::from_utf8_lossy(&buf[..n]));
                 }
             }
-        });
-    }
-    Ok((tokio::io::join(stdout, stdin), child, stderr_text))
+        })
+    });
+    Ok((
+        tokio::io::join(stdout, stdin),
+        child,
+        CommandStderr {
+            text: stderr_text,
+            reader,
+        },
+    ))
 }
 
 /// `sh -c <command>` or, on Windows, `cmd /C <command>`. On Windows the command is passed
