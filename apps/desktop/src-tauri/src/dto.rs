@@ -1996,6 +1996,93 @@ pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
     })
 }
 
+/// What changing a connection's engine does to its settings (ADR-030), by the file's field
+/// names. Values are what the form shows: a password only as its reference.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineChangeItem {
+    pub from: String,
+    pub to: String,
+    pub kept: Vec<String>,
+    pub changed: Vec<FieldChangeItem>,
+    pub dropped: Vec<String>,
+    pub required: Vec<String>,
+}
+
+impl From<spelaion_config::EngineChange> for EngineChangeItem {
+    fn from(change: spelaion_config::EngineChange) -> Self {
+        Self {
+            from: change.from.as_str().into(),
+            to: change.to.as_str().into(),
+            kept: change.kept,
+            changed: change
+                .changed
+                .into_iter()
+                .map(|f| FieldChangeItem {
+                    field: f.field,
+                    before: f.before,
+                    after: f.after,
+                })
+                .collect(),
+            dropped: change.dropped,
+            required: change.required,
+        }
+    }
+}
+
+/// The form of a connection mapped to another engine, and what that did.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MappedConnectionItem {
+    pub draft: ConnectionDraftItem,
+    pub change: EngineChangeItem,
+}
+
+/// A connection made by "Duplicate" (ADR-030).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicatedItem {
+    pub id: String,
+    pub name: String,
+    /// Its password was in the keychain and the copy has its own entry now.
+    pub password_copied: bool,
+}
+
+/// The clipboard form of a connection: no secrets, nothing that runs a program.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardConnectionItem {
+    pub text: String,
+    /// Settings left out of the text, by the file's field names.
+    pub left_out: Vec<String>,
+}
+
+/// A personal connection made from clipboard text (ADR-030).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PastedItem {
+    pub id: String,
+    pub name: String,
+    /// Settings of the text that were not taken, by the file's field names.
+    pub left_out: Vec<String>,
+}
+
+/// A connection name pattern checked and shown for two sample connections.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NamePatternPreview {
+    /// For a PostgreSQL server; empty when the pattern is not valid.
+    pub server: String,
+    /// For a SQLite file.
+    pub file: String,
+    /// Why the pattern is not valid.
+    pub error: Option<String>,
+    /// Unknown variables, each shown to the user.
+    pub unknown: Vec<String>,
+    /// Every variable a pattern can use.
+    pub variables: Vec<String>,
+}
+
 /// Why a statement asks for confirmation before running (see `spelaion_core::Risk`).
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

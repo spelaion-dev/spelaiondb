@@ -81,7 +81,8 @@
     "tlsKey": "Clave del cliente (PEM)",
     "tlsKeyPlaceholder": "~/.ssl/yo.key",
     "clientCertHint": "Entra con un certificado en lugar de una contraseña (el servidor debe aceptarlo para este usuario). La clave se queda en tu ordenador: guárdala en tu carpeta personal, nunca en el repositorio.",
-    "cloudToken": "Proveedor"
+    "cloudToken": "Proveedor",
+    "engine": "Motor"
   },
   "tls": {
     "disable": "Desactivado",
@@ -273,5 +274,47 @@
     "awsRdsHint": "Ejecuta «aws rds generate-db-auth-token» en cada conexión: la CLI de AWS debe tener la sesión iniciada en este ordenador. Los tokens duran 15 minutos y necesitan TLS.",
     "azureAdHint": "Ejecuta «az account get-access-token» en cada conexión: la CLI de Azure debe tener la sesión iniciada en este ordenador. Usa tu usuario de Entra ID como usuario.",
     "googleCloudSqlHint": "Ejecuta «gcloud sql generate-login-token» en cada conexión: la CLI de gcloud debe tener la sesión iniciada en este ordenador. Usa tu usuario de IAM como usuario."
+  },
+  "fieldNames": {
+    "host": "servidor",
+    "port": "puerto",
+    "database": "base de datos",
+    "user": "usuario",
+    "password": "contraseña",
+    "tunnel": "túnel SSH",
+    "local_port": "puerto local",
+    "kubernetes": "Kubernetes",
+    "kubernetes.kubeconfig": "archivo kubeconfig",
+    "kubernetes.kubectl": "programa kubectl",
+    "sqlite3": "programa sqlite3 del servidor",
+    "keepalive": "keep-alive",
+    "tls.mode": "modo TLS",
+    "tls.ca": "certificado de la CA",
+    "tls.cert": "certificado de cliente",
+    "env": "entorno",
+    "read_only": "solo lectura",
+    "mcp": "acceso de los agentes"
+  },
+  "copies": {
+    "duplicate": "Duplicar",
+    "copy": "Copiar",
+    "paste": "Pegar conexión",
+    "duplicated": "«{{copy}}» es una copia de «{{name}}», ya guardada. Su contraseña se pedirá al conectar. Cambia lo que sea distinto o cierra.",
+    "duplicatedWithPassword": "«{{copy}}» es una copia de «{{name}}», ya guardada, con su propia copia de la contraseña guardada. Cambia lo que sea distinto o cierra.",
+    "copied": "«{{name}}» copiada, sin su contraseña.",
+    "copiedWithout": "«{{name}}» copiada, sin su contraseña. Se ha quedado fuera: {{fields}}.",
+    "pasted": "«{{name}}» se ha pegado como conexión personal, ya guardada. Su contraseña se pide al conectar. Revísala o cierra.",
+    "pastedWithout": "«{{name}}» se ha pegado como conexión personal, ya guardada. Su contraseña se pide al conectar. No se ha tomado del portapapeles: {{fields}}. Revísala o cierra.",
+    "clipboardUnavailable": "No se ha podido leer el portapapeles: selecciona una conexión y pulsa Ctrl+V."
+  },
+  "engineChange": {
+    "title": "Cambio de motor",
+    "summary": "Motor: {{from}} → {{to}}. No se guarda nada hasta que guardes.",
+    "kept": "Se mantiene: {{fields}}.",
+    "changed": "Cambia: {{fields}}.",
+    "dropped": "Se quita: {{fields}}.",
+    "required": "Falta rellenar: {{fields}}.",
+    "none": "(nada)",
+    "hint": "La conexión conserva su archivo, filtros, marcadores e historial. Al guardar se cierran sus sesiones abiertas: son del motor anterior, y sus pestañas vuelven a conectar al ejecutar."
   }
 }

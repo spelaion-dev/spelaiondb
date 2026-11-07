@@ -2218,3 +2218,35 @@ select {
 .new-table-element > .error { margin: 0 20px 10px; }
 .new-table-element > .modal-actions { margin: 0; padding: 12px 20px; border-top: 1px solid var(--line); }
 @media (max-width: 540px) { .new-table-element-fields { grid-template-columns: minmax(0, 1fr); } .new-table-element-wide { grid-column: auto; } }
+
+/* Duplicate, copy and paste of connections; engine changes; name pattern (ADR-030). */
+.row-note {
+  padding: 2px 8px 4px 28px;
+  overflow-wrap: anywhere;
+}
+.wizard-notice,
+.engine-change {
+  margin: 8px 18px 0;
+}
+.engine-change p {
+  margin: 4px 0 0;
+}
+.pattern-variables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+.pattern-variables button {
+  font-family: var(--mono, monospace);
+}
+.pattern-preview {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 8px 0;
+}
+.pattern-preview dd {
+  margin: 0;
+  font-weight: 600;
+}

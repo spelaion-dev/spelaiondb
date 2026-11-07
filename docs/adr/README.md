@@ -37,3 +37,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [026](0026-explorer-object-actions.md) | The explorer's object actions: SQL from the core, run only after it is shown | Accepted |
 | [027](0027-proxies-and-network-profiles.md) | SOCKS and HTTP proxies go in tunnel files, and tunnel files are the network profiles | Accepted |
 | [028](0028-idle-sessions.md) | Idle database sessions: keep them alive, notice when one dies, reconnect only on a click | Accepted |
+| [030](0030-copying-connections-and-changing-engines.md) | Copying connections, changing their engine, and naming new ones | Accepted |

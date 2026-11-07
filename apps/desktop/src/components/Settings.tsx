@@ -9,11 +9,11 @@ import { usePreferences, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
 import { useUpdate } from "../update";
-import { call, commands, type NetworkProfileItem } from "../api";
+import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
-type Category = "appearance" | "language" | "explorer" | "history" | "network" | "updates";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "history", "network", "updates"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "history" | "network" | "updates";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "history", "network", "updates"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -60,6 +60,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "appearance" && <AppearanceSettings />}
         {category === "language" && <LanguageSettings />}
         {category === "explorer" && <ExplorerSettings />}
+        {category === "connections" && <ConnectionSettings />}
         {category === "history" && <HistorySettings />}
         {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}
@@ -310,6 +311,107 @@ function NetworkProfiles() {
 }
 
 /** The range of local ports SSH tunnels listen on, for a firewall that only allows some. */
+/** The pattern new connections are named with (ADR-030), checked and previewed by the core. */
+function ConnectionSettings() {
+  const { t } = useTranslation("settings");
+  const [pattern, setPattern] = useState<string | null>(null);
+  const [preview, setPreview] = useState<NamePatternPreview | null>(null);
+  const [status, setStatus] = useState<{ kind: "idle" | "saved" } | { kind: "error"; message: string }>({ kind: "idle" });
+  const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+  useEffect(() => {
+    call(commands.getConnectionNamePattern())
+      .then(setPattern)
+      .catch((e: unknown) => setStatus({ kind: "error", message: errorText(e) }));
+  }, []);
+  useEffect(() => {
+    if (pattern === null) return;
+    let current = true;
+    void commands.previewConnectionNamePattern(pattern).then((p) => current && setPreview(p));
+    return () => {
+      current = false;
+    };
+  }, [pattern]);
+
+  async function save(next: string | null) {
+    try {
+      await call(commands.setConnectionNamePattern(next));
+      if (next === null) setPattern(await call(commands.getConnectionNamePattern()));
+      setStatus({ kind: "saved" });
+    } catch (e) {
+      setStatus({ kind: "error", message: errorText(e) });
+    }
+  }
+
+  if (pattern === null) return status.kind === "error" ? <p className="error small" role="alert">{status.message}</p> : null;
+  const valid = preview !== null && preview.error === null;
+  return (
+    <section aria-label={t("connections.namePattern")}>
+      <h3>{t("connections.namePattern")}</h3>
+      <p>{t("connections.namePatternIntro")}</p>
+      <label className="field">
+        <span>{t("connections.pattern")}</span>
+        <input
+          type="text"
+          value={pattern}
+          spellCheck={false}
+          autoComplete="off"
+          aria-invalid={!valid}
+          onChange={(e) => {
+            setPattern(e.target.value);
+            setStatus({ kind: "idle" });
+          }}
+        />
+      </label>
+      <div className="pattern-variables" aria-label={t("connections.variables")}>
+        {preview?.variables.map((name) => (
+          <button
+            key={name}
+            className="ghost small"
+            title={t(`connections.variable.${name}`)}
+            onClick={() => {
+              setPattern(`${pattern}{${name}}`);
+              setStatus({ kind: "idle" });
+            }}
+          >
+            {`{${name}}`}
+          </button>
+        ))}
+      </div>
+      <p className="muted small">{t("connections.syntax")}</p>
+      {preview && preview.unknown.length > 0 && (
+        <p className="error small" role="alert">
+          {t("connections.unknown", { names: preview.unknown.map((n) => `{${n}}`).join(", ") })}
+        </p>
+      )}
+      {preview?.error && preview.unknown.length === 0 && (
+        <p className="error small" role="alert">
+          {preview.error}
+        </p>
+      )}
+      {valid && (
+        <dl className="pattern-preview" aria-label={t("connections.preview")}>
+          <dt>{t("connections.previewServer")}</dt>
+          <dd>{preview.server || <span className="muted">{t("connections.previewEmpty")}</span>}</dd>
+          <dt>{t("connections.previewFile")}</dt>
+          <dd>{preview.file || <span className="muted">{t("connections.previewEmpty")}</span>}</dd>
+        </dl>
+      )}
+      <div className="form-row">
+        <button disabled={!valid} onClick={() => void save(pattern)}>
+          {t("connections.save")}
+        </button>
+        <button className="ghost" onClick={() => void save(null)}>
+          {t("connections.reset")}
+        </button>
+      </div>
+      {status.kind === "saved" && <p className="small" role="status">{t("connections.saved")}</p>}
+      {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
+      <p className="muted small">{t("connections.hint")}</p>
+    </section>
+  );
+}
+
 function PortRange() {
   const { t } = useTranslation("settings");
   const [min, setMin] = useState("");

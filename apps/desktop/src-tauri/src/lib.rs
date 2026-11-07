@@ -830,6 +830,195 @@ async fn update_connection(
     Ok(())
 }
 
+/// The form mapped to another engine (ADR-030): what still applies is kept, the rest is
+/// changed or dropped by the core; nothing is saved until the form is.
+#[tauri::command]
+#[specta::specta]
+fn change_connection_engine(
+    draft: ConnectionDraftItem,
+    engine: String,
+) -> CmdResult<MappedConnectionItem> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let (mapped, change) = draft.with_engine(engine_named(&engine)?);
+    Ok(MappedConnectionItem {
+        draft: mapped.into(),
+        change: change.into(),
+    })
+}
+
+/// Duplicates a connection next to the original (ADR-030). A stored password is copied to the
+/// copy's own keychain entry by the core; a repository connection must be as trusted.
+#[tauri::command]
+#[specta::specta]
+async fn duplicate_connection(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<DuplicatedItem> {
+    let duplicated = {
+        let config = state.config.read().await;
+        let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+        spelaion_config::duplicate_connection(
+            &config,
+            &mut trust,
+            &parse_id(&connection),
+            &SystemBackend,
+        )
+        .map_err(|e| e.to_string())?
+    };
+    state.reload().await;
+    Ok(DuplicatedItem {
+        id: duplicated.id.to_string(),
+        name: duplicated.name,
+        password_copied: duplicated.password_copied,
+    })
+}
+
+/// The text Ctrl+C puts on the clipboard for a connection: without secrets or programs.
+#[tauri::command]
+#[specta::specta]
+async fn copy_connection(
+    connection: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ClipboardConnectionItem> {
+    let config = state.config.read().await;
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let copied = spelaion_config::connection_clipboard_text(
+        &config,
+        &trust,
+        &parse_id(&connection),
+        &SystemBackend,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(ClipboardConnectionItem {
+        text: copied.text,
+        left_out: copied.left_out,
+    })
+}
+
+/// A personal connection from clipboard text, checked by the core as untrusted input.
+#[tauri::command]
+#[specta::specta]
+async fn paste_connection(text: String, state: State<'_, AppState>) -> CmdResult<PastedItem> {
+    let pasted = {
+        let config = state.config.read().await;
+        spelaion_config::paste_connection(&config, &text, &SystemBackend)
+            .map_err(|e| e.to_string())?
+    };
+    state.reload().await;
+    Ok(PastedItem {
+        id: pasted.id.to_string(),
+        name: pasted.name,
+        left_out: pasted.left_out,
+    })
+}
+
+/// The display name of an engine, as the catalog shows it.
+fn engine_display_name(engine: spelaion_config::Engine) -> String {
+    spelaion_core::engine_catalog()
+        .into_iter()
+        .find(|info| info.engine == Some(engine))
+        .map_or_else(|| engine.as_str().to_string(), |info| info.name.to_string())
+}
+
+/// The pattern new connections are named with (ADR-030).
+#[tauri::command]
+#[specta::specta]
+async fn get_connection_name_pattern(state: State<'_, AppState>) -> CmdResult<String> {
+    state
+        .history
+        .connection_name_pattern()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Sets the pattern (checked by the core) or, with null, goes back to the default.
+#[tauri::command]
+#[specta::specta]
+async fn set_connection_name_pattern(
+    pattern: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_connection_name_pattern(pattern)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Checks a pattern and shows what it gives for two sample connections, for Settings.
+#[tauri::command]
+#[specta::specta]
+fn preview_connection_name_pattern(pattern: String) -> NamePatternPreview {
+    use spelaion_config::{Engine, NamePattern, NamePatternError, NameValues};
+    let variables = spelaion_config::NAME_VARIABLES.map(String::from).to_vec();
+    match NamePattern::parse(&pattern) {
+        Ok(parsed) => {
+            let server = NameValues {
+                host: "db.example.com".into(),
+                port: "5432".into(),
+                database: "orders".into(),
+                user: "app".into(),
+                engine: engine_display_name(Engine::Postgres),
+                env: "prod".into(),
+                file: String::new(),
+            };
+            let file = NameValues {
+                database: "shop".into(),
+                file: "shop.sqlite".into(),
+                engine: engine_display_name(Engine::Sqlite),
+                env: "dev".into(),
+                ..NameValues::default()
+            };
+            NamePatternPreview {
+                server: parsed.render(&server),
+                file: parsed.render(&file),
+                error: None,
+                unknown: Vec::new(),
+                variables,
+            }
+        }
+        Err(error) => NamePatternPreview {
+            server: String::new(),
+            file: String::new(),
+            unknown: match &error {
+                NamePatternError::Unknown(names) => names.clone(),
+                NamePatternError::Unclosed
+                | NamePatternError::Unopened
+                | NamePatternError::Empty
+                | NamePatternError::TooLong => Vec::new(),
+            },
+            error: Some(error.to_string()),
+            variables,
+        },
+    }
+}
+
+/// The name the user's pattern gives the connection being added, as the form is now; null
+/// when the pattern is empty (no suggestions).
+#[tauri::command]
+#[specta::specta]
+async fn suggest_connection_name(
+    draft: ConnectionDraftItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let draft = ConnectionDraft::try_from(draft)?;
+    let pattern = state
+        .history
+        .connection_name_pattern()
+        .await
+        .map_err(|e| e.to_string())?;
+    if pattern.trim().is_empty() {
+        return Ok(None);
+    }
+    // A pattern stored by an older version that no longer parses suggests nothing.
+    Ok(spelaion_config::NamePattern::parse(&pattern).ok().map(|p| {
+        p.render(&spelaion_config::NameValues::of_draft(
+            &draft,
+            &engine_display_name(draft.engine),
+        ))
+    }))
+}
+
 /// Deletes a connection file and its stored password. The UI closes its sessions first.
 #[tauri::command]
 #[specta::specta]
@@ -2768,6 +2957,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connection_draft,
             update_connection,
             delete_connection,
+            change_connection_engine,
+            duplicate_connection,
+            copy_connection,
+            paste_connection,
+            get_connection_name_pattern,
+            set_connection_name_pattern,
+            preview_connection_name_pattern,
+            suggest_connection_name,
             tunnel_draft,
             test_tunnel,
             add_tunnel,

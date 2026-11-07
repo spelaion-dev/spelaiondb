@@ -53,6 +53,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server). `dbeaver.rs` reads DBeaver's
   connections and saved credentials for the import (passwords only as `Secret`, to the keychain).
+  ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
+  inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
+  untrusted input (a personal connection through the form's checks, password always asked, no
+  `${env:…}`, nothing that runs a program); `engine_change.rs` maps a connection to another
+  engine (kept, changed, dropped, to fill in); `name_pattern.rs` renders the name of new
+  connections from the personal pattern. Any change to `copy.rs` needs tests that try to get
+  around it.
 - `crates/spelaion-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
   it receives a `TunnelSpec`. `KnownHosts` checks the team's `.spelaion/known_hosts` first
   (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Dialogs go through the `Interaction` trait. Tests against the

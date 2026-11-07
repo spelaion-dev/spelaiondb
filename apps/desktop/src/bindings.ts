@@ -53,6 +53,31 @@ export const commands = {
 	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
 	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
 	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
+	/**
+	 *  The form mapped to another engine (ADR-030): what still applies is kept, the rest is
+	 *  changed or dropped by the core; nothing is saved until the form is.
+	 */
+	changeConnectionEngine: (draft: ConnectionDraftItem_Deserialize, engine: string) => typedError<MappedConnectionItem_Serialize, string>(__TAURI_INVOKE("change_connection_engine", { draft, engine })),
+	/**
+	 *  Duplicates a connection next to the original (ADR-030). A stored password is copied to the
+	 *  copy's own keychain entry by the core; a repository connection must be as trusted.
+	 */
+	duplicateConnection: (connection: string) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
+	/**  The text Ctrl+C puts on the clipboard for a connection: without secrets or programs. */
+	copyConnection: (connection: string) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
+	/**  A personal connection from clipboard text, checked by the core as untrusted input. */
+	pasteConnection: (text: string) => typedError<PastedItem, string>(__TAURI_INVOKE("paste_connection", { text })),
+	/**  The pattern new connections are named with (ADR-030). */
+	getConnectionNamePattern: () => typedError<string, string>(__TAURI_INVOKE("get_connection_name_pattern")),
+	/**  Sets the pattern (checked by the core) or, with null, goes back to the default. */
+	setConnectionNamePattern: (pattern: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_name_pattern", { pattern })),
+	/**  Checks a pattern and shows what it gives for two sample connections, for Settings. */
+	previewConnectionNamePattern: (pattern: string) => __TAURI_INVOKE<NamePatternPreview_Serialize>("preview_connection_name_pattern", { pattern }),
+	/**
+	 *  The name the user's pattern gives the connection being added, as the form is now; null
+	 *  when the pattern is empty (no suggestions).
+	 */
+	suggestConnectionName: (draft: ConnectionDraftItem_Deserialize) => typedError<string | null, string>(__TAURI_INVOKE("suggest_connection_name", { draft })),
 	/**  The form of an existing tunnel, to edit it. */
 	tunnelDraft: (name: string, personal: boolean) => typedError<[TunnelDraftItem_Serialize, string], string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
 	/**
@@ -358,6 +383,13 @@ export type CellRange = {
 	columns: number,
 };
 
+/**  The clipboard form of a connection: no secrets, nothing that runs a program. */
+export type ClipboardConnectionItem = {
+	text: string,
+	/**  Settings left out of the text, by the file's field names. */
+	leftOut: string[],
+};
+
 export type ColumnDetails = ColumnDetails_Serialize | ColumnDetails_Deserialize;
 
 export type ColumnDetails_Deserialize = {
@@ -634,6 +666,14 @@ export type DbeaverScan_Serialize = {
 	connections: DbeaverItem_Serialize[],
 };
 
+/**  A connection made by "Duplicate" (ADR-030). */
+export type DuplicatedItem = {
+	id: string,
+	name: string,
+	/**  Its password was in the keychain and the copy has its own entry now. */
+	passwordCopied: boolean,
+};
+
 export type EditableTableItem = {
 	schema: string,
 	name: string,
@@ -652,6 +692,38 @@ item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string 
 export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string };
+
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem = EngineChangeItem_Serialize | EngineChangeItem_Deserialize;
+
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem_Deserialize = {
+	from: string,
+	to: string,
+	kept: string[],
+	changed: FieldChangeItem_Deserialize[],
+	dropped: string[],
+	required: string[],
+};
+
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem_Serialize = {
+	from: string,
+	to: string,
+	kept: string[],
+	changed: FieldChangeItem_Serialize[],
+	dropped: string[],
+	required: string[],
+};
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
 export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;
@@ -866,10 +938,56 @@ export type KubernetesDraftItem = {
 	kubectl: string,
 };
 
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem = MappedConnectionItem_Serialize | MappedConnectionItem_Deserialize;
+
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem_Deserialize = {
+	draft: ConnectionDraftItem_Deserialize,
+	change: EngineChangeItem_Deserialize,
+};
+
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem_Serialize = {
+	draft: ConnectionDraftItem_Serialize,
+	change: EngineChangeItem_Serialize,
+};
+
 /**  Include and exclude patterns for one kind of name (ADR-025). */
 export type NameFilterItem = {
 	include: string[],
 	exclude: string[],
+};
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview = NamePatternPreview_Serialize | NamePatternPreview_Deserialize;
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview_Deserialize = {
+	/**  For a PostgreSQL server; empty when the pattern is not valid. */
+	server: string,
+	/**  For a SQLite file. */
+	file: string,
+	/**  Why the pattern is not valid. */
+	error?: string | null,
+	/**  Unknown variables, each shown to the user. */
+	unknown: string[],
+	/**  Every variable a pattern can use. */
+	variables: string[],
+};
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview_Serialize = {
+	/**  For a PostgreSQL server; empty when the pattern is not valid. */
+	server: string,
+	/**  For a SQLite file. */
+	file: string,
+	/**  Why the pattern is not valid. */
+	error: string | null,
+	/**  Unknown variables, each shown to the user. */
+	unknown: string[],
+	/**  Every variable a pattern can use. */
+	variables: string[],
 };
 
 /**
@@ -999,6 +1117,14 @@ export type PasswordMode = "none" | "keychain" | "prompt" | "env" |
 "other" | 
 /**  Short-lived tokens from a cloud provider's CLI (ADR-022). */
 "awsRds" | "azureAd" | "googleCloudSql";
+
+/**  A personal connection made from clipboard text (ADR-030). */
+export type PastedItem = {
+	id: string,
+	name: string,
+	/**  Settings of the text that were not taken, by the file's field names. */
+	leftOut: string[],
+};
 
 export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;
 

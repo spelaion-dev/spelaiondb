@@ -12,13 +12,16 @@
 mod accounts;
 mod check;
 mod conn_url;
+mod copy;
 mod dbeaver;
 mod draft;
 mod edit;
+mod engine_change;
 mod error;
 mod load;
 mod migrate;
 mod model;
+mod name_pattern;
 mod resolve;
 mod secrets;
 mod trust;
@@ -28,6 +31,10 @@ mod vars;
 pub use accounts::{connection_account, proxy_account, tunnel_account};
 pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
+pub use copy::{
+    ClipboardConnection, Duplicated, MAX_CLIPBOARD_TEXT, Pasted, connection_clipboard_text,
+    duplicate_connection, paste_connection,
+};
 pub use dbeaver::{
     DbeaverConnection, DbeaverError, DbeaverProxy, DbeaverSsh, ImportPlan, dbeaver_workspace,
     import_plan, read_dbeaver,
@@ -41,6 +48,7 @@ pub use edit::{
     CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_vars,
     set_value,
 };
+pub use engine_change::EngineChange;
 pub use error::{ConfigError, ResolveError};
 pub use load::{
     Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, WORKSPACE_DIR, default_user_dir,
@@ -51,6 +59,10 @@ pub use model::{
     ConnectionFile, Engine, HopConfig, KubernetesConfig, McpConfig, ProxyConfig, ProxyType,
     SCHEMA_VERSION, SecretSpec, SshAuth, TlsConfig, TlsModeConfig, TunnelFile, TunnelPreferences,
     UserFile, WritePolicy,
+};
+pub use name_pattern::{
+    DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
+    NameValues,
 };
 pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,

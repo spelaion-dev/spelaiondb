@@ -503,7 +503,8 @@ impl ConnectionDraft {
 }
 
 impl ConnectionDraft {
-    /// The entry an edit would produce: same identifier, file and layer as `entry`.
+    /// The entry an edit would produce: same identifier, file and layer as `entry`. The
+    /// engine may change (ADR-030): the form maps the settings first with [`Self::with_engine`].
     pub(crate) fn edited_entry(
         &self,
         config: &Config,
@@ -511,7 +512,6 @@ impl ConnectionDraft {
     ) -> Result<ConnectionEntry, ConfigError> {
         let draft = ConnectionDraft {
             source: entry.id.source,
-            engine: entry.file.engine,
             ..self.clone()
         };
         Ok(ConnectionEntry {
@@ -522,7 +522,7 @@ impl ConnectionDraft {
     }
 }
 
-fn uses_default_keychain(file: &ConnectionFile) -> bool {
+pub(crate) fn uses_default_keychain(file: &ConnectionFile) -> bool {
     file.password
         .as_ref()
         .is_some_and(|p| p.secret == "keychain")
@@ -530,7 +530,7 @@ fn uses_default_keychain(file: &ConnectionFile) -> bool {
 
 /// Sets (or removes, with `None`) one key of the document, creating parent tables as needed
 /// and dropping tables left empty. The comment on an existing value is kept.
-fn put(doc: &mut toml_edit::DocumentMut, key: &[&str], value: Option<toml_edit::Value>) {
+pub(crate) fn put(doc: &mut toml_edit::DocumentMut, key: &[&str], value: Option<toml_edit::Value>) {
     use toml_edit::{Item, Table};
     let Some((last, parents)) = key.split_last() else {
         return;
@@ -622,6 +622,13 @@ pub fn update_connection(
         return Err(ConfigError::new(path, "the connection changed; reopen the editor").into());
     }
     let text = |v: &Option<String>| v.clone().map(Value::from);
+    if old.engine != new.engine {
+        put(
+            &mut doc,
+            &["engine"],
+            Some(Value::from(new.engine.as_str())),
+        );
+    }
     if old.name != new.name {
         put(&mut doc, &["name"], text(&new.name));
     }
