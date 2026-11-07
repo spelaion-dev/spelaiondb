@@ -37,6 +37,9 @@ enum Command {
         /// Maximum time per query, in seconds.
         #[arg(long, default_value_t = 30)]
         timeout: u64,
+        /// Every connection read-only for this server, whatever each one allows (ADR-033).
+        #[arg(long)]
+        read_only: bool,
     },
     /// Lists the visible connections and whether they are exposed to the MCP.
     Connections {
@@ -144,12 +147,17 @@ async fn main() -> Result<()> {
     let user_dir = user_dir(&cli)?;
     match cli.command {
         Command::Check { .. } => unreachable!("handled above"),
-        Command::Mcp { workspace, timeout } => {
+        Command::Mcp {
+            workspace,
+            timeout,
+            read_only,
+        } => {
             // stdout is the protocol channel: notices go to stderr.
             let options = spelaion_mcp::ServerOptions {
                 workspace: Some(workspace_or_cwd(workspace)?),
                 user_dir,
                 timeout: Duration::from_secs(timeout),
+                read_only,
             };
             spelaion_mcp::serve_stdio(options)
                 .await

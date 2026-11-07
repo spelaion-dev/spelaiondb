@@ -381,7 +381,10 @@ anything that reaches files or other servers are always refused, and read-only c
 never let agents write. Every engine is served (PostgreSQL, MySQL, MariaDB, SQL Server,
 SQLite and DuckDB), each behind its own read-only barrier (ADR-020); for DuckDB, agents never
 reach files or the network. A read-only database user is still the safest choice for agents
-that only read. Install the binary and add it to Claude Code:
+that only read. One switch makes every agent read-only, whatever each connection allows
+(ADR-033; `spelaiondb mcp --read-only` does the same for one server). Query rows come back as
+JSON or as compact TOON (`output_format`, or your default). Install the binary and add it to
+Claude Code:
 
 ```bash
 cargo install --path apps/cli

@@ -127,7 +127,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
   `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
-  (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions.
+  (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions. What agents may
+  do on a connection is `spelaion-core::agent_access` (`write.rs`): the user's read-only mode
+  for every agent (ADR-033, `mcp.read_only` in the store, read on every call, failing closed)
+  only takes writes away. Query rows go out as JSON or TOON (`format.rs`); any change there
+  keeps every cell quoted so data cannot add rows or fields.
 - `apps/desktop`: Tauri 2 + React app. `src-tauri` is a thin adapter over the core; the
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).

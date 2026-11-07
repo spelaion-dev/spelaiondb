@@ -10,6 +10,7 @@ use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
+use spelaion_config::{ConnectionFile, WritePolicy};
 use spelaion_driver_api::{Dialect, DriverError, ExecEvent, ExecOptions};
 use sqlparser::ast::{AlterTableOperation, Statement, visit_statements};
 use sqlparser::parser::Parser;
@@ -50,6 +51,66 @@ pub enum WriteError {
     Database(#[from] DriverError),
     #[error("writes from agents are not available for {0} yet")]
     Unsupported(String),
+}
+
+/// What agents may do on a connection, with every rule applied (ADR-019, ADR-033). This is
+/// the one place that decides it: the MCP server refuses writes with it, and the app and
+/// `list_connections` show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentAccess {
+    /// `execute_write` may run, through the barriers of [`check_write`].
+    ReadWrite,
+    ReadOnly(ReadOnlyBecause),
+}
+
+/// Why agents may only read a connection, the first reason that applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadOnlyBecause {
+    /// The user's read-only mode for every agent (ADR-033): it wins over any connection
+    /// file, a trusted repository's and Production's included.
+    AllAgents,
+    /// The connection is `read_only`, for the user too.
+    Connection,
+    /// `[mcp] writes = "deny"`, the default.
+    WritesDenied,
+    /// `[mcp] writes = "confirm"`, which is not supported yet (ADR-019).
+    ConfirmUnsupported,
+}
+
+/// What agents may do on the connection in `file`. `all_read_only` is the user's read-only
+/// mode for every agent (or `spelaiondb mcp --read-only`); it can only take writes away.
+pub fn agent_access(file: &ConnectionFile, all_read_only: bool) -> AgentAccess {
+    if all_read_only {
+        return AgentAccess::ReadOnly(ReadOnlyBecause::AllAgents);
+    }
+    if file.read_only {
+        return AgentAccess::ReadOnly(ReadOnlyBecause::Connection);
+    }
+    match file.mcp.writes {
+        WritePolicy::Allow => AgentAccess::ReadWrite,
+        WritePolicy::Deny => AgentAccess::ReadOnly(ReadOnlyBecause::WritesDenied),
+        WritePolicy::Confirm => AgentAccess::ReadOnly(ReadOnlyBecause::ConfirmUnsupported),
+    }
+}
+
+impl ReadOnlyBecause {
+    /// Why a write on `connection` was refused, in words for the agent.
+    pub fn refusal(self, connection: &str) -> String {
+        match self {
+            ReadOnlyBecause::AllAgents => format!(
+                "connection {connection:?} is read-only: the user made every agent read-only (SpelaionDB's MCP server page)"
+            ),
+            ReadOnlyBecause::Connection => {
+                format!("connection {connection:?} is read-only, for agents and for the user")
+            }
+            ReadOnlyBecause::WritesDenied => format!(
+                "connection {connection:?} is read-only for agents; the user can allow writes in its settings"
+            ),
+            ReadOnlyBecause::ConfirmUnsupported => format!(
+                "connection {connection:?} asks to confirm each write, which is not supported yet; the user can set writes to allow or deny"
+            ),
+        }
+    }
 }
 
 /// Margin of the client timer over `statement_timeout` in PostgreSQL (as for reads).
@@ -450,5 +511,58 @@ mod tests {
         ] {
             assert_eq!(check_write(dialect, sql), Ok(()), "{sql}");
         }
+    }
+
+    fn connection(extra: &str) -> ConnectionFile {
+        let base = "schema_version = 1\nname = \"Orders\"\nengine = \"postgres\"\nhost = \"db\"\nenv = \"prod\"\n";
+        toml::from_str(&format!("{base}{extra}")).unwrap()
+    }
+
+    #[test]
+    fn read_only_for_every_agent_wins_over_any_connection() {
+        // A connection that lets agents write, Production included (ADR-019): the user's
+        // read-only mode takes the writes away, and nothing in the file brings them back.
+        let writable = connection("[mcp]\nexposed = true\nwrites = \"allow\"\n");
+        assert_eq!(agent_access(&writable, false), AgentAccess::ReadWrite);
+        assert_eq!(
+            agent_access(&writable, true),
+            AgentAccess::ReadOnly(ReadOnlyBecause::AllAgents)
+        );
+        for extra in [
+            "",
+            "read_only = true\n[mcp]\nwrites = \"allow\"\n",
+            "[mcp]\nwrites = \"confirm\"\n",
+            "[mcp]\nwrites = \"deny\"\n",
+        ] {
+            assert_eq!(
+                agent_access(&connection(extra), true),
+                AgentAccess::ReadOnly(ReadOnlyBecause::AllAgents),
+                "{extra}"
+            );
+        }
+        assert!(
+            ReadOnlyBecause::AllAgents
+                .refusal("prod/orders")
+                .contains("every agent read-only")
+        );
+    }
+
+    #[test]
+    fn without_the_switch_each_connection_decides_as_before() {
+        assert_eq!(
+            agent_access(&connection(""), false),
+            AgentAccess::ReadOnly(ReadOnlyBecause::WritesDenied)
+        );
+        assert_eq!(
+            agent_access(
+                &connection("read_only = true\n[mcp]\nwrites = \"allow\"\n"),
+                false
+            ),
+            AgentAccess::ReadOnly(ReadOnlyBecause::Connection)
+        );
+        assert_eq!(
+            agent_access(&connection("[mcp]\nwrites = \"confirm\"\n"), false),
+            AgentAccess::ReadOnly(ReadOnlyBecause::ConfirmUnsupported)
+        );
     }
 }
