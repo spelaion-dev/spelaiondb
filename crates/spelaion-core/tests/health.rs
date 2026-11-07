@@ -79,7 +79,7 @@ async fn lost_within(session: &Session, limit: Duration) -> Option<String> {
     match lost {
         Ok(Ok(health)) => match &*health {
             SessionHealth::Lost { reason } => Some(reason.clone()),
-            SessionHealth::Alive => None,
+            SessionHealth::Alive | SessionHealth::IdleClosed { .. } => None,
         },
         Ok(Err(_)) | Err(_) => None,
     }

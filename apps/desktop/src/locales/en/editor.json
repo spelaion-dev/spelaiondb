@@ -14,7 +14,8 @@
     "connected": "Connected",
     "connecting": "Connecting…",
     "disconnected": "Disconnected",
-    "lost": "Connection lost"
+    "lost": "Connection lost",
+    "idleClosed": "Closed after {{minutes}} min idle"
   },
   "production": "PRODUCTION",
   "cancel": "Cancel",
@@ -93,6 +94,7 @@
   },
   "messages": {
     "connectionLost": "The connection was lost: {{detail}}. Nothing ran. Reconnect, then run it again: nothing is re-run on its own.",
+    "idleClosed": "The connection was closed after {{minutes}} min without use, as its connection type asks. Nothing ran. Reconnect, then run it again: nothing is re-run on its own.",
     "connectionFailed": "Could not connect: {{detail}}",
     "runFailed": "Could not run the query: {{detail}}",
     "statementOk": "Statement {{index}}: OK ({{duration}} ms)",

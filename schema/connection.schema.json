@@ -158,7 +158,7 @@
       "$ref": "#/$defs/Engine"
     },
     "env": {
-      "description": "Environment label (`dev`, `staging`, `prod`…). `prod` tightens the MCP permissions.",
+      "description": "Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type\nin `connection-types.toml`; its badge and safeguards apply. Any other text is a plain\nlabel with no behaviour.",
       "type": [
         "string",
         "null"

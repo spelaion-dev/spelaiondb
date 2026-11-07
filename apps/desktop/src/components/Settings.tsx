@@ -10,10 +10,11 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
 import { useUpdate } from "../update";
 import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
+import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "history" | "network" | "updates";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "history", "network", "updates"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -61,6 +62,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "language" && <LanguageSettings />}
         {category === "explorer" && <ExplorerSettings />}
         {category === "connections" && <ConnectionSettings />}
+        {category === "types" && <ConnectionTypesSettings />}
         {category === "history" && <HistorySettings />}
         {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}

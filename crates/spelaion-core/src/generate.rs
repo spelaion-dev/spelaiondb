@@ -848,6 +848,13 @@ mod tests {
             "DELETE FROM `shop`.`order lines`\n-- No primary or unique key: every column identifies the row.\nWHERE `id` = :id\n  AND `unit price` = :unit_price\n  AND `qty` = :qty;\n"
         );
         // Generated writes never trip the "without WHERE" guard.
-        assert!(crate::script_risks(&SqliteDialect, &sql.replace('`', "\""), false).is_empty());
+        assert!(
+            crate::script_risks(
+                &SqliteDialect,
+                &sql.replace('`', "\""),
+                &spelaion_config::Safeguards::default(),
+            )
+            .is_empty()
+        );
     }
 }

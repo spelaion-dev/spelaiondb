@@ -270,6 +270,8 @@ function ParamsDialog() {
 
 /** Long statements are cut in the list: the reason is what matters. */
 const SHOWN_SQL = 400;
+/** A connection that asks before every run lists at most this many statements. */
+const SHOWN_STATEMENTS = 20;
 
 function RiskDialog() {
   const { t } = useTranslation("shell");
@@ -278,23 +280,27 @@ function RiskDialog() {
   // Cancel has the focus: Enter by habit must not run a DROP.
   useEffect(() => cancel.current?.focus(), []);
   if (!request) return null;
+  // Only because the connection's type asks before every run (ADR-029): nothing risky as such.
+  const onlyExecution = request.statements.every((s) => s.risk === "execution");
+  const hidden = request.statements.length - SHOWN_STATEMENTS;
   return (
     <Modal title={t("risk.title")}>
-      <p>{t("risk.explanation", { connection: request.connection })}</p>
+      <p>{t(onlyExecution ? "risk.executionExplanation" : "risk.explanation", { connection: request.connection })}</p>
       <ul className="risk-list">
-        {request.statements.map((s, i) => (
+        {request.statements.slice(0, SHOWN_STATEMENTS).map((s, i) => (
           <li key={i}>
             <strong>{t(`risk.${s.risk}`)}</strong>
             <pre className="mono small">{s.sql.length > SHOWN_SQL ? `${s.sql.slice(0, SHOWN_SQL)}…` : s.sql}</pre>
           </li>
         ))}
+        {hidden > 0 && <li className="muted small">{t("risk.more", { count: hidden })}</li>}
       </ul>
       <div className="modal-actions" onKeyDown={(e) => e.key === "Escape" && request.resolve(false)}>
         <button ref={cancel} onClick={() => request.resolve(false)}>
           {t("risk.cancel")}
         </button>
-        <button className="danger" onClick={() => request.resolve(true)}>
-          {t("risk.run")}
+        <button className={onlyExecution ? undefined : "danger"} onClick={() => request.resolve(true)}>
+          {t(onlyExecution ? "risk.runConfirmed" : "risk.run")}
         </button>
       </div>
     </Modal>

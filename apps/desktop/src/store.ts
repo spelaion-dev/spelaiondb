@@ -69,6 +69,8 @@ export interface Tab {
   status: TabStatus;
   /** Why its session was lost (ADR-028): nothing runs until the user reconnects. */
   lost?: string;
+  /** Its session was closed by its connection type after this many seconds idle (ADR-029). */
+  idleClosed?: number;
   serverVersion: string | null;
   sql: string;
   run: RunState | null;

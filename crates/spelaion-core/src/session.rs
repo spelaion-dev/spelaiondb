@@ -107,6 +107,7 @@ pub struct Session {
     tracked: Arc<Tracked>,
     health: Health,
     keep_alive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    idle_close: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     dialect: Arc<dyn Dialect>,
     results: Arc<ResultStore>,
     options: ExecOptions,
@@ -115,6 +116,9 @@ pub struct Session {
 impl Drop for Session {
     fn drop(&mut self) {
         if let Some(task) = self.keep_alive.lock().expect("lock poisoned").take() {
+            task.abort();
+        }
+        if let Some(task) = self.idle_close.lock().expect("lock poisoned").take() {
             task.abort();
         }
     }
@@ -133,6 +137,7 @@ impl Session {
             tracked,
             health,
             keep_alive: std::sync::Mutex::new(None),
+            idle_close: std::sync::Mutex::new(None),
             dialect,
             results,
             options: ExecOptions::default(),
@@ -160,6 +165,16 @@ impl Session {
     pub fn start_keep_alive(&self, interval: std::time::Duration) {
         let task = self.tracked.keep_alive(interval);
         if let Some(previous) = self.keep_alive.lock().expect("lock poisoned").replace(task) {
+            previous.abort();
+        }
+    }
+
+    /// Marks the session [`SessionHealth::IdleClosed`] once it has gone `after` without use
+    /// (ADR-029): never while a transaction is open, and never on an engine that cannot tell.
+    /// The owner then closes it; nothing reconnects. Replaces a previous one.
+    pub fn close_when_idle(&self, after: std::time::Duration) {
+        let task = self.tracked.close_when_idle(after);
+        if let Some(previous) = self.idle_close.lock().expect("lock poisoned").replace(task) {
             previous.abort();
         }
     }

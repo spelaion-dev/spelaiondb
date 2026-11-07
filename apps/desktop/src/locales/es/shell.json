@@ -63,6 +63,7 @@
   },
   "toggleConnection": "Expandir o contraer {{connection}}",
   "tunnel": "Túnel {{name}}",
+  "typeTooltip": "Tipo: {{name}}",
   "filtered": "filtrado",
   "filteredHint": "El filtro de esta conexión oculta algunos esquemas, objetos o columnas (⋯ → Configurar filtros)",
   "configureFilter": "Configurar filtro…",
@@ -91,7 +92,13 @@
   "toggleFolder": "Expandir o contraer {{name}}",
   "openObject": "{{name}}: abrir su definición",
   "openDefinition": "Generar DDL",
-  "generatedSql": { "title": "SQL generado", "editor": "Editor de SQL", "copy": "Copiar", "copied": "Copiado", "close": "Cerrar" },
+  "generatedSql": {
+    "title": "SQL generado",
+    "editor": "Editor de SQL",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "close": "Cerrar"
+  },
   "generateSql": "Generar SQL",
   "generateDdl": "Generar DDL",
   "generateCall": "Generar CALL",
@@ -224,7 +231,12 @@
     "drop": "DROP: elimina el objeto y todo lo que contiene",
     "truncate": "TRUNCATE: vacía la tabla",
     "uncheckedWrite": "DELETE o UPDATE en el que no se pudo comprobar el WHERE",
-    "productionWrite": "Cambia una base de datos de producción",
+    "dataChange": "Cambia datos donde el tipo de la conexión pide confirmación",
+    "execution": "Se ejecuta en una conexión que pregunta antes de cada ejecución",
+    "executionExplanation": "{{connection}} pregunta antes de ejecutar nada. Todavía no se ha ejecutado nada.",
+    "more_one": "…y {{count}} sentencia más",
+    "more_other": "…y {{count}} sentencias más",
+    "runConfirmed": "Ejecutar",
     "cancel": "Cancelar",
     "run": "Ejecutar de todos modos"
   },
@@ -334,5 +346,6 @@
   "bookmarkOpen": "Marcador {{name}}: abrirlo",
   "bookmarkOpenMenu": "Abrir",
   "bookmarkHint": "Clic para mostrarlo en el explorador, doble clic para abrirlo",
-  "showInExplorer": "Mostrar en el explorador"
+  "showInExplorer": "Mostrar en el explorador",
+  "idleClosed": "Cerrada tras {{minutes}} min sin uso, como pide su tipo de conexión. Despliégala para volver a conectar."
 }
