@@ -87,10 +87,10 @@ like and which safeguards it carries.
   visual consistency: the type's badge already tells environments apart, and a free color per
   connection would bring back the legibility problems the palette avoids. If it ever comes back,
   it would be a small dot next to the connection, not a stripe.
-- **Future work:** DBeaver's **auto-commit**, **smart commit** and **close idle transactions**
-  need a manual-commit mode the app does not have: every statement commits as it runs. They are
-  not in the file format or the UI; when a manual-commit mode exists, they become type settings
-  with the same "only add up" rule.
+- **Future work, now done in ADR-031:** DBeaver's **auto-commit** and **smart commit** needed a
+  manual-commit mode. ADR-031 adds it, and with it two type safeguards with the same "only add
+  up" rule: `manual_commit` (sessions start with auto-commit off) and `smart_commit` (on for
+  Production). **Close idle transactions** is still in the backlog.
 
 ## Alternatives
 - **Personal types only.** Simpler, but a team cannot agree on what production looks like or
@@ -110,4 +110,4 @@ like and which safeguards it carries.
 ## What would change this
 - If users really need to switch a safeguard off for one connection of a type, a per-connection
   override in the personal layer only (never in the repository) would be the place.
-- A manual-commit mode brings the three settings above back.
+- A manual-commit mode brought auto-commit and smart commit back (ADR-031).
