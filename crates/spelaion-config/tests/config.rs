@@ -3335,3 +3335,45 @@ fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
             .any(|p| p.to_string().contains("both .spelaion/ and .spelunk/"))
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_new_personal_folder_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("private-new");
+    let dir = f.base.join("nested/spelaion");
+    spelaion_config::ensure_private_dir(&dir).unwrap();
+    let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "a new personal folder is created private");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_existing_personal_folder_open_to_others_is_closed() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("private-existing");
+    let dir = f.user();
+    std::fs::write(dir.join("user.toml"), "").unwrap();
+    for open in [0o755, 0o750, 0o705, 0o777] {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(open)).unwrap();
+        spelaion_config::ensure_private_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{open:o} is closed to 0700");
+    }
+    // Its contents stay where they were.
+    assert!(dir.join("user.toml").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_private_personal_folder_is_left_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("private-kept");
+    let dir = f.user();
+    // Already private (no group or other bits): a stricter mode chosen by the user is kept.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    spelaion_config::ensure_private_dir(&dir).unwrap();
+    let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(mode, 0o500);
+}

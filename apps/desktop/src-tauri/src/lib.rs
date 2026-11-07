@@ -2885,6 +2885,10 @@ pub fn run() {
             dir
         }
     };
+    // Query history and audit live there: other local users must not read them.
+    if let Err(e) = spelaion_config::ensure_private_dir(&user_dir) {
+        eprintln!("could not make the personal folder private: {e}");
+    }
     // Initial folder: command-line argument or the last one opened.
     let workspace = std::env::args()
         .nth(1)
