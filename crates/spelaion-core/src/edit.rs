@@ -277,7 +277,9 @@ pub enum EditError {
     Nothing,
     #[error("this connection is read-only")]
     ReadOnly,
-    #[error("changes to a production database need a confirmation before they are applied")]
+    #[error(
+        "this connection's type confirms data changes: they need a confirmation before they are applied"
+    )]
     NeedsConfirmation,
     #[error("change {index} failed, nothing was applied: {message}")]
     Failed { index: usize, message: String },
@@ -287,16 +289,17 @@ pub enum EditError {
     NotOneRow { index: usize, rows: String },
 }
 
-/// Whether changes may be applied on this connection: never when it is read-only, and on
-/// production only after the user confirmed the statements.
+/// Whether changes may be applied on this connection: never when it is read-only, and where
+/// its type confirms data changes (Production, ADR-029) only after the user confirmed the
+/// statements.
 pub fn check_edit_policy(
     read_only: bool,
-    production: bool,
+    confirm_data_changes: bool,
     confirmed: bool,
 ) -> Result<(), EditError> {
     if read_only {
         Err(EditError::ReadOnly)
-    } else if production && !confirmed {
+    } else if confirm_data_changes && !confirmed {
         Err(EditError::NeedsConfirmation)
     } else {
         Ok(())

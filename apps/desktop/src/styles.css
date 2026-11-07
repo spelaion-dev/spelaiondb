@@ -24,6 +24,10 @@
   --tab-hover: #dbe2ec;
   --tab-active-border: #aab4c1;
   --prod: #d0342c;
+  --tone-neutral: #6b7280;
+  --tone-green: #2e7d32;
+  --tone-blue: #1f6feb;
+  --tone-amber: #b45309;
   color-scheme: light;
   font-family: system-ui, "Segoe UI", sans-serif;
   font-size: 13px;
@@ -55,6 +59,10 @@
   --tab-hover: #303741;
   --tab-active-border: #687381;
   --prod: #ff6b61;
+  --tone-neutral: #6e7681;
+  --tone-green: #2ea043;
+  --tone-blue: #388bfd;
+  --tone-amber: #c27c0e;
   color-scheme: dark;
 }
 
@@ -728,6 +736,38 @@ select {
   border-radius: 4px;
   letter-spacing: 0.04em;
 }
+/* A connection type's badge (ADR-029): Production's badge, tinted with the type's tone from
+   this fixed palette (white text on every tone, in both themes). */
+.type-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--tone);
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.type-badge-small {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 5px;
+  letter-spacing: 0.02em;
+}
+.tone-neutral { --tone: var(--tone-neutral); }
+.tone-green { --tone: var(--tone-green); }
+.tone-blue { --tone: var(--tone-blue); }
+.tone-amber { --tone: var(--tone-amber); }
+.tone-red { --tone: var(--prod); }
+.type-picker { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.type-picker select { flex: 1; min-width: 0; }
+.type-editor { width: min(560px, 92vw); }
+.type-editor .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.type-editor .field > span { color: var(--muted); font-size: 12px; }
+/* Beats `.form-row > span`, which would grey the badge's text. */
+.form-row > .type-badge { color: #fff; font-size: 10.5px; }
+.form-row > .type-badge-small { font-size: 10px; }
+
 .editor-body {
   flex: 1;
   display: flex;

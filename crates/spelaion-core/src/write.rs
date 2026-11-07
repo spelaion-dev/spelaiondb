@@ -71,7 +71,7 @@ pub fn check_write(dialect: &dyn Dialect, sql: &str) -> Result<(), String> {
             Risk::Truncate => "TRUNCATE is never run for agents".into(),
             Risk::DeleteAll => "DELETE without WHERE is never run for agents".into(),
             Risk::UpdateAll => "UPDATE without WHERE is never run for agents".into(),
-            Risk::UncheckedWrite | Risk::ProductionWrite => {
+            Risk::UncheckedWrite | Risk::DataChange | Risk::Execution => {
                 "the statement could not be read, so its WHERE was not checked".into()
             }
         });

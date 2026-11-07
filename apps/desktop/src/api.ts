@@ -11,6 +11,8 @@ import {
   type ColumnItem,
   type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
+  type ConnectionTypeDraft_Deserialize,
+  type ConnectionTypeItem_Serialize,
   type EngineItem_Serialize,
   type HopDraftItem_Deserialize,
   type SshAuthItem,
@@ -73,6 +75,8 @@ export type NetworkProfileItem = NetworkProfileItem_Serialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
+export type ConnectionTypeItem = ConnectionTypeItem_Serialize;
+export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
 export type DbeaverItem = DbeaverItem_Serialize;
 export type KubePort = KubePortItem_Serialize;
 export type DbeaverScan = DbeaverScan_Serialize;

@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "ConnectionTypeConfig": {
+      "additionalProperties": false,
+      "description": "One connection type. Safeguards only add up: a layer can turn one on, never off.",
+      "properties": {
+        "close_idle_after": {
+          "description": "Close a session after this many seconds without use. Never while a transaction is\nopen; nothing reconnects by itself. Off when absent or 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "confirm_data_changes": {
+          "description": "The editor asks before any statement that is not a read, and table edits are\nconfirmed (what Production does).",
+          "type": "boolean"
+        },
+        "confirm_execution": {
+          "description": "The editor asks before running any script.",
+          "type": "boolean"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tone": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tone"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tone of its badge, from the app's palette (it looks right in both themes)."
+        }
+      },
+      "type": "object"
+    },
+    "Tone": {
+      "description": "The tones a connection type's badge can have: a fixed palette the app draws for the light\nand the dark theme (ADR-029).",
+      "enum": [
+        "neutral",
+        "green",
+        "blue",
+        "amber",
+        "red"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Connection types (ADR-029): `.spelaion/connection-types.toml` (the team's, shared in git)\nand `connection-types.toml` in the personal directory, with the same format.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "types": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ConnectionTypeConfig"
+      },
+      "default": {},
+      "description": "One table per type, by id (lowercase letters, digits, `-` and `_`). `dev`, `test` and\n`prod` are the built-in ones: defining them changes their looks or adds safeguards.",
+      "type": "object"
+    }
+  },
+  "title": "ConnectionTypesFile",
+  "type": "object"
+}

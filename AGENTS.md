@@ -52,7 +52,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server). `dbeaver.rs` reads DBeaver's
-  connections and saved credentials for the import (passwords only as `Secret`, to the keychain).
+  connections and saved credentials for the import (passwords only as `Secret`, to the
+  keychain; its connection types map to the closest built-in type).
+  `types.rs` resolves a connection's type (ADR-029): `env` names one by id (built-in `dev`,
+  `test`, `prod`/`production`, or one in `.spelaion/connection-types.toml`, honoured only as
+  trusted, or in the user's `connection-types.toml`); looks come from the user first, and
+  safeguards only add up across layers, so nothing can loosen Production. Any change there
+  needs tests that try to get around it (`tests/connection_types.rs`); `types_edit.rs` writes
+  the user's types.
 - `crates/spelaion-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
   it receives a `TunnelSpec`. `KnownHosts` checks the team's `.spelaion/known_hosts` first
   (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Dialogs go through the `Interaction` trait. Tests against the
@@ -70,9 +77,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
-  must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, production
-  writes); `run_script` refuses unconfirmed risky scripts. `health.rs` keeps idle sessions
-  alive and marks a session lost (ADR-028): every use goes through its `Tracked` connection, and
+  must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
+  connection's type asks for: data changes on Production, every run where it confirms
+  execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
+  decides it. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  closes the ones a connection type says are idle too long, never with a transaction open
+  (ADR-029): every use goes through its `Tracked` connection, and
   nothing is ever reconnected or re-run there. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view)

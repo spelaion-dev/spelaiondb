@@ -97,7 +97,8 @@ export function ObjectChangeDialog({
   }
 
   const readOnly = connection?.readOnly ?? false;
-  const production = connection?.env?.toLowerCase().startsWith("prod") ?? false;
+  // Decided by the core from the connection's type (ADR-029).
+  const production = connection?.kind?.safeguards.confirmDataChanges ?? false;
   return (
     <div className="modal-backdrop">
       <form

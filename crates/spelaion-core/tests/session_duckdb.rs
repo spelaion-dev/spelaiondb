@@ -240,7 +240,7 @@ async fn risky_statements_are_recognized() {
     let risks = spelaion_core::script_risks(
         session.dialect().as_ref(),
         "delete from t; update t set a = 1; drop table t; select 1",
-        false,
+        &Default::default(),
     );
     assert_eq!(risks.len(), 3, "{risks:?}");
 }

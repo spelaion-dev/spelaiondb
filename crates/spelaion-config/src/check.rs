@@ -10,6 +10,7 @@ use crate::load::{Config, ConnectionEntry, Source, TunnelEntry, load, workspace_
 use crate::model::{SecretSpec, TlsModeConfig, WritePolicy};
 use crate::secrets::SecretRef;
 use crate::trust::team_known_hosts;
+use crate::types::ConnectionTypes;
 use crate::vars::valid_var_name;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -99,12 +100,31 @@ fn check_connection(config: &Config, root: &Path, entry: &ConnectionEntry, add: 
             ),
         );
     }
-    let production = file.env.as_deref() == Some("prod");
-    if production && file.mcp.exposed && file.mcp.writes == WritePolicy::Allow {
+    // Production, or a team type that confirms data changes like it (ADR-029).
+    let types = ConnectionTypes::of_repository(config);
+    let protected = file
+        .env
+        .as_deref()
+        .and_then(|env| types.get(env))
+        .filter(|kind| kind.safeguards.confirm_data_changes)
+        .map(|kind| {
+            if kind.is_production() {
+                "a production connection".to_string()
+            } else {
+                format!(
+                    "a {} connection (its type confirms data changes)",
+                    kind.name
+                )
+            }
+        });
+    if let Some(what) = &protected
+        && file.mcp.exposed
+        && file.mcp.writes == WritePolicy::Allow
+    {
         add(
             path,
             Severity::Warning,
-            "a production connection lets AI agents write (mcp.writes = \"allow\")".into(),
+            format!("{what} lets AI agents write (mcp.writes = \"allow\")"),
         );
     }
     if file.mcp.writes == WritePolicy::Confirm {
@@ -119,11 +139,17 @@ fn check_connection(config: &Config, root: &Path, entry: &ConnectionEntry, add: 
         file.tls.mode,
         TlsModeConfig::VerifyCa | TlsModeConfig::VerifyFull
     );
-    if production && direct && !file.engine.is_file() && !verified {
+    if let Some(what) = &protected
+        && direct
+        && !file.engine.is_file()
+        && !verified
+    {
         add(
             path,
             Severity::Warning,
-            "a production connection does not verify the server's certificate (tls.mode verify-ca or verify-full)".into(),
+            format!(
+                "{what} does not verify the server's certificate (tls.mode verify-ca or verify-full)"
+            ),
         );
     }
 }
