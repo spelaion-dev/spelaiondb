@@ -8,6 +8,7 @@ import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChang
 import type { EditableTableItem } from "../bindings";
 import { openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
+import { connectionTooltip } from "../connectionInfo";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
@@ -695,10 +696,19 @@ export function EditorTab({ tab }: { tab: Tab }) {
   return (
     <div className="editor-tab">
       <div className="toolbar">
-        <select value={tab.connectionId ?? ""} onChange={(e) => void changeConnection(e.target.value)} aria-label={t("connection")} disabled={running || databaseBusy || tab.status === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
+        <select
+          value={tab.connectionId ?? ""}
+          onChange={(e) => void changeConnection(e.target.value)}
+          aria-label={t("connection")}
+          // The chosen connection's description, which an open list may not show per option.
+          title={(() => {
+            const chosen = connections.find((c) => c.id === tab.connectionId);
+            return chosen ? connectionTooltip(chosen) : t("connection");
+          })()}
+          disabled={running || databaseBusy || tab.status === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
           <option value="">{t("noConnection")}</option>
           {connections.map((c) => (
-            <option key={c.id} value={c.id}>
+            <option key={c.id} value={c.id} title={connectionTooltip(c)}>
               {c.name} ({c.engine}
               {c.env ? `, ${c.env}` : ""})
             </option>

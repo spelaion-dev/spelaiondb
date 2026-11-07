@@ -154,6 +154,13 @@
         "null"
       ]
     },
+    "description": {
+      "description": "What the database is for, in the user's words: shown as the connection's tooltip and\nto agents in `list_connections`. It may span lines; at most 2000 characters.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "engine": {
       "$ref": "#/$defs/Engine"
     },
@@ -246,6 +253,13 @@
         "string",
         "null"
       ]
+    },
+    "tags": {
+      "description": "Short labels to find and group connections (`billing`, `eu`, `reporting`…): at most\n20, of up to 32 characters each, without commas, and unique ignoring case.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "tls": {
       "$ref": "#/$defs/TlsConfig"

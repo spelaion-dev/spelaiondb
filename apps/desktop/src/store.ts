@@ -2,6 +2,7 @@
 // requested from the core in windows.
 
 import { create } from "zustand";
+import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FieldChangeItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
 
 export interface ResultMeta {
@@ -143,6 +144,8 @@ interface AppStore {
   workspaceChanging: boolean;
   /** Text of the explorer's quick filter; null while its box is closed. */
   explorerFilter: string | null;
+  /** Tags the quick filter asks of connections (all of them); empty while its box is closed. */
+  explorerTags: string[];
   /** Connections expanded in the explorer: the quick filter keeps them shown. */
   openConnections: string[];
   /** Connections the explorer has a session on (they were opened at least once). */
@@ -182,6 +185,8 @@ interface AppStore {
   setWorkspaceChanging(changing: boolean): void;
   clearTabConnections(): void;
   setExplorerFilter(filter: string | null): void;
+  /** Adds the tag to the quick filter (opening it) or takes it out. */
+  toggleExplorerTag(tag: string): void;
   setConnectionOpen(connection: string, open: boolean): void;
   setExplorerConnected(connection: string, connected: boolean): void;
   /** Ctrl+click: adds or removes one; choosing in another session starts again. */
@@ -209,6 +214,7 @@ export const useApp = create<AppStore>((set) => ({
   historySaving: [],
   workspaceChanging: false,
   explorerFilter: null,
+  explorerTags: [],
   openConnections: [],
   explorerConnected: [],
   explorerSelection: [],
@@ -282,7 +288,15 @@ export const useApp = create<AppStore>((set) => ({
     historySaving: saving ? [...new Set([...s.historySaving, connection])] : s.historySaving.filter((id) => id !== connection),
   })),
   setWorkspaceChanging: (workspaceChanging) => set({ workspaceChanging }),
-  setExplorerFilter: (explorerFilter) => set({ explorerFilter }),
+  setExplorerFilter: (explorerFilter) =>
+    set((s) => ({ explorerFilter, explorerTags: explorerFilter === null ? [] : s.explorerTags })),
+  toggleExplorerTag: (tag) =>
+    set((s) => ({
+      explorerFilter: s.explorerFilter ?? "",
+      explorerTags: s.explorerTags.some((other) => sameTag(other, tag))
+        ? s.explorerTags.filter((other) => !sameTag(other, tag))
+        : [...s.explorerTags, tag],
+    })),
   toggleExplorerSelection: (item) => set((s) => {
     const same = (o: typeof item) => o.session === item.session && o.schema === item.schema && o.name === item.name;
     const mine = s.explorerSelection.filter((o) => o.session === item.session);

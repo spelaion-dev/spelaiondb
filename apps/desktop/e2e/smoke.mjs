@@ -2131,12 +2131,60 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("File", { exact: true }).fill(join(demo, "data", "shop.db"));
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  // A description over two lines: the tooltip of the connection, written to its file.
+  const shopCopyDescription = "Copy of the demo shop.\nFor trying things out.";
+  await wizard.getByLabel("Description", { exact: true }).fill(`  ${shopCopyDescription}\n`);
+  // Tags as chips: a comma or Enter adds one, a repeat in another case is not added twice.
+  // A box with suggestions (`list`) is a combobox.
+  const tagBox = wizard.getByRole("combobox", { name: "Tags", exact: true });
+  await tagBox.pressSequentially("demo,");
+  await tagBox.fill("Testing");
+  await tagBox.press("Enter");
+  await tagBox.fill("DEMO");
+  await tagBox.press("Enter");
+  assert.deepEqual(await wizard.locator(".tag-chip").allTextContents(), ["demo×", "Testing×"]);
+  // Enter in the tag box added a tag: it did not submit the form.
+  await wizard.getByRole("heading", { name: "New SQLite connection" }).waitFor();
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: /Connected · 3\./ }).waitFor();
   await wizard.getByRole("button", { name: "Save", exact: true }).click();
   await wizard.waitFor({ state: "detached" });
   await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor();
+  assert.equal(
+    await page.locator(".connection-row", { hasText: "Shop copy" }).locator(".label").getAttribute("title"),
+    `${shopCopyDescription}\n\n~/shop-copy`,
+  );
+  const shopCopyFile = readFileSync(join(userDir, "connections", "shop-copy.toml"), "utf8");
+  assert.match(shopCopyFile, /Copy of the demo shop\.\nFor trying things out\./);
+  assert.match(shopCopyFile, /tags = \[\s*"demo",\s*"Testing",?\s*\]/);
+  // Tags next to the name; a click filters the explorer to the connections that have it.
+  const shopCopyRow = page.locator(".connection-row", { hasText: "Shop copy" });
+  assert.deepEqual(await shopCopyRow.locator(".connection-tag").allTextContents(), ["#demo", "#Testing"]);
+  const allConnections = await page.locator(".connection-row").count();
+  assert.ok(allConnections > 1);
+  await shopCopyRow.locator(".connection-tag", { hasText: "#demo" }).click();
+  const tagFilter = page.getByRole("group", { name: "Filter connections by tag" });
+  await tagFilter.getByRole("button", { name: "#demo" }).waitFor();
+  assert.equal(await tagFilter.getByRole("button", { name: "#demo" }).getAttribute("aria-pressed"), "true");
+  assert.equal(await tagFilter.getByRole("button", { name: "#Testing" }).getAttribute("aria-pressed"), "false");
+  for (let i = 0; i < 40 && (await page.locator(".connection-row").count()) !== 1; i++) await page.waitForTimeout(50);
+  assert.deepEqual(await page.locator(".connection-row .label").allTextContents(), ["Shop copy"]);
+  await shot("12a0-filter-by-tag");
+  // Off again from the filter's chip; closing the quick filter forgets the tags.
+  await tagFilter.getByRole("button", { name: "#demo" }).click();
+  for (let i = 0; i < 40 && (await page.locator(".connection-row").count()) !== allConnections; i++) await page.waitForTimeout(50);
+  assert.equal(await page.locator(".connection-row").count(), allConnections);
+  await tagFilter.getByRole("button", { name: "#Testing" }).click();
+  assert.deepEqual(await page.locator(".connection-row .label").allTextContents(), ["Shop copy"]);
+  await page.getByRole("button", { name: "Filter the explorer", exact: true }).click();
+  await tagFilter.waitFor({ state: "detached" });
+  assert.equal(await page.locator(".connection-row").count(), allConnections);
   panel = await newQuery("Shop copy", "select count(*) as n from product;");
+  assert.equal(
+    await panel.locator("select").first().locator("option", { hasText: "Shop copy" }).getAttribute("title"),
+    `${shopCopyDescription}\n\n~/shop-copy`,
+  );
+  assert.equal(await panel.locator("select").first().getAttribute("title"), `${shopCopyDescription}\n\n~/shop-copy`);
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
@@ -2157,6 +2205,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByRole("button", { name: "New database…" }).click();
   await wizard.getByRole("alert").filter({ hasText: "already exists: a new database never replaces a file" }).waitFor();
   await shot("12a2-new-sqlite-database");
+  // Tags already used by other connections are suggested.
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  const suggested = await wizard.locator(".tag-input datalist option").evaluateAll((options) => options.map((o) => o.value));
+  assert.deepEqual(suggested, ["demo", "Testing"]);
   await page.evaluate(() => delete window.__spelaionSavePath);
   await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
   await wizard.waitFor({ state: "detached" });

@@ -75,7 +75,7 @@
   "loadingDetails": "Cargando detalles de la tabla…",
   "connecting": "Conectando…",
   "quickFilter": "Filtrar el explorador",
-  "quickFilterHint": "Filtrar el explorador por nombre (Ctrl+Mayús+F)",
+  "quickFilterHint": "Filtrar el explorador por nombre o etiqueta (Ctrl+Mayús+F)",
   "quickFilterPlaceholder": "Filtrar por nombre",
   "quickFilterNothing": "Ninguna conexión, esquema u objeto cargado coincide con el filtro.",
   "connectedOnly": "Mostrar solo las conexiones conectadas",
@@ -334,5 +334,7 @@
   "bookmarkOpen": "Marcador {{name}}: abrirlo",
   "bookmarkOpenMenu": "Abrir",
   "bookmarkHint": "Clic para mostrarlo en el explorador, doble clic para abrirlo",
-  "showInExplorer": "Mostrar en el explorador"
+  "showInExplorer": "Mostrar en el explorador",
+  "tagFilter": "Filtrar las conexiones por etiqueta",
+  "tagFilterHint": "Mostrar solo las conexiones con la etiqueta {{tag}}"
 }

@@ -631,6 +631,10 @@ pub struct ConnectionItem {
     /// `prod/orders`, or `~/local` if it is personal.
     pub id: String,
     pub name: String,
+    /// What the database is for, in the user's words; may span lines.
+    pub description: Option<String>,
+    /// Short labels to find the connection; filtered on in the explorer.
+    pub tags: Vec<String>,
     pub engine: String,
     pub env: Option<String>,
     pub folders: Vec<String>,
@@ -1435,6 +1439,10 @@ pub struct ConnectionDraftItem {
     pub personal: bool,
     pub folder: String,
     pub name: String,
+    /// Free text, over lines if needed; empty for none.
+    pub description: String,
+    /// As typed; the core normalises and validates them.
+    pub tags: Vec<String>,
     /// An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…).
     pub engine: String,
     pub env: String,
@@ -1479,6 +1487,8 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             },
             folder: item.folder,
             name: item.name,
+            description: item.description,
+            tags: item.tags,
             engine,
             env: item.env,
             host: item.host,
@@ -1541,6 +1551,8 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             },
             folder: draft.folder,
             name: draft.name,
+            description: draft.description,
+            tags: draft.tags,
             engine: draft.engine.as_str().into(),
             env: draft.env,
             host: draft.host,

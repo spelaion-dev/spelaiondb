@@ -16,5 +16,8 @@ rmcp = { version = "3", features = ["server", "transport-io", "macros"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { workspace = true, features = ["sync", "time", "io-std"] }
 
+[dev-dependencies]
+toml = "1"
+
 [lints]
 workspace = true

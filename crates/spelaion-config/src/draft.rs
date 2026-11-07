@@ -107,6 +107,10 @@ pub struct ConnectionDraft {
     /// Optional folders, such as `prod/eu`.
     pub folder: String,
     pub name: String,
+    /// Free text, over lines if needed; empty for none.
+    pub description: String,
+    /// As typed: [`normalize_tags`] cleans them up before they are validated.
+    pub tags: Vec<String>,
     pub engine: Engine,
     pub env: String,
     pub host: String,
@@ -177,6 +181,24 @@ pub fn slug(name: &str) -> String {
 fn non_empty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
+}
+
+/// The description as stored: trimmed, with `\n` line breaks; `None` when empty.
+fn normalize_description(description: &str) -> Option<String> {
+    non_empty(&description.replace("\r\n", "\n").replace('\r', "\n"))
+}
+
+/// Tags as stored: each trimmed with single spaces inside, empty ones dropped, and only the
+/// first of those that differ in case kept. Limits are checked when the file is validated.
+pub fn normalize_tags(tags: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tag in tags {
+        let tag = tag.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !tag.is_empty() && !out.iter().any(|t| t.to_lowercase() == tag.to_lowercase()) {
+            out.push(tag);
+        }
+    }
+    out
 }
 
 fn valid_env_var(name: &str) -> bool {
@@ -347,6 +369,8 @@ impl ConnectionDraft {
         let file = ConnectionFile {
             schema_version: SCHEMA_VERSION,
             name: non_empty(&self.name),
+            description: normalize_description(&self.description),
+            tags: normalize_tags(&self.tags),
             engine: self.engine,
             env: non_empty(&self.env),
             host: non_empty(&self.host).filter(|_| network),
@@ -473,6 +497,8 @@ impl ConnectionDraft {
             source: entry.id.source,
             folder: entry.folders().join("/"),
             name: file.name.clone().unwrap_or_else(|| file_name.to_string()),
+            description: file.description.clone().unwrap_or_default(),
+            tags: file.tags.clone(),
             engine: file.engine,
             env: file.env.clone().unwrap_or_default(),
             host: file.host.clone().unwrap_or_default(),
@@ -571,6 +597,23 @@ fn put(doc: &mut toml_edit::DocumentMut, key: &[&str], value: Option<toml_edit::
     }
 }
 
+/// Moves `key` right after `anchor` among the root table's values, when both are there.
+fn move_after(doc: &mut toml_edit::DocumentMut, key: &str, anchor: &str) {
+    let table = doc.as_table_mut();
+    if !table.contains_key(key) || !table.contains_key(anchor) {
+        return;
+    }
+    let mut order: Vec<String> = table
+        .iter()
+        .map(|(k, _)| k.to_string())
+        .filter(|k| k != key)
+        .collect();
+    let after = order.iter().position(|k| k == anchor).map_or(0, |i| i + 1);
+    order.insert(after, key.to_string());
+    let rank = |k: &toml_edit::Key| order.iter().position(|o| o == k.get());
+    table.sort_values_by(|a, _, b, _| rank(a).cmp(&rank(b)));
+}
+
 /// A revision identifies the complete connection and the file it was loaded from.
 pub fn connection_revision(entry: &ConnectionEntry) -> Result<String, ConfigError> {
     crate::edit::revision(&entry.file_path, &entry.file)
@@ -624,6 +667,27 @@ pub fn update_connection(
     let text = |v: &Option<String>| v.clone().map(Value::from);
     if old.name != new.name {
         put(&mut doc, &["name"], text(&new.name));
+    }
+    if old.description != new.description {
+        // Next to the name, where a reader of the file looks for it.
+        let value = new.description.as_deref().map(Value::from);
+        put(&mut doc, &["description"], value);
+        if old.description.is_none() {
+            move_after(&mut doc, "description", "name");
+        }
+    }
+    if old.tags != new.tags {
+        let value = (!new.tags.is_empty())
+            .then(|| Value::Array(new.tags.iter().map(String::as_str).collect()));
+        put(&mut doc, &["tags"], value);
+        if old.tags.is_empty() {
+            let anchor = if new.description.is_some() {
+                "description"
+            } else {
+                "name"
+            };
+            move_after(&mut doc, "tags", anchor);
+        }
     }
     if old.env != new.env {
         put(&mut doc, &["env"], text(&new.env));

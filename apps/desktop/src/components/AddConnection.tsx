@@ -15,8 +15,10 @@ import {
   type TunnelItem,
   type UrlFields,
 } from "../api";
+import { tagsInUse } from "../connectionInfo";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { EngineIcon } from "./EngineIcon";
+import { TagInput } from "./TagInput";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath, openFilters } from "../dialogs";
 import { reviewChanges } from "../connect";
@@ -257,6 +259,9 @@ const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
 const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
 type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "options";
 
+/** The core's limit (`ConnectionFile::MAX_DESCRIPTION`); the core checks it again. */
+const DESCRIPTION_MAX = 2000;
+
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
     <label className={`field ${className ?? ""}`}>
@@ -300,6 +305,9 @@ function ConnectionForm(props: {
   const { t } = useTranslation("connections");
   const workspace = useApp((s) => s.workspace);
   const hasWorkspace = Boolean(workspace?.workspace);
+  /** Tags other connections already use, offered while typing a new one. */
+  const connections = useApp((s) => s.connections);
+  const knownTags = tagsInUse(connections);
   const network = engine.access === "network";
   // A SQLite file may be on a server, opened there through an SSH tunnel (ADR-018).
   const remoteFile = engine.id === "sqlite";
@@ -332,6 +340,8 @@ function ConnectionForm(props: {
     personal: !hasWorkspace,
     folder: "",
     name: prefill ? prefill.database.split(/[\\/]/).pop() || prefill.host : "",
+    description: "",
+    tags: [],
     engine: engine.id,
     env: "",
     host: prefill?.host || (network ? "localhost" : ""),
@@ -814,6 +824,30 @@ function ConnectionForm(props: {
         )}
 
         <div id="connection-tab-options" role="tabpanel" hidden={tab !== "options"}>
+          <fieldset>
+            <legend>{t("sections.about")}</legend>
+            <Field label={t("fields.description")}>
+              <textarea
+                className="description"
+                rows={3}
+                maxLength={DESCRIPTION_MAX}
+                value={draft.description}
+                placeholder={t("fields.descriptionPlaceholder")}
+                onChange={(e) => update({ description: e.target.value })}
+              />
+            </Field>
+            <p className="muted small">{t("fields.descriptionHint")}</p>
+            <div className="field">
+              <span>{t("fields.tags")}</span>
+              <TagInput
+                label={t("fields.tags")}
+                tags={draft.tags}
+                suggestions={knownTags}
+                onChange={(tags) => update({ tags })}
+              />
+            </div>
+            <p className="muted small">{t("fields.tagsHint")}</p>
+          </fieldset>
           <fieldset>
             <legend>{t("sections.organization")}</legend>
             <div className="form-row" role="radiogroup" aria-label={t("fields.saveIn")}>

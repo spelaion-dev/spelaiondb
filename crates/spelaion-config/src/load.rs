@@ -421,6 +421,10 @@ pub(crate) fn validate_connection(
             "sqlite3 only applies to a SQLite file on a server (a connection with a tunnel)",
         ));
     }
+    if let Some(description) = &file.description {
+        check_description(description).map_err(|m| ConfigError::new(path, m))?;
+    }
+    check_tags(&file.tags).map_err(|m| ConfigError::new(path, m))?;
     if let Some(kubernetes) = &file.kubernetes {
         if file.tunnel.is_some() {
             return Err(ConfigError::new(
@@ -501,6 +505,73 @@ pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFil
         ));
     }
     Ok(file)
+}
+
+/// Characters that change how the text around them is shown without being seen themselves:
+/// control characters (terminal escapes, NUL…) and Unicode's bidirectional overrides and
+/// zero-width marks. They could hide text in a terminal or in an agent's listing.
+pub(crate) fn is_hidden_char(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// A description: plain text over lines and tabs, of a bounded length.
+fn check_description(description: &str) -> Result<(), String> {
+    if description.chars().count() > ConnectionFile::MAX_DESCRIPTION {
+        return Err(format!(
+            "description is at most {} characters",
+            ConnectionFile::MAX_DESCRIPTION
+        ));
+    }
+    if description
+        .chars()
+        .any(|c| is_hidden_char(c) && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err("description can only hold text, line breaks and tabs".into());
+    }
+    Ok(())
+}
+
+/// One tag: what the form would have saved (trimmed, single spaces), short, without commas
+/// (they separate tags when typed) and without hidden characters.
+pub(crate) fn check_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err("a tag cannot be empty".into());
+    }
+    if tag.chars().count() > ConnectionFile::MAX_TAG {
+        return Err(format!(
+            "tag {tag:?} is longer than {} characters",
+            ConnectionFile::MAX_TAG
+        ));
+    }
+    if tag.chars().any(|c| is_hidden_char(c) || c == ',')
+        || tag.trim() != tag
+        || tag.contains("  ")
+        || tag.chars().any(|c| c.is_whitespace() && c != ' ')
+    {
+        return Err(format!(
+            "tag {tag:?} can only hold text separated by single spaces, without commas"
+        ));
+    }
+    Ok(())
+}
+
+/// The tags of a connection: each valid, a bounded number, none repeated ignoring case.
+fn check_tags(tags: &[String]) -> Result<(), String> {
+    if tags.len() > ConnectionFile::MAX_TAGS {
+        return Err(format!(
+            "a connection has at most {} tags",
+            ConnectionFile::MAX_TAGS
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for tag in tags {
+        check_tag(tag)?;
+        if !seen.insert(tag.to_lowercase()) {
+            return Err(format!("tag {tag:?} is repeated"));
+        }
+    }
+    Ok(())
 }
 
 /// `svc/<name>`, `pod/<name>` or `deployment/<name>` (and kubectl's other spellings).
