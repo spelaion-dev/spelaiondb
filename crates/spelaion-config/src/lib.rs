@@ -34,8 +34,8 @@ pub use dbeaver::{
 };
 pub use draft::{
     CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection,
-    connection_revision, connections_dir, delete_connection, slug, update_connection,
-    update_connection_at_revision,
+    connection_revision, connections_dir, delete_connection, normalize_tags, slug,
+    update_connection, update_connection_at_revision,
 };
 pub use edit::{
     CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_vars,

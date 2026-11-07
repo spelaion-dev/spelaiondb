@@ -14,8 +14,8 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
-use crate::draft::{ConnectionDraft, PasswordChoice, slug};
-use crate::load::{Source, is_hidden_char};
+use crate::draft::{ConnectionDraft, PasswordChoice, normalize_tags, slug};
+use crate::load::{Source, check_tag, is_hidden_char};
 use crate::model::{ConnectionFile, Engine, ProxyType, SshAuth, TlsModeConfig, TunnelFile};
 use crate::tunnel_draft::{HopDraft, ProxyDraft, TunnelDraft, TunnelDraftOptions, TunnelPasswords};
 
@@ -32,6 +32,8 @@ pub struct DbeaverConnection {
     pub name: String,
     /// DBeaver's description of the connection; empty for none.
     pub description: String,
+    /// DBeaver's tags, a name → value map: `name`, or `name=value` when it has a value.
+    pub tags: Vec<String>,
     /// DBeaver folder, `a/b` for nested ones.
     pub folder: String,
     /// The engine, or why SpelaionDB cannot open it (yet).
@@ -263,6 +265,20 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
         id: id.to_string(),
         name: text(json.get("name")),
         description: text(json.get("description")),
+        tags: json
+            .get("tags")
+            .and_then(Json::as_object)
+            .map(|map| {
+                map.iter()
+                    .map(|(name, value)| match text(Some(value)) {
+                        value if value.is_empty() || value == name.trim() => {
+                            name.trim().to_string()
+                        }
+                        value => format!("{}={value}", name.trim()),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         folder: text(json.get("folder")),
         engine,
         host: text(config.get("host")),
@@ -441,6 +457,7 @@ pub fn import_plan(
             folder: connection.folder.to_lowercase(),
             name: connection.name.clone(),
             description: importable_description(&connection.description),
+            tags: importable_tags(&connection.tags),
             engine,
             env: connection.env.clone(),
             host: if sqlite {
@@ -499,6 +516,26 @@ fn importable_description(description: &str) -> String {
         .to_string()
 }
 
+/// DBeaver tags as SpelaionDB accepts them: commas become spaces, hidden characters go,
+/// and a tag that is still too long, or one past the most a connection holds, is left out,
+/// so a tag does not stop the connection from being imported.
+fn importable_tags(tags: &[String]) -> Vec<String> {
+    let cleaned: Vec<String> = tags
+        .iter()
+        .map(|tag| {
+            tag.chars()
+                .filter(|c| !is_hidden_char(*c) || c.is_whitespace())
+                .map(|c| if c == ',' { ' ' } else { c })
+                .collect()
+        })
+        .collect();
+    normalize_tags(&cleaned)
+        .into_iter()
+        .filter(|tag| check_tag(tag).is_ok())
+        .take(ConnectionFile::MAX_TAGS)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +557,7 @@ mod tests {
                 "postgres-jdbc-1": {
                   "provider": "postgresql", "driver": "postgres-jdbc", "name": "Orders PG",
                   "description": "Orders of the EU shop.\nAsk #data before heavy queries.",
+                  "tags": {"team": "", "region": "eu", "billing": "billing"},
                   "folder": "Prod", "save-password": true,
                   "configuration": {
                     "host": "db.internal", "port": "5432", "database": "orders", "type": "prod",
@@ -599,6 +637,11 @@ mod tests {
             "Orders of the EU shop.\nAsk #data before heavy queries."
         );
         assert_eq!(by_id("mariaDB-2").description, "");
+        // A tag without a value (or with its own name as value) is its name.
+        let mut tags = pg.tags.clone();
+        tags.sort();
+        assert_eq!(tags, ["billing", "region=eu", "team"]);
+        assert!(by_id("mariaDB-2").tags.is_empty());
         let ssh = pg.ssh.as_ref().unwrap();
         assert_eq!(
             (ssh.host.as_str(), ssh.port, ssh.user.as_str()),
@@ -730,6 +773,9 @@ mod tests {
             kept.connection.description,
             "Orders of the EU shop.\nAsk #data before heavy queries."
         );
+        let mut tags = kept.connection.tags.clone();
+        tags.sort();
+        assert_eq!(tags, ["billing", "region=eu", "team"]);
         assert_eq!(
             secrets.hops[0].as_ref().map(Secret::expose),
             Some("hop-pass")
@@ -760,6 +806,35 @@ mod tests {
         assert_eq!(
             importable_description(&long).chars().count(),
             ConnectionFile::MAX_DESCRIPTION
+        );
+    }
+
+    #[test]
+    fn tags_are_imported_as_spelaiondb_accepts_them() {
+        let tags: Vec<String> = [
+            " eu ",
+            "EU",
+            "a,b",
+            "hidden\u{202e}mark",
+            "",
+            "far too long for a tag of a connection",
+            "multi \t word",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        // Repeats ignoring case, empty and over-long tags are left out; the rest is cleaned.
+        assert_eq!(
+            importable_tags(&tags),
+            ["eu", "a b", "hiddenmark", "multi word"]
+        );
+        let many: Vec<String> = (0..30).map(|i| format!("t{i}")).collect();
+        assert_eq!(importable_tags(&many).len(), ConnectionFile::MAX_TAGS);
+        // What is imported is a valid connection.
+        let draft_tags = importable_tags(&tags);
+        assert!(
+            draft_tags.iter().all(|t| check_tag(t).is_ok()),
+            "{draft_tags:?}"
         );
     }
 }

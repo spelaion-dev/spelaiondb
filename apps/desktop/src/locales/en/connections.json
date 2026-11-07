@@ -85,7 +85,12 @@
     "cloudToken": "Provider",
     "description": "Description",
     "descriptionPlaceholder": "What is this database for? Who owns it?",
-    "descriptionHint": "Shown as the connection's tooltip and, if it is exposed, to AI agents, so they know what the database is for. Never put passwords here."
+    "descriptionHint": "Shown as the connection's tooltip and, if it is exposed, to AI agents, so they know what the database is for. Never put passwords here.",
+    "tags": "Tags",
+    "tagsPlaceholder": "billing, eu, reporting…",
+    "tagsHint": "Short labels to find the connection: press Enter or type a comma after each one. Click a tag in the explorer to show only the connections that have it.",
+    "tagsFull": "At most {{count}} tags",
+    "removeTag": "Remove tag {{tag}}"
   },
   "tls": {
     "disable": "Disabled",

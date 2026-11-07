@@ -15,8 +15,10 @@ import {
   type TunnelItem,
   type UrlFields,
 } from "../api";
+import { tagsInUse } from "../connectionInfo";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
 import { EngineIcon } from "./EngineIcon";
+import { TagInput } from "./TagInput";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath, openFilters } from "../dialogs";
 import { reviewChanges } from "../connect";
@@ -303,6 +305,9 @@ function ConnectionForm(props: {
   const { t } = useTranslation("connections");
   const workspace = useApp((s) => s.workspace);
   const hasWorkspace = Boolean(workspace?.workspace);
+  /** Tags other connections already use, offered while typing a new one. */
+  const connections = useApp((s) => s.connections);
+  const knownTags = tagsInUse(connections);
   const network = engine.access === "network";
   // A SQLite file may be on a server, opened there through an SSH tunnel (ADR-018).
   const remoteFile = engine.id === "sqlite";
@@ -336,6 +341,7 @@ function ConnectionForm(props: {
     folder: "",
     name: prefill ? prefill.database.split(/[\\/]/).pop() || prefill.host : "",
     description: "",
+    tags: [],
     engine: engine.id,
     env: "",
     host: prefill?.host || (network ? "localhost" : ""),
@@ -831,6 +837,16 @@ function ConnectionForm(props: {
               />
             </Field>
             <p className="muted small">{t("fields.descriptionHint")}</p>
+            <div className="field">
+              <span>{t("fields.tags")}</span>
+              <TagInput
+                label={t("fields.tags")}
+                tags={draft.tags}
+                suggestions={knownTags}
+                onChange={(tags) => update({ tags })}
+              />
+            </div>
+            <p className="muted small">{t("fields.tagsHint")}</p>
           </fieldset>
           <fieldset>
             <legend>{t("sections.organization")}</legend>

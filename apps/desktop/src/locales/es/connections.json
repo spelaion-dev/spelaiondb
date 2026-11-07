@@ -85,7 +85,12 @@
     "cloudToken": "Proveedor",
     "description": "Descripción",
     "descriptionPlaceholder": "¿Para qué es esta base de datos? ¿Quién la mantiene?",
-    "descriptionHint": "Se muestra como descripción emergente de la conexión y, si está expuesta, a los agentes de IA, para que sepan para qué sirve la base de datos. Nunca pongas contraseñas aquí."
+    "descriptionHint": "Se muestra como descripción emergente de la conexión y, si está expuesta, a los agentes de IA, para que sepan para qué sirve la base de datos. Nunca pongas contraseñas aquí.",
+    "tags": "Etiquetas",
+    "tagsPlaceholder": "facturación, eu, informes…",
+    "tagsHint": "Etiquetas cortas para encontrar la conexión: pulsa Intro o escribe una coma después de cada una. Haz clic en una etiqueta del explorador para ver solo las conexiones que la tienen.",
+    "tagsFull": "Como mucho {{count}} etiquetas",
+    "removeTag": "Quitar la etiqueta {{tag}}"
   },
   "tls": {
     "disable": "Desactivado",

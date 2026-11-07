@@ -254,6 +254,13 @@
         "null"
       ]
     },
+    "tags": {
+      "description": "Short labels to find and group connections (`billing`, `eu`, `reporting`…): at most\n20, of up to 32 characters each, without commas, and unique ignoring case.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "tls": {
       "$ref": "#/$defs/TlsConfig"
     },

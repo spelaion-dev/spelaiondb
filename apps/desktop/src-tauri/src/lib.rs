@@ -367,6 +367,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             id: c.id.to_string(),
             name: c.name(),
             description: c.file.description.clone(),
+            tags: c.file.tags.clone(),
             engine: c.file.engine.as_str().into(),
             env: c.file.env.clone(),
             folders: c.folders().into_iter().map(String::from).collect(),

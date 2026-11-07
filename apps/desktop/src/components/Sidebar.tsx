@@ -36,7 +36,7 @@ import {
   SCHEMAS_REFRESHED_EVENT,
   SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
-import { connectionTooltip } from "../connectionInfo";
+import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInfo";
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
@@ -112,6 +112,9 @@ function useContextMenu() {
 
 /** Fired on `window` to put the keyboard in the explorer's quick filter (Ctrl+Shift+F). */
 export const FOCUS_EXPLORER_FILTER_EVENT = "spelaion-focus-explorer-filter";
+
+/** Tags shown next to a connection's name; the others are only in its tooltip. */
+const VISIBLE_TAGS = 2;
 
 /** Whether a name contains the quick filter's text, ignoring case. An empty filter keeps all. */
 function matchesFilter(name: string, filter: string): boolean {
@@ -956,6 +959,13 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     return () => window.removeEventListener(FOCUS_EXPLORER_FILTER_EVENT, focus);
   }, []);
   const filterText = filter ?? "";
+  const explorerTags = useApp((s) => s.explorerTags);
+  /** Tags a connection must have to be shown: only while the quick filter is open. */
+  const activeTags = filter === null ? [] : explorerTags;
+  /** The tags offered in the quick filter: those in use, and any still selected. */
+  const filterTags = tagsInUse(connections);
+  for (const tag of activeTags) if (!filterTags.some((other) => sameTag(other, tag))) filterTags.push(tag);
+  const filtering = filterText !== "" || activeTags.length > 0;
   const explorer = usePreferences((s) => s.explorer);
   const explorerConnected = useApp((s) => s.explorerConnected);
   const tabs = useApp((s) => s.tabs);
@@ -987,9 +997,11 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       current = false;
     };
   }, [explorer.linkWithEditor, linked]);
-  /** With a filter, connections whose name matches, and those already expanded. */
+  /** With a filter, connections whose name matches, and those already expanded; with tags,
+   * only connections that have them all (tags describe connections, not what is inside). */
   const shown = (c: ConnectionItem) =>
     (!explorer.connectedOnly || connected(c)) &&
+    hasTags(c, activeTags) &&
     (matchesFilter(c.name, filterText) || openConnections.includes(c.id));
 
   async function openFolder() {
@@ -1126,6 +1138,25 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
               }
             }}
           />
+          {filterTags.length > 0 && (
+            <div className="tag-filter" role="group" aria-label={t("tagFilter")}>
+              {filterTags.map((tag) => {
+                const active = activeTags.some((other) => sameTag(other, tag));
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={`tag-filter-chip${active ? " active" : ""}`}
+                    aria-pressed={active}
+                    title={t("tagFilterHint", { tag })}
+                    onClick={() => useApp.getState().toggleExplorerTag(tag)}
+                  >
+                    #{tag}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
       {folderError && (
@@ -1163,10 +1194,10 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       )}
       <div className="tree">
         <BookmarksSection />
-        {connections.length > 0 && filterText !== "" && !connections.some(shown) && (
+        {connections.length > 0 && filtering && !connections.some(shown) && (
           <div className="empty small">{t("quickFilterNothing")}</div>
         )}
-        {connections.length > 0 && filterText === "" && explorer.connectedOnly && !connections.some(shown) && (
+        {connections.length > 0 && !filtering && explorer.connectedOnly && !connections.some(shown) && (
           <div className="empty small">
             {t("noneConnected")}{" "}
             <button className="link" onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: false })}>
@@ -1394,6 +1425,25 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
         >
           {connection.name}
         </span>
+        {connection.tags.length > 0 && (
+          // A few tags, quiet; the rest in the tooltip. A click filters the explorer by it.
+          <span className="connection-tags" title={connection.tags.join(", ")}>
+            {connection.tags.slice(0, VISIBLE_TAGS).map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className="connection-tag"
+                aria-label={t("tagFilterHint", { tag })}
+                onClick={() => useApp.getState().toggleExplorerTag(tag)}
+              >
+                #{tag}
+              </button>
+            ))}
+            {connection.tags.length > VISIBLE_TAGS && (
+              <span className="connection-tag-more">+{connection.tags.length - VISIBLE_TAGS}</span>
+            )}
+          </span>
+        )}
         {connection.tunnel && (
           <span
             className="tag"

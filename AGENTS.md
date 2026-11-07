@@ -51,8 +51,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
   A connection's `description` is the user's free text (the explorer's tooltip, and what
-  `list_connections` tells agents a database is for): bounded and without hidden characters
-  (`load.rs`), and like every key it is part of what a trusted repository pins.
+  `list_connections` tells agents a database is for) and its `tags` are short labels the
+  explorer filters connections by (`normalize_tags` in `draft.rs`): both bounded and without
+  hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server). `dbeaver.rs` reads DBeaver's
   connections and saved credentials for the import (passwords only as `Secret`, to the keychain).

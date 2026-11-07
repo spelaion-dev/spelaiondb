@@ -448,6 +448,8 @@ export type ConnectionDraftItem_Deserialize = {
 	name: string,
 	/**  Free text, over lines if needed; empty for none. */
 	description: string,
+	/**  As typed; the core normalises and validates them. */
+	tags: string[],
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	env: string,
@@ -488,6 +490,8 @@ export type ConnectionDraftItem_Serialize = {
 	name: string,
 	/**  Free text, over lines if needed; empty for none. */
 	description: string,
+	/**  As typed; the core normalises and validates them. */
+	tags: string[],
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	env: string,
@@ -526,6 +530,8 @@ export type ConnectionItem_Deserialize = {
 	name: string,
 	/**  What the database is for, in the user's words; may span lines. */
 	description?: string | null,
+	/**  Short labels to find the connection; filtered on in the explorer. */
+	tags: string[],
 	engine: string,
 	env?: string | null,
 	folders: string[],
@@ -542,6 +548,8 @@ export type ConnectionItem_Serialize = {
 	name: string,
 	/**  What the database is for, in the user's words; may span lines. */
 	description: string | null,
+	/**  Short labels to find the connection; filtered on in the explorer. */
+	tags: string[],
 	engine: string,
 	env: string | null,
 	folders: string[],
