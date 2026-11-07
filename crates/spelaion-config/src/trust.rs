@@ -7,8 +7,9 @@
 //! commands. Personal configuration does not need this: the user wrote it.
 //!
 //! Trusting is not forever: it records a snapshot of every connection and tunnel in the
-//! repository (every field but the display name), and of the team's SSH server keys
-//! (`.spelaion/known_hosts`). A `git pull` that changes one, or adds a new one, stops it from
+//! repository (every field but the display name), of the team's SSH server keys
+//! (`.spelaion/known_hosts`) and of the team's connection types (ADR-029: every type and its
+//! name and safeguards, not its badge's tone or description). A `git pull` that changes one, or adds a new one, stops it from
 //! being used until the user has seen the change and accepted it.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,8 +19,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
-use crate::load::{Config, ConnectionEntry, ConnectionId, Source, TunnelEntry};
-use crate::model::{ConnectionFile, TunnelFile};
+use crate::load::{Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, TypesLayer};
+use crate::model::{ConnectionFile, ConnectionTypesFile, TunnelFile};
 
 /// Format of `trusted-workspaces.toml` with snapshots.
 const VERSION: u32 = 2;
@@ -82,6 +83,9 @@ impl fmt::Display for ItemChange {
         let (kind, name) = match self.item.split_once(':') {
             Some(parts) => parts,
             None if self.item == KNOWN_HOSTS_ITEM => ("file", ".spelaion/known_hosts"),
+            None if self.item == CONNECTION_TYPES_ITEM => {
+                ("file", ".spelaion/connection-types.toml")
+            }
             None => ("item", self.item.as_str()),
         };
         if self.new {
@@ -114,6 +118,9 @@ impl fmt::Display for ItemChange {
 /// The key of the team's SSH server keys in the trust file.
 pub const KNOWN_HOSTS_ITEM: &str = "known_hosts";
 
+/// The key of the team's connection types in the trust file (ADR-029).
+pub const CONNECTION_TYPES_ITEM: &str = "connection_types";
+
 /// The team's SSH server keys, reviewed in git (ADR-022).
 pub fn team_known_hosts(root: &Path) -> PathBuf {
     crate::load::workspace_dir(root).join("known_hosts")
@@ -135,6 +142,43 @@ fn connection_snapshot(file: &ConnectionFile) -> Snapshot {
     let mut file = file.clone();
     file.name = None;
     flatten(toml::Value::try_from(file).unwrap_or(toml::Value::Table(Default::default())))
+}
+
+/// The team's connection types: one field per type and setting that decides something (its
+/// name, which the user reads to tell environments apart, and every safeguard, written even
+/// when off so a type that appears or disappears is a change). The badge's tone and the
+/// description are left out: changing them needs no review (ADR-029).
+fn connection_types_snapshot(file: &ConnectionTypesFile) -> Snapshot {
+    let mut out = Snapshot::new();
+    for (id, kind) in &file.types {
+        let field = |name: &str| format!("types.{id}.{name}");
+        if let Some(name) = &kind.name {
+            out.insert(field("name"), name.clone());
+        }
+        out.insert(
+            field("confirm_execution"),
+            kind.confirm_execution.to_string(),
+        );
+        out.insert(
+            field("confirm_data_changes"),
+            kind.confirm_data_changes.to_string(),
+        );
+        out.insert(
+            field("close_idle_after"),
+            kind.close_idle_after.unwrap_or(0).to_string(),
+        );
+    }
+    out
+}
+
+/// The team's connection types as they are now: `None` without a file. A file that does not
+/// load is one field with its error (no type of it is used then).
+fn team_types_snapshot(config: &Config) -> Option<Snapshot> {
+    match &config.team_types {
+        TypesLayer::Absent => None,
+        TypesLayer::Loaded { file, .. } => Some(connection_types_snapshot(file)),
+        TypesLayer::Broken(e) => Some(Snapshot::from([("error".to_string(), e.message.clone())])),
+    }
 }
 
 fn tunnel_snapshot(file: &TunnelFile) -> Snapshot {
@@ -325,7 +369,7 @@ impl TrustStore {
     /// its change, or wrote it through the app. An item that no longer exists is forgotten.
     pub fn accept(&mut self, config: &Config, item: &str) -> Result<(), ConfigError> {
         let root = workspace_root(config)?;
-        match current(config, item) {
+        match self.current(&root, config, item) {
             Some(snapshot) => {
                 self.pins.insert((root, item.to_string()), snapshot);
             }
@@ -350,7 +394,8 @@ impl TrustStore {
                 "the workspace changed; review again",
             ));
         }
-        let snapshot = current(config, &reviewed.item)
+        let snapshot = self
+            .current(&root, config, &reviewed.item)
             .ok_or_else(|| ConfigError::new(&root, "the item changed; review again"))?;
         let key = (root.clone(), reviewed.item.clone());
         if diff(reviewed.item.clone(), self.pins.get(&key), &snapshot).as_ref() != Some(reviewed) {
@@ -436,7 +481,7 @@ impl TrustStore {
         if !self.trusted.contains(&root) || self.legacy.contains(&root) {
             return Vec::new();
         }
-        repository_items(config)
+        self.items(&root, config)
             .into_iter()
             .filter_map(|(item, snapshot)| {
                 let pinned = self.pins.get(&(root.clone(), item.clone()));
@@ -464,6 +509,24 @@ impl TrustStore {
         self.check(root, KNOWN_HOSTS_ITEM.into(), known_hosts_snapshot(&path))
     }
 
+    /// Are the team's connection types as the user trusted them (ADR-029)? `Err` says what
+    /// changed; a file that disappeared is a change too, since its types no longer apply.
+    pub(crate) fn check_connection_types(
+        &self,
+        root: &Path,
+        config: &Config,
+    ) -> Result<(), ItemChange> {
+        let root = canonical(root);
+        let pinned = self
+            .pins
+            .contains_key(&(root.clone(), CONNECTION_TYPES_ITEM.to_string()));
+        match team_types_snapshot(config) {
+            Some(snapshot) => self.check(&root, CONNECTION_TYPES_ITEM.into(), snapshot),
+            None if pinned => self.check(&root, CONNECTION_TYPES_ITEM.into(), Snapshot::new()),
+            None => Ok(()),
+        }
+    }
+
     /// Is this repository tunnel as the user trusted it? `Err` says what changed.
     pub(crate) fn check_tunnel(&self, root: &Path, entry: &TunnelEntry) -> Result<(), ItemChange> {
         self.check(root, tunnel_item(&entry.name), tunnel_snapshot(&entry.file))
@@ -480,6 +543,26 @@ impl TrustStore {
             Some(change) => Err(change),
             None => Ok(()),
         }
+    }
+
+    /// The repository's items with their snapshots, plus the team's connection types as empty
+    /// when the file was trusted and is gone now, so that removing it is a change too.
+    fn items(&self, root: &Path, config: &Config) -> Vec<(String, Snapshot)> {
+        let mut items = repository_items(config);
+        let types_pinned = self
+            .pins
+            .contains_key(&(root.to_path_buf(), CONNECTION_TYPES_ITEM.to_string()));
+        if types_pinned && !items.iter().any(|(item, _)| item == CONNECTION_TYPES_ITEM) {
+            items.push((CONNECTION_TYPES_ITEM.to_string(), Snapshot::new()));
+        }
+        items
+    }
+
+    fn current(&self, root: &Path, config: &Config, item: &str) -> Option<Snapshot> {
+        self.items(root, config)
+            .into_iter()
+            .find(|(key, _)| key == item)
+            .map(|(_, snapshot)| snapshot)
     }
 
     fn pin_all(&mut self, root: &Path, config: &Config) {
@@ -539,14 +622,13 @@ fn repository_items(config: &Config) -> Vec<(String, Snapshot)> {
         .map(team_known_hosts)
         .filter(|path| path.is_file())
         .map(|path| (KNOWN_HOSTS_ITEM.to_string(), known_hosts_snapshot(&path)));
-    connections.chain(tunnels).chain(known_hosts).collect()
-}
-
-fn current(config: &Config, item: &str) -> Option<Snapshot> {
-    repository_items(config)
-        .into_iter()
-        .find(|(key, _)| key == item)
-        .map(|(_, snapshot)| snapshot)
+    let types =
+        team_types_snapshot(config).map(|snapshot| (CONNECTION_TYPES_ITEM.to_string(), snapshot));
+    connections
+        .chain(tunnels)
+        .chain(known_hosts)
+        .chain(types)
+        .collect()
 }
 
 /// Canonical path, so that `C:\repo` and `c:/repo/./` are the same repository.

@@ -285,6 +285,47 @@ async fn set_user_vars(
     Ok(())
 }
 
+/// Every connection type (ADR-029): built-in, the team's (from a trusted repository) and the
+/// user's, with every layer applied.
+#[tauri::command]
+#[specta::specta]
+async fn list_connection_types(state: State<'_, AppState>) -> CmdResult<Vec<ConnectionTypeItem>> {
+    state.reload().await;
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let config = state.config.read().await;
+    Ok(spelaion_config::ConnectionTypes::load(&config, &trust)
+        .all()
+        .iter()
+        .map(ConnectionTypeItem::from)
+        .collect())
+}
+
+/// Saves the user's definition of a connection type (a new one, or their changes to a
+/// built-in or team type) in their `connection-types.toml`. Safeguards only add up: the core
+/// keeps what other layers turn on.
+#[tauri::command]
+#[specta::specta]
+async fn save_connection_type(
+    id: String,
+    draft: ConnectionTypeDraft,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    spelaion_config::set_personal_type(&state.user_dir, id.trim(), &draft.into())
+        .map_err(|e| e.to_string())?;
+    state.reload().await;
+    Ok(())
+}
+
+/// Removes the user's definition of a connection type: a type of their own goes, and a
+/// built-in or team one goes back to how the others define it.
+#[tauri::command]
+#[specta::specta]
+async fn delete_connection_type(id: String, state: State<'_, AppState>) -> CmdResult<()> {
+    spelaion_config::remove_personal_type(&state.user_dir, &id).map_err(|e| e.to_string())?;
+    state.reload().await;
+    Ok(())
+}
+
 /// The personal range of local ports for SSH tunnels (`[tunnels]` in `user.toml`), if set.
 #[tauri::command]
 #[specta::specta]
@@ -348,8 +389,10 @@ async fn accept_change(
 #[specta::specta]
 async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<ConnectionItem>> {
     state.reload().await;
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
     let connections = config.connections.clone();
+    let types = spelaion_config::ConnectionTypes::load(&config, &trust);
     let workspace = history_workspace(&config, Source::Workspace);
     drop(config);
     let mut items = Vec::with_capacity(connections.len());
@@ -368,6 +411,12 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             name: c.name(),
             engine: c.file.engine.as_str().into(),
             env: c.file.env.clone(),
+            kind: c
+                .file
+                .env
+                .as_deref()
+                .and_then(|env| types.get(env))
+                .map(ConnectionTypeItem::from),
             folders: c.folders().into_iter().map(String::from).collect(),
             personal: c.id.source == Source::User,
             tunnel: c.file.tunnel.clone(),
@@ -1282,23 +1331,35 @@ async fn connect_from_session(
     Ok(server_version)
 }
 
-/// Keeps an editor session alive if its connection asks for it, and tells the UI when it is
-/// lost (ADR-028). Nothing is reconnected or re-run here: the tab shows the loss and the
-/// user reconnects. A session replaced in the meantime says nothing.
+/// Keeps a session alive if its connection asks for it, closes it when its type says it has
+/// been idle too long (ADR-029), and tells the UI when it is lost or closed (ADR-028). Nothing
+/// is reconnected or re-run here: the tab shows it and the user reconnects. A session
+/// replaced in the meantime says nothing.
 fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
     if let Some(interval) = open.resolved.keepalive {
         open.session.start_keep_alive(interval);
+    }
+    if let Some(seconds) = open.resolved.safeguards().close_idle_after {
+        open.session
+            .close_when_idle(std::time::Duration::from_secs(seconds.into()));
     }
     let mut health = open.session.health();
     let watched = Arc::downgrade(open);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let reason = match health
-            .wait_for(|h| matches!(h, SessionHealth::Lost { .. }))
+        let (reason, idle) = match health
+            .wait_for(|h| !matches!(h, SessionHealth::Alive))
             .await
         {
             Ok(health) => match &*health {
-                SessionHealth::Lost { reason } => reason.clone(),
+                SessionHealth::Lost { reason } => (reason.clone(), None),
+                SessionHealth::IdleClosed { after } => (
+                    format!(
+                        "closed after {} s without use, as its connection type asks",
+                        after.as_secs()
+                    ),
+                    Some(u32::try_from(after.as_secs()).unwrap_or(u32::MAX)),
+                ),
                 SessionHealth::Alive => return,
             },
             // The session was closed.
@@ -1308,14 +1369,30 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
             return;
         };
         let state = app.state::<AppState>();
-        let current = state
-            .sessions
-            .lock()
-            .await
+        let mut sessions = state.sessions.lock().await;
+        let current = sessions
             .get(&session)
             .is_some_and(|s| Arc::ptr_eq(&s.open, &watched));
-        if current {
-            let _ = SessionLost { session, reason }.emit(&app);
+        if !current {
+            return;
+        }
+        // An idle session is closed for real, freeing it on the server; the next use
+        // reconnects only when the user asks.
+        let closed = if idle.is_some() {
+            sessions.remove(&session)
+        } else {
+            None
+        };
+        drop(sessions);
+        drop(watched);
+        let _ = SessionLost {
+            session,
+            reason,
+            idle_seconds: idle,
+        }
+        .emit(&app);
+        if let Some(open) = closed.and_then(|s| Arc::try_unwrap(s.open).ok()) {
+            open.close().await;
         }
     });
 }
@@ -1417,10 +1494,14 @@ async fn start_script(
         (session.open.clone(), session.history_workspace.clone())
     };
     // The core decides what needs confirmation; the UI asks first (`script_risks`), and a
-    // run that skipped the question is refused here.
-    if !confirmed && !risks_of(&open, &sql).is_empty() {
-        return Err("this script has statements that need confirmation before running".into());
-    }
+    // run that skipped the question is refused by the core.
+    spelaion_core::check_script(
+        open.session.dialect().as_ref(),
+        &sql,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .map_err(|e| e.to_string())?;
     let mut events = state.history.run_script_with_original(
         &open.session,
         &sql,
@@ -1536,12 +1617,12 @@ fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelaion_core::RiskyStateme
     spelaion_core::script_risks(
         open.session.dialect().as_ref(),
         sql,
-        open.resolved.is_production(),
+        &open.resolved.safeguards(),
     )
 }
 
 /// Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
-/// without WHERE, DROP, TRUNCATE, or any write on a production connection.
+/// without WHERE, DROP, TRUNCATE, and whatever the connection's type asks for (ADR-029).
 #[tauri::command]
 #[specta::specta]
 async fn script_risks(
@@ -2637,7 +2718,7 @@ async fn apply_table_edits(
     let open = state.session(&session).await?;
     spelaion_core::check_edit_policy(
         open.resolved.params.read_only,
-        open.resolved.is_production(),
+        open.resolved.safeguards().confirm_data_changes,
         confirmed,
     )
     .map_err(|e| e.to_string())?;
@@ -2816,6 +2897,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             trust_workspace,
             accept_change,
             set_user_vars,
+            list_connection_types,
+            save_connection_type,
+            delete_connection_type,
             tunnel_ports,
             network_profiles,
             set_tunnel_ports,

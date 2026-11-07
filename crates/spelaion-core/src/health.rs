@@ -3,8 +3,10 @@
 //! Every call a session makes goes through [`Tracked`], which notes when the connection was
 //! last used and turns a connection error into [`SessionHealth::Lost`]. The keep-alive loop
 //! sends the driver's cheapest round trip only when the session has been idle for the whole
-//! interval, never while something runs, and stops while a transaction is open. Nothing is
-//! ever reconnected or re-run here: a lost session stays lost until the user reconnects.
+//! interval, never while something runs, and stops while a transaction is open. A connection
+//! type may close sessions left idle (ADR-029): never while a transaction is open, and never
+//! where the engine cannot tell. Nothing is ever reconnected or re-run here: a lost or closed
+//! session stays so until the user reconnects.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -31,6 +33,11 @@ pub enum SessionHealth {
     Lost {
         reason: String,
     },
+    /// Closed after this long without use, as its connection type asks (ADR-029). Like a lost
+    /// session, only the user reopens it.
+    IdleClosed {
+        after: Duration,
+    },
 }
 
 /// When the connection was last used, and whether something is using it now.
@@ -39,7 +46,10 @@ pub(crate) struct Activity {
     gate: Arc<RwLock<()>>,
     /// Bumped by every use: a keep-alive paused by an open transaction resumes after one.
     uses: AtomicU64,
+    /// The end of the last use or keep-alive.
     last: Mutex<Instant>,
+    /// The end of the last use: keep-alives do not count, for closing idle sessions.
+    last_use: Mutex<Instant>,
 }
 
 impl Activity {
@@ -49,6 +59,7 @@ impl Activity {
             gate: Arc::new(RwLock::new(())),
             uses: AtomicU64::new(0),
             last: Mutex::new(Instant::now()),
+            last_use: Mutex::new(Instant::now()),
         }
     }
 
@@ -62,6 +73,10 @@ impl Activity {
     fn last(&self) -> Instant {
         *self.last.lock().expect("lock poisoned")
     }
+
+    fn last_use(&self) -> Instant {
+        *self.last_use.lock().expect("lock poisoned")
+    }
 }
 
 /// Marks the connection busy until dropped (for a statement, until its rows are read).
@@ -70,6 +85,7 @@ struct Busy(Arc<Activity>, #[allow(dead_code)] OwnedRwLockReadGuard<()>);
 impl Drop for Busy {
     fn drop(&mut self) {
         *self.0.last.lock().expect("lock poisoned") = Instant::now();
+        *self.0.last_use.lock().expect("lock poisoned") = Instant::now();
         self.0.busy.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -95,12 +111,27 @@ impl Health {
                 *health = SessionHealth::Lost { reason };
                 true
             }
-            SessionHealth::Lost { .. } => false,
+            SessionHealth::Lost { .. } | SessionHealth::IdleClosed { .. } => false,
         });
     }
 
+    /// The session was closed for being idle (unless it was already lost).
+    fn close_idle(&self, after: Duration) {
+        self.0.send_if_modified(|health| match health {
+            SessionHealth::Alive => {
+                *health = SessionHealth::IdleClosed { after };
+                true
+            }
+            SessionHealth::Lost { .. } | SessionHealth::IdleClosed { .. } => false,
+        });
+    }
+
+    /// Lost or closed: nothing more is sent on it.
     fn is_lost(&self) -> bool {
-        matches!(*self.0.borrow(), SessionHealth::Lost { .. })
+        match *self.0.borrow() {
+            SessionHealth::Alive => false,
+            SessionHealth::Lost { .. } | SessionHealth::IdleClosed { .. } => true,
+        }
     }
 
     /// Marks the session lost when its tunnel goes down. The watch ends with the tunnel, and
@@ -156,6 +187,15 @@ impl Tracked {
         let activity = self.activity.clone();
         let health = self.health.clone();
         tokio::spawn(keep_alive_loop(connection, activity, health, interval))
+    }
+
+    /// Closes the session (marks it [`SessionHealth::IdleClosed`]) once it has not been used
+    /// for `after` (ADR-029).
+    pub(crate) fn close_when_idle(&self, after: Duration) -> tokio::task::JoinHandle<()> {
+        let connection = Arc::downgrade(&self.inner);
+        let activity = self.activity.clone();
+        let health = self.health.clone();
+        tokio::spawn(idle_close_loop(connection, activity, health, after))
     }
 }
 
@@ -242,6 +282,67 @@ async fn keep_alive_loop(
             Err(_) => {
                 health.lose(format!(
                     "the server did not answer a keep-alive in {} s",
+                    KEEPALIVE_ANSWER_TIMEOUT.as_secs()
+                ));
+                return;
+            }
+        }
+    }
+}
+
+/// Waits until the session has not been used for `after`, then asks the driver whether a
+/// transaction is open (its keep-alive check): closed only when it says none is. With an open
+/// transaction it waits a whole period again; an engine that cannot tell is never closed, so
+/// uncommitted work is never rolled back behind the user's back.
+async fn idle_close_loop(
+    connection: Weak<dyn Connection>,
+    activity: Arc<Activity>,
+    health: Health,
+    after: Duration,
+) {
+    loop {
+        let due = activity.last_use() + after;
+        tokio::time::sleep_until(due.max(Instant::now() + Duration::from_millis(10))).await;
+        if health.is_lost() {
+            return;
+        }
+        let idle =
+            || activity.busy.load(Ordering::SeqCst) == 0 && activity.last_use().elapsed() >= after;
+        if !idle() {
+            continue;
+        }
+        let Some(connection) = connection.upgrade() else {
+            return;
+        };
+        if connection.is_closed() {
+            health.lose("the server closed the connection");
+            return;
+        }
+        // Like a keep-alive, it holds the connection so no user operation starts meanwhile.
+        let Ok(_permit) = activity.gate.clone().try_write_owned() else {
+            continue;
+        };
+        if !idle() {
+            continue;
+        }
+        let answer = tokio::time::timeout(KEEPALIVE_ANSWER_TIMEOUT, connection.keep_alive()).await;
+        *activity.last.lock().expect("lock poisoned") = Instant::now();
+        match answer {
+            Ok(Ok(KeepAlive::Alive)) => {
+                health.close_idle(after);
+                return;
+            }
+            Ok(Ok(KeepAlive::InTransaction)) => {
+                *activity.last_use.lock().expect("lock poisoned") = Instant::now();
+            }
+            // An engine without the check is left open; a connection error marks it lost.
+            Ok(Err(e)) => {
+                observe(&*connection, &health, &Err::<(), _>(e));
+                return;
+            }
+            Err(_) => {
+                health.lose(format!(
+                    "the server did not answer in {} s",
                     KEEPALIVE_ANSWER_TIMEOUT.as_secs()
                 ));
                 return;
@@ -383,6 +484,10 @@ mod tests {
         pings: AtomicUsize,
         capabilities: Capabilities,
         release: tokio::sync::Notify,
+        /// The keep-alive check answers that a transaction is open.
+        in_transaction: std::sync::atomic::AtomicBool,
+        /// The engine has no keep-alive check (SQLite, DuckDB).
+        no_check: std::sync::atomic::AtomicBool,
     }
 
     struct NoCancel;
@@ -414,7 +519,13 @@ mod tests {
         }
         async fn keep_alive(&self) -> Result<KeepAlive> {
             self.pings.fetch_add(1, Ordering::SeqCst);
-            Ok(KeepAlive::Alive)
+            if self.no_check.load(Ordering::SeqCst) {
+                Err(DriverError::Other("this engine has no keep-alive".into()))
+            } else if self.in_transaction.load(Ordering::SeqCst) {
+                Ok(KeepAlive::InTransaction)
+            } else {
+                Ok(KeepAlive::Alive)
+            }
         }
         async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
             Ok(Vec::new())
@@ -438,7 +549,89 @@ mod tests {
                 schemas: false,
             },
             release: tokio::sync::Notify::new(),
+            in_transaction: Default::default(),
+            no_check: Default::default(),
         })
+    }
+
+    fn closed(tracked: &Tracked) -> bool {
+        matches!(
+            *tracked.health().subscribe().borrow(),
+            SessionHealth::IdleClosed { .. }
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_sessions_close_after_their_time_and_uses_or_keep_alives_postpone_it() {
+        let inner = fake();
+        let tracked = Arc::new(Tracked::new(inner.clone()));
+        let keep_alive = tracked.keep_alive(Duration::from_secs(10));
+        let task = tracked.close_when_idle(Duration::from_secs(60));
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        // A use halfway: the 60 s start again from it.
+        let _ = tracked.list_schemas().await;
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        assert!(!closed(&tracked), "used 40 s ago");
+        assert!(
+            inner.pings.load(Ordering::SeqCst) >= 2,
+            "keep-alives ran meanwhile"
+        );
+        tokio::time::sleep(Duration::from_secs(25)).await;
+        assert!(closed(&tracked), "keep-alives are not uses");
+        assert_eq!(
+            *tracked.health().subscribe().borrow(),
+            SessionHealth::IdleClosed {
+                after: Duration::from_secs(60)
+            }
+        );
+        assert!(tracked.health().is_lost());
+        task.await.unwrap();
+        keep_alive.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn never_closed_while_running_in_a_transaction_or_where_the_engine_cannot_tell() {
+        // Running for longer than the idle time.
+        let inner = fake();
+        let tracked = Arc::new(Tracked::new(inner.clone()));
+        let task = tracked.close_when_idle(Duration::from_secs(10));
+        let running = {
+            let tracked = tracked.clone();
+            tokio::spawn(async move {
+                tracked
+                    .execute("select pg_sleep(60)", &ExecOptions::default())
+                    .await
+                    .map(|_| ())
+            })
+        };
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert!(!closed(&tracked), "busy the whole time");
+        inner.release.notify_one();
+        running.await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_secs(11)).await;
+        assert!(closed(&tracked), "idle after it");
+        task.abort();
+
+        // An open transaction: it waits, and closes once the transaction is over.
+        let inner = fake();
+        inner.in_transaction.store(true, Ordering::SeqCst);
+        let tracked = Arc::new(Tracked::new(inner.clone()));
+        let task = tracked.close_when_idle(Duration::from_secs(10));
+        tokio::time::sleep(Duration::from_secs(100)).await;
+        assert!(!closed(&tracked), "a transaction is open");
+        inner.in_transaction.store(false, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(11)).await;
+        assert!(closed(&tracked), "the transaction ended");
+        task.abort();
+
+        // SQLite and DuckDB cannot say whether one is open: left alone.
+        let inner = fake();
+        inner.no_check.store(true, Ordering::SeqCst);
+        let tracked = Arc::new(Tracked::new(inner.clone()));
+        let task = tracked.close_when_idle(Duration::from_secs(10));
+        tokio::time::sleep(Duration::from_secs(100)).await;
+        assert!(!tracked.health().is_lost());
+        assert!(task.is_finished(), "it gave up");
     }
 
     #[tokio::test(start_paused = true)]

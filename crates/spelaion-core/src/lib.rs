@@ -36,7 +36,7 @@ pub use edit::{
 pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
 pub use filter::{ColumnFilter, FilterOp};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
-pub use guard::{Risk, RiskyStatement, script_risks};
+pub use guard::{NeedsConfirmation, Risk, RiskyStatement, check_script, script_risks};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, QueryHistory};
 pub use objects::{

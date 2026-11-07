@@ -151,7 +151,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, history: 4, network: 5 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, types: 4, history: 5, network: 6 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -2088,7 +2088,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.getByRole("button", { name: "Trust and remember" }).click();
   }
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-  await panel.getByText("PRODUCTION").waitFor();
+  await panel.locator(".toolbar .type-badge.badge-prod", { hasText: "PRODUCTION" }).waitFor();
   await shot("09-bastions");
 
   step("add connection: catalog by category, test and save (personal, nothing in the repo)");
@@ -2279,9 +2279,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await agentsCan.isDisabled(), true);
   await wizard.getByRole("checkbox", { name: "Expose to AI agents" }).check();
   await agentsCan.selectOption("write");
-  await wizard.getByLabel("Environment", { exact: true }).fill("prod");
+  // The warning follows what the core says the type does, not the label's text.
+  await wizard.getByLabel("Connection type", { exact: true }).selectOption("prod");
   await wizard.getByRole("alert").filter({ hasText: "agents will be able to change its data" }).waitFor();
-  await wizard.getByLabel("Environment", { exact: true }).fill("");
+  await wizard.getByLabel("Connection type", { exact: true }).selectOption("");
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
   await shot("12c-add-connection-options");
@@ -2321,6 +2322,65 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const edited = readFileSync(join(userDir, "connections", "wizard", "docker-pg-wizard.toml"), "utf8");
   assert.match(edited, /name = "Docker PG \(edited\)"/);
   assert.doesNotMatch(edited, /\[tls\]|spelaion"\s*\n\s*password = "/);
+
+  step("connection types: made in Settings, picked in the form, a tinted badge in the sidebar and the editor, asking before any run");
+  await withSettings("types", async (settings) => {
+    await settings.getByRole("listitem", { name: "Production" }).waitFor();
+    await settings.getByRole("button", { name: "New type…" }).click();
+    const typeEditor = page.getByRole("dialog", { name: "New connection type" });
+    await typeEditor.getByLabel("Id", { exact: true }).fill("careful");
+    await typeEditor.getByLabel("Name", { exact: true }).fill("Careful");
+    await typeEditor.getByLabel("Badge tone", { exact: true }).selectOption("amber");
+    await typeEditor.getByRole("checkbox", { name: "Ask before running any SQL" }).check();
+    // Production's own safeguard is fixed: it cannot be switched off from here.
+    await typeEditor.getByRole("button", { name: "Save" }).click();
+    await typeEditor.waitFor({ state: "detached" });
+    await settings.getByRole("listitem", { name: "Careful" }).waitFor();
+    await settings.getByRole("listitem", { name: "Production" }).getByRole("button", { name: "Edit…" }).click();
+    const prodEditor = page.getByRole("dialog", { name: "Connection type Production" });
+    const confirmChanges = prodEditor.getByRole("checkbox", { name: "Ask before changing data" });
+    assert.ok(await confirmChanges.isChecked());
+    assert.ok(await confirmChanges.isDisabled());
+    await shot("13b-connection-types");
+    await prodEditor.getByRole("button", { name: "Cancel" }).click();
+    await prodEditor.waitFor({ state: "detached" });
+  });
+  assert.match(readFileSync(join(userDir, "connection-types.toml"), "utf8"), /\[types\.careful\][^[]*confirm_execution = true/);
+  await (await connectionMenu("Shop copy")).getByRole("button", { name: "Edit…" }).click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  await wizard.getByLabel("Connection type", { exact: true }).selectOption("careful");
+  await wizard.getByText("Asks before every run").waitFor();
+  await wizard.getByRole("button", { name: "Save changes" }).click();
+  await wizard.waitFor({ state: "detached" });
+  assert.match(readFileSync(join(userDir, "connections", "shop-copy.toml"), "utf8"), /env = "careful"/);
+  // The type comes from the core: a badge with its name and tone next to the connection…
+  const carefulBadge = page.locator(".connection-row", { hasText: "Shop copy" }).locator('.type-badge[data-connection-type="careful"]');
+  assert.equal(await carefulBadge.innerText(), "Careful");
+  assert.ok(await carefulBadge.evaluate((el) => el.classList.contains("tone-amber")));
+  // …and in its editor's toolbar, with the palette's own color for each theme.
+  panel = await newQuery("Shop copy", "select count(*) as n from product;");
+  const editorBadge = panel.locator('.toolbar .type-badge[data-connection-type="careful"]');
+  assert.equal(await editorBadge.innerText(), "Careful");
+  const badgeBackground = () => editorBadge.evaluate((el) => getComputedStyle(el).backgroundColor);
+  const lightBackground = await badgeBackground();
+  await setTheme("dark", "dark");
+  assert.notEqual(await badgeBackground(), lightBackground);
+  await setTheme("light", "light");
+  // No stripes: the type is only the badge.
+  assert.equal(await page.locator(".tabbar .tab.active").evaluate((el) => getComputedStyle(el).boxShadow.includes("inset")), false);
+  // Every run asks first; cancelling runs nothing.
+  await run(panel);
+  const askFirst = page.getByRole("dialog", { name: "Run these statements?" });
+  await askFirst.getByText("Shop copy asks before running anything").waitFor();
+  assert.equal(await askFirst.locator(".risk-list li strong").innerText(), "Runs on a connection that asks before every run");
+  await shot("13c-connection-type-confirm");
+  await askFirst.getByRole("button", { name: "Cancel" }).click();
+  await askFirst.waitFor({ state: "detached" });
+  assert.equal(await panel.locator(".statusline", { hasText: "1 row" }).count(), 0);
+  await run(panel);
+  await page.getByRole("dialog", { name: "Run these statements?" }).getByRole("button", { name: "Run", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
   step("SSH tunnel editor: two hops with keys, tested, used by a new connection");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();

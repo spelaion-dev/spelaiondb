@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 
 use crate::error::ConfigError;
-use crate::model::{ConnectionFile, Engine, SCHEMA_VERSION, TunnelFile, UserFile};
+use crate::model::{
+    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, SCHEMA_VERSION, TunnelFile,
+    UserFile,
+};
 
 /// Configuration directory inside a repository.
 pub const WORKSPACE_DIR: &str = ".spelaion";
@@ -69,6 +72,33 @@ pub struct TunnelEntry {
     pub file: TunnelFile,
 }
 
+/// File name of the connection types (ADR-029), in `.spelaion/` and in the personal directory.
+pub const CONNECTION_TYPES_FILE: &str = "connection-types.toml";
+
+/// One layer's `connection-types.toml` (ADR-029).
+#[derive(Debug, Clone, Default)]
+pub enum TypesLayer {
+    /// No file.
+    #[default]
+    Absent,
+    Loaded {
+        path: PathBuf,
+        file: ConnectionTypesFile,
+    },
+    /// The file exists but does not load: connections with a type label are refused until it
+    /// is fixed, because a missing type would loosen its safeguards.
+    Broken(ConfigError),
+}
+
+impl TypesLayer {
+    pub fn file(&self) -> Option<&ConnectionTypesFile> {
+        match self {
+            TypesLayer::Loaded { file, .. } => Some(file),
+            TypesLayer::Absent | TypesLayer::Broken(_) => None,
+        }
+    }
+}
+
 /// All the configuration visible from a directory.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -78,6 +108,10 @@ pub struct Config {
     pub user: UserFile,
     pub connections: Vec<ConnectionEntry>,
     pub tunnels: Vec<TunnelEntry>,
+    /// The repository's connection types (ADR-029): used only once it is trusted.
+    pub team_types: TypesLayer,
+    /// The user's connection types.
+    pub user_types: TypesLayer,
     /// Files with problems. A broken file does not prevent loading the rest.
     pub problems: Vec<ConfigError>,
 }
@@ -186,6 +220,13 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
         }
     }
     config.workspace_root = start.and_then(find_workspace);
+    config.user_types = load_types(&user_dir.join(CONNECTION_TYPES_FILE), &mut config.problems);
+    if let Some(root) = &config.workspace_root {
+        config.team_types = load_types(
+            &workspace_dir(root).join(CONNECTION_TYPES_FILE),
+            &mut config.problems,
+        );
+    }
 
     let mut layers = vec![(Source::User, user_dir.to_path_buf())];
     if let Some(root) = &config.workspace_root {
@@ -234,6 +275,91 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
     }
     config.connections.sort_by(|a, b| a.id.cmp(&b.id));
     config
+}
+
+fn load_types(path: &Path, problems: &mut Vec<ConfigError>) -> TypesLayer {
+    if !path.exists() {
+        return TypesLayer::Absent;
+    }
+    match parse_file::<ConnectionTypesFile>(path).and_then(|file| validate_types(path, file)) {
+        Ok(file) => TypesLayer::Loaded {
+            path: path.to_path_buf(),
+            file,
+        },
+        Err(e) => {
+            problems.push(e.clone());
+            TypesLayer::Broken(e)
+        }
+    }
+}
+
+/// A connection type's id: lowercase ASCII letters, digits, `-` and `_`, starting with a
+/// letter or digit, at most 40 characters.
+pub fn valid_type_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 40
+        && id
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+pub(crate) fn validate_types(
+    path: &Path,
+    file: ConnectionTypesFile,
+) -> Result<ConnectionTypesFile, ConfigError> {
+    check_version(path, file.schema_version)?;
+    for (id, kind) in &file.types {
+        validate_type(id, kind).map_err(|m| ConfigError::new(path, m))?;
+    }
+    Ok(file)
+}
+
+/// One type of a `connection-types.toml`; the message names it.
+pub(crate) fn validate_type(id: &str, kind: &ConnectionTypeConfig) -> Result<(), String> {
+    if !valid_type_id(id) {
+        return Err(format!(
+            "connection type {id:?}: an id is lowercase letters, digits, - and _ (at most 40)"
+        ));
+    }
+    if id == crate::types::PRODUCTION_ALIAS {
+        return Err(format!(
+            "connection type {id:?} is another name of Production: define [types.{}] instead",
+            crate::types::PRODUCTION
+        ));
+    }
+    if let Some(name) = &kind.name {
+        let length = name.trim().chars().count();
+        if length == 0 || length > ConnectionTypeConfig::MAX_NAME {
+            return Err(format!(
+                "connection type {id:?}: the name needs 1 to {} characters",
+                ConnectionTypeConfig::MAX_NAME
+            ));
+        }
+    }
+    if kind
+        .description
+        .as_ref()
+        .is_some_and(|d| d.chars().count() > ConnectionTypeConfig::MAX_DESCRIPTION)
+    {
+        return Err(format!(
+            "connection type {id:?}: the description is at most {} characters",
+            ConnectionTypeConfig::MAX_DESCRIPTION
+        ));
+    }
+    if kind
+        .close_idle_after
+        .is_some_and(|s| s > ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER)
+    {
+        return Err(format!(
+            "connection type {id:?}: close_idle_after is in seconds, at most {} (0 turns it off)",
+            ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER
+        ));
+    }
+    Ok(())
 }
 
 /// `.toml` files under `dir`, recursively (subdirectories are explorer folders).

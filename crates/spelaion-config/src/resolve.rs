@@ -14,6 +14,7 @@ use crate::model::{Engine, McpConfig, ProxyType, SecretSpec, SshAuth, TlsModeCon
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::trust::TrustStore;
 use crate::tunnel_draft::TunnelDraft;
+use crate::types::{ConnectionType, ConnectionTypes, Safeguards};
 use crate::vars::{expand, resolve_path};
 
 /// State of a password after resolving.
@@ -34,6 +35,9 @@ pub struct ResolvedConnection {
     pub name: String,
     pub engine: Engine,
     pub env: Option<String>,
+    /// The connection type `env` names (ADR-029), with every layer applied; `None` for no
+    /// label or a plain one.
+    pub kind: Option<ConnectionType>,
     /// Driver parameters, without the password (it goes in `password`).
     pub params: ConnectParams,
     pub password: Password,
@@ -73,11 +77,19 @@ impl ResolvedConnection {
         params
     }
 
-    /// `env = "prod"`: the editor asks before writes here (`guard.rs`).
+    /// Its type is Production (`env = "prod"` or `"production"`, any case).
     pub fn is_production(&self) -> bool {
-        self.env
-            .as_deref()
-            .is_some_and(|e| e.eq_ignore_ascii_case("prod") || e.eq_ignore_ascii_case("production"))
+        self.kind
+            .as_ref()
+            .is_some_and(ConnectionType::is_production)
+    }
+
+    /// What its type asks for (ADR-029): `guard.rs` and the edit policy apply it.
+    pub fn safeguards(&self) -> Safeguards {
+        self.kind
+            .as_ref()
+            .map(|kind| kind.safeguards)
+            .unwrap_or_default()
     }
 }
 
@@ -238,6 +250,9 @@ impl<'a> Resolver<'a> {
         let base = self.base_dir(entry.id.source)?;
         self.check_variables(entry)?;
         let file = &entry.file;
+        // Before any secret is read: a type the team changed waits for the user's review, and
+        // a file that does not load stops every typed connection (ADR-029).
+        let kind = ConnectionTypes::load(self.config, self.trust).resolve(file.env.as_deref())?;
         let text = |value: &Option<String>| -> Result<Option<String>, ResolveError> {
             value
                 .as_deref()
@@ -341,6 +356,7 @@ impl<'a> Resolver<'a> {
             name: entry.name(),
             engine: file.engine,
             env: file.env.clone(),
+            kind,
             params,
             password,
             tunnel,

@@ -186,7 +186,7 @@ export const commands = {
 	createDatabase: (engine: string, path: string) => typedError<null, string>(__TAURI_INVOKE("create_database", { engine, path })),
 	/**
 	 *  Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
-	 *  without WHERE, DROP, TRUNCATE, or any write on a production connection.
+	 *  without WHERE, DROP, TRUNCATE, and whatever the connection's type asks for (ADR-029).
 	 */
 	scriptRisks: (session: string, sql: string) => typedError<RiskyItem[], string>(__TAURI_INVOKE("script_risks", { session, sql })),
 	/**  The `:name` placeholders of a script, in order, so the UI can ask for their values. */
@@ -227,6 +227,22 @@ export const commands = {
 	 *  the configuration. Only those entries change; the rest of the file stays as it was.
 	 */
 	setUserVars: (values: { [key in string]: string }) => typedError<null, string>(__TAURI_INVOKE("set_user_vars", { values })),
+	/**
+	 *  Every connection type (ADR-029): built-in, the team's (from a trusted repository) and the
+	 *  user's, with every layer applied.
+	 */
+	listConnectionTypes: () => typedError<ConnectionTypeItem_Serialize[], string>(__TAURI_INVOKE("list_connection_types")),
+	/**
+	 *  Saves the user's definition of a connection type (a new one, or their changes to a
+	 *  built-in or team type) in their `connection-types.toml`. Safeguards only add up: the core
+	 *  keeps what other layers turn on.
+	 */
+	saveConnectionType: (id: string, draft: ConnectionTypeDraft_Deserialize) => typedError<null, string>(__TAURI_INVOKE("save_connection_type", { id, draft })),
+	/**
+	 *  Removes the user's definition of a connection type: a type of their own goes, and a
+	 *  built-in or team one goes back to how the others define it.
+	 */
+	deleteConnectionType: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection_type", { id })),
 	/**  The personal range of local ports for SSH tunnels (`[tunnels]` in `user.toml`), if set. */
 	tunnelPorts: () => typedError<TunnelPortsItem | null, string>(__TAURI_INVOKE("tunnel_ports")),
 	/**  Every tunnel file as a network profile (ADR-027), for Settings → Network. */
@@ -319,7 +335,7 @@ export const commands = {
 /** Events */
 export const events = {
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
-	sessionLost: makeEvent<SessionLost, SessionLost>("session-lost"),
+	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
 };
 
 /* Types */
@@ -522,6 +538,8 @@ export type ConnectionItem_Deserialize = {
 	name: string,
 	engine: string,
 	env?: string | null,
+	/**  The type `env` names (ADR-029); `None` for no label or a plain one. */
+	kind?: ConnectionTypeItem_Deserialize | null,
 	folders: string[],
 	personal: boolean,
 	tunnel?: string | null,
@@ -536,12 +554,94 @@ export type ConnectionItem_Serialize = {
 	name: string,
 	engine: string,
 	env: string | null,
+	/**  The type `env` names (ADR-029); `None` for no label or a plain one. */
+	kind: ConnectionTypeItem_Serialize | null,
 	folders: string[],
 	personal: boolean,
 	tunnel: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
 	readOnly: boolean,
+};
+
+/**
+ *  One type as the Settings page edits it: what the personal layer says (empty texts and
+ *  `null` for what it leaves to the team or the built-in definition).
+ */
+export type ConnectionTypeDraft = ConnectionTypeDraft_Serialize | ConnectionTypeDraft_Deserialize;
+
+/**
+ *  One type as the Settings page edits it: what the personal layer says (empty texts and
+ *  `null` for what it leaves to the team or the built-in definition).
+ */
+export type ConnectionTypeDraft_Deserialize = {
+	name: string,
+	tone?: ToneItem | null,
+	description: string,
+	confirmExecution: boolean,
+	confirmDataChanges: boolean,
+	closeIdleAfter?: number | null,
+};
+
+/**
+ *  One type as the Settings page edits it: what the personal layer says (empty texts and
+ *  `null` for what it leaves to the team or the built-in definition).
+ */
+export type ConnectionTypeDraft_Serialize = {
+	name: string,
+	tone: ToneItem | null,
+	description: string,
+	confirmExecution: boolean,
+	confirmDataChanges: boolean,
+	closeIdleAfter: number | null,
+};
+
+/**
+ *  A connection type with every layer applied (ADR-029). The UI shows it; the core decides
+ *  what it does.
+ */
+export type ConnectionTypeItem = ConnectionTypeItem_Serialize | ConnectionTypeItem_Deserialize;
+
+/**
+ *  A connection type with every layer applied (ADR-029). The UI shows it; the core decides
+ *  what it does.
+ */
+export type ConnectionTypeItem_Deserialize = {
+	id: string,
+	name: string,
+	/**  The tone of its badge. */
+	tone: ToneItem,
+	description?: string | null,
+	builtIn: boolean,
+	team: boolean,
+	/**  Production: every change is confirmed. */
+	production: boolean,
+	safeguards: SafeguardsItem_Deserialize,
+	/**  What the built-in and team definitions turn on: the user cannot switch it off. */
+	inherited: SafeguardsItem_Deserialize,
+	/**  The user's own definition or changes, if any. */
+	personal?: ConnectionTypeDraft_Deserialize | null,
+};
+
+/**
+ *  A connection type with every layer applied (ADR-029). The UI shows it; the core decides
+ *  what it does.
+ */
+export type ConnectionTypeItem_Serialize = {
+	id: string,
+	name: string,
+	/**  The tone of its badge. */
+	tone: ToneItem,
+	description: string | null,
+	builtIn: boolean,
+	team: boolean,
+	/**  Production: every change is confirmed. */
+	production: boolean,
+	safeguards: SafeguardsItem_Serialize,
+	/**  What the built-in and team definitions turn on: the user cannot switch it off. */
+	inherited: SafeguardsItem_Serialize,
+	/**  The user's own definition or changes, if any. */
+	personal: ConnectionTypeDraft_Serialize | null,
 };
 
 export type ConstraintDetails = ConstraintDetails_Serialize | ConstraintDetails_Deserialize;
@@ -1090,7 +1190,7 @@ export type ProxyDraftItem_Serialize = {
 export type ProxyTypeItem = "socks5" | "http";
 
 /**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
-export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";
+export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "dataChange" | "execution";
 
 /**  A statement of a script that needs confirmation; `start`/`end` in UTF-8 bytes. */
 export type RiskyItem = {
@@ -1108,6 +1208,25 @@ export type RowChangeItem_Deserialize = { kind: "update"; row: number; values: C
 
 /**  A pending change of a table data tab (ADR-014), by position in the page shown. */
 export type RowChangeItem_Serialize = { kind: "update"; row: number; values: CellEditItem_Serialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Serialize[] };
+
+/**  What a connection type asks for (ADR-029). */
+export type SafeguardsItem = SafeguardsItem_Serialize | SafeguardsItem_Deserialize;
+
+/**  What a connection type asks for (ADR-029). */
+export type SafeguardsItem_Deserialize = {
+	confirmExecution: boolean,
+	confirmDataChanges: boolean,
+	/**  Seconds. */
+	closeIdleAfter?: number | null,
+};
+
+/**  What a connection type asks for (ADR-029). */
+export type SafeguardsItem_Serialize = {
+	confirmExecution: boolean,
+	confirmDataChanges: boolean,
+	/**  Seconds. */
+	closeIdleAfter: number | null,
+};
 
 export type SchemaItem = {
 	name: string,
@@ -1193,9 +1312,28 @@ export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "e
  *  An editor session's connection is gone (ADR-028): the tab shows it and offers to
  *  reconnect. Nothing was re-run.
  */
-export type SessionLost = {
+export type SessionLost = SessionLost_Serialize | SessionLost_Deserialize;
+
+/**
+ *  An editor session's connection is gone (ADR-028): the tab shows it and offers to
+ *  reconnect. Nothing was re-run.
+ */
+export type SessionLost_Deserialize = {
 	session: string,
 	reason: string,
+	/**  Closed by its connection type after this many seconds idle (ADR-029), not lost. */
+	idleSeconds?: number | null,
+};
+
+/**
+ *  An editor session's connection is gone (ADR-028): the tab shows it and offers to
+ *  reconnect. Nothing was re-run.
+ */
+export type SessionLost_Serialize = {
+	session: string,
+	reason: string,
+	/**  Closed by its connection type after this many seconds idle (ADR-029), not lost. */
+	idleSeconds: number | null,
 };
 
 /**  A saved query; `connection` is empty when it was saved without one. */
@@ -1258,6 +1396,9 @@ export type TextSpan = {
 };
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
+
+/**  The tone of a connection type's badge, from the app's fixed palette (ADR-029). */
+export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";
 
 export type TunnelDraftItem = TunnelDraftItem_Serialize | TunnelDraftItem_Deserialize;
 

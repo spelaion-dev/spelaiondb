@@ -349,7 +349,8 @@ async fn updates_from_and_deletes_using_a_source() {
         let update = generated(&session, schema, &items, SqlTemplate::UpdateFrom).await;
         // What the app asks to confirm (an UPDATE without WHERE…) never applies: each has one.
         assert!(
-            spelaion_core::script_risks(session.dialect().as_ref(), &update, false).is_empty(),
+            spelaion_core::script_risks(session.dialect().as_ref(), &update, &Default::default())
+                .is_empty(),
             "{label}: {update}"
         );
         run(
@@ -381,7 +382,12 @@ async fn updates_from_and_deletes_using_a_source() {
         if table_templates(session.dialect().as_ref()).contains(&SqlTemplate::DeleteUsing) {
             let delete = generated(&session, schema, &items, SqlTemplate::DeleteUsing).await;
             assert!(
-                spelaion_core::script_risks(session.dialect().as_ref(), &delete, false).is_empty(),
+                spelaion_core::script_risks(
+                    session.dialect().as_ref(),
+                    &delete,
+                    &Default::default()
+                )
+                .is_empty(),
                 "{label}: {delete}"
             );
             run(label, &session, &fill(&delete, &[("id", "1")])).await;

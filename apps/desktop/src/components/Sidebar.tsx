@@ -32,6 +32,7 @@ import {
   connectTabFromExplorer,
   explorerDatabase,
   EXPLORER_REFRESH_EVENT,
+  EXPLORER_SESSION_CLOSED_EVENT,
   openSession,
   SCHEMAS_REFRESHED_EVENT,
   SET_ACTIVE_SCHEMA_EVENT,
@@ -43,6 +44,7 @@ import { ConnectionMenu } from "./ConnectionMenu";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
+import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 
 function errorText(e: unknown): string {
@@ -1247,6 +1249,21 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
     window.addEventListener(EXPLORER_REFRESH_EVENT, refresh);
     return () => window.removeEventListener(EXPLORER_REFRESH_EVENT, refresh);
   }, [connection.id, schemas]);
+  // The explorer's session was lost or closed for being idle (ADR-029): the tree collapses and
+  // says why; expanding it again reconnects, nothing else does.
+  useEffect(() => {
+    const closed = (event: Event) => {
+      const detail = (event as CustomEvent<{ connectionId: string; idleSeconds: number | null }>).detail;
+      if (detail.connectionId !== connection.id) return;
+      setSchemas(null);
+      setServerObjects([]);
+      setOpen(false);
+      useApp.getState().setExplorerConnected(connection.id, false);
+      setError(detail.idleSeconds != null ? t("idleClosed", { minutes: Math.max(1, Math.round(detail.idleSeconds / 60)) }) : null);
+    };
+    window.addEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
+    return () => window.removeEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
+  }, [connection.id, t]);
 
   function newQuery() {
     const tab = addTab(connection.id);
@@ -1361,7 +1378,8 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       onFilterName={filterName}
     />
   ));
-  const prod = connection.env?.toLowerCase().startsWith("prod");
+  // The type comes from the core (ADR-029).
+  const kind = connection.kind;
   return (
     <div
       className="node"
@@ -1401,7 +1419,7 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
             SSH
           </span>
         )}
-        {prod && <span className="tag tag-prod">prod</span>}
+        {kind && <TypeBadge type={kind} small />}
         {!isFilterEmpty(filters, "schemas") && (
           <span className="tag" title={t("filteredHint")}>
             {t("filtered")}
