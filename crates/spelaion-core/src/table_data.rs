@@ -93,6 +93,22 @@ pub fn table_count_sql(
     Ok(sql)
 }
 
+/// Every row the filter keeps, in the tab's order, for a streaming export (ADR-034): the
+/// page's SELECT without its paging, checked the same way, so the filter and the order cannot
+/// add a limit, read another table or run anything else.
+pub fn table_export_sql(
+    dialect: &dyn Dialect,
+    schema: &str,
+    name: &str,
+    filter: &str,
+    order_by: &str,
+) -> Result<String, PageError> {
+    let mut sql = format!("SELECT *\nFROM {}", qualified(dialect, schema, name));
+    push_clauses(&mut sql, filter, order_by);
+    check(dialect, &sql, None, !filter.trim().is_empty())?;
+    Ok(sql)
+}
+
 /// The rows the filter keeps, counted on `session` (the "Count" button).
 pub async fn count_table_rows(
     session: &Session,
@@ -658,6 +674,41 @@ mod tests {
             assert!(
                 table_page_sql(&SqlServerDialect, &page(filter, order_by)).is_err(),
                 "T-SQL: {filter} / {order_by}"
+            );
+        }
+        // The export's SELECT: every row, the same checks, and no limit may be slipped in.
+        assert_eq!(
+            table_export_sql(&SqliteDialect, "main", "orders", "total > 1", "id desc").unwrap(),
+            "SELECT *\nFROM orders\nWHERE (\ntotal > 1\n)\nORDER BY\nid desc\n"
+        );
+        assert_eq!(
+            table_export_sql(&SqlServerDialect, "dbo", "orders", "", "").unwrap(),
+            "SELECT *\nFROM dbo.orders"
+        );
+        for (filter, order_by) in [
+            ("1=1); drop table orders; select (1", ""),
+            ("1=1) union select * from secrets where (1", ""),
+            ("", "id limit 10"),
+            ("", "id limit 10 offset 5"),
+            ("1=1 /*", ""),
+            ("", "1 for update"),
+            ("1=1) group by (id", ""),
+            ("", "id; delete from orders"),
+        ] {
+            assert!(
+                table_export_sql(&SqliteDialect, "main", "orders", filter, order_by).is_err(),
+                "export: {filter} / {order_by}"
+            );
+        }
+        for (filter, order_by) in [
+            ("", "id offset 0 rows fetch next 10 rows only"),
+            ("", "id offset 5 rows"),
+            ("", "id\ngo\ndelete from orders"),
+            ("1=1) union select * from secrets where (1", ""),
+        ] {
+            assert!(
+                table_export_sql(&SqlServerDialect, "dbo", "orders", filter, order_by).is_err(),
+                "T-SQL export: {filter} / {order_by}"
             );
         }
         let mut huge = page("", "");

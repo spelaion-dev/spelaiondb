@@ -109,6 +109,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   writes "filter by this value" conditions into its WHERE from the typed cell.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
+  `export.rs` also holds the CSV options and formula escaping of files;
+  `export_stream.rs` streams a query, a table data tab or explorer tables to a file
+  (ADR-034): only a single read is ever run again, in its own session and inside the engine's
+  read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
+  tests that try to get around it (`tests/export_stream.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
   `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
