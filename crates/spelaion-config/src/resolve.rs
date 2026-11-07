@@ -571,14 +571,21 @@ impl<'a> Resolver<'a> {
             SecretRef::Prompt => return Ok(Password::Prompt { save_to: None }),
             SecretRef::Keychain(name) => {
                 let account = name.clone().unwrap_or_else(|| default_account.to_string());
-                match self.backend.keychain_get(&account).map_err(fail)? {
-                    Some(secret) => secret,
+                match self.backend.keychain_get(&account) {
+                    Ok(Some(secret)) => secret,
                     // First time: ask and offer to store it.
-                    None => {
+                    Ok(None) => {
                         return Ok(Password::Prompt {
                             save_to: Some(account),
                         });
                     }
+                    // No keychain at all (Linux without a Secret Service): asked like
+                    // "prompt", with nowhere to remember it. A keychain that is there but
+                    // fails (locked, refused) stays an error.
+                    Err(_) if !self.backend.keychain_available() => {
+                        return Ok(Password::Prompt { save_to: None });
+                    }
+                    Err(message) => return Err(fail(message)),
                 }
             }
             SecretRef::Env(var) => self

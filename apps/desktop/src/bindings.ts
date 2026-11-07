@@ -24,6 +24,11 @@ export const commands = {
 	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
+	/**
+	 *  Whether there is a system keychain. Without one (Linux with no Secret Service running) the
+	 *  forms cannot offer to save a password: it is asked when connecting.
+	 */
+	keychainAvailable: () => __TAURI_INVOKE<boolean>("keychain_available"),
 	/**  Tunnels a new connection can use (from the repository and the personal directory). */
 	listTunnels: () => typedError<TunnelItem[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**

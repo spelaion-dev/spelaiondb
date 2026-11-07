@@ -115,6 +115,7 @@
     "none": "Sin contraseña",
     "savedHint": "La contraseña va al llavero del sistema (Administrador de credenciales, Llavero o Secret Service), nunca al fichero de la conexión.",
     "askHint": "No se guarda: se preguntará cada vez que conectes. La contraseña escrita aquí solo se usa para probar.",
+    "noKeychainHint": "No hay un llavero del sistema donde guardarla (en Linux debe estar en marcha un Secret Service como GNOME Keyring, KWallet o KeePassXC): se pedirá cada vez que conectes.",
     "envHint": "Se lee de esta variable al conectar; el fichero solo guarda su nombre.",
     "other": "Definida en el fichero",
     "otherHint": "Esta contraseña viene de una referencia que el formulario no puede editar (1Password, una orden o una entrada con nombre del llavero). Se conserva tal cual; edita el fichero para cambiarla.",
