@@ -142,6 +142,20 @@ input[type="search"] {
   border-radius: 6px;
   padding: 4px 8px;
 }
+/* WebKitGTK draws a native GTK menu button, whose own padding does not fit the fixed heights
+   and cuts the text: every select is drawn by us, with the same arrow on every system. */
+select {
+  appearance: none;
+  padding-right: 26px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 9px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
 
 .app {
   display: grid;
