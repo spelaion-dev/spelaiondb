@@ -17,6 +17,7 @@ use futures_util::StreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, KeepAlive,
     NameFilter, ObjectInfo, Result, SchemaInfo, SchemaObject, ServerObject, TableInfo,
+    TransactionState,
 };
 use spelaion_ssh::TunnelState;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, watch};
@@ -68,6 +69,12 @@ impl Activity {
         self.busy.fetch_add(1, Ordering::SeqCst);
         self.uses.fetch_add(1, Ordering::SeqCst);
         Busy(self.clone(), guard)
+    }
+
+    /// Holds the connection like a use, without counting as one: reading the transaction
+    /// state after a statement must not keep an idle session from being closed.
+    async fn peek(&self) -> OwnedRwLockReadGuard<()> {
+        self.gate.clone().read_owned().await
     }
 
     fn last(&self) -> Instant {
@@ -382,6 +389,11 @@ impl Connection for Tracked {
     async fn keep_alive(&self) -> Result<KeepAlive> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.keep_alive().await)
+    }
+
+    async fn transaction_state(&self) -> Result<TransactionState> {
+        let _held = self.activity.peek().await;
+        self.observe(self.inner.transaction_state().await)
     }
 
     fn is_closed(&self) -> bool {

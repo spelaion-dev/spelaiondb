@@ -27,6 +27,8 @@ const EMPTY: ConnectionTypeDraft = {
   confirmExecution: false,
   confirmDataChanges: false,
   closeIdleAfter: null,
+  manualCommit: false,
+  smartCommit: false,
 };
 
 function message(e: unknown): string {
@@ -106,6 +108,8 @@ function safeguardsText(type: ConnectionTypeItem, t: (key: string, options?: Rec
   const parts = [
     s.confirmExecution ? t("types.confirmExecution") : null,
     s.confirmDataChanges ? t("types.confirmDataChanges") : null,
+    s.manualCommit ? t("types.manualCommit") : null,
+    s.smartCommit ? t("types.smartCommit") : null,
     s.closeIdleAfter ? t("types.closesAfter", { minutes: Math.max(1, Math.round(s.closeIdleAfter / 60)) }) : null,
   ].filter((p): p is string => p !== null);
   return parts.length > 0 ? parts.join(" · ") : t("types.noSafeguards");
@@ -205,6 +209,24 @@ function TypeEditor({ editing, onCancel, onSaved }: { editing: Editing; onCancel
             />
             {t("types.confirmDataChanges")}
           </label>
+          <label className="check" title={t("types.manualCommitHint")}>
+            <input
+              type="checkbox"
+              checked={draft.manualCommit || Boolean(inherited?.manualCommit)}
+              disabled={Boolean(inherited?.manualCommit)}
+              onChange={(e) => update({ manualCommit: e.target.checked })}
+            />
+            {t("types.manualCommit")}
+          </label>
+          <label className="check" title={t("types.smartCommitHint")}>
+            <input
+              type="checkbox"
+              checked={draft.smartCommit || Boolean(inherited?.smartCommit)}
+              disabled={Boolean(inherited?.smartCommit)}
+              onChange={(e) => update({ smartCommit: e.target.checked })}
+            />
+            {t("types.smartCommit")}
+          </label>
           <label className="field port">
             <span>{t("types.closeIdle")}</span>
             <input
@@ -217,7 +239,7 @@ function TypeEditor({ editing, onCancel, onSaved }: { editing: Editing; onCancel
             />
           </label>
           <p className="muted small">{t("types.closeIdleHint")}</p>
-          {(inherited?.confirmExecution || inherited?.confirmDataChanges || inherited?.closeIdleAfter) && (
+          {(inherited?.confirmExecution || inherited?.confirmDataChanges || inherited?.closeIdleAfter || inherited?.manualCommit || inherited?.smartCommit) && (
             <p className="muted small">{t("types.inheritedHint")}</p>
           )}
         </fieldset>

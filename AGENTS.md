@@ -94,7 +94,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   decides it. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
   closes the ones a connection type says are idle too long, never with a transaction open
   (ADR-029): every use goes through its `Tracked` connection, and
-  nothing is ever reconnected or re-run there. `sort.rs` orders stored results
+  nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's
+  transaction: the state always comes from the driver (`Connection::transaction_state`, read
+  after every statement), manual commit opens one with the engine's `BEGIN`, smart commit is a
+  connection type safeguard, and `Session::close_needs_confirmation` is the check before
+  closing a tab, disconnecting or quitting; core-written statements use `run_generated`, never
+  the manual-commit `BEGIN`; `tests/transactions.rs` runs it on every engine. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view)
   and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks

@@ -76,7 +76,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         const sources = [`meta:${connection.id}`, ...useApp.getState().tabs.filter((tab) => tab.connectionId === connection.id && tab.status === "connected").map((tab) => tab.id)];
         let version: string | null = null;
         for (const source of sources) {
-          try { version = await call(commands.connectFromSession(source, id, null)); break; } catch { /* Try another open session. */ }
+          try { version = await call(commands.connectFromSession(source, id, null, false)); break; } catch { /* Try another open session. */ }
         }
         if (version === null && !disposed) version = await openSession(id, connection.id);
         if (version === null) {
@@ -151,7 +151,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
       try {
         // PostgreSQL sessions cannot switch databases after connecting. SQL Server and
         // MySQL can select the process's database when opening the query.
-        const version = await call(commands.connectFromSession(id, tab, connection.engine === "postgres" ? null : row.database));
+        const version = await call(commands.connectFromSession(id, tab, connection.engine === "postgres" ? null : row.database, false));
         const current = useApp.getState().tabs.find((item) => item.id === tab);
         if (!current || current.connectionId !== connection.id || current.status !== "connecting") { await call(commands.disconnect(tab)); return; }
         useApp.getState().updateTab(tab, { status: "connected", serverVersion: version });

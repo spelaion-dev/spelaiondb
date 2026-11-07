@@ -629,3 +629,85 @@ fn changing_the_engine_keeps_the_type_and_the_name_pattern_shows_its_id() {
         "orders (prod)"
     );
 }
+
+#[test]
+fn commit_safeguards_only_add_up_and_production_has_smart_commit() {
+    let fx = Fixture::new("commit");
+    // The team tries to switch Production's smart commit off; the user tries on a team type
+    // that asks for it. Writing `false` is the same as not writing it (ADR-031).
+    fx.write(
+        "repo/.spelaion/connection-types.toml",
+        "schema_version = 1\n[types.prod]\nsmart_commit = false\n[types.ledger]\nsmart_commit = true\nmanual_commit = true\n",
+    );
+    fx.write(
+        "user/connection-types.toml",
+        "schema_version = 1\n[types.ledger]\nsmart_commit = false\nmanual_commit = false\n[types.dev]\nmanual_commit = true\n",
+    );
+    fx.write("repo/.spelaion/connections/p.toml", &sqlite("prod"));
+    fx.write("repo/.spelaion/connections/l.toml", &sqlite("ledger"));
+    fx.write("repo/.spelaion/connections/d.toml", &sqlite("dev"));
+    fx.write("repo/.spelaion/connections/t.toml", &sqlite("test"));
+    let trust = fx.trusted();
+    let prod = fx.resolve(&trust, &ws("p")).unwrap().safeguards();
+    assert!(prod.smart_commit && !prod.manual_commit);
+    let ledger = fx.resolve(&trust, &ws("l")).unwrap().safeguards();
+    assert!(ledger.smart_commit && ledger.manual_commit);
+    // The user may tighten a built-in type for themselves.
+    let dev = fx.resolve(&trust, &ws("d")).unwrap().safeguards();
+    assert!(dev.manual_commit && !dev.smart_commit);
+    let test = fx.resolve(&trust, &ws("t")).unwrap().safeguards();
+    assert!(!test.manual_commit && !test.smart_commit);
+}
+
+#[test]
+fn switching_a_team_commit_safeguard_off_or_on_is_reviewed() {
+    let fx = Fixture::new("commit-review");
+    let with = "schema_version = 1\n[types.ledger]\nname = \"Ledger\"\nsmart_commit = true\n";
+    let team = fx.write("repo/.spelaion/connection-types.toml", with);
+    fx.write("repo/.spelaion/connections/l.toml", &sqlite("ledger"));
+    let trust = fx.trusted();
+    assert!(
+        fx.resolve(&trust, &ws("l"))
+            .unwrap()
+            .safeguards()
+            .smart_commit
+    );
+    for (what, edited) in [
+        (
+            "smart commit switched off",
+            with.replace("smart_commit = true", ""),
+        ),
+        (
+            "smart commit written false",
+            with.replace("smart_commit = true", "smart_commit = false"),
+        ),
+        (
+            "manual commit added",
+            with.replace(
+                "smart_commit = true",
+                "smart_commit = true\nmanual_commit = true",
+            ),
+        ),
+    ] {
+        std::fs::write(&team, &edited).unwrap();
+        let change = changed(fx.resolve(&trust, &ws("l")));
+        assert!(
+            change.fields.iter().any(|f| f.field.ends_with("_commit")),
+            "{what}: {:?}",
+            change.fields
+        );
+    }
+    // A type trusted before these settings existed (none on) is not a change.
+    std::fs::write(
+        &team,
+        "schema_version = 1\n[types.ledger]\nname = \"Ledger\"\n",
+    )
+    .unwrap();
+    let trust = fx.trusted();
+    std::fs::write(
+        &team,
+        "schema_version = 1\n[types.ledger]\nname = \"Ledger\"\nsmart_commit = false\nmanual_commit = false\n",
+    )
+    .unwrap();
+    fx.resolve(&trust, &ws("l")).unwrap();
+}

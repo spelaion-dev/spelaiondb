@@ -350,5 +350,21 @@
   "idleClosed": "Closed after {{minutes}} min without use, as its connection type asks. Expand it to reconnect.",
   "tagFilter": "Filter connections by tag",
   "tagFilterHint": "Show only connections tagged {{tag}}",
-  "tagsTooltip": "Tags: {{tags}}"
+  "tagsTooltip": "Tags: {{tags}}",
+  "openTransactions": {
+    "title": {
+      "close": "Close with an open transaction?",
+      "disconnect": "Disconnect with an open transaction?",
+      "quit": "Quit with an open transaction?"
+    },
+    "explanation_one": "This tab has a transaction open. Its session will end, and the server rolls back what was not committed:",
+    "explanation_other": "These tabs have a transaction open. Their sessions will end, and the server rolls back what was not committed:",
+    "hint": "To keep the changes, cancel and press Commit in the tab first.",
+    "cancel": "Cancel",
+    "proceed": {
+      "close": "Close and roll back",
+      "disconnect": "Disconnect and roll back",
+      "quit": "Quit and roll back"
+    }
+  }
 }

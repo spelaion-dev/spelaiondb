@@ -167,6 +167,16 @@ fn connection_types_snapshot(file: &ConnectionTypesFile) -> Snapshot {
             field("close_idle_after"),
             kind.close_idle_after.unwrap_or(0).to_string(),
         );
+        // ADR-031's settings, only when on: snapshots trusted before them stay unchanged,
+        // and switching one on or off is still a change to review.
+        for (name, on) in [
+            ("manual_commit", kind.manual_commit),
+            ("smart_commit", kind.smart_commit),
+        ] {
+            if on {
+                out.insert(field(name), "true".into());
+            }
+        }
     }
     out
 }

@@ -27,11 +27,19 @@
             "null"
           ]
         },
+        "manual_commit": {
+          "description": "Editor tabs start with auto-commit off: changes wait for Commit (ADR-031).",
+          "type": "boolean"
+        },
         "name": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "smart_commit": {
+          "description": "The first statement that is not a read switches an auto-commit tab to manual commit,\nuntil that transaction is committed or rolled back (ADR-031). On for Production.",
+          "type": "boolean"
         },
         "tone": {
           "anyOf": [

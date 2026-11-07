@@ -164,7 +164,7 @@ pub async fn append_query_page(
 ) -> Result<usize, String> {
     let paged = query_page_sql(session.dialect().as_ref(), sql, limit, offset)
         .ok_or("this query cannot be paged")?;
-    let mut events = session.run_script(&paged);
+    let mut events = session.run_generated(&paged);
     let mut results = Vec::new();
     let mut failure = None;
     while let Some(event) = events.next().await {

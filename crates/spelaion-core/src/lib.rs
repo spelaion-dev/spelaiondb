@@ -24,6 +24,7 @@ mod results;
 mod session;
 mod sort;
 mod table_data;
+mod transaction;
 mod write;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
@@ -60,6 +61,7 @@ pub use spelaion_store::{HistoryEntry, Snippet};
 pub use table_data::{
     MAX_PAGE_ROWS, PageError, TablePage, count_table_rows, table_count_sql, table_page_sql,
 };
+pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use write::{WriteError, WriteLimits, WriteResult, check_write};
 
 /// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file

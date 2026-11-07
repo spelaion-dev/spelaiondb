@@ -29,6 +29,11 @@ pub struct Safeguards {
     /// Close the session after this many seconds without use (never while a transaction is
     /// open); `None`: never.
     pub close_idle_after: Option<u32>,
+    /// Editor sessions start with auto-commit off (ADR-031).
+    pub manual_commit: bool,
+    /// The first write switches an auto-commit session to manual commit until that
+    /// transaction ends (ADR-031).
+    pub smart_commit: bool,
 }
 
 impl Safeguards {
@@ -41,6 +46,8 @@ impl Safeguards {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (a, b) => a.or(b),
             },
+            manual_commit: self.manual_commit || other.manual_commit,
+            smart_commit: self.smart_commit || other.smart_commit,
         }
     }
 
@@ -49,6 +56,8 @@ impl Safeguards {
             confirm_execution: config.confirm_execution,
             confirm_data_changes: config.confirm_data_changes,
             close_idle_after: config.close_idle_after.filter(|s| *s > 0),
+            manual_commit: config.manual_commit,
+            smart_commit: config.smart_commit,
         }
     }
 }
@@ -96,6 +105,8 @@ const BUILT_IN: [BuiltIn; 3] = [
             confirm_execution: false,
             confirm_data_changes: false,
             close_idle_after: None,
+            manual_commit: false,
+            smart_commit: false,
         },
     },
     BuiltIn {
@@ -107,17 +118,21 @@ const BUILT_IN: [BuiltIn; 3] = [
             confirm_execution: false,
             confirm_data_changes: false,
             close_idle_after: None,
+            manual_commit: false,
+            smart_commit: false,
         },
     },
     BuiltIn {
         id: PRODUCTION,
         name: "Production",
         tone: Tone::Red,
-        description: "Production database: every change is confirmed",
+        description: "Production database: every change is confirmed, and writes wait for Commit",
         safeguards: Safeguards {
             confirm_execution: false,
             confirm_data_changes: true,
             close_idle_after: None,
+            manual_commit: false,
+            smart_commit: true,
         },
     },
 ];

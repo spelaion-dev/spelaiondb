@@ -359,6 +359,13 @@ pub struct ConnectionTypeConfig {
     /// open; nothing reconnects by itself. Off when absent or 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_idle_after: Option<u32>,
+    /// Editor tabs start with auto-commit off: changes wait for Commit (ADR-031).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub manual_commit: bool,
+    /// The first statement that is not a read switches an auto-commit tab to manual commit,
+    /// until that transaction is committed or rolled back (ADR-031). On for Production.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub smart_commit: bool,
 }
 
 /// The tones a connection type's badge can have: a fixed palette the app draws for the light

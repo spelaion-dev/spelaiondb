@@ -350,5 +350,21 @@
   "idleClosed": "Cerrada tras {{minutes}} min sin uso, como pide su tipo de conexión. Despliégala para volver a conectar.",
   "tagFilter": "Filtrar las conexiones por etiqueta",
   "tagFilterHint": "Mostrar solo las conexiones con la etiqueta {{tag}}",
-  "tagsTooltip": "Etiquetas: {{tags}}"
+  "tagsTooltip": "Etiquetas: {{tags}}",
+  "openTransactions": {
+    "title": {
+      "close": "¿Cerrar con una transacción abierta?",
+      "disconnect": "¿Desconectar con una transacción abierta?",
+      "quit": "¿Salir con una transacción abierta?"
+    },
+    "explanation_one": "Esta pestaña tiene una transacción abierta. Su sesión terminará y el servidor deshará lo que no se haya confirmado:",
+    "explanation_other": "Estas pestañas tienen una transacción abierta. Sus sesiones terminarán y el servidor deshará lo que no se haya confirmado:",
+    "hint": "Para conservar los cambios, cancela y pulsa Commit en la pestaña primero.",
+    "cancel": "Cancelar",
+    "proceed": {
+      "close": "Cerrar y deshacer",
+      "disconnect": "Desconectar y deshacer",
+      "quit": "Salir y deshacer"
+    }
+  }
 }

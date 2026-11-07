@@ -12,6 +12,7 @@ export function Dialogs() {
   const change = useDialogs((s) => s.change);
   const variables = useDialogs((s) => s.variables);
   const risk = useDialogs((s) => s.risk);
+  const openTransactions = useDialogs((s) => s.openTransactions);
   const params = useDialogs((s) => s.params);
   const text = useDialogs((s) => s.text);
   const interaction = useDialogs((s) => s.interactions[0]);
@@ -22,6 +23,7 @@ export function Dialogs() {
   if (params) return <ParamsDialog />;
   if (text) return <TextDialog />;
   if (risk) return <RiskDialog />;
+  if (openTransactions) return <OpenTransactionsDialog />;
   if (password) return <PasswordDialog key={password.connectionName + (password.error ?? "")} />;
   return null;
 }
@@ -301,6 +303,33 @@ function RiskDialog() {
         </button>
         <button className={onlyExecution ? undefined : "danger"} onClick={() => request.resolve(true)}>
           {t(onlyExecution ? "risk.runConfirmed" : "risk.run")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Closing, disconnecting or quitting with a transaction open (ADR-031): the server rolls
+ *  back what was not committed, so the user decides. Cancel has the focus. */
+function OpenTransactionsDialog() {
+  const { t } = useTranslation("shell");
+  const request = useDialogs((s) => s.openTransactions);
+  const cancel = useRef<HTMLButtonElement>(null);
+  useEffect(() => cancel.current?.focus(), []);
+  if (!request) return null;
+  return (
+    <Modal title={t(`openTransactions.title.${request.action}`)}>
+      <p>{t("openTransactions.explanation", { count: request.tabs.length })}</p>
+      <ul className="risk-list">
+        {request.tabs.map((tab) => <li key={tab}><strong>{tab}</strong></li>)}
+      </ul>
+      <p className="muted small">{t("openTransactions.hint")}</p>
+      <div className="modal-actions" onKeyDown={(e) => e.key === "Escape" && request.resolve(false)}>
+        <button ref={cancel} onClick={() => request.resolve(false)}>
+          {t("openTransactions.cancel")}
+        </button>
+        <button className="danger" onClick={() => request.resolve(true)}>
+          {t(`openTransactions.proceed.${request.action}`)}
         </button>
       </div>
     </Modal>

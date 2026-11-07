@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
 import type { EditableTableItem } from "../bindings";
-import { openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
+import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { connectionTooltip } from "../connectionInfo";
 import { byteToIndex } from "../text";
@@ -15,6 +15,7 @@ import { ResultFilter } from "./ResultFilter";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
+import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
@@ -551,16 +552,17 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** Opens a new session for a tab whose session was lost. Nothing is run: the user runs
    *  the statement again. */
   async function reconnect() {
-    updateTab(tab.id, { lost: undefined, idleClosed: undefined });
+    updateTab(tab.id, { lost: undefined, idleClosed: undefined, lostTransaction: undefined });
     if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
   }
 
   async function changeConnection(id: string) {
     if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
     setTables({});
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
-    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined });
+    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
   }
 
   async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize) {
@@ -731,8 +733,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
           <button className="ghost" disabled={tab.status === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
         ))}
         {tab.lost ? (
-          <span className="status status-lost" role="alert" title={tab.lost}>
+          <span className="status status-lost" role="alert" title={tab.lostTransaction ? `${tab.lost}
+${t("transaction.lostWithTransaction")}` : tab.lost}>
             {tab.idleClosed ? t("status.idleClosed", { minutes: idleMinutes(tab.idleClosed) }) : t("status.lost")}
+            {tab.lostTransaction && <span className="small">{t("transaction.lostWithTransaction")}</span>}
             <button className="ghost small" disabled={workspaceChanging} onClick={() => void reconnect()}>
               {t("reconnect")}
             </button>
@@ -743,6 +747,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           </span>
         )}
         {kind && <TypeBadge type={kind} />}
+        {!tab.table && tab.status === "connected" && <TransactionControls tab={tab} running={running} onNotice={setNotice} />}
         {notice && (
           <span className={`small format-error ${notice.error ? "error" : "muted"}`} role={notice.error ? "alert" : "status"}>
             {notice.text}
