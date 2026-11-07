@@ -85,7 +85,7 @@ export function ExplorerFilterDialog({
           void save(build(text));
         }}
         onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
+          if (e.key === "Escape") { e.stopPropagation(); if (!saving) onClose(); }
         }}
       >
         <h2>{title}</h2>

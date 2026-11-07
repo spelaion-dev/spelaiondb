@@ -185,7 +185,7 @@ function GeneratedSqlDialog({ initialSql, onClose }: { initialSql: string; onClo
   return (
     <div className="modal-backdrop">
       <section className="modal generated-sql-dialog" role="dialog" aria-modal="true" aria-label={t("generatedSql.title")}
-        onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
+        onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
         <h2>{t("generatedSql.title")}</h2>
         <textarea autoFocus spellCheck={false} aria-label={t("generatedSql.editor")} value={sql}
           onChange={(e) => { setSql(e.target.value); setCopied(false); }} />
@@ -1077,59 +1077,64 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const folderName = workspace?.workspace?.split(/[\\/]/).filter(Boolean).pop();
   return (
     <aside id="connections-sidebar" className="sidebar" hidden={hidden}>
-      <div className="sidebar-header">
-        <div className="workspace-name" title={workspace?.workspace ?? ""}>
-          {folderName ?? t("noFolder")}
+      <div className="sidebar-header connections-header">
+        <div className="sidebar-workspace">
+          <div className="workspace-name" title={workspace?.workspace ?? ""}>
+            {folderName ?? t("noFolder")}
+          </div>
+          <button
+            className="ghost"
+            onClick={() => void openFolder()}
+            title={t("openAnotherFolder")}
+            disabled={cannotSwitch}
+          >
+            {t("openFolder")}
+          </button>
         </div>
-        <button
-          className="ghost"
-          onClick={() => void openFolder()}
-          title={t("openAnotherFolder")}
-          disabled={cannotSwitch}
-        >
-          {t("openFolder")}
-        </button>
-        <button
-          className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
-          onClick={() => void usePreferences.getState().setExplorer({ ...explorer, linkWithEditor: !explorer.linkWithEditor })}
-          aria-label={t("linkWithEditor")}
-          aria-pressed={explorer.linkWithEditor}
-          title={t("linkWithEditorHint")}
-        >
-          <LinkIcon />
-        </button>
-        <button
-          className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
-          onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: !explorer.connectedOnly })}
-          aria-label={t("connectedOnly")}
-          aria-pressed={explorer.connectedOnly}
-          title={t("connectedOnly")}
-        >
-          <PlugIcon />
-        </button>
-        <button
-          className={`ghost icon-button${filter !== null ? " active" : ""}`}
-          onClick={() => {
-            const app = useApp.getState();
-            if (app.explorerFilter === null) {
-              app.setExplorerFilter("");
-              window.dispatchEvent(new Event(FOCUS_EXPLORER_FILTER_EVENT));
-            } else app.setExplorerFilter(null);
-          }}
-          aria-label={t("quickFilter")}
-          aria-pressed={filter !== null}
-          title={t("quickFilterHint")}
-        >
-          <SearchIcon />
-        </button>
-        <button
-          className="ghost add-connection"
-          onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
-          aria-label={t("connections:add")}
-          title={t("connections:add")}
-        >
-          +
-        </button>
+        <div className="sidebar-tools">
+          <span className="sidebar-section-title">{t("connections")}</span>
+          <button
+            className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
+            onClick={() => void usePreferences.getState().setExplorer({ ...explorer, linkWithEditor: !explorer.linkWithEditor })}
+            aria-label={t("linkWithEditor")}
+            aria-pressed={explorer.linkWithEditor}
+            title={t("linkWithEditorHint")}
+          >
+            <LinkIcon />
+          </button>
+          <button
+            className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
+            onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: !explorer.connectedOnly })}
+            aria-label={t("connectedOnly")}
+            aria-pressed={explorer.connectedOnly}
+            title={t("connectedOnly")}
+          >
+            <PlugIcon />
+          </button>
+          <button
+            className={`ghost icon-button${filter !== null ? " active" : ""}`}
+            onClick={() => {
+              const app = useApp.getState();
+              if (app.explorerFilter === null) {
+                app.setExplorerFilter("");
+                window.dispatchEvent(new Event(FOCUS_EXPLORER_FILTER_EVENT));
+              } else app.setExplorerFilter(null);
+            }}
+            aria-label={t("quickFilter")}
+            aria-pressed={filter !== null}
+            title={t("quickFilterHint")}
+          >
+            <SearchIcon />
+          </button>
+          <button
+            className="ghost add-connection"
+            onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
+            aria-label={t("connections:add")}
+            title={t("connections:add")}
+          >
+            +
+          </button>
+        </div>
       </div>
       {filter !== null && (
         <div className="explorer-filter">
