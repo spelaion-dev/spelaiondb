@@ -672,6 +672,10 @@ pub struct SafeguardsItem {
     pub confirm_data_changes: bool,
     /// Seconds.
     pub close_idle_after: Option<u32>,
+    /// Editor tabs start with auto-commit off (ADR-031).
+    pub manual_commit: bool,
+    /// The first write switches a tab to manual commit (ADR-031).
+    pub smart_commit: bool,
 }
 
 impl From<spelaion_config::Safeguards> for SafeguardsItem {
@@ -680,6 +684,8 @@ impl From<spelaion_config::Safeguards> for SafeguardsItem {
             confirm_execution: s.confirm_execution,
             confirm_data_changes: s.confirm_data_changes,
             close_idle_after: s.close_idle_after,
+            manual_commit: s.manual_commit,
+            smart_commit: s.smart_commit,
         }
     }
 }
@@ -731,6 +737,10 @@ pub struct ConnectionTypeDraft {
     pub confirm_execution: bool,
     pub confirm_data_changes: bool,
     pub close_idle_after: Option<u32>,
+    #[serde(default)]
+    pub manual_commit: bool,
+    #[serde(default)]
+    pub smart_commit: bool,
 }
 
 impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
@@ -743,6 +753,8 @@ impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
             confirm_execution: c.confirm_execution,
             confirm_data_changes: c.confirm_data_changes,
             close_idle_after: c.close_idle_after,
+            manual_commit: c.manual_commit,
+            smart_commit: c.smart_commit,
         }
     }
 }
@@ -757,6 +769,8 @@ impl From<ConnectionTypeDraft> for spelaion_config::ConnectionTypeConfig {
             confirm_execution: d.confirm_execution,
             confirm_data_changes: d.confirm_data_changes,
             close_idle_after: d.close_idle_after,
+            manual_commit: d.manual_commit,
+            smart_commit: d.smart_commit,
         }
     }
 }
@@ -1433,6 +1447,101 @@ pub struct SessionLost {
     pub reason: String,
     /// Closed by its connection type after this many seconds idle (ADR-029), not lost.
     pub idle_seconds: Option<u32>,
+    /// A transaction was open when it was lost: the server rolls back what was not committed
+    /// (ADR-031).
+    pub open_transaction: bool,
+}
+
+/// What the core last read about a transaction (ADR-031).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TransactionStateItem {
+    Idle,
+    Open,
+    /// Open, but the engine will only roll it back.
+    Failed,
+}
+
+/// An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionStatusItem {
+    /// The tab follows its transaction (an editor tab on an engine that can tell).
+    pub supported: bool,
+    pub auto_commit: bool,
+    /// The connection type's smart commit.
+    pub smart_commit: bool,
+    /// Manual commit came from smart commit: it ends with the transaction.
+    pub smart_switched: bool,
+    pub state: Option<TransactionStateItem>,
+    /// Statements run in the open transaction.
+    pub statements: u32,
+}
+
+impl From<spelaion_core::TransactionStatus> for TransactionStatusItem {
+    fn from(s: spelaion_core::TransactionStatus) -> Self {
+        use spelaion_core::TransactionState;
+        Self {
+            supported: s.supported,
+            auto_commit: s.auto_commit,
+            smart_commit: s.smart_commit,
+            smart_switched: s.smart_switched,
+            state: s.state.map(|state| match state {
+                TransactionState::Idle => TransactionStateItem::Idle,
+                TransactionState::Open => TransactionStateItem::Open,
+                TransactionState::Failed => TransactionStateItem::Failed,
+            }),
+            statements: s.statements,
+        }
+    }
+}
+
+/// What a Commit or Rollback said.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionOutcomeItem {
+    pub status: TransactionStatusItem,
+    pub notices: Vec<NoticeItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NoticeItem {
+    pub severity: String,
+    pub message: String,
+}
+
+impl From<spelaion_core::TransactionOutcome> for TransactionOutcomeItem {
+    fn from(o: spelaion_core::TransactionOutcome) -> Self {
+        Self {
+            status: o.status.into(),
+            notices: o
+                .notices
+                .into_iter()
+                .map(|n| NoticeItem {
+                    severity: n.severity,
+                    message: n.message,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
+/// auto-commit toggle (ADR-031).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionChanged {
+    pub session: String,
+    pub status: TransactionStatusItem,
+}
+
+/// The window was asked to close while these tabs have a transaction open: the UI asks, then
+/// calls `quit_app` (ADR-031).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct QuitBlocked {
+    pub sessions: Vec<String>,
 }
 
 /// Dialog the tunnel needs to show. The UI answers with `answer_interaction`.

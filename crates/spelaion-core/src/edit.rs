@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use futures_util::StreamExt;
-use spelaion_driver_api::{Dialect, LogicalType, ObjectKind, TableInfo, Value};
+use spelaion_driver_api::{Dialect, LogicalType, ObjectKind, TableInfo, TransactionState, Value};
 use sqlparser::ast::{Expr, GroupByExpr, SelectItem, SetExpr, Statement, TableFactor};
 use sqlparser::parser::Parser;
 
@@ -284,6 +284,10 @@ pub enum EditError {
     #[error("change {index} failed, nothing was applied: {message}")]
     Failed { index: usize, message: String },
     #[error(
+        "a transaction is open on this tab: commit or roll it back before applying table edits"
+    )]
+    TransactionOpen,
+    #[error(
         "change {index} would affect {rows} rows instead of one (the row changed or vanished meanwhile?), nothing was applied"
     )]
     NotOneRow { index: usize, rows: String },
@@ -422,6 +426,13 @@ pub async fn apply_edits(session: &Session, statements: &[String]) -> Result<usi
     if statements.is_empty() {
         return Err(EditError::Nothing);
     }
+    // Edits are a transaction of their own (ADR-031): never nested in, nor committing, one the
+    // user left open on this session.
+    if let Ok(TransactionState::Open | TransactionState::Failed) =
+        session.connection().transaction_state().await
+    {
+        return Err(EditError::TransactionOpen);
+    }
     // In T-SQL a lone BEGIN opens a block, not a transaction.
     let begin = if session.dialect().name() == "sqlserver" {
         "BEGIN TRANSACTION"
@@ -459,7 +470,7 @@ pub async fn apply_edits(session: &Session, statements: &[String]) -> Result<usi
 
 /// Rows affected by one statement, or its error.
 pub(crate) async fn run_one(session: &Session, sql: &str) -> Result<Option<u64>, String> {
-    let mut events = session.run_script(sql);
+    let mut events = session.run_generated(sql);
     let mut affected = None;
     let mut failure = None;
     while let Some(event) = events.next().await {

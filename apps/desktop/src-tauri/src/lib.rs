@@ -8,7 +8,7 @@ mod update;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -47,6 +47,8 @@ struct AppState {
     sessions: Mutex<HashMap<String, DesktopSession>>,
     history: QueryHistory,
     pending: Pending,
+    /// The user confirmed quitting with transactions open (ADR-031).
+    quitting: AtomicBool,
 }
 
 struct DesktopSession {
@@ -1370,6 +1372,7 @@ async fn connect(
     connection: String,
     password: Option<String>,
     remember: bool,
+    editor: bool,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectOutcome> {
@@ -1443,6 +1446,13 @@ async fn connect(
         .server_version()
         .await
         .map_err(|e| e.to_string())?;
+    // Editor tabs follow their transaction under their type's safeguards (ADR-031); the
+    // explorer's and table data tabs' sessions stay in auto-commit.
+    if editor {
+        open.session
+            .follow_transactions(&open.resolved.safeguards())
+            .await;
+    }
     let mut sessions = state.sessions.lock().await;
     if workspace_version != state.workspace_version.load(Ordering::Acquire) {
         drop(sessions);
@@ -1474,6 +1484,7 @@ async fn connect_from_session(
     source: String,
     session: String,
     database: Option<String>,
+    editor: bool,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
@@ -1522,6 +1533,11 @@ async fn connect_from_session(
             return Err(error.to_string());
         }
     };
+    if editor {
+        open.session
+            .follow_transactions(&open.resolved.safeguards())
+            .await;
+    }
     let mut sessions = state.sessions.lock().await;
     if workspace_version != state.workspace_version.load(Ordering::Acquire)
         || !sessions
@@ -1558,6 +1574,7 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
         open.session
             .close_when_idle(std::time::Duration::from_secs(seconds.into()));
     }
+    forward_transaction(app, session.clone(), open);
     let mut health = open.session.health();
     let watched = Arc::downgrade(open);
     let app = app.clone();
@@ -1583,6 +1600,8 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
         let Some(watched) = watched.upgrade() else {
             return;
         };
+        // The last state read before the loss (ADR-031).
+        let open_transaction = idle.is_none() && watched.session.transaction_status().is_open();
         let state = app.state::<AppState>();
         let mut sessions = state.sessions.lock().await;
         let current = sessions
@@ -1604,12 +1623,179 @@ fn watch_session(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
             session,
             reason,
             idle_seconds: idle,
+            open_transaction,
         }
         .emit(&app);
         if let Some(open) = closed.and_then(|s| Arc::try_unwrap(s.open).ok()) {
             open.close().await;
         }
     });
+}
+
+/// Tells the UI every change of an editor tab's transaction (ADR-031), while that session is
+/// still the tab's.
+fn forward_transaction(app: &AppHandle, session: String, open: &Arc<OpenConnection>) {
+    if !open.session.transaction_status().supported {
+        return;
+    }
+    let mut changes = open.session.transaction();
+    let watched = Arc::downgrade(open);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while changes.changed().await.is_ok() {
+            let status = *changes.borrow_and_update();
+            // Compared by address, without holding the session: `disconnect` must still be
+            // able to close it.
+            let still_the_tabs = app
+                .state::<AppState>()
+                .sessions
+                .lock()
+                .await
+                .get(&session)
+                .is_some_and(|s| std::ptr::eq(Arc::as_ptr(&s.open), watched.as_ptr()));
+            if !still_the_tabs {
+                return;
+            }
+            let _ = TransactionChanged {
+                session: session.clone(),
+                status: status.into(),
+            }
+            .emit(&app);
+        }
+    });
+}
+
+/// An editor tab's transaction, as the core last read it (ADR-031).
+#[tauri::command]
+#[specta::specta]
+async fn transaction_status(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TransactionStatusItem> {
+    let open = state.session(&session).await?;
+    Ok(open.session.transaction_status().into())
+}
+
+/// Turns an editor tab's auto-commit on or off; the core refuses to turn it on while a
+/// transaction is open (ADR-031).
+#[tauri::command]
+#[specta::specta]
+async fn set_auto_commit(
+    session: String,
+    on: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<TransactionStatusItem> {
+    let open = state.session(&session).await?;
+    open.session
+        .set_auto_commit(on)
+        .await
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn commit_transaction(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TransactionOutcomeItem> {
+    let open = state.session(&session).await?;
+    open.session
+        .commit()
+        .await
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn rollback_transaction(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TransactionOutcomeItem> {
+    let open = state.session(&session).await?;
+    open.session
+        .rollback()
+        .await
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+
+/// Of these sessions, the ones whose closing must be confirmed: a transaction with work in it
+/// is open (ADR-031). The UI asks before closing a tab, switching its connection or
+/// disconnecting; the core decides who needs the question.
+#[tauri::command]
+#[specta::specta]
+async fn sessions_to_confirm(
+    sessions: Vec<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let opened: Vec<(String, Arc<OpenConnection>)> = {
+        let map = state.sessions.lock().await;
+        sessions
+            .into_iter()
+            .filter_map(|key| map.get(&key).map(|s| (key, s.open.clone())))
+            .collect()
+    };
+    let mut out = Vec::new();
+    for (key, open) in opened {
+        if open.session.close_needs_confirmation().await {
+            out.push(key);
+        }
+    }
+    Ok(out)
+}
+
+/// Quits after the user confirmed closing tabs with open transactions (`QuitBlocked`).
+#[tauri::command]
+#[specta::specta]
+async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    state.quitting.store(true, Ordering::SeqCst);
+    app.exit(0);
+    Ok(())
+}
+
+/// The editor tabs with an open transaction, from what each session last read (no round trip:
+/// the window's close request cannot wait for servers).
+fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> {
+    let mut open: Vec<String> = sessions
+        .iter()
+        .filter(|(_, s)| s.open.session.transaction_status().is_open())
+        .map(|(key, _)| key.clone())
+        .collect();
+    open.sort();
+    open
+}
+
+/// The window was asked to close (ADR-031): with transactions open, the UI asks first and calls
+/// `quit_app`. Nothing is committed or rolled back here; the server rolls back.
+fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
+    let state = window.state::<AppState>();
+    if state.quitting.load(Ordering::SeqCst) {
+        return;
+    }
+    // The event loop must not block: when a command holds the sessions, decide in a task.
+    let Ok(sessions) = state.sessions.try_lock() else {
+        api.prevent_close();
+        let app = window.app_handle().clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let open = open_transactions(&*state.sessions.lock().await);
+            if open.is_empty() {
+                state.quitting.store(true, Ordering::SeqCst);
+                app.exit(0);
+            } else {
+                let _ = QuitBlocked { sessions: open }.emit(&app);
+            }
+        });
+        return;
+    };
+    let open = open_transactions(&sessions);
+    drop(sessions);
+    if !open.is_empty() {
+        api.prevent_close();
+        let _ = QuitBlocked { sessions: open }.emit(window.app_handle());
+    }
 }
 
 #[tauri::command]
@@ -3164,10 +3350,18 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             join_sql,
             editable_query_table,
             answer_interaction,
+            transaction_status,
+            set_auto_commit,
+            commit_transaction,
+            rollback_transaction,
+            sessions_to_confirm,
+            quit_app,
         ])
         .events(tauri_specta::collect_events![
             InteractionRequest,
-            SessionLost
+            SessionLost,
+            TransactionChanged,
+            QuitBlocked
         ])
 }
 
@@ -3236,6 +3430,7 @@ pub fn run() {
         sessions: Mutex::new(HashMap::new()),
         history,
         pending: Pending::default(),
+        quitting: AtomicBool::new(false),
     };
 
     let typed = builder.invoke_handler();
@@ -3247,6 +3442,11 @@ pub fn run() {
         .invoke_handler(move |invoke| match invoke.message.command() {
             "fetch_window" => raw_handler(invoke),
             _ => typed(invoke),
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                on_close_requested(window, api);
+            }
         })
         .setup(move |app| {
             builder.mount_events(app);

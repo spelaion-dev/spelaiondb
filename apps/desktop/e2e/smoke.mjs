@@ -1758,6 +1758,70 @@ try {
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
+  step("transactions: auto-commit off, the TX badge, Rollback and Commit, and closing asks first");
+  // ADR-031: the core keeps the tab's transaction; the toolbar and the tab only show it.
+  const autoCommit = panel.locator(".transaction-controls").getByRole("checkbox", { name: "Auto-commit" });
+  assert.ok(await autoCommit.isChecked());
+  await replaceQuery(panel, "create temp table tx_smoke (id int);");
+  await run(panel);
+  await panel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+  assert.equal(await panel.locator(".tx-badge").count(), 0, "auto-commit leaves no transaction open");
+  // The switch shows what the core answers, so it changes once the core has done it.
+  await autoCommit.click();
+  await panel.locator(".transaction-controls input[type=checkbox]:not(:checked)").waitFor();
+  await panel.getByRole("button", { name: "Commit", exact: true }).waitFor();
+  await replaceQuery(panel, "insert into tx_smoke values (1);\ninsert into tx_smoke values (2);");
+  await run(panel);
+  await panel.locator(".tx-badge", { hasText: "TX open · 2" }).waitFor();
+  await page.locator(".tabbar .tab.active .tab-tx").waitFor();
+  // Auto-commit cannot come back on while the transaction is open: commit or roll back first.
+  assert.ok(await autoCommit.isDisabled());
+  await shot("07b-transaction-open");
+  await panel.getByRole("button", { name: "Rollback", exact: true }).click();
+  await panel.getByText("Transaction rolled back.", { exact: false }).waitFor();
+  await panel.locator(".tx-badge").waitFor({ state: "detached" });
+  assert.equal(await page.locator(".tabbar .tab.active .tab-tx").count(), 0);
+  await replaceQuery(panel, "insert into tx_smoke values (3);");
+  await run(panel);
+  await panel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+  await panel.getByRole("button", { name: "Commit", exact: true }).click();
+  await panel.getByText("Transaction committed.", { exact: false }).waitFor();
+  await panel.locator(".tx-badge").waitFor({ state: "detached" });
+  // Closing the tab with a transaction open asks first; Cancel keeps it.
+  await replaceQuery(panel, "delete from tx_smoke where id = 3;");
+  await run(panel);
+  await panel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+  await page.locator(".tabbar .tab.active .close").click();
+  const closeOpen = page.getByRole("dialog", { name: "Close with an open transaction?" });
+  await closeOpen.getByText("the server rolls back what was not committed", { exact: false }).waitFor();
+  assert.equal(await closeOpen.locator(".risk-list li").count(), 1);
+  await shot("07c-close-open-transaction");
+  // Cancel has the focus: a reflex Enter keeps the tab.
+  await page.keyboard.press("Enter");
+  await closeOpen.waitFor({ state: "detached" });
+  await panel.locator(".tx-badge").waitFor();
+  // Switching the tab's connection asks too.
+  await panel.locator(".toolbar select").first().selectOption({ label: "Shop (SQLite) (sqlite)" });
+  const switchOpen = page.getByRole("dialog", { name: "Disconnect with an open transaction?" });
+  await switchOpen.getByRole("button", { name: "Cancel", exact: true }).click();
+  await switchOpen.waitFor({ state: "detached" });
+  await panel.locator(".tx-badge").waitFor();
+  // A session lost with a transaction open says so; nothing reconnects or re-runs.
+  await replaceQuery(panel, "select pg_terminate_backend(pg_backend_pid());");
+  await run(panel);
+  const lostOpen = panel.locator(".status-lost");
+  await lostOpen.getByText("A transaction was open", { exact: false }).waitFor();
+  assert.equal(await page.locator(".tabbar .tab.active .tab-tx").count(), 0);
+  await shot("07d-lost-with-transaction");
+  await lostOpen.getByRole("button", { name: "Reconnect" }).click();
+  await page.getByRole("dialog").getByText("Password for Postgres (Docker)").waitFor();
+  await page.getByLabel("Password", { exact: true }).fill("spelaion");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await panel.locator(".status-connected").waitFor();
+  // A new session starts from its type's default: auto-commit.
+  await autoCommit.waitFor();
+  assert.ok(await autoCommit.isChecked());
+
   step("MySQL and MariaDB: password, TLS, types and the schema explorer");
   // Only an encrypted session has a cipher: the row exists only if TLS is on.
   for (const [connection, version, status] of [
@@ -1817,7 +1881,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const connection = (await invoke("list_connections")).find((item) => item.name === "MySQL (Docker)");
     const session = "e2e-process-confirmation";
     try {
-      const outcome = await invoke("connect", { session, connection: connection.id, password: "spelaion", remember: false });
+      const outcome = await invoke("connect", { session, connection: connection.id, password: "spelaion", remember: false, editor: false });
       if (outcome.kind !== "connected") throw new Error(`unexpected connection outcome: ${outcome.kind}`);
       const snapshot = await invoke("list_processes", { session });
       const row = snapshot.processes.find((item) => item.id === snapshot.ownId);
@@ -2245,6 +2309,22 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   await panel.locator(".toolbar .type-badge.badge-prod", { hasText: "PRODUCTION" }).waitFor();
   await shot("09-bastions");
+  // Production has smart commit (ADR-031): reads stay in auto-commit, the first change opens a
+  // transaction that waits for Commit or Rollback, then the tab is back in auto-commit.
+  const prodAutoCommit = panel.locator(".transaction-controls").getByRole("checkbox", { name: /Auto-commit/ });
+  await panel.locator(".transaction-controls .smart", { hasText: "smart" }).waitFor();
+  assert.ok(await prodAutoCommit.isChecked());
+  await replaceQuery(panel, "create temp table smart_tx (id int);");
+  await run(panel);
+  const prodRisk = page.getByRole("dialog", { name: "Run these statements?" });
+  await prodRisk.getByRole("button", { name: "Run anyway" }).click();
+  await prodRisk.waitFor({ state: "detached" });
+  await panel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+  assert.ok(!(await prodAutoCommit.isChecked()));
+  await shot("09a-smart-commit");
+  await panel.getByRole("button", { name: "Rollback", exact: true }).click();
+  await panel.locator(".tx-badge").waitFor({ state: "detached" });
+  await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .transaction-controls input[type=checkbox]")?.checked === true);
 
   step("add connection: catalog by category, test and save (personal, nothing in the repo)");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
@@ -3297,6 +3377,28 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await variables.waitFor({ state: "detached" });
   await varsPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
   assert.match(readFileSync(join(userDir, "user.toml"), "utf8"), /demo_db = ".*shop\.db"/);
+
+  step("quitting with a transaction open asks first: Cancel keeps the app, the dialog quits");
+  const quitPanel = await newQuery("Shop (SQLite)", "create temp table quit_tx (x);");
+  await run(quitPanel);
+  await quitPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+  await quitPanel.locator(".transaction-controls").getByRole("checkbox", { name: "Auto-commit" }).click();
+  await quitPanel.locator(".transaction-controls input[type=checkbox]:not(:checked)").waitFor();
+  await replaceQuery(quitPanel, "insert into quit_tx values (1);");
+  await run(quitPanel);
+  await quitPanel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+  // The window's close button (WM_CLOSE): the core holds the window and the UI asks.
+  execFileSync("taskkill", ["/PID", String(app.pid)], { stdio: "ignore" });
+  const quitOpen = page.getByRole("dialog", { name: "Quit with an open transaction?" });
+  await quitOpen.waitFor();
+  await shot("11b-quit-open-transaction");
+  await quitOpen.getByRole("button", { name: "Cancel", exact: true }).click();
+  await quitOpen.waitFor({ state: "detached" });
+  assert.equal(app.exitCode, null, "Cancel keeps the app open");
+  execFileSync("taskkill", ["/PID", String(app.pid)], { stdio: "ignore" });
+  const exitedOnQuit = once(app, "exit");
+  await page.getByRole("dialog", { name: "Quit with an open transaction?" }).getByRole("button", { name: "Quit and roll back" }).click();
+  await Promise.race([exitedOnQuit, new Promise((_, reject) => setTimeout(() => reject(new Error("the app did not quit")), 15_000))]);
 
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {

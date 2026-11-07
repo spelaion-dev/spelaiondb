@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
-import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FieldChangeItem, InteractionKind, RiskKind, WorkspaceInfo } from "./api";
+import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FieldChangeItem, InteractionKind, RiskKind, TransactionStatusItem, WorkspaceInfo } from "./api";
 
 export interface ResultMeta {
   id: number;
@@ -72,6 +72,10 @@ export interface Tab {
   lost?: string;
   /** Its session was closed by its connection type after this many seconds idle (ADR-029). */
   idleClosed?: number;
+  /** Its session was lost with a transaction open: the server rolled it back (ADR-031). */
+  lostTransaction?: boolean;
+  /** Its transaction as the core last told it (ADR-031); the core decides, this only shows. */
+  transaction?: TransactionStatusItem;
   serverVersion: string | null;
   sql: string;
   run: RunState | null;
@@ -366,6 +370,13 @@ export interface ParamsRequest {
   resolve(values: Record<string, string> | null): void;
 }
 
+/** Tabs with an open transaction about to be closed, disconnected or quit (ADR-031). */
+export interface OpenTransactionsRequest {
+  tabs: string[];
+  action: "close" | "disconnect" | "quit";
+  resolve(proceed: boolean): void;
+}
+
 /** Statements the core wants confirmed before they run. */
 export interface RiskRequest {
   connection: string;
@@ -384,9 +395,11 @@ interface DialogStore {
   change: ChangeRequest | null;
   variables: VariablesRequest | null;
   risk: RiskRequest | null;
+  openTransactions: OpenTransactionsRequest | null;
   params: ParamsRequest | null;
   text: TextRequest | null;
   interactions: InteractionItem[];
+  askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"]): Promise<boolean>;
   askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
   askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
@@ -404,6 +417,7 @@ export const useDialogs = create<DialogStore>((set) => ({
   change: null,
   variables: null,
   risk: null,
+  openTransactions: null,
   params: null,
   text: null,
   interactions: [],
@@ -491,6 +505,19 @@ export const useDialogs = create<DialogStore>((set) => ({
           resolve: (values) => {
             set({ variables: null });
             resolve(values);
+          },
+        },
+      }),
+    ),
+  askOpenTransactions: (tabs, action) =>
+    new Promise((resolve) =>
+      set({
+        openTransactions: {
+          tabs,
+          action,
+          resolve: (proceed) => {
+            set({ openTransactions: null });
+            resolve(proceed);
           },
         },
       }),

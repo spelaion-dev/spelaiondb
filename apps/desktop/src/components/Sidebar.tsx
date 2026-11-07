@@ -29,6 +29,7 @@ import {
   type TableDetails,
 } from "../api";
 import {
+  confirmOpenTransactions,
   connectTabFromExplorer,
   explorerDatabase,
   EXPLORER_REFRESH_EVENT,
@@ -1020,6 +1021,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       app.historySaving.length > 0
     )
       return;
+    // Changing folder closes every tab's session (ADR-031): ask first if a transaction is open.
+    if (!(await confirmOpenTransactions(app.tabs.map((t) => t.id), "disconnect"))) return;
     app.setWorkspaceChanging(true);
     setFolderError(null);
     try {

@@ -23,7 +23,7 @@ import { EngineIcon } from "./EngineIcon";
 import { TagInput } from "./TagInput";
 import { refreshConnections } from "./Sidebar";
 import { chooseSavePath, openFilters } from "../dialogs";
-import { reviewChanges } from "../connect";
+import { confirmOpenTransactions, reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
 import { fieldList } from "../fieldNames";
@@ -601,6 +601,11 @@ function ConnectionForm(props: {
     try {
       // Only a saved password reaches the keychain; otherwise it was just for the test.
       const stored = passwordMode === "keychain" && password ? password : null;
+      // Changing the engine closes its tabs' sessions: ask first if a transaction is open.
+      if (editing && props.savedEngine && props.savedEngine !== engine.id) {
+        const sessions = useApp.getState().tabs.filter((tab) => tab.connectionId === editing).map((tab) => tab.id);
+        if (!(await confirmOpenTransactions(sessions, "disconnect"))) return;
+      }
       await call(editing ? commands.updateConnection(editing, request, stored, props.revision ?? "") : commands.addConnection(request, stored));
       if (editing && props.savedEngine && props.savedEngine !== engine.id) {
         // Its open sessions belong to the old engine: closed; tabs connect again when run.

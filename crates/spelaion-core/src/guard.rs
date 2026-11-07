@@ -174,16 +174,22 @@ mod tests {
         confirm_execution: false,
         confirm_data_changes: false,
         close_idle_after: None,
+        manual_commit: false,
+        smart_commit: false,
     };
     const PRODUCTION: Safeguards = Safeguards {
         confirm_execution: false,
         confirm_data_changes: true,
         close_idle_after: None,
+        manual_commit: false,
+        smart_commit: false,
     };
     const EVERY_RUN: Safeguards = Safeguards {
         confirm_execution: true,
         confirm_data_changes: false,
         close_idle_after: None,
+        manual_commit: false,
+        smart_commit: false,
     };
 
     fn risks(script: &str, production: bool) -> Vec<(usize, Risk)> {

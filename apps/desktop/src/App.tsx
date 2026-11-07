@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { events } from "./api";
 import { ActivityBar } from "./components/ActivityBar";
 import { AddConnection } from "./components/AddConnection";
 import { DeleteConnection } from "./components/DeleteConnection";
@@ -13,7 +12,8 @@ import { SnippetsPanel } from "./components/SnippetsPanel";
 import { FOCUS_EXPLORER_FILTER_EVENT, Sidebar, refreshConnections } from "./components/Sidebar";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
-import { EXPLORER_SESSION_CLOSED_EVENT, closeQueryTab } from "./connect";
+import { EXPLORER_SESSION_CLOSED_EVENT, closeQueryTab, tabName } from "./connect";
+import { call, commands, events } from "./api";
 import { usePreferences } from "./preferences";
 import { useUpdate } from "./update";
 import { SAVE_QUERY_EVENT, useApp, useDialogs } from "./store";
@@ -95,11 +95,21 @@ export default function App() {
     // A tab whose session died, or was closed for being idle (ADR-029), shows it; nothing
     // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses.
     const unlistenLost = events.sessionLost.listen((e) => {
-      const { session, reason, idleSeconds } = e.payload;
-      useApp.getState().updateTab(session, { status: "disconnected", lost: reason, idleClosed: idleSeconds ?? undefined });
+      const { session, reason, idleSeconds, openTransaction } = e.payload;
+      useApp.getState().updateTab(session, { status: "disconnected", lost: reason, idleClosed: idleSeconds ?? undefined, lostTransaction: openTransaction || undefined, transaction: undefined });
       if (session.startsWith("meta:")) {
         window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: session.slice("meta:".length), idleSeconds } }));
       }
+    });
+    // The core keeps each editor tab's transaction (ADR-031); the tab only shows it.
+    const unlistenTransaction = events.transactionChanged.listen((e) => {
+      useApp.getState().updateTab(e.payload.session, { transaction: e.payload.status });
+    });
+    // Quitting with transactions open: the core held the window; the user decides.
+    const unlistenQuit = events.quitBlocked.listen((e) => {
+      void useDialogs.getState().askOpenTransactions(e.payload.sessions.map(tabName), "quit").then((quit) => {
+        if (quit) void call(commands.quitApp()).catch(() => undefined);
+      });
     });
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
@@ -147,6 +157,8 @@ export default function App() {
     return () => {
       void unlisten.then((f) => f());
       void unlistenLost.then((f) => f());
+      void unlistenTransaction.then((f) => f());
+      void unlistenQuit.then((f) => f());
       window.removeEventListener("keydown", onKey);
     };
   }, []);
@@ -227,6 +239,9 @@ export default function App() {
             >
               <TabIcon kind={tab.tableDetails ? "details" : tab.table ? "table" : "query"} />
               <span className={`dot dot-${tab.status}`} role="img" aria-label={t(`editor:status.${tab.status}`)} title={t(`editor:status.${tab.status}`)} />
+              {(tab.transaction?.state === "open" || tab.transaction?.state === "failed") && (
+                <span className={`tab-tx${tab.transaction.state === "failed" ? " tab-tx-failed" : ""}`} title={t("editor:transaction.tabBadge")} aria-label={t("editor:transaction.tabBadge")}>TX</span>
+              )}
               <span className="tab-label" title={tab.tableDetails ? `${tab.tableDetails.name} · ${t(`shell:folders.${tab.tableDetails.kind}`)}` : tab.table ? tab.table.name : t("shell:queryTab", { number: tab.number })}>{tab.tableDetails ? `${tab.tableDetails.name} · ${t(`shell:folders.${tab.tableDetails.kind}`)}` : tab.table ? tab.table.name : t("shell:queryTab", { number: tab.number })}</span>
               <button
                 className="close"

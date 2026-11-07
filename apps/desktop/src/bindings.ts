@@ -286,12 +286,12 @@ export const commands = {
 	 *  Opens a session (`session` is chosen by the UI). If a password is needed, it says so
 	 *  instead of failing, so the UI can ask for it.
 	 */
-	connect: (session: string, connection: string, password: string | null, remember: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember })),
+	connect: (session: string, connection: string, password: string | null, remember: boolean, editor: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember, editor })),
 	/**
 	 *  Open an independent tab from an existing explorer session, reusing its in-memory
 	 *  credentials and exact resolved connection. Passwords never cross back into the UI.
 	 */
-	connectFromSession: (source: string, session: string, database: string | null) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database })),
+	connectFromSession: (source: string, session: string, database: string | null, editor: boolean) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database, editor })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
@@ -357,12 +357,31 @@ export const commands = {
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
+	/**  An editor tab's transaction, as the core last read it (ADR-031). */
+	transactionStatus: (session: string) => typedError<TransactionStatusItem_Serialize, string>(__TAURI_INVOKE("transaction_status", { session })),
+	/**
+	 *  Turns an editor tab's auto-commit on or off; the core refuses to turn it on while a
+	 *  transaction is open (ADR-031).
+	 */
+	setAutoCommit: (session: string, on: boolean) => typedError<TransactionStatusItem_Serialize, string>(__TAURI_INVOKE("set_auto_commit", { session, on })),
+	commitTransaction: (session: string) => typedError<TransactionOutcomeItem_Serialize, string>(__TAURI_INVOKE("commit_transaction", { session })),
+	rollbackTransaction: (session: string) => typedError<TransactionOutcomeItem_Serialize, string>(__TAURI_INVOKE("rollback_transaction", { session })),
+	/**
+	 *  Of these sessions, the ones whose closing must be confirmed: a transaction with work in it
+	 *  is open (ADR-031). The UI asks before closing a tab, switching its connection or
+	 *  disconnecting; the core decides who needs the question.
+	 */
+	sessionsToConfirm: (sessions: string[]) => typedError<string[], string>(__TAURI_INVOKE("sessions_to_confirm", { sessions })),
+	/**  Quits after the user confirmed closing tabs with open transactions (`QuitBlocked`). */
+	quitApp: () => typedError<null, string>(__TAURI_INVOKE("quit_app")),
 };
 
 /** Events */
 export const events = {
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
+	quitBlocked: makeEvent<QuitBlocked, QuitBlocked>("quit-blocked"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
+	transactionChanged: makeEvent<TransactionChanged_Serialize, TransactionChanged_Deserialize>("transaction-changed"),
 };
 
 /* Types */
@@ -633,6 +652,8 @@ export type ConnectionTypeDraft_Deserialize = {
 	confirmExecution: boolean,
 	confirmDataChanges: boolean,
 	closeIdleAfter?: number | null,
+	manualCommit?: boolean,
+	smartCommit?: boolean,
 };
 
 /**
@@ -646,6 +667,8 @@ export type ConnectionTypeDraft_Serialize = {
 	confirmExecution: boolean,
 	confirmDataChanges: boolean,
 	closeIdleAfter: number | null,
+	manualCommit: boolean,
+	smartCommit: boolean,
 };
 
 /**
@@ -1158,6 +1181,11 @@ export type NewIndexKindItem = "index" | "uniqueIndex" | "uniqueConstraint" | "p
 
 export type NewTableElementItem = { kind: "column"; name: string; dataType: string; nullable: boolean; default: string } | { kind: "constraint"; name: string; constraintKind: string; columns: string[]; expression: string } | { kind: "foreignKey"; name: string; columns: string[]; referencedSchema: string; referencedTable: string; referencedColumns: string[] } | { kind: "index"; name: string; columns: string[]; unique: boolean } | { kind: "trigger"; name: string; timing: string; event: string; body: string };
 
+export type NoticeItem = {
+	severity: string,
+	message: string,
+};
+
 /**  What the explorer may offer on a session's engine (ADR-026). */
 export type ObjectActionsItem = {
 	renameViews: boolean,
@@ -1342,6 +1370,14 @@ export type ProxyDraftItem_Serialize = {
 
 export type ProxyTypeItem = "socks5" | "http";
 
+/**
+ *  The window was asked to close while these tabs have a transaction open: the UI asks, then
+ *  calls `quit_app` (ADR-031).
+ */
+export type QuitBlocked = {
+	sessions: string[],
+};
+
 /**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
 export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "dataChange" | "execution";
 
@@ -1371,6 +1407,10 @@ export type SafeguardsItem_Deserialize = {
 	confirmDataChanges: boolean,
 	/**  Seconds. */
 	closeIdleAfter?: number | null,
+	/**  Editor tabs start with auto-commit off (ADR-031). */
+	manualCommit: boolean,
+	/**  The first write switches a tab to manual commit (ADR-031). */
+	smartCommit: boolean,
 };
 
 /**  What a connection type asks for (ADR-029). */
@@ -1379,6 +1419,10 @@ export type SafeguardsItem_Serialize = {
 	confirmDataChanges: boolean,
 	/**  Seconds. */
 	closeIdleAfter: number | null,
+	/**  Editor tabs start with auto-commit off (ADR-031). */
+	manualCommit: boolean,
+	/**  The first write switches a tab to manual commit (ADR-031). */
+	smartCommit: boolean,
 };
 
 export type SchemaItem = {
@@ -1476,6 +1520,11 @@ export type SessionLost_Deserialize = {
 	reason: string,
 	/**  Closed by its connection type after this many seconds idle (ADR-029), not lost. */
 	idleSeconds?: number | null,
+	/**
+	 *  A transaction was open when it was lost: the server rolls back what was not committed
+	 *  (ADR-031).
+	 */
+	openTransaction: boolean,
 };
 
 /**
@@ -1487,6 +1536,11 @@ export type SessionLost_Serialize = {
 	reason: string,
 	/**  Closed by its connection type after this many seconds idle (ADR-029), not lost. */
 	idleSeconds: number | null,
+	/**
+	 *  A transaction was open when it was lost: the server rolls back what was not committed
+	 *  (ADR-031).
+	 */
+	openTransaction: boolean,
 };
 
 /**  A saved query; `connection` is empty when it was saved without one. */
@@ -1552,6 +1606,81 @@ export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "veri
 
 /**  The tone of a connection type's badge, from the app's fixed palette (ADR-029). */
 export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";
+
+/**
+ *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
+ *  auto-commit toggle (ADR-031).
+ */
+export type TransactionChanged = TransactionChanged_Serialize | TransactionChanged_Deserialize;
+
+/**
+ *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
+ *  auto-commit toggle (ADR-031).
+ */
+export type TransactionChanged_Deserialize = {
+	session: string,
+	status: TransactionStatusItem_Deserialize,
+};
+
+/**
+ *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
+ *  auto-commit toggle (ADR-031).
+ */
+export type TransactionChanged_Serialize = {
+	session: string,
+	status: TransactionStatusItem_Serialize,
+};
+
+/**  What a Commit or Rollback said. */
+export type TransactionOutcomeItem = TransactionOutcomeItem_Serialize | TransactionOutcomeItem_Deserialize;
+
+/**  What a Commit or Rollback said. */
+export type TransactionOutcomeItem_Deserialize = {
+	status: TransactionStatusItem_Deserialize,
+	notices: NoticeItem[],
+};
+
+/**  What a Commit or Rollback said. */
+export type TransactionOutcomeItem_Serialize = {
+	status: TransactionStatusItem_Serialize,
+	notices: NoticeItem[],
+};
+
+/**  What the core last read about a transaction (ADR-031). */
+export type TransactionStateItem = "idle" | "open" | 
+/**  Open, but the engine will only roll it back. */
+"failed";
+
+/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
+export type TransactionStatusItem = TransactionStatusItem_Serialize | TransactionStatusItem_Deserialize;
+
+/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
+export type TransactionStatusItem_Deserialize = {
+	/**  The tab follows its transaction (an editor tab on an engine that can tell). */
+	supported: boolean,
+	autoCommit: boolean,
+	/**  The connection type's smart commit. */
+	smartCommit: boolean,
+	/**  Manual commit came from smart commit: it ends with the transaction. */
+	smartSwitched: boolean,
+	state?: TransactionStateItem | null,
+	/**  Statements run in the open transaction. */
+	statements: number,
+};
+
+/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
+export type TransactionStatusItem_Serialize = {
+	/**  The tab follows its transaction (an editor tab on an engine that can tell). */
+	supported: boolean,
+	autoCommit: boolean,
+	/**  The connection type's smart commit. */
+	smartCommit: boolean,
+	/**  Manual commit came from smart commit: it ends with the transaction. */
+	smartSwitched: boolean,
+	state: TransactionStateItem | null,
+	/**  Statements run in the open transaction. */
+	statements: number,
+};
 
 export type TunnelDraftItem = TunnelDraftItem_Serialize | TunnelDraftItem_Deserialize;
 

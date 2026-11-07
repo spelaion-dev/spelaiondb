@@ -51,13 +51,64 @@ export async function reviewChanges(
   return outcome;
 }
 
+/** An SQL editor tab: its session follows its transaction (ADR-031). The explorer's, the table
+ *  data tabs' and the process monitor's sessions stay in auto-commit. */
+function isEditorSession(session: string): boolean {
+  const tab = useApp.getState().tabs.find((t) => t.id === session);
+  return Boolean(tab && !tab.table && !tab.tableDetails);
+}
+
+/** Shows the transaction the core keeps for a freshly connected editor tab. */
+async function showTransaction(session: string) {
+  if (!isEditorSession(session)) return;
+  try {
+    const transaction = await call(commands.transactionStatus(session));
+    useApp.getState().updateTab(session, { transaction, lostTransaction: undefined });
+  } catch {
+    // The tab was closed meanwhile.
+  }
+}
+
+/** A tab's name as its tab shows it. */
+export function tabName(id: string): string {
+  const tab = useApp.getState().tabs.find((t) => t.id === id);
+  if (!tab) return id;
+  if (tab.tableDetails) return `${tab.tableDetails.name} · ${i18n.t(`shell:folders.${tab.tableDetails.kind}`)}`;
+  if (tab.table) return tab.table.name;
+  return i18n.t("shell:queryTab", { number: tab.number });
+}
+
+/**
+ * Asks before closing, disconnecting or quitting sessions with an open transaction (ADR-031):
+ * the core says which ones need the question. True when there is nothing to ask or the user
+ * accepted; also when the core cannot be asked (the sessions are gone).
+ */
+export async function confirmOpenTransactions(sessions: string[], action: "close" | "disconnect" | "quit"): Promise<boolean> {
+  if (sessions.length === 0) return true;
+  let open: string[];
+  try {
+    open = await call(commands.sessionsToConfirm(sessions));
+  } catch {
+    return true;
+  }
+  if (open.length === 0) return true;
+  return useDialogs.getState().askOpenTransactions(open.map(tabName), action);
+}
+
 /** Returns the server version, or null if the user cancelled. Throws if it fails. */
 export async function openSession(session: string, connectionId: string): Promise<string | null> {
+  const version = await openSessionInner(session, connectionId);
+  if (version !== null) await showTransaction(session);
+  return version;
+}
+
+async function openSessionInner(session: string, connectionId: string): Promise<string | null> {
   const app = useApp.getState();
   const dialogs = useDialogs.getState();
   const name = app.connections.find((c) => c.id === connectionId)?.name ?? connectionId;
+  const editor = isEditorSession(session);
 
-  const connect = () => call(commands.connect(session, connectionId, null, false));
+  const connect = () => call(commands.connect(session, connectionId, null, false, editor));
   let outcome = await connect();
   if (outcome.kind === "untrusted") {
     const workspace = app.workspace?.workspace ?? null;
@@ -75,7 +126,7 @@ export async function openSession(session: string, connectionId: string): Promis
     if (outcome.kind === "authFailed") error = outcome.message;
     const answer = await dialogs.askPassword(name, outcome.canRemember, error);
     if (!answer) return null;
-    outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember));
+    outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember, editor));
   }
   if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables") return null;
   return outcome.serverVersion;
@@ -89,13 +140,14 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
   useApp.getState().updateTab(tabId, { status: "connecting", serverVersion: null });
   void (async () => {
     try {
-      const serverVersion = await call(commands.connectFromSession(source, tabId, database ?? null));
+      const serverVersion = await call(commands.connectFromSession(source, tabId, database ?? null, isEditorSession(tabId)));
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") {
         await call(commands.disconnect(tabId)).catch(() => undefined);
         return;
       }
       useApp.getState().updateTab(tabId, { status: "connected", serverVersion });
+      await showTransaction(tabId);
     } catch (e) {
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") return;
@@ -121,6 +173,7 @@ export async function closeQueryTab(id: string) {
   if (!tab) return;
   if (tab.savingEdits) return;
   if (tab.pendingEdits && !(await confirm(i18n.t("editor:edit.closeUnsaved"), { kind: "warning" }))) return;
+  if (!(await confirmOpenTransactions([id], "close"))) return;
   if (useApp.getState().tabs.find((t) => t.id === id)?.savingEdits) return;
   useApp.getState().closeTab(id);
   void call(commands.disconnect(id)).catch(() => undefined);

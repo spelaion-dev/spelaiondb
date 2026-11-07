@@ -110,7 +110,7 @@ pub async fn list_processes(session: &Session) -> Result<ProcessSnapshot, String
 }
 
 async fn read_processes(session: &Session, sql: &str) -> Result<Vec<Process>, String> {
-    let mut events = session.run_script(sql);
+    let mut events = session.run_generated(sql);
     let mut result = None;
     let mut failure = None;
     while let Some(event) = events.next().await {

@@ -306,5 +306,24 @@
     "applied_other": "Applied {{count}} changes",
     "applyFirst": "Apply or discard the pending changes first"
   },
-  "activeSchemaSet": "Unqualified names are looked up in {{schema}} now"
+  "activeSchemaSet": "Unqualified names are looked up in {{schema}} now",
+  "transaction": {
+    "autoCommit": "Auto-commit",
+    "autoCommitHint": "Each statement commits as it runs. Off: changes wait for Commit or Rollback.",
+    "autoCommitLocked": "A transaction is open: commit or roll it back before turning auto-commit on.",
+    "smartCommitHint": "Smart commit (from the connection's type): the first statement that changes data switches this tab to manual commit until you commit or roll back.",
+    "smart": "smart",
+    "unsupported": "Auto-commit only: this connection cannot tell whether a transaction is open.",
+    "open": "TX open",
+    "openCount": "TX open · {{count}}",
+    "openHint": "A transaction is open on this tab: its changes are not visible to others until you commit.",
+    "failed": "TX failed",
+    "failedHint": "The transaction failed: the server will only roll it back.",
+    "commit": "Commit",
+    "rollback": "Rollback",
+    "committed": "Transaction committed.",
+    "rolledBack": "Transaction rolled back.",
+    "lostWithTransaction": "A transaction was open: the server rolled back what was not committed.",
+    "tabBadge": "Transaction open"
+  }
 }

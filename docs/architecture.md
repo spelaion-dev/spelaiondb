@@ -36,7 +36,9 @@ A summary of how the pieces fit together. The reasons behind each decision are i
 **Running a query from the app**
 1. The UI sends `Execute { tab, sql }` to the core.
 2. The core splits the SQL according to the dialect and runs it on that tab's connection
-   (which goes through the shared SSH tunnel if there is one).
+   (which goes through the shared SSH tunnel if there is one). With auto-commit off, or when
+   smart commit meets the first write, the core opens a transaction first; after every
+   statement it asks the driver whether one is open, and tells the tab (ADR-031).
 3. Rows arrive streamed, are converted to Arrow batches and stored in the core's result
    store (in memory up to a budget; then on disk).
 4. The UI requests windows of rows while scrolling and receives them as binary Arrow IPC.

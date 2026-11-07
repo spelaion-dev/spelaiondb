@@ -306,5 +306,24 @@
     "applied_other": "Aplicados {{count}} cambios",
     "applyFirst": "Aplica o descarta antes los cambios pendientes"
   },
-  "activeSchemaSet": "Los nombres sin esquema se buscan ahora en {{schema}}"
+  "activeSchemaSet": "Los nombres sin esquema se buscan ahora en {{schema}}",
+  "transaction": {
+    "autoCommit": "Auto-commit",
+    "autoCommitHint": "Cada sentencia se confirma al ejecutarse. Desactivado: los cambios esperan a Commit o Rollback.",
+    "autoCommitLocked": "Hay una transacción abierta: confírmala o deshazla antes de activar auto-commit.",
+    "smartCommitHint": "Smart commit (del tipo de la conexión): la primera sentencia que cambia datos pasa esta pestaña a confirmación manual hasta que hagas Commit o Rollback.",
+    "smart": "smart",
+    "unsupported": "Solo auto-commit: esta conexión no puede decir si hay una transacción abierta.",
+    "open": "TX abierta",
+    "openCount": "TX abierta · {{count}}",
+    "openHint": "Hay una transacción abierta en esta pestaña: sus cambios no son visibles para otros hasta que la confirmes.",
+    "failed": "TX fallida",
+    "failedHint": "La transacción falló: el servidor solo puede deshacerla.",
+    "commit": "Commit",
+    "rollback": "Rollback",
+    "committed": "Transacción confirmada.",
+    "rolledBack": "Transacción deshecha.",
+    "lostWithTransaction": "Había una transacción abierta: el servidor deshizo lo que no estaba confirmado.",
+    "tabBadge": "Transacción abierta"
+  }
 }
