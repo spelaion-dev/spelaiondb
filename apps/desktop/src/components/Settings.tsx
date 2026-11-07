@@ -264,7 +264,7 @@ function HistorySettings() {
       <p>{t("history.stored")}</p>
       <p>{t("history.perConnection")}</p>
       <p className="muted small">{t("history.audit")}</p>
-      <button onClick={() => setHistoryOpen(true)}>{t("history.open")}</button>
+      <button onClick={() => { setHistoryOpen(true); useApp.getState().closeSettings(); }}>{t("history.open")}</button>
     </>
   );
 }

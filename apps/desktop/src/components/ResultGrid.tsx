@@ -1,7 +1,7 @@
 // Canvas result grid (ADR-010). Only what is visible is painted; scrolling is native
 // (a container with a "spacer" of the full size) and the canvas is redrawn on top.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type NameStyleItem, type TextFormat } from "../api";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
@@ -213,6 +213,8 @@ export function ResultGrid({
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const accessibleCell = useRef<HTMLDivElement>(null);
+  const accessibleCellId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
   const [wrapWidth, setWrapWidth] = useState(0);
   const viewerDrag = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -364,6 +366,32 @@ export function ResultGrid({
   const rowNumW = Math.max(52, numbers.format(result.rows).length * 8 + PAD * 2);
   const totalW = rowNumW + (offsets[offsets.length - 1] ?? 0);
   const totalH = HEADER_H + result.rows * ROW_H;
+
+  // The canvas has no accessible cells. Expose the active one without putting result data in
+  // React state; stale asynchronous answers must not announce a previously selected cell.
+  const activeRow = selection?.focus.row;
+  const activeColumn = selection?.focus.col;
+  const activeEdits = editing?.cells;
+  const activeDeleted = editing?.deleted;
+  useEffect(() => {
+    const target = accessibleCell.current;
+    if (!target || activeRow === undefined || activeColumn === undefined || activeRow >= result.rows) return;
+    const column = result.columns[activeColumn];
+    if (!column) return;
+    let current = true;
+    const describe = (value: string | null) => {
+      if (!current) return;
+      const text = value === null ? "NULL" : value.length > 500 ? t("results.accessibleTruncated", { value: value.slice(0, 500) }) : value;
+      target.textContent = t("results.accessibleCell", { row: numbers.format(activeRow + 1), column: column.name, type: column.nativeType, value: text });
+    };
+    target.textContent = t("results.accessibleCellLoading", { row: numbers.format(activeRow + 1), column: column.name });
+    const key = `${activeRow}:${activeColumn}`;
+    if (activeEdits && key in activeEdits) describe(activeEdits[key] ?? null);
+    else void call(commands.cellValue(result.id, activeRow, activeColumn)).then(describe, () => {
+      if (current) target.textContent = t("results.accessibleCellError", { row: numbers.format(activeRow + 1), column: column.name });
+    });
+    return () => { current = false; };
+  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers]);
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
   const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent });
@@ -702,6 +730,13 @@ export function ResultGrid({
   function hideColumn(col: number) {
     setMenu(null);
     if (visibleCols.length <= 1 || hidden.has(col)) return;
+    if (selection?.focus.col === col) {
+      const next = visibleCols.find((candidate) => candidate > col) ?? visibleCols.find((candidate) => candidate !== col);
+      if (next !== undefined) {
+        const cell = { row: selection.focus.row, col: next };
+        setSelection({ anchor: cell, focus: cell });
+      }
+    }
     setHidden(new Set([...hidden, col]));
   }
 
@@ -1244,6 +1279,8 @@ export function ResultGrid({
   const pageBusy = pagingLocked || !!paging?.loading || !!cellEditor || sorting;
   const pageCanLoad = !!paging?.hasMore && (paging.total === undefined || result.rows < paging.total);
   const pageStart = paging ? queryPage * paging.pageSize : 0;
+  const hasPendingEdits = !!editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0);
+  const updatedRows = editing ? new Set(Object.keys(editing.cells).map((key) => key.split(":")[0]).filter((row) => !editing.deleted.includes(Number(row)))).size : 0;
 
   function onGridScroll() {
     redraw();
@@ -1348,7 +1385,17 @@ export function ResultGrid({
       <div
         ref={scrollerRef}
         className="grid-scroller"
+        role="grid"
         tabIndex={0}
+        aria-rowcount={result.rows + 1}
+        aria-colcount={visibleCols.length}
+        aria-activedescendant={selection && selection.focus.row < result.rows ? accessibleCellId : undefined}
+        onFocus={() => {
+          if (!selection && result.rows > 0 && visibleCols.length > 0) {
+            const cell = { row: 0, col: firstVisible };
+            setSelection({ anchor: cell, focus: cell });
+          }
+        }}
         onScroll={onGridScroll}
         onMouseDown={(e) => {
           if (e.button !== 0) return;
@@ -1419,7 +1466,10 @@ export function ResultGrid({
             : "")
         }
       >
-        <div style={{ width: totalW, height: totalH }} />
+        <div aria-hidden="true" style={{ width: totalW, height: totalH }} />
+        {selection && selection.focus.row < result.rows && <div className="sr-only" role="row" aria-rowindex={selection.focus.row + 2}>
+          <div ref={accessibleCell} id={accessibleCellId} role="gridcell" aria-colindex={Math.max(1, visibleCols.indexOf(selection.focus.col) + 1)} aria-selected="true" aria-live="polite" aria-atomic="true" />
+        </div>}
       </div>
       {menu && menu.header !== undefined && (
         <div ref={menuRef} className="grid-menu result-grid-menu" role="menu" aria-label={result.columns[menu.header]?.name} style={{ left: menu.x, top: menu.y }}>
@@ -1680,13 +1730,19 @@ export function ResultGrid({
         </div>}
         <div className="result-edit-toolbar" role="toolbar" aria-label={t(editing ? "edit.toolbar" : "queryPaging.label")}>
           {editing && <>
-          <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !result.complete} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /></button>
-          <button className="ghost" title={t("edit.shortcutDuplicate")} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /></button>
-          <button className="ghost" title={t("edit.shortcutDelete")} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /></button>
-          <button className="ghost" title={t("edit.shortcutRevert")} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="undo" /></button>
-          <span className="result-edit-divider" />
-          <button className="ghost" title={t("edit.shortcutSave")} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !(editing.inserts.length || editing.deleted.length || Object.keys(editing.cells).length)} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /></button>
-          <button className="ghost" title={t("edit.shortcutDiscard")} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !(editing.inserts.length || editing.deleted.length || Object.keys(editing.cells).length)} onClick={editing.onDiscard}><EditIcon name="cancel" /></button>
+            <div className="result-row-actions" role="group" aria-label={t("edit.toolbar")}>
+              <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !result.complete} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDuplicate")} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /><span>{t("edit.duplicateAction")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDelete")} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /><span>{t("edit.deleteAction")}</span></button>
+              <button className="ghost" title={t("edit.shortcutRevert")} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="undo" /><span>{t("edit.undoAction")}</span></button>
+            </div>
+            <div className="result-commit-actions" role="group" aria-label={t("edit.pendingActions")}>
+              <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave")} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /><span>{t("edit.saveChanges")}</span></button>
+              <button className="ghost" title={t("edit.shortcutDiscard")} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><EditIcon name="cancel" /><span>{t("edit.discard")}</span></button>
+            </div>
+            <span className={`small result-edit-count${hasPendingEdits ? " has-pending" : " muted"}`} role="status">
+              {hasPendingEdits ? t("edit.counts", { inserted: editing.inserts.length, deleted: editing.deleted.length, updated: updatedRows }) : t("edit.noPending")}
+            </span>
           </>}
           {paging && <>
             <div className="spacer" />
@@ -1706,9 +1762,6 @@ export function ResultGrid({
               </button>
             </div>
           </>}
-          {editing &&
-          <span className="muted small result-edit-count" role="status">{t("edit.counts", { inserted: editing.inserts.length, deleted: editing.deleted.length, updated: new Set(Object.keys(editing.cells).map((key) => key.split(":")[0]).filter((row) => !editing.deleted.includes(Number(row)))).size })}</span>
-          }
         </div>
         {editing && inserting && <InsertRowDialog columns={result.columns} initial={inserting.values} onAdd={(values) => { if (inserting.index === undefined) editing.onInsert(values); else editing.onUpdateInsert(inserting.index, values); setInserting(null); }} onCancel={() => setInserting(null)} />}
       </div>
@@ -2089,13 +2142,14 @@ function CustomFilterDialog(props: {
   const apply = () => props.onApply(needsValue ? filter : { ...filter, value: "" });
   return (
     <div className="modal-backdrop">
-      <div className="modal custom-filter" role="dialog" aria-modal="true" aria-label={t("results.customFilterTitle")}>
+      <div className="modal custom-filter" role="dialog" aria-modal="true" aria-label={t("results.customFilterTitle")} onKeyDown={(e) => {
+        if (e.key === "Escape") { e.stopPropagation(); props.onCancel(); }
+      }}>
         <h2>{t("results.customFilterTitle")}</h2>
         <div
           className="custom-filter-row"
           onKeyDown={(e) => {
             if (e.key === "Enter") apply();
-            if (e.key === "Escape") props.onCancel();
           }}
         >
           <select

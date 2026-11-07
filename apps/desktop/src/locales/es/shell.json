@@ -46,6 +46,7 @@
     "selectRow": "Selecciona un proceso para ver sus detalles y su SQL.",
     "noSql": "No hay ninguna consulta en ejecución.",
     "ownHint": "Esta es la conexión del monitor.",
+    "ownLabel": "(esta sesión)",
     "copySql": "Copiar SQL",
     "openSql": "Abrir SQL",
     "otherDatabase": "Copia el SQL para abrirlo en una conexión a esta base de datos PostgreSQL.",

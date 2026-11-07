@@ -28,10 +28,12 @@ export function Dialogs() {
   return null;
 }
 
-function Modal({ title, children }: { title: string; children: React.ReactNode }) {
+function Modal({ title, children, onCancel }: { title: string; children: React.ReactNode; onCancel(): void }) {
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title} onKeyDown={(e) => {
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onCancel(); }
+      }}>
         <h2>{title}</h2>
         {children}
       </div>
@@ -49,20 +51,21 @@ function PasswordDialog() {
   if (!request) return null;
   const submit = () => request.resolve({ password: value, remember });
   return (
-    <Modal title={t("passwordFor", { connection: request.connectionName })}>
+    <Modal title={t("passwordFor", { connection: request.connectionName })} onCancel={() => request.resolve(null)}>
       {request.error && <p className="error">{request.error}</p>}
-      <input
-        ref={input}
-        type="password"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") submit();
-          if (e.key === "Escape") request.resolve(null);
-        }}
-        autoComplete="off"
-        aria-label={t("password")}
-      />
+      <label className="modal-field">
+        <span>{t("password")}</span>
+        <input
+          ref={input}
+          type="password"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+          }}
+          autoComplete="off"
+        />
+      </label>
       {request.canRemember && (
         <label className="check">
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
@@ -84,7 +87,7 @@ function TrustDialog() {
   const request = useDialogs((s) => s.trust);
   if (!request) return null;
   return (
-    <Modal title={t("trustRepository")}>
+    <Modal title={t("trustRepository")} onCancel={() => request.resolve(false)}>
       <p className="mono small">{request.workspace ?? t("thisRepository")}</p>
       <p>
         {t("trustExplanation")}
@@ -114,7 +117,7 @@ function VariablesDialog() {
     if (complete) request.resolve(Object.fromEntries(request.names.map((name) => [name, (values[name] ?? "").trim()])));
   };
   return (
-    <Modal title={t("variables.title")}>
+    <Modal title={t("variables.title")} onCancel={() => request.resolve(null)}>
       <p>{t("variables.explanation")}</p>
       <form
         className="variables-form"
@@ -164,7 +167,7 @@ function ChangeDialog() {
         ? t("change.knownHosts")
         : t("change.connection", { name });
   return (
-    <Modal title={request.isNew ? t("change.newTitle") : t("change.title")}>
+    <Modal title={request.isNew ? t("change.newTitle") : t("change.title")} onCancel={() => request.resolve(false)}>
       <p>{request.isNew ? t("change.newExplanation", { what }) : t("change.explanation", { what })}</p>
       <div className="change-table-wrap">
         <table className="change-table">
@@ -204,7 +207,7 @@ function TextDialog() {
   if (!request) return null;
   const submit = () => value.trim() && request.resolve(value.trim());
   return (
-    <Modal title={request.title}>
+    <Modal title={request.title} onCancel={() => request.resolve(null)}>
       <label className="field">
         <span>{request.label}</span>
         <input
@@ -214,7 +217,6 @@ function TextDialog() {
           onFocus={(e) => e.currentTarget.select()}
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
-            if (e.key === "Escape") request.resolve(null);
           }}
           maxLength={200}
         />
@@ -238,13 +240,12 @@ function ParamsDialog() {
   if (!request) return null;
   const submit = () => request.resolve(values);
   return (
-    <Modal title={t("params.title")}>
+    <Modal title={t("params.title")} onCancel={() => request.resolve(null)}>
       <p className="muted small">{t("params.explanation")}</p>
       <div
         className="params-list"
         onKeyDown={(e) => {
           if (e.key === "Enter") submit();
-          if (e.key === "Escape") request.resolve(null);
         }}
       >
         {request.names.map((name, i) => (
@@ -286,7 +287,7 @@ function RiskDialog() {
   const onlyExecution = request.statements.every((s) => s.risk === "execution");
   const hidden = request.statements.length - SHOWN_STATEMENTS;
   return (
-    <Modal title={t("risk.title")}>
+    <Modal title={t("risk.title")} onCancel={() => request.resolve(false)}>
       <p>{t(onlyExecution ? "risk.executionExplanation" : "risk.explanation", { connection: request.connection })}</p>
       <ul className="risk-list">
         {request.statements.slice(0, SHOWN_STATEMENTS).map((s, i) => (
@@ -297,7 +298,7 @@ function RiskDialog() {
         ))}
         {hidden > 0 && <li className="muted small">{t("risk.more", { count: hidden })}</li>}
       </ul>
-      <div className="modal-actions" onKeyDown={(e) => e.key === "Escape" && request.resolve(false)}>
+      <div className="modal-actions">
         <button ref={cancel} onClick={() => request.resolve(false)}>
           {t("risk.cancel")}
         </button>
@@ -318,13 +319,13 @@ function OpenTransactionsDialog() {
   useEffect(() => cancel.current?.focus(), []);
   if (!request) return null;
   return (
-    <Modal title={t(`openTransactions.title.${request.action}`)}>
+    <Modal title={t(`openTransactions.title.${request.action}`)} onCancel={() => request.resolve(false)}>
       <p>{t("openTransactions.explanation", { count: request.tabs.length })}</p>
       <ul className="risk-list">
         {request.tabs.map((tab) => <li key={tab}><strong>{tab}</strong></li>)}
       </ul>
       <p className="muted small">{t("openTransactions.hint")}</p>
-      <div className="modal-actions" onKeyDown={(e) => e.key === "Escape" && request.resolve(false)}>
+      <div className="modal-actions">
         <button ref={cancel} onClick={() => request.resolve(false)}>
           {t("openTransactions.cancel")}
         </button>
@@ -349,7 +350,7 @@ function InteractionDialog() {
   const r = item.request;
   if (r.kind === "unknownHost") {
     return (
-      <Modal title={t("unknownSshServer")}>
+      <Modal title={t("unknownSshServer")} onCancel={() => answer(false)}>
         <p>
           <Trans t={t} i18nKey="unknownHostPrompt" values={{ host: r.host, port: r.port, hop: r.hop }} components={{ strong: <strong /> }} />
         </p>
@@ -387,7 +388,7 @@ function InteractionDialog() {
       break;
   }
   return (
-    <Modal title={title}>
+    <Modal title={title} onCancel={() => answer(false)}>
       <p className="mono small">{prompt}</p>
       <input
         autoFocus
@@ -396,7 +397,6 @@ function InteractionDialog() {
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") answer(true);
-          if (e.key === "Escape") answer(false);
         }}
         autoComplete="off"
         aria-label={prompt}

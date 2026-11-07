@@ -152,7 +152,12 @@ function TypeEditor({ editing, onCancel, onSaved }: { editing: Editing; onCancel
           e.preventDefault();
           if (!saving) void save();
         }}
-        onKeyDown={(e) => e.key === "Escape" && onCancel()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            if (!saving) onCancel();
+          }
+        }}
       >
         <h3>{editing.isNew ? t("types.newTitle") : t("types.editTitle", { name: base?.name ?? id })}</h3>
         {!editing.isNew && (base?.builtIn || base?.team) && <p className="muted small">{t("types.overrideHint")}</p>}
