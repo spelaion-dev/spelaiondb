@@ -515,6 +515,7 @@ fn creates_new_connection_files() {
     let file = ConnectionFile {
         schema_version: 1,
         name: Some("Analytics".into()),
+        description: None,
         engine: Engine::Sqlite,
         env: None,
         host: None,
@@ -614,6 +615,7 @@ fn postgres_draft() -> ConnectionDraft {
         source: Source::Workspace,
         folder: "Prod/EU".into(),
         name: "Orders (prod)".into(),
+        description: String::new(),
         engine: Engine::Postgres,
         env: "prod".into(),
         host: " db.internal ".into(),
@@ -939,6 +941,111 @@ fn editing_keeps_comments_and_settings_the_form_does_not_show() {
 }
 
 #[test]
+fn descriptions_are_saved_edited_and_validated() {
+    let fx = Fixture::new("draft-description");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+
+    // Trimmed, with `\n` line breaks, and written readable: multi-line in the file.
+    let draft = ConnectionDraft {
+        description: "  Orders of the EU shop.\r\nAsk #data before heavy queries.\n ".into(),
+        ..postgres_draft()
+    };
+    let file = draft.to_file(&config).unwrap();
+    assert_eq!(
+        file.description.as_deref(),
+        Some("Orders of the EU shop.\nAsk #data before heavy queries.")
+    );
+    let id = add_connection(&config, &draft, None, &backend).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.connection(&id).unwrap();
+    let content = std::fs::read_to_string(&entry.file_path).unwrap();
+    assert!(
+        content.contains("Orders of the EU shop.\nAsk #data before heavy queries."),
+        "{content}"
+    );
+    assert_eq!(
+        ConnectionDraft::from_entry(entry).description,
+        "Orders of the EU shop.\nAsk #data before heavy queries."
+    );
+    // Blank is none: the key is not written.
+    let blank = ConnectionDraft {
+        description: " \n ".into(),
+        ..postgres_draft()
+    };
+    assert_eq!(blank.to_file(&config).unwrap().description, None);
+
+    // Too long, or with characters that hide text, is refused.
+    let error = |description: String| {
+        ConnectionDraft {
+            description,
+            ..postgres_draft()
+        }
+        .to_file(&config)
+        .unwrap_err()
+        .to_string()
+    };
+    let longest = "x".repeat(ConnectionFile::MAX_DESCRIPTION);
+    assert!(
+        ConnectionDraft {
+            description: longest.clone(),
+            ..postgres_draft()
+        }
+        .to_file(&config)
+        .is_ok()
+    );
+    assert!(error(format!("{longest}x")).contains("at most 2000"));
+    assert!(error("hidden \u{1b}[8m text".into()).contains("only hold text"));
+    assert!(error("reversed \u{202e}txet".into()).contains("only hold text"));
+    assert!(error("zero\u{200b}width".into()).contains("only hold text"));
+    // Hand-written files are held to the same rules.
+    fx.write(
+        "repo/.spelaion/connections/bad.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"a.db\"\ndescription = \"a\\u0000b\"\n",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(
+        config
+            .problems
+            .iter()
+            .any(|p| p.to_string().contains("only hold text")),
+        "{:?}",
+        config.problems
+    );
+
+    // Editing adds it right after the name, changes it in place and removes it.
+    let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
+    let id = ws("orders");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let described = ConnectionDraft {
+        description: "Line one\nline two".into(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &described, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.starts_with("# Orders database: owned by the data team\nschema_version = 1\nname = \"Orders\"\ndescription = "),
+        "{content}"
+    );
+    assert!(
+        content.contains("host = \"db.internal\" # primary"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert_eq!(
+        config.connection(&id).unwrap().file.description.as_deref(),
+        Some("Line one\nline two")
+    );
+    let cleared = ConnectionDraft {
+        description: String::new(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &cleared, None, &backend).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), HAND_WRITTEN);
+}
+
+#[test]
 fn the_form_lets_agents_write_or_only_read() {
     let fx = Fixture::new("draft-mcp-writes");
     let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
@@ -1192,6 +1299,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         source: Source::Workspace,
         folder: String::new(),
         name: "Orders in cluster".into(),
+        description: String::new(),
         engine: Engine::Postgres,
         env: String::new(),
         host: String::new(),

@@ -23,7 +23,8 @@
     "idle": "Idle sessions",
     "safety": "Safety",
     "general": "General",
-    "kubernetes": "Kubernetes port-forward"
+    "kubernetes": "Kubernetes port-forward",
+    "about": "About this connection"
   },
   "fields": {
     "name": "Name",
@@ -90,7 +91,10 @@
     "typeConfirmsExecution": "Asks before every run",
     "typeConfirmsChanges": "Asks before changing data",
     "typeClosesIdle": "Closes after {{minutes}} min idle",
-    "typeNoSafeguards": "No safeguards: only its badge"
+    "typeNoSafeguards": "No safeguards: only its badge",
+    "description": "Description",
+    "descriptionPlaceholder": "What is this database for? Who owns it?",
+    "descriptionHint": "Shown as the connection's tooltip and, if it is exposed, to AI agents, so they know what the database is for. Never put passwords here."
   },
   "tls": {
     "disable": "Disabled",
@@ -301,7 +305,8 @@
     "tls.cert": "client certificate",
     "env": "connection type",
     "read_only": "read-only",
-    "mcp": "agents' access"
+    "mcp": "agents' access",
+    "description": "description"
   },
   "copies": {
     "duplicate": "Duplicate",

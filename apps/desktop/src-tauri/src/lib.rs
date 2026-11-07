@@ -409,6 +409,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
         items.push(ConnectionItem {
             id: c.id.to_string(),
             name: c.name(),
+            description: c.file.description.clone(),
             engine: c.file.engine.as_str().into(),
             env: c.file.env.clone(),
             kind: c

@@ -392,22 +392,7 @@ impl SpelaionMcp {
             return text(out);
         }
         for c in exposed {
-            let env = c
-                .file
-                .env
-                .as_deref()
-                .map(|e| format!(", environment {e}"))
-                .unwrap_or_default();
-            let access = match c.file.mcp.writes {
-                WritePolicy::Allow => "Read and write: execute_write is allowed.",
-                WritePolicy::Deny | WritePolicy::Confirm => "Read-only.",
-            };
-            out.push_str(&format!(
-                "- {} — {} ({}{env}). {access}\n",
-                c.id,
-                c.name(),
-                c.file.engine.as_str()
-            ));
+            out.push_str(&format::connection_entry(c));
         }
         text(out)
     }

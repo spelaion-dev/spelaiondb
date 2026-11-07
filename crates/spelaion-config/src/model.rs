@@ -19,6 +19,10 @@ pub struct ConnectionFile {
     /// Display name. If missing, the identifier (the file path) is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// What the database is for, in the user's words: shown as the connection's tooltip and
+    /// to agents in `list_connections`. It may span lines; at most 2000 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub engine: Engine,
     /// Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type
     /// in `connection-types.toml`; its badge and safeguards apply. Any other text is a plain
@@ -75,6 +79,8 @@ impl ConnectionFile {
     pub const SUGGESTED_KEEPALIVE: u32 = 300;
     /// Longest keep-alive interval accepted: a day.
     pub const MAX_KEEPALIVE: u32 = 86_400;
+    /// Longest description accepted, in characters: a few paragraphs.
+    pub const MAX_DESCRIPTION: usize = 2_000;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

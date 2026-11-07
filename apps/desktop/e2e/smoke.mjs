@@ -2131,12 +2131,25 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await wizard.getByLabel("File", { exact: true }).fill(join(demo, "data", "shop.db"));
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+  // A description over two lines: the tooltip of the connection, written to its file.
+  const shopCopyDescription = "Copy of the demo shop.\nFor trying things out.";
+  await wizard.getByLabel("Description", { exact: true }).fill(`  ${shopCopyDescription}\n`);
   await wizard.getByRole("button", { name: "Test connection" }).click();
   await wizard.locator(".test-result", { hasText: /Connected · 3\./ }).waitFor();
   await wizard.getByRole("button", { name: "Save", exact: true }).click();
   await wizard.waitFor({ state: "detached" });
   await page.locator(".connection-row", { hasText: "Shop copy" }).waitFor();
+  assert.equal(
+    await page.locator(".connection-row", { hasText: "Shop copy" }).locator(".label").getAttribute("title"),
+    `${shopCopyDescription}\n\n~/shop-copy`,
+  );
+  assert.match(readFileSync(join(userDir, "connections", "shop-copy.toml"), "utf8"), /Copy of the demo shop\.\nFor trying things out\./);
   panel = await newQuery("Shop copy", "select count(*) as n from product;");
+  assert.equal(
+    await panel.locator("select").first().locator("option", { hasText: "Shop copy" }).getAttribute("title"),
+    `${shopCopyDescription}\n\n~/shop-copy`,
+  );
+  assert.equal(await panel.locator("select").first().getAttribute("title"), `${shopCopyDescription}\n\n~/shop-copy`);
   await run(panel);
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
