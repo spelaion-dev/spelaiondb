@@ -83,6 +83,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const lastRequest = useRef<RunRequest | null>(null);
   const executedRequest = useRef<RunRequest | null>(null);
   const startingRun = useRef(false);
+  /** The text of each statement of the running script, by index: what an export runs again. */
+  const statementTexts = useRef<Record<number, string>>({});
   /** Values given to `:name` placeholders in this tab, offered again next time. */
   const paramValues = useRef<Record<string, string>>({});
   const editor = useRef<SqlEditorHandle>(null);
@@ -636,14 +638,18 @@ export function EditorTab({ tab }: { tab: Tab }) {
   function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null, failures: Map<number, string>) {
     switch (event.kind) {
       case "statementStarted":
+        if (event.index === 0) statementTexts.current = {};
+        statementTexts.current[event.index] = request.text.slice(byteToIndex(request.text, event.start), byteToIndex(request.text, event.end));
         break;
-      case "resultStarted":
+      case "resultStarted": {
+        const sql = page ? page.sql : statementTexts.current[event.index];
         updateRun(tab.id, (r) => ({
           ...r,
-          results: [...r.results, { id: event.result, statement: event.index, columns: event.columns, rows: 0, complete: false, ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) }],
+          results: [...r.results, { id: event.result, statement: event.index, columns: event.columns, rows: 0, complete: false, ...(sql ? { sql } : {}), ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) }],
           activeResult: r.activeResult ?? event.result,
         }));
         break;
+      }
       case "rows":
         updateRun(tab.id, (r) => ({
           ...r,
@@ -859,6 +865,8 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           <Results
             run={tab.run}
             session={tab.id}
+            connectionId={tab.connectionId}
+            table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
             serverSort={tab.table ? { sort: tab.table.sort, onSort: (sort) => void sortTable(sort) } : undefined}
             tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0 }) } : undefined}
             editing={editing}
@@ -905,6 +913,8 @@ function errorRun(text: string, translation?: Translation): RunState {
 function Results({
   run,
   session,
+  connectionId,
+  table,
   onSelect,
   onSorted,
   onFiltered,
@@ -920,6 +930,8 @@ function Results({
 }: {
   run: RunState | null;
   session: string;
+  connectionId: string | null;
+  table: { schema: string; name: string; filter: string; orderBy: string } | null;
   onSelect(id: number | null): void;
   onSorted(result: number, sort: SortState | undefined): void;
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
@@ -938,6 +950,8 @@ function Results({
   const [filteringResult, setFilteringResult] = useState<number | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerWidth, setViewerWidth] = useState(420);
+  /** Columns hidden in each result's grid (positions only), for the export dialog. */
+  const [hiddenColumns, setHiddenColumns] = useState<Record<number, number[]>>({});
   if (!run) return <div className="empty">{t("results.empty")}</div>;
   const active = run.results.find((r) => r.id === run.activeResult) ?? null;
   const showMessages = active === null;
@@ -969,7 +983,17 @@ function Results({
             locked={!!active.paging?.loading || (editing !== undefined && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0))}
           />
         )}
-        {active && <ExportButton key={`export-${active.id}`} result={active} session={session} />}
+        {active && (
+          <ExportButton
+            key={`export-${active.id}`}
+            result={active}
+            session={session}
+            connectionId={connectionId}
+            sql={table ? null : (active.sql ?? null)}
+            table={table}
+            hidden={hiddenColumns[active.id] ?? []}
+          />
+        )}
       </div>
       <div className="result-body">
         {active ? (
@@ -989,6 +1013,7 @@ function Results({
             onLoadMore={() => onLoadMore(active.id)}
             onCountQuery={() => onCountQuery(active.id)}
             onQueryPageSize={onQueryPageSize}
+            onHiddenColumns={(hidden) => setHiddenColumns((current) => ({ ...current, [active.id]: hidden }))}
           />
         ) : (
           <div className="messages">

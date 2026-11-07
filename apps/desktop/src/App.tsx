@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ExportDialog } from "./components/ExportDialog";
 import { ActivityBar } from "./components/ActivityBar";
 import { McpPage } from "./components/McpPage";
 import { AddConnection } from "./components/AddConnection";
@@ -302,6 +303,7 @@ export default function App() {
       {openObject && (
         <OpenObjectDialog initialConnection={openObject.connectionId} onClose={() => useApp.getState().setOpenObject(null)} />
       )}
+      <ExportDialog />
       <Dialogs />
     </div>
   );

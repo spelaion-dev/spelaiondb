@@ -177,10 +177,34 @@ export const commands = {
 	 */
 	tableFilterCondition: (session: string, result: number, column: number, op: FilterOpItem, row: number | null, value: string, filter: string) => typedError<string, string>(__TAURI_INVOKE("table_filter_condition", { session, result, column, op, row, value, filter })),
 	/**
-	 *  Writes a whole result to a file the user chose (in a blocking task: it may be millions of
-	 *  rows). Returns how many rows were written.
+	 *  Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
+	 *  rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
+	 *  are the shown columns, in order.
 	 */
-	exportResult: (result: number, session: string, path: string, format: TextFormat) => typedError<number | null, string>(__TAURI_INVOKE("export_result", { result, session, path, format })),
+	exportResult: (result: number, session: string, path: string, options: ExportFileOptions_Deserialize, range: CellRange | null) => typedError<ExportSummaryItem, string>(__TAURI_INVOKE("export_result", { result, session, path, options, range })),
+	/**
+	 *  Before offering to run a query (or a table data tab) again for an export: whether it may
+	 *  be (only a single read), and whether the tab has an open transaction whose uncommitted
+	 *  changes the export will not see (ADR-034).
+	 */
+	exportRerunCheck: (session: string, sql: string | null) => typedError<RerunCheckItem_Serialize, string>(__TAURI_INVOKE("export_rerun_check", { session, sql })),
+	/**
+	 *  Runs a query again in a new session and streams every row to `path` (ADR-034). Only a single
+	 *  read is run; a connection type that confirms execution needs `confirmed`.
+	 */
+	exportQuery: (source: string, exportId: number, sql: string, path: string, options: ExportFileOptions_Deserialize, confirmed: boolean, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportOutcome, string>(__TAURI_INVOKE("export_query", { source, exportId, sql, path, options, confirmed, onProgress })),
+	/**
+	 *  Streams every row of a table data tab's view (its filter and order, not just the loaded
+	 *  page) to `path`, through the core's own SELECT.
+	 */
+	exportTableData: (source: string, exportId: number, view: TableExportItem, path: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportOutcome, string>(__TAURI_INVOKE("export_table_data", { source, exportId, view, path, options, onProgress })),
+	/**
+	 *  Streams explorer tables and views, one file each, into `folder`, never over an existing
+	 *  file. Stops at a cancel or an error; the files written before stay.
+	 */
+	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, extension: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportTablesOutcome_Serialize, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, extension, options, onProgress })),
+	/**  Stops a running streaming export: its statement and its writer; no file is left. */
+	cancelExport: (exportId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_export", { exportId })),
 	/**
 	 *  The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
 	 *  what fits, and the row may not be in its cache.
@@ -1115,6 +1139,107 @@ export type ExplorerPreferencesItem = {
 	linkWithEditor: boolean,
 };
 
+/**  How an export writes its file (ADR-034). The core checks the delimiter. */
+export type ExportFileOptions = ExportFileOptions_Serialize | ExportFileOptions_Deserialize;
+
+/**  How an export writes its file (ADR-034). The core checks the delimiter. */
+export type ExportFileOptions_Deserialize = {
+	format: TextFormat,
+	/**  Column names as the first line (CSV and TSV). */
+	header: boolean,
+	/**  One character (CSV only). */
+	delimiter: string,
+	nullText: string,
+	escapeFormulas: boolean,
+	encoding: TextEncodingItem,
+	/**  Columns of the result by position, in order (the shown ones); `None`: all. */
+	columns?: number[] | null,
+};
+
+/**  How an export writes its file (ADR-034). The core checks the delimiter. */
+export type ExportFileOptions_Serialize = {
+	format: TextFormat,
+	/**  Column names as the first line (CSV and TSV). */
+	header: boolean,
+	/**  One character (CSV only). */
+	delimiter: string,
+	nullText: string,
+	escapeFormulas: boolean,
+	encoding: TextEncodingItem,
+	/**  Columns of the result by position, in order (the shown ones); `None`: all. */
+	columns: number[] | null,
+};
+
+/**  How a streaming export ended. */
+export type ExportOutcome = { kind: "done"; summary: ExportSummaryItem } | { kind: "cancelled" } | 
+/**  The connection's type confirms execution: ask, then export again with `confirmed`. */
+{ kind: "needsConfirmation" } | 
+/**  Not a read: only the loaded rows can be exported. */
+{ kind: "notARead"; message: string } | { kind: "failed"; message: string };
+
+/**
+ *  Rows and bytes written so far by a streaming export; `table` is the position of the table
+ *  being written when several are exported.
+ */
+export type ExportProgressItem = ExportProgressItem_Serialize | ExportProgressItem_Deserialize;
+
+/**
+ *  Rows and bytes written so far by a streaming export; `table` is the position of the table
+ *  being written when several are exported.
+ */
+export type ExportProgressItem_Deserialize = {
+	table?: number | null,
+	rows: number | null,
+	bytes: number | null,
+};
+
+/**
+ *  Rows and bytes written so far by a streaming export; `table` is the position of the table
+ *  being written when several are exported.
+ */
+export type ExportProgressItem_Serialize = {
+	table: number | null,
+	rows: number | null,
+	bytes: number | null,
+};
+
+/**  What writing an export file did. */
+export type ExportSummaryItem = {
+	rows: number | null,
+	bytes: number | null,
+	/**  Characters the encoding lacks, written as `?`. */
+	replaced: number | null,
+};
+
+/**  How exporting several tables ended: the files written, and where it stopped if it did. */
+export type ExportTablesOutcome = ExportTablesOutcome_Serialize | ExportTablesOutcome_Deserialize;
+
+/**  How exporting several tables ended: the files written, and where it stopped if it did. */
+export type ExportTablesOutcome_Deserialize = {
+	files: ExportedFileItem[],
+	cancelled: boolean,
+	/**  Position of the table that failed, with why. */
+	failedTable?: number | null,
+	error?: string | null,
+};
+
+/**  How exporting several tables ended: the files written, and where it stopped if it did. */
+export type ExportTablesOutcome_Serialize = {
+	files: ExportedFileItem[],
+	cancelled: boolean,
+	/**  Position of the table that failed, with why. */
+	failedTable: number | null,
+	error: string | null,
+};
+
+/**  A file written by `export_tables`. */
+export type ExportedFileItem = {
+	schema: string,
+	name: string,
+	path: string,
+	summary: ExportSummaryItem,
+};
+
 export type FailureKindItem = "config" | "passwordRequired" | "cancelled" | "proxyAuth" | "sshAuth" | "hostUnreachable" | "hostKeyChanged" | "hostKeyRejected" | "dbAuth" | "dbNotFound" | "tls" | "timeout" | "kubernetes" | "other";
 
 /**
@@ -1750,6 +1875,27 @@ export type QuitBlocked = {
 	sessions: string[],
 };
 
+/**  A table or view chosen in the explorer. */
+export type RelationRefItem = {
+	schema: string,
+	name: string,
+};
+
+/**  What the export dialog says before running a query again (see `spelaion_core::RerunCheck`). */
+export type RerunCheckItem = RerunCheckItem_Serialize | RerunCheckItem_Deserialize;
+
+/**  What the export dialog says before running a query again (see `spelaion_core::RerunCheck`). */
+export type RerunCheckItem_Deserialize = {
+	refused?: string | null,
+	openTransaction: boolean,
+};
+
+/**  What the export dialog says before running a query again (see `spelaion_core::RerunCheck`). */
+export type RerunCheckItem_Serialize = {
+	refused: string | null,
+	openTransaction: boolean,
+};
+
 /**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
 export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "dataChange" | "execution";
 
@@ -2025,6 +2171,14 @@ export type TableDetails_Serialize = {
 	indexes: IndexDetails[],
 };
 
+/**  A table data tab's view to export: every row its filter keeps, in its order. */
+export type TableExportItem = {
+	schema: string,
+	name: string,
+	filter: string,
+	orderBy: string,
+};
+
 /**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */
 export type TablePageItem = {
 	schema: string,
@@ -2105,6 +2259,9 @@ export type TestStepKindItem_Serialize = { kind: "resolve" } | { kind: "proxy"; 
 { kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context: string | null; namespace: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
 
 export type TestStepStatusItem = "pending" | "running" | "ok" | "failed" | "skipped" | "stopped";
+
+/**  Character encoding of an exported file (see `spelaion_core::TextEncoding`). */
+export type TextEncodingItem = "utf8" | "utf8Bom" | "utf16Le" | "windows1252";
 
 /**  Text format to copy or export rows in. */
 export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList" | "html";

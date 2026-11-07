@@ -516,32 +516,72 @@ try {
   const tuples = json.map((row) => `('${row.country.replaceAll("'", "''")}')`).join(",\n  ");
   assert.equal(await copied(6), `INSERT INTO table_name (country) VALUES ${tuples};\n`);
 
-  step("export: the whole result to CSV and JSON files written by the core");
+  step("export: the loaded result, every row run again with CSV options, and a selection");
   // The native save dialog cannot be driven: src/dialogs.ts takes this path instead.
   const exportPath = (name) => join(userDir, name);
   const answerSaveDialog = (path) => page.evaluate((target) => (window.__spelaionSavePath = target), path);
-  await answerSaveDialog(exportPath("result.csv"));
-  await panel.getByRole("button", { name: "Export ▾" }).click();
-  await page.getByRole("menuitem", { name: "CSV (Excel)" }).click();
-  await panel.getByRole("status").filter({ hasText: "Exported 6 rows" }).waitFor();
+  /** Opens the export dialog from `open`, picks the format, lets `setup` change the rest,
+   *  exports to `path` and returns the dialog's last message. */
+  const exportWith = async (open, title, format, path, setup) => {
+    await answerSaveDialog(path);
+    await open();
+    const dialog = page.getByRole("dialog", { name: title });
+    await dialog.waitFor();
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption(format);
+    if (setup) await setup(dialog);
+    await dialog.getByRole("button", { name: "Export…" }).click();
+    const message = dialog.locator(".export-result");
+    await message.waitFor();
+    const text = await message.innerText();
+    await shot(`03c-export-${format}`);
+    await dialog.getByRole("button", { name: "Close" }).last().click();
+    await dialog.waitFor({ state: "detached" });
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    return text;
+  };
+  const openResultExport = () => panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
+  assert.match(await exportWith(openResultExport, "Export result", "csv", exportPath("result.csv")), /^Exported 6 rows to /);
   const csv = readFileSync(exportPath("result.csv"), "utf8");
   assert.ok(csv.startsWith("\ufeffcountry,orders,total\r\n"), csv.slice(0, 40));
   assert.equal(csv.trimEnd().split("\r\n").length, 7);
-  await answerSaveDialog(exportPath("result.json"));
-  await panel.getByRole("button", { name: "Export ▾" }).click();
-  await shot("03c-export-menu");
-  await page.getByRole("menuitem", { name: "JSON" }).click();
-  await panel.getByRole("status").filter({ hasText: "result.json" }).waitFor();
+  await exportWith(openResultExport, "Export result", "json", exportPath("result.json"));
   const exported = JSON.parse(readFileSync(exportPath("result.json"), "utf8"));
   assert.equal(exported.length, 6);
   assert.equal(typeof exported[0].total, "number");
-  await answerSaveDialog(exportPath("result.md"));
-  await panel.getByRole("button", { name: "Export ▾" }).click();
-  await page.getByRole("menuitem", { name: "Markdown table" }).click();
-  await panel.getByRole("status").filter({ hasText: "result.md" }).waitFor();
+  await exportWith(openResultExport, "Export result", "markdown", exportPath("result.md"));
   const md = readFileSync(exportPath("result.md"), "utf8").trimEnd().split("\n");
   assert.equal(md.length, 8);
   assert.equal(md[1], "| --- | ---: | ---: |");
+  // Every row: the query runs again in a new session and streams to the file, with a
+  // semicolon, plain UTF-8 and no header.
+  const streamed = await exportWith(openResultExport, "Export result", "csv", exportPath("streamed.csv"), async (dialog) => {
+    await dialog.getByRole("radio", { name: "Every row: run the query again" }).check();
+    await dialog.getByText("It runs again in a new session").waitFor();
+    await dialog.getByRole("combobox", { name: /^Delimiter/ }).selectOption(";");
+    await dialog.getByRole("checkbox", { name: "Column names as the first row" }).uncheck();
+    await dialog.getByRole("combobox", { name: /^Encoding/ }).selectOption("utf8");
+  });
+  assert.match(streamed, /^Exported 6 rows to /);
+  const streamedLines = readFileSync(exportPath("streamed.csv"), "utf8").trimEnd().split("\r\n");
+  assert.equal(streamedLines.length, 6);
+  assert.deepEqual(streamedLines.map((line) => line.split(";").length), [3, 3, 3, 3, 3, 3]);
+  assert.ok(!streamedLines[0].startsWith("\ufeff"));
+  // A selection: its rows and its columns, from the grid's menu.
+  {
+    const grid = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.click(grid.x + 80, grid.y + 36 + 13);
+    await page.keyboard.press("Shift+ArrowDown");
+    await page.keyboard.press("Shift+ArrowRight");
+    const openSelection = async () => {
+      await page.mouse.click(grid.x + 80, grid.y + 36 + 13, { button: "right" });
+      await panel.getByRole("menuitem", { name: "Export selection…" }).click();
+    };
+    const selected = await exportWith(openSelection, "Export selection", "tsv", exportPath("selection.tsv"));
+    assert.match(selected, /^Exported 2 rows to /);
+    const tsv = readFileSync(exportPath("selection.tsv"), "utf8").replace(/^\ufeff/, "").trimEnd().split("\n");
+    assert.equal(tsv[0], "country\torders");
+    assert.equal(tsv.length, 3);
+  }
 
   step("cell viewer: pretty JSON, hex dump of bytes, full text");
   panel = await newQuery(
@@ -1587,10 +1627,47 @@ try {
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy 2 names" }).click();
   assert.equal(await copied(copiedBeforeNames + 1), "orders\ncustomer");
+  // Export streams the chosen tables without opening them: one file each into a folder,
+  // never over a file that is there.
+  {
+    const folder = join(userDir, "tables");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "orders.csv"), "keep");
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
+    await ordersNode.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Export 2 tables…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export 2 tables" });
+    await dialog.getByRole("button", { name: "Export…" }).click();
+    await dialog.locator(".export-result", { hasText: "2 files" }).waitFor();
+    await shot("05e-export-tables");
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+    assert.equal(readFileSync(join(folder, "orders.csv"), "utf8"), "keep");
+    const orders = readFileSync(join(folder, "orders (2).csv"), "utf8").trimEnd().split("\r\n");
+    assert.equal(orders.length, 50_001);
+    assert.ok(orders[0].startsWith("\ufeffid,"), orders[0]);
+    assert.ok(readFileSync(join(folder, "customer.csv"), "utf8").startsWith("\ufeffid,"));
+  }
   // A plain click forgets the choice without expanding the table.
   await ordersNode.click();
   assert.equal(await customerRow.getAttribute("aria-selected"), "false");
   assert.equal(await ordersNode.getAttribute("aria-expanded"), "false");
+  // One table from the explorer: to a file, with a progress line and every row.
+  {
+    const path = join(userDir, "orders.json");
+    await page.evaluate((target) => (window.__spelaionSavePath = target), path);
+    await customerRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Export…", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Export customer" });
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("json");
+    await dialog.getByRole("button", { name: "Export…" }).click();
+    await dialog.locator(".export-result", { hasText: "Exported" }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    const customers = JSON.parse(readFileSync(path, "utf8"));
+    assert.ok(customers.length > 0);
+    assert.ok("id" in customers[0]);
+  }
   // Refresh: a table created from a query tab appears with F5 on its schema, and "Refresh all
   // schemas" sees it go; open folders stay open.
   const mainSchema = page.getByRole("button", { name: "Expand or collapse schema main" });
@@ -1855,6 +1932,27 @@ try {
   await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
   const range = panel.locator(".table-range");
   await range.filter({ hasText: "rows 1–500" }).waitFor();
+  // Export takes every row the WHERE keeps, in the ORDER BY, not only the page on screen.
+  await panel.getByRole("textbox", { name: "WHERE" }).fill("id > 49000");
+  await panel.getByRole("textbox", { name: "ORDER BY" }).fill("id desc");
+  await page.keyboard.press("Enter");
+  await range.filter({ hasText: "rows 1–500" }).waitFor();
+  {
+    const path = join(userDir, "orders-filtered.csv");
+    await page.evaluate((target) => (window.__spelaionSavePath = target), path);
+    await panel.locator(".export-button").getByRole("button", { name: "Export…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Export result" });
+    assert.ok(await dialog.getByRole("radio", { name: /^Every row the filter keeps/ }).isChecked());
+    await dialog.getByRole("button", { name: "Export…" }).click();
+    await dialog.locator(".export-result", { hasText: "Exported 1,000 rows" }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    const lines = readFileSync(path, "utf8").trimEnd().split("\r\n");
+    assert.equal(lines.length, 1_001);
+    assert.ok(lines[1].startsWith("50000,"), lines[1]);
+    assert.ok(lines[1_000].startsWith("49001,"), lines[1_000]);
+  }
+  await panel.getByRole("textbox", { name: "ORDER BY" }).fill("");
   await panel.getByRole("textbox", { name: "WHERE" }).fill("total > 1990");
   await page.keyboard.press("Enter");
   await range.filter({ hasText: "rows 1–264" }).waitFor();

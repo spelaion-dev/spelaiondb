@@ -18,6 +18,8 @@ export interface ResultMeta {
   /** Column conditions the core filtered the rows by (all must hold). */
   columnFilters?: ColumnFilterItem[];
   total?: number;
+  /** The statement that produced it, as it ran: what an export runs again (ADR-034). */
+  sql?: string;
   /** Pages fetched from one safe SELECT, appended to this result. */
   paging?: { sql: string; pageSize: number; hasMore: boolean; loading: boolean; total?: number };
 }
