@@ -216,3 +216,82 @@ pub async fn mcp_access(state: State<'_, AppState>) -> CmdResult<Vec<McpAccessIt
         })
         .collect())
 }
+
+/// The MCP activity the filter keeps, newest first (ADR-033); secrets masked by the core.
+#[tauri::command]
+#[specta::specta]
+pub async fn audit_events(
+    filter: AuditFilterItem,
+    offset: u32,
+    limit: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<AuditPageItem> {
+    let (records, total) = state
+        .history
+        .audit_events(filter.into(), limit.min(1000) as usize, offset as usize)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(AuditPageItem {
+        events: records.into_iter().map(AuditEventItem::from).collect(),
+        total,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn audit_tools(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    state.history.audit_tools().await.map_err(|e| e.to_string())
+}
+
+/// The latest `spelaiondb mcp` processes and their calls.
+#[tauri::command]
+#[specta::specta]
+pub async fn audit_sessions(state: State<'_, AppState>) -> CmdResult<Vec<AuditSessionItem>> {
+    state
+        .history
+        .audit_sessions(200)
+        .await
+        .map(|sessions| sessions.into_iter().map(AuditSessionItem::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+/// Writes the activity the filter keeps to a file the user chose; the core masks secrets and
+/// writes it. Returns how many events were written.
+#[tauri::command]
+#[specta::specta]
+pub async fn export_audit(
+    filter: AuditFilterItem,
+    format: AuditFormatItem,
+    path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let entries = state
+        .history
+        .audit_all(filter.into())
+        .await
+        .map_err(|e| e.to_string())?;
+    let format = match format {
+        AuditFormatItem::Csv => spelaion_core::audit::AuditFormat::Csv,
+        AuditFormatItem::Json => spelaion_core::audit::AuditFormat::Json,
+    };
+    let count = entries.len();
+    tokio::task::spawn_blocking(move || {
+        spelaion_core::audit::export_audit(&entries, format, std::path::Path::new(&path))
+            .map_err(|e| format!("could not write {path}: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
+/// Empties the MCP activity log, leaving a record that it was cleared (done by the core).
+#[tauri::command]
+#[specta::specta]
+pub async fn clear_audit(state: State<'_, AppState>) -> CmdResult<u32> {
+    state
+        .history
+        .clear_audit()
+        .await
+        .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+        .map_err(|e| e.to_string())
+}

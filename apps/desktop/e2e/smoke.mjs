@@ -2,7 +2,8 @@
 // with Playwright (CDP). It uses examples/demo and a temporary personal directory, so it does
 // not touch the user's configuration or keychain.
 //
-// Requirements: the app built (npx tauri build --no-bundle), examples/demo/make-shop-db.py
+// Requirements: the app built (npx tauri build --no-bundle) and the CLI (cargo build --release
+// -p spelaion-cli, for the MCP activity steps), examples/demo/make-shop-db.py
 // run and, for the PostgreSQL steps, testing/docker up.
 //   node e2e/smoke.mjs [screenshots-dir]
 
@@ -62,6 +63,48 @@ function startApp() {
 }
 
 let app = startApp();
+
+/** Runs `spelaiondb mcp` as an AI client would (stdio, JSON-RPC): `list_connections`, then each
+ *  call, as the client "smoke-agent". Needs `cargo build --release -p spelaion-cli`. */
+async function agentSession(calls) {
+  const cli = join(root, "target/release/spelaiondb" + (process.platform === "win32" ? ".exe" : ""));
+  if (!existsSync(cli)) throw new Error(`${cli} is missing: run cargo build --release -p spelaion-cli`);
+  const agent = spawn(cli, ["mcp", "--workspace", demo], {
+    env: { ...process.env, SPELAION_USER_DIR: userDir },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  let buffer = "";
+  const waiting = new Map();
+  agent.stdout.setEncoding("utf8");
+  agent.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    let newline;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const message = JSON.parse(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+      waiting.get(message.id)?.(message);
+    }
+  });
+  let next = 1;
+  const request = (method, params) =>
+    new Promise((done, fail) => {
+      const id = next++;
+      const timer = setTimeout(() => fail(new Error(`${method}: no answer`)), 30_000);
+      waiting.set(id, (message) => {
+        clearTimeout(timer);
+        if (message.error) fail(new Error(`${method}: ${JSON.stringify(message.error)}`));
+        else done(message.result);
+      });
+      agent.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+    });
+  await request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke-agent", version: "1.0" } });
+  agent.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+  for (const [name, args] of [["list_connections", {}], ...calls]) {
+    await request("tools/call", { name, arguments: args });
+  }
+  agent.stdin.end();
+  await once(agent, "exit");
+}
 
 async function stopApp() {
   if (app.exitCode !== null || app.signalCode !== null) return;
@@ -3775,6 +3818,69 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByRole("radio", { name: /TOON/ }).and(page.locator(":checked")).waitFor();
   await mcp.getByRole("switch", { name: "Every agent is read-only" }).uncheck();
   await shopAccess.getByText("The connection does not let agents write.").waitFor();
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await mcp.waitFor({ state: "detached" });
+
+  step("MCP server page, Activity: calls from a real spelaiondb mcp, filtered, exported and cleared");
+  await page.getByRole("button", { name: "MCP server", exact: true }).click();
+  await mcp.getByRole("tab", { name: "Activity" }).click();
+  await mcp.getByText("No MCP calls yet.", { exact: false }).waitFor();
+  // A real agent session over stdio, as an AI client runs it, on this run's folder.
+  await agentSession([
+    ["run_query", { connection: "shop", sql: "select count(*) as n from product" }],
+    ["execute_write", { connection: "shop", sql: "insert into product (name) values ('x')" }],
+    ["execute_write", { connection: "shop", sql: "alter user bob password 'hunter2'" }],
+  ]);
+  await mcp.getByRole("button", { name: "Refresh" }).click();
+  await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
+  const events = mcp.getByRole("table", { name: "Events" });
+  await events.getByRole("row").filter({ hasText: "select count(*) as n from product" }).getByText("OK").waitFor();
+  await events.getByRole("row").filter({ hasText: "insert into product" }).getByText("Refused").waitFor();
+  await events.getByText("alter user bob password '***'").waitFor();
+  assert.ok(!(await mcp.innerText()).includes("hunter2"), "a password never shows");
+  await shot("mcp-activity");
+  await mcp.getByLabel("Status").selectOption("refused");
+  await mcp.getByRole("status").filter({ hasText: "2 events" }).waitFor();
+  await mcp.getByLabel("Status").selectOption("");
+  await mcp.getByLabel("Tool").selectOption("run_query");
+  await mcp.getByRole("status").filter({ hasText: "1 event" }).waitFor();
+  await mcp.getByLabel("Tool").selectOption("");
+  await mcp.getByRole("searchbox", { name: "Search statements" }).fill("ALTER USER");
+  await mcp.getByRole("status").filter({ hasText: "1 event" }).waitFor();
+  await mcp.getByRole("searchbox", { name: "Search statements" }).fill("");
+  await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
+  // Export: the core writes it, secrets masked and no cell read as a formula.
+  const csvPath = join(userDir, "activity.csv");
+  await page.evaluate((path) => { window.__spelaionSavePath = path; }, csvPath);
+  await mcp.getByRole("button", { name: "Export CSV" }).click();
+  await mcp.getByText("4 events exported to", { exact: false }).waitFor();
+  const activityCsv = readFileSync(csvPath, "utf8");
+  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail\n"), activityCsv);
+  assert.ok(activityCsv.includes(",smoke-agent,shop,execute_write,alter user bob password '***',refused,"), activityCsv);
+  assert.ok(!activityCsv.includes("hunter2"), activityCsv);
+  const jsonPath = join(userDir, "activity.json");
+  await page.evaluate((path) => { window.__spelaionSavePath = path; }, jsonPath);
+  await mcp.getByRole("button", { name: "Export JSON" }).click();
+  await mcp.getByText(`4 events exported to ${jsonPath}`, { exact: false }).waitFor();
+  assert.equal(JSON.parse(readFileSync(jsonPath, "utf8")).length, 4);
+  await page.evaluate(() => { delete window.__spelaionSavePath; });
+  // Sessions: the agent's process, opening into its calls.
+  await mcp.getByRole("tab", { name: "Sessions" }).click();
+  const sessions = mcp.getByRole("table", { name: "Sessions" });
+  await sessions.getByRole("row").filter({ hasText: "smoke-agent" }).getByText("4 calls").waitFor();
+  await sessions.getByRole("row").filter({ hasText: "smoke-agent" }).getByRole("button", { name: "Show calls" }).click();
+  await mcp.getByText("Calls of the smoke-agent session", { exact: false }).waitFor();
+  await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
+  // Clear: confirmed, done by the core, and recorded.
+  await mcp.getByRole("button", { name: "Clear", exact: true }).click();
+  const clearDialog = page.getByRole("dialog", { name: "Clear the MCP activity?" });
+  await clearDialog.getByRole("button", { name: "Cancel" }).click();
+  await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
+  await mcp.getByRole("button", { name: "Clear", exact: true }).click();
+  await clearDialog.getByRole("button", { name: "Clear the log" }).click();
+  await mcp.getByText("4 events cleared.").waitFor();
+  await mcp.getByRole("status").filter({ hasText: "1 event" }).waitFor();
+  await events.getByText("Log cleared").waitFor();
   await page.getByRole("button", { name: "Connections", exact: true }).click();
   await mcp.waitFor({ state: "detached" });
 

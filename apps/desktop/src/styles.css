@@ -2687,3 +2687,20 @@ select {
 @media (max-width: 900px) {
   .mcp-configuration { grid-template-columns: 1fr; }
 }
+.mcp-subtabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.mcp-subtabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.mcp-activity-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.mcp-activity-bar input[type="search"] { flex: 1 1 220px; min-width: 160px; }
+.mcp-activity-actions { display: flex; gap: 6px; margin-left: auto; }
+.mcp-events-table { width: 100%; border-collapse: collapse; }
+.mcp-events-table th, .mcp-events-table td { text-align: left; vertical-align: top; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.mcp-events-table th { font-weight: 600; color: var(--muted); }
+.mcp-events-table .nowrap { white-space: nowrap; }
+.mcp-statement { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.mcp-detail { font-size: 12px; margin-top: 2px; }
+.mcp-status-ok { color: var(--tone-green); border-color: var(--tone-green); }
+.mcp-status-error { color: var(--danger); border-color: var(--danger); }
+.mcp-status-refused { color: var(--tone-amber); border-color: var(--tone-amber); }
+.mcp-status-cleared { color: var(--muted); }
+.mcp-empty { padding: 32px 12px; text-align: center; color: var(--muted); }
+.mcp-session-filter { margin: 0 0 8px; }

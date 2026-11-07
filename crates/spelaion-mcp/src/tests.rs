@@ -73,6 +73,13 @@ fn body(result: &CallToolResult) -> String {
         .collect()
 }
 
+fn call(tool: &'static str) -> Call {
+    Call {
+        client: "test".into(),
+        tool,
+    }
+}
+
 fn refused(result: &CallToolResult) -> bool {
     result.is_error == Some(true)
 }
@@ -107,13 +114,21 @@ const INSERT: &str = "insert into notes (body) values ('from an agent')";
 async fn the_switch_takes_writes_away_from_a_running_server() {
     let p = personal(false);
     // As before ADR-033: the connection lets agents write.
-    let done = p.server.write("test", "~/notes", INSERT).await.unwrap();
+    let done = p
+        .server
+        .write(&call("execute_write"), "~/notes", INSERT)
+        .await
+        .unwrap();
     assert!(!refused(&done), "{}", body(&done));
     assert_eq!(rows(&p.db), 2);
 
     // The user turns read-only mode on in the app while the server keeps running.
     app_store(&p.user_dir).set_mcp_read_only(true).unwrap();
-    let result = p.server.write("test", "~/notes", INSERT).await.unwrap();
+    let result = p
+        .server
+        .write(&call("execute_write"), "~/notes", INSERT)
+        .await
+        .unwrap();
     assert!(refused(&result));
     assert!(
         body(&result).contains("every agent read-only"),
@@ -130,7 +145,12 @@ async fn the_switch_takes_writes_away_from_a_running_server() {
     // Reads keep working, and a write cannot come in through them either.
     let read = p
         .server
-        .read("test", "~/notes", "select count(*) as n from notes", None)
+        .read(
+            &call("run_query"),
+            "~/notes",
+            "select count(*) as n from notes",
+            None,
+        )
         .await
         .unwrap();
     assert!(!refused(&read), "{}", body(&read));
@@ -139,13 +159,17 @@ async fn the_switch_takes_writes_away_from_a_running_server() {
         "with x as (insert into notes (body) values ('x') returning id) select * from x",
         "select 1; insert into notes (body) values ('x')",
     ] {
-        let sneaked = p.server.read("test", "~/notes", sql, None).await.unwrap();
+        let sneaked = p
+            .server
+            .read(&call("run_query"), "~/notes", sql, None)
+            .await
+            .unwrap();
         assert!(refused(&sneaked), "{sql}: {}", body(&sneaked));
     }
     assert_eq!(rows(&p.db), 2);
 
     // The agent is told before it tries.
-    let listed = p.server.list_connections().await.unwrap();
+    let listed = p.server.list_connections_inner().await.unwrap();
     assert!(
         body(&listed).contains("every agent read-only"),
         "{}",
@@ -155,7 +179,11 @@ async fn the_switch_takes_writes_away_from_a_running_server() {
 
     // Turning it off gives back exactly what the connection allowed.
     app_store(&p.user_dir).set_mcp_read_only(false).unwrap();
-    let done = p.server.write("test", "~/notes", INSERT).await.unwrap();
+    let done = p
+        .server
+        .write(&call("execute_write"), "~/notes", INSERT)
+        .await
+        .unwrap();
     assert!(!refused(&done), "{}", body(&done));
     assert_eq!(rows(&p.db), 3);
 }
@@ -181,17 +209,23 @@ async fn a_trusted_repository_cannot_give_agents_writes_back() {
     store.set_mcp_read_only(true).unwrap();
 
     let server = server(Some(&repo), &user_dir, false);
-    let listed = body(&server.list_connections().await.unwrap());
+    let listed = body(&server.list_connections_inner().await.unwrap());
     assert!(listed.contains("- orders"), "{listed}");
     assert!(listed.contains("every agent read-only"), "{listed}");
-    let result = server.write("test", "orders", INSERT).await.unwrap();
+    let result = server
+        .write(&call("execute_write"), "orders", INSERT)
+        .await
+        .unwrap();
     assert!(refused(&result));
     assert!(body(&result).contains("every agent read-only"));
     assert_eq!(rows(&db), 1);
 
     // With the switch off, the trusted repository's choice applies again.
     store.set_mcp_read_only(false).unwrap();
-    let done = server.write("test", "orders", INSERT).await.unwrap();
+    let done = server
+        .write(&call("execute_write"), "orders", INSERT)
+        .await
+        .unwrap();
     assert!(!refused(&done), "{}", body(&done));
     assert_eq!(rows(&db), 2);
 }
@@ -200,7 +234,11 @@ async fn a_trusted_repository_cannot_give_agents_writes_back() {
 async fn the_command_line_flag_only_takes_writes_away() {
     let p = personal(true);
     assert!(!app_store(&p.user_dir).mcp_read_only().unwrap());
-    let result = p.server.write("test", "~/notes", INSERT).await.unwrap();
+    let result = p
+        .server
+        .write(&call("execute_write"), "~/notes", INSERT)
+        .await
+        .unwrap();
     assert!(refused(&result));
     assert!(body(&result).contains("every agent read-only"));
     assert_eq!(rows(&p.db), 1);
@@ -211,7 +249,11 @@ async fn without_a_readable_setting_every_agent_is_read_only() {
     let p = personal(false);
     // The store goes away (it cannot be read): agents only read.
     p.server.state.store.lock().unwrap().take();
-    let result = p.server.write("test", "~/notes", INSERT).await.unwrap();
+    let result = p
+        .server
+        .write(&call("execute_write"), "~/notes", INSERT)
+        .await
+        .unwrap();
     assert!(refused(&result));
     assert_eq!(rows(&p.db), 1);
 }
@@ -221,7 +263,12 @@ async fn queries_come_as_json_or_toon() {
     let p = personal(false);
     let sql = "select id, body from notes order by id";
     // JSON until the user picks another default.
-    let json = body(&p.server.read("test", "~/notes", sql, None).await.unwrap());
+    let json = body(
+        &p.server
+            .read(&call("run_query"), "~/notes", sql, None)
+            .await
+            .unwrap(),
+    );
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed["rows"], serde_json::json!([[1, "first"]]));
     assert_eq!(parsed["columns"][1]["name"], "body");
@@ -229,20 +276,25 @@ async fn queries_come_as_json_or_toon() {
     app_store(&p.user_dir)
         .set_mcp_output_format(ToolOutput::Toon)
         .unwrap();
-    let toon = body(&p.server.read("test", "~/notes", sql, None).await.unwrap());
+    let toon = body(
+        &p.server
+            .read(&call("run_query"), "~/notes", sql, None)
+            .await
+            .unwrap(),
+    );
     assert!(toon.contains("rows[1]{id,body}:\n  1,first\n"), "{toon}");
 
     // A call may ask for the other format.
     let json = body(
         &p.server
-            .read("test", "~/notes", sql, Some(OutputFormat::Json))
+            .read(&call("run_query"), "~/notes", sql, Some(OutputFormat::Json))
             .await
             .unwrap(),
     );
     assert!(json.starts_with("{\"columns\":"), "{json}");
     let toon = body(
         &p.server
-            .read("test", "~/notes", sql, Some(OutputFormat::Toon))
+            .read(&call("run_query"), "~/notes", sql, Some(OutputFormat::Toon))
             .await
             .unwrap(),
     );
@@ -253,4 +305,92 @@ async fn queries_come_as_json_or_toon() {
         "connection": "~/notes", "sql": sql, "output_format": "markdown"
     }));
     assert!(args.is_err());
+}
+
+#[tokio::test]
+async fn every_call_is_recorded_with_its_tool_and_session() {
+    let p = personal(false);
+    p.server
+        .read(&call("run_query"), "~/notes", "select 1", None)
+        .await
+        .unwrap();
+    p.server
+        .write(&call("execute_write"), "~/notes", "drop table notes")
+        .await
+        .unwrap();
+    let listed = p
+        .server
+        .audited(
+            call("list_objects"),
+            "~/notes",
+            "schemas".into(),
+            p.server.list_objects_inner(Parameters(ListObjectsArgs {
+                connection: "~/notes".into(),
+                schema: None,
+                filter: None,
+            })),
+        )
+        .await
+        .unwrap();
+    assert!(!refused(&listed), "{}", body(&listed));
+    let missing = p
+        .server
+        .audited(
+            call("describe_table"),
+            "~/nowhere",
+            "main.x".into(),
+            p.server.describe_table_inner(Parameters(DescribeArgs {
+                connection: "~/nowhere".into(),
+                schema: "main".into(),
+                table: "x".into(),
+            })),
+        )
+        .await
+        .unwrap();
+    assert!(refused(&missing));
+
+    let entries = app_store(&p.user_dir).recent(10).unwrap();
+    let tools: Vec<_> = entries
+        .iter()
+        .rev()
+        .map(|e| e.tool.clone().unwrap())
+        .collect();
+    assert_eq!(
+        tools,
+        [
+            "run_query",
+            "execute_write",
+            "list_objects",
+            "describe_table"
+        ]
+    );
+    let decisions: Vec<_> = entries.iter().rev().map(|e| e.decision).collect();
+    assert_eq!(
+        decisions,
+        [
+            Decision::Executed,
+            Decision::Rejected,
+            Decision::Executed,
+            Decision::Rejected
+        ]
+    );
+    // One process, one session, the same for every call.
+    let session = entries[0].session.clone().unwrap();
+    assert!(
+        entries
+            .iter()
+            .all(|e| e.session.as_deref() == Some(session.as_str()))
+    );
+    assert!(
+        session.ends_with(&format!("-{}", std::process::id())),
+        "{session}"
+    );
+    // Another server is another session.
+    let other = server(None, &p.user_dir, false);
+    other
+        .read(&call("run_query"), "~/notes", "select 2", None)
+        .await
+        .unwrap();
+    let latest = &app_store(&p.user_dir).recent(1).unwrap()[0];
+    assert_ne!(latest.session.as_deref(), Some(session.as_str()));
 }

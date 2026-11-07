@@ -138,6 +138,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   fingerprint). Tests and the smoke test point it at `SPELAION_MCP_CLIENTS_HOME`, never at the
   user's files; `SPELAION_CLI` names the `spelaiondb` it installs. The installers ship the CLI
   next to the app (`externalBin`, only in `tauri.release.conf.json`).
+  Every MCP tool call goes to the store's append-only `audit` table with its tool and its
+  process's session; the app's Activity tab reads it through `spelaion-core::audit`, which masks
+  secrets (`redact_secrets`) before anything is shown or exported. Clearing (`clear_audit`) is
+  the only delete and leaves a record.
 - `apps/desktop`: Tauri 2 + React app. `src-tauri` is a thin adapter over the core; the
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).

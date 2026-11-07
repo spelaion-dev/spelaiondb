@@ -5528,6 +5528,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "spelaion-config",
+ "spelaion-core",
  "spelaion-driver-api",
  "spelaion-driver-duckdb",
  "spelaion-mcp",

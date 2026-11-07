@@ -8,8 +8,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
-    Bookmark, ExplorerFilter, ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry,
-    Snippet, Store, StoreError, ToolOutput,
+    AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, ExplorerFilter,
+    ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store,
+    StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -83,6 +84,26 @@ enum Request {
     },
     GetMcp {
         reply: Reply<(bool, ToolOutput)>,
+    },
+    AuditEvents {
+        filter: AuditFilter,
+        limit: usize,
+        offset: usize,
+        reply: Reply<(Vec<AuditRecord>, i64)>,
+    },
+    AuditAll {
+        filter: AuditFilter,
+        reply: Reply<Vec<AuditEntry>>,
+    },
+    AuditTools {
+        reply: Reply<Vec<String>>,
+    },
+    AuditSessions {
+        limit: usize,
+        reply: Reply<Vec<AuditSession>>,
+    },
+    ClearAudit {
+        reply: Reply<i64>,
     },
     SetMcpReadOnly {
         read_only: bool,
@@ -166,7 +187,7 @@ pub struct QueryHistory {
 impl QueryHistory {
     /// Opens and migrates the local store synchronously, for application startup.
     pub fn open(path: PathBuf) -> Result<Self, HistoryError> {
-        let store = Store::open(&path)?;
+        let mut store = Store::open(&path)?;
         let (requests, mut receiver) = mpsc::channel(32);
         std::thread::Builder::new()
             .name("spelaion-history".into())
@@ -216,6 +237,34 @@ impl QueryHistory {
                                     .mcp_read_only()
                                     .and_then(|r| Ok((r, store.mcp_output_format()?))),
                             );
+                        }
+                        Request::AuditEvents {
+                            filter,
+                            limit,
+                            offset,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                store
+                                    .audit_events(&filter, limit, offset)
+                                    .and_then(|events| Ok((events, store.audit_count(&filter)?))),
+                            );
+                        }
+                        Request::AuditAll { filter, reply } => {
+                            let _ = reply.send(
+                                store
+                                    .audit_events(&filter, usize::MAX >> 1, 0)
+                                    .map(|records| records.into_iter().map(|r| r.entry).collect()),
+                            );
+                        }
+                        Request::AuditTools { reply } => {
+                            let _ = reply.send(store.audit_tools());
+                        }
+                        Request::AuditSessions { limit, reply } => {
+                            let _ = reply.send(store.audit_sessions(limit));
+                        }
+                        Request::ClearAudit { reply } => {
+                            let _ = reply.send(store.clear_audit("SpelaionDB"));
                         }
                         Request::SetMcpReadOnly { read_only, reply } => {
                             let _ = reply.send(store.set_mcp_read_only(read_only));
@@ -419,6 +468,44 @@ impl QueryHistory {
     /// output of query tools.
     pub async fn mcp_settings(&self) -> Result<(bool, ToolOutput), HistoryError> {
         self.request(|reply| Request::GetMcp { reply }).await
+    }
+
+    /// The MCP activity `filter` keeps (ADR-033), newest first, with how many there are in all.
+    /// Secrets are masked by the caller (`audit::redacted`) before anything is shown.
+    pub async fn audit_events(
+        &self,
+        filter: AuditFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<AuditRecord>, i64), HistoryError> {
+        self.request(|reply| Request::AuditEvents {
+            filter,
+            limit,
+            offset,
+            reply,
+        })
+        .await
+    }
+
+    /// Every entry `filter` keeps, for an export.
+    pub async fn audit_all(&self, filter: AuditFilter) -> Result<Vec<AuditEntry>, HistoryError> {
+        self.request(|reply| Request::AuditAll { filter, reply })
+            .await
+    }
+
+    pub async fn audit_tools(&self) -> Result<Vec<String>, HistoryError> {
+        self.request(|reply| Request::AuditTools { reply }).await
+    }
+
+    pub async fn audit_sessions(&self, limit: usize) -> Result<Vec<AuditSession>, HistoryError> {
+        self.request(|reply| Request::AuditSessions { limit, reply })
+            .await
+    }
+
+    /// Empties the MCP activity log, leaving a record that it was cleared. Returns how many
+    /// entries went.
+    pub async fn clear_audit(&self) -> Result<i64, HistoryError> {
+        self.request(|reply| Request::ClearAudit { reply }).await
     }
 
     pub async fn set_mcp_read_only(&self, read_only: bool) -> Result<(), HistoryError> {

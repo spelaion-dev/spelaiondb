@@ -231,11 +231,17 @@ async fn main() -> Result<()> {
         }
         Command::Audit { limit } => {
             let store = Store::open(&spelaion_config::state_db(&user_dir))?;
-            for e in store.recent(limit)? {
+            // Secrets in statements are masked, as on the app's MCP page (ADR-033).
+            for e in store
+                .recent(limit)?
+                .iter()
+                .map(spelaion_core::audit::redacted)
+            {
                 let decision = match e.decision {
                     Decision::Executed => "executed",
                     Decision::Rejected => "REJECTED",
                     Decision::Failed => "failed",
+                    Decision::Cleared => "log cleared",
                 };
                 let detail = e.detail.map(|d| format!(" — {d}")).unwrap_or_default();
                 println!(
