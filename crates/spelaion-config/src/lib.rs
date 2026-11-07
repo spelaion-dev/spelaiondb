@@ -19,6 +19,7 @@ mod edit;
 mod engine_change;
 mod error;
 mod load;
+pub mod mcp_clients;
 mod migrate;
 mod model;
 mod name_pattern;
