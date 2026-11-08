@@ -159,5 +159,11 @@
     "notify": "Avisarme cuando termine una ejecución larga con la aplicación en segundo plano",
     "notifyAfter": "Solo ejecuciones de más de (segundos)",
     "notifyHint": "La notificación dice qué pestaña terminó y si algo falló; nunca incluye SQL ni datos."
+  },
+  "editor": {
+    "title": "Editor",
+    "restoreHint": "Las pestañas abiertas vuelven tras reiniciar con su texto y su conexión, desconectadas: consolas y archivos, incluidos los cambios sin guardar. Sus resultados nunca se guardan.",
+    "reconnect": "Volver a conectar las últimas conexiones al arrancar",
+    "reconnectHint": "Solo conecta (puede pedir una contraseña); nada se ejecuta solo."
   }
 }

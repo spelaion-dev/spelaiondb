@@ -6,7 +6,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { closeQueryTab, defaultTabLabel, tabLabel } from "../connect";
 import { topDialog } from "../modalFocus";
+import { isModified, reloadTab, saveTab, saveTabAs } from "../sqlFiles";
 import { type Tab, useApp } from "../store";
+import { FileMenuButton } from "./FileMenu";
 import { Icon } from "./Icons";
 import {
   TAB_SHORTCUTS,
@@ -20,18 +22,19 @@ import {
 } from "../tabActions";
 
 /** Distinguishes SQL, table data and table metadata without adding labels to the tab bar. */
-function TabIcon({ kind }: { kind: "query" | "table" | "details" }) {
+function TabIcon({ kind }: { kind: "query" | "file" | "table" | "details" }) {
   return (
     <svg className="tab-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {kind === "query" ? <><path d="m3 4 3 3-3 3M8 11h5" /></> :
+        kind === "file" ? <><path d="M4 2.5h5.5L12.5 5.5v8H4z" /><path d="M9.5 2.5v3h3M6 9h4.5M6 11.5h3" /></> :
         kind === "table" ? <><rect x="2.5" y="3" width="11" height="10" rx="1" /><path d="M2.5 6.5h11M6.2 6.5V13M9.8 6.5V13" /></> :
           <><rect x="2.5" y="3" width="11" height="10" rx="1" /><path d="M6 3v10M8 6h3.5M8 9.5h3.5" /></>}
     </svg>
   );
 }
 
-function tabKind(tab: Tab): "query" | "table" | "details" {
-  return tab.tableDetails ? "details" : tab.table ? "table" : "query";
+function tabKind(tab: Tab): "query" | "file" | "table" | "details" {
+  return tab.tableDetails ? "details" : tab.table ? "table" : tab.file ? "file" : "query";
 }
 
 /** Pixels the pointer moves before a press on a tab becomes a drag. */
@@ -127,7 +130,7 @@ export function TabBar({ hidden }: { hidden: boolean }) {
               data-pinned={tab.pinned ? "true" : undefined}
               className={classes}
               tabIndex={active ? 0 : -1}
-              title={tab.title ? `${tab.title} (${defaultTabLabel(tab)})` : label}
+              title={[tab.title ? `${tab.title} (${defaultTabLabel(tab)})` : label, tab.file?.path].filter(Boolean).join("\n")}
               onClick={() => {
                 if (swallowClick.current) {
                   swallowClick.current = false;
@@ -215,6 +218,9 @@ export function TabBar({ hidden }: { hidden: boolean }) {
               ) : (
                 <span className="tab-label">{label}</span>
               )}
+              {isModified(tab) && (
+                <span className="tab-unsaved" role="img" aria-label={t("tabs.unsaved")} title={t("tabs.unsaved")} />
+              )}
               {tab.pinned ? (
                 <button
                   className="close tab-unpin"
@@ -244,6 +250,7 @@ export function TabBar({ hidden }: { hidden: boolean }) {
         })}
       </div>
       <button className="new-tab" type="button" onClick={() => addTab(null)} title={t("newQueryShortcut")} aria-label={t("newQueryShortcut")}><Icon name="plus" /></button>
+      <FileMenuButton />
       {menu && <TabMenu key={menu.id} {...menu} onClose={() => setMenu(null)} />}
       <TabSwitcher />
     </div>
@@ -366,6 +373,14 @@ function TabMenu({ id, x, y, onClose }: { id: string; x: number; y: number; onCl
       {item(t("tabs.rename"), TAB_SHORTCUTS.rename, () => startRename(id))}
       {item(t("tabs.duplicate"), TAB_SHORTCUTS.duplicate, () => duplicateTab(id), Boolean(tab.tableDetails))}
       {item(tab.pinned ? t("tabs.unpin") : t("tabs.pin"), TAB_SHORTCUTS.pin, () => togglePinned(id))}
+      {!tab.table && !tab.tableDetails && (
+        <>
+          <hr />
+          {tab.file && item(t("tabs.saveFile"), "Ctrl+S", () => void saveTab(id))}
+          {item(t("tabs.saveFileAs"), "Ctrl+Shift+S", () => void saveTabAs(id))}
+          {tab.file && item(t("tabs.reloadFile"), "", () => void reloadTab(id))}
+        </>
+      )}
       <hr />
       {item(t("tabs.close"), TAB_SHORTCUTS.close, () => void closeQueryTab(id))}
       {item(t("tabs.closeOthers"), TAB_SHORTCUTS.closeOthers, () => void closeOtherTabs(id), !can.others)}

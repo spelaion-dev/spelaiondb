@@ -49,6 +49,34 @@ export const commands = {
 	getScriptPreferences: () => typedError<ScriptPreferencesItem, string>(__TAURI_INVOKE("get_script_preferences")),
 	setScriptPreferences: (preferences: ScriptPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_script_preferences", { preferences })),
 	/**
+	 *  Reads a `.sql` file the user picked (or one from the recent files or a kept tab) and puts
+	 *  it first in the recent files.
+	 */
+	openSqlFile: (path: string) => typedError<SqlFileItem, string>(__TAURI_INVOKE("open_sql_file", { path })),
+	/**
+	 *  Saves a tab's text to `path`. `format` is the file's (`None`: a new file, UTF-8 and the
+	 *  platform's line break); `expected_hash` is what the tab last read or saved (`None`: write
+	 *  whatever is there, after a "save as" dialog or the user's "overwrite").
+	 */
+	saveSqlFile: (path: string, text: string, format: FileFormatItem | null, expectedHash: string | null) => typedError<SaveFileOutcome, string>(__TAURI_INVOKE("save_sql_file", { path, text, format, expectedHash })),
+	/**  The recent files, newest first, each saying whether it is still there. */
+	recentFiles: () => typedError<RecentFileItem[], string>(__TAURI_INVOKE("recent_files")),
+	forgetRecentFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("forget_recent_file", { path })),
+	/**
+	 *  The open folder's kept tabs, checked by the core: every one comes back disconnected,
+	 *  with its text and a note when its connection or file is gone. Nothing is run.
+	 */
+	restoreTabsForWorkspace: () => typedError<RestoredTabsItem_Serialize, string>(__TAURI_INVOKE("restore_tabs_for_workspace")),
+	/**
+	 *  The open tabs as they are now, for the folder `scope` (from `restore_tabs_for_workspace`).
+	 *  The core writes them within a second (ADR-036).
+	 */
+	saveTabs: (scope: string, tabs: OpenTabItem_Deserialize[], active: number | null) => typedError<null, string>(__TAURI_INVOKE("save_tabs", { scope, tabs, active })),
+	/**  Writes the tabs waiting now (before switching folders). */
+	flushTabs: () => typedError<null, string>(__TAURI_INVOKE("flush_tabs")),
+	getReconnectOnStart: () => typedError<boolean, string>(__TAURI_INVOKE("get_reconnect_on_start")),
+	setReconnectOnStart: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_reconnect_on_start", { enabled })),
+	/**
 	 *  A system notification that a long run finished in the background (ADR-035). The app sends
 	 *  it only when the user turned it on; its text names the tab and counts statements, never SQL,
 	 *  data or error text.
@@ -1268,6 +1296,14 @@ export type FieldChangeItem_Serialize = {
 	after: string | null,
 };
 
+/**  The encoding a `.sql` file was read in and is written back in. */
+export type FileEncodingItem = "utf8" | "utf8Bom" | "utf16Le" | "utf16Be" | "windows1252";
+
+export type FileFormatItem = {
+	encoding: FileEncodingItem,
+	lineEnding: LineEndingItem,
+};
+
 /**  What "Hide" and "Show only" in the explorer do with one name. */
 export type FilterActionItem = "hide" | "showOnly";
 
@@ -1447,6 +1483,9 @@ export type KubernetesDraftItem = {
 	kubeconfig: string,
 	kubectl: string,
 };
+
+/**  The line break a `.sql` file is written with. */
+export type LineEndingItem = "lf" | "crLf" | "cr";
 
 /**  The form of a connection mapped to another engine, and what that did. */
 export type MappedConnectionItem = MappedConnectionItem_Serialize | MappedConnectionItem_Deserialize;
@@ -1764,6 +1803,54 @@ export type ObjectTargetItem_Serialize = { kind: "schema"; name: string } |
 /**  What a run does when a statement fails (ADR-035). */
 export type OnErrorItem = "stop" | "continue" | "ask";
 
+/**  The file behind a kept file tab. */
+export type OpenTabFileItem = OpenTabFileItem_Serialize | OpenTabFileItem_Deserialize;
+
+/**  The file behind a kept file tab. */
+export type OpenTabFileItem_Deserialize = {
+	path: string,
+	hash?: string | null,
+	format: FileFormatItem,
+	/**  The text differs from the file: it is restored as unsaved. */
+	modified: boolean,
+};
+
+/**  The file behind a kept file tab. */
+export type OpenTabFileItem_Serialize = {
+	path: string,
+	hash: string | null,
+	format: FileFormatItem,
+	/**  The text differs from the file: it is restored as unsaved. */
+	modified: boolean,
+};
+
+/**  An editor tab as kept between runs: text and settings, never results or session state. */
+export type OpenTabItem = OpenTabItem_Serialize | OpenTabItem_Deserialize;
+
+/**  An editor tab as kept between runs: text and settings, never results or session state. */
+export type OpenTabItem_Deserialize = {
+	title?: string | null,
+	text: string,
+	connection?: string | null,
+	pinned: boolean,
+	onError?: OnErrorItem | null,
+	timeoutSeconds?: number | null,
+	snippetName?: string | null,
+	file?: OpenTabFileItem_Deserialize | null,
+};
+
+/**  An editor tab as kept between runs: text and settings, never results or session state. */
+export type OpenTabItem_Serialize = {
+	title: string | null,
+	text: string,
+	connection: string | null,
+	pinned: boolean,
+	onError: OnErrorItem | null,
+	timeoutSeconds: number | null,
+	snippetName: string | null,
+	file: OpenTabFileItem_Serialize | null,
+};
+
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */
 "other" | 
@@ -1875,6 +1962,13 @@ export type QuitBlocked = {
 	sessions: string[],
 };
 
+export type RecentFileItem = {
+	path: string,
+	name: string,
+	/**  Still on disk (checked when listed). */
+	exists: boolean,
+};
+
 /**  A table or view chosen in the explorer. */
 export type RelationRefItem = {
 	schema: string,
@@ -1894,6 +1988,44 @@ export type RerunCheckItem_Deserialize = {
 export type RerunCheckItem_Serialize = {
 	refused: string | null,
 	openTransaction: boolean,
+};
+
+/**  Why a restored tab is not exactly as it was kept. */
+export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } | { kind: "fileMissing" } | { kind: "fileUnreadable"; message: string } | { kind: "fileChangedOnDisk" };
+
+export type RestoredTabItem = RestoredTabItem_Serialize | RestoredTabItem_Deserialize;
+
+export type RestoredTabItem_Deserialize = {
+	tab: OpenTabItem_Deserialize,
+	notes: RestoreNoteItem[],
+};
+
+export type RestoredTabItem_Serialize = {
+	tab: OpenTabItem_Serialize,
+	notes: RestoreNoteItem[],
+};
+
+/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+export type RestoredTabsItem = RestoredTabsItem_Serialize | RestoredTabsItem_Deserialize;
+
+/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+export type RestoredTabsItem_Deserialize = {
+	/**  Which folder they belong to: sent back with every `save_tabs`. */
+	scope: string,
+	tabs: RestoredTabItem_Deserialize[],
+	active?: number | null,
+	/**  The personal "reconnect at startup" setting: connect only, never run. */
+	reconnect: boolean,
+};
+
+/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+export type RestoredTabsItem_Serialize = {
+	/**  Which folder they belong to: sent back with every `save_tabs`. */
+	scope: string,
+	tabs: RestoredTabItem_Serialize[],
+	active: number | null,
+	/**  The personal "reconnect at startup" setting: connect only, never run. */
+	reconnect: boolean,
 };
 
 /**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
@@ -1959,6 +2091,15 @@ export type SafeguardsItem_Serialize = {
 	/**  The first write switches a tab to manual commit (ADR-031). */
 	smartCommit: boolean,
 };
+
+/**  What a save did. The conflicts are answers, not errors: the app asks the user. */
+export type SaveFileOutcome = { kind: "saved"; path: string; name: string; hash: string; format: FileFormatItem } | 
+/**  The file changed on disk since it was read or saved: overwrite, reload or cancel. */
+{ kind: "changedOnDisk" } | 
+/**  The file was deleted on disk since: write it again or cancel. */
+{ kind: "deletedOnDisk" } | 
+/**  The file's encoding cannot hold this character: save as UTF-8 instead? */
+{ kind: "unrepresentable"; character: string; encoding: string };
 
 export type SchemaItem = {
 	name: string,
@@ -2146,6 +2287,17 @@ export type SnippetItem = {
 	updatedMs: number,
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
+};
+
+/**  A `.sql` file read by the core: its text with `\n` line breaks. */
+export type SqlFileItem = {
+	path: string,
+	/**  The file's name, for the tab's title. */
+	name: string,
+	text: string,
+	format: FileFormatItem,
+	/**  SHA-256 of the file's bytes, sent back with the next save. */
+	hash: string,
 };
 
 /**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */

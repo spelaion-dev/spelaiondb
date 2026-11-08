@@ -15,6 +15,7 @@ import { ResultFilter } from "./ResultFilter";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { summaryMessages, summaryShort } from "../scriptRun";
+import { saveTab, saveTabAs } from "../sqlFiles";
 import { notifyFinished } from "../notify";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
@@ -32,13 +33,14 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-function EditorActionIcon({ name }: { name: "run" | "script" | "format" | "save" | "cancel" }) {
+function EditorActionIcon({ name }: { name: "run" | "script" | "format" | "save" | "saveAs" | "cancel" }) {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
       {name === "run" && <path d="M6.5 3.8v12.4l9-6.2z" fill="currentColor" stroke="none" />}
       {name === "script" && <><path d="M3.5 4h9M3.5 7.5h6M3.5 11h4M3.5 14.5h4" /><path d="M11 9.5v6l4.5-3z" fill="currentColor" stroke="none" /></>}
       {name === "format" && <><path d="M4 4.5h12M4 8h8M7 11.5h9M7 15h6" /><path d="M4 11v4" /></>}
       {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4z" /><path d="M6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
+      {name === "saveAs" && <><path d="M5 3.5h6.5L15 7v9.5H5z" /><path d="M11.5 3.5V7H15M8 12.5h4M10 10.5v4" /></>}
       {name === "cancel" && <rect x="5" y="5" width="10" height="10" rx="1" fill="currentColor" stroke="none" />}
     </svg>
   );
@@ -809,6 +811,22 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           </button>
         ))}
       </div>
+      {tab.restoreNotes && tab.restoreNotes.length > 0 && (
+        <div className="banner restore-notes" role="status">
+          <ul>
+            {tab.restoreNotes.map((note, i) => (
+              <li key={i}>
+                {note.kind === "connectionMissing"
+                  ? t("restore.connectionMissing", { connection: note.connection })
+                  : note.kind === "fileUnreadable"
+                    ? t("restore.fileUnreadable", { message: note.message })
+                    : t(`restore.${note.kind}`)}
+              </li>
+            ))}
+          </ul>
+          <button className="ghost small" onClick={() => updateTab(tab.id, { restoreNotes: undefined })}>{t("restore.dismiss")}</button>
+        </div>
+      )}
       <div className="editor-body" ref={body}>
         {tab.table && (
           <TableDataBar
@@ -845,14 +863,24 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
               <EditorActionIcon name="format" />
             </button>
-            <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
-              <EditorActionIcon name="save" />
+            {tab.file ? (
+              <button className="editor-action" aria-label={t("files.saveFile")} title={t("files.saveFileHint")} onClick={() => void saveTab(tab.id)}>
+                <EditorActionIcon name="save" />
+              </button>
+            ) : (
+              <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
+                <EditorActionIcon name="save" />
+              </button>
+            )}
+            <button className="editor-action" aria-label={t("files.saveAs")} title={t("files.saveAsHint")} onClick={() => void saveTabAs(tab.id)}>
+              <EditorActionIcon name="saveAs" />
             </button>
           </div>
           <SqlEditor
             handle={editor}
             onFormatError={(reason) => setNotice({ text: t("formatFailed", { reason }), error: true })}
             value={tab.sql}
+            revision={tab.textRevision}
             onChange={(sql) => {
               if (notice?.error) setNotice(null);
               updateTab(tab.id, { sql });

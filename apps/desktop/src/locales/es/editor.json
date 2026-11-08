@@ -474,5 +474,46 @@
     "loadedInstead_other": "Exportar las {{formattedCount}} filas cargadas"
   },
   "maximizeResults": "Maximizar los resultados (Ctrl+Alt+M)",
-  "restoreResults": "Mostrar el editor (Ctrl+Alt+M)"
+  "restoreResults": "Mostrar el editor (Ctrl+Alt+M)",
+  "files": {
+    "sqlFiles": "Archivos SQL",
+    "allFiles": "Todos los archivos",
+    "openTitle": "Abrir archivo SQL",
+    "openFailed": "No se pudo abrir el archivo",
+    "saveFailed": "No se pudo guardar {{name}}",
+    "changedTitle": "{{name}} cambió en el disco",
+    "changedMessage": "El archivo cambió desde que esta pestaña lo abrió o lo guardó. Sobrescríbelo con el texto de esta pestaña, vuelve a cargarlo del disco (se pierden los cambios sin guardar de esta pestaña) o cancela.",
+    "cancel": "Cancelar",
+    "reload": "Volver a cargar del disco",
+    "overwrite": "Sobrescribir",
+    "deletedTitle": "{{name}} se eliminó",
+    "deletedMessage": "El archivo ya no está en el disco. ¿Guardar ahí otra vez el texto de esta pestaña?",
+    "writeAgain": "Guardarlo otra vez",
+    "encodingTitle": "{{name}} no puede contener este texto",
+    "encodingMessage": "El archivo está en {{encoding}}, que no puede contener el carácter «{{character}}». ¿Guardarlo como UTF-8?",
+    "saveUtf8": "Guardar como UTF-8",
+    "saveAsTitle": "Guardar como archivo SQL",
+    "defaultName": "consulta",
+    "unsavedTitle_one": "¿Guardar los cambios de {{names}}?",
+    "unsavedTitle_other": "¿Guardar los cambios de {{count}} archivos?",
+    "unsavedMessage_one": "Se pierden si no los guardas.",
+    "unsavedMessage_other": "Se pierden si no los guardas: {{names}}.",
+    "dontSave": "No guardar",
+    "save": "Guardar",
+    "reloadTitle": "¿Volver a cargar {{name}} del disco?",
+    "reloadMessage": "Se pierden los cambios sin guardar de esta pestaña.",
+    "saveFile": "Guardar archivo",
+    "saveFileHint": "Guardar el archivo (Ctrl+S)",
+    "saveAs": "Guardar como archivo",
+    "saveAsHint": "Guardar como archivo .sql (Ctrl+Mayús+S)",
+    "saved": "Guardado {{name}}",
+    "close": "Cerrar"
+  },
+  "restore": {
+    "connectionMissing": "La conexión «{{connection}}» ya no existe: elige otra para ejecutar esta pestaña.",
+    "fileMissing": "El archivo ya no está en el disco: este es el texto que tenía la pestaña, sin guardar.",
+    "fileUnreadable": "No se pudo leer el archivo ({{message}}): este es el texto que tenía la pestaña, sin guardar.",
+    "fileChangedOnDisk": "El archivo cambió en el disco mientras la app estaba cerrada: estos son tus cambios sin guardar, y guardar pregunta antes de sobrescribirlo.",
+    "dismiss": "Descartar"
+  }
 }

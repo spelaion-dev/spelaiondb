@@ -201,7 +201,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, history: 6, network: 7, scripts: 9 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, history: 6, network: 7, scripts: 9, editor: 10 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -1163,7 +1163,7 @@ try {
 
   step("editor toolbar: run the current statement or selection, and run the whole script");
   const actions = panel.getByRole("toolbar", { name: "Query actions" });
-  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Format", "Save"]);
+  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Format", "Save", "Save as file"]);
   for (const button of await actions.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   await sqlEditor.click();
   await page.keyboard.press("Control+Home");
@@ -2257,6 +2257,108 @@ try {
   await markerEntry.getByRole("button", { name: "Confirm delete" }).click();
   await snippets.getByText("No saved queries yet.", { exact: false }).waitFor();
   await page.getByRole("button", { name: "Close saved queries" }).click();
+
+  step("SQL files: Ctrl+O opens one, the unsaved marker, Ctrl+S keeps its encoding and line endings, a change on disk asks, save as, closing asks, recent files");
+  {
+    const sqlDir = join(userDir, "sql files");
+    mkdirSync(sqlDir, { recursive: true });
+    const reportPath = join(sqlDir, "report.sql");
+    // UTF-8 with a byte order mark and Windows line endings: both kept when saved.
+    writeFileSync(reportPath, "﻿select 'file_marker' as f;\r\nselect 2;\r\n");
+    const fileTab = (name) => page.locator(".tabbar .tab").filter({ has: page.locator(".tab-label", { hasText: new RegExp(`^${name.replace(".", "\\.")}$`) }) });
+    const shownPanel = page.locator(".tab-panel:not([hidden])");
+    const editorLines = async () => (await shownPanel.locator(".cm-line").evaluateAll((lines) => lines.map((l) => l.textContent))).join("\n");
+    // The native open dialog cannot be driven: src/dialogs.ts takes this path instead.
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, reportPath);
+    await page.keyboard.press("Control+o");
+    await fileTab("report.sql").waitFor();
+    assert.equal(await editorLines(), "select 'file_marker' as f;\nselect 2;\n");
+    assert.equal(await fileTab("report.sql").locator(".tab-unsaved").count(), 0);
+    // Opening it again shows the same tab.
+    await page.keyboard.press("Control+o");
+    await page.waitForTimeout(300);
+    assert.equal(await fileTab("report.sql").count(), 1);
+    await shownPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.insertText("-- edited");
+    await fileTab("report.sql").locator(".tab-unsaved").waitFor();
+    await shot("05i-sql-file-unsaved");
+    await page.keyboard.press("Control+s");
+    await fileTab("report.sql").locator(".tab-unsaved").waitFor({ state: "detached" });
+    assert.equal(readFileSync(reportPath, "utf8"), "﻿select 'file_marker' as f;\r\nselect 2;\r\n-- edited");
+    // Someone changes the file: saving over it asks; reloading takes theirs.
+    writeFileSync(reportPath, "select 'theirs';\n");
+    await page.keyboard.insertText(" again");
+    await fileTab("report.sql").locator(".tab-unsaved").waitFor();
+    await page.keyboard.press("Control+s");
+    const changed = page.getByRole("dialog", { name: "report.sql changed on disk" });
+    await changed.waitFor();
+    await shot("05j-sql-file-changed-on-disk");
+    await changed.getByRole("button", { name: "Reload from disk" }).click();
+    await changed.waitFor({ state: "detached" });
+    await fileTab("report.sql").locator(".tab-unsaved").waitFor({ state: "detached" });
+    assert.equal(await editorLines(), "select 'theirs';\n");
+    assert.equal(readFileSync(reportPath, "utf8"), "select 'theirs';\n");
+    // Save as (Ctrl+Shift+S): the tab now shows the new file, written in the old one's format.
+    const copyPath = join(sqlDir, "copy.sql");
+    await page.evaluate((path) => { window.__spelaionSavePath = path; }, copyPath);
+    await shownPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+Shift+S");
+    await fileTab("copy.sql").waitFor();
+    assert.equal(await fileTab("report.sql").count(), 0);
+    assert.equal(readFileSync(copyPath, "utf8"), "select 'theirs';\n");
+    // A console saved as a file becomes a file tab.
+    const consolePath = join(sqlDir, "console.sql");
+    await page.keyboard.press("Control+t");
+    await shownPanel.locator(".cm-content").click();
+    await page.keyboard.insertText("select 'from_console';\nselect 3;");
+    await page.evaluate((path) => { window.__spelaionSavePath = path; }, consolePath);
+    await page.keyboard.press("Control+Shift+S");
+    await fileTab("console.sql").waitFor();
+    // A new file: UTF-8 without a BOM, the platform's line break.
+    assert.equal(readFileSync(consolePath, "utf8"), process.platform === "win32" ? "select 'from_console';\r\nselect 3;" : "select 'from_console';\nselect 3;");
+    await page.evaluate(() => { delete window.__spelaionSavePath; delete window.__spelaionOpenPath; });
+    // Closing a file tab with unsaved changes asks: Cancel keeps it, Don't save closes it.
+    await shownPanel.locator(".cm-content").click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.insertText(" -- not kept");
+    await page.keyboard.press("Control+w");
+    const unsaved = page.getByRole("dialog", { name: "Save the changes to console.sql?" });
+    await unsaved.waitFor();
+    await shot("05k-sql-file-close-unsaved");
+    await unsaved.getByRole("button", { name: "Cancel", exact: true }).click();
+    await unsaved.waitFor({ state: "detached" });
+    assert.equal(await fileTab("console.sql").count(), 1);
+    await page.keyboard.press("Control+w");
+    await unsaved.getByRole("button", { name: "Don't save" }).click();
+    await fileTab("console.sql").waitFor({ state: "detached" });
+    assert.ok(!readFileSync(consolePath, "utf8").includes("not kept"));
+    // Reopening the closed tab brings it back as it was closed: unsaved changes included.
+    await page.keyboard.press("Control+Shift+T");
+    await fileTab("console.sql").locator(".tab-unsaved").waitFor();
+    await page.keyboard.press("Control+w");
+    await unsaved.getByRole("button", { name: "Don't save" }).click();
+    await fileTab("console.sql").waitFor({ state: "detached" });
+    // Recent files: newest first, from the tab bar's file button; one already open shows its tab.
+    await page.getByRole("button", { name: "Open a file or a recent one" }).click();
+    const fileMenu = page.getByRole("menu", { name: "Open a file or a recent one" });
+    await fileMenu.getByRole("menuitem", { name: /^console\.sql/ }).waitFor();
+    const recentNames = await fileMenu.locator(".recent-file button[role=menuitem] > span:first-child").allInnerTexts();
+    assert.deepEqual(recentNames.slice(0, 3), ["console.sql", "copy.sql", "report.sql"]);
+    await shot("05l-recent-files");
+    await fileMenu.getByRole("menuitem", { name: /^copy\.sql/ }).click();
+    await page.locator(".tabbar .tab.active .tab-label", { hasText: "copy.sql" }).waitFor();
+    await page.getByRole("button", { name: "Open a file or a recent one" }).click();
+    await fileMenu.getByRole("menuitem", { name: /^report\.sql/ }).click();
+    await fileTab("report.sql").waitFor();
+    assert.equal(await editorLines(), "select 'theirs';\n");
+    // Both saved: closing them asks nothing.
+    await page.keyboard.press("Control+w");
+    await fileTab("report.sql").waitFor({ state: "detached" });
+    await fileTab("copy.sql").click();
+    await page.keyboard.press("Control+w");
+    await fileTab("copy.sql").waitFor({ state: "detached" });
+  }
 
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
@@ -3987,6 +4089,37 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate(() => delete window.__spelaionDbeaverDir);
   }
 
+  step("open tabs survive a restart (ADR-036): a file and two consoles come back with their text, disconnected, and nothing runs");
+  const restartFile = join(userDir, "sql files", "restart.sql");
+  writeFileSync(restartFile, "select 'restart_file_marker';\n");
+  {
+    // Only these three tabs: the others are closed first (pinned ones unpinned).
+    while (await page.locator(".tabbar .tab .tab-unpin").count() > 0) await page.locator(".tabbar .tab .tab-unpin").first().click();
+    await page.keyboard.press("Control+Shift+W");
+    for (let i = 0; i < 20 && await page.locator(".tabbar .tab").count() > 0; i++) {
+      await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0 || document.querySelector('[role="dialog"] .modal-actions .danger'));
+      const danger = page.locator('[role="dialog"] .modal-actions .danger');
+      if (await danger.count() > 0) await danger.click();
+    }
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
+    await newQuery("Shop (SQLite)", "select 'restart_console_marker' as restored;");
+    await page.keyboard.press("Control+t");
+    await page.locator(".tab-panel:not([hidden]) .cm-content").click();
+    await page.keyboard.insertText("-- second console, no connection");
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, restartFile);
+    await page.keyboard.press("Control+o");
+    await page.locator(".tabbar .tab.active .tab-label", { hasText: "restart.sql" }).waitFor();
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    // An unsaved change: it comes back unsaved.
+    await page.locator(".tab-panel:not([hidden]) .cm-content").click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.insertText("-- unsaved line");
+    await page.locator(".tabbar .tab.active .tab-unsaved").waitFor();
+    assert.equal(await page.locator(".tabbar .tab").count(), 3);
+    // The core writes the tabs at most 1.25 s after a change; the app is then killed (as a
+    // crash would) unless it closes cleanly below.
+    await page.waitForTimeout(2_000);
+  }
   step("history, theme and per-connection preference survive an app restart");
   await setLanguage("es");
   await setTheme("dark", "dark");
@@ -4013,6 +4146,34 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   page.setDefaultTimeout(30_000);
   await page.getByRole("button", { name: "Configuración", exact: true }).waitFor();
   assert.equal(await page.locator("html").getAttribute("lang"), "es");
+  {
+    // The three tabs are back, in order, with their text; disconnected, without results.
+    const tabs = page.locator(".tabbar .tab");
+    await tabs.nth(2).waitFor();
+    assert.equal(await tabs.count(), 3);
+    const labels = await page.locator(".tabbar .tab .tab-label").allInnerTexts();
+    assert.equal(labels[2], "restart.sql");
+    // Each tab shown in turn (an editor only draws its lines while it is shown).
+    const texts = [];
+    for (let i = 0; i < 3; i++) {
+      await tabs.nth(i).locator(".tab-label").click();
+      texts.push((await page.locator(".tab-panel:not([hidden]) .cm-line").evaluateAll((lines) => lines.map((l) => l.textContent))).join("\n"));
+    }
+    assert.deepEqual(texts, [
+      "select 'restart_console_marker' as restored;",
+      "-- second console, no connection",
+      "select 'restart_file_marker';\n-- unsaved line",
+    ]);
+    assert.equal(await page.locator(".tabbar .tab.active .tab-label").innerText(), "restart.sql");
+    await page.locator(".tabbar .tab.active .tab-unsaved").waitFor();
+    assert.equal(await page.locator(".tabbar .tab .dot-disconnected").count(), 3);
+    assert.equal(await page.locator(".tab-panel").first().locator("select").first().evaluate((el) => el.selectedOptions[0].text), "Shop (SQLite) (sqlite)");
+    await page.waitForTimeout(500);
+    assert.equal(await page.locator(".tab-panel .grid-host").count(), 0, "a restored tab runs nothing");
+    assert.equal(await page.locator(".tabbar .tab-running, .tabbar .tab .dot-connected").count(), 0);
+    assert.ok(!readFileSync(restartFile, "utf8").includes("unsaved line"), "nothing was saved on its own");
+    await shot("10b-tabs-restored");
+  }
   assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
   assert.equal(await savedLanguage(), "es");
   await setLanguage("en");
@@ -4334,6 +4495,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
   }
 
+  // The next start connects the restored tab (checked after quitting, below).
+  await withSettings("editor", async (settings) => {
+    await settings.getByRole("checkbox", { name: "Reconnect the last connections at startup" }).check();
+    await page.waitForFunction(() => document.querySelector('input[name="reconnectOnStart"]')?.checked && !document.querySelector('input[name="reconnectOnStart"]').disabled);
+  });
   step("quitting with a transaction open asks first: Cancel keeps the app, the dialog quits");
   const quitPanel = await newQuery("Shop (SQLite)", "create temp table quit_tx (x);");
   await run(quitPanel);
@@ -4355,6 +4521,21 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const exitedOnQuit = once(app, "exit");
   await page.getByRole("dialog", { name: "Quit with an open transaction?" }).getByRole("button", { name: "Quit and roll back" }).click();
   await Promise.race([exitedOnQuit, new Promise((_, reject) => setTimeout(() => reject(new Error("the app did not quit")), 15_000))]);
+
+  step("reconnect at startup (Settings › Editor): the restored tab connects, and nothing runs");
+  await browser.close().catch(() => {});
+  app = startApp();
+  browser = await connect();
+  page = browser.contexts()[0].pages()[0];
+  page.setDefaultTimeout(30_000);
+  await page.locator(".tabbar .tab .dot-connected").waitFor();
+  assert.equal(await page.locator(".tabbar .tab").count(), 1);
+  const reconnected = page.locator(".tab-panel:not([hidden])");
+  assert.equal(await reconnected.locator(".cm-content").innerText(), "insert into quit_tx values (1);");
+  await page.waitForTimeout(500);
+  assert.equal(await reconnected.locator(".grid-host").count(), 0, "connecting ran nothing");
+  assert.equal(await page.locator(".tabbar .tab-tx").count(), 0, "no transaction was opened");
+  assert.equal(await reconnected.getByText("Statement 1", { exact: false }).count(), 0);
 
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {

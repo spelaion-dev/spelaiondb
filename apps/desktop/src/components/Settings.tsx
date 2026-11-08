@@ -13,8 +13,8 @@ import { call, commands, type NamePatternPreview, type NetworkProfileItem } from
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates" | "scripts";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates", "scripts"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates" | "scripts" | "editor";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates", "scripts", "editor"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -67,6 +67,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}
         {category === "scripts" && <ScriptSettings />}
+        {category === "editor" && <EditorSettings />}
       </section>
     </div>
   );
@@ -132,6 +133,26 @@ function AppearanceSettings() {
       <p className="muted small">{t("appearance.hint")}</p>
       <SaveError setting="theme" />
       <GridSettings />
+    </>
+  );
+}
+
+/** The editor's tabs (ADR-036): they always come back after a restart, disconnected; this
+ *  only chooses whether their connections connect again (never run anything). */
+function EditorSettings() {
+  const { t } = useTranslation("settings");
+  const reconnect = usePreferences((s) => s.reconnectOnStart);
+  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const setReconnect = usePreferences((s) => s.setReconnectOnStart);
+  return (
+    <>
+      <p className="muted small">{t("editor.restoreHint")}</p>
+      <label className="check">
+        <input type="checkbox" name="reconnectOnStart" checked={reconnect} disabled={busy} onChange={(e) => void setReconnect(e.target.checked)} />
+        {t("editor.reconnect")}
+      </label>
+      <p className="muted small">{t("editor.reconnectHint")}</p>
+      <SaveError setting="editor" />
     </>
   );
 }

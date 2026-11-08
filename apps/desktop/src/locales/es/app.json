@@ -31,6 +31,19 @@
     "reopen": "Reabrir la pestaña cerrada",
     "running": "Hay una consulta en ejecución",
     "switcher": "Pestañas usadas recientemente",
-    "switcherHint": "Mantén Ctrl pulsado y pulsa Tab para moverte; suelta Ctrl para cambiar."
+    "switcherHint": "Mantén Ctrl pulsado y pulsa Tab para moverte; suelta Ctrl para cambiar.",
+    "unsaved": "Cambios sin guardar",
+    "saveFile": "Guardar archivo",
+    "saveFileAs": "Guardar como archivo…",
+    "reloadFile": "Volver a cargar del disco"
+  },
+  "files": {
+    "menu": "Abrir un archivo o uno reciente",
+    "open": "Abrir archivo…",
+    "recent": "Archivos recientes",
+    "noRecent": "Aún no hay archivos recientes.",
+    "missing": "{{path}} (ya no está en el disco)",
+    "missingShort": "no está",
+    "forget": "Quitar {{name}} de los archivos recientes"
   }
 }

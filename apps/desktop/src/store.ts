@@ -3,7 +3,8 @@
 
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
-import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, ErrorAnswerItem, FieldChangeItem, InteractionKind, OnErrorItem, RiskKind, ScriptSummaryItem, TransactionStatusItem, WorkspaceInfo } from "./api";
+import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, ErrorAnswerItem, FieldChangeItem, FileFormatItem, InteractionKind, OnErrorItem, RestoreNoteItem, RiskKind, ScriptSummaryItem, TransactionStatusItem, WorkspaceInfo } from "./api";
+import type { RestoredTabItem } from "./bindings";
 
 export interface ResultMeta {
   id: number;
@@ -104,6 +105,26 @@ export interface Tab {
   savingEdits?: boolean;
   /** This tab's own run options (ADR-035); `null` fields take the defaults. */
   runOptions?: { onError: OnErrorItem | null; timeoutSeconds: number | null };
+  /** Bumped when `sql` is replaced from outside the editor (a file reloaded from disk). */
+  textRevision?: number;
+  /** The `.sql` file this tab shows (ADR-036); a console has none. */
+  file?: TabFile;
+  /** What changed while the app was closed (a connection or file gone), shown until dismissed. */
+  restoreNotes?: RestoreNoteItem[];
+}
+
+/** The `.sql` file behind a file tab. The core reads and writes it (ADR-036). */
+export interface TabFile {
+  path: string;
+  /** Its name, the tab's default title. */
+  name: string;
+  /** Encoding and line ending, kept when it is saved. */
+  format: FileFormatItem;
+  /** What the core last read or saved, sent back with the next save to notice a change on disk. */
+  hash: string | null;
+  /** The text as last read or saved; the tab is unsaved while its text differs. `null`: not
+   *  known (restored or reopened with unsaved changes). */
+  savedText: string | null;
 }
 
 /** What a table data tab shows: the core writes and checks the page's SELECT. */
@@ -137,6 +158,8 @@ export interface TabSnapshot {
   pinned?: boolean;
   snippetName?: string;
   runOptions?: Tab["runOptions"];
+  /** A file tab comes back as it was closed, unsaved changes included (ADR-036). */
+  file?: TabFile;
 }
 
 /** A closed tab and where it was, to reopen it in the same place. */
@@ -156,6 +179,7 @@ export function snapshotOf(tab: Tab): TabSnapshot | null {
     ...(tab.pinned ? { pinned: true } : {}),
     ...(tab.snippetName ? { snippetName: tab.snippetName } : {}),
     ...(tab.runOptions ? { runOptions: tab.runOptions } : {}),
+    ...(tab.file ? { file: tab.file } : {}),
   };
 }
 
@@ -254,6 +278,9 @@ interface AppStore {
   /** Moves a tab to `index`, kept inside its group (pinned or not). */
   moveTab(id: string, index: number): void;
   setActiveTab(id: string): void;
+  /** Replaces every tab with the ones the core restored for the open folder (ADR-036): all
+   *  disconnected, with their text and nothing to run. Closed tabs are forgotten. */
+  restoreTabs(restored: RestoredTabItem[], active: number | null): void;
   updateTab(id: string, patch: Partial<Tab>): void;
   updateRun(id: string, update: (run: RunState) => RunState): void;
   setHistoryOpen(open: boolean): void;
@@ -371,7 +398,7 @@ export const useApp = create<AppStore>((set) => ({
     set((now) => {
       const tab = now.tabs.find((t) => t.id === id);
       if (!tab) return now;
-      const restored: Tab = { ...tab, title: snapshot.title, pinned: snapshot.pinned, snippetName: snapshot.snippetName, runOptions: snapshot.runOptions };
+      const restored: Tab = { ...tab, title: snapshot.title, pinned: snapshot.pinned, snippetName: snapshot.snippetName, runOptions: snapshot.runOptions, file: snapshot.file };
       const others = now.tabs.filter((t) => t.id !== id);
       others.splice(Math.min(last.index, others.length), 0, restored);
       return { tabs: pinnedFirst(others) };
@@ -418,6 +445,38 @@ export const useApp = create<AppStore>((set) => ({
       return { tabs: others };
     }),
   setActiveTab: (activeTab) => set((s) => ({ activeTab, recentTabs: [activeTab, ...s.recentTabs.filter((id) => id !== activeTab)] })),
+  restoreTabs: (restored, active) => {
+    const tabs: Tab[] = restored.map(({ tab: kept, notes }) => {
+      tabCounter += 1;
+      const file = kept.file ?? null;
+      return {
+        id: `tab-${tabCounter}`,
+        number: tabCounter,
+        title: kept.title ?? undefined,
+        pinned: kept.pinned || undefined,
+        connectionId: kept.connection ?? null,
+        status: "disconnected",
+        serverVersion: null,
+        sql: kept.text,
+        run: null,
+        snippetName: kept.snippetName ?? undefined,
+        runOptions: kept.onError || kept.timeoutSeconds ? { onError: kept.onError ?? null, timeoutSeconds: kept.timeoutSeconds ?? null } : undefined,
+        file: file
+          ? {
+              path: file.path,
+              name: file.path.split(/[\\/]/).pop() ?? file.path,
+              format: file.format,
+              hash: file.hash ?? null,
+              savedText: file.modified ? null : kept.text,
+            }
+          : undefined,
+        restoreNotes: notes.length > 0 ? notes : undefined,
+      };
+    });
+    const ordered = pinnedFirst(tabs);
+    const activeTab = (active !== null ? tabs[active]?.id : undefined) ?? ordered[ordered.length - 1]?.id ?? null;
+    set({ tabs: ordered, activeTab, recentTabs: activeTab ? [activeTab] : [], closedTabs: [], renamingTab: null });
+  },
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   updateRun: (id, update) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id && t.run ? { ...t, run: update(t.run) } : t)) })),
@@ -500,6 +559,14 @@ export interface TextRequest {
   resolve(text: string | null): void;
 }
 
+/** A question with a few answers (save, don't save, cancel…); `null` when dismissed. */
+export interface ChoiceRequest {
+  title: string;
+  message: string;
+  choices: { id: string; label: string; primary?: boolean; danger?: boolean }[];
+  resolve(choice: string | null): void;
+}
+
 /** Values for the `:name` placeholders of a script. */
 export interface ParamsRequest {
   names: string[];
@@ -551,9 +618,11 @@ interface DialogStore {
   openTransactions: OpenTransactionsRequest | null;
   params: ParamsRequest | null;
   text: TextRequest | null;
+  choice: ChoiceRequest | null;
   interactions: InteractionItem[];
   askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"], running?: string[]): Promise<boolean>;
   askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
+  askChoice(request: Omit<ChoiceRequest, "resolve">): Promise<string | null>;
   askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
   askScriptError(request: Omit<ScriptErrorRequest, "resolve">): Promise<ErrorAnswerItem>;
@@ -575,6 +644,7 @@ export const useDialogs = create<DialogStore>((set) => ({
   openTransactions: null,
   params: null,
   text: null,
+  choice: null,
   interactions: [],
   askText: (request) =>
     new Promise((resolve) =>
@@ -584,6 +654,18 @@ export const useDialogs = create<DialogStore>((set) => ({
           resolve: (text) => {
             set({ text: null });
             resolve(text);
+          },
+        },
+      }),
+    ),
+  askChoice: (request) =>
+    new Promise((resolve) =>
+      set({
+        choice: {
+          ...request,
+          resolve: (choice) => {
+            set({ choice: null });
+            resolve(choice);
           },
         },
       }),

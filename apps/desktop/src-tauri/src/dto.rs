@@ -3715,3 +3715,248 @@ pub struct RerunCheckItem {
     pub refused: Option<String>,
     pub open_transaction: bool,
 }
+
+// ------------------------------------------------- SQL files and open tabs (ADR-036)
+
+/// The encoding a `.sql` file was read in and is written back in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum FileEncodingItem {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+    Utf16Be,
+    Windows1252,
+}
+
+impl From<spelaion_core::FileEncoding> for FileEncodingItem {
+    fn from(e: spelaion_core::FileEncoding) -> Self {
+        match e {
+            spelaion_core::FileEncoding::Utf8 => Self::Utf8,
+            spelaion_core::FileEncoding::Utf8Bom => Self::Utf8Bom,
+            spelaion_core::FileEncoding::Utf16Le => Self::Utf16Le,
+            spelaion_core::FileEncoding::Utf16Be => Self::Utf16Be,
+            spelaion_core::FileEncoding::Windows1252 => Self::Windows1252,
+        }
+    }
+}
+
+impl From<FileEncodingItem> for spelaion_core::FileEncoding {
+    fn from(e: FileEncodingItem) -> Self {
+        match e {
+            FileEncodingItem::Utf8 => Self::Utf8,
+            FileEncodingItem::Utf8Bom => Self::Utf8Bom,
+            FileEncodingItem::Utf16Le => Self::Utf16Le,
+            FileEncodingItem::Utf16Be => Self::Utf16Be,
+            FileEncodingItem::Windows1252 => Self::Windows1252,
+        }
+    }
+}
+
+/// The line break a `.sql` file is written with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum LineEndingItem {
+    Lf,
+    CrLf,
+    Cr,
+}
+
+impl From<spelaion_core::LineEnding> for LineEndingItem {
+    fn from(e: spelaion_core::LineEnding) -> Self {
+        match e {
+            spelaion_core::LineEnding::Lf => Self::Lf,
+            spelaion_core::LineEnding::CrLf => Self::CrLf,
+            spelaion_core::LineEnding::Cr => Self::Cr,
+        }
+    }
+}
+
+impl From<LineEndingItem> for spelaion_core::LineEnding {
+    fn from(e: LineEndingItem) -> Self {
+        match e {
+            LineEndingItem::Lf => Self::Lf,
+            LineEndingItem::CrLf => Self::CrLf,
+            LineEndingItem::Cr => Self::Cr,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FileFormatItem {
+    pub encoding: FileEncodingItem,
+    pub line_ending: LineEndingItem,
+}
+
+impl From<spelaion_core::FileFormat> for FileFormatItem {
+    fn from(f: spelaion_core::FileFormat) -> Self {
+        Self {
+            encoding: f.encoding.into(),
+            line_ending: f.line_ending.into(),
+        }
+    }
+}
+
+impl From<FileFormatItem> for spelaion_core::FileFormat {
+    fn from(f: FileFormatItem) -> Self {
+        Self {
+            encoding: f.encoding.into(),
+            line_ending: f.line_ending.into(),
+        }
+    }
+}
+
+/// A `.sql` file read by the core: its text with `\n` line breaks.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlFileItem {
+    pub path: String,
+    /// The file's name, for the tab's title.
+    pub name: String,
+    pub text: String,
+    pub format: FileFormatItem,
+    /// SHA-256 of the file's bytes, sent back with the next save.
+    pub hash: String,
+}
+
+/// What a save did. The conflicts are answers, not errors: the app asks the user.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SaveFileOutcome {
+    #[serde(rename_all = "camelCase")]
+    Saved {
+        path: String,
+        name: String,
+        hash: String,
+        format: FileFormatItem,
+    },
+    /// The file changed on disk since it was read or saved: overwrite, reload or cancel.
+    ChangedOnDisk,
+    /// The file was deleted on disk since: write it again or cancel.
+    DeletedOnDisk,
+    /// The file's encoding cannot hold this character: save as UTF-8 instead?
+    Unrepresentable { character: String, encoding: String },
+}
+
+/// The file behind a kept file tab.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenTabFileItem {
+    pub path: String,
+    pub hash: Option<String>,
+    pub format: FileFormatItem,
+    /// The text differs from the file: it is restored as unsaved.
+    pub modified: bool,
+}
+
+/// An editor tab as kept between runs: text and settings, never results or session state.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenTabItem {
+    pub title: Option<String>,
+    pub text: String,
+    pub connection: Option<String>,
+    pub pinned: bool,
+    pub on_error: Option<OnErrorItem>,
+    pub timeout_seconds: Option<u32>,
+    pub snippet_name: Option<String>,
+    pub file: Option<OpenTabFileItem>,
+}
+
+impl From<OpenTabItem> for spelaion_core::SavedTab {
+    fn from(t: OpenTabItem) -> Self {
+        Self {
+            title: t.title,
+            text: t.text,
+            connection: t.connection,
+            pinned: t.pinned,
+            on_error: t.on_error.map(Into::into),
+            timeout_seconds: t.timeout_seconds,
+            snippet_name: t.snippet_name,
+            file: t.file.map(|f| spelaion_core::SavedFile {
+                path: f.path,
+                hash: f.hash,
+                encoding: f.format.encoding.into(),
+                line_ending: f.format.line_ending.into(),
+                modified: f.modified,
+            }),
+        }
+    }
+}
+
+impl From<spelaion_core::SavedTab> for OpenTabItem {
+    fn from(t: spelaion_core::SavedTab) -> Self {
+        Self {
+            title: t.title,
+            text: t.text,
+            connection: t.connection,
+            pinned: t.pinned,
+            on_error: t.on_error.map(Into::into),
+            timeout_seconds: t.timeout_seconds,
+            snippet_name: t.snippet_name,
+            file: t.file.map(|f| OpenTabFileItem {
+                path: f.path,
+                hash: f.hash,
+                format: FileFormatItem {
+                    encoding: f.encoding.into(),
+                    line_ending: f.line_ending.into(),
+                },
+                modified: f.modified,
+            }),
+        }
+    }
+}
+
+/// Why a restored tab is not exactly as it was kept.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RestoreNoteItem {
+    ConnectionMissing { connection: String },
+    FileMissing,
+    FileUnreadable { message: String },
+    FileChangedOnDisk,
+}
+
+impl From<spelaion_core::RestoreNote> for RestoreNoteItem {
+    fn from(n: spelaion_core::RestoreNote) -> Self {
+        match n {
+            spelaion_core::RestoreNote::ConnectionMissing { connection } => {
+                Self::ConnectionMissing { connection }
+            }
+            spelaion_core::RestoreNote::FileMissing => Self::FileMissing,
+            spelaion_core::RestoreNote::FileUnreadable { message } => {
+                Self::FileUnreadable { message }
+            }
+            spelaion_core::RestoreNote::FileChangedOnDisk => Self::FileChangedOnDisk,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoredTabItem {
+    pub tab: OpenTabItem,
+    pub notes: Vec<RestoreNoteItem>,
+}
+
+/// The open folder's kept tabs, checked by the core. They come back disconnected.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoredTabsItem {
+    /// Which folder they belong to: sent back with every `save_tabs`.
+    pub scope: String,
+    pub tabs: Vec<RestoredTabItem>,
+    pub active: Option<u32>,
+    /// The personal "reconnect at startup" setting: connect only, never run.
+    pub reconnect: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentFileItem {
+    pub path: String,
+    pub name: String,
+    /// Still on disk (checked when listed).
+    pub exists: bool,
+}

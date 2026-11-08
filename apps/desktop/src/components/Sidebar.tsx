@@ -42,6 +42,7 @@ import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInf
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
+import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard, pasteIsForText } from "../connectionCopies";
@@ -1017,8 +1018,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     const path = await open({ directory: true, title: t("openFolderTitle") });
     if (typeof path !== "string") return;
     const app = useApp.getState();
-    // A connection ID can refer to a different server in the next folder. Keep the SQL,
-    // but make the user choose a connection again before executing any existing tab.
+    // A connection ID can refer to a different server in the next folder: the tabs on screen
+    // are kept under this folder and the next folder's own tabs come back (ADR-036).
     if (
       app.tabs.some((t) => t.status === "connecting" || t.run?.running) ||
       app.historySaving.length > 0
@@ -1028,6 +1029,10 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     if (!(await confirmOpenTransactions(app.tabs.map((t) => t.id), "disconnect"))) return;
     app.setWorkspaceChanging(true);
     setFolderError(null);
+    // Tabs belong to the folder they were opened in (ADR-036): the old folder's are written
+    // now, and the new folder's come back once it is open.
+    await flushTabs();
+    detachTabs();
     try {
       const sessions = [
         ...app.tabs.map((t) => t.id),
@@ -1051,6 +1056,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       setFolderError(errorText(e));
       await refreshConnections().catch(() => undefined);
     } finally {
+      await restoreTabs();
       app.setWorkspaceChanging(false);
     }
   }
