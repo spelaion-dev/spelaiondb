@@ -3,6 +3,8 @@
 - **Status:** Accepted (implemented)
 - **Date:** 2026-11-05
 - **Builds on:** ADR-007 (in-process SSH), ADR-005 (driver model)
+- **Amended by:** ADR-037 (a reconnect, like any new session, runs the connection's session
+  setup; never the user's statements)
 
 ## Context
 A connection left open overnight shows connection errors in the morning. What happens today:

@@ -45,3 +45,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [034](0034-streaming-exports.md) | Exports that stream to a file: a new read-only run in its own session, written batch by batch | Accepted |
 | [035](0035-script-runs.md) | Script runs that behave like a script runner: error modes, timeouts and server output | Accepted |
 | [036](0036-sql-files-and-restored-tabs.md) | SQL files in editor tabs, and open tabs that survive a restart | Accepted |
+| [037](0037-session-setup.md) | Every new session starts as its connection says: setup statements, default schema, isolation level | Accepted |

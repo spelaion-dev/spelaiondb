@@ -394,3 +394,51 @@ async fn every_call_is_recorded_with_its_tool_and_session() {
     let latest = &app_store(&p.user_dir).recent(1).unwrap()[0];
     assert_ne!(latest.session.as_deref(), Some(session.as_str()));
 }
+
+#[tokio::test]
+async fn an_agents_read_session_refuses_a_setup_that_writes() {
+    let user_dir = temp("setup");
+    let db = database(&user_dir);
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    // The user's own setup writes: their editor runs it, an agent's read session must not.
+    std::fs::write(
+        user_dir.join("connections/notes.toml"),
+        writable_connection(
+            &db,
+            "\n[session]\nsetup = \"insert into notes (body) values ('setup')\"\nignore_setup_errors = true\n",
+        ),
+    )
+    .unwrap();
+    let mcp = server(None, &user_dir, false);
+    let result = mcp
+        .read(
+            &call("run_query"),
+            "~/notes",
+            "select count(*) from notes",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(refused(&result), "{}", body(&result));
+    assert!(body(&result).contains("session setup"), "{}", body(&result));
+    assert_eq!(rows(&db), 1);
+
+    // A setup that only reads or sets the session is fine for agents.
+    std::fs::write(
+        user_dir.join("connections/notes.toml"),
+        writable_connection(&db, "\n[session]\nsetup = \"select count(*) from notes\"\n"),
+    )
+    .unwrap();
+    let mcp = server(None, &user_dir, false);
+    let result = mcp
+        .read(
+            &call("run_query"),
+            "~/notes",
+            "select count(*) from notes",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!refused(&result), "{}", body(&result));
+    assert_eq!(rows(&db), 1);
+}

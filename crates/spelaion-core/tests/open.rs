@@ -71,6 +71,7 @@ impl Workspace {
             },
             interaction: ui,
             password,
+            read_only_session: false,
         };
         open_connection(
             resolved,

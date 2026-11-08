@@ -14,8 +14,8 @@ use crate::load::{
     Config, ConnectionEntry, ConnectionId, Source, validate_connection, workspace_dir,
 };
 use crate::model::{
-    ConnectionFile, Engine, KubernetesConfig, McpConfig, SCHEMA_VERSION, SecretSpec, TlsConfig,
-    TlsModeConfig, WritePolicy,
+    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, McpConfig, SCHEMA_VERSION,
+    SecretSpec, SessionConfig, TlsConfig, TlsModeConfig, WritePolicy,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::vars::home_dir;
@@ -141,6 +141,43 @@ pub struct ConnectionDraft {
     pub mcp_exposed: bool,
     /// Agents may write through `execute_write` (ADR-019); otherwise they only read.
     pub mcp_writes: bool,
+    /// How every new session starts (ADR-037).
+    pub session: SessionDraft,
+}
+
+/// The Session tab of the connection form (ADR-037); empty fields mean "not set".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionDraft {
+    /// SQL run on every new session.
+    pub setup: String,
+    pub ignore_setup_errors: bool,
+    pub schema: String,
+    pub isolation: Option<IsolationLevel>,
+}
+
+impl SessionDraft {
+    /// The `[session]` table: the setup with `\n` line breaks and without blank lines around
+    /// it, the schema trimmed, and "ignore errors" only with a setup.
+    fn to_config(&self) -> SessionConfig {
+        let setup = self.setup.replace("\r\n", "\n").replace('\r', "\n");
+        let setup = setup.trim();
+        let setup = (!setup.is_empty()).then(|| setup.to_string());
+        SessionConfig {
+            ignore_setup_errors: self.ignore_setup_errors && setup.is_some(),
+            setup,
+            schema: non_empty(&self.schema),
+            isolation: self.isolation,
+        }
+    }
+
+    fn from_config(session: &SessionConfig) -> Self {
+        Self {
+            setup: session.setup.clone().unwrap_or_default(),
+            ignore_setup_errors: session.ignore_setup_errors,
+            schema: session.schema.clone().unwrap_or_default(),
+            isolation: session.isolation,
+        }
+    }
 }
 
 /// The Kubernetes tab of the connection form; empty fields mean the defaults.
@@ -428,6 +465,7 @@ impl ConnectionDraft {
             } else {
                 TlsConfig::default()
             },
+            session: self.session.to_config(),
             mcp: McpConfig {
                 exposed: self.mcp_exposed,
                 writes: if self.mcp_writes {
@@ -539,6 +577,7 @@ impl ConnectionDraft {
             read_only: file.read_only,
             mcp_exposed: file.mcp.exposed,
             mcp_writes: file.mcp.writes == WritePolicy::Allow,
+            session: SessionDraft::from_config(&file.session),
         }
     }
 }
@@ -799,6 +838,28 @@ pub fn update_connection(
             &mut doc,
             &["read_only"],
             new.read_only.then(|| Value::from(true)),
+        );
+    }
+    if old.session.setup != new.session.setup {
+        put(&mut doc, &["session", "setup"], text(&new.session.setup));
+    }
+    if old.session.ignore_setup_errors != new.session.ignore_setup_errors {
+        put(
+            &mut doc,
+            &["session", "ignore_setup_errors"],
+            new.session.ignore_setup_errors.then(|| Value::from(true)),
+        );
+    }
+    if old.session.schema != new.session.schema {
+        put(&mut doc, &["session", "schema"], text(&new.session.schema));
+    }
+    if old.session.isolation != new.session.isolation {
+        put(
+            &mut doc,
+            &["session", "isolation"],
+            new.session
+                .isolation
+                .map(|level| Value::from(level.as_str())),
         );
     }
     if old.tls.mode != new.tls.mode {

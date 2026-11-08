@@ -14,7 +14,7 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
-use crate::draft::{ConnectionDraft, PasswordChoice, normalize_tags, slug};
+use crate::draft::{ConnectionDraft, PasswordChoice, SessionDraft, normalize_tags, slug};
 use crate::load::{Source, check_tag, is_hidden_char};
 use crate::model::{ConnectionFile, Engine, ProxyType, SshAuth, TlsModeConfig, TunnelFile};
 use crate::tunnel_draft::{HopDraft, ProxyDraft, TunnelDraft, TunnelDraftOptions, TunnelPasswords};
@@ -531,6 +531,7 @@ pub fn import_plan(
             keepalive: (!sqlite).then_some(ConnectionFile::SUGGESTED_KEEPALIVE),
             connect_timeout: None,
             statement_timeout: None,
+            session: SessionDraft::default(),
             mcp_exposed: false,
             mcp_writes: false,
         },

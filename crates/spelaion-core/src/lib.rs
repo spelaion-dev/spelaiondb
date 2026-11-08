@@ -31,6 +31,7 @@ mod results;
 mod script;
 mod selection_stats;
 mod session;
+mod session_setup;
 mod sort;
 mod sql_file;
 mod table_data;
@@ -38,7 +39,7 @@ mod transaction;
 mod write;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
-pub use classify::{ReadKind, classify_read_only};
+pub use classify::{ReadKind, classify_read_only, classify_session_setup};
 pub use column_stats::{
     ColumnStats, ColumnStatsError, ColumnStatsRequest, ColumnStatsSql, STATS_SAMPLE_ROWS,
     STATS_TEXT_CHARS, Stat, TOP_VALUES, TopValue, column_stats, column_stats_sql,
@@ -95,6 +96,10 @@ pub use selection_stats::{
 pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
     ScriptSummary, Session, StatementError,
+};
+pub use session_setup::{
+    SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
+    isolation_statement, setup_is_restricted,
 };
 pub use sort::{SortKey, ViewError};
 pub use spelaion_store::{

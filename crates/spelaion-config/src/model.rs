@@ -80,6 +80,10 @@ pub struct ConnectionFile {
     pub statement_timeout: Option<u32>,
     #[serde(default, skip_serializing_if = "TlsConfig::is_default")]
     pub tls: TlsConfig,
+    /// How every new session starts (ADR-037): setup statements, the default schema and the
+    /// isolation level, applied each time a session opens (reconnecting included).
+    #[serde(default, skip_serializing_if = "SessionConfig::is_default")]
+    pub session: SessionConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_default")]
     pub mcp: McpConfig,
 }
@@ -189,6 +193,111 @@ pub enum TlsModeConfig {
     Require,
     VerifyCa,
     VerifyFull,
+}
+
+/// How every new session of a connection starts (ADR-037). Applied in this order when a
+/// session opens: the isolation level, the default schema, then the setup statements.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionConfig {
+    /// SQL run on every new session, split into statements like the editor does (`SET
+    /// search_path TO app, public;`, `SET TIME ZONE 'UTC';`…). Sent as written: `${…}`
+    /// variables are not expanded here. On a read-only connection, on Production and in
+    /// agents' sessions it may only read or change session settings; a statement that writes
+    /// refuses the session. At most 20000 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<String>,
+    /// A setup statement the database rejects is skipped instead of failing the session. A
+    /// statement refused because it writes on a read-only connection still refuses it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ignore_setup_errors: bool,
+    /// Where unqualified names are found when a session opens: `search_path` on PostgreSQL
+    /// (this schema, then `public`), the database on MySQL and MariaDB, `SET schema` on DuckDB.
+    /// SQL Server and SQLite have no per-session schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    /// The isolation level of the session's transactions; the server's default when absent.
+    /// PostgreSQL, MySQL, MariaDB and SQL Server (`snapshot` only there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationLevel>,
+}
+
+impl SessionConfig {
+    /// Longest setup accepted, in characters.
+    pub const MAX_SETUP: usize = 20_000;
+    /// Longest default schema accepted, in characters.
+    pub const MAX_SCHEMA: usize = 128;
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A transaction isolation level (ADR-037), as SQL names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum IsolationLevel {
+    ReadUncommitted,
+    ReadCommitted,
+    RepeatableRead,
+    Serializable,
+    /// SQL Server only, where the database allows snapshot isolation.
+    Snapshot,
+}
+
+impl IsolationLevel {
+    pub const ALL: [IsolationLevel; 5] = [
+        IsolationLevel::ReadUncommitted,
+        IsolationLevel::ReadCommitted,
+        IsolationLevel::RepeatableRead,
+        IsolationLevel::Serializable,
+        IsolationLevel::Snapshot,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IsolationLevel::ReadUncommitted => "read-uncommitted",
+            IsolationLevel::ReadCommitted => "read-committed",
+            IsolationLevel::RepeatableRead => "repeatable-read",
+            IsolationLevel::Serializable => "serializable",
+            IsolationLevel::Snapshot => "snapshot",
+        }
+    }
+
+    /// The words SQL uses after `ISOLATION LEVEL`.
+    pub fn sql(self) -> &'static str {
+        match self {
+            IsolationLevel::ReadUncommitted => "READ UNCOMMITTED",
+            IsolationLevel::ReadCommitted => "READ COMMITTED",
+            IsolationLevel::RepeatableRead => "REPEATABLE READ",
+            IsolationLevel::Serializable => "SERIALIZABLE",
+            IsolationLevel::Snapshot => "SNAPSHOT",
+        }
+    }
+
+    /// Whether `engine` can set this level for a session.
+    pub fn available_on(self, engine: Engine) -> bool {
+        match engine {
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb => self != IsolationLevel::Snapshot,
+            Engine::Sqlserver => true,
+            // A file engine has one level: SQLite serializes, DuckDB uses snapshots.
+            Engine::Sqlite | Engine::Duckdb => false,
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.as_str() == text)
+    }
+}
+
+impl Engine {
+    /// Whether a session of this engine has a schema of its own to switch to (ADR-037).
+    pub fn has_session_schema(self) -> bool {
+        match self {
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Duckdb => true,
+            Engine::Sqlserver | Engine::Sqlite => false,
+        }
+    }
 }
 
 /// What an agent can do with this connection (ADR-008).
