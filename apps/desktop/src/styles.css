@@ -2994,82 +2994,107 @@ select {
   gap: 8px;
   margin-top: 8px;
 }
-.dbeaver-import {
+.conn-import {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 16px;
+  gap: var(--space-lg);
+  padding: var(--space-lg) var(--space-xl);
   min-height: 0;
   overflow: auto;
   flex: 1;
 }
-.dbeaver-import > .wizard-footer { margin: auto -16px -12px; }
-.dbeaver-source {
+.conn-import > .wizard-footer { margin: auto calc(-1 * var(--space-xl)) calc(-1 * var(--space-lg)); }
+.conn-import-source {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-md);
 }
-.dbeaver-dir {
+.conn-import-dir {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
-.dbeaver-list {
+.conn-import-list {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   max-height: 45vh;
   overflow: auto;
 }
-.dbeaver-item {
+.conn-import-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-md) var(--space-sm);
+  border-bottom: 1px solid var(--line);
+}
+.conn-import-item:last-child { border-bottom: none; }
+.conn-import-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
+  gap: var(--space-md);
   cursor: pointer;
+  min-width: 0;
 }
-.dbeaver-item:last-child {
-  border-bottom: none;
-}
-.dbeaver-item.unsupported {
-  opacity: 0.8;
-  cursor: default;
-}
-.dbeaver-main {
+.conn-import-item.unsupported .conn-import-row { cursor: default; }
+.conn-import-main {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
-.dbeaver-detail {
+.conn-import-detail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dbeaver-options {
+.conn-import-duplicate,
+.conn-import-unmapped {
+  margin-left: calc(var(--space-3xl) + var(--space-lg));
+}
+.conn-import-duplicate {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  color: var(--warning-fg);
+}
+.conn-import-unmapped summary { color: var(--muted); cursor: pointer; }
+.conn-import-unmapped ul {
+  margin: var(--space-xs) 0 0;
+  padding-left: var(--space-xl);
+  color: var(--muted);
+}
+.conn-import-unmapped li { overflow-wrap: anywhere; }
+.conn-import-options {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
+  gap: var(--space-sm) var(--space-xl);
   align-items: center;
   min-width: 0;
   margin: 0;
-  padding: 10px 12px 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  padding: 0;
+  border: none;
 }
-.dbeaver-options legend { padding: 0 4px; font-weight: 600; }
-.dbeaver-passwords {
-  flex-basis: 100%;
+.conn-import-options legend {
+  padding: 0 0 var(--space-xs);
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
-.dbeaver-report {
+.conn-import-options p { flex-basis: 100%; margin: 0; }
+.conn-import-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+.conn-import-report {
   margin: 0;
-  padding-left: 18px;
+  padding-left: var(--space-xl);
 }
-.dbeaver-report li { overflow-wrap: anywhere; }
+.conn-import-report li { overflow-wrap: anywhere; }
 
 /* Changes to a trusted repository item (ADR-022). */
 .change-table-wrap {

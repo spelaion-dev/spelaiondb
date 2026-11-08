@@ -25,6 +25,10 @@ const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
 const port = 9333;
 // The MCP page's AI clients: their files under this folder, and a stand-in for the CLI.
 const clientsHome = join(userDir, "ai-clients");
+// Files a real DataGrip wrote (crates/spelaion-config/tests/fixtures/datagrip/README.md).
+const datagripFixtures = join(root, "crates/spelaion-config/tests/fixtures/datagrip");
+const datagripJetbrains = join(datagripFixtures, "JetBrains");
+const datagripProject = join(datagripFixtures, "DataGripProjects", "default");
 const fakeCli = join(userDir, process.platform === "win32" ? "spelaiondb.exe" : "spelaiondb");
 writeFileSync(fakeCli, "");
 const editSmokeComplete = Symbol("edit smoke complete");
@@ -57,6 +61,8 @@ function startApp() {
       // The MCP page never reads or writes the user's AI clients' files (ADR-033).
       SPELAION_MCP_CLIENTS_HOME: clientsHome,
       SPELAION_CLI: fakeCli,
+      // The DataGrip import reads the repository's fixtures, never the user's JetBrains files.
+      SPELAION_JETBRAINS_DIR: datagripJetbrains,
     },
     stdio: "inherit",
   });
@@ -4677,7 +4683,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const iv = Buffer.alloc(16, 7);
     const cipher = createCipheriv("aes-128-cbc", key, iv);
     writeFileSync(join(dbeaverDir, "credentials-config.json"), Buffer.concat([iv, cipher.update(credentials), cipher.final()]));
-    await page.evaluate((dir) => (window.__spelaionDbeaverDir = dir), join(userDir, "dbeaver"));
+    await page.evaluate((dir) => (window.__spelaionImportDirs = { dbeaver: dir }), join(userDir, "dbeaver"));
 
     await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
     await page.getByRole("button", { name: "Import from DBeaver…" }).click();
@@ -4690,6 +4696,13 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await list.getByRole("listitem").filter({ hasText: "PG behind bastion via DBeaver" }).getByText("SSH tester@127.0.0.1:2221").waitFor();
     await list.getByRole("listitem").filter({ hasText: "Docker PG via DBeaver" }).getByText("password saved", { exact: false }).waitFor();
     await importer.getByRole("radio", { name: "Personal", exact: true }).check();
+    // Both reach databases the personal connections already reach: left out until picked.
+    await list.getByRole("listitem").filter({ hasText: "Docker PG via DBeaver" }).getByText("Already in SpelaionDB as Docker PG (edited)").waitFor();
+    await list.getByRole("listitem").filter({ hasText: "PG behind bastion via DBeaver" }).getByText("Already in SpelaionDB as PG through proxy").waitFor();
+    assert.ok(!(await list.getByRole("checkbox", { name: "Docker PG via DBeaver" }).isChecked()));
+    for (const name of ["Docker PG via DBeaver", "PG behind bastion via DBeaver"]) {
+      await importer.getByRole("combobox", { name: `What to do with ${name}` }).selectOption({ label: "Import it as a copy" });
+    }
     // Never the user's real keychain from the smoke test: passwords are asked instead.
     await importer.getByRole("checkbox", { name: "Store the passwords DBeaver saved in the system keychain" }).uncheck();
     await shot("13c-import-dbeaver");
@@ -4710,7 +4723,64 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     panel = await newQuery("Shop via DBeaver", "select count(*) as products from product;");
     await run(panel);
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
-    await page.evaluate(() => delete window.__spelaionDbeaverDir);
+    await page.evaluate(() => delete window.__spelaionImportDirs);
+  }
+
+  step("import from DataGrip: files a real DataGrip wrote (the repository's fixtures), duplicates and what is not imported");
+  {
+    // SPELAION_JETBRAINS_DIR points the app at the fixtures' JetBrains folder (SSH
+    // configurations), never the user's; the project is picked like a folder.
+    await page.evaluate((dir) => (window.__spelaionImportDirs = { datagrip: dir }), datagripProject);
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    await page.getByRole("button", { name: "Import from DataGrip…" }).click();
+    const importer = page.locator(".modal.wizard");
+    await importer.getByRole("heading", { name: "Import from DataGrip" }).waitFor();
+    const list = importer.getByRole("list", { name: "DataGrip connections" });
+    const item = (name) => list.getByRole("listitem").filter({ has: page.getByRole("checkbox", { name, exact: true }) });
+    // Duplicates are looked for where the import goes: the personal connections here.
+    await importer.getByRole("radio", { name: "Personal", exact: true }).check();
+    await item("PG via bastion").getByText("SSH spelaion@127.0.0.1:2221").waitFor();
+    await item("Orders PG").getByText("TLS require", { exact: false }).waitFor();
+    for (const name of ["Shop MySQL", "Shop MariaDB", "Reports MSSQL", "Local file"]) {
+      assert.ok(await list.getByRole("checkbox", { name, exact: true }).isChecked(), `${name} is chosen`);
+    }
+    // The DBeaver import above made "Docker PG via DBeaver" (127.0.0.1:15432/spelaion as
+    // spelaion) and "PG behind bastion via DBeaver" (postgres:5432/spelaion as spelaion):
+    // DataGrip's "Orders PG" and "PG via bastion" reach the same databases, so they start left out.
+    await item("Orders PG").getByText("Already in SpelaionDB as Docker PG via DBeaver").waitFor();
+    await item("PG via bastion").getByText("Already in SpelaionDB as PG behind bastion via DBeaver").waitFor();
+    assert.ok(!(await list.getByRole("checkbox", { name: "Orders PG", exact: true }).isChecked()));
+    assert.ok(!(await list.getByRole("checkbox", { name: "PG via bastion", exact: true }).isChecked()));
+    // DataGrip's "Analytics" has the name of the personal "analytics" (DuckDB, another file).
+    await item("Analytics").getByText("Already in SpelaionDB as analytics").waitFor();
+    assert.ok(!(await list.getByRole("checkbox", { name: "Analytics", exact: true }).isChecked()));
+    // Nothing is dropped silently: Orders PG's password is in DataGrip's KeePass database.
+    await item("Orders PG").getByText("1 setting is not imported").click();
+    await item("Orders PG").getByText("KeePass database", { exact: false }).waitFor();
+    await importer.getByRole("combobox", { name: "What to do with Orders PG" }).selectOption({ label: "Replace Docker PG via DBeaver" });
+    await importer.getByRole("combobox", { name: "What to do with PG via bastion" }).selectOption({ label: "Import it as a copy" });
+    await importer.getByRole("combobox", { name: "What to do with Analytics" }).selectOption({ label: "Import it as a copy" });
+    await importer.getByRole("textbox", { name: "Put them in" }).fill("DataGrip");
+    await importer.getByRole("checkbox", { name: "Store the passwords DataGrip saved in the system keychain" }).uncheck();
+    await shot("sdb-50-import-datagrip");
+    await importer.getByRole("button", { name: "Import 7 connections" }).click();
+    await importer
+      .getByRole("status")
+      .filter({ hasText: "Imported 6 connections. Replaced 1 connection. Created 1 network profile." })
+      .waitFor();
+    await shot("sdb-50-import-datagrip-done");
+    await importer.getByRole("button", { name: "Done", exact: true }).click();
+    await importer.waitFor({ state: "detached" });
+    await page.locator(".connection-row", { hasText: "PG via bastion" }).first().waitFor();
+    for (const file of ["pg-via-bastion", "shop-mysql", "shop-mariadb", "reports-mssql", "local-file", "analytics"]) {
+      assert.ok(existsSync(join(userDir, "connections", "datagrip", `${file}.toml`)), file);
+    }
+    assert.ok(existsSync(join(userDir, "tunnels", "spelaion-127-0-0-1.toml")));
+    // Replaced in place: DBeaver's name and folder stay, DataGrip's TLS comes in.
+    const replaced = readFileSync(join(userDir, "connections", "docker-pg-via-dbeaver.toml"), "utf8");
+    assert.match(replaced, /name = "Docker PG via DBeaver"/);
+    assert.match(replaced, /ca\.crt/);
+    await page.evaluate(() => delete window.__spelaionImportDirs);
   }
 
   step("open tabs survive a restart (ADR-036): a file and two consoles come back with their text, disconnected, and nothing runs");

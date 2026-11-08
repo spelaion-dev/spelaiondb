@@ -14,89 +14,13 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
-use crate::draft::{ConnectionDraft, PasswordChoice, SessionDraft, normalize_tags, slug};
-use crate::load::{Source, check_tag, is_hidden_char};
-use crate::model::{ConnectionFile, Engine, ProxyType, SshAuth, TlsModeConfig, TunnelFile};
-use crate::tunnel_draft::{HopDraft, ProxyDraft, TunnelDraft, TunnelDraftOptions, TunnelPasswords};
+use crate::import::{ImportedConnection, ImportedProxy, ImportedSsh};
+use crate::model::{Engine, SshAuth, TunnelFile};
 
 /// The key DBeaver ships with to obscure `credentials-config.json`.
 const CREDENTIALS_KEY: [u8; 16] = [
     0xba, 0xbb, 0x4a, 0x9f, 0x77, 0x4a, 0xb8, 0x53, 0xc9, 0x6c, 0x2d, 0x65, 0x3d, 0xfe, 0x54, 0x4a,
 ];
-
-/// One DBeaver connection, as far as SpelaionDB can use it.
-#[derive(Debug, Clone)]
-pub struct DbeaverConnection {
-    /// DBeaver's own identifier (`mysql8-18f…`), to pick connections to import.
-    pub id: String,
-    pub name: String,
-    /// DBeaver's description of the connection; empty for none.
-    pub description: String,
-    /// DBeaver's tags, a name → value map: `name`, or `name=value` when it has a value.
-    pub tags: Vec<String>,
-    /// DBeaver folder, `a/b` for nested ones.
-    pub folder: String,
-    /// The engine, or why SpelaionDB cannot open it (yet).
-    pub engine: Result<Engine, String>,
-    pub host: String,
-    pub port: Option<u16>,
-    /// Database name; for SQLite, the file path.
-    pub database: String,
-    pub user: String,
-    pub password: Option<Secret>,
-    /// The built-in type closest to DBeaver's connection type (`dev`, `test` or `prod`,
-    /// ADR-029); empty for none.
-    pub env: String,
-    pub ssh: Option<DbeaverSsh>,
-    /// DBeaver's SOCKS proxy handler (`socks_proxy`), alone or in front of the SSH tunnel.
-    /// DBeaver has no per-connection HTTP proxy: its HTTP proxy is a global preference.
-    pub proxy: Option<DbeaverProxy>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DbeaverProxy {
-    pub host: String,
-    pub port: Option<u16>,
-    pub user: String,
-    pub password: Option<Secret>,
-}
-
-impl DbeaverConnection {
-    /// The name its imported network profile gets: one per SSH bastion and user (and proxy,
-    /// if any), or per proxy alone, so connections that share one in DBeaver share it here.
-    pub fn tunnel_name(&self) -> Option<String> {
-        let proxy = self
-            .proxy
-            .as_ref()
-            .map(|p| format!("{} {}", p.host, p.port.unwrap_or(1080)));
-        match (&self.ssh, proxy) {
-            (Some(ssh), None) => Some(slug(&format!("{} {}", ssh.user, ssh.host))),
-            (Some(ssh), Some(proxy)) => {
-                Some(slug(&format!("{} {} via {proxy}", ssh.user, ssh.host)))
-            }
-            (None, Some(proxy)) => Some(slug(&format!("socks {proxy}"))),
-            (None, None) => None,
-        }
-    }
-}
-
-/// The SSH tunnel of a DBeaver connection.
-#[derive(Debug, Clone)]
-pub struct DbeaverSsh {
-    pub host: String,
-    pub port: Option<u16>,
-    pub user: String,
-    pub auth: SshAuth,
-    pub key_path: String,
-    pub password: Option<Secret>,
-    /// Seconds (DBeaver keeps milliseconds); `None` where DBeaver left it unset or 0.
-    pub keepalive_interval: Option<u32>,
-    pub keepalive_count: Option<u32>,
-    /// Seconds (DBeaver keeps milliseconds).
-    pub connect_timeout: Option<u32>,
-    /// A fixed local port for the tunnel; `None` where DBeaver picks a free one.
-    pub local_port: Option<u16>,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbeaverError {
@@ -124,7 +48,7 @@ pub fn dbeaver_workspace() -> Option<PathBuf> {
 
 /// Every connection under `dir`: a DBeaver workspace (all its projects), one project, or a
 /// `.dbeaver` folder.
-pub fn read_dbeaver(dir: &Path) -> Result<Vec<DbeaverConnection>, DbeaverError> {
+pub fn read_dbeaver(dir: &Path) -> Result<Vec<ImportedConnection>, DbeaverError> {
     let folders = dbeaver_folders(dir);
     if folders.is_empty() {
         return Err(DbeaverError::NotFound(dir.to_path_buf()));
@@ -266,7 +190,7 @@ fn closest_type(dbeaver: &str, definition: Option<&Json>) -> String {
     }
 }
 
-fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverConnection {
+fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> ImportedConnection {
     let config = json.get("configuration").unwrap_or(&Json::Null);
     let provider = text(json.get("provider")).to_lowercase();
     let driver = text(json.get("driver")).to_lowercase();
@@ -298,7 +222,7 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
         .and_then(Json::as_str)
         .filter(|p| !p.is_empty())
         .map(Secret::new);
-    DbeaverConnection {
+    ImportedConnection {
         id: id.to_string(),
         name: text(json.get("name")),
         description: text(json.get("description")),
@@ -323,13 +247,62 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
         database,
         user,
         password,
+        stored_password: None,
         env: closest_type(&text(config.get("type")), None),
+        read_only: config.get("read-only").and_then(Json::as_bool) == Some(true),
         ssh: ssh_of(config, credentials),
         proxy: proxy_of(config, credentials),
+        tls: None,
+        unmapped: unmapped_of(json, config),
     }
 }
 
-fn proxy_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverProxy> {
+/// What a DBeaver connection sets that the import leaves out, for the preview: other network
+/// handlers (its SSL settings, HTTP tunnels…), driver properties, bootstrap queries and other
+/// ways to log in. A property that may hold a secret shows its name only.
+fn unmapped_of(json: &Json, config: &Json) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(handlers) = config.get("handlers").and_then(Json::as_object) {
+        for (id, handler) in handlers {
+            let enabled = handler.get("enabled").and_then(Json::as_bool) == Some(true);
+            if enabled && !matches!(id.as_str(), "ssh_tunnel" | "socks_proxy") {
+                out.push(format!("Network handler: {id}"));
+            }
+        }
+    }
+    let auth = text(config.get("auth-model"));
+    if !auth.is_empty() && !auth.starts_with("native") {
+        out.push(format!("Authentication: {auth}"));
+    }
+    if let Some(bootstrap) = config.get("bootstrap") {
+        let queries = bootstrap
+            .get("initQueries")
+            .and_then(Json::as_array)
+            .map_or(0, Vec::len);
+        if queries > 0 {
+            out.push(format!("Bootstrap queries: {queries}"));
+        }
+        if let Some(schema) = bootstrap.get("defaultSchema").and_then(Json::as_str) {
+            out.push(format!("Default schema: {schema}"));
+        }
+    }
+    for key in ["provider-properties", "properties"] {
+        if let Some(properties) = config.get(key).and_then(Json::as_object) {
+            for name in properties.keys() {
+                let lower = name.to_lowercase();
+                if !lower.starts_with("@dbeaver") {
+                    out.push(format!("Driver property: {name}"));
+                }
+            }
+        }
+    }
+    if json.get("lockPasswordHash").is_some() {
+        out.push("A DBeaver lock password".into());
+    }
+    out
+}
+
+fn proxy_of(config: &Json, credentials: Option<&Json>) -> Option<ImportedProxy> {
     let handler = config.get("handlers")?.get("socks_proxy")?;
     if handler.get("enabled").and_then(Json::as_bool) != Some(true) {
         return None;
@@ -344,7 +317,7 @@ fn proxy_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverProxy> {
         user if user.is_empty() => text(properties.get("socks-user")),
         user => user,
     };
-    Some(DbeaverProxy {
+    Some(ImportedProxy {
         host,
         port: port(properties.get("socks-port")),
         user,
@@ -356,7 +329,7 @@ fn proxy_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverProxy> {
     })
 }
 
-fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverSsh> {
+fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<ImportedSsh> {
     let handler = config.get("handlers")?.get("ssh_tunnel")?;
     if handler.get("enabled").and_then(Json::as_bool) != Some(true) {
         return None;
@@ -372,7 +345,7 @@ fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverSsh> {
         "AGENT" => SshAuth::Agent,
         _ => SshAuth::Password,
     };
-    Some(DbeaverSsh {
+    Some(ImportedSsh {
         host: text(properties.get("host")),
         port: port(properties.get("port")),
         user,
@@ -396,191 +369,23 @@ fn ssh_of(config: &Json, credentials: Option<&Json>) -> Option<DbeaverSsh> {
     })
 }
 
-/// What SpelaionDB will create for a connection: the connection, its tunnel (if any) and
-/// the secrets that go to the keychain with them.
-pub struct ImportPlan {
-    pub connection: ConnectionDraft,
-    pub password: Option<Secret>,
-    pub tunnel: Option<(TunnelDraft, TunnelPasswords)>,
-}
-
-/// The drafts for one DBeaver connection. With `save_passwords`, the passwords DBeaver saved
-/// go to the keychain; otherwise (or when DBeaver saved none) they are asked when connecting.
-pub fn import_plan(
-    connection: &DbeaverConnection,
-    engine: Engine,
-    source: Source,
-    save_passwords: bool,
-    tunnel_name: &str,
-) -> ImportPlan {
-    let keep = |secret: &Option<Secret>| {
-        save_passwords
-            .then(|| secret.as_ref().map(|s| Secret::new(s.expose())))
-            .flatten()
-    };
-    let choice = |secret: &Option<Secret>| {
-        if keep(secret).is_some() {
-            PasswordChoice::Keychain
-        } else {
-            PasswordChoice::Prompt
-        }
-    };
-    let proxy = connection.proxy.as_ref().map(|proxy| ProxyDraft {
-        kind: ProxyType::Socks5,
-        host: proxy.host.clone(),
-        port: Some(proxy.port.unwrap_or(1080)),
-        user: proxy.user.clone(),
-        password: if proxy.user.is_empty() {
-            PasswordChoice::None
-        } else {
-            choice(&proxy.password)
-        },
-    });
-    let proxy_password = connection
-        .proxy
-        .as_ref()
-        .and_then(|proxy| keep(&proxy.password));
-    let tunnel = match (&connection.ssh, proxy) {
-        (None, None) => None,
-        (Some(ssh), proxy) => {
-            let password = match ssh.auth {
-                SshAuth::Password | SshAuth::KeyboardInteractive => choice(&ssh.password),
-                SshAuth::Agent | SshAuth::Key => PasswordChoice::None,
-            };
-            Some((
-                TunnelDraft {
-                    source,
-                    name: tunnel_name.to_string(),
-                    hops: vec![HopDraft {
-                        host: ssh.host.clone(),
-                        port: ssh.port,
-                        user: ssh.user.clone(),
-                        auth: vec![ssh.auth],
-                        identity_file: ssh.key_path.clone(),
-                        password,
-                    }],
-                    options: TunnelDraftOptions {
-                        keepalive_interval: ssh.keepalive_interval,
-                        keepalive_count: ssh.keepalive_count,
-                        connect_timeout: ssh.connect_timeout,
-                    },
-                    proxy,
-                },
-                TunnelPasswords {
-                    hops: vec![keep(&ssh.password)],
-                    proxy: proxy_password,
-                },
-            ))
-        }
-        // The proxy alone reaches the database (ADR-027).
-        (None, Some(proxy)) => Some((
-            TunnelDraft {
-                source,
-                name: tunnel_name.to_string(),
-                hops: Vec::new(),
-                options: TunnelDraftOptions::default(),
-                proxy: Some(proxy),
-            },
-            TunnelPasswords {
-                hops: Vec::new(),
-                proxy: proxy_password,
-            },
-        )),
-    };
-    let sqlite = engine.is_file();
-    ImportPlan {
-        connection: ConnectionDraft {
-            source,
-            folder: connection.folder.to_lowercase(),
-            name: connection.name.clone(),
-            description: importable_description(&connection.description),
-            tags: importable_tags(&connection.tags),
-            engine,
-            env: connection.env.clone(),
-            host: if sqlite {
-                String::new()
-            } else {
-                connection.host.clone()
-            },
-            port: if sqlite { None } else { connection.port },
-            database: connection.database.clone(),
-            user: if sqlite {
-                String::new()
-            } else {
-                connection.user.clone()
-            },
-            password: if sqlite {
-                PasswordChoice::None
-            } else {
-                choice(&connection.password)
-            },
-            tls_mode: TlsModeConfig::default(),
-            tls_ca: String::new(),
-            tls_cert: String::new(),
-            tls_key: String::new(),
-            tunnel: if tunnel.is_some() {
-                tunnel_name.to_string()
-            } else {
-                String::new()
-            },
-            local_port: connection.ssh.as_ref().and_then(|ssh| ssh.local_port),
-            kubernetes: None,
-            sqlite3: String::new(),
-            read_only: false,
-            // Like a connection made in the form: idle sessions are kept alive (ADR-028).
-            keepalive: (!sqlite).then_some(ConnectionFile::SUGGESTED_KEEPALIVE),
-            connect_timeout: None,
-            statement_timeout: None,
-            session: SessionDraft::default(),
-            mcp_exposed: false,
-            mcp_writes: false,
-        },
-        password: if sqlite {
-            None
-        } else {
-            keep(&connection.password)
-        },
-        tunnel,
-    }
-}
-
-/// A DBeaver description as SpelaionDB accepts it: without hidden characters and cut to the
-/// longest description, so one long note does not stop the connection from being imported.
-fn importable_description(description: &str) -> String {
-    description
-        .chars()
-        .filter(|c| !is_hidden_char(*c) || matches!(c, '\n' | '\r' | '\t'))
-        .take(ConnectionFile::MAX_DESCRIPTION)
-        .collect::<String>()
-        .trim()
-        .to_string()
-}
-
-/// DBeaver tags as SpelaionDB accepts them: commas become spaces, hidden characters go,
-/// and a tag that is still too long, or one past the most a connection holds, is left out,
-/// so a tag does not stop the connection from being imported.
-fn importable_tags(tags: &[String]) -> Vec<String> {
-    let cleaned: Vec<String> = tags
-        .iter()
-        .map(|tag| {
-            tag.chars()
-                .filter(|c| !is_hidden_char(*c) || c.is_whitespace())
-                .map(|c| if c == ',' { ' ' } else { c })
-                .collect()
-        })
-        .collect();
-    normalize_tags(&cleaned)
-        .into_iter()
-        .filter(|tag| check_tag(tag).is_ok())
-        .take(ConnectionFile::MAX_TAGS)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::draft::PasswordChoice;
+    use crate::import::{TargetFolder, import_plan};
+    use crate::load::Source;
+    use crate::model::ProxyType;
     use cbc::Encryptor;
     use cbc::cipher::BlockEncryptMut;
+
+    /// DBeaver's folders, kept as they are.
+    fn keep() -> TargetFolder {
+        TargetFolder {
+            folder: String::new(),
+            keep_client_folders: true,
+        }
+    }
 
     /// A DBeaver workspace with one project, like the one DBeaver writes.
     fn workspace(name: &str) -> PathBuf {
@@ -635,8 +440,11 @@ mod tests {
                   "provider": "mysql", "driver": "mysql8", "name": "Behind SOCKS", "save-password": true,
                   "configuration": {
                     "host": "localhost", "port": "3306", "type": "dev",
+                    "provider-properties": {"useCompression": "true", "@dbeaver-default-dbname": "x"},
                     "handlers": {"socks_proxy": {"type": "PROXY", "enabled": true, "save-password": true,
-                      "properties": {"socks-host": "proxy.corp", "socks-port": 1080}}}
+                      "properties": {"socks-host": "proxy.corp", "socks-port": 1080}},
+                      "mysql_ssl": {"type": "CONFIG", "enabled": true, "properties": {}},
+                      "off": {"type": "CONFIG", "enabled": false}}
                   }
                 }
               }
@@ -718,7 +526,7 @@ mod tests {
         assert_eq!(by_id("oracle_thin-4").env, "dev");
         assert_eq!(by_id("sqlite_jdbc-3").env, "dev");
         assert_eq!(
-            import_plan(maria, Engine::Mariadb, Source::User, false, "")
+            import_plan(maria, Engine::Mariadb, Source::User, false, "", &keep())
                 .connection
                 .env,
             "prod"
@@ -732,6 +540,15 @@ mod tests {
         assert_eq!(closest_type("", None), "");
         assert_eq!(by_id("sqlite_jdbc-3").database, "C:\\data\\local.db");
         assert!(by_id("oracle_thin-4").engine.is_err());
+        // What the import leaves out is listed, never dropped silently.
+        assert_eq!(
+            by_id("mysql8-6").unmapped,
+            [
+                "Network handler: mysql_ssl",
+                "Driver property: useCompression"
+            ]
+        );
+        assert!(pg.unmapped.is_empty());
         let duck = by_id("duckdb_jdbc-5");
         assert_eq!(
             (duck.engine.clone(), duck.database.as_str()),
@@ -771,7 +588,7 @@ mod tests {
         assert_eq!(name, "socks-proxy-corp-1080");
 
         // The proxy alone: a profile without hops; its password to the keychain if asked.
-        let plan = import_plan(socks, Engine::Mysql, Source::User, true, &name);
+        let plan = import_plan(socks, Engine::Mysql, Source::User, true, &name, &keep());
         assert_eq!(plan.connection.tunnel, name);
         let (tunnel, secrets) = plan.tunnel.unwrap();
         assert!(tunnel.hops.is_empty());
@@ -790,7 +607,7 @@ mod tests {
             secrets.proxy.as_ref().map(Secret::expose),
             Some("proxy-secret")
         );
-        let asked = import_plan(socks, Engine::Mysql, Source::User, false, &name);
+        let asked = import_plan(socks, Engine::Mysql, Source::User, false, &name, &keep());
         let (tunnel, secrets) = asked.tunnel.unwrap();
         assert_eq!(tunnel.proxy.unwrap().password, PasswordChoice::Prompt);
         assert!(secrets.proxy.is_none());
@@ -804,7 +621,7 @@ mod tests {
             "jump-bastion-example-com-via-proxy-corp-1080"
         );
         assert_eq!(pg.tunnel_name().unwrap(), "jump-bastion-example-com");
-        let plan = import_plan(&both, Engine::Postgres, Source::User, true, "t");
+        let plan = import_plan(&both, Engine::Postgres, Source::User, true, "t", &keep());
         let (tunnel, secrets) = plan.tunnel.unwrap();
         assert_eq!(tunnel.hops.len(), 1);
         assert_eq!(tunnel.proxy.unwrap().host, "proxy.corp");
@@ -826,6 +643,7 @@ mod tests {
             Source::User,
             true,
             "bastion-example-com",
+            &keep(),
         );
         assert_eq!(kept.connection.password, PasswordChoice::Keychain);
         assert_eq!(kept.connection.tunnel, "bastion-example-com");
@@ -849,61 +667,14 @@ mod tests {
             secrets.hops[0].as_ref().map(Secret::expose),
             Some("hop-pass")
         );
-        let asked = import_plan(pg, Engine::Postgres, Source::User, false, "t");
+        let asked = import_plan(pg, Engine::Postgres, Source::User, false, "t", &keep());
         assert_eq!(asked.connection.password, PasswordChoice::Prompt);
         assert!(asked.password.is_none());
         assert!(asked.tunnel.unwrap().1.hops[0].is_none());
         let sqlite = found.iter().find(|c| c.id == "sqlite_jdbc-3").unwrap();
-        let plan = import_plan(sqlite, Engine::Sqlite, Source::User, true, "t");
+        let plan = import_plan(sqlite, Engine::Sqlite, Source::User, true, "t", &keep());
         assert_eq!(plan.connection.password, PasswordChoice::None);
         assert!(plan.connection.host.is_empty() && plan.tunnel.is_none());
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn descriptions_are_imported_as_spelaiondb_accepts_them() {
-        assert_eq!(
-            importable_description("  Sales\r\n\tby region "),
-            "Sales\r\n\tby region"
-        );
-        // Escapes and bidirectional overrides are dropped; the text around them stays.
-        assert_eq!(
-            importable_description("safe\u{1b}[2J text \u{202e}desrever"),
-            "safe[2J text desrever"
-        );
-        let long = "x".repeat(ConnectionFile::MAX_DESCRIPTION + 50);
-        assert_eq!(
-            importable_description(&long).chars().count(),
-            ConnectionFile::MAX_DESCRIPTION
-        );
-    }
-
-    #[test]
-    fn tags_are_imported_as_spelaiondb_accepts_them() {
-        let tags: Vec<String> = [
-            " eu ",
-            "EU",
-            "a,b",
-            "hidden\u{202e}mark",
-            "",
-            "far too long for a tag of a connection",
-            "multi \t word",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
-        // Repeats ignoring case, empty and over-long tags are left out; the rest is cleaned.
-        assert_eq!(
-            importable_tags(&tags),
-            ["eu", "a b", "hiddenmark", "multi word"]
-        );
-        let many: Vec<String> = (0..30).map(|i| format!("t{i}")).collect();
-        assert_eq!(importable_tags(&many).len(), ConnectionFile::MAX_TAGS);
-        // What is imported is a valid connection.
-        let draft_tags = importable_tags(&tags);
-        assert!(
-            draft_tags.iter().all(|t| check_tag(t).is_ok()),
-            "{draft_tags:?}"
-        );
     }
 }

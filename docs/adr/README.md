@@ -47,3 +47,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [036](0036-sql-files-and-restored-tabs.md) | SQL files in editor tabs, and open tabs that survive a restart | Accepted |
 | [037](0037-session-setup.md) | Every new session starts as its connection says: setup statements, default schema, isolation level | Accepted |
 | [038](0038-importing-data.md) | Importing data into a table: values bound, statements shown first, whole batches | Accepted |
+| [039](0039-importing-connections.md) | Importing connections from other clients: one flow, a reader per client | Accepted |

@@ -1,6 +1,7 @@
 //! SpelaionDB desktop app: a thin Tauri adapter over `spelaion-core` (ADR-002). There is no
 //! database or security logic here: only translation between UI commands and the core.
 
+mod connection_import;
 mod dto;
 mod files;
 mod import;
@@ -2728,168 +2729,6 @@ fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
         .map_err(|e| e.to_string())
 }
 
-/// The DBeaver folder to read: the one chosen, or DBeaver's workspace on this system.
-fn dbeaver_dir(path: Option<String>) -> CmdResult<PathBuf> {
-    match path.filter(|p| !p.trim().is_empty()) {
-        Some(path) => Ok(PathBuf::from(path)),
-        None => spelaion_config::dbeaver_workspace()
-            .ok_or_else(|| "DBeaver's folder is unknown on this system".into()),
-    }
-}
-
-/// The DBeaver connections under a folder (DBeaver's workspace if none), without secrets.
-#[tauri::command]
-#[specta::specta]
-async fn scan_dbeaver(path: Option<String>) -> CmdResult<DbeaverScan> {
-    let dir = dbeaver_dir(path)?;
-    let found = tokio::task::spawn_blocking({
-        let dir = dir.clone();
-        move || spelaion_config::read_dbeaver(&dir)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
-    Ok(DbeaverScan {
-        dir: dir.display().to_string(),
-        connections: found.iter().map(DbeaverItem::from).collect(),
-    })
-}
-
-/// Imports the chosen DBeaver connections (and their SSH tunnels) as SpelaionDB files. The
-/// folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
-/// DBeaver saved go to the keychain, otherwise they are asked when connecting.
-#[tauri::command]
-#[specta::specta]
-async fn import_dbeaver(
-    path: Option<String>,
-    ids: Vec<String>,
-    personal: bool,
-    save_passwords: bool,
-    state: State<'_, AppState>,
-) -> CmdResult<ImportReport> {
-    let dir = dbeaver_dir(path)?;
-    let found = tokio::task::spawn_blocking(move || spelaion_config::read_dbeaver(&dir))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    let source = source_of(personal);
-    let mut report = ImportReport {
-        imported: Vec::new(),
-        tunnels: Vec::new(),
-        skipped: Vec::new(),
-    };
-    for connection in found.iter().filter(|c| ids.contains(&c.id)) {
-        let engine = match &connection.engine {
-            Ok(engine) => *engine,
-            Err(reason) => {
-                report.skipped.push(ImportSkip {
-                    name: connection.name.clone(),
-                    reason: reason.clone(),
-                });
-                continue;
-            }
-        };
-        // One network profile per bastion and user (and proxy): connections through the same
-        // one share it.
-        let tunnel_name = connection.tunnel_name().unwrap_or_default();
-        match import_one(
-            &state,
-            connection,
-            engine,
-            source,
-            save_passwords,
-            &tunnel_name,
-        )
-        .await
-        {
-            Ok((name, created_tunnel)) => {
-                report.imported.push(name);
-                if created_tunnel {
-                    report.tunnels.push(tunnel_name);
-                }
-            }
-            Err(reason) => report.skipped.push(ImportSkip {
-                name: connection.name.clone(),
-                reason,
-            }),
-        }
-    }
-    Ok(report)
-}
-
-/// Creates the tunnel (unless one with its name exists) and the connection, trying
-/// `name (DBeaver)`, `name (DBeaver 2)`… when the name is taken.
-async fn import_one(
-    state: &AppState,
-    connection: &spelaion_config::DbeaverConnection,
-    engine: spelaion_config::Engine,
-    source: Source,
-    save_passwords: bool,
-    tunnel_name: &str,
-) -> Result<(String, bool), String> {
-    let plan =
-        spelaion_config::import_plan(connection, engine, source, save_passwords, tunnel_name);
-    let mut created_tunnel = false;
-    if let Some((tunnel, passwords)) = &plan.tunnel {
-        let exists = state
-            .config
-            .read()
-            .await
-            .tunnels
-            .iter()
-            .any(|t| t.source == source && t.name == tunnel_name);
-        if !exists {
-            let config = state.config.read().await;
-            let file = tunnel.to_file(&config).map_err(|e| e.to_string())?;
-            let name = spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
-                .map_err(|e| e.to_string())?;
-            if source == Source::Workspace {
-                TrustStore::load(&state.user_dir)
-                    .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
-                    .map_err(|e| e.to_string())?;
-            }
-            created_tunnel = true;
-        }
-        state.reload().await;
-    }
-    let mut draft = plan.connection;
-    let base = draft.name.clone();
-    for attempt in 0..10 {
-        draft.name = match attempt {
-            0 => base.clone(),
-            1 => format!("{base} (DBeaver)"),
-            n => format!("{base} (DBeaver {n})"),
-        };
-        let added = {
-            let config = state.config.read().await;
-            let file = draft.to_file(&config).map_err(|e| e.to_string())?;
-            let result = spelaion_config::add_connection(
-                &config,
-                &draft,
-                plan.password.as_ref(),
-                &SystemBackend,
-            );
-            if let Ok(id) = &result
-                && source == Source::Workspace
-            {
-                TrustStore::load(&state.user_dir)
-                    .and_then(|mut trust| trust.accept_connection_write(&config, id, &file))
-                    .map_err(|e| e.to_string())?;
-            }
-            result
-        };
-        match added {
-            Ok(_) => {
-                state.reload().await;
-                return Ok((draft.name, created_tunnel));
-            }
-            Err(e) if e.to_string().contains("already exists") => continue,
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    Err("every name tried is taken".into())
-}
-
 /// Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
 /// overwrites an existing file.
 #[tauri::command]
@@ -4402,12 +4241,12 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             script_params,
             bind_params,
             parse_connection_url,
-            scan_dbeaver,
+            connection_import::scan_connections,
             kube_contexts,
             kube_namespaces,
             kube_names,
             kube_ports,
-            import_dbeaver,
+            connection_import::import_connections,
             open_workspace,
             trust_workspace,
             accept_change,
