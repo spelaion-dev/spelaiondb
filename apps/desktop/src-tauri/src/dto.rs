@@ -954,6 +954,63 @@ pub struct HistoryItem {
     pub rows: i64,
     pub error: Option<String>,
     pub cancelled: bool,
+    pub database: Option<String>,
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum HistoryStatusItem {
+    Success,
+    Error,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryFilterItem {
+    pub search: String,
+    pub status: Option<HistoryStatusItem>,
+    pub database: Option<String>,
+    #[specta(type=Option<specta_typescript::Number>)]
+    pub from_ms: Option<i64>,
+    #[specta(type=Option<specta_typescript::Number>)]
+    pub until_ms: Option<i64>,
+    pub pinned: bool,
+    #[specta(type=Option<specta_typescript::Number>)]
+    pub through_id: Option<i64>,
+}
+impl From<HistoryFilterItem> for spelaion_core::HistoryFilter {
+    fn from(filter: HistoryFilterItem) -> Self {
+        Self {
+            search: filter.search,
+            status: filter.status.map(|status| match status {
+                HistoryStatusItem::Success => spelaion_core::HistoryStatus::Success,
+                HistoryStatusItem::Error => spelaion_core::HistoryStatus::Error,
+                HistoryStatusItem::Cancelled => spelaion_core::HistoryStatus::Cancelled,
+            }),
+            database: filter.database,
+            from_ms: filter.from_ms,
+            until_ms: filter.until_ms,
+            pinned: filter.pinned,
+            through_id: filter.through_id,
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPageItem {
+    pub entries: Vec<HistoryItem>,
+    pub has_more: bool,
+    #[specta(type=specta_typescript::Number)]
+    pub through_id: i64,
+}
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct SnippetFolderItem {
+    #[specta(type=specta_typescript::Number)]
+    pub id: i64,
+    pub name: String,
+    pub personal: bool,
 }
 
 /// A saved query; `connection` is empty when it was saved without one.
@@ -969,6 +1026,8 @@ pub struct SnippetItem {
     pub updated_ms: i64,
     /// Saved outside any repository: visible from every workspace.
     pub personal: bool,
+    #[specta(type=Option<specta_typescript::Number>)]
+    pub folder_id: Option<i64>,
 }
 
 impl From<spelaion_core::Snippet> for SnippetItem {
@@ -980,6 +1039,7 @@ impl From<spelaion_core::Snippet> for SnippetItem {
             statement: s.statement,
             connection: s.connection,
             updated_ms: s.updated_ms,
+            folder_id: s.folder_id,
         }
     }
 }
@@ -995,6 +1055,8 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
             rows: entry.rows,
             error: entry.error,
             cancelled: entry.cancelled,
+            database: entry.database,
+            pinned: entry.pinned,
         }
     }
 }

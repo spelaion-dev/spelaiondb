@@ -4,6 +4,7 @@
 mod dto;
 mod files;
 mod interaction;
+mod library;
 mod mcp;
 mod update;
 
@@ -608,9 +609,10 @@ async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<
 #[tauri::command]
 #[specta::specta]
 async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> {
+    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     state
         .history
-        .delete_snippet(id.into())
+        .delete_visible_snippet(workspace, id.into())
         .await
         .map_err(|e| e.to_string())
 }
@@ -2097,11 +2099,22 @@ async fn start_script(
         confirmed,
     )
     .map_err(|e| e.to_string())?;
-    let mut events = state.history.run_script_with_original(
+    let mut events = state.history.run_script_in_context(
         &open.session,
         &sql,
-        workspace,
-        open.resolved.id.to_string(),
+        spelaion_core::HistoryScope {
+            workspace,
+            connection: open.resolved.id.to_string(),
+            database: (!open.resolved.params.database.is_empty())
+                .then(|| open.resolved.params.database.clone()),
+            switchable_database: matches!(
+                open.resolved.engine,
+                spelaion_config::Engine::Mysql
+                    | spelaion_config::Engine::Mariadb
+                    | spelaion_config::Engine::Sqlserver
+                    | spelaion_config::Engine::Duckdb
+            ),
+        },
         original,
         spelaion_core::ScriptOptions {
             on_error: options.on_error.into(),
@@ -4353,6 +4366,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_tunnel_ports,
             list_connections,
             list_history,
+            library::history_page,
+            library::history_databases,
+            library::pin_history,
+            library::export_history,
+            library::snippet_page,
+            library::snippet_folders,
+            library::create_snippet_folder,
+            library::move_snippet,
             set_history_enabled,
             connect,
             connect_from_session,

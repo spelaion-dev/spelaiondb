@@ -18,10 +18,10 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, Notice, ObjectInfo,
-    ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
-    TlsMode, TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
+    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter,
+    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject,
+    ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -133,7 +133,12 @@ impl Driver for SqlServerDriver {
         let client = open(params).await?;
         let (cancels, cancelled) = watch::channel(0u64);
         let (requests, receiver) = mpsc::channel(8);
-        tokio::spawn(actor(client, receiver, cancelled));
+        tokio::spawn(actor(
+            client,
+            receiver,
+            cancelled,
+            Some(params.database.clone()),
+        ));
         Ok(Box::new(SqlServerConnection {
             requests,
             cancel: Arc::new(SqlServerCancel(cancels)),
@@ -151,6 +156,12 @@ impl Driver for SqlServerDriver {
 pub(crate) type Rows = Vec<Vec<Option<String>>>;
 
 enum Request {
+    DatabaseContext {
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
+    CurrentDatabase {
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
     Execute {
         sql: String,
         batch_size: usize,
@@ -176,7 +187,9 @@ async fn actor(
     mut client: SqlClient,
     mut requests: mpsc::Receiver<Request>,
     mut cancels: watch::Receiver<u64>,
+    database: Option<String>,
 ) {
+    let mut context = DatabaseContext::new(ContextDialect::SqlServer, database);
     // An interrupted or failed response may have hidden transaction ENVCHANGE tokens.
     // Stay conservative until a later user operation completes cleanly.
     let mut transaction_state_unknown = false;
@@ -202,6 +215,15 @@ async fn actor(
                     () = cancelled => ExecutionOutcome::Cancelled,
                 };
                 transaction_state_unknown = !matches!(finished, ExecutionOutcome::Complete);
+                context.observe(&sql, matches!(finished, ExecutionOutcome::Complete));
+                if matches!(
+                    finished,
+                    ExecutionOutcome::Cancelled
+                        | ExecutionOutcome::Abandoned
+                        | ExecutionOutcome::Failed { definitive: false }
+                ) {
+                    context.refresh(None);
+                }
                 if matches!(
                     finished,
                     ExecutionOutcome::Cancelled | ExecutionOutcome::Abandoned
@@ -219,6 +241,36 @@ async fn actor(
             }
             Request::Rows { sql, params, reply } => {
                 let result = rows(&mut client, &sql, &params).await;
+                context.observe(&sql, result.is_ok());
+                if result.is_err() && !matches!(&result, Err(DriverError::Database { .. })) {
+                    context.refresh(None);
+                }
+                transaction_state_unknown = result.is_err();
+                let _ = reply.send(result);
+            }
+            Request::DatabaseContext { reply } => {
+                let _ = reply.send(Ok(context.snapshot()));
+            }
+            Request::CurrentDatabase { reply } => {
+                // SHOWPLAN can return text/XML instead of executing a SELECT. Only the
+                // actual two-column row with this literal is an authoritative observation.
+                let result = rows(
+                    &mut client,
+                    "select db_name(), N'spelaion-context-executed'",
+                    &[],
+                )
+                .await
+                .map(|rows| {
+                    if rows.len() == 1
+                        && rows[0].len() == 2
+                        && rows[0][1].as_deref() == Some("spelaion-context-executed")
+                    {
+                        rows[0][0].clone()
+                    } else {
+                        None
+                    }
+                });
+                context.refresh(result.as_ref().ok().cloned().flatten());
                 transaction_state_unknown = result.is_err();
                 let _ = reply.send(result);
             }
@@ -319,7 +371,7 @@ impl Current {
 
 enum ExecutionOutcome {
     Complete,
-    Failed,
+    Failed { definitive: bool },
     Abandoned,
     Cancelled,
 }
@@ -351,8 +403,9 @@ async fn execute(
             ExecutionOutcome::Complete
         }
         Streamed::Failed(error) => {
+            let definitive = matches!(&error, DriverError::Database { .. });
             let _ = events.send(Err(error)).await;
-            ExecutionOutcome::Failed
+            ExecutionOutcome::Failed { definitive }
         }
         Streamed::Gone => ExecutionOutcome::Complete,
         Streamed::Abandoned => ExecutionOutcome::Abandoned,
@@ -602,11 +655,21 @@ impl Connection for SqlServerConnection {
     }
 
     async fn current_database(&self) -> Result<Option<String>> {
-        let rows = self.rows("select db_name()", vec![]).await?;
-        Ok(rows
-            .into_iter()
-            .next()
-            .and_then(|row| row.into_iter().next().flatten()))
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::CurrentDatabase { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
+    }
+
+    async fn database_context(&self) -> Result<Option<String>> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::DatabaseContext { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
     }
 
     /// The online databases this login can enter; the system ones last.

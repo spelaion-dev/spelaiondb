@@ -404,6 +404,10 @@ impl Connection for Tracked {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.current_database().await)
     }
+    async fn database_context(&self) -> Result<Option<String>> {
+        // A local actor snapshot is not server activity and must not extend an idle session.
+        self.inner.database_context().await
+    }
 
     async fn select_database(&self, database: &str) -> Result<()> {
         let _busy = self.activity.begin().await;

@@ -8,7 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+mod library;
 mod tabs;
+pub use library::{HistoryFilter, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder};
 pub use tabs::{
     FileEncoding, LineEnding, MAX_RECENT_FILES, RecentFile, SavedFile, SavedTab, SavedTabs,
 };
@@ -20,6 +22,12 @@ pub struct StoreError(String);
 impl From<rusqlite::Error> for StoreError {
     fn from(e: rusqlite::Error) -> Self {
         StoreError(e.to_string())
+    }
+}
+
+impl From<std::io::Error> for StoreError {
+    fn from(error: std::io::Error) -> Self {
+        Self(error.to_string())
     }
 }
 
@@ -168,7 +176,8 @@ const MIGRATIONS: &[&str] = &["create table audit (
         begin select raise(abort, 'unsupported editor setting'); end;
     create trigger personal_settings_editor_update before update on personal_settings
         when new.key = 'editor.reconnect_on_start' and new.value not in ('on', 'off')
-        begin select raise(abort, 'unsupported editor setting'); end;"
+        begin select raise(abort, 'unsupported editor setting'); end;",
+    library::MIGRATION,
 ];
 
 /// Milliseconds since 1970 (UTC); 0 if the clock is before it.
@@ -189,6 +198,7 @@ pub struct Snippet {
     pub statement: String,
     pub connection: String,
     pub updated_ms: i64,
+    pub folder_id: Option<i64>,
 }
 
 /// One execution from the desktop app, scoped to its workspace and connection identifier.
@@ -219,6 +229,8 @@ pub struct HistoryEntry {
     pub rows: i64,
     pub error: Option<String>,
     pub cancelled: bool,
+    pub database: Option<String>,
+    pub pinned: bool,
 }
 
 /// What was done with a request.
@@ -861,7 +873,7 @@ impl Store {
                 .replace('_', "\\_")
         );
         let mut statement = self.conn.prepare(
-            "select id, workspace, name, statement, connection, updated_ms from snippets
+            "select id, workspace, name, statement, connection, updated_ms, folder_id from snippets
              where workspace in (?1, '')
                and (name like ?2 escape '\\' or statement like ?2 escape '\\')
              order by name collate nocase, id",
@@ -874,6 +886,7 @@ impl Store {
                 statement: r.get(3)?,
                 connection: r.get(4)?,
                 updated_ms: r.get(5)?,
+                folder_id: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -1448,11 +1461,13 @@ impl Store {
                 rows: r.get(6)?,
                 error: r.get(7)?,
                 cancelled: r.get(8)?,
+                database: r.get(9)?,
+                pinned: r.get(10)?,
             })
         };
         if search.is_empty() {
             let mut stmt = self.conn.prepare(
-                "select id, at_ms, workspace, connection, statement, duration_ms, rows, error, cancelled
+                "select id, at_ms, workspace, connection, statement, duration_ms, rows, error, cancelled, database, pinned
                  from history where (workspace = ?1 or workspace = '')
                  order by at_ms desc, id desc limit ?2 offset ?3",
             )?;
@@ -1462,7 +1477,7 @@ impl Store {
             let phrase = format!("\"{}\"*", search.replace('"', "\"\""));
             let mut stmt = self.conn.prepare(
                 "select h.id, h.at_ms, h.workspace, h.connection, h.statement,
-                        h.duration_ms, h.rows, h.error, h.cancelled
+                        h.duration_ms, h.rows, h.error, h.cancelled, h.database, h.pinned
                  from history h join history_fts on history_fts.rowid = h.id
                  where (h.workspace = ?1 or h.workspace = '') and history_fts match ?2
                  order by h.at_ms desc, h.id desc limit ?3 offset ?4",
@@ -1497,7 +1512,7 @@ fn validate_theme(theme: &str) -> Result<(), StoreError> {
 mod tests {
     use super::*;
 
-    fn history_entry(
+    pub(super) fn history_entry(
         workspace: &str,
         connection: &str,
         statement: &str,
@@ -1515,7 +1530,7 @@ mod tests {
         }
     }
 
-    fn temp(name: &str) -> std::path::PathBuf {
+    pub(super) fn temp(name: &str) -> std::path::PathBuf {
         let path =
             std::env::temp_dir().join(format!("spelaion-store-{name}-{}.db", std::process::id()));
         for suffix in ["", "-wal", "-shm"] {

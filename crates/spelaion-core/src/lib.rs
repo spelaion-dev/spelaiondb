@@ -68,7 +68,7 @@ pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use guard::{NeedsConfirmation, Risk, RiskyStatement, check_script, script_risks};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
-pub use history::{HistoryError, QueryHistory};
+pub use history::{HistoryError, HistoryScope, QueryHistory};
 pub use objects::{
     CreateKind, FoundObject, NewIndexKind, NewTableElement, ObjectActions, ObjectChange,
     ObjectError, ObjectTarget, SEARCH_LIMIT, active_schema, apply_change, can_cascade,
@@ -98,8 +98,8 @@ pub use session::{
 };
 pub use sort::{SortKey, ViewError};
 pub use spelaion_store::{
-    AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, Snippet,
-    ToolOutput,
+    AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
+    HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
 };
 pub use spelaion_store::{
     Bookmark, EditorPreferences, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences,
