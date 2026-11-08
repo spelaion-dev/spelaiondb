@@ -9,8 +9,8 @@ use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
     AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, ExplorerFilter,
-    ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry, ScriptPreferences,
-    Snippet, Store, StoreError, ToolOutput,
+    ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry, RecentFile, SavedTabs,
+    ScriptPreferences, Snippet, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -182,6 +182,33 @@ enum Request {
     DeleteSnippet {
         id: i64,
         reply: Reply<bool>,
+    },
+    SaveOpenTabs {
+        workspace: String,
+        tabs: SavedTabs,
+        reply: Reply<()>,
+    },
+    OpenTabs {
+        workspace: String,
+        reply: Reply<SavedTabs>,
+    },
+    AddRecentFile {
+        path: String,
+        reply: Reply<()>,
+    },
+    RecentFiles {
+        reply: Reply<Vec<RecentFile>>,
+    },
+    RemoveRecentFile {
+        path: String,
+        reply: Reply<bool>,
+    },
+    GetReconnectOnStart {
+        reply: Reply<bool>,
+    },
+    SetReconnectOnStart {
+        enabled: bool,
+        reply: Reply<()>,
     },
 }
 
@@ -375,6 +402,31 @@ impl QueryHistory {
                         }
                         Request::DeleteSnippet { id, reply } => {
                             let _ = reply.send(store.delete_snippet(id));
+                        }
+                        Request::SaveOpenTabs {
+                            workspace,
+                            tabs,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.save_open_tabs(&workspace, &tabs));
+                        }
+                        Request::OpenTabs { workspace, reply } => {
+                            let _ = reply.send(store.open_tabs(&workspace));
+                        }
+                        Request::AddRecentFile { path, reply } => {
+                            let _ = reply.send(store.add_recent_file(&path));
+                        }
+                        Request::RecentFiles { reply } => {
+                            let _ = reply.send(store.recent_files());
+                        }
+                        Request::RemoveRecentFile { path, reply } => {
+                            let _ = reply.send(store.remove_recent_file(&path));
+                        }
+                        Request::GetReconnectOnStart { reply } => {
+                            let _ = reply.send(store.reconnect_on_start());
+                        }
+                        Request::SetReconnectOnStart { enabled, reply } => {
+                            let _ = reply.send(store.set_reconnect_on_start(enabled));
                         }
                     }
                 }
@@ -697,6 +749,54 @@ impl QueryHistory {
 
     pub async fn delete_snippet(&self, id: i64) -> Result<bool, HistoryError> {
         self.request(|reply| Request::DeleteSnippet { id, reply })
+            .await
+    }
+
+    /// Replaces the open tabs kept for `workspace` (ADR-036). The desktop writes them through
+    /// [`crate::TabKeeper`], which decides how often.
+    pub async fn save_open_tabs(
+        &self,
+        workspace: String,
+        tabs: SavedTabs,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SaveOpenTabs {
+            workspace,
+            tabs,
+            reply,
+        })
+        .await
+    }
+
+    /// The open tabs kept for `workspace`, as saved; [`crate::restore_tabs`] checks them.
+    pub async fn open_tabs(&self, workspace: String) -> Result<SavedTabs, HistoryError> {
+        self.request(|reply| Request::OpenTabs { workspace, reply })
+            .await
+    }
+
+    /// Puts a file first in the recent files (ADR-036).
+    pub async fn add_recent_file(&self, path: String) -> Result<(), HistoryError> {
+        self.request(|reply| Request::AddRecentFile { path, reply })
+            .await
+    }
+
+    /// The recent files, newest first.
+    pub async fn recent_files(&self) -> Result<Vec<RecentFile>, HistoryError> {
+        self.request(|reply| Request::RecentFiles { reply }).await
+    }
+
+    pub async fn remove_recent_file(&self, path: String) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::RemoveRecentFile { path, reply })
+            .await
+    }
+
+    /// Whether the app connects restored tabs at startup; off by default (ADR-036).
+    pub async fn reconnect_on_start(&self) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::GetReconnectOnStart { reply })
+            .await
+    }
+
+    pub async fn set_reconnect_on_start(&self, enabled: bool) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetReconnectOnStart { enabled, reply })
             .await
     }
 

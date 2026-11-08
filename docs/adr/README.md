@@ -44,3 +44,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [033](0033-mcp-page.md) | The MCP server page: read-only mode for every agent, query rows as JSON or TOON, one-click setup of AI clients | Accepted |
 | [034](0034-streaming-exports.md) | Exports that stream to a file: a new read-only run in its own session, written batch by batch | Accepted |
 | [035](0035-script-runs.md) | Script runs that behave like a script runner: error modes, timeouts and server output | Accepted |
+| [036](0036-sql-files-and-restored-tabs.md) | SQL files in editor tabs, and open tabs that survive a restart | Accepted |
