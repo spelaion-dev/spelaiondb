@@ -13,6 +13,8 @@ import { useExport } from "./ExportDialog";
 import { CellViewer, ViewerModes, type ViewerMode } from "./CellViewer";
 import { Icon, PATHS } from "./Icons";
 import { ReferencesPanel } from "./ReferencesPanel";
+import { CalcPanel } from "./CalcPanel";
+import { ColumnStatsPopover } from "./ColumnStatsPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
 
@@ -261,6 +263,8 @@ export function ResultGrid({
   const [frozen, setFrozen] = useState(false);
   /** The column chooser, where it was opened. */
   const [chooser, setChooser] = useState<{ x: number; y: number } | null>(null);
+  /** A table data tab column's statistics popover, where it was opened. */
+  const [columnStats, setColumnStats] = useState<{ x: number; y: number; column: number } | null>(null);
   const gridLook = usePreferences((s) => s.grid);
   /** The find bar (Ctrl+F): what is searched, and what the core found. */
   const [find, setFind] = useState<{ text: string; matchCase: boolean } | null>(null);
@@ -313,9 +317,10 @@ export function ResultGrid({
     }
     return byColumn;
   }, [keys, result.columns]);
-  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references"] : ["cell", "row"];
+  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references", "calc"] : ["cell", "row", "calc"];
   const shownMode: ViewerMode = viewerModes.includes(viewerMode) ? viewerMode : "cell";
   const referencesShown = viewer && shownMode === "references";
+  const calcShown = viewer && shownMode === "calc";
   const [sorting, setSorting] = useState(false);
   const sortsPending = useRef(0);
   const [inserting, setInserting] = useState<{ values: CellEditItem[]; index?: number } | null>(null);
@@ -833,9 +838,20 @@ export function ResultGrid({
   /** Shows the value of the active cell (Enter, double-click, "View value"), even when the
    *  side panel last showed the row's references. */
   function openCellViewer() {
-    if (viewerMode === "references") setViewerMode("cell");
+    if (viewerMode === "references" || viewerMode === "calc") setViewerMode("cell");
     setViewer(true);
   }
+
+  /** Shows the numbers about the selection in the side panel (the core computes them). */
+  function openCalc() {
+    setViewerMode("calc");
+    setViewer(true);
+  }
+
+  const closeColumnStats = useCallback(() => {
+    setColumnStats(null);
+    scrollerRef.current?.focus();
+  }, []);
 
   /** Opens a table data tab where a key of the references panel leads (its filter is the core's). */
   function openTarget(target: KeyTargetItem) {
@@ -851,6 +867,20 @@ export function ResultGrid({
 
   /** Shown columns inside a selection, in order (hidden ones are left out of copies). */
   const shownIn = (b: Bounds) => visibleCols.filter((c) => c >= b.c0 && c <= b.c1);
+  const calcBounds = selection && result.complete && result.rows > 0 ? bounds(selection) : null;
+  const calcColumns = calcBounds ? shownIn(calcBounds).join(",") : "";
+  const calcRange = useMemo<CellRange | null>(
+    () =>
+      calcBounds
+        ? {
+            firstRow: Math.min(calcBounds.r0, result.rows - 1),
+            rows: Math.max(0, Math.min(calcBounds.r1, result.rows - 1) - Math.min(calcBounds.r0, result.rows - 1) + 1),
+            columns: calcColumns ? calcColumns.split(",").map(Number) : [],
+          }
+        : null,
+    // Rebuilt only when the bounds change, not on every render.
+    [calcBounds?.r0, calcBounds?.r1, calcColumns, result.rows],
+  );
 
   function hideColumn(col: number) {
     setMenu(null);
@@ -1649,6 +1679,18 @@ export function ResultGrid({
             <button role="menuitem" onClick={() => void copyColumnInList(menu.header ?? 0)}>
               {t("results.copyColumnInList")}
             </button>
+            {tableData && (
+              <button
+                role="menuitem"
+                title={t("columnStats.hint")}
+                onClick={() => {
+                  setMenu(null);
+                  setColumnStats({ x: menu.x, y: menu.y, column: menu.header ?? 0 });
+                }}
+              >
+                {t("columnStats.open")}
+              </button>
+            )}
           </HeaderMenuItems>
         </div>
       )}
@@ -1706,6 +1748,17 @@ export function ResultGrid({
           >
             {t("viewer.open")}
           </button>
+          {selection && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                openCalc();
+              }}
+            >
+              {t("calc.open")}
+            </button>
+          )}
           {menu.cell && (keyColumns.get(menu.cell.col) ?? []).map((key) => (
             <button key={`key:${key.schema}.${key.table}:${key.name}`} role="menuitem" onClick={() => menu.cell && void followKey(menu.cell, key)}>
               {t("references.openReferenced", { table: key.table })}
@@ -1848,6 +1901,23 @@ export function ResultGrid({
           onClose={closeFind}
         />
       )}
+      {columnStats && tableData && (
+        <ColumnStatsPopover
+          x={columnStats.x}
+          y={columnStats.y}
+          session={session}
+          resultId={result.id}
+          column={columnStats.column}
+          name={result.columns[columnStats.column]?.name ?? ""}
+          table={{ schema: tableData.schema, name: tableData.name, filter: tableData.filter }}
+          onFilter={(filter) => {
+            setColumnStats(null);
+            tableData.onFilter(filter);
+            scrollerRef.current?.focus();
+          }}
+          onClose={closeColumnStats}
+        />
+      )}
       {chooser && (
         <ColumnChooser
           x={chooser.x}
@@ -1974,7 +2044,19 @@ export function ResultGrid({
       }}
     />
     <div className="viewer-panel" id={viewerId} style={{ width: shownViewerWidth }}>
-    {referencesShown && tableData && result.rows > 0 ? (
+    {calcShown ? (
+      <CalcPanel
+        resultId={result.id}
+        range={calcRange}
+        waiting={!!selection && !result.complete}
+        view={`${view}|${result.rows}`}
+        modes={<ViewerModes modes={viewerModes} mode={shownMode} onMode={(mode) => { setViewerMode(mode); scrollerRef.current?.focus(); }} />}
+        onClose={() => {
+          setViewer(false);
+          scrollerRef.current?.focus();
+        }}
+      />
+    ) : referencesShown && tableData && result.rows > 0 ? (
       <ReferencesPanel
         session={session}
         resultId={result.id}
@@ -2033,13 +2115,13 @@ export function ResultGrid({
     <div className="result-side-actions" role="toolbar" aria-label={t("viewer.toolbar")}>
       <button
         type="button"
-        className={`result-side-action ${viewer && !referencesShown ? "active" : ""}`}
+        className={`result-side-action ${viewer && !referencesShown && !calcShown ? "active" : ""}`}
         aria-label={t("viewer.toggle")}
-        aria-pressed={viewer && !referencesShown}
+        aria-pressed={viewer && !referencesShown && !calcShown}
         aria-controls={viewer ? viewerId : undefined}
-        title={t(viewer && !referencesShown ? "viewer.hide" : "viewer.show")}
+        title={t(viewer && !referencesShown && !calcShown ? "viewer.hide" : "viewer.show")}
         onClick={() => {
-          if (referencesShown) setViewerMode("cell");
+          if (referencesShown || calcShown) setViewerMode("cell");
           else setViewer(!viewer);
         }}
       >
@@ -2066,6 +2148,20 @@ export function ResultGrid({
           <Icon name="link" size={18} />
         </button>
       )}
+      <button
+        type="button"
+        className={`result-side-action ${calcShown ? "active" : ""}`}
+        aria-label={t("calc.toggle")}
+        aria-pressed={calcShown}
+        aria-controls={calcShown ? viewerId : undefined}
+        title={t(calcShown ? "calc.hide" : "calc.show")}
+        onClick={() => {
+          if (calcShown) setViewer(false);
+          else openCalc();
+        }}
+      >
+        <Icon name="sigma" size={18} />
+      </button>
     </div>
     </div>
   );

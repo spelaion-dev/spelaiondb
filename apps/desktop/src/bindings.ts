@@ -201,6 +201,30 @@ export const commands = {
 	/**  Forgets a result's search (the find bar closed). */
 	clearFind: (result: number) => typedError<null, string>(__TAURI_INVOKE("clear_find", { result })),
 	/**
+	 *  The numbers about a selection of a result (the calc panel): the UI sends the selection's
+	 *  bounds (rows of the current view and the columns it shows), never cell values, and the
+	 *  core computes over the stored result. A newer calculation on the same result, or
+	 *  `cancel_selection_stats`, stops this one (`None`).
+	 */
+	selectionStats: (result: number, range: CellRange) => typedError<SelectionStatsItem_Serialize | null, string>(__TAURI_INVOKE("selection_stats", { result, range })),
+	/**  Stops the selection calculation running on a result (the calc panel's Cancel). */
+	cancelSelectionStats: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_selection_stats", { result })),
+	/**
+	 *  A table data tab column's statistics (the column header's "Column statistics"): counted by
+	 *  the server in a new session of the tab's connection, every statement a read inside the
+	 *  engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
+	 *  type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
+	 *  `stats_id` stops it.
+	 */
+	columnStats: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<ColumnStatsOutcome_Serialize, string>(__TAURI_INVOKE("column_stats", { source, statsId, table, result, column })),
+	/**  Stops a column's statistics while they are counted: the running statement and the rest. */
+	cancelColumnStats: (statsId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_column_stats", { statsId })),
+	/**
+	 *  A table data tab's filter with a condition the core wrote (one of the column statistics'
+	 *  most frequent values) added with AND. The page's SELECT is checked when it loads.
+	 */
+	addTableCondition: (session: string, filter: string, condition: string) => typedError<string, string>(__TAURI_INVOKE("add_table_condition", { session, filter, condition })),
+	/**
 	 *  "Filter by this value" in a table data tab: the core writes the condition from the typed
 	 *  value (the cell at `row` of the page, or `value` typed for the column) and returns the
 	 *  tab's filter with it added. The page's SELECT is checked when it loads.
@@ -696,6 +720,61 @@ export type ColumnItem = {
 	/**  Common logical type (`int`, `text`, `timestamptz`…). */
 	logical: string,
 	nativeType: string,
+};
+
+/**  A table column's statistics, counted by the server with read-only queries. */
+export type ColumnStatsItem = ColumnStatsItem_Serialize | ColumnStatsItem_Deserialize;
+
+/**  A table column's statistics, counted by the server with read-only queries. */
+export type ColumnStatsItem_Deserialize = {
+	/**  Rows the numbers describe (`sampleRows` when sampled). */
+	rows: number | null,
+	sampled: boolean,
+	sampleRows: number | null,
+	nulls: number | null,
+	distinct?: number | null,
+	distinctState: StatStateItem,
+	min?: string | null,
+	max?: string | null,
+	rangeState: StatStateItem,
+	top: TopValueItem_Deserialize[],
+	topState: StatStateItem,
+	/**  The statements that ran, every one a read. */
+	statements: string[],
+};
+
+/**  A table column's statistics, counted by the server with read-only queries. */
+export type ColumnStatsItem_Serialize = {
+	/**  Rows the numbers describe (`sampleRows` when sampled). */
+	rows: number | null,
+	sampled: boolean,
+	sampleRows: number | null,
+	nulls: number | null,
+	distinct: number | null,
+	distinctState: StatStateItem,
+	min: string | null,
+	max: string | null,
+	rangeState: StatStateItem,
+	top: TopValueItem_Serialize[],
+	topState: StatStateItem,
+	/**  The statements that ran, every one a read. */
+	statements: string[],
+};
+
+/**  How asking for a column's statistics ended. */
+export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize | ColumnStatsOutcome_Deserialize;
+
+/**  How asking for a column's statistics ended. */
+export type ColumnStatsOutcome_Deserialize = { kind: "done"; stats: ColumnStatsItem_Deserialize } | { kind: "cancelled" };
+
+/**  How asking for a column's statistics ended. */
+export type ColumnStatsOutcome_Serialize = { kind: "done"; stats: ColumnStatsItem_Serialize } | { kind: "cancelled" };
+
+/**  A column of a table data tab, for its statistics: the tab's table and filter. */
+export type ColumnStatsTarget = {
+	schema: string,
+	name: string,
+	filter: string,
 };
 
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
@@ -2309,6 +2388,66 @@ export type ScriptSummaryItem_Serialize = {
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
 
+/**
+ *  The numbers about a grid selection (the calc panel), computed by the core over the stored
+ *  result. Values are text as the grid shows them; counts are exact up to 2^53.
+ */
+export type SelectionStatsItem = SelectionStatsItem_Serialize | SelectionStatsItem_Deserialize;
+
+/**
+ *  The numbers about a grid selection (the calc panel), computed by the core over the stored
+ *  result. Values are text as the grid shows them; counts are exact up to 2^53.
+ */
+export type SelectionStatsItem_Deserialize = {
+	cells: number | null,
+	nulls: number | null,
+	/**  Cells that are not NULL. */
+	values: number | null,
+	distinct: number | null,
+	/**  More different values than the core counts: `distinct` reads "N+". */
+	distinctCapped: boolean,
+	/**  Numeric values: what sum, average and median take. */
+	numbers: number | null,
+	sum?: string | null,
+	avg?: string | null,
+	median?: string | null,
+	/**  Too many numbers for a median. */
+	medianCapped: boolean,
+	/**  `None` when the selection mixes values that do not compare (numbers and text). */
+	min?: string | null,
+	max?: string | null,
+	/**  The most frequent value, when one repeats. */
+	mode?: string | null,
+	modeCount: number | null,
+};
+
+/**
+ *  The numbers about a grid selection (the calc panel), computed by the core over the stored
+ *  result. Values are text as the grid shows them; counts are exact up to 2^53.
+ */
+export type SelectionStatsItem_Serialize = {
+	cells: number | null,
+	nulls: number | null,
+	/**  Cells that are not NULL. */
+	values: number | null,
+	distinct: number | null,
+	/**  More different values than the core counts: `distinct` reads "N+". */
+	distinctCapped: boolean,
+	/**  Numeric values: what sum, average and median take. */
+	numbers: number | null,
+	sum: string | null,
+	avg: string | null,
+	median: string | null,
+	/**  Too many numbers for a median. */
+	medianCapped: boolean,
+	/**  `None` when the selection mixes values that do not compare (numbers and text). */
+	min: string | null,
+	max: string | null,
+	/**  The most frequent value, when one repeats. */
+	mode: string | null,
+	modeCount: number | null,
+};
+
 /**  A role, login, tablespace or extension: outside every schema (ADR-024). */
 export type ServerObjectItem = ServerObjectItem_Serialize | ServerObjectItem_Deserialize;
 
@@ -2396,6 +2535,13 @@ export type SqlFileItem = {
 export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" | "insert" | "upsert" | "merge" | "update" | "updateFrom" | "delete" | "deleteUsing";
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
+
+/**  Whether a statistic could be computed. */
+export type StatStateItem = { kind: "done" } | 
+/**  The column's type has no such number (booleans have no minimum). */
+{ kind: "notForType" } | 
+/**  The engine refused it: its message. */
+{ kind: "failed"; message: string };
 
 export type TableDetails = TableDetails_Serialize | TableDetails_Deserialize;
 
@@ -2537,6 +2683,33 @@ export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "veri
 export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";
 
 export type ToolOutputItem = "json" | "toon";
+
+/**  One of a column's most frequent values. */
+export type TopValueItem = TopValueItem_Serialize | TopValueItem_Deserialize;
+
+/**  One of a column's most frequent values. */
+export type TopValueItem_Deserialize = {
+	/**  `None` for NULL. */
+	text?: string | null,
+	count: number | null,
+	/**
+	 *  The condition the core wrote to keep these rows (added to the tab's filter with
+	 *  `add_table_condition`); `None` when the value is too long to filter by.
+	 */
+	condition?: string | null,
+};
+
+/**  One of a column's most frequent values. */
+export type TopValueItem_Serialize = {
+	/**  `None` for NULL. */
+	text: string | null,
+	count: number | null,
+	/**
+	 *  The condition the core wrote to keep these rows (added to the tab's filter with
+	 *  `add_table_condition`); `None` when the value is too long to filter by.
+	 */
+	condition: string | null,
+};
 
 /**
  *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the

@@ -2994,6 +2994,146 @@ async fn clear_find(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
+/// The numbers about a selection of a result (the calc panel): the UI sends the selection's
+/// bounds (rows of the current view and the columns it shows), never cell values, and the
+/// core computes over the stored result. A newer calculation on the same result, or
+/// `cancel_selection_stats`, stops this one (`None`).
+#[tauri::command]
+#[specta::specta]
+async fn selection_stats(
+    result: u32,
+    range: CellRange,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<SelectionStatsItem>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let block = spelaion_core::CellBlock {
+        first_row: range.first_row as usize,
+        rows: range.rows as usize,
+        columns: range.columns.into_iter().map(|c| c as usize).collect(),
+    };
+    tokio::task::spawn_blocking(move || {
+        let read = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let ticket = read.stats_ticket();
+        read.selection_stats(&block, &ticket)
+            .map(|stats| stats.map(SelectionStatsItem::from))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops the selection calculation running on a result (the calc panel's Cancel).
+#[tauri::command]
+#[specta::specta]
+async fn cancel_selection_stats(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(stored) = state.results.get(ResultId(result.into())) {
+        stored
+            .read()
+            .map_err(|_| "result lock poisoned")?
+            .cancel_stats();
+    }
+    Ok(())
+}
+
+/// A table data tab column's statistics (the column header's "Column statistics"): counted by
+/// the server in a new session of the tab's connection, every statement a read inside the
+/// engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
+/// type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
+/// `stats_id` stops it.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn column_stats(
+    source: String,
+    stats_id: u32,
+    table: ColumnStatsTarget,
+    result: u32,
+    column: u32,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<ColumnStatsOutcome> {
+    let (name, logical) = {
+        let stored = state
+            .results
+            .get(ResultId(result.into()))
+            .ok_or("result freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        let meta = stored
+            .schema()
+            .columns
+            .get(column as usize)
+            .ok_or("no such column")?;
+        (meta.name.clone(), meta.logical)
+    };
+    let request = spelaion_core::ColumnStatsRequest {
+        schema: table.schema,
+        table: table.name,
+        column: name,
+        logical,
+        filter: table.filter,
+        sample_rows: spelaion_core::STATS_SAMPLE_ROWS,
+        top: spelaion_core::TOP_VALUES,
+    };
+    // Checked before connecting: a filter that would change the statements never reaches a
+    // new session.
+    {
+        let tab = state.session(&source).await?;
+        spelaion_core::column_stats_sql(tab.session.dialect().as_ref(), &request, false)
+            .map_err(|e| e.to_string())?;
+    }
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, stats_id).await?;
+    // The tab's database (MySQL, SQL Server) or schema, as for exports.
+    let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
+    drop(tab);
+    let outcome = match context {
+        Err(message) => Err(message),
+        Ok(()) => match spelaion_core::column_stats(&open.session, &request, &cancel).await {
+            Ok(stats) => Ok(ColumnStatsOutcome::Done {
+                stats: Box::new(ColumnStatsItem::new(stats, request.sample_rows)),
+            }),
+            Err(spelaion_core::ColumnStatsError::Cancelled) => Ok(ColumnStatsOutcome::Cancelled),
+            Err(e) => Err(e.to_string()),
+        },
+    };
+    close_export_session(&state, stats_id, open).await;
+    outcome
+}
+
+/// Stops a column's statistics while they are counted: the running statement and the rest.
+#[tauri::command]
+#[specta::specta]
+async fn cancel_column_stats(stats_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    let cancel = state
+        .exports
+        .lock()
+        .expect("lock poisoned")
+        .get(&stats_id)
+        .cloned();
+    if let Some(cancel) = cancel {
+        cancel.cancel().await;
+    }
+    Ok(())
+}
+
+/// A table data tab's filter with a condition the core wrote (one of the column statistics'
+/// most frequent values) added with AND. The page's SELECT is checked when it loads.
+#[tauri::command]
+#[specta::specta]
+async fn add_table_condition(
+    session: String,
+    filter: String,
+    condition: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let dialect = dialect_for(&state, &session).await;
+    spelaion_core::add_condition(dialect.as_ref(), &filter, &condition).map_err(|e| e.to_string())
+}
+
 /// "Filter by this value" in a table data tab: the core writes the condition from the typed
 /// value (the cell at `row` of the page, or `value` typed for the column) and returns the
 /// tab's filter with it added. The page's SELECT is checked when it loads.
@@ -4092,6 +4232,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             find_matches,
             find_step,
             clear_find,
+            selection_stats,
+            cancel_selection_stats,
+            column_stats,
+            cancel_column_stats,
+            add_table_condition,
             table_filter_condition,
             table_keys,
             referencing_keys,
