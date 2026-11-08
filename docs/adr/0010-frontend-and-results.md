@@ -61,6 +61,26 @@
 - Hidden and frozen columns are view state of the tab (in memory); display settings (zebra
   rows, NULL text, boolean checkboxes) are personal settings in the store.
 
+## Numbers about the selection (2026-11-08, SDB-12)
+- **The calc panel computes in the core** (`selection_stats.rs`): the grid sends the selection's
+  bounds (rows of the current view and the columns it shows, the `CellRange` copies already
+  use) and gets back count, distinct, NULLs, sum, average, median, minimum, maximum and mode.
+  No cell value crosses to React. Sum, average and median take the numeric cells only; integers
+  and decimals add up exactly (a float makes the result a float); minimum and maximum compare
+  by type and are absent when the selection mixes kinds that do not compare. Distinct values
+  are counted up to 1,000,000. A newer calculation on the same result, or Cancel, stops one
+  still running, as a newer search stops Ctrl+F.
+- **Column statistics ask the server** (`column_stats.rs`), because a table data tab holds one
+  page: rows, distinct, NULLs, minimum, maximum and the ten most frequent values of the table
+  with the tab's filter. Every statement is written by the core from the catalog's names, the
+  filter is checked like a page's, and each runs as a single read inside the engine's
+  read-only transaction (ADR-034's barrier) in a session of its own, closed afterwards. Past
+  100,000 rows the numbers describe the first 100,000 rows the server returns and are marked
+  "Sampled": `TABLESAMPLE` does not exist in MySQL or SQLite, and the same rule everywhere is
+  easier to read. Each number has its own statement, so one the engine refuses for the type
+  (PostgreSQL's `json`) leaves the others. A most frequent value carries the core's
+  "filter by this value" condition, which the popover adds to the tab's filter.
+
 ## Alternatives
 Monaco (heavier), AG Grid (DOM, more editing features, heavier).
 
