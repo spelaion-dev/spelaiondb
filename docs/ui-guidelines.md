@@ -192,7 +192,7 @@ to an action that is also in a context menu, never its only way in.
 | Place | What goes there | Today |
 |---|---|---|
 | Editor action column | running and saving the tab's SQL | Run (Cancel while running), Run script, Run options, Format, Save, Save as |
-| Tab bar (connection row) | what the tab is connected to and its state | connection and database pickers, status with Reconnect, type badge, transaction controls; Refresh / Cancel on table tabs |
+| Tab bar (connection row) | what the tab is connected to and its state | connection and database (or schema) pickers, status with Reconnect, type badge, transaction controls; Refresh / Cancel on table tabs |
 | Results toolbar and grid | the active result and its selection | result tabs, filter, Export…, maximize; row edits with Save changes / Discard above the grid; copy, sort and filters in the grid's menus; in a table data tab, a foreign key cell's link and Open referenced row, and the side panel's references of the active row; the side panel's selection numbers (also in the cell menu); in a table data tab, Column statistics in the header menu |
 | Tab strip | tabs and files | new tab, the file menu (Open…, recent files: the app has no menu bar), each tab's context menu |
 | Explorer header | the explorer itself | link with editor, connected only, quick filter (finds connections by name, tag, type or host, forgiving a typo), add connection |

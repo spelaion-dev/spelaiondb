@@ -1070,16 +1070,14 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
 pub enum ConnectOutcome {
     Connected {
         server_version: String,
+        /// Session setup statements that failed and were skipped (ADR-037): the connection
+        /// ignores setup errors, and the tab says which.
+        setup_skipped: Vec<SkippedSetupItem>,
     },
     /// The password must be asked for. `can_remember`: it can be stored in the keychain.
-    PasswordRequired {
-        can_remember: bool,
-    },
+    PasswordRequired { can_remember: bool },
     /// The server rejected the password (or the user): it must be asked for again.
-    AuthFailed {
-        message: String,
-        can_remember: bool,
-    },
+    AuthFailed { message: String, can_remember: bool },
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
     /// A repository connection or tunnel is new or changed since the repository was trusted
@@ -1093,9 +1091,28 @@ pub enum ConnectOutcome {
     },
     /// The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
     /// their values, save them with `set_user_vars` and try again.
-    MissingVariables {
-        names: Vec<String>,
-    },
+    MissingVariables { names: Vec<String> },
+}
+
+/// A session setup statement that failed and was skipped (ADR-037).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedSetupItem {
+    /// 1-based.
+    pub index: u32,
+    /// The start of the statement.
+    pub statement: String,
+    pub message: String,
+}
+
+impl From<spelaion_core::SkippedSetup> for SkippedSetupItem {
+    fn from(skipped: spelaion_core::SkippedSetup) -> Self {
+        Self {
+            index: u32::try_from(skipped.index).unwrap_or(u32::MAX),
+            statement: skipped.statement,
+            message: skipped.message,
+        }
+    }
 }
 
 /// Trust status of an existing connection before opening its editor.
@@ -2080,6 +2097,10 @@ pub struct EngineItem {
     pub access: String,
     pub default_port: Option<u16>,
     pub available: bool,
+    /// A session has a schema of its own the connection can choose (ADR-037).
+    pub session_schema: bool,
+    /// Isolation levels a session can be set to (`read-committed`…); empty for one level.
+    pub isolation_levels: Vec<String>,
 }
 
 impl From<spelaion_core::EngineInfo> for EngineItem {
@@ -2095,6 +2116,17 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
             .into(),
             default_port: info.default_port,
             available: info.engine.is_some(),
+            session_schema: info.engine.is_some_and(|e| e.has_session_schema()),
+            isolation_levels: info
+                .engine
+                .map(|engine| {
+                    spelaion_config::IsolationLevel::ALL
+                        .into_iter()
+                        .filter(|level| level.available_on(engine))
+                        .map(|level| level.as_str().to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -2242,6 +2274,14 @@ pub struct ConnectionDraftItem {
     pub mcp_exposed: bool,
     /// Agents may write (`[mcp] writes = "allow"`, ADR-019).
     pub mcp_writes: bool,
+    /// SQL run on every new session (ADR-037); empty for none.
+    pub session_setup: String,
+    /// A setup statement the database rejects is skipped.
+    pub ignore_setup_errors: bool,
+    /// Where unqualified names are found when a session opens; empty for the server's.
+    pub default_schema: String,
+    /// `read-committed`…; null for the server's default.
+    pub isolation: Option<String>,
 }
 
 impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
@@ -2298,7 +2338,18 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             statement_timeout: item.statement_timeout,
             mcp_exposed: item.mcp_exposed,
             mcp_writes: item.mcp_writes,
-            session: Default::default(),
+            session: spelaion_config::SessionDraft {
+                setup: item.session_setup,
+                ignore_setup_errors: item.ignore_setup_errors,
+                schema: item.default_schema,
+                isolation: match item.isolation.as_deref() {
+                    None | Some("") => None,
+                    Some(text) => Some(
+                        spelaion_config::IsolationLevel::parse(text)
+                            .ok_or_else(|| format!("unknown isolation level: {text}"))?,
+                    ),
+                },
+            },
         })
     }
 }
@@ -2350,6 +2401,13 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             statement_timeout: draft.statement_timeout,
             mcp_exposed: draft.mcp_exposed,
             mcp_writes: draft.mcp_writes,
+            session_setup: draft.session.setup,
+            ignore_setup_errors: draft.session.ignore_setup_errors,
+            default_schema: draft.session.schema,
+            isolation: draft
+                .session
+                .isolation
+                .map(|level| level.as_str().to_string()),
         }
     }
 }

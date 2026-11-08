@@ -25,7 +25,9 @@
     "statements": "Sentencias",
     "general": "General",
     "kubernetes": "Port-forward de Kubernetes",
-    "about": "Sobre esta conexión"
+    "about": "Sobre esta conexión",
+    "session": "Valores por defecto",
+    "setup": "Sentencias de inicio"
   },
   "fields": {
     "name": "Nombre",
@@ -105,7 +107,18 @@
     "tagsPlaceholder": "facturación, eu, informes…",
     "tagsHint": "Etiquetas cortas para encontrar la conexión: pulsa Intro o escribe una coma después de cada una. Haz clic en una etiqueta del explorador para ver solo las conexiones que la tienen.",
     "tagsFull": "Como mucho {{count}} etiquetas",
-    "removeTag": "Quitar la etiqueta {{tag}}"
+    "removeTag": "Quitar la etiqueta {{tag}}",
+    "defaultSchema": "Esquema por defecto",
+    "defaultDatabase": "Base de datos por defecto",
+    "defaultSchemaPlaceholder": "El del servidor",
+    "defaultSchemaHint": "Las sesiones nuevas buscan primero en este esquema los nombres sin esquema (y luego en public). Cada pestaña puede cambiar a otro.",
+    "defaultDatabaseHint": "Las sesiones nuevas empiezan en esta base de datos, como con USE. Cada pestaña puede cambiar a otra.",
+    "isolation": "Nivel de aislamiento",
+    "isolationHint": "El nivel de aislamiento de cada transacción en las sesiones nuevas. El auto-commit y el commit manual los decide el tipo de conexión.",
+    "sessionSetup": "Ejecutar al abrir una sesión",
+    "ignoreSetupErrors": "Ignorar errores en estas sentencias",
+    "sessionSetupHint": "Se ejecutan en cada sesión nueva, antes que nada, también tras reconectar. No son tus consultas: no van al historial y no se vuelve a ejecutar nada de lo que ejecutaste.",
+    "sessionSetupRestricted": "En esta conexión solo pueden leer y cambiar ajustes de la sesión (search path, zona horaria, rol…): una sentencia que escribe impide abrir la sesión."
   },
   "tls": {
     "disable": "Desactivado",
@@ -192,7 +205,8 @@
     "ssl": "SSL",
     "ssh": "SSH",
     "kubernetes": "Kubernetes",
-    "options": "Opciones"
+    "options": "Opciones",
+    "session": "Sesión"
   },
   "auth": {
     "password": "Usuario y contraseña",
@@ -414,5 +428,13 @@
     "required": "Falta rellenar: {{fields}}.",
     "none": "(nada)",
     "hint": "La conexión conserva su archivo, filtros, marcadores e historial. Al guardar se cierran sus sesiones abiertas: son del motor anterior, y sus pestañas vuelven a conectar al ejecutar."
+  },
+  "isolation": {
+    "default": "El del servidor",
+    "read-uncommitted": "Read uncommitted",
+    "read-committed": "Read committed",
+    "repeatable-read": "Repeatable read",
+    "serializable": "Serializable",
+    "snapshot": "Snapshot"
   }
 }

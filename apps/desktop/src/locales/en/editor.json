@@ -674,5 +674,12 @@
     "hide": "Hide references panel",
     "followFailed": "Could not open the referenced row: {{detail}}",
     "accessibleKey": "Foreign key: {{shortcut}} opens the referenced row."
+  },
+  "schema": "Schema",
+  "schemaHint": "Where this tab finds unqualified names",
+  "noSchema": "No schema",
+  "setupSkipped": {
+    "title": "Some of the connection's setup statements failed and were skipped",
+    "item": "Statement {{index}} ({{statement}}): {{message}}"
   }
 }

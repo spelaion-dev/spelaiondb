@@ -794,7 +794,12 @@ export type ColumnStatsTarget = {
 
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
 
-export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string } | 
+export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string; 
+/**
+ *  Session setup statements that failed and were skipped (ADR-037): the connection
+ *  ignores setup errors, and the tab says which.
+ */
+setupSkipped: SkippedSetupItem[] } | 
 /**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
@@ -814,7 +819,12 @@ item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string 
  */
 { kind: "missingVariables"; names: string[] };
 
-export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string } | 
+export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string; 
+/**
+ *  Session setup statements that failed and were skipped (ADR-037): the connection
+ *  ignores setup errors, and the tab says which.
+ */
+setupSkipped: SkippedSetupItem[] } | 
 /**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
@@ -884,6 +894,14 @@ export type ConnectionDraftItem_Deserialize = {
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
+	/**  SQL run on every new session (ADR-037); empty for none. */
+	sessionSetup: string,
+	/**  A setup statement the database rejects is skipped. */
+	ignoreSetupErrors: boolean,
+	/**  Where unqualified names are found when a session opens; empty for the server's. */
+	defaultSchema: string,
+	/**  `read-committed`…; null for the server's default. */
+	isolation?: string | null,
 };
 
 /**
@@ -930,6 +948,14 @@ export type ConnectionDraftItem_Serialize = {
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
+	/**  SQL run on every new session (ADR-037); empty for none. */
+	sessionSetup: string,
+	/**  A setup statement the database rejects is skipped. */
+	ignoreSetupErrors: boolean,
+	/**  Where unqualified names are found when a session opens; empty for the server's. */
+	defaultSchema: string,
+	/**  `read-committed`…; null for the server's default. */
+	isolation: string | null,
 };
 
 export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deserialize;
@@ -1267,6 +1293,10 @@ export type EngineItem_Deserialize = {
 	access: string,
 	defaultPort?: number | null,
 	available: boolean,
+	/**  A session has a schema of its own the connection can choose (ADR-037). */
+	sessionSchema: boolean,
+	/**  Isolation levels a session can be set to (`read-committed`…); empty for one level. */
+	isolationLevels: string[],
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
@@ -1279,6 +1309,10 @@ export type EngineItem_Serialize = {
 	access: string,
 	defaultPort: number | null,
 	available: boolean,
+	/**  A session has a schema of its own the connection can choose (ADR-037). */
+	sessionSchema: boolean,
+	/**  Isolation levels a session can be set to (`read-committed`…); empty for one level. */
+	isolationLevels: string[],
 };
 
 /**  The answer to a paused run. */
@@ -2578,6 +2612,15 @@ export type SessionLost_Serialize = {
 	 *  (ADR-031).
 	 */
 	openTransaction: boolean,
+};
+
+/**  A session setup statement that failed and was skipped (ADR-037). */
+export type SkippedSetupItem = {
+	/**  1-based. */
+	index: number,
+	/**  The start of the statement. */
+	statement: string,
+	message: string,
 };
 
 export type SnippetFolderItem = {

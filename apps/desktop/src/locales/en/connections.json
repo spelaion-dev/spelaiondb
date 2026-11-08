@@ -25,7 +25,9 @@
     "statements": "Statements",
     "general": "General",
     "kubernetes": "Kubernetes port-forward",
-    "about": "About this connection"
+    "about": "About this connection",
+    "session": "Defaults",
+    "setup": "Setup statements"
   },
   "fields": {
     "name": "Name",
@@ -105,7 +107,18 @@
     "tagsPlaceholder": "billing, eu, reporting…",
     "tagsHint": "Short labels to find the connection: press Enter or type a comma after each one. Click a tag in the explorer to show only the connections that have it.",
     "tagsFull": "At most {{count}} tags",
-    "removeTag": "Remove tag {{tag}}"
+    "removeTag": "Remove tag {{tag}}",
+    "defaultSchema": "Default schema",
+    "defaultDatabase": "Default database",
+    "defaultSchemaPlaceholder": "The server's default",
+    "defaultSchemaHint": "New sessions find unqualified names in this schema first (then in public). Each tab can switch to another one.",
+    "defaultDatabaseHint": "New sessions start in this database, as with USE. Each tab can switch to another one.",
+    "isolation": "Isolation level",
+    "isolationHint": "The isolation level of every transaction in new sessions. Auto-commit and manual commit come from the connection type.",
+    "sessionSetup": "Run when a session opens",
+    "ignoreSetupErrors": "Ignore errors in these statements",
+    "sessionSetupHint": "Run on every new session, before anything else, including after a reconnect. They are not your queries: they are not in the history and nothing you ran is run again.",
+    "sessionSetupRestricted": "On this connection they may only read and change session settings (search path, time zone, role…): a statement that writes stops the session from opening."
   },
   "tls": {
     "disable": "Disabled",
@@ -192,7 +205,8 @@
     "ssl": "SSL",
     "ssh": "SSH",
     "kubernetes": "Kubernetes",
-    "options": "Options"
+    "options": "Options",
+    "session": "Session"
   },
   "auth": {
     "password": "User and password",
@@ -414,5 +428,13 @@
     "required": "To fill in: {{fields}}.",
     "none": "(none)",
     "hint": "The connection keeps its file, filters, bookmarks and history. Saving closes its open sessions: they belong to the old engine, and its tabs connect again when run."
+  },
+  "isolation": {
+    "default": "The server's default",
+    "read-uncommitted": "Read uncommitted",
+    "read-committed": "Read committed",
+    "repeatable-read": "Repeatable read",
+    "serializable": "Serializable",
+    "snapshot": "Snapshot"
   }
 }
