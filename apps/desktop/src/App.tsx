@@ -12,17 +12,18 @@ import { HistoryPanel } from "./components/HistoryPanel";
 import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
 import { SettingsDialog } from "./components/Settings";
 import { SnippetsPanel } from "./components/SnippetsPanel";
-import { FOCUS_EXPLORER_FILTER_EVENT, Sidebar, refreshConnections } from "./components/Sidebar";
+import { Sidebar, refreshConnections } from "./components/Sidebar";
+import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
-import { EXPLORER_SESSION_CLOSED_EVENT, closeQueryTab, tabName } from "./connect";
-import { closeAllTabs, closeOtherTabs, closeTabsToTheRight, duplicateTab, moveTabBy, startRename, toggleResultsMaximized, togglePinned } from "./tabActions";
+import { EXPLORER_SESSION_CLOSED_EVENT, tabName } from "./connect";
+import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./commandRegistry";
+import { activeContext, isCommandId, runCommand } from "./commands";
 import { call, commands, events } from "./api";
 import { usePreferences } from "./preferences";
 import { useUpdate } from "./update";
-import { SAVE_QUERY_EVENT, useApp, useDialogs } from "./store";
+import { useApp, useDialogs } from "./store";
 import { topDialog, useModalFocus } from "./modalFocus";
-import { openFileDialog, saveTab, saveTabAs } from "./sqlFiles";
 import { restoreTabs } from "./tabPersistence";
 
 const SIDEBAR_DEFAULT = 290;
@@ -36,7 +37,6 @@ export default function App() {
   const { t } = useTranslation(["app", "shell", "settings", "editor"]);
   const tabs = useApp((s) => s.tabs);
   const activeTab = useApp((s) => s.activeTab);
-  const addTab = useApp((s) => s.addTab);
   const historyOpen = useApp((s) => s.historyOpen);
   const snippetsOpen = useApp((s) => s.snippetsOpen);
   const settingsOpen = useApp((s) => s.settingsOpen);
@@ -48,7 +48,9 @@ export default function App() {
   const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
-  const [sidebarSection, setSidebarSection] = useState<"connections" | "processes" | "mcp" | null>("connections");
+  const sidebarSection = useApp((s) => s.sidebarSection);
+  const setSidebarSection = useApp((s) => s.setSidebarSection);
+  const paletteOpen = useApp((s) => s.paletteOpen);
   const [processConnection, setProcessConnection] = useState<string | null>(null);
   const connections = useApp((s) => s.connections);
   const workspaceChanging = useApp((s) => s.workspaceChanging);
@@ -112,89 +114,19 @@ export default function App() {
         if (quit) void call(commands.quitApp()).catch(() => undefined);
       });
     });
+    // Global shortcuts: the registry's (commandRegistry.ts), the same commands as the menus and
+    // the command palette. Ctrl+Tab is the tab bar's switcher (TabBar.tsx).
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      const key = e.key.toLowerCase();
-      const app = useApp.getState();
+      const command = globalCommandFor(e);
+      if (!command || !isCommandId(command.id)) return;
+      e.preventDefault();
+      // A modal dialog keeps the app's shortcuts from acting behind it; Ctrl+W closes Settings.
       const modal = topDialog();
-      // A modal dialog keeps the app's shortcuts from acting behind it (the tab ones included).
-      const tabShortcut = e.altKey ? ["d", "p", "w", "r", "m"].includes(key) : e.key === "F2";
-      if (mod && modal && (tabShortcut || key === "t" || key === "s" || key === "w" || e.key === "Tab" || e.key === "PageDown" || e.key === "PageUp" || e.key === "," || (e.shiftKey && (key === "d" || key === "f")))) {
-        e.preventDefault();
-        if (key === "w" && !e.altKey && !e.shiftKey && modal.classList.contains("settings-dialog")) app.closeSettings();
+      if (modal) {
+        if (command.id === "tab.close" && modal.classList.contains("settings-dialog")) useApp.getState().closeSettings();
         return;
       }
-      const active = app.settingsOpen ? null : app.activeTab;
-      if (mod && e.altKey && !e.shiftKey) {
-        // Tab actions (tabActions.ts). AltGr is Ctrl+Alt on Windows: a key that AltGr turns
-        // into a character (€, @…) has that character as its key, so it never matches here.
-        const action = ({
-          d: duplicateTab,
-          p: togglePinned,
-          w: closeOtherTabs,
-          r: closeTabsToTheRight,
-          m: toggleResultsMaximized,
-        } as Record<string, ((id: string) => unknown) | undefined>)[key];
-        if (!action) return;
-        e.preventDefault();
-        if (active) void action(active);
-      } else if (e.altKey) {
-        return;
-      } else if (mod && e.key === "F2" && !e.shiftKey) {
-        e.preventDefault();
-        if (active) startRename(active);
-      } else if (mod && key === "t") {
-        e.preventDefault();
-        if (e.shiftKey) app.reopenTab();
-        else app.addTab(null);
-      } else if (mod && key === "o" && !e.shiftKey) {
-        e.preventDefault();
-        if (!app.settingsOpen) void openFileDialog();
-      } else if (mod && key === "s" && e.shiftKey) {
-        // Any editor tab to a `.sql` file (ADR-036).
-        e.preventDefault();
-        if (active) void saveTabAs(active);
-      } else if (mod && key === "s") {
-        e.preventDefault();
-        const target = e.target instanceof Element ? e.target : null;
-        // A file tab saves its file; a console saves its query by name, as before.
-        if (active && app.tabs.find((t) => t.id === active)?.file) {
-          void saveTab(active);
-        } else if (app.activeTab && !app.settingsOpen && target?.closest(".editor-pane")) {
-          window.dispatchEvent(new CustomEvent(SAVE_QUERY_EVENT, { detail: app.activeTab }));
-        }
-      } else if (mod && key === "w") {
-        e.preventDefault();
-        if (app.settingsOpen) app.closeSettings();
-        else if (e.shiftKey) void closeAllTabs();
-        else if (app.activeTab) void closeQueryTab(app.activeTab);
-      } else if (mod && (e.key === "PageDown" || e.key === "PageUp")) {
-        // Ctrl+Tab is the most-recently-used switcher (TabBar.tsx); these go by position.
-        const order = app.tabs.map((t) => t.id);
-        if (order.length === 0) return;
-        e.preventDefault();
-        const back = e.key === "PageUp";
-        if (e.shiftKey) {
-          if (active) moveTabBy(active, back ? -1 : 1);
-          return;
-        }
-        const at = Math.max(0, order.indexOf(app.activeTab ?? ""));
-        const next = order[(at + (back ? order.length - 1 : 1)) % order.length];
-        if (next) app.setActiveTab(next);
-      } else if (mod && e.key === ",") {
-        e.preventDefault();
-        app.openSettings();
-      } else if (mod && e.shiftKey && key === "d") {
-        // DBeaver's Open Database Object.
-        e.preventDefault();
-        app.setOpenObject({ connectionId: null });
-      } else if (mod && e.shiftKey && key === "f") {
-        // Focus the explorer's quick filter, showing the explorer if it is hidden.
-        e.preventDefault();
-        setSidebarSection("connections");
-        if (app.explorerFilter === null) app.setExplorerFilter("");
-        window.dispatchEvent(new Event(FOCUS_EXPLORER_FILTER_EVENT));
-      }
+      runCommand(command.id, activeContext("key", e.target));
     };
     window.addEventListener("keydown", onKey);
     return () => {
@@ -209,7 +141,7 @@ export default function App() {
 
   return (
     <div className="app" style={{ gridTemplateColumns: `${ACTIVITY_WIDTH}px ${sidebarOpen ? shownSidebarWidth : 0}px 0px minmax(0, 1fr)` }}>
-      <ActivityBar connectionsOpen={sidebarSection === "connections"} processesOpen={sidebarSection === "processes"} mcpOpen={sidebarSection === "mcp"} onToggleConnections={() => setSidebarSection((section) => section === "connections" ? null : "connections")} onToggleProcesses={() => setSidebarSection((section) => section === "processes" ? null : "processes")} onToggleMcp={() => setSidebarSection((section) => section === "mcp" ? "connections" : "mcp")} />
+      <ActivityBar />
       <Sidebar hidden={sidebarSection !== "connections"} />
       {sidebarSection === "processes" && <ProcessSidebar selected={processConnection} onSelect={setProcessConnection} />}
       <div
@@ -263,15 +195,12 @@ export default function App() {
                 <h1>SpelaionDB</h1>
                 <p>{t("welcome")}</p>
                 <div className="welcome-actions">
-                  <button className="primary" onClick={() => addTab(null)}>
-                    {t("newQuery")}
-                  </button>
-                  <button onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}>
-                    {t("connections:add")}
-                  </button>
-                  <button onClick={() => void openFileDialog()}>{t("files.open")}</button>
+                  <WelcomeButton command="tab.new" primary />
+                  <WelcomeButton command="connection.add" />
+                  <WelcomeButton command="file.open" />
                 </div>
                 <p className="welcome-shortcut">{t("newQueryShortcut")}</p>
+                <p className="welcome-shortcut">{t("commands.paletteHint", { shortcut: commandSpec("palette.show").shortcut })}</p>
               </div>
             ) : (
               tabs.map((t) => (
@@ -298,9 +227,21 @@ export default function App() {
       {openObject && (
         <OpenObjectDialog initialConnection={openObject.connectionId} onClose={() => useApp.getState().setOpenObject(null)} />
       )}
+      {paletteOpen && <CommandPalette onClose={() => useApp.getState().setPaletteOpen(false)} />}
       <ExportDialog />
       <Dialogs />
     </div>
+  );
+}
+
+/** A welcome screen action: a command of the registry, named as in the palette. */
+function WelcomeButton({ command, primary = false }: { command: CommandId; primary?: boolean }) {
+  const { t } = useTranslation();
+  const spec = commandSpec(command);
+  return (
+    <button className={primary ? "primary" : undefined} data-command={command} title={withShortcut(t(spec.label), spec)} onClick={() => runCommand(command, activeContext("menu"))}>
+      {t(spec.label)}
+    </button>
   );
 }
 

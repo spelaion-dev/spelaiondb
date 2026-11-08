@@ -1971,6 +1971,51 @@ try {
     document.querySelector('[aria-label="Expand or collapse Views"]')?.getAttribute("aria-expanded") === "true",
   );
   await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).waitFor();
+  // The command palette (Ctrl+Shift+P): the registry's commands with their shortcuts, and the
+  // objects the explorer has loaded with their actions. Nothing here changes the active tab.
+  step("command palette: run a command, and an action on an object the explorer loaded");
+  await page.keyboard.press("Control+Shift+P");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  const paletteBox = palette.getByRole("combobox");
+  const paletteResults = palette.getByRole("listbox", { name: "Commands and objects" });
+  const paletteLabels = () => paletteResults.getByRole("option").locator(".palette-label").allInnerTexts();
+  // Nothing typed: every command that can run, each with its shortcut.
+  assert.equal(await paletteResults.locator('[data-command="tab.new"] .menu-shortcut').innerText(), "Ctrl+T");
+  assert.equal(await paletteResults.locator('[data-command="tab.reopen"] .palette-label').innerText(), "Tab: Reopen closed tab");
+  // A command: the history panel opens, and the palette is gone.
+  await paletteBox.fill("query hist");
+  assert.equal((await paletteLabels())[0], "View: Query history");
+  await page.keyboard.press("Enter");
+  await palette.waitFor({ state: "detached" });
+  const historyPanel = page.getByRole("complementary", { name: "Query history", exact: true });
+  await historyPanel.waitFor();
+  await page.keyboard.press("Control+Shift+P");
+  await paletteBox.fill("query hist");
+  await page.keyboard.press("Enter");
+  await historyPanel.waitFor({ state: "detached" });
+  // Objects: from the explorer's catalog, best match first, with their kind, schema and connection.
+  await page.keyboard.press("Control+Shift+P");
+  await paletteBox.fill("ord");
+  await paletteResults.locator(".palette-item", { hasText: "big_orders" }).waitFor();
+  assert.deepEqual((await paletteLabels()).slice(0, 2), ["orders", "big_orders"]);
+  assert.equal(await paletteResults.getByRole("option").first().locator(".palette-detail").innerText(), "Table · main · Shop (SQLite)");
+  await shot("sdb-18-palette");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await shot("sdb-18-palette-dark");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  // Enter lists the object's actions; Escape goes back to the search as it was.
+  await page.keyboard.press("Enter");
+  assert.deepEqual(await paletteLabels(), ["Open data", "Open structure", "New console", "Copy name", "Copy qualified name", "Show in explorer"]);
+  await shot("sdb-18-palette-actions");
+  await page.keyboard.press("Escape");
+  assert.equal(await paletteBox.inputValue(), "ord");
+  await page.keyboard.press("Enter");
+  await paletteBox.fill("copy name");
+  assert.equal((await paletteLabels())[0], "Copy name");
+  const copiedBeforePalette = await page.evaluate(() => window.__copied.length);
+  await page.keyboard.press("Enter");
+  await palette.waitFor({ state: "detached" });
+  assert.equal(await copied(copiedBeforePalette + 1), "orders");
   // Link with editor: the active tab (big_orders' data) is shown in the tree as it changes.
   await viewsFolder.click();
   assert.equal(await viewsFolder.getAttribute("aria-expanded"), "false");

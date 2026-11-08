@@ -3172,3 +3172,92 @@ select {
 .export-dialog .export-result {
   word-break: break-word;
 }
+
+/* ---------------------------------------------------------------- command palette */
+/* Ctrl+Shift+P (CommandPalette.tsx): near the top, so the list grows downwards as it fills. */
+.modal-backdrop.palette-backdrop {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+.modal.command-palette {
+  width: min(640px, 92vw);
+  padding: var(--space-md);
+  gap: var(--space-xs);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+}
+.command-palette .palette-input {
+  width: 100%;
+  height: var(--control-lg);
+  padding: 0 var(--space-md);
+  border-color: var(--line-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+}
+.palette-context {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-md);
+  min-width: 0;
+  padding: var(--space-xs) var(--space-sm) 0;
+}
+.palette-context-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(420px, 55vh);
+  overflow: auto;
+}
+.palette-results:empty {
+  display: none;
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  min-height: var(--row-h);
+  padding: 0 var(--space-md);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  line-height: var(--leading-md);
+  cursor: pointer;
+}
+.palette-item[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+.palette-item.palette-danger {
+  color: var(--danger-fg);
+}
+.palette-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-label mark {
+  background: none;
+  color: inherit;
+  font-weight: 600;
+}
+.palette-label .muted {
+  color: var(--muted);
+}
+.palette-detail {
+  flex: 0 1 auto;
+  max-width: 55%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-hint,
+.palette-error {
+  padding: var(--space-xs) var(--space-sm) 0;
+}

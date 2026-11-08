@@ -45,5 +45,47 @@
     "missing": "{{path}} (ya no está en el disco)",
     "missingShort": "no está",
     "forget": "Quitar {{name}} de los archivos recientes"
+  },
+  "commands": {
+    "categories": {
+      "general": "General",
+      "tab": "Pestaña",
+      "file": "Archivo",
+      "editor": "Editor",
+      "view": "Ver"
+    },
+    "palette": "Mostrar todos los comandos",
+    "paletteHint": "{{shortcut}} muestra todos los comandos.",
+    "openObject": "Abrir objeto por nombre…",
+    "nextTab": "Pestaña siguiente",
+    "previousTab": "Pestaña anterior",
+    "moveTabRight": "Mover la pestaña a la derecha",
+    "moveTabLeft": "Mover la pestaña a la izquierda",
+    "maximizeResults": "Maximizar los resultados",
+    "restoreEditor": "Restaurar el editor",
+    "saveQuery": "Guardar la consulta",
+    "cancelQuery": "Cancelar la consulta",
+    "explorerFilter": "Filtrar el explorador"
+  },
+  "palette": {
+    "title": "Paleta de comandos",
+    "placeholder": "Escribe un comando, una conexión o un objeto",
+    "actionPlaceholder": "Elige qué hacer con {{name}}",
+    "results": "Comandos y objetos",
+    "connection": "Conexión",
+    "recentFile": "Archivo reciente",
+    "hint": "Comandos, conexiones, archivos recientes y los objetos que ha cargado el explorador. Intro lo ejecuta.",
+    "actionHint": "Intro ejecuta la acción; Escape vuelve atrás.",
+    "nothing": "Ningún comando ni objeto coincide. Los objetos aparecen al abrir su esquema en el explorador.",
+    "noActions": "Ninguna acción coincide.",
+    "running": "Ejecutando…",
+    "failed": "No se pudo ejecutar «{{action}}»: {{detail}}",
+    "actions": {
+      "openData": "Abrir datos",
+      "openStructure": "Abrir estructura",
+      "openDefinition": "Abrir definición",
+      "newConsole": "Nueva consola",
+      "showInExplorer": "Mostrar en el explorador"
+    }
   }
 }

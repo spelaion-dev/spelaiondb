@@ -45,5 +45,47 @@
     "missing": "{{path}} (no longer on disk)",
     "missingShort": "missing",
     "forget": "Remove {{name}} from recent files"
+  },
+  "commands": {
+    "categories": {
+      "general": "General",
+      "tab": "Tab",
+      "file": "File",
+      "editor": "Editor",
+      "view": "View"
+    },
+    "palette": "Show all commands",
+    "paletteHint": "{{shortcut}} lists every command.",
+    "openObject": "Open object by name…",
+    "nextTab": "Next tab",
+    "previousTab": "Previous tab",
+    "moveTabRight": "Move tab right",
+    "moveTabLeft": "Move tab left",
+    "maximizeResults": "Maximize results",
+    "restoreEditor": "Restore the editor",
+    "saveQuery": "Save query",
+    "cancelQuery": "Cancel the query",
+    "explorerFilter": "Filter the explorer"
+  },
+  "palette": {
+    "title": "Command palette",
+    "placeholder": "Type a command, a connection or an object",
+    "actionPlaceholder": "Choose what to do with {{name}}",
+    "results": "Commands and objects",
+    "connection": "Connection",
+    "recentFile": "Recent file",
+    "hint": "Commands, connections, recent files and the objects the explorer has loaded. Enter runs it.",
+    "actionHint": "Enter runs the action; Escape goes back.",
+    "nothing": "No matching commands or objects. Objects appear once their schema is open in the explorer.",
+    "noActions": "No matching actions.",
+    "running": "Running…",
+    "failed": "Could not run “{{action}}”: {{detail}}",
+    "actions": {
+      "openData": "Open data",
+      "openStructure": "Open structure",
+      "openDefinition": "Open definition",
+      "newConsole": "New console",
+      "showInExplorer": "Show in explorer"
+    }
   }
 }

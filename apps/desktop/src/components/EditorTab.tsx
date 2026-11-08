@@ -7,7 +7,7 @@ import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
 import type { EditableTableItem } from "../bindings";
 import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
-import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
+import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { connectionTooltip } from "../connectionInfo";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
@@ -412,6 +412,33 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => window.removeEventListener(SAVE_QUERY_EVENT, onSave);
   }, [tab.id]);
 
+  // The command palette's editor commands (SDB-18): what the action column's buttons do, and
+  // nothing while those buttons are disabled.
+  const actionState = useRef({ running: false, runBlocked: false });
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const { tab: target, command } = (e as CustomEvent<{ tab: string; command: EditorCommand }>).detail;
+      if (target !== tab.id) return;
+      const { running, runBlocked } = actionState.current;
+      switch (command) {
+        case "runCurrent":
+          if (!running && !runBlocked) editor.current?.runCurrent();
+          break;
+        case "runScript":
+          if (!running && !runBlocked) editor.current?.runScript();
+          break;
+        case "format":
+          editor.current?.format();
+          break;
+        case "cancel":
+          if (running) void call(commands.cancel(tab.id)).catch(() => undefined);
+          break;
+      }
+    };
+    window.addEventListener(EDITOR_COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(EDITOR_COMMAND_EVENT, onCommand);
+  }, [tab.id]);
+
   // "Refresh all schemas" in the explorer reloads the names below.
   const [schemasRefreshed, setSchemasRefreshed] = useState(0);
   useEffect(() => {
@@ -739,6 +766,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   const running = tab.run?.running ?? false;
+  actionState.current = { running, runBlocked: historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging };
   const maximized = !tab.table && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
   return (

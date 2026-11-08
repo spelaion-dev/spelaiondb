@@ -159,7 +159,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
-  text). Our own canvas grid (`ResultGrid.tsx`). Smoke test against the real app:
+  text). Our own canvas grid (`ResultGrid.tsx`). App commands (name, shortcut, menus) are
+  registered once in `src/commandRegistry.ts` and run through `src/commands.ts`: the tab and
+  file menus, the activity bar, the global shortcuts and the command palette
+  (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
+  menus against it. The palette's objects are only what the explorer already read (`catalog.ts`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;

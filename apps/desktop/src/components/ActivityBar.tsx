@@ -1,4 +1,6 @@
 import { useTranslation } from "react-i18next";
+import { commandSpec, withShortcut, type CommandId } from "../commandRegistry";
+import { activeContext, runCommand } from "../commands";
 import { useApp } from "../store";
 
 type IconName = "connections" | "processes" | "history" | "saved" | "mcp" | "settings";
@@ -16,32 +18,42 @@ function ActivityIcon({ name }: { name: IconName }) {
   );
 }
 
-export function ActivityBar({ connectionsOpen, processesOpen, mcpOpen, onToggleConnections, onToggleProcesses, onToggleMcp }: { connectionsOpen: boolean; processesOpen: boolean; mcpOpen: boolean; onToggleConnections(): void; onToggleProcesses(): void; onToggleMcp(): void }) {
-  const { t } = useTranslation(["shell", "settings"]);
+/** One button per view command of the registry (commandRegistry.ts): same name and action as
+ *  in the command palette. */
+function ActivityButton({ command, icon, pressed, controls, className }: { command: CommandId; icon: IconName; pressed: boolean; controls?: string; className?: string }) {
+  const { t } = useTranslation();
+  const spec = commandSpec(command);
+  const label = t(spec.label);
+  return (
+    <button
+      className={`activity-button${className ? ` ${className}` : ""}`}
+      data-command={command}
+      aria-label={label}
+      title={withShortcut(label, spec)}
+      aria-pressed={pressed}
+      aria-controls={controls}
+      onClick={() => runCommand(command, activeContext("menu"))}
+    >
+      <ActivityIcon name={icon} />
+    </button>
+  );
+}
+
+export function ActivityBar() {
+  const { t } = useTranslation("shell");
+  const section = useApp((s) => s.sidebarSection);
   const historyOpen = useApp((s) => s.historyOpen);
   const snippetsOpen = useApp((s) => s.snippetsOpen);
   const settingsActive = useApp((s) => s.settingsOpen);
   return (
     <nav className="activity-bar" aria-label={t("activityBar")}>
-      <button className="activity-button" aria-label={t("connections")} title={t("connections")} aria-pressed={connectionsOpen} aria-controls="connections-sidebar" onClick={onToggleConnections}>
-        <ActivityIcon name="connections" />
-      </button>
-      <button className="activity-button" aria-label={t("processMonitor.title")} title={t("processMonitor.title")} aria-pressed={processesOpen} aria-controls="processes-sidebar" onClick={onToggleProcesses}>
-        <ActivityIcon name="processes" />
-      </button>
+      <ActivityButton command="view.explorer" icon="connections" pressed={section === "connections"} controls="connections-sidebar" />
+      <ActivityButton command="view.processes" icon="processes" pressed={section === "processes"} controls="processes-sidebar" />
       <div className="activity-bottom">
-        <button className="activity-button" aria-label={t("queryHistory")} title={t("queryHistory")} aria-pressed={historyOpen} aria-controls="query-history" onClick={() => useApp.getState().setHistoryOpen(!historyOpen)}>
-          <ActivityIcon name="history" />
-        </button>
-        <button className="activity-button" aria-label={t("savedQueries")} title={t("savedQueries")} aria-pressed={snippetsOpen} aria-controls="saved-queries" onClick={() => useApp.getState().setSnippetsOpen(!snippetsOpen)}>
-          <ActivityIcon name="saved" />
-        </button>
-        <button className="activity-button" aria-label={t("mcpServer")} title={t("mcpServer")} aria-pressed={mcpOpen} onClick={onToggleMcp}>
-          <ActivityIcon name="mcp" />
-        </button>
-        <button className="activity-button settings-button" aria-label={t("settings:title")} title={t("settings:open")} aria-pressed={settingsActive} onClick={() => useApp.getState().openSettings()}>
-          <ActivityIcon name="settings" />
-        </button>
+        <ActivityButton command="view.history" icon="history" pressed={historyOpen} controls="query-history" />
+        <ActivityButton command="view.savedQueries" icon="saved" pressed={snippetsOpen} controls="saved-queries" />
+        <ActivityButton command="view.mcp" icon="mcp" pressed={section === "mcp"} />
+        <ActivityButton command="view.settings" icon="settings" pressed={settingsActive} className="settings-button" />
       </div>
     </nav>
   );

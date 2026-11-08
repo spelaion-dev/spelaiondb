@@ -40,6 +40,7 @@ import {
 } from "../connect";
 import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInfo";
 import { sortByName } from "../explorerSort";
+import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
 import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
@@ -1751,10 +1752,13 @@ function SchemaNode({
       ]);
       setOthers(rest);
       setObjects(relations);
+      // The command palette lists what the tree has read (SDB-18).
+      useCatalog.getState().publish({ connectionId, schema, relations, others: rest });
     } catch (e) {
       setError(errorText(e));
     }
   }
+  useEffect(() => () => useCatalog.getState().forget(connectionId, schema), [connectionId, schema]);
 
   async function toggle() {
     setOpen(!open);
@@ -1766,7 +1770,10 @@ function SchemaNode({
   function reload() {
     if (!objects) return;
     if (open) void load();
-    else setObjects(null);
+    else {
+      setObjects(null);
+      useCatalog.getState().forget(connectionId, schema);
+    }
   }
 
   function refresh() {
