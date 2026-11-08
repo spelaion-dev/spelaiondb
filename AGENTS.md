@@ -131,6 +131,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   tests that try to get around it (`tests/export_stream.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
+  `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
+  arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
+  `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
+  the DDL, checks read-only and the guard, and loads the rows in transactions through
+  `Connection::insert_rows`, which binds every value (`COPY` on PostgreSQL, prepared inserts on
+  MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
+  `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
+  to get around it.
   `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
   create, new index…); `tests/object_actions.rs` runs each engine's statements on that engine.
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each

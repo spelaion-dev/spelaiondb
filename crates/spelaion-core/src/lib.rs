@@ -18,6 +18,7 @@ mod generate;
 mod guard;
 mod health;
 mod history;
+mod import;
 pub mod kube;
 mod objects;
 mod open;
@@ -70,6 +71,14 @@ pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates
 pub use guard::{NeedsConfirmation, Risk, RiskyStatement, check_script, script_risks};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, HistoryScope, QueryHistory};
+pub use import::{
+    ColumnKind, ColumnMapping, DEFAULT_COMMIT_EVERY, DEFAULT_SAMPLE_ROWS, IMPORT_BATCH_ROWS,
+    IMPORT_PREVIEW_CHARS, IMPORT_PREVIEW_ROWS, IfExists, ImportCancel, ImportError, ImportFormat,
+    ImportPlan, ImportPreview, ImportProgress, ImportRequest, ImportSource, ImportSummary,
+    ImportTarget, MAX_COLUMNS, MAX_RECORD_BYTES, MAX_SAMPLE_ROWS, MAX_WHOLE_FILE, ParseOptions,
+    PreviewColumn, SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import,
+    preview, run_import, suggested_table, text_format,
+};
 pub use objects::{
     CreateKind, FoundObject, NewIndexKind, NewTableElement, ObjectActions, ObjectChange,
     ObjectError, ObjectTarget, SEARCH_LIMIT, active_schema, apply_change, can_cascade,

@@ -285,7 +285,7 @@ pub fn encode(text: &str, format: FileFormat) -> Result<Vec<u8>, FileError> {
     })
 }
 
-fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Result<String, FileError> {
+pub(crate) fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Result<String, FileError> {
     if !bytes.len().is_multiple_of(2) {
         return Err(FileError::Binary);
     }
@@ -335,7 +335,7 @@ const WINDOWS_1252_HIGH: [char; 32] = [
     '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{009D}', '\u{017E}', '\u{0178}',
 ];
 
-fn windows_1252_char(byte: u8) -> char {
+pub(crate) fn windows_1252_char(byte: u8) -> char {
     match byte {
         0x80..=0x9F => WINDOWS_1252_HIGH[usize::from(byte - 0x80)],
         other => char::from(other),
