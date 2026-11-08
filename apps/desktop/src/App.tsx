@@ -21,6 +21,7 @@ import { call, commands, events } from "./api";
 import { usePreferences } from "./preferences";
 import { useUpdate } from "./update";
 import { SAVE_QUERY_EVENT, useApp, useDialogs } from "./store";
+import { topDialog, useModalFocus } from "./modalFocus";
 
 const SIDEBAR_DEFAULT = 290;
 const SIDEBAR_MIN = 210;
@@ -29,6 +30,7 @@ const EDITOR_MIN = 360;
 const ACTIVITY_WIDTH = 48;
 
 export default function App() {
+  useModalFocus();
   const { t } = useTranslation(["app", "shell", "settings", "editor"]);
   const tabs = useApp((s) => s.tabs);
   const activeTab = useApp((s) => s.activeTab);
@@ -111,6 +113,14 @@ export default function App() {
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       const app = useApp.getState();
+      const modal = topDialog();
+      // A modal dialog keeps the app's shortcuts from acting behind it (the tab ones included).
+      const tabShortcut = e.altKey ? ["d", "p", "w", "r", "m"].includes(key) : e.key === "F2";
+      if (mod && modal && (tabShortcut || key === "t" || key === "s" || key === "w" || e.key === "Tab" || e.key === "PageDown" || e.key === "PageUp" || e.key === "," || (e.shiftKey && (key === "d" || key === "f")))) {
+        e.preventDefault();
+        if (key === "w" && !e.altKey && !e.shiftKey && modal.classList.contains("settings-dialog")) app.closeSettings();
+        return;
+      }
       const active = app.settingsOpen ? null : app.activeTab;
       if (mod && e.altKey && !e.shiftKey) {
         // Tab actions (tabActions.ts). AltGr is Ctrl+Alt on Windows: a key that AltGr turns
@@ -236,11 +246,18 @@ export default function App() {
           <div className="editor-workspace" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
             {tabs.length === 0 ? (
               <div className="welcome">
+                <p className="welcome-eyebrow">{t("welcomeEyebrow")}</p>
                 <h1>SpelaionDB</h1>
                 <p>{t("welcome")}</p>
-                <button className="primary" onClick={() => addTab(null)}>
-                  {t("newQuery")}
-                </button>
+                <div className="welcome-actions">
+                  <button className="primary" onClick={() => addTab(null)}>
+                    {t("newQuery")}
+                  </button>
+                  <button onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}>
+                    {t("connections:add")}
+                  </button>
+                </div>
+                <p className="welcome-shortcut">{t("newQueryShortcut")}</p>
               </div>
             ) : (
               tabs.map((t) => (

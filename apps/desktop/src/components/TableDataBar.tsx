@@ -107,15 +107,12 @@ export function InsertRowDialog(props: { columns: ColumnItem[]; initial?: CellEd
     );
   return (
     <div className="modal-backdrop">
-      <div className="modal insert-row" role="dialog" aria-modal="true" aria-label={t("edit.addRowTitle")}>
+      <div className="modal insert-row" role="dialog" aria-modal="true" aria-label={t("edit.addRowTitle")} onKeyDown={(e) => {
+        if (e.key === "Escape") { e.stopPropagation(); props.onCancel(); }
+      }}>
         <h2>{t("edit.addRowTitle")}</h2>
         <p className="muted small">{t("edit.addRowHint")}</p>
-        <div
-          className="insert-row-fields"
-          onKeyDown={(e) => {
-            if (e.key === "Escape") props.onCancel();
-          }}
-        >
+        <div className="insert-row-fields">
           {props.columns.map((c, i) => {
             const v = values[i] ?? { text: "", isNull: false };
             return (

@@ -44,7 +44,9 @@ export function DeleteConnection({ connection }: { connection: ConnectionItem })
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" aria-label={t("deleteTitle")}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={t("deleteTitle")} onKeyDown={(e) => {
+        if (e.key === "Escape") { e.stopPropagation(); if (!deleting) close(); }
+      }}>
         <h2>{t("deleteTitle")}</h2>
         <p>
           <Trans t={t} i18nKey="deleteExplanation" values={{ name: connection.name, file }} components={{ strong: <strong />, code: <code /> }} />

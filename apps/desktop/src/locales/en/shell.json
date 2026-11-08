@@ -46,6 +46,7 @@
     "selectRow": "Select a process to inspect its details and SQL.",
     "noSql": "No statement is running.",
     "ownHint": "This is the monitoring connection.",
+    "ownLabel": "(this session)",
     "copySql": "Copy SQL",
     "openSql": "Open SQL",
     "otherDatabase": "Copy the SQL to open it in a connection to this PostgreSQL database.",

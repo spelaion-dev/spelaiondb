@@ -2,6 +2,7 @@
   "retryConnections": "Retry loading connections",
   "closeTab": "Close {{name}}",
   "newQueryShortcut": "New query (Ctrl+T)",
+  "welcomeEyebrow": "Database workspace",
   "welcome": "Pick a connection on the left or open a new query.",
   "newQuery": "New query",
   "resizeSidebar": "Resize the connections panel",

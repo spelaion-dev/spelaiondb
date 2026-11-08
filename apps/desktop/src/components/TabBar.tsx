@@ -5,7 +5,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { closeQueryTab, defaultTabLabel, tabLabel } from "../connect";
+import { topDialog } from "../modalFocus";
 import { type Tab, useApp } from "../store";
+import { Icon } from "./Icons";
 import {
   TAB_SHORTCUTS,
   closable,
@@ -24,14 +26,6 @@ function TabIcon({ kind }: { kind: "query" | "table" | "details" }) {
       {kind === "query" ? <><path d="m3 4 3 3-3 3M8 11h5" /></> :
         kind === "table" ? <><rect x="2.5" y="3" width="11" height="10" rx="1" /><path d="M2.5 6.5h11M6.2 6.5V13M9.8 6.5V13" /></> :
           <><rect x="2.5" y="3" width="11" height="10" rx="1" /><path d="M6 3v10M8 6h3.5M8 9.5h3.5" /></>}
-    </svg>
-  );
-}
-
-function PinIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M9.5 2.5 13.5 6.5M10.5 3.5 7 7 4.5 7.5 8.5 11.5 9 9 12.5 5.5M6.5 9.5 3 13" />
     </svg>
   );
 }
@@ -231,7 +225,7 @@ export function TabBar({ hidden }: { hidden: boolean }) {
                     useApp.getState().setPinned(tab.id, false);
                   }}
                 >
-                  <PinIcon />
+                  <Icon name="pin" />
                 </button>
               ) : (
                 <button
@@ -242,14 +236,14 @@ export function TabBar({ hidden }: { hidden: boolean }) {
                     void closeQueryTab(tab.id);
                   }}
                 >
-                  ×
+                  <Icon name="x" />
                 </button>
               )}
             </div>
           );
         })}
       </div>
-      <button className="new-tab" type="button" onClick={() => addTab(null)} title={t("newQueryShortcut")} aria-label={t("newQueryShortcut")}>+</button>
+      <button className="new-tab" type="button" onClick={() => addTab(null)} title={t("newQueryShortcut")} aria-label={t("newQueryShortcut")}><Icon name="plus" /></button>
       {menu && <TabMenu key={menu.id} {...menu} onClose={() => setMenu(null)} />}
       <TabSwitcher />
     </div>
@@ -428,6 +422,8 @@ function TabSwitcher() {
     const down = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (e.key === "Tab" && mod && !e.altKey) {
+        // A modal dialog keeps the tabs behind it as they are (its own focus trap handles Tab).
+        if (!ref.current && topDialog()) return;
         e.preventDefault();
         e.stopPropagation();
         step(e.shiftKey);
@@ -479,7 +475,7 @@ function TabSwitcher() {
           >
             <TabIcon kind={tabKind(tab)} />
             <span>{tabLabel(tab)}</span>
-            {tab.pinned && <PinIcon />}
+            {tab.pinned && <Icon name="pin" />}
           </div>
         );
       })}

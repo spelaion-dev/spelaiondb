@@ -21,6 +21,7 @@ import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
 import { toggleResultsMaximized } from "../tabActions";
+import { Icon } from "./Icons";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 function databaseSwitching(engine: string | undefined): boolean {
@@ -862,7 +863,28 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
             error={editorError}
           />
         </div>
-        <div className="divider" hidden={maximized} onPointerDown={startDrag} onDoubleClick={() => toggleResultsMaximized(tab.id)} role="separator" aria-orientation="horizontal" aria-label={t("resizeEditor")} title={t("maximizeResults")} />
+        <div
+          className="divider"
+          hidden={maximized}
+          onPointerDown={startDrag}
+          onDoubleClick={() => setEditorShare(0.42)}
+          role="separator"
+          tabIndex={0}
+          aria-orientation="horizontal"
+          aria-label={t("resizeEditor")}
+          aria-valuemin={12}
+          aria-valuemax={85}
+          aria-valuenow={Math.round(editorShare * 100)}
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 0.1 : 0.02;
+            if (e.key === "ArrowUp") setEditorShare((share) => Math.max(0.12, share - step));
+            else if (e.key === "ArrowDown") setEditorShare((share) => Math.min(0.85, share + step));
+            else if (e.key === "Home") setEditorShare(0.12);
+            else if (e.key === "End") setEditorShare(0.85);
+            else return;
+            e.preventDefault();
+          }}
+        />
         </>
         )}
         <div style={{ flex: tab.table || maximized ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
@@ -956,21 +978,20 @@ function Results({
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const [filteringResult, setFilteringResult] = useState<number | null>(null);
+  const [filterError, setFilterError] = useState<{ result: number; message: string } | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerWidth, setViewerWidth] = useState(420);
   /** Columns hidden in each result's grid (positions only), for the export dialog. */
   const [hiddenColumns, setHiddenColumns] = useState<Record<number, number[]>>({});
   const maximizeButton = maximize && (
     <button
-      className={`ghost small results-maximize${maximize.maximized ? " active" : ""}`}
+      className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
       aria-pressed={maximize.maximized}
       aria-label={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
       title={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
       onClick={maximize.onToggle}
     >
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        {maximize.maximized ? <path d="M6 2.5v3.5H2.5M10 2.5v3.5h3.5M6 13.5V10H2.5M10 13.5V10h3.5" /> : <path d="M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10" />}
-      </svg>
+      <Icon name={maximize.maximized ? "minimize" : "maximize"} />
     </button>
   );
   // Nothing to show yet: the button only brings the editor back if it was hidden.
@@ -988,6 +1009,7 @@ function Results({
       }
     }}>
       <div className="result-tabs">
+        <div className="result-tab-list">
         {run.results.map((r, i) => (
           <button key={r.id} className={r.id === run.activeResult ? "active" : ""} onClick={() => onSelect(r.id)}>
             {t("results.result", { number: numbers.format(i + 1) })}
@@ -996,16 +1018,18 @@ function Results({
         <button className={showMessages ? "active" : ""} onClick={() => onSelect(null)}>
           {t("results.messages")}{run.messages.some((m) => m.kind === "error") ? " ⚠" : ""}
         </button>
-        {active && (
+        </div>
+        {active && <div className="result-tools">
           <ResultFilter
             key={`filter-${active.id}`}
             result={active}
+            scope={serverSort ? "page" : active.paging?.hasMore ? "loaded" : undefined}
+            errorId={`result-filter-error-${active.id}`}
+            onError={(message) => setFilterError(message ? { result: active.id, message } : null)}
             onFiltered={(filter, rows, total) => onFiltered(active.id, filter, rows, total)}
             onPending={(pending) => setFilteringResult(pending ? active.id : null)}
             locked={!!active.paging?.loading || (editing !== undefined && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0))}
           />
-        )}
-        {active && (
           <ExportButton
             key={`export-${active.id}`}
             result={active}
@@ -1015,9 +1039,10 @@ function Results({
             table={table}
             hidden={hiddenColumns[active.id] ?? []}
           />
-        )}
+        </div>}
         {maximizeButton}
       </div>
+      {active && filterError?.result === active.id && <div id={`result-filter-error-${active.id}`} className="result-filter-error" role="alert">{filterError.message}</div>}
       <div className="result-body">
         {active ? (
           <ResultGrid
