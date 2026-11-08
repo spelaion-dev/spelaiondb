@@ -138,6 +138,13 @@ export const commands = {
 	 *  copy's own keychain entry by the core; a repository connection must be as trusted.
 	 */
 	duplicateConnection: (connection: string) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
+	/**
+	 *  Moves a connection to another folder (`""` for none) in its layer. The core moves its
+	 *  file, its keychain password and, for a repository connection, what trust pinned for it,
+	 *  without adding any (ADR-022); its explorer filter, bookmarks, history setting and saved
+	 *  tabs follow. A connection in use is not moved: the UI disconnects it first.
+	 */
+	moveConnection: (connection: string, folder: string) => typedError<MovedItem, string>(__TAURI_INVOKE("move_connection", { connection, folder })),
 	/**  The text Ctrl+C puts on the clipboard for a connection: without secrets or programs. */
 	copyConnection: (connection: string) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
 	/**  A personal connection from clipboard text, checked by the core as untrusted input. */
@@ -933,6 +940,8 @@ export type ConnectionItem_Deserialize = {
 	kind?: ConnectionTypeItem_Deserialize | null,
 	folders: string[],
 	personal: boolean,
+	/**  The server's host name, for the explorer's search; `None` for a file database. */
+	host?: string | null,
 	tunnel?: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
@@ -953,6 +962,8 @@ export type ConnectionItem_Serialize = {
 	kind: ConnectionTypeItem_Serialize | null,
 	folders: string[],
 	personal: boolean,
+	/**  The server's host name, for the explorer's search; `None` for a file database. */
+	host: string | null,
 	tunnel: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
@@ -1767,6 +1778,14 @@ export type McpSettingsItem = {
 
 export type McpVisibilityItem = "visible" | "notExposed" | "untrusted";
 
+/**  A connection moved to another folder. */
+export type MovedItem = {
+	/**  Its identifier now. */
+	id: string,
+	/**  Its keychain password moved to the new identifier's entry. */
+	passwordMoved: boolean,
+};
+
 /**  Include and exclude patterns for one kind of name (ADR-025). */
 export type NameFilterItem = {
 	include: string[],
@@ -2347,6 +2366,8 @@ export type ScriptPreferencesItem = {
 	onError: OnErrorItem,
 	notify: boolean,
 	notifyAfterSeconds: number,
+	/**  Seconds before "Run anyway" is enabled in a risky statement's confirmation. */
+	confirmDelaySeconds: number,
 };
 
 /**  Why a run stopped with statements left. */

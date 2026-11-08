@@ -92,6 +92,12 @@ enum Request {
         preferences: ScriptPreferences,
         reply: Reply<()>,
     },
+    MoveConnection {
+        workspace: Option<String>,
+        from: String,
+        to: String,
+        reply: Reply<()>,
+    },
     SetUpdateCheck {
         enabled: bool,
         reply: Reply<()>,
@@ -351,6 +357,18 @@ impl QueryHistory {
                                 &workspace,
                                 &connection,
                                 enabled,
+                            ));
+                        }
+                        Request::MoveConnection {
+                            workspace,
+                            from,
+                            to,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.move_connection_settings(
+                                workspace.as_deref(),
+                                &from,
+                                &to,
                             ));
                         }
                         Request::GetFilter {
@@ -666,6 +684,24 @@ impl QueryHistory {
             workspace,
             connection,
             enabled,
+            reply,
+        })
+        .await
+    }
+
+    /// A connection moved to another folder: its explorer filter, bookmarks, history setting
+    /// and saved tabs follow it (see `Store::move_connection_settings`). `workspace` is `None`
+    /// for a personal connection.
+    pub async fn move_connection(
+        &self,
+        workspace: Option<String>,
+        from: String,
+        to: String,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::MoveConnection {
+            workspace,
+            from,
+            to,
             reply,
         })
         .await

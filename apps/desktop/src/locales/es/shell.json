@@ -77,9 +77,11 @@
   "loadingDetails": "Cargando detalles de la tabla…",
   "connecting": "Conectando…",
   "quickFilter": "Filtrar el explorador",
-  "quickFilterHint": "Filtrar el explorador por nombre o etiqueta (Ctrl+Mayús+F)",
-  "quickFilterPlaceholder": "Filtrar por nombre",
+  "quickFilterHint": "Buscar conexiones por nombre, etiqueta, tipo o servidor, y filtrar lo cargado (Ctrl+Mayús+F)",
+  "quickFilterPlaceholder": "Nombre, etiqueta, tipo o servidor",
   "quickFilterNothing": "Ninguna conexión, esquema u objeto cargado coincide con el filtro.",
+  "moveFailed": "No se pudo mover {{name}}: {{detail}}",
+  "moveToNoFolder": "Sin carpeta",
   "connectedOnly": "Mostrar solo las conexiones conectadas",
   "noneConnected": "Todavía no hay ninguna conexión conectada.",
   "showAllConnections": "Mostrar todas",
@@ -243,7 +245,9 @@
     "more_other": "…y {{count}} sentencias más",
     "runConfirmed": "Ejecutar",
     "cancel": "Cancelar",
-    "run": "Ejecutar de todos modos"
+    "run": "Ejecutar de todos modos",
+    "runIn": "Ejecutar de todos modos ({{seconds}})",
+    "runInHint": "Lee antes las sentencias: “Ejecutar de todos modos” se activa tras la pausa elegida en Ajustes → Scripts."
   },
   "sql": {
     "preview": "Ver filas",

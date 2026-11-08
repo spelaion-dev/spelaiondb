@@ -68,7 +68,7 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
   theme: "system",
   explorer: { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false },
   grid: { zebra: true, nullText: true, boolCheckboxes: false },
-  script: { onError: "stop", notify: false, notifyAfterSeconds: 30 },
+  script: { onError: "stop", notify: false, notifyAfterSeconds: 30, confirmDelaySeconds: 0 },
   editor: { font: "system", fontSize: 13, lineHeight: 18, tabSize: 2, lineNumbers: true, wordWrap: false, keywordCase: "preserve", indent: 2, commaPosition: "trailing" },
   reconnectOnStart: false,
   loading: true,

@@ -67,6 +67,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   engine (kept, changed, dropped, to fill in); `name_pattern.rs` renders the name of new
   connections from the personal pattern. Any change to `copy.rs` needs tests that try to get
   around it.
+  `relocate.rs` moves a connection to another folder (its file, its keychain password, and the
+  trust pin as it was, so a move never makes a changed or new repository connection usable);
+  any change there needs tests that try to get around it (`tests/moves.rs`).
   `types.rs` resolves a connection's type (ADR-029): `env` names one by id (built-in `dev`,
   `test`, `prod`/`production`, or one in `.spelaion/connection-types.toml`, honoured only as
   trusted, or in the user's `connection-types.toml`); looks come from the user first, and

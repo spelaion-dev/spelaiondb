@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands } from "../api";
+import { usePreferences } from "../preferences";
 import { useDialogs } from "../store";
 
 export function Dialogs() {
@@ -287,9 +288,17 @@ function RiskDialog() {
   const cancel = useRef<HTMLButtonElement>(null);
   // Cancel has the focus: Enter by habit must not run a DROP.
   useEffect(() => cancel.current?.focus(), []);
-  if (!request) return null;
   // Only because the connection's type asks before every run (ADR-029): nothing risky as such.
-  const onlyExecution = request.statements.every((s) => s.risk === "execution");
+  const onlyExecution = request?.statements.every((s) => s.risk === "execution") ?? true;
+  // The personal pause before "Run anyway" (Settings → Scripts): read once, when it opens. It
+  // only delays the button; the core decided that this run must be confirmed (guard.rs).
+  const [wait, setWait] = useState(() => (onlyExecution ? 0 : usePreferences.getState().script.confirmDelaySeconds));
+  useEffect(() => {
+    if (wait <= 0) return;
+    const timer = window.setTimeout(() => setWait((left) => left - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [wait]);
+  if (!request) return null;
   const hidden = request.statements.length - SHOWN_STATEMENTS;
   return (
     <Modal title={t("risk.title")} onCancel={() => request.resolve(false)}>
@@ -307,8 +316,13 @@ function RiskDialog() {
         <button ref={cancel} onClick={() => request.resolve(false)}>
           {t("risk.cancel")}
         </button>
-        <button className={onlyExecution ? undefined : "danger"} onClick={() => request.resolve(true)}>
-          {t(onlyExecution ? "risk.runConfirmed" : "risk.run")}
+        <button
+          className={onlyExecution ? undefined : "danger"}
+          disabled={wait > 0}
+          title={wait > 0 ? t("risk.runInHint") : undefined}
+          onClick={() => request.resolve(true)}
+        >
+          {onlyExecution ? t("risk.runConfirmed") : wait > 0 ? t("risk.runIn", { seconds: wait }) : t("risk.run")}
         </button>
       </div>
     </Modal>

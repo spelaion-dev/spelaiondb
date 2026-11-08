@@ -158,7 +158,9 @@
     "notifications": "Notificaciones",
     "notify": "Avisarme cuando termine una ejecución larga con la aplicación en segundo plano",
     "notifyAfter": "Solo ejecuciones de más de (segundos)",
-    "notifyHint": "La notificación dice qué pestaña terminó y si algo falló; nunca incluye SQL ni datos."
+    "notifyHint": "La notificación dice qué pestaña terminó y si algo falló; nunca incluye SQL ni datos.",
+    "confirmDelay": "Pausa antes de “Ejecutar de todos modos” (segundos)",
+    "confirmDelayHint": "En la confirmación de una sentencia peligrosa (DROP, DELETE sin WHERE, cambios de datos en Producción…), “Ejecutar de todos modos” sigue desactivado este tiempo, para no pulsarlo por reflejo. Con 0 se activa enseguida. No cambia qué sentencias se confirman."
   },
   "editor": {
     "title": "Editor",
