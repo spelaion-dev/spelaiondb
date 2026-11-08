@@ -12,7 +12,7 @@ use spelaion_driver_api::{
 };
 
 use crate::edit::run_one;
-use crate::generate::scalar_value;
+use crate::generate::scalar_metadata;
 use crate::session::Session;
 
 /// A name as the engine writes it in SQL: `schema.table`, `schema.table.column`…, each part
@@ -190,7 +190,7 @@ pub async fn active_schema(session: &Session) -> Result<Option<String>, String> 
         "sqlserver" => "SELECT SCHEMA_NAME()",
         _ => "SELECT current_schema()",
     };
-    Ok(match scalar_value(session, sql).await? {
+    Ok(match scalar_metadata(session, sql).await? {
         None | Some(Value::Null) => None,
         Some(Value::Text(text)) => Some(text),
         Some(other) => Some(other.to_string()),

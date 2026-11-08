@@ -150,6 +150,15 @@ pub struct Session {
     cancels: Arc<AtomicU64>,
 }
 
+/// All paths share session serialization and state observation. Only editor SQL manages
+/// transactions; core metadata is not work the user ran in their open transaction.
+#[derive(Clone, Copy)]
+enum RunKind {
+    User,
+    Generated,
+    Metadata,
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.pause.resume(Resume::Closed);
@@ -391,7 +400,7 @@ impl Session {
     /// statement that runs while none is open, smart commit switches to manual before the
     /// first write, and the state is read after every statement.
     pub fn run_script(&self, script: &str) -> BoxStream<'static, CoreEvent> {
-        self.run(script, true, ScriptOptions::default())
+        self.run(script, RunKind::User, ScriptOptions::default())
     }
 
     /// [`Session::run_script`] with its error mode and statement timeout (ADR-035). Whatever
@@ -403,22 +412,34 @@ impl Session {
         script: &str,
         options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
-        self.run(script, true, options)
+        self.run(script, RunKind::User, options)
     }
 
     /// Runs statements the core wrote itself (table edits, object actions, pages, the process
     /// list) as written: never preceded by the manual-commit `BEGIN`, never switching smart
     /// commit. The transaction state is still read afterwards.
     pub(crate) fn run_generated(&self, script: &str) -> BoxStream<'static, CoreEvent> {
-        self.run(script, false, ScriptOptions::default())
+        self.run(script, RunKind::Generated, ScriptOptions::default())
+    }
+
+    /// Reads internal session metadata without opening a managed transaction or counting it
+    /// as a user statement. Still serialized, tracked, cancellable, and observed afterwards.
+    /// Callers supply only fixed metadata SQL written by the core.
+    pub(crate) fn run_metadata(&self, script: &str) -> BoxStream<'static, CoreEvent> {
+        self.run(script, RunKind::Metadata, ScriptOptions::default())
     }
 
     fn run(
         &self,
         script: &str,
-        managed: bool,
+        kind: RunKind,
         run_options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
+        let (managed, count_statement) = match kind {
+            RunKind::User => (true, true),
+            RunKind::Generated => (false, true),
+            RunKind::Metadata => (false, false),
+        };
         let script = script.to_string();
         let spans = self.dialect.split_statements(&script);
         let engine = self.dialect.name();
@@ -609,7 +630,7 @@ impl Session {
                             if restarted {
                                 status.statements = 0;
                             }
-                            if !kind.is_control() {
+                            if count_statement && !kind.is_control() {
                                 status.statements += 1;
                             }
                         }

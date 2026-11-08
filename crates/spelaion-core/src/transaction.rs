@@ -32,7 +32,8 @@ pub struct TransactionStatus {
     pub smart_switched: bool,
     /// What the driver last said; `None` while it is not followed.
     pub state: Option<TransactionState>,
-    /// Statements run in the open transaction (transaction control not counted).
+    /// Statements run in the open transaction (transaction control and internal metadata
+    /// reads are not counted).
     pub statements: u32,
 }
 
