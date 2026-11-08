@@ -3261,3 +3261,19 @@ select {
 .palette-error {
   padding: var(--space-xs) var(--space-sm) 0;
 }
+/* Editor actions use the shared menu scale, overriding the older grid menu defaults. */
+.editor-menu {
+  max-width: calc(100vw - var(--space-xl));
+  max-height: calc(100vh - var(--space-xl));
+  overflow-y: auto;
+  padding: var(--space-xs);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  z-index: var(--z-popover);
+}
+.editor-menu button {
+  min-height: var(--row-h);
+  padding: 0 var(--space-md);
+  border-radius: var(--radius-md);
+}
+.editor-menu button:hover { background: var(--hover); }

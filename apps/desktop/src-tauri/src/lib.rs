@@ -243,6 +243,29 @@ async fn set_explorer_preferences(
 
 #[tauri::command]
 #[specta::specta]
+async fn get_editor_preferences(state: State<'_, AppState>) -> CmdResult<EditorPreferencesItem> {
+    state
+        .history
+        .editor_preferences()
+        .await
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+#[specta::specta]
+async fn set_editor_preferences(
+    preferences: EditorPreferencesItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_editor_preferences(preferences.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn get_grid_preferences(state: State<'_, AppState>) -> CmdResult<GridPreferencesItem> {
     state
         .history
@@ -3904,6 +3927,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_update_check,
             get_explorer_preferences,
             set_explorer_preferences,
+            get_editor_preferences,
+            set_editor_preferences,
             get_grid_preferences,
             set_grid_preferences,
             get_script_preferences,

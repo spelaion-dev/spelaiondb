@@ -17,6 +17,7 @@ import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { summaryMessages, summaryShort } from "../scriptRun";
 import { saveTab, saveTabAs } from "../sqlFiles";
 import { notifyFinished } from "../notify";
+import { EditorActionsButton } from "./EditorMenu";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
@@ -429,6 +430,23 @@ export function EditorTab({ tab }: { tab: Tab }) {
           break;
         case "format":
           editor.current?.format();
+          break;
+        case "lineComment":
+        case "blockComment":
+        case "wordWrap":
+        case "fold":
+        case "unfold":
+        case "matchingBracket":
+        case "upperCase":
+        case "lowerCase":
+        case "quotedList":
+        case "selectStatement":
+        case "copyStatement":
+        case "selectOccurrences":
+        case "insertSelect":
+        case "insertInsert":
+        case "insertUpdate":
+          editor.current?.action(command);
           break;
         case "cancel":
           if (running) void call(commands.cancel(tab.id)).catch(() => undefined);
@@ -887,6 +905,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
               <EditorActionIcon name="script" />
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
+            <EditorActionsButton />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
               <EditorActionIcon name="format" />
@@ -906,6 +925,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           </div>
           <SqlEditor
             handle={editor}
+            onActionError={(reason) => setNotice({ text: t("actions.failed", { reason }), error: true })}
             onFormatError={(reason) => setNotice({ text: t("formatFailed", { reason }), error: true })}
             value={tab.sql}
             revision={tab.textRevision}

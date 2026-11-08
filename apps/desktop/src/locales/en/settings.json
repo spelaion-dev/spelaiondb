@@ -164,6 +164,24 @@
     "title": "Editor",
     "restoreHint": "Open tabs come back after a restart with their text and connection, disconnected: consoles and files, including unsaved changes. Their results are never kept.",
     "reconnect": "Reconnect the last connections at startup",
-    "reconnectHint": "Only connects (it may ask for a password); nothing runs on its own."
+    "reconnectHint": "Only connects (it may ask for a password); nothing runs on its own.",
+    "display": "Display",
+    "font": "Font",
+    "systemFont": "System monospace",
+    "fontSize": "Font size (px)",
+    "lineHeight": "Line height (px)",
+    "tabSize": "Tab size",
+    "lineNumbers": "Show line numbers",
+    "wordWrap": "Wrap long lines",
+    "formatter": "SQL formatting",
+    "keywordCase": "Keyword case",
+    "indent": "Indent spaces",
+    "commaPosition": "Comma position",
+    "preserve": "As typed",
+    "upper": "Upper case",
+    "lower": "Lower case",
+    "trailing": "End of line",
+    "leading": "Start of line",
+    "snippets": "Type sel, ins or upd and press Tab to expand a snippet. Tab moves to its next field; Shift+Tab moves back."
   }
 }

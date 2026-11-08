@@ -8,9 +8,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
-    AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, ExplorerFilter,
-    ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry, RecentFile, SavedTabs,
-    ScriptPreferences, Snippet, Store, StoreError, ToolOutput,
+    AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, EditorPreferences,
+    ExplorerFilter, ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry,
+    RecentFile, SavedTabs, ScriptPreferences, Snippet, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -69,6 +69,13 @@ enum Request {
     },
     SetExplorer {
         preferences: ExplorerPreferences,
+        reply: Reply<()>,
+    },
+    GetEditor {
+        reply: Reply<EditorPreferences>,
+    },
+    SetEditor {
+        preferences: EditorPreferences,
         reply: Reply<()>,
     },
     GetGrid {
@@ -255,6 +262,12 @@ impl QueryHistory {
                         }
                         Request::SetExplorer { preferences, reply } => {
                             let _ = reply.send(store.set_explorer_preferences(&preferences));
+                        }
+                        Request::GetEditor { reply } => {
+                            let _ = reply.send(store.get_editor_preferences());
+                        }
+                        Request::SetEditor { preferences, reply } => {
+                            let _ = reply.send(store.set_editor_preferences(&preferences));
                         }
                         Request::GetGrid { reply } => {
                             let _ = reply.send(store.get_grid_preferences());
@@ -513,6 +526,17 @@ impl QueryHistory {
         preferences: ExplorerPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetExplorer { preferences, reply })
+            .await
+    }
+
+    pub async fn editor_preferences(&self) -> Result<EditorPreferences, HistoryError> {
+        self.request(|reply| Request::GetEditor { reply }).await
+    }
+    pub async fn set_editor_preferences(
+        &self,
+        preferences: EditorPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetEditor { preferences, reply })
             .await
     }
 

@@ -1,3 +1,4 @@
+import type { EditorActionId } from "./editorActions";
 // UI state. Result data does NOT live here (AGENTS.md): only its metadata; rows are
 // requested from the core in windows.
 
@@ -217,7 +218,7 @@ export interface ExplorerReveal {
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
-export type EditorCommand = "runCurrent" | "runScript" | "format" | "cancel";
+export type EditorCommand = "runCurrent" | "runScript" | "format" | "cancel" | EditorActionId;
 
 /** Window event asking the editor tab `detail.tab` to do `detail.command` (SDB-18). */
 export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";

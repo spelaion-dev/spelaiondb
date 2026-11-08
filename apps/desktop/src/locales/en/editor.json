@@ -515,5 +515,24 @@
     "fileUnreadable": "The file could not be read ({{message}}): this is the text the tab had, unsaved.",
     "fileChangedOnDisk": "The file changed on disk while the app was closed: these are your unsaved changes, and saving asks before overwriting it.",
     "dismiss": "Dismiss"
+  },
+  "actions": {
+    "menu": "Editor actions",
+    "lineComment": "Toggle line comment",
+    "blockComment": "Toggle block comment",
+    "wordWrap": "Toggle word wrap",
+    "fold": "Fold selection",
+    "unfold": "Unfold selection",
+    "matchingBracket": "Go to matching bracket",
+    "upperCase": "Convert to upper case",
+    "lowerCase": "Convert to lower case",
+    "quotedList": "Lines to quoted list",
+    "selectStatement": "Select current statement",
+    "copyStatement": "Copy current statement",
+    "selectOccurrences": "Select all occurrences",
+    "insertSelect": "Insert SELECT snippet",
+    "insertInsert": "Insert INSERT snippet",
+    "insertUpdate": "Insert UPDATE snippet",
+    "failed": "Could not perform editor action: {{reason}}"
   }
 }

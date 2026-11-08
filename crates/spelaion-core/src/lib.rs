@@ -87,8 +87,8 @@ pub use spelaion_store::{
     ToolOutput,
 };
 pub use spelaion_store::{
-    Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences, RecentFile,
-    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
+    Bookmark, EditorPreferences, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences,
+    RecentFile, SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
