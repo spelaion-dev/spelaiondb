@@ -6,8 +6,8 @@
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, Dialect, DriverError, ForeignKeyInfo, IndexInfo,
-    LikeFilter, ObjectInfo, ObjectKind, Result, SchemaInfo, SchemaObject, SchemaObjectKind,
-    TableInfo, terminated,
+    LikeFilter, ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, SchemaObject,
+    SchemaObjectKind, TableInfo, terminated,
 };
 
 use crate::dialect::SqliteDialect;
@@ -206,6 +206,60 @@ pub(crate) fn foreign_keys_sql(schema: &str, name: &str) -> String {
         literal(name),
         literal(schema)
     )
+}
+
+/// The foreign keys of every table of `schema` that point to `name` (a key and the table it
+/// references always share a database file). The pragma keeps the referenced table's name as
+/// the key's DDL wrote it: compared ignoring case, as SQLite resolves names.
+pub(crate) fn referencing_keys_sql(schema: &str, name: &str) -> String {
+    format!(
+        r#"select m.name, p.id, p."from", p."to"
+           from {} m, pragma_foreign_key_list(m.name, {}) p
+           where m.type = 'table' and p."table" = {} collate nocase
+           order by m.name, p.id, p.seq"#,
+        schema_table(schema),
+        literal(schema),
+        literal(name)
+    )
+}
+
+/// One key per (table, id) of [`referencing_keys_sql`]'s rows. A key written without its
+/// referenced columns points to `primary_key`, the referenced table's.
+pub(crate) fn referencing_keys(
+    schema: &str,
+    rows: &[Row],
+    primary_key: &[String],
+) -> Vec<ReferencingKey> {
+    let mut keys: Vec<ReferencingKey> = Vec::new();
+    let mut implicit: Vec<bool> = Vec::new();
+    for row in rows {
+        let (table, name) = (text(row, 0), format!("fk_{}", integer(row, 1)));
+        if keys
+            .last()
+            .is_none_or(|key| key.table != table || key.name != name)
+        {
+            keys.push(ReferencingKey {
+                schema: schema.to_string(),
+                table,
+                name,
+                columns: Vec::new(),
+                referenced_columns: Vec::new(),
+            });
+            implicit.push(false);
+        }
+        let key = keys.last_mut().expect("just added");
+        key.columns.push(text(row, 2));
+        match optional_text(row, 3) {
+            Some(to) => key.referenced_columns.push(to),
+            None => *implicit.last_mut().expect("just added") = true,
+        }
+    }
+    for (key, implicit) in keys.iter_mut().zip(implicit) {
+        if implicit {
+            key.referenced_columns = primary_key.to_vec();
+        }
+    }
+    keys
 }
 
 pub(crate) fn primary_key_sql(schema: &str, table: &str) -> String {

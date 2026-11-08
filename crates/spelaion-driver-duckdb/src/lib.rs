@@ -25,8 +25,8 @@ use async_trait::async_trait;
 use duckdb::{AccessMode, Config, InterruptHandle};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, SchemaInfo,
-    SchemaObject, TableInfo, TransactionState,
+    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey,
+    Result, SchemaInfo, SchemaObject, TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -251,6 +251,7 @@ enum Command {
     Schemas(LikeFilter, Reply<Vec<SchemaInfo>>),
     Objects(String, LikeFilter, Reply<Vec<ObjectInfo>>),
     Describe(String, String, Reply<TableInfo>),
+    Referencing(String, String, Reply<Vec<ReferencingKey>>),
     SchemaObjects(String, LikeFilter, Reply<Vec<SchemaObject>>),
     Definition(Box<SchemaObject>, Reply<String>),
     RelationDefinition(String, String, Reply<String>),
@@ -285,6 +286,9 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             }
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(conn, &schema, &name));
+            }
+            Command::Referencing(schema, name, reply) => {
+                let _ = reply.send(introspect::list_referencing_keys(conn, &schema, &name));
             }
             Command::SchemaObjects(schema, like, reply) => {
                 let _ = reply.send(objects::list_schema_objects(conn, &schema, &like));
@@ -426,6 +430,12 @@ impl Connection for DuckdbConnection {
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Describe(schema, name, reply))
+            .await
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        let (schema, name) = (schema.to_string(), name.to_string());
+        self.ask(|reply| Command::Referencing(schema, name, reply))
             .await
     }
 

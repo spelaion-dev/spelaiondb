@@ -28,8 +28,8 @@ pub use error::DriverError;
 pub use filter::{LikeFilter, NameFilter, literal_pattern, pattern_matches};
 pub use introspect::{
     ColumnInfo, ConstraintInfo, ConstraintKind, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind,
-    SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo,
-    check_definition, terminated,
+    ReferencingKey, SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind,
+    TableInfo, check_definition, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use secret::Secret;
@@ -203,6 +203,18 @@ pub trait Connection: Send + Sync {
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>>;
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>>;
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo>;
+    /// The foreign keys of every table (in any schema) that point to `schema.name`, ordered by
+    /// referencing schema, table and key name: [`TableInfo::foreign_keys`] seen from the other
+    /// side. Read from the catalog, like `describe_table`.
+    async fn list_referencing_keys(
+        &self,
+        _schema: &str,
+        _name: &str,
+    ) -> Result<Vec<ReferencingKey>> {
+        Err(DriverError::Other(
+            "this engine cannot list the keys that point to a table".into(),
+        ))
+    }
     /// Functions, sequences, triggers, types… of a schema (ADR-024), ordered by name. Engines
     /// without any return none.
     async fn list_schema_objects(&self, _schema: &str) -> Result<Vec<SchemaObject>> {

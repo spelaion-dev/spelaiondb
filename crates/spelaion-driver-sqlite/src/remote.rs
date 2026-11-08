@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, Connection, Dialect, DriverError, EventStream,
-    ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Remote, RemoteControl,
-    RemoteProcess, Result, ResultSchema, SchemaInfo, SchemaObject, TableInfo,
+    ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey, Remote,
+    RemoteControl, RemoteProcess, Result, ResultSchema, SchemaInfo, SchemaObject, TableInfo,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -766,6 +766,14 @@ impl Connection for RemoteConnection {
             );
         }
         Ok(table)
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        let rows = self
+            .rows(catalog::referencing_keys_sql(schema, name))
+            .await?;
+        let primary_key = catalog::names(&self.rows(catalog::primary_key_sql(schema, name)).await?);
+        Ok(catalog::referencing_keys(schema, &rows, &primary_key))
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
