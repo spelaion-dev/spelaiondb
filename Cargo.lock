@@ -5825,6 +5825,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "specta",
  "spelaion-config",
  "spelaion-driver-api",
  "spelaion-driver-duckdb",

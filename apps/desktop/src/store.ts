@@ -101,6 +101,8 @@ export interface Tab {
   /** A table data tab (pages of one table) instead of an SQL editor. */
   table?: TableView;
   tableDetails?: { schema: string; name: string; kind: TableDetailKind };
+  /** A local saved plan, opened without executing SQL. */
+  plan?: { path: string };
   /** Pending row changes are kept in the mounted editor until saved or discarded. */
   pendingEdits?: boolean;
   savingEdits?: boolean;
@@ -175,7 +177,7 @@ export interface ClosedTab {
 /** The durable part of a tab. Only SQL editor tabs have one: table data and metadata tabs
  *  are reopened from the explorer. */
 export function snapshotOf(tab: Tab): TabSnapshot | null {
-  if (tab.table || tab.tableDetails) return null;
+  if (tab.table || tab.tableDetails || tab.plan) return null;
   return {
     connectionId: tab.connectionId,
     sql: tab.sql,
@@ -221,7 +223,7 @@ export interface ExplorerReveal {
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
 /** What the command palette asks of an editor tab: the same as its action column's buttons. */
-export type EditorCommand = "runCurrent" | "runScript" | "format" | "cancel" | EditorActionId;
+export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | EditorActionId;
 
 /** Window event asking the editor tab `detail.tab` to do `detail.command` (SDB-18). */
 export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";

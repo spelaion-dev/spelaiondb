@@ -24,6 +24,7 @@ mod objects;
 mod open;
 mod open_tabs;
 mod params;
+pub mod plan;
 mod processes;
 mod query_page;
 mod readonly;

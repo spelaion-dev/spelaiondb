@@ -39,7 +39,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 spelaion-config.workspace = true
-spelaion-core.workspace = true
+spelaion-core = { workspace = true, features = ["bindings"] }
 spelaion-driver-api.workspace = true
 spelaion-ssh.workspace = true
 arrow.workspace = true

@@ -1228,7 +1228,7 @@ try {
 
   step("editor toolbar: run the current statement or selection, and run the whole script");
   const actions = panel.getByRole("toolbar", { name: "Query actions" });
-  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Editor actions", "Format", "Save", "Save as file"]);
+  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Explain query", "Editor actions", "Format", "Save", "Save as file"]);
   for (const button of await actions.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   await sqlEditor.click();
   await page.keyboard.press("Control+Home");
@@ -2801,6 +2801,27 @@ try {
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await panel.locator(".statusline", { hasText: "1,000 rows" }).waitFor();
   await shot("07-postgres");
+
+  step("PostgreSQL visual plan: actual core tree, graph, raw output and execution warning");
+  await replaceQuery(panel, "select 1 as plan_smoke_value;");
+  await panel.getByRole("button", { name: "Explain query", exact: true }).click();
+  const planView = panel.getByRole("region", { name: "Execution plan", exact: true });
+  await planView.getByText("Estimates only", { exact: false }).waitFor();
+  await planView.getByRole("button", { name: "Tree & table", exact: true }).click();
+  await planView.locator('.plan-table [data-node-id="0"]').waitFor();
+  assert.match(await planView.locator(".plan-table").innerText(), /Result/);
+  await planView.getByRole("button", { name: "Graph", exact: true }).click();
+  await planView.locator('.plan-graph-node[data-node-id="0"]').waitFor();
+  await planView.getByRole("button", { name: "Raw output", exact: true }).click();
+  await planView.locator(".plan-raw pre").filter({ hasText: '"Node Type": "Result"' }).waitFor();
+  await planView.getByLabel("ANALYZE", { exact: true }).check();
+  await planView.getByRole("button", { name: "Explain query", exact: true }).click();
+  await page.getByRole("dialog").getByText("ANALYZE executes your query", { exact: true }).waitFor();
+  await page.getByRole("dialog").getByRole("button", { name: "Execute and analyze", exact: true }).click();
+  await planView.getByText("Actual execution", { exact: false }).waitFor();
+  await shot("07-plan-overview");
+  await planView.getByRole("button", { name: "Back to results", exact: true }).click();
+  await planView.waitFor({ state: "detached" });
 
   step("a session the server ended: shown as lost, nothing re-run, reconnected on a click");
   await replaceQuery(panel, "select pg_terminate_backend(pg_backend_pid());");
@@ -4833,6 +4854,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("button", { name: "Close query history" }).click();
   await replaceQuery(panel, Array.from({ length: 105 }, (_, i) => `select ${i} as history_page_marker;`).join("\n"));
   await run(panel);
+  // Run's old button remains visible while async preflight runs. Wait for this script's
+  // completion summary before taking the history snapshot: new entries reset its anchor.
+  await panel.locator(".statusline", { hasText: "105 OK, 0 failed, 0 not run" }).waitFor();
   await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await history.getByRole("textbox", { name: "Search query history" }).fill("history_page_marker");

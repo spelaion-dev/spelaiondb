@@ -1194,7 +1194,18 @@ impl QueryHistory {
         original: Option<String>,
         options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
-        let mut events = session.run_script_with(sql, options);
+        let events = session.run_script_with(sql, options);
+        self.observe_run(session, sql, scope, original, events)
+    }
+
+    pub(crate) fn observe_run(
+        &self,
+        session: &Session,
+        sql: &str,
+        scope: HistoryScope,
+        original: Option<String>,
+        mut events: BoxStream<'static, CoreEvent>,
+    ) -> BoxStream<'static, CoreEvent> {
         let source = session.connection().clone();
         let HistoryScope {
             workspace,

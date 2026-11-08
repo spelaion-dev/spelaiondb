@@ -59,7 +59,7 @@ export async function reviewChanges<T extends ConnectResult | ConnectionTestResu
  *  data tabs' and the process monitor's sessions stay in auto-commit. */
 function isEditorSession(session: string): boolean {
   const tab = useApp.getState().tabs.find((t) => t.id === session);
-  return Boolean(tab && !tab.table && !tab.tableDetails);
+  return Boolean(tab && !tab.table && !tab.tableDetails && !tab.plan);
 }
 
 /** Shows the transaction the core keeps for a freshly connected editor tab. */

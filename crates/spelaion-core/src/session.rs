@@ -435,6 +435,30 @@ impl Session {
         kind: RunKind,
         run_options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
+        self.run_with_intent(script, kind, run_options, None)
+    }
+
+    /// Only the core's opaque, parsed plan request can pair EXPLAIN SQL with its intent.
+    pub(crate) fn run_plan(
+        &self,
+        plan: &crate::plan::PreparedPlan,
+        options: ScriptOptions,
+    ) -> BoxStream<'static, CoreEvent> {
+        self.run_with_intent(
+            plan.sql(),
+            RunKind::User,
+            options,
+            Some(plan.intent().to_owned()),
+        )
+    }
+
+    fn run_with_intent(
+        &self,
+        script: &str,
+        kind: RunKind,
+        run_options: ScriptOptions,
+        intent: Option<String>,
+    ) -> BoxStream<'static, CoreEvent> {
         // This run is requested now, even if history or another run delays its first poll.
         // A cancel during those waits stops it; a later, newly requested run gets a new epoch.
         let cancels_at_start = self.cancels.load(Ordering::SeqCst);
@@ -478,7 +502,8 @@ impl Session {
                 let started = Instant::now();
                 summary.executed += 1;
                 let text = span.text(&script);
-                let kind = transaction::statement_kind(engine, text);
+                let policy_text = intent.as_deref().unwrap_or(text);
+                let kind = transaction::statement_kind(engine, policy_text);
 
                 // Before: smart commit, then the manual-commit BEGIN.
                 let mut before = None;
@@ -488,7 +513,7 @@ impl Session {
                         && status.auto_commit
                         && status.smart_commit
                         && kind == StatementKind::Other
-                        && transaction::is_write(engine, text)
+                        && transaction::is_write(engine, policy_text)
                     {
                         status.auto_commit = false;
                         status.smart_switched = true;

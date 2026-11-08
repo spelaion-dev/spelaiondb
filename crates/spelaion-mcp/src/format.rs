@@ -11,7 +11,7 @@ use spelaion_driver_api::Value;
 /// Maximum characters per cell; the rest is cut with `…`.
 const MAX_CELL: usize = 200;
 /// Approximate maximum size of a response: the agent's context is finite.
-const MAX_RESPONSE: usize = 60_000;
+pub(crate) const MAX_RESPONSE: usize = 60_000;
 
 /// What to tell the agent when not every row fits.
 const MORE_ROWS: &str =

@@ -7,6 +7,7 @@ mod import;
 mod interaction;
 mod library;
 mod mcp;
+mod plans;
 mod update;
 
 use std::collections::HashMap;
@@ -48,6 +49,8 @@ struct AppState {
     engines: Engines,
     tunnels: Arc<TunnelPool>,
     results: Arc<ResultStore>,
+    plans: Arc<spelaion_core::plan::PlanStore>,
+    startup_plan: std::sync::Mutex<Option<String>>,
     sessions: Mutex<HashMap<String, DesktopSession>>,
     history: QueryHistory,
     /// Writes the open tabs to the local store on a deadline (ADR-036).
@@ -4268,6 +4271,16 @@ fn raw_handler(invoke: tauri::ipc::Invoke<tauri::Wry>) -> bool {
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![
+            plans::explain_preflight,
+            plans::plan_capabilities,
+            plans::explain_query,
+            plans::open_plan_file,
+            plans::startup_plan_path,
+            plans::plan_page,
+            plans::plan_statistics,
+            plans::plan_raw_window,
+            plans::release_plan,
+            plans::export_plan,
             workspace_info,
             mcp::mcp_clients,
             mcp::mcp_plan_install,
@@ -4508,8 +4521,27 @@ pub fn run() {
         eprintln!("could not make the personal folder private: {e}");
     }
     // Initial folder: command-line argument or the last one opened.
-    let workspace = std::env::args()
-        .nth(1)
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let startup_plan = arguments
+        .windows(2)
+        .find(|args| args[0] == "--plan")
+        .map(|args| args[1].clone())
+        .or_else(|| {
+            arguments
+                .first()
+                .filter(|path| {
+                    Path::new(path).is_file()
+                        && matches!(
+                            Path::new(path).extension().and_then(|s| s.to_str()),
+                            Some("json" | "plan" | "sqlplan")
+                        )
+                })
+                .cloned()
+        });
+    let workspace = arguments
+        .first()
+        .filter(|arg| !arg.starts_with('-') && Some(*arg) != startup_plan.as_ref())
+        .cloned()
         .map(PathBuf::from)
         .or_else(|| {
             std::fs::read_to_string(last_workspace_file(&user_dir))
@@ -4530,6 +4562,8 @@ pub fn run() {
         engines: Engines::builtin(),
         tunnels: Arc::new(TunnelPool::new()),
         results: Arc::new(ResultStore::new()),
+        plans: Arc::new(spelaion_core::plan::PlanStore::new()),
+        startup_plan: std::sync::Mutex::new(startup_plan),
         sessions: Mutex::new(HashMap::new()),
         history,
         tabs,

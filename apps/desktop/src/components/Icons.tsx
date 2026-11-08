@@ -2,9 +2,11 @@
 // `currentColor`), shown at 16px. Lucide itself (ISC) is not a dependency yet: these follow its
 // shapes, so they can be swapped for `lucide-react` without changing how they look.
 
-type IconName = "x" | "plus" | "pin" | "maximize" | "minimize" | "folderOpen" | "link" | "arrowUpRight" | "sigma";
+type IconName = "x" | "plus" | "pin" | "maximize" | "minimize" | "folderOpen" | "link" | "arrowUpRight" | "sigma" | "chevronRight" | "plan";
 
 export const PATHS: Record<IconName, string[]> = {
+  chevronRight: ["m9 6 6 6-6 6"],
+  plan: ["M5 3h8v6H5z", "M5 15h8v6H5z", "M17 9h5v6h-5z", "M9 9v6", "M13 6h3v6h1"],
   x: ["M18 6 6 18", "m6 6 12 12"],
   link: [
     "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",

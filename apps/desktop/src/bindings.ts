@@ -7,6 +7,16 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	explainPreflight: (session: string, sql: string, options: ExplainOptions_Deserialize) => typedError<ExplainCheck, string>(__TAURI_INVOKE("explain_preflight", { session, sql, options })),
+	planCapabilities: (session: string) => typedError<PlanCapabilities, string>(__TAURI_INVOKE("plan_capabilities", { session })),
+	explainQuery: (session: string, sql: string, options: ExplainOptions_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("explain_query", { session, sql, options, onEvent })),
+	openPlanFile: (path: string) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("open_plan_file", { path })),
+	startupPlanPath: () => __TAURI_INVOKE<string | null>("startup_plan_path"),
+	planPage: (plan: number, view: PlanView, offset: number, limit: number) => typedError<PlanPage_Serialize, string>(__TAURI_INVOKE("plan_page", { plan, view, offset, limit })),
+	planStatistics: (plan: number, kind: PlanStatKind, offset: number, limit: number) => typedError<PlanStatsPage_Serialize, string>(__TAURI_INVOKE("plan_statistics", { plan, kind, offset, limit })),
+	planRawWindow: (plan: number, offset: number) => typedError<RawWindow_Serialize, string>(__TAURI_INVOKE("plan_raw_window", { plan, offset })),
+	releasePlan: (plan: number) => __TAURI_INVOKE<void>("release_plan", { plan }),
+	exportPlan: (exportId: number, plan: number, view: PlanView, path: string, csv: boolean) => typedError<number, string>(__TAURI_INVOKE("export_plan", { exportId, plan, view, path, csv })),
 	workspaceInfo: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("workspace_info")),
 	/**  Every AI client: its file, whether our server is there, and its manual configuration. */
 	mcpClients: () => typedError<McpClientsItem_Serialize, string>(__TAURI_INVOKE("mcp_clients")),
@@ -1342,6 +1352,36 @@ export type EngineItem_Serialize = {
 /**  The answer to a paused run. */
 export type ErrorAnswerItem = "stop" | "skip" | "skipAll";
 
+export type ExplainCheck = {
+	sql: string,
+	risks: RiskyItem[],
+	executesQuery: boolean,
+};
+
+export type ExplainOptions = ExplainOptions_Serialize | ExplainOptions_Deserialize;
+
+export type ExplainOptions_Deserialize = {
+	analyze: boolean,
+	buffers: boolean,
+	/**  The separate warning that ANALYZE executes the query was accepted. */
+	analyzeConfirmed: boolean,
+	/**  The existing statement/type guard was accepted. */
+	confirmed: boolean,
+	/**  This tab's override, as for ordinary scripts: None uses the connection, zero disables. */
+	timeoutSeconds?: number | null,
+};
+
+export type ExplainOptions_Serialize = {
+	analyze: boolean,
+	buffers: boolean,
+	/**  The separate warning that ANALYZE executes the query was accepted. */
+	analyzeConfirmed: boolean,
+	/**  The existing statement/type guard was accepted. */
+	confirmed: boolean,
+	/**  This tab's override, as for ordinary scripts: None uses the connection, zero disables. */
+	timeoutSeconds: number | null,
+};
+
 /**  A connection's explorer filter: personal, per workspace and connection (ADR-025). */
 export type ExplorerFilterItem = {
 	schemas: NameFilterItem,
@@ -1533,6 +1573,8 @@ export type FindStepItem = {
 	row: number,
 	column: number,
 };
+
+export type FindingKind = "hotspot" | "underestimatedRows" | "overestimatedRows" | "sortSpill" | "filteredRows" | "largeSequentialScan" | "heapFetches" | "missingWorkers" | "highLoops" | "diskReads" | "neverExecuted";
 
 export type ForeignKeyDetails = {
 	name: string,
@@ -2216,6 +2258,224 @@ export type PastedItem = {
 	leftOut: string[],
 };
 
+export type PlanCapabilities = {
+	estimated: boolean,
+	analyze: boolean,
+	buffers: boolean,
+	note: string,
+};
+
+/**  Findings use the normalized metrics only. Engines do not supply their own heuristics. */
+export type PlanFinding = {
+	kind: FindingKind,
+	explanation: string,
+};
+
+export type PlanMetrics = PlanMetrics_Serialize | PlanMetrics_Deserialize;
+
+export type PlanMetrics_Deserialize = {
+	cost?: number | null,
+	selfCost?: number | null,
+	estimatedRows?: number | null,
+	actualRowsPerLoop?: number | null,
+	actualRows?: number | null,
+	timeMs?: number | null,
+	selfTimeMs?: number | null,
+	timePerLoopMs?: number | null,
+	loops?: number | null,
+	buffersHit?: number | null,
+	buffersRead?: number | null,
+	rowsRemoved?: number | null,
+	heapFetches?: number | null,
+	workersPlanned?: number | null,
+	workersLaunched?: number | null,
+	temporaryRead?: number | null,
+	temporaryWritten?: number | null,
+	sortSpaceKb?: number | null,
+};
+
+export type PlanMetrics_Serialize = {
+	cost: number | null,
+	selfCost: number | null,
+	estimatedRows: number | null,
+	actualRowsPerLoop: number | null,
+	actualRows: number | null,
+	timeMs: number | null,
+	selfTimeMs: number | null,
+	timePerLoopMs: number | null,
+	loops: number | null,
+	buffersHit: number | null,
+	buffersRead: number | null,
+	rowsRemoved: number | null,
+	heapFetches: number | null,
+	workersPlanned: number | null,
+	workersLaunched: number | null,
+	temporaryRead: number | null,
+	temporaryWritten: number | null,
+	sortSpaceKb: number | null,
+};
+
+export type PlanNode = PlanNode_Serialize | PlanNode_Deserialize;
+
+export type PlanNode_Deserialize = {
+	id: number,
+	parent?: number | null,
+	depth: number,
+	children: number[],
+	nodeType: string,
+	operation: PlanOperation,
+	relation?: string | null,
+	index?: string | null,
+	joinType?: string | null,
+	filter?: string | null,
+	indexCondition?: string | null,
+	hashCondition?: string | null,
+	sortMethod?: string | null,
+	sortSpilled: boolean,
+	sequentialScan: boolean,
+	parallel: boolean,
+	metrics: PlanMetrics_Deserialize,
+	findings: PlanFinding[],
+};
+
+export type PlanNode_Serialize = {
+	id: number,
+	parent: number | null,
+	depth: number,
+	children: number[],
+	nodeType: string,
+	operation: PlanOperation,
+	relation: string | null,
+	index: string | null,
+	joinType: string | null,
+	filter: string | null,
+	indexCondition: string | null,
+	hashCondition: string | null,
+	sortMethod: string | null,
+	sortSpilled: boolean,
+	sequentialScan: boolean,
+	parallel: boolean,
+	metrics: PlanMetrics_Serialize,
+	findings: PlanFinding[],
+};
+
+export type PlanOperation = "scan" | "join" | "sort" | "aggregate" | "temporary" | "other";
+
+export type PlanPage = PlanPage_Serialize | PlanPage_Deserialize;
+
+export type PlanPage_Deserialize = {
+	nodes: PlanNode_Deserialize[],
+	offset: number,
+	total: number,
+	nextOffset?: number | null,
+};
+
+export type PlanPage_Serialize = {
+	nodes: PlanNode_Serialize[],
+	offset: number,
+	total: number,
+	nextOffset: number | null,
+};
+
+export type PlanSort = "tree" | "nodeType" | "relation" | "index" | "cost" | "selfCost" | "estimatedRows" | "actualRowsPerLoop" | "actualRows" | "time" | "selfTime" | "timePerLoop" | "loops" | "buffersHit" | "buffersRead" | "rowsRemoved" | "heapFetches" | "workersPlanned" | "workersLaunched" | "temporaryRead" | "temporaryWritten" | "sortSpace" | "findings";
+
+export type PlanStat = PlanStat_Serialize | PlanStat_Deserialize;
+
+export type PlanStatKind = "operations" | "relations" | "indexes";
+
+export type PlanStat_Deserialize = {
+	name: string,
+	nodes: number,
+	cumulativeTimeMs?: number | null,
+};
+
+export type PlanStat_Serialize = {
+	name: string,
+	nodes: number,
+	cumulativeTimeMs: number | null,
+};
+
+export type PlanStatsPage = PlanStatsPage_Serialize | PlanStatsPage_Deserialize;
+
+export type PlanStatsPage_Deserialize = {
+	items: PlanStat_Deserialize[],
+	offset: number,
+	total: number,
+	nextOffset?: number | null,
+};
+
+export type PlanStatsPage_Serialize = {
+	items: PlanStat_Serialize[],
+	offset: number,
+	total: number,
+	nextOffset: number | null,
+};
+
+export type PlanStep = {
+	node: number,
+	label: string,
+	value: number | null,
+};
+
+export type PlanSummary = PlanSummary_Serialize | PlanSummary_Deserialize;
+
+export type PlanSummary_Deserialize = {
+	id: number,
+	engine: string,
+	name: string,
+	analyzed: boolean,
+	buffers: boolean,
+	totalCost?: number | null,
+	planningMs?: number | null,
+	executionMs?: number | null,
+	highestCost?: PlanStep | null,
+	slowest?: PlanStep | null,
+	estimateGap?: PlanStep | null,
+	sequentialScans: number,
+	sorts: number,
+	temporaryOperations: number,
+	nodeCount: number,
+	depth: number,
+	findingCount: number,
+	operationTypes: number,
+	relationCount: number,
+	indexCount: number,
+	/**  A capability note provided by the core, not guessed from the engine in React. */
+	note: string,
+};
+
+export type PlanSummary_Serialize = {
+	id: number,
+	engine: string,
+	name: string,
+	analyzed: boolean,
+	buffers: boolean,
+	totalCost: number | null,
+	planningMs: number | null,
+	executionMs: number | null,
+	highestCost: PlanStep | null,
+	slowest: PlanStep | null,
+	estimateGap: PlanStep | null,
+	sequentialScans: number,
+	sorts: number,
+	temporaryOperations: number,
+	nodeCount: number,
+	depth: number,
+	findingCount: number,
+	operationTypes: number,
+	relationCount: number,
+	indexCount: number,
+	/**  A capability note provided by the core, not guessed from the engine in React. */
+	note: string,
+};
+
+export type PlanView = {
+	sort: PlanSort,
+	descending: boolean,
+	collapsed: number[],
+	findingsOnly: boolean,
+};
+
 export type PreviewColumnItem = {
 	name: string,
 	kind: ColumnKindItem,
@@ -2320,6 +2580,25 @@ export type ProxyTypeItem = "socks5" | "http";
  */
 export type QuitBlocked = {
 	sessions: string[],
+};
+
+/**  A bounded raw-text window. Offsets are UTF-8 bytes and always returned on boundaries. */
+export type RawWindow = RawWindow_Serialize | RawWindow_Deserialize;
+
+/**  A bounded raw-text window. Offsets are UTF-8 bytes and always returned on boundaries. */
+export type RawWindow_Deserialize = {
+	text: string,
+	offset: number,
+	nextOffset?: number | null,
+	total: number,
+};
+
+/**  A bounded raw-text window. Offsets are UTF-8 bytes and always returned on boundaries. */
+export type RawWindow_Serialize = {
+	text: string,
+	offset: number,
+	nextOffset: number | null,
+	total: number,
 };
 
 export type RecentFileItem = {

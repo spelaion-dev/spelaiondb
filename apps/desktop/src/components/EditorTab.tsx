@@ -5,7 +5,8 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
-import type { EditableTableItem } from "../bindings";
+import type { EditableTableItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities } from "../bindings";
+import { PlanViewer } from "./PlanViewer";
 import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { connectionTooltip } from "../connectionInfo";
@@ -105,6 +106,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** Values given to `:name` placeholders in this tab, offered again next time. */
   const paramValues = useRef<Record<string, string>>({});
   const editor = useRef<SqlEditorHandle>(null);
+  const [plan, setPlan] = useState<PlanSummary | null>(null);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [analyzePlan, setAnalyzePlan] = useState(false);
+  const [planBuffers, setPlanBuffers] = useState(true);
+  const [capabilities, setCapabilities] = useState<PlanCapabilities | null>(null);
+  const explainAction = useRef<() => Promise<void>>(async () => undefined);
   // A short message in the toolbar: a formatting error or "saved as …".
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   useEffect(() => {
@@ -440,6 +447,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
         case "runScript":
           if (!running && !runBlocked) editor.current?.runScript();
           break;
+        case "explain":
+          if (!running && !runBlocked) void explainAction.current();
+          break;
         case "format":
           editor.current?.format();
           break;
@@ -635,6 +645,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
+    setPlan(null); setPlanOpen(false); setCapabilities(null); setAnalyzePlan(false);
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
     updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
   }
@@ -647,6 +658,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     startingRun.current = true;
     try {
     if (!(await ensureConnected())) return;
+    setPlan(null); setPlanOpen(false);
     // `:name` placeholders: the core lists them and writes the values in as literals.
     let text = request.text;
     const names = await call(commands.scriptParams(tab.id, text)).catch(() => [] as string[]);
@@ -703,6 +715,60 @@ export function EditorTab({ tab }: { tab: Tab }) {
       startingRun.current = false;
     }
   }
+
+  async function explainCurrent() {
+    if (startingRun.current || queryPageBusy.current || actionState.current.running || actionState.current.runBlocked) return;
+    if (pendingCount > 0 || savingEditsRef.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    startingRun.current = true;
+    let runStarted = false;
+    try {
+      if (!(await ensureConnected())) return;
+      const support = await call(commands.planCapabilities(tab.id));
+      setCapabilities(support); setPlanOpen(true);
+      if (!support.analyze) setAnalyzePlan(false);
+      if (!support.estimated) { setNotice({ text: t("plan.unsupported", { engine: connection?.engine }), error: true }); return; }
+      const request = await editor.current?.currentRequest();
+      if (!request?.text.trim()) return;
+      let text = request.text;
+      const names = await call(commands.scriptParams(tab.id, text));
+      if (names.length) {
+        const values = await useDialogs.getState().askParams(names, paramValues.current);
+        if (!values) return;
+        paramValues.current = { ...paramValues.current, ...values };
+        text = await call(commands.bindParams(tab.id, text, values));
+      }
+      const analyze = analyzePlan && support.analyze;
+      let options = { analyze, buffers: analyze && planBuffers && support.buffers, analyzeConfirmed: false, confirmed: false, timeoutSeconds: runOptionsOf(tab).timeoutSeconds };
+      const check = await call(commands.explainPreflight(tab.id, text, options));
+      if (check.executesQuery) {
+        const answer = await useDialogs.getState().askChoice({ title: t("plan.analyzeTitle"), message: t("plan.analyzeWarning"), choices: [{ id: "execute", label: t("plan.analyzeExecute"), danger: true }, { id: "cancel", label: t("cancel") }] });
+        if (answer !== "execute") return;
+        options = { ...options, analyzeConfirmed: true };
+      }
+      if (check.risks.length) {
+        if (!(await useDialogs.getState().askRisks(connection?.name ?? "", check.risks.map(item => ({ sql: text, risk: item.risk }))))) return;
+        options = { ...options, confirmed: true };
+      }
+      // Acceptance transfers result ownership just like an ordinary Run. Refusals and
+      // dismissed warnings above leave the previous result and its handles intact.
+      await Promise.all((tab.run?.results ?? []).map(result => call(commands.releaseResult(result.id)).catch(() => undefined)));
+      setQueryTable(null); setQueryChecked(null); setPlan(null);
+      runStarted = true;
+      const startedAt = performance.now();
+      updateTab(tab.id, { run: { running: true, results: [], activeResult: null, messages: [], error: null, startedAt, elapsedMs: null } });
+      const channel = new Channel<ScriptEvent>(), failures = new Map<number, string>();
+      // PostgreSQL diagnostics refer to the generated EXPLAIN, so never underline source offsets.
+      channel.onmessage = event => handle(event, { ...request, text, bound: true }, startedAt, null, failures);
+      const result = await call(commands.explainQuery(tab.id, text, options, channel));
+      if (useApp.getState().tabs.some(item => item.id === tab.id)) setPlan(result);
+      else await commands.releasePlan(result.id);
+    } catch (e) {
+      const detail = message(e);
+      if (runStarted) updateRun(tab.id, current => ({ ...current, running: false, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));
+      setNotice({ text: t("plan.runFailed", { reason: message(e) }), error: true });
+    } finally { startingRun.current = false; }
+  }
+  explainAction.current = explainCurrent;
 
   function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null, failures: Map<number, string>) {
     switch (event.kind) {
@@ -810,6 +876,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   actionState.current = { running, runBlocked: historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging };
   const maximized = !tab.table && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
+  const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyze === false && capabilities.estimated && <span className="muted small">{t("plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults")} title={t(maximized ? "restoreResults" : "maximizeResults")} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
       <div className="toolbar">
@@ -957,6 +1024,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
               <EditorActionIcon name="script" />
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
+            <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
             <EditorActionsButton />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
@@ -1017,7 +1085,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
         </>
         )}
         <div style={{ flex: tab.table || maximized ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
-          <Results
+          {planOpen && plan ? <PlanViewer key={plan.id} summary={plan} controls={planControls} onBack={() => { setPlan(null); setPlanOpen(false); }} /> : <>{planOpen && planControls}<Results
             maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
             run={tab.run}
             session={tab.id}
@@ -1047,7 +1115,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
                 results: r.results.map((x) => (x.id === result ? { ...x, filter, rows, total } : x)),
               }))
             }
-          />
+          /></>}
         </div>
       </div>
     </div>

@@ -353,7 +353,7 @@ function TabMenu({ id, x, y, onClose }: { id: string; x: number; y: number; onCl
       {item("tab.rename")}
       {item("tab.duplicate")}
       {item("tab.pin")}
-      {!tab.table && !tab.tableDetails && (
+      {!tab.table && !tab.tableDetails && !tab.plan && (
         <>
           <hr />
           {tab.file && item("file.save")}
