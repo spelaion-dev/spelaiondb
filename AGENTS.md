@@ -145,6 +145,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
   writes them at most a second after a change) and checks them before they come back
   (`restore_tabs`): never results, secrets or session state, and nothing is run.
+  `session_setup.rs` (ADR-037) applies a connection's `[session]` table every time a session
+  opens (isolation level, default schema, setup statements), from `open_connection`; on a
+  read-only connection, a Production type and sessions that only read
+  (`OpenOptions::read_only_session`), every setup statement must first pass
+  `classify_session_setup` in `classify.rs`: like `classify.rs`, any change there needs tests
+  that try to get around it (`tests/session_setup.rs`).
   `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
@@ -243,7 +249,9 @@ outside the team.
 - All security lives in the core: statement splitting and classification, permissions,
   audit and secrets. Never in React or in a Tauri command.
 - Secrets are never written to logs, config files, history or MCP responses.
-- After reconnecting a tunnel or a connection, nothing is ever re-run automatically.
+- After reconnecting a tunnel or a connection, nothing the user ran is ever re-run
+  automatically. Only the connection's session setup runs, as part of opening every new session
+  (ADR-037).
 - A changed SSH fingerprint is a blocking error, never a warning accepted with one click.
 
 ## Rust style

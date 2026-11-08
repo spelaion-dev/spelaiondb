@@ -106,6 +106,8 @@ impl ConnectionDraft {
     ///   new connection would, and turns on the suggested keep-alive.
     /// - SQLite ↔ DuckDB keep the file, except a SQLite file on a server (ADR-018): DuckDB
     ///   opens local files only, so the path on the server, the tunnel and `sqlite3` go.
+    /// - The session setup stays as written; a default schema or an isolation level the new
+    ///   engine cannot set is dropped (ADR-037).
     /// - The name, folder, environment, read-only mode, agents' access and every other setting
     ///   stay as they are.
     pub fn with_engine(&self, engine: Engine) -> (ConnectionDraft, EngineChange) {
@@ -255,6 +257,24 @@ impl ConnectionDraft {
         report.keep_if("env", filled(&self.env).is_some());
         report.keep_if("read_only", self.read_only);
         report.keep_if("mcp", self.mcp_exposed);
+        // The session setup is kept as written: its SQL may need rewriting for the new engine,
+        // which a session that fails to open says (ADR-037).
+        report.keep_if("session.setup", filled(&self.session.setup).is_some());
+        let schema = filled(&self.session.schema).is_some();
+        if to.has_session_schema() {
+            report.keep_if("session.schema", schema);
+        } else {
+            report.drop_if("session.schema", schema);
+            next.session.schema.clear();
+        }
+        match self.session.isolation {
+            Some(level) if level.available_on(to) => report.kept.push("session.isolation".into()),
+            Some(_) => {
+                report.dropped.push("session.isolation".into());
+                next.session.isolation = None;
+            }
+            None => {}
+        }
         (next, report)
     }
 }

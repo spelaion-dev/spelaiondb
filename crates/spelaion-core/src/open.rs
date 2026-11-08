@@ -24,6 +24,7 @@ use spelaion_ssh::{
 use tokio::sync::watch;
 
 use crate::kube::{KubeError, KubeTunnel};
+use crate::session_setup::{SetupError, SetupReport, apply_session_setup, setup_is_restricted};
 use crate::{ResultStore, Session};
 
 /// Available engines, by the name the configuration uses (`engine = "postgres"`).
@@ -74,6 +75,11 @@ pub enum OpenError {
     /// The database did not finish connecting within the connection's `connect_timeout`.
     #[error("the database did not answer in {} s", after.as_secs())]
     Timeout { after: Duration },
+
+    /// The session opened but could not be set up as its connection says (ADR-037); it was
+    /// closed again.
+    #[error("{0}")]
+    Setup(#[from] SetupError),
 }
 
 /// Open tunnels, shared between connections (ADR-004): two tabs against the same database,
@@ -208,6 +214,9 @@ pub struct OpenOptions {
     pub interaction: Arc<dyn Interaction>,
     /// Password typed by the user, if `ResolvedConnection::password` is `Prompt`.
     pub password: Option<Secret>,
+    /// The session only reads (agents' reads, streaming exports): its session setup goes
+    /// through the read-only barrier, as on a read-only connection (ADR-037).
+    pub read_only_session: bool,
 }
 
 /// The tunnel a connection goes through.
@@ -221,6 +230,8 @@ pub struct OpenConnection {
     // Field order = drop order: first the session, then the tunnel.
     pub session: Session,
     pub resolved: ResolvedConnection,
+    /// What the connection's session setup did (ADR-037).
+    pub setup: SetupReport,
     tunnel: Option<ActiveTunnel>,
 }
 
@@ -321,11 +332,22 @@ pub async fn open_connection(
         Some(ActiveTunnel::Kube(t)) => session.health_handle().watch_tunnel(t.state()),
         None => {}
     }
-    Ok(OpenConnection {
+    // The session starts as its connection says, every time it opens (ADR-037).
+    let restricted = options.read_only_session || setup_is_restricted(&resolved);
+    let mut open = OpenConnection {
         session,
         resolved,
+        setup: SetupReport::default(),
         tunnel,
-    })
+    };
+    match apply_session_setup(&open.session, &open.resolved, restricted).await {
+        Ok(report) => open.setup = report,
+        Err(error) => {
+            open.close().await;
+            return Err(error.into());
+        }
+    }
+    Ok(open)
 }
 
 /// Opens a tunnel and closes it again, to check it from the UI before saving. A typed

@@ -9,7 +9,8 @@
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{
-    Expr, ObjectName, Query, SetExpr, Statement, Value as SqlValue, Visit, Visitor,
+    ContextModifier, Expr, ObjectName, Query, Set, SetExpr, SetSessionParamKind, Statement,
+    TransactionMode, UnaryOperator, Value as SqlValue, Visit, Visitor,
 };
 use sqlparser::parser::Parser;
 
@@ -87,6 +88,204 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
         return Err(reason);
     }
     Ok(kind)
+}
+
+/// May `sql` (a single statement) run as session setup where the read-only barrier applies
+/// (ADR-037): on a read-only connection, on a connection whose type confirms data changes
+/// (Production) and in sessions that only read (agents' reads, streaming exports)? A read
+/// passes as [`classify_read_only`] decides; otherwise only session settings from an allow
+/// list, with plain values (literals and names, no expressions or subqueries), and `USE`. A
+/// setting that could loosen read-only mode or change how SQL is parsed (`SET
+/// default_transaction_read_only`, `SET … READ WRITE`, `sql_mode`, `SET NAMES`…) is refused,
+/// like anything that does not parse. `Err` explains why.
+pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
+    reject_mysql_executable_comments(engine, sql)?;
+    let dialect = sql_dialect(engine);
+    let statements = Parser::parse_sql(dialect.as_ref(), sql)
+        .map_err(|e| format!("could not parse the statement: {e}"))?;
+    let statement = match statements.as_slice() {
+        [one] => one,
+        [] => return Err("there is no statement".into()),
+        _ => return Err("only one statement at a time".into()),
+    };
+    let set = match statement {
+        Statement::Set(set) => set,
+        Statement::Use(_) => {
+            return match engine {
+                "mysql" | "mariadb" | "sqlserver" | "duckdb" => Ok(()),
+                _ => Err("USE is not a setting of this engine".into()),
+            };
+        }
+        _ => {
+            return classify_read_only(engine, sql)
+                .map(|_| ())
+                .map_err(|reason| {
+                    format!("{reason}: only reads and session settings may run here")
+                });
+        }
+    };
+    let refused = || {
+        format!(
+            "{} could change more than this session's settings: only reads and the settings on the session setup's allow list may run here",
+            kind_name(statement)
+        )
+    };
+    match set {
+        Set::SingleAssignment {
+            scope,
+            hivevar,
+            variable,
+            values,
+        } => {
+            if *hivevar || !session_scope(*scope) || !values.iter().all(plain_value) {
+                return Err(refused());
+            }
+            setting_allowed(engine, variable)
+                .then_some(())
+                .ok_or_else(refused)
+        }
+        Set::MultipleAssignments { assignments } => assignments
+            .iter()
+            .all(|a| {
+                session_scope(a.scope) && plain_value(&a.value) && setting_allowed(engine, &a.name)
+            })
+            .then_some(())
+            .ok_or_else(refused),
+        Set::SetTimeZone { value, .. } => match engine {
+            "postgres" | "duckdb" if plain_value(value) => Ok(()),
+            _ => Err(refused()),
+        },
+        Set::SetRole {
+            context_modifier, ..
+        } => match engine {
+            "postgres" | "mysql" | "mariadb" if session_scope(*context_modifier) => Ok(()),
+            _ => Err(refused()),
+        },
+        // Only the isolation level: never READ WRITE, nor another transaction's snapshot.
+        Set::SetTransaction {
+            modes, snapshot, ..
+        } => {
+            let isolation_only = !modes.is_empty()
+                && modes
+                    .iter()
+                    .all(|m| matches!(m, TransactionMode::IsolationLevel(_)));
+            if isolation_only && snapshot.is_none() {
+                Ok(())
+            } else {
+                Err(refused())
+            }
+        }
+        Set::SetSessionParam(SetSessionParamKind::Generic(param)) if engine == "sqlserver" => {
+            let allowed = !param.names.is_empty()
+                && param
+                    .names
+                    .iter()
+                    .all(|name| SQLSERVER_SETTINGS.contains(&name.to_ascii_uppercase().as_str()));
+            allowed.then_some(()).ok_or_else(refused)
+        }
+        Set::SetSessionParam(_)
+        | Set::ParenthesizedAssignments { .. }
+        | Set::SetSessionAuthorization(_)
+        | Set::SetNames { .. }
+        | Set::SetNamesDefault {} => Err(refused()),
+    }
+}
+
+/// Settings of this session only: no `GLOBAL`.
+fn session_scope(scope: Option<ContextModifier>) -> bool {
+    matches!(
+        scope,
+        None | Some(ContextModifier::Session) | Some(ContextModifier::Local)
+    )
+}
+
+/// A literal or a bare name (`'UTC'`, `5000`, `-1`, `app`, `DEFAULT`): nothing that runs.
+fn plain_value(expr: &Expr) -> bool {
+    match expr {
+        Expr::Value(_) | Expr::Identifier(_) => true,
+        Expr::UnaryOp {
+            op: UnaryOperator::Minus | UnaryOperator::Plus,
+            expr,
+        } => matches!(expr.as_ref(), Expr::Value(_)),
+        _ => false,
+    }
+}
+
+/// Session settings a read-only session setup may change, by engine: where names are found,
+/// how values are shown, and limits. None loosens read-only mode or changes how SQL parses.
+fn setup_settings(engine: &str) -> &'static [&'static str] {
+    match engine {
+        "postgres" => &[
+            "search_path",
+            "timezone",
+            "datestyle",
+            "intervalstyle",
+            "extra_float_digits",
+            "bytea_output",
+            "application_name",
+            "client_min_messages",
+            "statement_timeout",
+            "lock_timeout",
+            "idle_in_transaction_session_timeout",
+            "work_mem",
+        ],
+        "mysql" | "mariadb" => &[
+            "time_zone",
+            "lc_time_names",
+            "max_execution_time",
+            "max_statement_time",
+            "div_precision_increment",
+            "group_concat_max_len",
+            "sql_select_limit",
+            "lock_wait_timeout",
+            "innodb_lock_wait_timeout",
+            "net_read_timeout",
+            "net_write_timeout",
+            "wait_timeout",
+            "interactive_timeout",
+        ],
+        "duckdb" => &["schema", "search_path", "timezone", "calendar"],
+        _ => &[],
+    }
+}
+
+/// SQL Server's `SET <option> <value>` options a read-only session setup may change.
+const SQLSERVER_SETTINGS: &[&str] = &[
+    "DATEFORMAT",
+    "DATEFIRST",
+    "LANGUAGE",
+    "LOCK_TIMEOUT",
+    "NOCOUNT",
+    "DEADLOCK_PRIORITY",
+    "TEXTSIZE",
+    "ARITHABORT",
+];
+
+/// `name` (`search_path`, MySQL's `@@session.time_zone` or `@@time_zone`) is on the engine's
+/// allow list, case-insensitively.
+fn setting_allowed(engine: &str, name: &ObjectName) -> bool {
+    let mysql = engine == "mysql" || engine == "mariadb";
+    let parts: Vec<String> = name
+        .0
+        .iter()
+        .map(|part| {
+            part.as_ident()
+                .map(|ident| ident.value.to_ascii_lowercase())
+                .unwrap_or_default()
+        })
+        .collect();
+    let setting = match parts.as_slice() {
+        [one] if mysql => match one.strip_prefix("@@") {
+            Some(rest) => rest.to_string(),
+            // `@x` is a user variable, not a setting.
+            None if one.starts_with('@') => return false,
+            None => one.clone(),
+        },
+        [one] => one.clone(),
+        [scope, one] if mysql && (scope == "@@session" || scope == "@@local") => one.clone(),
+        _ => return false,
+    };
+    !setting.is_empty() && setup_settings(engine).contains(&setting.as_str())
 }
 
 /// MySQL and MariaDB may execute comment bodies differently depending on server version.
@@ -484,5 +683,183 @@ mod tests {
         // The same names as plain columns or tables are fine.
         assert!(classify_read_only("duckdb", "select glob from files").is_ok());
         assert!(classify_read_only("mysql", "select * from load_file_log").is_ok());
+    }
+    #[test]
+    fn session_setup_allows_reads_and_listed_settings() {
+        for (engine, sql) in [
+            ("postgres", "SET search_path TO app, public"),
+            ("postgres", "set search_path = \"App\", public"),
+            ("postgres", "SET SESSION search_path TO app"),
+            ("postgres", "SET LOCAL search_path TO app"),
+            ("postgres", "SET TIME ZONE 'UTC'"),
+            ("postgres", "SET timezone = 'Europe/Madrid'"),
+            ("postgres", "SET DateStyle = ISO"),
+            ("postgres", "SET statement_timeout = '5s'"),
+            ("postgres", "SET lock_timeout = 5000"),
+            ("postgres", "SET extra_float_digits = -1"),
+            ("postgres", "SET ROLE reporting"),
+            (
+                "postgres",
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+            ),
+            (
+                "postgres",
+                "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+            ),
+            ("postgres", "select current_schema()"),
+            ("postgres", "show search_path"),
+            ("mysql", "USE shop"),
+            ("mysql", "SET time_zone = '+00:00'"),
+            ("mysql", "SET SESSION time_zone = '+00:00'"),
+            ("mysql", "SET @@session.time_zone = '+00:00'"),
+            ("mysql", "SET @@time_zone = '+00:00'"),
+            ("mysql", "SET time_zone = '+00:00', lc_time_names = 'es_ES'"),
+            (
+                "mysql",
+                "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            ),
+            ("mysql", "SET ROLE reporting"),
+            ("mysql", "select 1"),
+            ("sqlserver", "SET DATEFORMAT dmy"),
+            ("sqlserver", "SET LANGUAGE us_english"),
+            ("sqlserver", "SET LOCK_TIMEOUT 5000"),
+            ("sqlserver", "SET NOCOUNT ON"),
+            ("sqlserver", "USE shop"),
+            ("sqlserver", "SET TRANSACTION ISOLATION LEVEL SNAPSHOT"),
+            ("duckdb", "SET schema = 'app'"),
+            ("duckdb", "SET search_path = 'app,main'"),
+            ("duckdb", "SET TimeZone = 'UTC'"),
+            ("duckdb", "USE memory"),
+            ("sqlite", "select 1"),
+        ] {
+            assert_eq!(
+                classify_session_setup(engine, sql),
+                Ok(()),
+                "{engine}: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_setup_refuses_writes_and_what_loosens_read_only() {
+        for (engine, sql) in [
+            // Writes, whatever their shape.
+            ("postgres", "insert into audit values (1)"),
+            ("postgres", "update t set a = 1"),
+            ("postgres", "delete from t"),
+            ("postgres", "create temp table t (a int)"),
+            ("postgres", "create table t (a int)"),
+            ("postgres", "drop table t"),
+            ("postgres", "truncate t"),
+            (
+                "postgres",
+                "with x as (delete from t returning *) select * from x",
+            ),
+            ("postgres", "select * into t2 from t"),
+            ("postgres", "select * from t for update"),
+            ("postgres", "copy t to '/tmp/x'"),
+            ("postgres", "do $$ begin delete from t; end $$"),
+            ("postgres", "call purge()"),
+            ("postgres", "grant all on t to public"),
+            ("postgres", "begin"),
+            ("postgres", "commit"),
+            ("postgres", "explain analyze delete from t"),
+            // Several statements in one, so a write cannot ride along.
+            ("postgres", "set search_path to app; drop table t"),
+            // Settings that loosen read-only mode.
+            ("postgres", "SET default_transaction_read_only = off"),
+            ("postgres", "set transaction_read_only = off"),
+            (
+                "postgres",
+                "SET SESSION default_transaction_read_only TO false",
+            ),
+            (
+                "postgres",
+                "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE",
+            ),
+            ("postgres", "SET TRANSACTION READ WRITE"),
+            (
+                "postgres",
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ WRITE",
+            ),
+            ("postgres", "SET TRANSACTION SNAPSHOT '00000003-0000001B-1'"),
+            ("postgres", "set session_replication_role = replica"),
+            ("postgres", "RESET ALL"),
+            ("postgres", "reset default_transaction_read_only"),
+            ("postgres", "SET SESSION AUTHORIZATION admin"),
+            (
+                "postgres",
+                "select set_config('default_transaction_read_only', 'off', false)",
+            ),
+            ("postgres", "select pg_advisory_lock(1)"),
+            // Values that run something.
+            ("postgres", "SET search_path TO (select 'app')"),
+            ("postgres", "SET timezone = current_setting('x')"),
+            ("postgres", "SET TIME ZONE (select 'UTC')"),
+            // Settings that are not on the list, and unknown ones.
+            ("postgres", "SET work_mem_x = 1"),
+            ("postgres", "SET my.custom = 'x'"),
+            ("postgres", "SET hivevar:x = 1"),
+            ("postgres", "USE shop"),
+            // MySQL: global scope, user variables, parsing settings, executable comments.
+            ("mysql", "SET GLOBAL time_zone = '+00:00'"),
+            ("mysql", "SET @@global.time_zone = '+00:00'"),
+            ("mysql", "SET @x = (SELECT 1)"),
+            ("mysql", "SET @x = 1"),
+            ("mysql", "SET sql_mode = ''"),
+            ("mysql", "SET time_zone = '+00:00', sql_mode = ''"),
+            ("mysql", "SET time_zone = '+00:00', GLOBAL wait_timeout = 1"),
+            ("mysql", "SET NAMES utf8mb4"),
+            ("mysql", "SET SESSION TRANSACTION READ WRITE"),
+            ("mysql", "SET transaction_read_only = 0"),
+            ("mysql", "SET @@session.transaction_read_only = 0"),
+            ("mysql", "SET autocommit = 0"),
+            ("mysql", "/*!50000 DELETE FROM t */"),
+            ("mysql", "SET time_zone = '+00:00' /*!, sql_mode = '' */"),
+            ("mysql", "insert into t values (1)"),
+            ("mysql", "select get_lock('x', 1)"),
+            // SQL Server: options that write or change parsing.
+            ("sqlserver", "SET IDENTITY_INSERT dbo.t ON"),
+            ("sqlserver", "SET QUOTED_IDENTIFIER OFF"),
+            ("sqlserver", "SET IMPLICIT_TRANSACTIONS ON"),
+            ("sqlserver", "SET ROLE x"),
+            ("sqlserver", "EXECUTE AS USER = 'dbo'"),
+            ("sqlserver", "exec sp_configure 'x', 1"),
+            ("sqlserver", "delete from t"),
+            // T-SQL needs no `;` between statements: a write cannot hide after a setting.
+            ("sqlserver", "SET NOCOUNT ON DELETE FROM t"),
+            ("sqlserver", "SET LANGUAGE us_english\nDROP TABLE t"),
+            ("postgres", "SET search_path TO app DELETE FROM t"),
+            // DuckDB: external access and engine-wide settings.
+            ("duckdb", "SET enable_external_access = true"),
+            ("duckdb", "SET GLOBAL schema = 'x'"),
+            ("duckdb", "SET memory_limit = '1GB'"),
+            ("duckdb", "attach 'x.db' as x"),
+            ("duckdb", "install httpfs"),
+            ("duckdb", "create table t (a int)"),
+            // SQLite: pragmas, attachments.
+            ("sqlite", "pragma query_only = 0"),
+            ("sqlite", "attach 'x.db' as x"),
+            ("sqlite", "USE main"),
+            ("sqlite", "insert into t values (1)"),
+            // Nothing, or something that does not parse.
+            ("postgres", ""),
+            ("postgres", "SET SCHEMA 'app'"),
+            ("postgres", "this is not sql"),
+        ] {
+            assert!(
+                classify_session_setup(engine, sql).is_err(),
+                "{engine}: {sql} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn session_setup_refusals_say_why() {
+        let err = classify_session_setup("postgres", "delete from t").unwrap_err();
+        assert!(err.contains("only reads and session settings"), "{err}");
+        let err = classify_session_setup("postgres", "SET default_transaction_read_only = off")
+            .unwrap_err();
+        assert!(err.contains("allow list"), "{err}");
     }
 }

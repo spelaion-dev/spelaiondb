@@ -44,7 +44,7 @@ pub use dbeaver::{
     import_plan, read_dbeaver,
 };
 pub use draft::{
-    CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, add_connection,
+    CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, SessionDraft, add_connection,
     connection_revision, connections_dir, delete_connection, normalize_tags, slug,
     update_connection, update_connection_at_revision,
 };
@@ -61,9 +61,9 @@ pub use load::{
 };
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{
-    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, HopConfig, KubernetesConfig,
-    McpConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec, SshAuth, TlsConfig,
-    TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile, WritePolicy,
+    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, HopConfig, IsolationLevel,
+    KubernetesConfig, McpConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec, SessionConfig,
+    SshAuth, TlsConfig, TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile, WritePolicy,
 };
 pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
@@ -72,7 +72,7 @@ pub use name_pattern::{
 pub use relocate::{Moved, move_connection};
 pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
-    ResolvedTunnel, Resolver, TunnelSettings,
+    ResolvedSession, ResolvedTunnel, Resolver, TunnelSettings,
 };
 pub use secrets::{
     KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef, SystemBackend,

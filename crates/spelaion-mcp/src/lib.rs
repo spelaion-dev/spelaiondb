@@ -327,6 +327,8 @@ impl SpelaionMcp {
             known_hosts: KnownHosts::for_user(&self.state.options.user_dir),
             interaction: Arc::new(NonInteractive),
             password: None,
+            // Agents' reads set up their sessions through the read-only barrier (ADR-037).
+            read_only_session: purpose == Use::Read,
         };
         let open = open_connection(resolved, &self.state.engines, options, Arc::new(ResultStore::new()))
             .await

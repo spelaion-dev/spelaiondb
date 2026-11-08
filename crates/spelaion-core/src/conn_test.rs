@@ -814,6 +814,8 @@ fn open_failure(error: &OpenError) -> Failure {
         OpenError::Kube(e) => (classify_kube(e), error.to_string()),
         OpenError::PasswordRequired { .. } => (FailureKind::PasswordRequired, error.to_string()),
         OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
+        // The test logs in without the session setup; only an opened session runs it.
+        OpenError::Setup(_) => (FailureKind::Other, error.to_string()),
     }
 }
 

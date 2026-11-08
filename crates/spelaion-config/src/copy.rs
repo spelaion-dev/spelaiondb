@@ -219,6 +219,12 @@ fn sanitize(mut file: ConnectionFile) -> (ConnectionFile, Vec<String>) {
     if file.sqlite3.take().is_some() {
         left_out.push("sqlite3".to_string());
     }
+    // Setup statements run on the database every time a session opens (ADR-037): pasted text
+    // must not bring SQL along. The default schema and isolation level only choose settings.
+    if file.session.setup.take().is_some() {
+        left_out.push("session.setup".to_string());
+        file.session.ignore_setup_errors = false;
+    }
     if file.mcp != McpConfig::default() {
         left_out.push("mcp".to_string());
         file.mcp = McpConfig::default();
@@ -354,6 +360,7 @@ fn variables(value: &toml::Value, out: &mut Vec<String>) {
 ///   keychain, the environment, 1Password or a command;
 /// - nothing runs a program: `cmd:` passwords and cloud tokens, `kubernetes.kubectl`,
 ///   `kubernetes.kubeconfig` (which can run its own) and `sqlite3` are left out;
+/// - no SQL comes along: the session setup statements are left out (ADR-037);
 /// - `${env:…}` is refused: resolving it would send an environment variable to the server
 ///   (or to DNS through the host name);
 /// - agents cannot use it (`[mcp]` is left out), and a tunnel is kept only if one of that

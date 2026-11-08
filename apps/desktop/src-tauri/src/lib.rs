@@ -1582,6 +1582,7 @@ async fn connect(
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password: password.clone(),
+        read_only_session: false,
     };
     let open = match open_connection(resolved, &state.engines, options, state.results.clone()).await
     {
@@ -1684,6 +1685,7 @@ async fn connect_from_session(
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password: password.clone(),
+        read_only_session: false,
     };
     let open = open_connection(
         source_open.resolved.clone(),
@@ -2460,6 +2462,8 @@ async fn open_export_session(
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password,
+        // Only a single read is ever run again there (ADR-034).
+        read_only_session: true,
     };
     match open_connection(
         source_open.resolved.clone(),

@@ -81,6 +81,7 @@ async fn connections_reach_a_database_inside_the_cluster() {
                 },
                 interaction: Arc::new(NonInteractive),
                 password: Some(Secret::new("spelaion")),
+                read_only_session: false,
             },
             Arc::new(ResultStore::new()),
         )

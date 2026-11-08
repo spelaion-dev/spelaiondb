@@ -2298,6 +2298,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             statement_timeout: item.statement_timeout,
             mcp_exposed: item.mcp_exposed,
             mcp_writes: item.mcp_writes,
+            session: Default::default(),
         })
     }
 }

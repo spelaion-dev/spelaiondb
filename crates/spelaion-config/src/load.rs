@@ -8,8 +8,8 @@ use serde::de::DeserializeOwned;
 
 use crate::error::ConfigError;
 use crate::model::{
-    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, SCHEMA_VERSION, TunnelFile,
-    UserFile,
+    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, SCHEMA_VERSION,
+    SessionConfig, TunnelFile, UserFile,
 };
 
 /// Configuration directory inside a repository.
@@ -580,6 +580,7 @@ pub(crate) fn validate_connection(
         check_description(description).map_err(|m| ConfigError::new(path, m))?;
     }
     check_tags(&file.tags).map_err(|m| ConfigError::new(path, m))?;
+    check_session(file.engine, &file.session).map_err(|m| ConfigError::new(path, m))?;
     if let Some(kubernetes) = &file.kubernetes {
         if file.tunnel.is_some() {
             return Err(ConfigError::new(
@@ -685,6 +686,80 @@ fn check_description(description: &str) -> Result<(), String> {
         return Err("description can only hold text, line breaks and tabs".into());
     }
     Ok(())
+}
+
+/// The `[session]` table (ADR-037): bounded text without hidden characters, and only what the
+/// engine can do. Whether a setup statement may run is decided by the core when the session
+/// opens (it depends on the session and the connection's type).
+pub(crate) fn check_session(engine: Engine, session: &SessionConfig) -> Result<(), String> {
+    if let Some(setup) = &session.setup {
+        if setup.trim().is_empty() {
+            return Err("session.setup is empty: leave it out for none".into());
+        }
+        if setup.chars().count() > SessionConfig::MAX_SETUP {
+            return Err(format!(
+                "session.setup is at most {} characters",
+                SessionConfig::MAX_SETUP
+            ));
+        }
+        if setup
+            .chars()
+            .any(|c| is_hidden_char(c) && !matches!(c, '\n' | '\r' | '\t'))
+        {
+            return Err("session.setup can only hold text, line breaks and tabs".into());
+        }
+    }
+    if session.ignore_setup_errors && session.setup.is_none() {
+        return Err("session.ignore_setup_errors needs a session.setup".into());
+    }
+    if let Some(schema) = &session.schema {
+        if !engine.has_session_schema() {
+            return Err(format!(
+                "{} has no schema per session: leave session.schema out and qualify names instead",
+                engine_label(engine)
+            ));
+        }
+        if schema.trim().is_empty() || schema.trim() != schema {
+            return Err("session.schema cannot be empty or start or end with spaces".into());
+        }
+        if schema.chars().count() > SessionConfig::MAX_SCHEMA {
+            return Err(format!(
+                "session.schema is at most {} characters",
+                SessionConfig::MAX_SCHEMA
+            ));
+        }
+        if schema.chars().any(is_hidden_char) {
+            return Err("session.schema cannot hold hidden characters".into());
+        }
+    }
+    if let Some(level) = session.isolation
+        && !level.available_on(engine)
+    {
+        return Err(if engine.is_file() {
+            format!(
+                "{} has a single isolation level: leave session.isolation out",
+                engine_label(engine)
+            )
+        } else {
+            format!(
+                "{} has no {} isolation level",
+                engine_label(engine),
+                level.as_str()
+            )
+        });
+    }
+    Ok(())
+}
+
+fn engine_label(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Postgres => "PostgreSQL",
+        Engine::Mysql => "MySQL",
+        Engine::Mariadb => "MariaDB",
+        Engine::Sqlserver => "SQL Server",
+        Engine::Sqlite => "SQLite",
+        Engine::Duckdb => "DuckDB",
+    }
 }
 
 /// One tag: what the form would have saved (trimmed, single spaces), short, without commas
