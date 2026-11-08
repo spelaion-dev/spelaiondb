@@ -13,7 +13,7 @@
 // (`PaletteObjectAction` in `commands.ts`).
 
 /** Where else a command appears, besides the palette. */
-export type CommandMenu = "tab" | "file" | "activity" | "welcome";
+export type CommandMenu = "tab" | "file" | "activity" | "welcome" | "editor";
 
 /**
  * Who handles the shortcut: `global` ones `App.tsx`'s handler (they do nothing while a modal is
@@ -62,6 +62,21 @@ export const COMMANDS = [
   { id: "editor.runScript", category: "editor", label: "editor:runScript", shortcut: "Ctrl+Shift+Enter", scope: "editor" },
   { id: "editor.cancel", category: "editor", label: "app:commands.cancelQuery" },
   { id: "editor.format", category: "editor", label: "editor:format", shortcut: "Shift+Alt+F", scope: "editor" },
+  { id: "editor.lineComment", category: "editor", label: "editor:actions.lineComment", shortcut: "Ctrl+/", scope: "editor", menus: ["editor"] },
+  { id: "editor.blockComment", category: "editor", label: "editor:actions.blockComment", shortcut: "Shift+Alt+A", scope: "editor", menus: ["editor"] },
+  { id: "editor.wordWrap", category: "editor", label: "editor:actions.wordWrap", shortcut: "Alt+Z", scope: "editor", menus: ["editor"] },
+  { id: "editor.fold", category: "editor", label: "editor:actions.fold", shortcut: "Ctrl+Shift+[", scope: "editor", menus: ["editor"] },
+  { id: "editor.unfold", category: "editor", label: "editor:actions.unfold", shortcut: "Ctrl+Shift+]", scope: "editor", menus: ["editor"] },
+  { id: "editor.matchingBracket", category: "editor", label: "editor:actions.matchingBracket", shortcut: "Ctrl+Shift+\\", scope: "editor", menus: ["editor"] },
+  { id: "editor.upperCase", category: "editor", label: "editor:actions.upperCase", shortcut: "Ctrl+Shift+Alt+U", scope: "editor", menus: ["editor"] },
+  { id: "editor.lowerCase", category: "editor", label: "editor:actions.lowerCase", shortcut: "Ctrl+Shift+Alt+L", scope: "editor", menus: ["editor"] },
+  { id: "editor.quotedList", category: "editor", label: "editor:actions.quotedList", shortcut: "Ctrl+Alt+Q", scope: "editor", menus: ["editor"] },
+  { id: "editor.selectStatement", category: "editor", label: "editor:actions.selectStatement", shortcut: "Ctrl+Alt+S", scope: "editor", menus: ["editor"] },
+  { id: "editor.copyStatement", category: "editor", label: "editor:actions.copyStatement", shortcut: "Ctrl+Alt+C", scope: "editor", menus: ["editor"] },
+  { id: "editor.selectOccurrences", category: "editor", label: "editor:actions.selectOccurrences", shortcut: "Ctrl+Shift+L", scope: "editor", menus: ["editor"] },
+  { id: "editor.insertSelect", category: "editor", label: "editor:actions.insertSelect", shortcut: "Ctrl+Alt+1", scope: "editor", menus: ["editor"] },
+  { id: "editor.insertInsert", category: "editor", label: "editor:actions.insertInsert", shortcut: "Ctrl+Alt+2", scope: "editor", menus: ["editor"] },
+  { id: "editor.insertUpdate", category: "editor", label: "editor:actions.insertUpdate", shortcut: "Ctrl+Alt+3", scope: "editor", menus: ["editor"] },
   { id: "view.explorer", category: "view", label: "shell:connections", menus: ["activity"] },
   { id: "view.explorerFilter", category: "view", label: "app:commands.explorerFilter", shortcut: "Ctrl+Shift+F", scope: "global" },
   { id: "view.processes", category: "view", label: "shell:processMonitor.title", menus: ["activity"] },

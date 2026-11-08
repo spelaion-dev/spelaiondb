@@ -151,3 +151,16 @@ test("global shortcuts find their command; AltGr characters and editor keys do n
   // Ctrl+Tab is the tab bar's switcher.
   assert.equal(globalCommandFor(press("Tab", { ctrlKey: true })), null);
 });
+
+test("the editor menu and keymap derive actions from the central palette registry", () => {
+  const editor = menuCommands("editor");
+  assert.equal(editor.length, 15);
+  for (const command of editor) {
+    assert.equal(command.scope, "editor");
+    assert.ok(paletteCommands().includes(command));
+  }
+  const menu = functionSource("components/EditorMenu.tsx", "EditorMenu");
+  assert.match(menu, /menuCommands\("editor"\)/);
+  assert.match(menu, /runCommand\(/);
+  assert.match(read("editorActions.ts"), /menuCommands\("editor"\)/);
+});

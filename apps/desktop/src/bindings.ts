@@ -40,6 +40,8 @@ export const commands = {
 	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
 	getExplorerPreferences: () => typedError<ExplorerPreferencesItem, string>(__TAURI_INVOKE("get_explorer_preferences")),
 	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
+	getEditorPreferences: () => typedError<EditorPreferencesItem, string>(__TAURI_INVOKE("get_editor_preferences")),
+	setEditorPreferences: (preferences: EditorPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_editor_preferences", { preferences })),
 	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
 	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
 	/**
@@ -1086,6 +1088,19 @@ item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string 
 export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string };
+
+/**  Personal editor preferences; all fields checked by the core store. */
+export type EditorPreferencesItem = {
+	font: string,
+	fontSize: number,
+	lineHeight: number,
+	tabSize: number,
+	lineNumbers: boolean,
+	wordWrap: boolean,
+	keywordCase: string,
+	indent: number,
+	commaPosition: string,
+};
 
 /**
  *  What changing a connection's engine does to its settings (ADR-030), by the file's field

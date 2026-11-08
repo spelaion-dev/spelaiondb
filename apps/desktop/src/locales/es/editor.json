@@ -515,5 +515,24 @@
     "fileUnreadable": "No se pudo leer el archivo ({{message}}): este es el texto que tenía la pestaña, sin guardar.",
     "fileChangedOnDisk": "El archivo cambió en el disco mientras la app estaba cerrada: estos son tus cambios sin guardar, y guardar pregunta antes de sobrescribirlo.",
     "dismiss": "Descartar"
+  },
+  "actions": {
+    "menu": "Acciones del editor",
+    "lineComment": "Alternar comentario de línea",
+    "blockComment": "Alternar comentario de bloque",
+    "wordWrap": "Alternar ajuste de línea",
+    "fold": "Plegar selección",
+    "unfold": "Desplegar selección",
+    "matchingBracket": "Ir al paréntesis correspondiente",
+    "upperCase": "Convertir a mayúsculas",
+    "lowerCase": "Convertir a minúsculas",
+    "quotedList": "Líneas a lista entre comillas",
+    "selectStatement": "Seleccionar sentencia actual",
+    "copyStatement": "Copiar sentencia actual",
+    "selectOccurrences": "Seleccionar todas las coincidencias",
+    "insertSelect": "Insertar fragmento SELECT",
+    "insertInsert": "Insertar fragmento INSERT",
+    "insertUpdate": "Insertar fragmento UPDATE",
+    "failed": "No se pudo realizar la acción del editor: {{reason}}"
   }
 }

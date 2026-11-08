@@ -614,6 +614,73 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
     }
 }
 
+/// Personal editor preferences; all fields checked by the core store.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorPreferencesItem {
+    pub font: String,
+    pub font_size: u8,
+    pub line_height: u8,
+    pub tab_size: u8,
+    pub line_numbers: bool,
+    pub word_wrap: bool,
+    pub keyword_case: String,
+    pub indent: u8,
+    pub comma_position: String,
+}
+impl From<spelaion_core::EditorPreferences> for EditorPreferencesItem {
+    fn from(p: spelaion_core::EditorPreferences) -> Self {
+        let spelaion_core::EditorPreferences {
+            font,
+            font_size,
+            line_height,
+            tab_size,
+            line_numbers,
+            word_wrap,
+            keyword_case,
+            indent,
+            comma_position,
+        } = p;
+        Self {
+            font,
+            font_size,
+            line_height,
+            tab_size,
+            line_numbers,
+            word_wrap,
+            keyword_case,
+            indent,
+            comma_position,
+        }
+    }
+}
+impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
+    fn from(p: EditorPreferencesItem) -> Self {
+        let EditorPreferencesItem {
+            font,
+            font_size,
+            line_height,
+            tab_size,
+            line_numbers,
+            word_wrap,
+            keyword_case,
+            indent,
+            comma_position,
+        } = p;
+        Self {
+            font,
+            font_size,
+            line_height,
+            tab_size,
+            line_numbers,
+            word_wrap,
+            keyword_case,
+            indent,
+            comma_position,
+        }
+    }
+}
+
 /// How the result grid draws its cells; personal, like the theme.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

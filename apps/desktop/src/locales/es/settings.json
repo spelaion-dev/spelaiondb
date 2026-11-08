@@ -164,6 +164,24 @@
     "title": "Editor",
     "restoreHint": "Las pestañas abiertas vuelven tras reiniciar con su texto y su conexión, desconectadas: consolas y archivos, incluidos los cambios sin guardar. Sus resultados nunca se guardan.",
     "reconnect": "Volver a conectar las últimas conexiones al arrancar",
-    "reconnectHint": "Solo conecta (puede pedir una contraseña); nada se ejecuta solo."
+    "reconnectHint": "Solo conecta (puede pedir una contraseña); nada se ejecuta solo.",
+    "display": "Visualización",
+    "font": "Fuente",
+    "systemFont": "Monoespaciada del sistema",
+    "fontSize": "Tamaño de fuente (px)",
+    "lineHeight": "Altura de línea (px)",
+    "tabSize": "Tamaño de tabulación",
+    "lineNumbers": "Mostrar números de línea",
+    "wordWrap": "Ajustar líneas largas",
+    "formatter": "Formato SQL",
+    "keywordCase": "Mayúsculas de palabras clave",
+    "indent": "Espacios de sangría",
+    "commaPosition": "Posición de comas",
+    "preserve": "Tal como se escribe",
+    "upper": "Mayúsculas",
+    "lower": "Minúsculas",
+    "trailing": "Final de línea",
+    "leading": "Inicio de línea",
+    "snippets": "Escribe sel, ins o upd y pulsa Tab para expandir un fragmento. Tab avanza al siguiente campo; Mayús+Tab vuelve atrás."
   }
 }

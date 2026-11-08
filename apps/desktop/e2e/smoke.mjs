@@ -67,7 +67,7 @@ let app = startApp();
 /** Runs `spelaiondb mcp` as an AI client would (stdio, JSON-RPC): `list_connections`, then each
  *  call, as the client "smoke-agent". Needs `cargo build --release -p spelaion-cli`. */
 async function agentSession(calls) {
-  const cli = join(root, "target/release/spelaiondb" + (process.platform === "win32" ? ".exe" : ""));
+  const cli = process.env.SPELAION_E2E_CLI ?? join(root, "target/release/spelaiondb" + (process.platform === "win32" ? ".exe" : ""));
   if (!existsSync(cli)) throw new Error(`${cli} is missing: run cargo build --release -p spelaion-cli`);
   const agent = spawn(cli, ["mcp", "--workspace", demo], {
     env: { ...process.env, SPELAION_USER_DIR: userDir },
@@ -1163,7 +1163,7 @@ try {
 
   step("editor toolbar: run the current statement or selection, and run the whole script");
   const actions = panel.getByRole("toolbar", { name: "Query actions" });
-  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Format", "Save", "Save as file"]);
+  assert.deepEqual(await actions.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Run", "Run script", "Run options", "Editor actions", "Format", "Save", "Save as file"]);
   for (const button of await actions.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   await sqlEditor.click();
   await page.keyboard.press("Control+Home");
@@ -1402,6 +1402,136 @@ try {
   await panel.getByRole("button", { name: "Format", exact: true }).click();
   await panel.getByRole("alert").filter({ hasText: "Could not format" }).waitFor();
   assert.equal(await sqlEditor.innerText(), "select 'unterminated");
+
+  step("editor actions: keyboard menu, snippets, comments, transforms and core statement selection");
+  {
+    const menu = page.getByRole("menu", { name: "Editor actions" });
+    const editorText = async (text) => { await page.waitForFunction((expected) => [...document.querySelectorAll('.tab-panel:not([hidden]) .cm-content .cm-line')].map((line) => line.textContent).join("\n") === expected, text); };
+    const menuAction = async (name) => {
+      await panel.getByRole("button", { name: "Editor actions", exact: true }).click();
+      await menu.getByRole("menuitem", { name, exact: true }).click();
+    };
+    await replaceQuery(panel, "select 'before' as value;");
+    await shot("05e-editor-initial-light");
+    await setTheme("dark", "dark");
+    await shot("05e-editor-initial-dark");
+    await setTheme("light", "light");
+    await replaceQuery(panel, "sel");
+    await page.keyboard.press("Tab");
+    await editorText("SELECT columns FROM table;");
+    await page.keyboard.insertText("id");
+    await page.keyboard.press("Tab");
+    await page.keyboard.insertText("orders");
+    await editorText("SELECT id FROM orders;");
+    await page.keyboard.press("Shift+Tab");
+    await page.waitForFunction(() => getSelection().toString() === "id");
+    await replaceQuery(panel, "select 'α;β' as value;\nselect 2;");
+    await page.keyboard.press("Control+Home");
+    await menuAction("Select current statement");
+    await page.waitForFunction(() => getSelection().toString() === "select 'α;β' as value");
+    const before = await page.evaluate(() => window.__copied.length);
+    await menuAction("Copy current statement");
+    assert.equal(await copied(before + 1), "select 'α;β' as value");
+    await page.evaluate(() => { window.__savedClipboardWrite = navigator.clipboard.writeText; navigator.clipboard.writeText = async () => { throw new Error("Clipboard access refused"); }; });
+    await menuAction("Copy current statement");
+    await panel.getByRole("alert").filter({ hasText: "Could not perform editor action: Clipboard access refused" }).waitFor();
+    await page.evaluate(() => { navigator.clipboard.writeText = window.__savedClipboardWrite; });
+    await replaceQuery(panel, "select id from orders");
+    await page.keyboard.press("Control+/");
+    await editorText("-- select id from orders");
+    await menuAction("Toggle line comment");
+    await editorText("select id from orders");
+    await page.keyboard.press("Control+A");
+    await menuAction("Toggle block comment");
+    assert.match(await sqlEditor.innerText(), /^\/\*/);
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+A");
+    await menuAction("Convert to upper case");
+    await editorText("SELECT ID FROM ORDERS");
+    await menuAction("Convert to lower case");
+    await editorText("select id from orders");
+    await replaceQuery(panel, "O'Reilly\n漢字\n");
+    await page.keyboard.press("Control+A");
+    await menuAction("Lines to quoted list");
+    await editorText("'O''Reilly', '漢字', ''");
+    await page.keyboard.press("Control+z");
+    await editorText("O'Reilly\n漢字\n");
+    await replaceQuery(panel, "");
+    await page.keyboard.type("(");
+    await editorText("()");
+    await replaceQuery(panel, "SELECT (\n  SELECT 1\n);");
+    await page.keyboard.press("Control+Home");
+    await menuAction("Fold selection");
+    await panel.locator(".cm-foldPlaceholder").waitFor();
+    await menuAction("Unfold selection");
+    await panel.locator(".cm-foldPlaceholder").waitFor({ state: "detached" });
+    await replaceQuery(panel, "(select 1)");
+    await page.keyboard.press("Control+Home");
+    await menuAction("Go to matching bracket");
+    await page.keyboard.insertText("X");
+    await editorText("(select 1)X");
+    await replaceQuery(panel, "orders orders orders");
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("ArrowRight");
+    await page.waitForFunction(() => document.querySelectorAll('.tab-panel:not([hidden]) .cm-selectionMatch').length === 3);
+    await sqlEditor.focus();
+    await page.keyboard.press("Shift+F10");
+    await menu.waitFor();
+    await page.keyboard.press("End");
+    assert.equal(await page.evaluate(() => document.activeElement.textContent.includes("Insert UPDATE")), true);
+    await page.keyboard.press("Escape");
+    assert.equal(await sqlEditor.evaluate((el) => el === document.activeElement), true);
+    await withSettings("editor", async (settings) => {
+      const choose = async (name, value) => { const input = settings.locator(`[name="${name}"]`); await input.selectOption(value); await page.waitForFunction((name) => !document.querySelector(`[name="${name}"]`).disabled, name); };
+      await choose("editorFont", "Consolas");
+      await choose("editor-fontSize", "16");
+      await choose("editor-lineHeight", "24");
+      await choose("editor-tabSize", "4");
+      await choose("editor-keywordCase", "upper");
+      await choose("editor-indent", "4");
+      await choose("editor-commaPosition", "leading");
+      await shot("05e-editor-settings-light");
+    });
+    await replaceQuery(panel, "select id, total from orders");
+    await page.keyboard.press("Shift+Alt+F");
+    await editorText("SELECT\n    id\n    , total\nFROM\n    orders");
+    assert.equal(await sqlEditor.evaluate((el) => getComputedStyle(el.closest('.cm-editor')).fontSize), "16px");
+    await page.keyboard.press("Alt+z");
+    await page.waitForFunction(() => document.querySelector('.tab-panel:not([hidden]) .cm-lineWrapping') !== null);
+    await panel.getByRole("button", { name: "Editor actions", exact: true }).click();
+    await shot("05e-editor-actions-light");
+    await page.keyboard.press("Escape");
+    await setTheme("dark", "dark");
+    await panel.getByRole("button", { name: "Editor actions", exact: true }).click();
+    await shot("05e-editor-actions-dark");
+    await page.keyboard.press("Escape");
+    await withSettings("editor", async () => { await shot("05e-editor-settings-dark"); });
+    await setTheme("light", "light");
+    await withSettings("editor", async (settings) => {
+      const choose = async (name, value) => { const input = settings.locator(`[name="${name}"]`); await input.selectOption(value); await page.waitForFunction((name) => !document.querySelector(`[name="${name}"]`).disabled, name); };
+      await choose("editorFont", "system"); await choose("editor-fontSize", "13"); await choose("editor-lineHeight", "18");
+      await choose("editor-tabSize", "2"); await choose("editor-keywordCase", "preserve"); await choose("editor-indent", "2"); await choose("editor-commaPosition", "trailing");
+      await settings.locator('[name="editor-wordWrap"]').click();
+      await page.waitForFunction(() => { const input = document.querySelector('[name="editor-wordWrap"]'); return !input.checked && !input.disabled; });
+    });
+    for (const theme of ["light", "dark"]) {
+      await setTheme(theme, theme);
+      await replaceQuery(panel, "select total from orders");
+      await page.keyboard.press("Control+A");
+      await page.keyboard.press("Control+Shift+P");
+      const editorPalette = page.getByRole("dialog", { name: "Command palette" });
+      await editorPalette.getByRole("combobox").fill("convert upper");
+      const action = editorPalette.locator('[data-command="editor.upperCase"]');
+      await action.waitFor();
+      assert.equal(await action.locator(".menu-shortcut").innerText(), "Ctrl+Shift+Alt+U");
+      await shot(`05e-editor-palette-${theme}`);
+      await page.keyboard.press("Enter");
+      await editorPalette.waitFor({ state: "detached" });
+      await editorText("SELECT TOTAL FROM ORDERS");
+    }
+    await setTheme("light", "light");
+    await replaceQuery(panel, "select 'unterminated");
+  }
 
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");
   const queryTabCount = await page.locator(".tabbar .tab").count();

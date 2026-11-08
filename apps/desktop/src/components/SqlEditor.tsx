@@ -2,18 +2,22 @@
 // the statement under the cursor (split by the core) or the selection, Ctrl/Cmd+Shift+Enter
 // to run everything, Shift+Alt+F to format, and underlining of the error at its position.
 
-import { useEffect, useImperativeHandle, useRef } from "react";
+import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Compartment, countColumn, EditorSelection, EditorState, findColumn, Prec, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
 import { MariaSQL, MSSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@codemirror/lang-sql";
-import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, foldCode, unfoldCode, indentUnit } from "@codemirror/language";
+import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess } from "@codemirror/commands";
 import { tags } from "@lezer/highlight";
 import { closeLintPanel, lintKeymap, openLintPanel, setDiagnostics } from "@codemirror/lint";
 import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel, SearchCursor, searchKeymap, searchPanelOpen } from "@codemirror/search";
-import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion } from "@codemirror/autocomplete";
-import type { SqlLanguage } from "sql-formatter";
+import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, nextSnippetField, prevSnippetField, acceptCompletion } from "@codemirror/autocomplete";
+import { EDITOR_ACTIONS, EDITOR_SNIPPETS as snippets, quotedLines, type EditorActionId } from "../editorActions";
+import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
+import { usePreferences } from "../preferences";
+import type { EditorPreferencesItem } from "../bindings";
+import { EditorMenu } from "./EditorMenu";
 import { call, commands } from "../api";
 import { byteToIndex, indexToByte, wordEnd } from "../text";
 
@@ -26,6 +30,7 @@ export interface RunRequest {
 
 /** What the toolbar can ask the editor to do. */
 export interface SqlEditorHandle {
+  action(id: EditorActionId): void;
   format(): void;
   runCurrent(): void;
   runScript(): void;
@@ -35,6 +40,7 @@ interface Props {
   handle?: React.Ref<SqlEditorHandle>;
   /** Formatting failed (the formatter could not read the SQL). */
   onFormatError(message: string): void;
+  onActionError(message: string): void;
   value: string;
   /** Changes when `value` was replaced from outside the editor, which then shows it. */
   revision?: number;
@@ -48,9 +54,11 @@ interface Props {
 }
 
 const theme = EditorView.theme({
-  "&": { height: "100%", fontSize: "13.5px", backgroundColor: "var(--editor-bg)", color: "var(--fg)" },
-  ".cm-scroller": { fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace', lineHeight: "1.55" },
+  "&": { height: "100%", fontSize: "var(--sql-font-size, var(--text-md))", backgroundColor: "var(--editor-bg)", color: "var(--fg)" },
+  ".cm-scroller": { fontFamily: "var(--sql-font, var(--font-code))", lineHeight: "var(--sql-line-height, var(--leading-md))" },
   ".cm-gutters": { backgroundColor: "var(--editor-bg)", color: "var(--muted)", border: "none" },
+  ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
+  ".cm-selectionMatch-main": { outline: "1px solid var(--accent)" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--editor-active)" },
   "&.cm-focused .cm-cursor": { borderLeftColor: "var(--accent)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
@@ -116,13 +124,13 @@ const rectangleGesture = [
 
 // The same extensions as CodeMirror's basic setup, with VS Code's mouse gestures.
 const editorSetup = [
-  lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(), foldGutter(),
+  highlightActiveLineGutter(), highlightSpecialChars(), history(), foldGutter(),
   drawSelection(), dropCursor(), EditorState.allowMultipleSelections.of(true), indentOnInput(),
   syntaxHighlighting(defaultHighlightStyle, { fallback: true }), bracketMatching(), closeBrackets(),
   autocompletion(),
   rectangleGesture,
   EditorView.clickAddsSelectionRange.of((event) => (event.altKey && !event.shiftKey) || event.ctrlKey || event.metaKey),
-  highlightActiveLine(), highlightSelectionMatches(),
+  highlightActiveLine(), highlightSelectionMatches({ highlightWordAroundCursor: true }),
   keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, ...lintKeymap]),
 ];
 
@@ -176,18 +184,9 @@ function flash(view: EditorView, from: number, to: number) {
   }, 1000);
 }
 
-const FORMAT_LANGUAGES: Record<string, SqlLanguage> = {
-  postgres: "postgresql",
-  sqlite: "sqlite",
-  mysql: "mysql",
-  mariadb: "mariadb",
-  duckdb: "duckdb",
-  sqlserver: "transactsql",
-};
-
 /** Formats the selection, or everything, with the engine's dialect, in one undo step. The
  *  formatter is loaded on first use (it is large); `null` when it worked. */
-async function formatIn(view: EditorView, engine: string | null): Promise<string | null> {
+async function formatIn(view: EditorView, engine: string | null, preferences: EditorPreferencesItem): Promise<string | null> {
   const sel = view.state.selection.main;
   const from = sel.empty ? 0 : sel.from;
   const to = sel.empty ? view.state.doc.length : sel.to;
@@ -199,10 +198,11 @@ async function formatIn(view: EditorView, engine: string | null): Promise<string
     const { format: formatSql } = await import("sql-formatter");
     formatted = formatSql(text, {
       language: (engine && FORMAT_LANGUAGES[engine]) || "sql",
-      keywordCase: "preserve",
-      tabWidth: 2,
+      keywordCase: preferences.keywordCase as "preserve" | "upper" | "lower",
+      tabWidth: preferences.indent,
       linesBetweenQueries: 1,
     });
+    if (preferences.commaPosition === "leading") formatted = leadingCommas(formatted, engine);
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
   }
@@ -224,16 +224,27 @@ function language(engine: string | null, tables: Record<string, string[]>) {
   return sql({ dialect: (engine && dialects[engine]) || PostgreSQL, schema: tables, upperCaseKeywords: false });
 }
 
-export function SqlEditor({ handle, onFormatError, value, revision, onChange, engine, tables, onRun, error }: Props) {
+function editorPreferences(p: EditorPreferencesItem) {
+  return [
+    EditorState.tabSize.of(p.tabSize), indentUnit.of(" ".repeat(p.tabSize)),
+    p.lineNumbers ? lineNumbers() : [], p.wordWrap ? EditorView.lineWrapping : [],
+    EditorView.theme({ "&": { "--sql-font-size": `${p.fontSize}px`, "--sql-line-height": `${p.lineHeight}px`, "--sql-font": p.font === "system" ? "var(--font-code)" : `"${p.font}", monospace` } }),
+  ];
+}
+
+export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, tables, onRun, error }: Props) {
   const { t } = useTranslation("editor");
+  const preferences = usePreferences((s) => s.editor);
+  const settings = useRef(new Compartment());
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const locale = useRef(new Compartment());
-  const callbacks = useRef({ onChange, onRun, engine, onFormatError });
-  callbacks.current = { onChange, onRun, engine, onFormatError };
+  const callbacks = useRef({ onChange, onRun, engine, onFormatError, onActionError });
+  callbacks.current = { onChange, onRun, engine, onFormatError, onActionError };
   const format = (v: EditorView) => {
-    void formatIn(v, callbacks.current.engine).then((failure) => {
+    void formatIn(v, callbacks.current.engine, usePreferences.getState().editor).then((failure) => {
       if (failure) callbacks.current.onFormatError(failure);
     });
     return true;
@@ -263,7 +274,66 @@ export function SqlEditor({ handle, onFormatError, value, revision, onChange, en
       .catch((e: unknown) => console.error("statement_at", e));
     return true;
   };
+  const insertSnippet = (v: EditorView, id: keyof typeof snippets, from = v.state.selection.main.from) => {
+    const to = v.state.selection.main.to;
+    const content = snippets[id];
+    const lower = usePreferences.getState().editor.keywordCase === "lower";
+    snippet(lower ? content.replace(/SELECT|FROM|INSERT INTO|VALUES|UPDATE|SET|WHERE/g, (word) => word.toLowerCase()) : content)(v, null, from, to);
+    return true;
+  };
+  const currentStatement = (v: EditorView, copy: boolean) => {
+    const doc = v.state.doc.toString();
+    const selection = v.state.selection;
+    void call(commands.statementAt(callbacks.current.engine ?? "postgres", doc, indexToByte(doc, selection.main.head))).then(async (span) => {
+      if (!span || !v.dom.isConnected || v.state.doc.toString() !== doc || !v.state.selection.eq(selection)) return;
+      const from = byteToIndex(doc, span.start), to = byteToIndex(doc, span.end);
+      if (copy) await navigator.clipboard.writeText(doc.slice(from, to));
+      else v.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
+    }).catch((e: unknown) => callbacks.current.onActionError(e instanceof Error ? e.message : String(e)));
+    return true;
+  };
+  const transform = (v: EditorView, change: (text: string) => string, wholeLine = false) => {
+    v.dispatch(v.state.changeByRange((range) => {
+      const target = range.empty ? (wholeLine ? v.state.doc.lineAt(range.head) : v.state.wordAt(range.head)) ?? range : range;
+      const text = change(v.state.sliceDoc(target.from, target.to));
+      return { changes: { from: target.from, to: target.to, insert: text }, range: EditorSelection.range(target.from, target.from + text.length) };
+    }), { userEvent: "input.transform" });
+    return true;
+  };
+  const action = (v: EditorView, id: EditorActionId): boolean => {
+    switch (id) {
+      case "lineComment": return toggleLineComment(v);
+      case "blockComment": return toggleBlockComment(v);
+      case "wordWrap": {
+        const { editor, setEditor } = usePreferences.getState();
+        void setEditor({ ...editor, wordWrap: !editor.wordWrap }).then((saved) => {
+          const error = usePreferences.getState().error;
+          if (!saved && error?.setting === "editor") callbacks.current.onActionError(error.detail);
+        }); return true;
+      }
+      case "fold": return foldCode(v);
+      case "unfold": return unfoldCode(v);
+      case "matchingBracket": return cursorMatchingBracket(v);
+      case "upperCase": return transform(v, (text) => text.toUpperCase());
+      case "lowerCase": return transform(v, (text) => text.toLowerCase());
+      case "quotedList": return transform(v, (text) => quotedLines(text, callbacks.current.engine), true);
+      case "selectStatement": return currentStatement(v, false);
+      case "copyStatement": return currentStatement(v, true);
+      case "selectOccurrences": return selectAllOccurrences(v);
+      case "insertSelect": case "insertInsert": case "insertUpdate": return insertSnippet(v, id);
+    }
+  };
+  const tab = (v: EditorView) => {
+    if (nextSnippetField(v)) return true;
+    const range = v.state.selection.main;
+    if (range.empty) {
+      const prefix = /\b(sel|ins|upd)$/.exec(v.state.doc.lineAt(range.head).text.slice(0, range.head - v.state.doc.lineAt(range.head).from));
+      if (prefix) return insertSnippet(v, prefix[1] === "sel" ? "insertSelect" : prefix[1] === "ins" ? "insertInsert" : "insertUpdate", range.head - prefix[1]!.length);
+    }
+    return acceptCompletion(v) || indentMore(v);
+  };
   useImperativeHandle(handle, () => ({
+    action: (id) => { if (view.current) { action(view.current, id); view.current.focus(); } },
     format: () => {
       if (view.current) {
         format(view.current);
@@ -286,9 +356,12 @@ export function SqlEditor({ handle, onFormatError, value, revision, onChange, en
               { key: "Mod-Shift-Enter", run: runAll },
               { key: "Mod-Enter", run },
               { key: "Shift-Alt-f", run: format },
-              { key: "Mod-Shift-l", run: selectAllOccurrences },
+              ...EDITOR_ACTIONS.map(({ id, key }) => ({ key, run: (v: EditorView) => action(v, id) })),
+              { key: "Tab", run: tab },
+              { key: "Shift-Tab", run: (v) => prevSnippetField(v) || indentLess(v) },
             ]),
           ),
+          settings.current.of(editorPreferences(preferences)),
           ranField,
           editorSetup,
           syntaxHighlighting(defaultHighlightStyle),
@@ -310,6 +383,9 @@ export function SqlEditor({ handle, onFormatError, value, revision, onChange, en
             }
           }),
           EditorView.domEventHandlers({
+            contextmenu: (event) => {
+              event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }); return true;
+            },
             blur: (_event, view) => {
               setTimeout(() => {
                 if (!view.hasFocus) closeCompletion(view);
@@ -329,6 +405,10 @@ export function SqlEditor({ handle, onFormatError, value, revision, onChange, en
   useEffect(() => {
     view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, tables)) });
   }, [engine, tables]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: settings.current.reconfigure(editorPreferences(preferences)) });
+  }, [preferences]);
 
   // Text replaced from outside the editor (a file reloaded from disk, ADR-036): a new
   // `revision` makes the editor show `value`. Only then: a render that arrives late while the
@@ -449,5 +529,13 @@ export function SqlEditor({ handle, onFormatError, value, revision, onChange, en
     // Navigate only when an execution produces a new error or position.
   }, [error?.source, error?.index]);
 
-  return <div ref={host} className="sql-editor" />;
+  return <>
+    <div ref={host} className="sql-editor" onKeyDown={(event) => {
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        event.preventDefault();
+        const rect = host.current!.getBoundingClientRect(); setMenu({ x: rect.left, y: rect.top });
+      }
+    }} />
+    {menu && <EditorMenu {...menu} onClose={() => { setMenu(null); view.current?.focus(); }} />}
+  </>;
 }

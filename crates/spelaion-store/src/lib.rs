@@ -538,6 +538,51 @@ impl Default for ExplorerPreferences {
     }
 }
 
+/// Personal SQL editor and formatter preferences. Values are checked before storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorPreferences {
+    pub font: String,
+    pub font_size: u8,
+    pub line_height: u8,
+    pub tab_size: u8,
+    pub line_numbers: bool,
+    pub word_wrap: bool,
+    pub keyword_case: String,
+    pub indent: u8,
+    pub comma_position: String,
+}
+impl Default for EditorPreferences {
+    fn default() -> Self {
+        Self {
+            font: "system".into(),
+            font_size: 13,
+            line_height: 18,
+            tab_size: 2,
+            line_numbers: true,
+            word_wrap: false,
+            keyword_case: "preserve".into(),
+            indent: 2,
+            comma_position: "trailing".into(),
+        }
+    }
+}
+impl EditorPreferences {
+    fn validate(&self) -> Result<(), StoreError> {
+        if !["system", "Consolas", "Cascadia Code", "Courier New"].contains(&self.font.as_str())
+            || !(10..=32).contains(&self.font_size)
+            || !(14..=48).contains(&self.line_height)
+            || self.line_height < self.font_size
+            || !(1..=8).contains(&self.tab_size)
+            || !(1..=8).contains(&self.indent)
+            || !["preserve", "upper", "lower"].contains(&self.keyword_case.as_str())
+            || !["leading", "trailing"].contains(&self.comma_position.as_str())
+        {
+            return Err(StoreError("invalid editor preferences".into()));
+        }
+        Ok(())
+    }
+}
+
 /// How the result grid draws its cells, shared by every workspace in this user directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridPreferences {
@@ -1132,6 +1177,62 @@ impl Store {
         self.set_flag("explorer.connected_only", connected_only)?;
         self.set_flag("explorer.server_side_filters", server_side_filters)?;
         self.set_flag("explorer.link_with_editor", link_with_editor)
+    }
+
+    pub fn get_editor_preferences(&self) -> Result<EditorPreferences, StoreError> {
+        let defaults = EditorPreferences::default();
+        let preferences = EditorPreferences {
+            font: self
+                .personal_setting("editor.font")?
+                .unwrap_or(defaults.font),
+            font_size: self
+                .personal_setting("editor.font_size")?
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(defaults.font_size),
+            line_height: self
+                .personal_setting("editor.line_height")?
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(defaults.line_height),
+            tab_size: self
+                .personal_setting("editor.tab_size")?
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(defaults.tab_size),
+            line_numbers: self.get_flag("editor.line_numbers", defaults.line_numbers)?,
+            word_wrap: self.get_flag("editor.word_wrap", defaults.word_wrap)?,
+            keyword_case: self
+                .personal_setting("editor.keyword_case")?
+                .unwrap_or(defaults.keyword_case),
+            indent: self
+                .personal_setting("editor.indent")?
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(defaults.indent),
+            comma_position: self
+                .personal_setting("editor.comma_position")?
+                .unwrap_or(defaults.comma_position),
+        };
+        Ok(if preferences.validate().is_ok() {
+            preferences
+        } else {
+            EditorPreferences::default()
+        })
+    }
+    pub fn set_editor_preferences(
+        &self,
+        preferences: &EditorPreferences,
+    ) -> Result<(), StoreError> {
+        preferences.validate()?;
+        let transaction = self.conn.unchecked_transaction()?;
+        self.set_personal_setting("editor.font", &preferences.font)?;
+        self.set_personal_setting("editor.font_size", &preferences.font_size.to_string())?;
+        self.set_personal_setting("editor.line_height", &preferences.line_height.to_string())?;
+        self.set_personal_setting("editor.tab_size", &preferences.tab_size.to_string())?;
+        self.set_flag("editor.line_numbers", preferences.line_numbers)?;
+        self.set_flag("editor.word_wrap", preferences.word_wrap)?;
+        self.set_personal_setting("editor.keyword_case", &preferences.keyword_case)?;
+        self.set_personal_setting("editor.indent", &preferences.indent.to_string())?;
+        self.set_personal_setting("editor.comma_position", &preferences.comma_position)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// The result grid's display preferences, each one at its default until it is changed.
@@ -1909,6 +2010,49 @@ mod tests {
         // Another setting does not touch them.
         reopened.set_theme("light").unwrap();
         assert_eq!(reopened.get_explorer_preferences().unwrap(), changed);
+    }
+
+    #[test]
+    fn editor_preferences_persist_and_reject_invalid_values_without_partial_writes() {
+        let path = std::env::temp_dir().join(format!("spelaion-editor-{}.db", std::process::id()));
+        let store = Store::open(&path).unwrap();
+        let defaults = EditorPreferences::default();
+        assert_eq!(store.get_editor_preferences().unwrap(), defaults);
+        let changed = EditorPreferences {
+            font: "Consolas".into(),
+            font_size: 16,
+            line_height: 24,
+            keyword_case: "upper".into(),
+            word_wrap: true,
+            ..defaults.clone()
+        };
+        store.set_editor_preferences(&changed).unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_editor_preferences().unwrap(), changed);
+        for invalid in [
+            EditorPreferences {
+                tab_size: 0,
+                ..defaults.clone()
+            },
+            EditorPreferences {
+                font: "url(evil)".into(),
+                ..defaults.clone()
+            },
+            EditorPreferences {
+                line_height: 1,
+                ..defaults.clone()
+            },
+            EditorPreferences {
+                comma_position: "unknown".into(),
+                ..defaults
+            },
+        ] {
+            assert!(store.set_editor_preferences(&invalid).is_err());
+            assert_eq!(store.get_editor_preferences().unwrap(), changed);
+        }
+        drop(store);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
