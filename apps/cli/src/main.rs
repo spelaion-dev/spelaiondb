@@ -29,7 +29,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Opens a saved PostgreSQL JSON plan locally, without connecting or executing SQL.
+    /// Opens a saved PostgreSQL, MySQL or MariaDB plan (JSON, or MySQL's EXPLAIN ANALYZE text)
+    /// locally, without connecting or executing SQL.
     Plan {
         path: PathBuf,
         /// Export the complete normalized table as formula-safe CSV instead of JSON.

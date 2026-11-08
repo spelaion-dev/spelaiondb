@@ -798,7 +798,9 @@
     "title": "Execution plan",
     "explain": "Explain query",
     "open": "Open saved plan…",
-    "files": "Execution plan JSON",
+    "files": "Execution plans",
+    "jsonFiles": "Plan JSON",
+    "textFiles": "Plan text",
     "csvFiles": "CSV files",
     "openFailed": "Could not open plan: {{reason}}",
     "opening": "Opening saved plan…",
@@ -859,6 +861,7 @@
     "indexCondition": "Index condition",
     "hashCondition": "Hash condition",
     "sortMethod": "Sort method",
+    "detail": "Engine detail",
     "noStepFindings": "No heuristics triggered for this step.",
     "selectStep": "Select a step to inspect its metrics and findings.",
     "inclusiveHelp": "Cumulative inclusive time: parents and children overlap; parallel workers accumulate work. These are not disjoint wall times.",
@@ -888,8 +891,8 @@
       "selfTime": "Self time (ms)",
       "timePerLoop": "Time / loop (ms)",
       "loops": "Loops",
-      "buffersHit": "Shared + local hits",
-      "buffersRead": "Shared + local reads",
+      "buffersHit": "Buffer hits",
+      "buffersRead": "Buffer reads",
       "rowsRemoved": "Rows filtered / loop",
       "heapFetches": "Heap fetches",
       "workersPlanned": "Workers planned",
@@ -925,7 +928,9 @@
       "neverExecuted": "This step never executed. Inspect the branch, parent limit or join before tuning it."
     },
     "engineNotes": {
-      "postgres": "PostgreSQL JSON supplies estimates; ANALYZE adds execution metrics and BUFFERS adds block counters. Inclusive parents overlap their children. Per-loop rows and time are multiplied by loops; parallel totals represent worker work. Self metrics subtract comparable serial children only, and remain unavailable for parallel, partial or repeated inputs. Shared and local blocks are combined; temporary I/O stays separate. Missing metrics remain unavailable. Findings are heuristics. New requests use VERBOSE for schema identity. Saved non-verbose files may omit schemas, so name counts can combine homonyms."
+      "postgres": "PostgreSQL JSON supplies estimates; ANALYZE adds execution metrics and BUFFERS adds block counters. Inclusive parents overlap their children. Per-loop rows and time are multiplied by loops; parallel totals represent worker work. Self metrics subtract comparable serial children only, and remain unavailable for parallel, partial or repeated inputs. Shared and local blocks are combined; temporary I/O stays separate. Missing metrics remain unavailable. Findings are heuristics. New requests use VERBOSE for schema identity. Saved non-verbose files may omit schemas, so name counts can combine homonyms.",
+      "mysql": "MySQL's EXPLAIN FORMAT=JSON lists tables in join order with estimated rows (rows examined × filtered %) and each table's own cost; nested loops, grouping, ordering, materialization and subqueries are shown as the JSON names them, without timings. ANALYZE (an operator tree) executes the statement and adds actual rows and time per loop, multiplied by loops; inclusive parents overlap their children and self metrics subtract comparable children only. MySQL reports no buffer, worker or sort-memory counters and names tables by their alias. Statements MySQL cannot analyze are reported, not guessed. Missing metrics remain unavailable. Findings are heuristics.",
+      "mariadb": "MariaDB's JSON lists tables in join order with estimated rows (rows × filtered %) and each table's own cost; nested loops, block joins, sorts, temporary tables, materializations and subqueries are shown as the JSON names them. ANALYZE FORMAT=JSON executes the statement and adds loops, rows read per loop (r_filtered keeps some; the rest count as filtered), each table's own time and InnoDB page accesses as buffer hits. Query block times include their children; a sort's or block join's time is its own, and tables have no inclusive time. Tables are named by their alias. Missing metrics remain unavailable. Findings are heuristics."
     }
   }
 }

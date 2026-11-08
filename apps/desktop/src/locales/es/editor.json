@@ -798,7 +798,9 @@
     "title": "Plan de ejecución",
     "explain": "Explicar consulta",
     "open": "Abrir plan guardado…",
-    "files": "Plan de ejecución JSON",
+    "files": "Planes de ejecución",
+    "jsonFiles": "Plan JSON",
+    "textFiles": "Plan en texto",
     "csvFiles": "Archivos CSV",
     "openFailed": "No se pudo abrir el plan: {{reason}}",
     "opening": "Abriendo plan guardado…",
@@ -859,6 +861,7 @@
     "indexCondition": "Condición del índice",
     "hashCondition": "Condición hash",
     "sortMethod": "Método de ordenación",
+    "detail": "Detalle del motor",
     "noStepFindings": "Ninguna heurística se activó en este paso.",
     "selectStep": "Selecciona un paso para inspeccionar sus métricas y hallazgos.",
     "inclusiveHelp": "Tiempo inclusivo acumulado: padres e hijos se solapan; los workers paralelos acumulan trabajo. No son tiempos de pared disjuntos.",
@@ -888,8 +891,8 @@
       "selfTime": "Tiempo propio (ms)",
       "timePerLoop": "Tiempo / ciclo (ms)",
       "loops": "Ciclos",
-      "buffersHit": "Aciertos shared + local",
-      "buffersRead": "Lecturas shared + local",
+      "buffersHit": "Aciertos de búfer",
+      "buffersRead": "Lecturas de búfer",
       "rowsRemoved": "Filas filtradas / ciclo",
       "heapFetches": "Accesos al heap",
       "workersPlanned": "Workers previstos",
@@ -925,7 +928,9 @@
       "neverExecuted": "Este paso no se ejecutó. Inspecciona rama, límite padre o join antes de optimizarlo."
     },
     "engineNotes": {
-      "postgres": "El JSON de PostgreSQL aporta estimaciones; ANALYZE añade métricas de ejecución y BUFFERS contadores de bloques. Los padres inclusivos se solapan con sus hijos. Filas y tiempo por ciclo se multiplican por ciclos; los totales paralelos representan trabajo de workers. Las métricas propias restan solo hijos seriales comparables y no están disponibles con entradas paralelas, parciales o repetidas. Se combinan bloques shared y local; E/S temporal queda separada. Las métricas ausentes no se inventan. Los hallazgos son heurísticas. Las solicitudes nuevas usan VERBOSE para conservar el esquema. Los archivos sin VERBOSE pueden omitirlo y los recuentos de nombres pueden combinar homónimos."
+      "postgres": "El JSON de PostgreSQL aporta estimaciones; ANALYZE añade métricas de ejecución y BUFFERS contadores de bloques. Los padres inclusivos se solapan con sus hijos. Filas y tiempo por ciclo se multiplican por ciclos; los totales paralelos representan trabajo de workers. Las métricas propias restan solo hijos seriales comparables y no están disponibles con entradas paralelas, parciales o repetidas. Se combinan bloques shared y local; E/S temporal queda separada. Las métricas ausentes no se inventan. Los hallazgos son heurísticas. Las solicitudes nuevas usan VERBOSE para conservar el esquema. Los archivos sin VERBOSE pueden omitirlo y los recuentos de nombres pueden combinar homónimos.",
+      "mysql": "El EXPLAIN FORMAT=JSON de MySQL lista las tablas en el orden del join con filas estimadas (filas examinadas × % filtrado) y el coste propio de cada tabla; bucles anidados, agrupación, ordenación, materialización y subconsultas se muestran como los nombra el JSON, sin tiempos. ANALYZE (un árbol de operadores) ejecuta la sentencia y añade filas y tiempo reales por ciclo, multiplicados por ciclos; los padres inclusivos se solapan con sus hijos y las métricas propias restan solo hijos comparables. MySQL no da contadores de búfer, workers ni memoria de ordenación y nombra las tablas por su alias. Las sentencias que MySQL no puede analizar se indican, no se adivinan. Las métricas ausentes no se inventan. Los hallazgos son heurísticas.",
+      "mariadb": "El JSON de MariaDB lista las tablas en el orden del join con filas estimadas (filas × % filtrado) y el coste propio de cada tabla; bucles anidados, joins por bloques, ordenaciones, tablas temporales, materializaciones y subconsultas se muestran como los nombra el JSON. ANALYZE FORMAT=JSON ejecuta la sentencia y añade ciclos, filas leídas por ciclo (r_filtered conserva una parte; el resto cuenta como filtrado), el tiempo propio de cada tabla y los accesos a páginas de InnoDB como aciertos de búfer. Los tiempos de cada bloque de consulta incluyen a sus hijos; el de una ordenación o un join por bloques es propio y las tablas no tienen tiempo inclusivo. Las tablas se nombran por su alias. Las métricas ausentes no se inventan. Los hallazgos son heurísticas."
     }
   }
 }

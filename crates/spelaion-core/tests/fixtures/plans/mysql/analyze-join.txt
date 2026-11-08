@@ -1,0 +1,7 @@
+-> Sort: revenue DESC  (actual time=50.7..50.7 rows=5 loops=1)
+    -> Table scan on <temporary>  (actual time=50.7..50.7 rows=5 loops=1)
+        -> Aggregate using temporary table  (actual time=50.7..50.7 rows=5 loops=1)
+            -> Nested loop inner join  (cost=14952 rows=10845) (actual time=0.269..43.1 rows=30000 loops=1)
+                -> Filter: (o.`status` = 'paid')  (cost=11157 rows=10845) (actual time=0.262..22 rows=30000 loops=1)
+                    -> Table scan on o  (cost=11157 rows=108446) (actual time=0.261..16.1 rows=120000 loops=1)
+                -> Single-row index lookup on c using PRIMARY (id=o.customer_id)  (cost=0.25 rows=1) (actual time=565e-6..587e-6 rows=1 loops=30000)

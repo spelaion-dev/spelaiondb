@@ -1,12 +1,16 @@
 //! Execution plans: bounded source documents and engine-independent analysis.
 //! Raw database rows stay in the core. Adapters receive a summary or a bounded projection.
 
+mod mysql;
+#[cfg(test)]
+mod mysql_tests;
 mod postgres;
 mod run;
 mod store;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use mysql::Flavor;
 pub(crate) use run::PreparedPlan;
 pub use run::{
     ExplainOptions, ExplainPolicy, PlanCapabilities, PlanPreflight, explain, explain_preflight,
@@ -116,6 +120,9 @@ pub struct PlanNode {
     pub index_condition: Option<String>,
     pub hash_condition: Option<String>,
     pub sort_method: Option<String>,
+    /// The engine's own text for this step, when it says more than the node type
+    /// (MySQL's `Index lookup on c using PRIMARY (id=o.customer_id)`).
+    pub detail: Option<String>,
     pub sort_spilled: bool,
     pub sequential_scan: bool,
     pub parallel: bool,
@@ -169,6 +176,16 @@ pub struct PlanStatsPage {
     pub next_offset: Option<u32>,
 }
 
+/// How the engine wrote the original plan, so a saved copy keeps a fitting extension.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum PlanRawFormat {
+    Json,
+    /// MySQL's EXPLAIN ANALYZE tree.
+    Text,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
@@ -176,6 +193,7 @@ pub struct PlanSummary {
     pub id: u32,
     pub engine: String,
     pub name: String,
+    pub raw_format: PlanRawFormat,
     pub analyzed: bool,
     pub buffers: bool,
     pub total_cost: Option<f64>,
@@ -255,11 +273,32 @@ pub struct PlanDocument {
     pub(crate) summary: PlanSummary,
 }
 
+/// Reads a PostgreSQL, MySQL or MariaDB plan, recognized by its shape.
 pub fn parse_plan(raw: &str, name: &str) -> Result<PlanDocument, PlanError> {
+    parse_plan_from(raw, name, None)
+}
+
+/// `hint` names the flavor of the session that produced the plan; the document's own keys
+/// win when they tell MySQL and MariaDB apart.
+pub(crate) fn parse_plan_from(
+    raw: &str,
+    name: &str,
+    hint: Option<Flavor>,
+) -> Result<PlanDocument, PlanError> {
     if raw.len() > MAX_PLAN_BYTES {
         return Err(PlanError::Limit("raw output is larger than 8 MiB".into()));
     }
-    postgres::parse(raw, name)
+    let text = raw.trim_start_matches('\u{feff}');
+    if mysql::is_tree(text) {
+        return mysql::parse_tree(raw, name);
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| PlanError::Invalid(e.to_string()))?;
+    if mysql::is_json(&json) {
+        mysql::parse_json(raw, &json, name, hint)
+    } else {
+        postgres::parse(raw, &json, name)
+    }
 }
 
 pub fn read_plan(path: &std::path::Path) -> Result<PlanDocument, PlanError> {
@@ -272,7 +311,7 @@ pub fn read_plan(path: &std::path::Path) -> Result<PlanDocument, PlanError> {
         return Err(PlanError::Limit("file is larger than 8 MiB".into()));
     }
     let raw = std::str::from_utf8(&bytes)
-        .map_err(|_| PlanError::Invalid("plan files must be UTF-8 JSON".into()))?;
+        .map_err(|_| PlanError::Invalid("plan files must be UTF-8 text".into()))?;
     parse_plan(raw, &path.file_name().unwrap_or_default().to_string_lossy())
 }
 

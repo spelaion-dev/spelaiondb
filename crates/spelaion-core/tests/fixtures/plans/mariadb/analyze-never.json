@@ -1,0 +1,56 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.067226644
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 119.2113156,
+    "r_loops": 1,
+    "r_total_time_ms": 73.2538648,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "ALL",
+          "possible_keys": ["PRIMARY"],
+          "loops": 1,
+          "r_loops": 1,
+          "rows": 1000,
+          "r_rows": 1000,
+          "cost": 0.177274,
+          "r_table_time_ms": 0.166615603,
+          "r_other_time_ms": 0.105633291,
+          "r_engine_stats": {
+            "pages_accessed": 5
+          },
+          "filtered": 100,
+          "r_filtered": 100
+        }
+      },
+      {
+        "table": {
+          "table_name": "o",
+          "access_type": "ref",
+          "possible_keys": ["orders_customer"],
+          "key": "orders_customer",
+          "key_length": "4",
+          "used_key_parts": ["customer_id"],
+          "ref": ["spelaion_plan47_e1c6ac1e501bbc23.c.id"],
+          "loops": 1000,
+          "r_loops": 1000,
+          "rows": 118,
+          "r_rows": 120,
+          "cost": 119.0340416,
+          "r_table_time_ms": 68.24030679,
+          "r_other_time_ms": 4.736265615,
+          "r_engine_stats": {
+            "pages_accessed": 242184
+          },
+          "filtered": 100,
+          "r_filtered": 0,
+          "attached_condition": "o.total < 0"
+        }
+      }
+    ]
+  }
+}
