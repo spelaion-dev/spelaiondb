@@ -13,6 +13,7 @@ use spelaion_driver_api::{ResultSchema, Value};
 
 use crate::filter::{ColumnFilter, matches, validate};
 use crate::find::{FindMatches, FindQuery, FindTicket, search};
+use crate::selection_stats::{self, CellBlock, SelectionStats, StatsTicket};
 use crate::sort::{SortKey, ViewError, sorted_rows};
 
 /// Identifier of a result within a [`ResultStore`].
@@ -42,6 +43,8 @@ pub struct StoredResult {
     find: Option<FindMatches>,
     /// The number of the latest search started, so a newer one stops an older one.
     find_latest: Arc<AtomicU64>,
+    /// The number of the latest selection calculation started (or cancelled).
+    stats_latest: Arc<AtomicU64>,
 }
 
 impl StoredResult {
@@ -59,6 +62,7 @@ impl StoredResult {
             generation: 0,
             find: None,
             find_latest: Arc::new(AtomicU64::new(0)),
+            stats_latest: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -271,6 +275,28 @@ impl StoredResult {
     /// Forgets the search (the find bar was closed or emptied).
     pub fn clear_find(&mut self) {
         self.find = None;
+    }
+
+    /// Starts a selection calculation: one still running on this result stops (its
+    /// [`Self::selection_stats`] returns `None`).
+    pub fn stats_ticket(&self) -> StatsTicket {
+        StatsTicket::new(&self.stats_latest)
+    }
+
+    /// Stops the selection calculation running on this result, if any.
+    pub fn cancel_stats(&self) {
+        selection_stats::cancel(&self.stats_latest);
+    }
+
+    /// The numbers about a block of cells of the current view (the calc panel), with a read
+    /// lock only. `None`: a newer calculation, or a cancel, stopped this one.
+    pub fn selection_stats(
+        &self,
+        block: &CellBlock,
+        ticket: &StatsTicket,
+    ) -> Result<Option<SelectionStats>, ViewError> {
+        self.check_viewable()?;
+        selection_stats::compute(self, block, ticket)
     }
 
     /// The order of the sort (or the server's) keeping only the rows both filters let

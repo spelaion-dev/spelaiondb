@@ -357,7 +357,7 @@ fn is_or(expr: &Expr) -> bool {
 
 /// Each clause on its own lines, the filter in parentheses: a `--` comment typed in it ends
 /// at its line and `a OR b` keeps its meaning.
-fn push_clauses(sql: &mut String, filter: &str, order_by: &str) {
+pub(crate) fn push_clauses(sql: &mut String, filter: &str, order_by: &str) {
     let filter = filter.trim();
     if !filter.is_empty() {
         sql.push_str(&format!("\nWHERE (\n{filter}\n)"));
@@ -368,7 +368,7 @@ fn push_clauses(sql: &mut String, filter: &str, order_by: &str) {
     }
 }
 
-fn check(
+pub(crate) fn check(
     dialect: &dyn Dialect,
     sql: &str,
     page: Option<(u64, u64)>,

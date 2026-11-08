@@ -390,7 +390,7 @@ fn checked_read(dialect: &dyn Dialect, sql: &str) -> Result<String, ExportError>
 }
 
 /// The statements around the read: the engine's read-only transaction, always rolled back.
-fn barrier(engine: &str) -> Result<(&'static str, Option<&'static str>), ExportError> {
+pub(crate) fn barrier(engine: &str) -> Result<(&'static str, Option<&'static str>), ExportError> {
     Ok(match engine {
         "postgres" => ("begin read only", Some("rollback")),
         "mysql" => ("start transaction read only", Some("rollback")),
@@ -648,7 +648,7 @@ async fn write_stream(
 }
 
 /// Runs a control statement and discards what it returns.
-async fn drain(session: &Session, sql: &str) -> Result<(), DriverError> {
+pub(crate) async fn drain(session: &Session, sql: &str) -> Result<(), DriverError> {
     let mut events = session
         .connection()
         .execute(sql, &ExecOptions::default())

@@ -6,6 +6,7 @@
 pub mod audit;
 mod catalog;
 mod classify;
+mod column_stats;
 mod conn_test;
 mod cursor;
 mod edit;
@@ -28,6 +29,7 @@ mod readonly;
 mod references;
 mod results;
 mod script;
+mod selection_stats;
 mod session;
 mod sort;
 mod sql_file;
@@ -37,6 +39,10 @@ mod write;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
+pub use column_stats::{
+    ColumnStats, ColumnStatsError, ColumnStatsRequest, ColumnStatsSql, STATS_SAMPLE_ROWS,
+    STATS_TEXT_CHARS, Stat, TOP_VALUES, TopValue, column_stats, column_stats_sql,
+};
 pub use conn_test::{
     FailureKind, REDACTED, Redactor, StepFailure, StepKind, StepObserver, StepStatus, TestOptions,
     TestReport, TestScope, TestStep, classify_driver, classify_ssh, test_connection,
@@ -83,6 +89,9 @@ pub use references::{
     reference_targets, table_keys,
 };
 pub use results::{ResultId, ResultStore, StoredResult};
+pub use selection_stats::{
+    CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
+};
 pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
     ScriptSummary, Session, StatementError,

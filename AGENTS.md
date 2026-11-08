@@ -105,7 +105,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   closing a tab, disconnecting or quitting; core-written statements use `run_generated`, never
   the manual-commit `BEGIN`; `tests/transactions.rs` runs it on every engine. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
-  one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows)
+  one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
+  `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
+  only, stopped by a newer one or a cancel)
   and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it), and
   writes "filter by this value" conditions into its WHERE from the typed cell.
@@ -113,6 +115,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   read from the catalog again each time (the UI only names one), the values come from the
   stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
   composite, multi-level and self-referencing keys on every engine.
+  `column_stats.rs` counts a table data tab column's statistics on the server: statements
+  written from the catalog's names, the tab's filter checked like a page, each one a read in
+  the engine's read-only transaction (the export barrier) in a session of its own, sampled past
+  100,000 rows; `tests/column_stats.rs` runs it on every engine.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
   `export.rs` also holds the CSV options and formula escaping of files;
