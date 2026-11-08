@@ -67,9 +67,20 @@ export interface RunState {
 export type TabStatus = "disconnected" | "connecting" | "connected";
 export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers";
 
+/**
+ * A tab, in the order the tab bar shows it (pinned tabs first). The fields kept when a tab is
+ * closed and reopened are those of {@link TabSnapshot}; everything else (session, results,
+ * transaction) belongs to this run of the app only.
+ */
 export interface Tab {
   id: string;
   number: number;
+  /** Name given by the user (rename); without it the tab shows its default name. */
+  title?: string;
+  /** Pinned tabs sort first and are left open by "close others / to the right / all". */
+  pinned?: boolean;
+  /** The results panel fills the tab, hiding the SQL editor (UI only, never kept). */
+  resultsMaximized?: boolean;
   connectionId: string | null;
   status: TabStatus;
   /** Why its session was lost (ADR-028): nothing runs until the user reconnects. */
@@ -113,6 +124,51 @@ export interface TableView {
 
 /** Rows per page a table data tab starts with. */
 export const DEFAULT_PAGE_SIZE = 500;
+
+/**
+ * What a closed SQL editor tab keeps for Ctrl+Shift+T: plain data, ready to be serialised.
+ * Never its session, results or transaction: a reopened tab starts disconnected and runs
+ * nothing on its own (AGENTS.md).
+ */
+export interface TabSnapshot {
+  connectionId: string | null;
+  sql: string;
+  title?: string;
+  pinned?: boolean;
+  snippetName?: string;
+  runOptions?: Tab["runOptions"];
+}
+
+/** A closed tab and where it was, to reopen it in the same place. */
+export interface ClosedTab {
+  snapshot: TabSnapshot;
+  index: number;
+}
+
+/** The durable part of a tab. Only SQL editor tabs have one: table data and metadata tabs
+ *  are reopened from the explorer. */
+export function snapshotOf(tab: Tab): TabSnapshot | null {
+  if (tab.table || tab.tableDetails) return null;
+  return {
+    connectionId: tab.connectionId,
+    sql: tab.sql,
+    ...(tab.title ? { title: tab.title } : {}),
+    ...(tab.pinned ? { pinned: true } : {}),
+    ...(tab.snippetName ? { snippetName: tab.snippetName } : {}),
+    ...(tab.runOptions ? { runOptions: tab.runOptions } : {}),
+  };
+}
+
+/** Pinned tabs first, each group keeping its order. */
+function pinnedFirst(tabs: Tab[]): Tab[] {
+  return [...tabs.filter((t) => t.pinned), ...tabs.filter((t) => !t.pinned)];
+}
+
+/** After closing, the tab used most recently among those left (or the last one). */
+function nextActive(tabs: Tab[], recent: string[], current: string | null): string | null {
+  if (current && tabs.some((t) => t.id === current)) return current;
+  return recent.find((id) => tabs.some((t) => t.id === id)) ?? tabs[tabs.length - 1]?.id ?? null;
+}
 
 let tabCounter = 0;
 
@@ -179,11 +235,24 @@ interface AppStore {
   /** Opens a table data tab on a table (its first page loads when it appears). */
   addTableTab(connectionId: string, schema: string, name: string): string;
   addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
-  closeTab(id: string): void;
-  /** Opens again the last closed query tab (its connection and SQL, not its results). */
+  /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
+  closeTabs(ids: string[]): void;
+  /** Opens again the last closed query tab (its connection, SQL and name, not its results). */
   reopenTab(): void;
   /** Closed query tabs, the last one at the end. */
-  closedTabs: { connectionId: string | null; sql: string }[];
+  closedTabs: ClosedTab[];
+  /** Tab ids, the one used most recently first (Ctrl+Tab). */
+  recentTabs: string[];
+  /** The tab whose name is being edited in the tab bar. */
+  renamingTab: string | null;
+  setRenamingTab(id: string | null): void;
+  /** An empty or blank title gives the tab back its default name. */
+  renameTab(id: string, title: string): void;
+  /** A copy next to it: same connection, SQL and options, without session or results. */
+  duplicateTab(id: string): string | null;
+  setPinned(id: string, pinned: boolean): void;
+  /** Moves a tab to `index`, kept inside its group (pinned or not). */
+  moveTab(id: string, index: number): void;
   setActiveTab(id: string): void;
   updateTab(id: string, patch: Partial<Tab>): void;
   updateRun(id: string, update: (run: RunState) => RunState): void;
@@ -199,6 +268,7 @@ interface AppStore {
   setHistorySaving(connection: string, saving: boolean): void;
   setWorkspaceChanging(changing: boolean): void;
   clearTabConnections(): void;
+  setResultsMaximized(id: string, maximized: boolean): void;
   setExplorerFilter(filter: string | null): void;
   /** Adds the tag to the quick filter (opening it) or takes it out. */
   toggleExplorerTag(tag: string): void;
@@ -250,7 +320,7 @@ export const useApp = create<AppStore>((set) => ({
       sql,
       run: null,
     };
-    set((s) => ({ tabs: [...s.tabs, tab], activeTab: id }));
+    set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, recentTabs: [id, ...s.recentTabs] }));
     return id;
   },
   addTableTab: (connectionId, schema, name): string => {
@@ -268,26 +338,86 @@ export const useApp = create<AppStore>((set) => ({
     return id;
   },
   closedTabs: [],
-  closeTab: (id) =>
+  recentTabs: [],
+  renamingTab: null,
+  closeTabs: (ids) =>
     set((s) => {
-      const closed = s.tabs.find((t) => t.id === id);
-      const tabs = s.tabs.filter((t) => t.id !== id);
-      const fallback = tabs[tabs.length - 1]?.id ?? null;
-      const closedTabs = closed && !closed.tableDetails
-        ? [...s.closedTabs, { connectionId: closed.connectionId, sql: closed.sql }].slice(-MAX_CLOSED_TABS)
-        : s.closedTabs;
-      return { tabs, closedTabs, activeTab: s.activeTab === id ? fallback : s.activeTab };
+      const closing = new Set(ids);
+      const closed: ClosedTab[] = [];
+      s.tabs.forEach((tab, index) => {
+        const snapshot = closing.has(tab.id) ? snapshotOf(tab) : null;
+        if (snapshot) closed.push({ snapshot, index });
+      });
+      const tabs = s.tabs.filter((t) => !closing.has(t.id));
+      const recentTabs = s.recentTabs.filter((id) => !closing.has(id));
+      return {
+        tabs,
+        recentTabs,
+        // The leftmost of a batch comes back first, so each one lands at its old index.
+        closedTabs: [...s.closedTabs, ...closed.reverse()].slice(-MAX_CLOSED_TABS),
+        activeTab: nextActive(tabs, recentTabs, s.activeTab && closing.has(s.activeTab) ? null : s.activeTab),
+        renamingTab: s.renamingTab && closing.has(s.renamingTab) ? null : s.renamingTab,
+      };
     }),
   reopenTab: () => {
-    const s = useApp.getState();
+    const s: AppStore = useApp.getState();
     const last = s.closedTabs[s.closedTabs.length - 1];
     if (!last) return;
     set({ closedTabs: s.closedTabs.slice(0, -1) });
+    const { snapshot } = last;
     // The connection may have been deleted since.
-    const connectionId = last.connectionId && s.connections.some((c) => c.id === last.connectionId) ? last.connectionId : null;
-    s.addTab(connectionId, last.sql);
+    const connectionId = snapshot.connectionId && s.connections.some((c) => c.id === snapshot.connectionId) ? snapshot.connectionId : null;
+    const id: string = s.addTab(connectionId, snapshot.sql);
+    set((now) => {
+      const tab = now.tabs.find((t) => t.id === id);
+      if (!tab) return now;
+      const restored: Tab = { ...tab, title: snapshot.title, pinned: snapshot.pinned, snippetName: snapshot.snippetName, runOptions: snapshot.runOptions };
+      const others = now.tabs.filter((t) => t.id !== id);
+      others.splice(Math.min(last.index, others.length), 0, restored);
+      return { tabs: pinnedFirst(others) };
+    });
   },
-  setActiveTab: (activeTab) => set({ activeTab }),
+  setRenamingTab: (renamingTab) => set({ renamingTab }),
+  renameTab: (id, title) => {
+    const trimmed = title.trim();
+    set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, title: trimmed === "" ? undefined : trimmed } : t)) }));
+  },
+  duplicateTab: (id): string | null => {
+    const s: AppStore = useApp.getState();
+    const source = s.tabs.find((t) => t.id === id);
+    // A metadata tab is opened once per object (addTableDetailsTab finds the open one).
+    if (!source || source.tableDetails) return null;
+    const copy: string = s.addTab(source.connectionId, source.sql);
+    set((now) => {
+      const tab = now.tabs.find((t) => t.id === copy);
+      if (!tab) return now;
+      const duplicate: Tab = {
+        ...tab,
+        title: source.title,
+        runOptions: source.runOptions,
+        table: source.table ? { ...source.table, page: 0, total: undefined } : undefined,
+      };
+      const others = now.tabs.filter((t) => t.id !== copy);
+      others.splice(others.findIndex((t) => t.id === id) + 1, 0, duplicate);
+      return { tabs: pinnedFirst(others) };
+    });
+    return copy;
+  },
+  setPinned: (id, pinned) =>
+    set((s) => ({ tabs: pinnedFirst(s.tabs.map((t) => (t.id === id ? { ...t, pinned: pinned || undefined } : t))) })),
+  moveTab: (id, index) =>
+    set((s) => {
+      const tab = s.tabs.find((t) => t.id === id);
+      if (!tab) return s;
+      const pinnedCount = s.tabs.filter((t) => t.pinned).length;
+      // Pinned tabs move among the pinned ones, the others after them.
+      const [min, max] = tab.pinned ? [0, pinnedCount - 1] : [pinnedCount, s.tabs.length - 1];
+      const target = Math.max(min, Math.min(max, index));
+      const others = s.tabs.filter((t) => t.id !== id);
+      others.splice(target, 0, tab);
+      return { tabs: others };
+    }),
+  setActiveTab: (activeTab) => set((s) => ({ activeTab, recentTabs: [activeTab, ...s.recentTabs.filter((id) => id !== activeTab)] })),
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   updateRun: (id, update) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id && t.run ? { ...t, run: update(t.run) } : t)) })),
@@ -329,6 +459,8 @@ export const useApp = create<AppStore>((set) => ({
     openConnections: open ? [...new Set([...s.openConnections, connection])] : s.openConnections.filter((id) => id !== connection),
   })),
   clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, status: "disconnected", serverVersion: null, run: null })) })),
+  setResultsMaximized: (id, resultsMaximized) =>
+    set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, resultsMaximized: resultsMaximized || undefined } : t)) })),
 }));
 
 // ------------------------------------------------------------------- dialogs
@@ -376,9 +508,13 @@ export interface ParamsRequest {
   resolve(values: Record<string, string> | null): void;
 }
 
-/** Tabs with an open transaction about to be closed, disconnected or quit (ADR-031). */
+/** Tabs with an open transaction about to be closed, disconnected or quit (ADR-031), and tabs
+ *  about to be closed while their query runs: asked once for all of them. */
 export interface OpenTransactionsRequest {
+  /** Tabs whose transaction the server rolls back. */
   tabs: string[];
+  /** Tabs whose running query is cancelled. */
+  running: string[];
   action: "close" | "disconnect" | "quit";
   resolve(proceed: boolean): void;
 }
@@ -416,7 +552,7 @@ interface DialogStore {
   params: ParamsRequest | null;
   text: TextRequest | null;
   interactions: InteractionItem[];
-  askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"]): Promise<boolean>;
+  askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"], running?: string[]): Promise<boolean>;
   askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
   askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
   askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
@@ -540,11 +676,12 @@ export const useDialogs = create<DialogStore>((set) => ({
         },
       }),
     ),
-  askOpenTransactions: (tabs, action) =>
+  askOpenTransactions: (tabs, action, running = []) =>
     new Promise((resolve) =>
       set({
         openTransactions: {
           tabs,
+          running,
           action,
           resolve: (proceed) => {
             set({ openTransactions: null });

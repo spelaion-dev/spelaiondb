@@ -3,6 +3,7 @@
 // carries SQL, data or error text.
 
 import { call, commands, type ScriptSummaryItem } from "./api";
+import { tabLabel } from "./connect";
 import i18n from "./i18n";
 import { usePreferences } from "./preferences";
 import { useApp, type Tab } from "./store";
@@ -16,7 +17,9 @@ function inBackground(tab: Tab): boolean {
 export function notifyFinished(tab: Tab, summary: ScriptSummaryItem, elapsedMs: number): void {
   const { notify, notifyAfterSeconds } = usePreferences.getState().script;
   if (!notify || elapsedMs < notifyAfterSeconds * 1000 || !inBackground(tab)) return;
-  const name = i18n.t("shell:queryTab", { number: tab.number });
+  // The tab's current name: the user may have renamed it while the script ran.
+  const current = useApp.getState().tabs.find((t) => t.id === tab.id);
+  const name = tabLabel(current ?? tab);
   const failed = summary.failed > 0 || summary.stop != null;
   const title = i18n.t(failed ? "editor:notification.failed" : "editor:notification.ok", { tab: name });
   const counts = i18n.t("editor:results.summary", { ok: summary.succeeded, failed: summary.failed, notRun: summary.notRun });

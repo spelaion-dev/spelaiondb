@@ -337,7 +337,9 @@
     "discard": "Descartar",
     "applied_one": "Aplicado {{count}} cambio",
     "applied_other": "Aplicados {{count}} cambios",
-    "applyFirst": "Aplica o descarta antes los cambios pendientes"
+    "applyFirst": "Aplica o descarta antes los cambios pendientes",
+    "closeUnsavedMany_one": "{{count}} pestaña tiene cambios de filas sin guardar ({{tabs}}). ¿Quieres descartarlos y cerrar?",
+    "closeUnsavedMany_other": "{{count}} pestañas tienen cambios de filas sin guardar ({{tabs}}). ¿Quieres descartarlos y cerrar?"
   },
   "activeSchemaSet": "Los nombres sin esquema se buscan ahora en {{schema}}",
   "transaction": {
@@ -452,5 +454,7 @@
     "failedAgain": "Falló al volver a ejecutarla en una sesión nueva: {{reason}}",
     "loadedInstead_one": "Exportar la fila cargada",
     "loadedInstead_other": "Exportar las {{formattedCount}} filas cargadas"
-  }
+  },
+  "maximizeResults": "Maximizar los resultados (Ctrl+Alt+M)",
+  "restoreResults": "Mostrar el editor (Ctrl+Alt+M)"
 }

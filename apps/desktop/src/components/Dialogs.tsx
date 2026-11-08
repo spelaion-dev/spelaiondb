@@ -24,8 +24,9 @@ export function Dialogs() {
   if (params) return <ParamsDialog />;
   if (text) return <TextDialog />;
   if (risk) return <RiskDialog />;
-  if (scriptError) return <ScriptErrorDialog key={`${scriptError.tab}-${scriptError.statement}`} />;
+  // Closing a tab whose run waits for this answer asks first; closing it stops that run.
   if (openTransactions) return <OpenTransactionsDialog />;
+  if (scriptError) return <ScriptErrorDialog key={`${scriptError.tab}-${scriptError.statement}`} />;
   if (password) return <PasswordDialog key={password.connectionName + (password.error ?? "")} />;
   return null;
 }
@@ -343,19 +344,34 @@ function OpenTransactionsDialog() {
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => cancel.current?.focus(), []);
   if (!request) return null;
+  const transactions = request.tabs.length > 0;
+  // Only running queries: closing cancels them, nothing is rolled back.
+  const proceed = transactions ? t(`openTransactions.proceed.${request.action}`) : t("openTransactions.proceedRunning");
   return (
-    <Modal title={t(`openTransactions.title.${request.action}`)}>
-      <p>{t("openTransactions.explanation", { count: request.tabs.length })}</p>
-      <ul className="risk-list">
-        {request.tabs.map((tab) => <li key={tab}><strong>{tab}</strong></li>)}
-      </ul>
-      <p className="muted small">{t("openTransactions.hint")}</p>
+    <Modal title={transactions ? t(`openTransactions.title.${request.action}`) : t("openTransactions.titleRunning")}>
+      {transactions && (
+        <>
+          <p>{t("openTransactions.explanation", { count: request.tabs.length })}</p>
+          <ul className="risk-list open-transaction-list">
+            {request.tabs.map((tab) => <li key={tab}><strong>{tab}</strong></li>)}
+          </ul>
+        </>
+      )}
+      {request.running.length > 0 && (
+        <>
+          <p>{t("openTransactions.running", { count: request.running.length })}</p>
+          <ul className="risk-list running-list">
+            {request.running.map((tab) => <li key={tab}><strong>{tab}</strong></li>)}
+          </ul>
+        </>
+      )}
+      {transactions && <p className="muted small">{t("openTransactions.hint")}</p>}
       <div className="modal-actions" onKeyDown={(e) => e.key === "Escape" && request.resolve(false)}>
         <button ref={cancel} onClick={() => request.resolve(false)}>
           {t("openTransactions.cancel")}
         </button>
         <button className="danger" onClick={() => request.resolve(true)}>
-          {t(`openTransactions.proceed.${request.action}`)}
+          {proceed}
         </button>
       </div>
     </Modal>

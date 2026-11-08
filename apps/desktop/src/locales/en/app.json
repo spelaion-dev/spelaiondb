@@ -12,5 +12,24 @@
     "install": "Install and restart",
     "installing": "Installing…",
     "later": "Later"
+  },
+  "tabs": {
+    "menu": "Actions for {{name}}",
+    "rename": "Rename",
+    "renameLabel": "New name for {{name}}",
+    "duplicate": "Duplicate",
+    "copyOf": "{{name}} (copy)",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "unpinButton": "Unpin {{name}}",
+    "pinned": "Pinned",
+    "close": "Close",
+    "closeOthers": "Close others",
+    "closeRight": "Close to the right",
+    "closeAll": "Close all",
+    "reopen": "Reopen closed tab",
+    "running": "A query is running",
+    "switcher": "Recently used tabs",
+    "switcherHint": "Keep Ctrl down and press Tab to move; release Ctrl to switch."
   }
 }

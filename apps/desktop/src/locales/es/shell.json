@@ -366,7 +366,11 @@
       "close": "Cerrar y deshacer",
       "disconnect": "Desconectar y deshacer",
       "quit": "Salir y deshacer"
-    }
+    },
+    "titleRunning": "¿Cerrar con una consulta en ejecución?",
+    "running_one": "La consulta de esta pestaña sigue en ejecución. Al cerrar se cancela:",
+    "running_other": "Las consultas de estas pestañas siguen en ejecución. Al cerrar se cancelan:",
+    "proceedRunning": "Cerrar y cancelar"
   },
   "exportTable": "Exportar…",
   "exportTables_one": "Exportar {{formattedCount}} tabla…",

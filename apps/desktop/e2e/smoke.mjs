@@ -1373,7 +1373,7 @@ try {
   await panel.getByRole("alert").filter({ hasText: "Could not format" }).waitFor();
   assert.equal(await sqlEditor.innerText(), "select 'unterminated");
 
-  step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab moves");
+  step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");
   const queryTabCount = await page.locator(".tabbar .tab").count();
   await sqlEditor.click();
   await page.keyboard.press("Control+w");
@@ -1386,7 +1386,12 @@ try {
   const reopened = await activeName();
   await page.keyboard.press("Control+Tab");
   assert.notEqual(await activeName(), reopened);
-  await page.keyboard.press("Control+Shift+Tab");
+  // Most recently used first: a second quick Ctrl+Tab comes back.
+  await page.keyboard.press("Control+Tab");
+  assert.equal(await activeName(), reopened);
+  await page.keyboard.press("Control+PageDown");
+  assert.notEqual(await activeName(), reopened);
+  await page.keyboard.press("Control+PageUp");
   assert.equal(await activeName(), reopened);
   await page.locator(".tabbar .tab.active").focus();
   await page.keyboard.press("ArrowRight");
@@ -1405,6 +1410,135 @@ try {
   await setTheme("dark", "dark");
   await shot("05e-tabs-dark");
   await setTheme("light", "light");
+
+  step("tab management: rename, pin, duplicate, drag, the Ctrl+Tab switcher, the running indicator and maximized results");
+  {
+    const tabs = page.locator(".tabbar .tab");
+    const activeTab = page.locator(".tabbar .tab.active");
+    const shown = page.locator(".tab-panel:not([hidden])");
+    const labels = () => page.locator(".tabbar .tab .tab-label").allInnerTexts();
+    const activeLabel = () => activeTab.locator(".tab-label").innerText();
+    const tabMenu = page.getByRole("menu", { name: /^Actions for / });
+    // Rename from the tab's menu: the name is edited in place, Enter keeps it.
+    await activeTab.click({ button: "right" });
+    await tabMenu.getByRole("menuitem", { name: /^Rename/ }).click();
+    const renameInput = activeTab.locator("input.tab-rename");
+    await renameInput.waitFor();
+    await renameInput.fill("Orders report");
+    await renameInput.press("Enter");
+    await renameInput.waitFor({ state: "detached" });
+    assert.equal(await activeLabel(), "Orders report");
+    // Ctrl+F2 renames too; Escape keeps the old name.
+    await page.keyboard.press("Control+F2");
+    await renameInput.waitFor();
+    await page.keyboard.insertText("Not kept");
+    await page.keyboard.press("Escape");
+    await renameInput.waitFor({ state: "detached" });
+    assert.equal(await activeLabel(), "Orders report");
+    // Pin from the menu: pinned tabs sort first, and their × becomes an unpin button.
+    await activeTab.click({ button: "right" });
+    await tabMenu.getByRole("menuitem", { name: /^Pin/ }).click();
+    await page.locator('.tabbar .tab.active[data-pinned="true"]').waitFor();
+    assert.equal((await labels())[0], "Orders report");
+    assert.equal(await activeTab.locator("button.close").getAttribute("aria-label"), "Unpin Orders report");
+    await shot("05f-tab-pinned");
+    await page.keyboard.press("Control+Alt+p");
+    await page.locator(".tabbar .tab.active:not([data-pinned])").waitFor();
+    await page.keyboard.press("Control+Alt+p");
+    await page.locator('.tabbar .tab.active[data-pinned="true"]').waitFor();
+    // Duplicate (Ctrl+Alt+D): next to it, same SQL and connection, no session, not pinned.
+    const beforeCopy = await tabs.count();
+    await page.keyboard.press("Control+Alt+d");
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 1, beforeCopy);
+    assert.equal(await activeLabel(), "Orders report (copy)");
+    assert.equal(await activeTab.getAttribute("data-pinned"), null);
+    assert.deepEqual((await labels()).slice(0, 2), ["Orders report", "Orders report (copy)"]);
+    assert.equal(await shown.locator(".cm-content").innerText(), "select 'unterminated");
+    assert.equal(await shown.locator("select").first().evaluate((el) => el.selectedOptions[0].text), "Shop (SQLite) (sqlite)");
+    await activeTab.locator(".dot-disconnected").waitFor();
+    // Drag the copy one place right, then onto the pinned tab: it stays after the pinned ones.
+    const dragTab = async (from, to, end) => {
+      const a = await tabs.nth(from).boundingBox();
+      const b = await tabs.nth(to).boundingBox();
+      await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(a.x + a.width / 2 + (end === "right" ? 12 : -12), a.y + a.height / 2, { steps: 3 });
+      await page.mouse.move(end === "right" ? b.x + b.width - 6 : b.x + 6, b.y + b.height / 2, { steps: 8 });
+      await page.locator(".tabbar .tab.dragging").waitFor();
+    };
+    await dragTab(1, 2, "right");
+    await shot("05f-tab-drag");
+    await page.mouse.up();
+    await page.locator(".tabbar .tab.dragging").waitFor({ state: "detached" });
+    assert.equal((await labels())[2], "Orders report (copy)");
+    assert.equal(await activeLabel(), "Orders report (copy)");
+    await dragTab(2, 0, "left");
+    await page.mouse.up();
+    await page.locator(".tabbar .tab.dragging").waitFor({ state: "detached" });
+    assert.deepEqual((await labels()).slice(0, 2), ["Orders report", "Orders report (copy)"]);
+    // Ctrl+Shift+PageDown / PageUp move the active tab by one place.
+    await page.keyboard.press("Control+Shift+PageDown");
+    assert.equal((await labels())[2], "Orders report (copy)");
+    await page.keyboard.press("Control+Shift+PageUp");
+    assert.equal((await labels())[1], "Orders report (copy)");
+    // Ctrl+Tab: hold Ctrl and press Tab to walk the most recently used tabs; release to switch.
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    const switcher = page.getByRole("listbox", { name: "Recently used tabs" });
+    await switcher.waitFor();
+    assert.equal(await switcher.getByRole("option", { selected: true }).innerText(), "Orders report");
+    await page.keyboard.press("Tab");
+    const third = await switcher.getByRole("option", { selected: true }).innerText();
+    assert.ok(!third.startsWith("Orders report"), third);
+    await shot("05f-tab-switcher");
+    await page.keyboard.up("Control");
+    await switcher.waitFor({ state: "detached" });
+    assert.equal(await activeLabel(), third);
+    // Escape keeps the current tab; a click on a row switches to it.
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await switcher.waitFor();
+    await page.keyboard.press("Escape");
+    await page.keyboard.up("Control");
+    await switcher.waitFor({ state: "detached" });
+    assert.equal(await activeLabel(), third);
+    await page.keyboard.down("Control");
+    await page.keyboard.press("Tab");
+    await switcher.getByRole("option", { name: "Orders report (copy)" }).click();
+    await page.keyboard.up("Control");
+    await switcher.waitFor({ state: "detached" });
+    assert.equal(await activeLabel(), "Orders report (copy)");
+    // A query running shows on its tab, until it is cancelled.
+    await replaceQuery(shown, "with recursive spin(i) as (select 1 union all select i + 1 from spin) select count(*) from spin;");
+    await run(shown);
+    await activeTab.locator(".tab-running").waitFor();
+    assert.equal(await activeTab.locator(".tab-running").getAttribute("aria-label"), "A query is running");
+    await shot("05f-tab-running");
+    await shown.getByRole("button", { name: "Cancel", exact: true }).click();
+    await activeTab.locator(".tab-running").waitFor({ state: "detached" });
+    await activeTab.locator(".dot-connected").waitFor();
+    // Maximize the results (button or Ctrl+Alt+M): the editor hides and comes back unchanged.
+    await replaceQuery(shown, "select 1 as maximized;");
+    await run(shown);
+    await shown.locator(".grid-host").waitFor();
+    await shown.getByRole("button", { name: "Maximize results (Ctrl+Alt+M)" }).click();
+    await shown.locator(".editor-pane").waitFor({ state: "hidden" });
+    await shot("05f-results-maximized");
+    await page.keyboard.press("Control+Alt+m");
+    await shown.locator(".editor-pane").waitFor({ state: "visible" });
+    assert.equal(await shown.locator(".cm-content").innerText(), "select 1 as maximized;");
+    await page.keyboard.press("Control+Alt+m");
+    await shown.locator(".editor-pane").waitFor({ state: "hidden" });
+    await shown.getByRole("button", { name: "Restore the editor (Ctrl+Alt+M)" }).click();
+    await shown.locator(".editor-pane").waitFor({ state: "visible" });
+    // Back as it was for the next steps: the copy closed, the original unpinned.
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, beforeCopy);
+    await tabs.first().click();
+    assert.equal(await activeLabel(), "Orders report");
+    await activeTab.getByRole("button", { name: "Unpin Orders report" }).click();
+    await page.locator(".tabbar .tab.active:not([data-pinned])").waitFor();
+  }
 
   step("explorer: view rows and generate SQL written by the core");
   await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
@@ -4061,6 +4195,98 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await events.getByText("Log cleared").waitFor();
   await page.getByRole("button", { name: "Connections", exact: true }).click();
   await mcp.waitFor({ state: "detached" });
+
+  step("tabs: close all, then close others asks once for a transaction and a running query, keeps pinned tabs, and reopen brings tabs back disconnected");
+  {
+    const tabs = page.locator(".tabbar .tab");
+    const activeTab = page.locator(".tabbar .tab.active");
+    const shown = page.locator(".tab-panel:not([hidden])");
+    const labels = () => page.locator(".tabbar .tab .tab-label").allInnerTexts();
+    const rename = async (name) => {
+      await page.keyboard.press("Control+F2");
+      const input = activeTab.locator("input.tab-rename");
+      await input.fill(name);
+      await input.press("Enter");
+      await input.waitFor({ state: "detached" });
+    };
+    // Close all (Ctrl+Shift+W); a tab left with a transaction or a running query would ask.
+    await page.keyboard.press("Control+Shift+W");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0 || document.querySelector('[role="dialog"] .modal-actions .danger'));
+    if (await tabs.count() > 0) await page.locator('[role="dialog"] .modal-actions .danger').click();
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
+    // A transaction open, a query running, a pinned tab, and the tab whose others close.
+    const txPanel = await newQuery("Shop (SQLite)", "create temp table close_tx (x);");
+    await run(txPanel);
+    await txPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    await txPanel.locator(".transaction-controls").getByRole("checkbox", { name: "Auto-commit" }).click();
+    await txPanel.locator(".transaction-controls input[type=checkbox]:not(:checked)").waitFor();
+    await replaceQuery(txPanel, "insert into close_tx values (1);");
+    await run(txPanel);
+    await txPanel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+    await rename("Open transaction");
+    const longSql = "with recursive close_cancel_marker(i) as (select 1 union all select i + 1 from close_cancel_marker) select count(*) from close_cancel_marker;";
+    const runPanel = await newQuery("Shop (SQLite)", longSql);
+    await run(runPanel);
+    await activeTab.locator(".tab-running").waitFor();
+    await rename("Long query");
+    await newQuery("Shop (SQLite)", "select 'pinned';");
+    await rename("Pinned");
+    await page.keyboard.press("Control+Alt+p");
+    await page.locator('.tabbar .tab.active[data-pinned="true"]').waitFor();
+    await newQuery("Shop (SQLite)", "select 'kept';");
+    await rename("Kept");
+    assert.deepEqual(await labels(), ["Pinned", "Open transaction", "Long query", "Kept"]);
+    // Close others from the menu: one question names both tabs; Cancel closes nothing.
+    await activeTab.click({ button: "right" });
+    await page.getByRole("menu", { name: "Actions for Kept" }).getByRole("menuitem", { name: /^Close others/ }).click();
+    const closeOthers = page.getByRole("dialog", { name: "Close with an open transaction?" });
+    await closeOthers.getByText("the server rolls back what was not committed", { exact: false }).waitFor();
+    assert.deepEqual(await closeOthers.locator(".open-transaction-list li").allInnerTexts(), ["Open transaction"]);
+    assert.deepEqual(await closeOthers.locator(".running-list li").allInnerTexts(), ["Long query"]);
+    await shot("12a-close-others-asks");
+    await closeOthers.getByRole("button", { name: "Cancel", exact: true }).click();
+    await closeOthers.waitFor({ state: "detached" });
+    assert.equal(await tabs.count(), 4);
+    assert.equal(await page.locator(".tabbar .tab-running").count(), 1, "the query still runs");
+    // Ctrl+Alt+W asks the same; accepted, both close and the running query is cancelled.
+    await page.keyboard.press("Control+Alt+w");
+    await closeOthers.getByRole("button", { name: "Close and roll back" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 2);
+    assert.deepEqual(await labels(), ["Pinned", "Kept"]);
+    assert.equal(await activeTab.locator(".tab-label").innerText(), "Kept");
+    // The core recorded the closed tab's query as cancelled.
+    if (!(await page.getByRole("complementary", { name: "Query history", exact: true }).isVisible())) {
+      await page.getByRole("button", { name: "Query history", exact: true }).click();
+    }
+    const closedHistory = page.getByRole("complementary", { name: "Query history", exact: true });
+    await closedHistory.getByRole("textbox", { name: "Search query history" }).fill("close_cancel_marker");
+    await waitForHistoryCount(1);
+    await closedHistory.locator(".history-error", { hasText: "Query cancelled" }).waitFor();
+    await page.getByRole("button", { name: "Close query history" }).click();
+    // Reopen (Ctrl+Shift+T): back in place, with name, SQL and connection; disconnected,
+    // without results or transaction, and nothing runs.
+    await page.keyboard.press("Control+Shift+T");
+    assert.equal(await activeTab.locator(".tab-label").innerText(), "Open transaction");
+    await activeTab.locator(".dot-disconnected").waitFor();
+    assert.equal(await activeTab.locator(".tab-tx").count(), 0);
+    assert.equal(await shown.locator(".cm-content").innerText(), "insert into close_tx values (1);");
+    assert.equal(await shown.locator("select").first().evaluate((el) => el.selectedOptions[0].text), "Shop (SQLite) (sqlite)");
+    assert.equal(await shown.locator(".grid-host").count(), 0);
+    await page.keyboard.press("Control+Shift+T");
+    assert.equal(await activeTab.locator(".tab-label").innerText(), "Long query");
+    assert.equal(await shown.locator(".cm-content").innerText(), longSql);
+    await page.waitForTimeout(300);
+    assert.equal(await activeTab.locator(".tab-running").count(), 0, "a reopened tab runs nothing");
+    await activeTab.locator(".dot-disconnected").waitFor();
+    assert.deepEqual(await labels(), ["Pinned", "Open transaction", "Long query", "Kept"]);
+    // Close all leaves the pinned tab; its own Ctrl+W still closes it.
+    await page.keyboard.press("Control+Shift+W");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 1);
+    assert.deepEqual(await labels(), ["Pinned"]);
+    await shot("12b-close-all-keeps-pinned");
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
+  }
 
   step("quitting with a transaction open asks first: Cancel keeps the app, the dialog quits");
   const quitPanel = await newQuery("Shop (SQLite)", "create temp table quit_tx (x);");
