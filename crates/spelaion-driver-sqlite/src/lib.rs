@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use rusqlite::{InterruptHandle, OpenFlags};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey,
-    Result, SchemaInfo, SchemaObject, TableInfo, TransactionState,
+    EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo,
+    ReferencingKey, Result, SchemaInfo, SchemaObject, TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -124,6 +124,7 @@ impl Driver for SqliteDriver {
                 explain: true,
                 editable_results: false, // comes in v0.2
                 schemas: true,           // main, temp and attached databases (ATTACH)
+                insert_rows: true,
             },
         }))
     }
@@ -146,6 +147,8 @@ enum Command {
     Catalog(String, Reply<Vec<catalog::Row>>),
     /// `sqlite3_get_autocommit`: no query (ADR-031).
     TransactionState(Reply<TransactionState>),
+    /// Rows of an import (ADR-038): one prepared single-row INSERT, values bound.
+    Insert(String, Vec<Vec<Option<String>>>, Reply<u64>),
 }
 
 /// Loop of the connection thread. Ends when the `SqliteConnection` is dropped.
@@ -182,6 +185,9 @@ fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>
             Command::Catalog(sql, reply) => {
                 let _ = reply.send(introspect::query(&conn, &sql));
             }
+            Command::Insert(sql, rows, reply) => {
+                let _ = reply.send(insert(&conn, &sql, rows));
+            }
             Command::TransactionState(reply) => {
                 // SQLite has no failed transactions: an error that ends one rolls it back.
                 let _ = reply.send(Ok(if conn.is_autocommit() {
@@ -192,6 +198,17 @@ fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>
             }
         }
     }
+}
+
+fn insert(conn: &rusqlite::Connection, sql: &str, rows: Vec<Vec<Option<String>>>) -> Result<u64> {
+    let mut statement = conn.prepare_cached(sql).map_err(exec::map_error)?;
+    let mut inserted = 0;
+    for row in rows {
+        inserted += statement
+            .execute(rusqlite::params_from_iter(row))
+            .map_err(exec::map_error)? as u64;
+    }
+    Ok(inserted)
 }
 
 struct SqliteConnection {
@@ -244,6 +261,20 @@ impl Connection for SqliteConnection {
 
     async fn transaction_state(&self) -> Result<TransactionState> {
         self.ask(Command::TransactionState).await
+    }
+
+    /// One prepared single-row INSERT run for every row: in-process, that is SQLite's fast path.
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        target.check_rows(&rows)?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let sql = target.insert_sql(&SqliteDialect, 1, |n| format!("?{n}"));
+        self.ask(|reply| Command::Insert(sql, rows, reply)).await
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {

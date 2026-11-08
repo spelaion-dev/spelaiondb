@@ -25,8 +25,9 @@ use async_trait::async_trait;
 use duckdb::{AccessMode, Config, InterruptHandle};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
-    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter,
-    ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject, TableInfo, TransactionState,
+    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter,
+    NameFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject, TableInfo,
+    TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -234,6 +235,7 @@ impl Driver for DuckdbDriver {
                 explain: true,
                 editable_results: false,
                 schemas: true, // main and attached databases (ATTACH)
+                insert_rows: true,
             },
         }))
     }
@@ -259,6 +261,8 @@ enum Command {
     RelationDefinition(String, String, Reply<String>),
     /// Whether a transaction is open (ADR-031).
     TransactionState(Reply<TransactionState>),
+    /// Rows of an import (ADR-038), through DuckDB's appender.
+    Append(InsertTarget, Vec<Vec<Option<String>>>, Reply<u64>),
 }
 
 /// Loop of the connection thread. Ends when the `DuckdbConnection` is dropped.
@@ -322,8 +326,38 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             Command::TransactionState(reply) => {
                 let _ = reply.send(transaction_state(conn));
             }
+            Command::Append(target, rows, reply) => {
+                let _ = reply.send(append(conn, &target, rows));
+            }
         }
     }
+}
+
+/// DuckDB's appender, given the table's columns by name: values arrive as text and DuckDB casts
+/// them to each column's type. It writes in the connection's open transaction, so a rollback
+/// takes the rows back.
+fn append(
+    conn: &duckdb::Connection,
+    target: &InsertTarget,
+    rows: Vec<Vec<Option<String>>>,
+) -> Result<u64> {
+    let schema = if target.schema.is_empty() {
+        "main"
+    } else {
+        target.schema.as_str()
+    };
+    let columns: Vec<&str> = target.columns.iter().map(String::as_str).collect();
+    let mut appender = conn
+        .appender_with_columns_to_db(&target.table, schema, &columns)
+        .map_err(exec::map_error)?;
+    let count = rows.len() as u64;
+    for row in rows {
+        appender
+            .append_row(duckdb::appender_params_from_iter(row))
+            .map_err(exec::map_error)?;
+    }
+    appender.flush().map_err(exec::map_error)?;
+    Ok(count)
 }
 
 /// duckdb-rs does not expose DuckDB's auto-commit flag (its `is_autocommit` always says yes),
@@ -407,6 +441,20 @@ impl Connection for DuckdbConnection {
 
     async fn transaction_state(&self) -> Result<TransactionState> {
         self.ask(Command::TransactionState).await
+    }
+
+    /// DuckDB's appender: no SQL at all, the values are the appender's data.
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        target.check_rows(&rows)?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let target = target.clone();
+        self.ask(|reply| Command::Append(target, rows, reply)).await
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {

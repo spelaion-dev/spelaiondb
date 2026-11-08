@@ -11,6 +11,8 @@ spelaion-driver-api.workspace = true
 arrow.workspace = true
 async-stream = "0.3"
 async-trait.workspace = true
+# COPY data for imports (ADR-038).
+bytes = "1"
 fallible-iterator = "0.2"
 futures-util.workspace = true
 postgres-protocol.workspace = true
