@@ -1140,6 +1140,7 @@ try {
   let history = page.getByRole("complementary", { name: "Query history", exact: true });
   await waitForHistoryCount(4);
   const errorEntry = history.locator(".history-entry").filter({ has: page.locator(".history-sql", { hasText: "from ordrs" }) });
+  await errorEntry.getByText("Error details", { exact: true }).click();
   await errorEntry.locator(".history-error", { hasText: "ordrs" }).waitFor();
   await errorEntry.getByText("0 rows returned", { exact: true }).waitFor();
   const aggregateEntry = history.locator(".history-entry").filter({ has: page.locator(".history-sql", { hasText: "group by c.country" }) });
@@ -1148,6 +1149,7 @@ try {
   assert.ok(await aggregateEntry.locator("time").getAttribute("datetime"));
   await history.getByRole("textbox", { name: "Search query history" }).fill("ORDRS");
   await waitForHistoryCount(1);
+  await history.getByText("Error details", { exact: true }).click();
   await history.locator(".history-error", { hasText: "ordrs" }).waitFor();
   await history.getByRole("textbox", { name: "Search query history" }).fill("round");
   await waitForHistoryCount(1);
@@ -2673,8 +2675,11 @@ try {
   await snippets.waitFor({ state: "detached" });
   assert.equal(await panel.locator(".cm-content").innerText(), "select 'snippet_marker' as saved, 2 as version;");
   await page.getByRole("button", { name: "Saved queries", exact: true }).click();
-  await markerEntry.getByRole("button", { name: "Delete" }).click();
-  await markerEntry.getByRole("button", { name: "Confirm delete" }).click();
+  await markerEntry.getByText("Organize", { exact: true }).click();
+  await markerEntry.getByRole("button", { name: "Delete", exact: true }).click();
+  const deleteSaved = page.getByRole("dialog", { name: "Delete “Marker query”?" });
+  assert.equal(await deleteSaved.getByRole("button", { name: "Cancel" }).evaluate((button) => button === document.activeElement), true);
+  await deleteSaved.getByRole("button", { name: "Delete", exact: true }).click();
   await snippets.getByText("No saved queries yet.", { exact: false }).waitFor();
   await page.getByRole("button", { name: "Close saved queries" }).click();
 
@@ -4640,6 +4645,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await history.getByRole("textbox", { name: "Search query history" }).fill("cancel_history_marker");
   await waitForHistoryCount(1);
+  await history.getByText("Error details", { exact: true }).click();
   await history.locator(".history-error", { hasText: "Query cancelled" }).waitFor();
   await setLanguage("es");
   await page.locator("#query-history .history-error", { hasText: "Consulta cancelada" }).waitFor();
@@ -4652,12 +4658,25 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await history.getByRole("textbox", { name: "Search query history" }).fill("history_page_marker");
-  await waitForHistoryCount(100);
-  await history.getByRole("button", { name: "Load more", exact: true }).click();
-  await waitForHistoryCount(105);
+  await waitForHistoryCount(50);
   const pageStatements = await history.locator(".history-sql").allTextContents();
+  assert.ok(await history.getByRole("button", { name: "Previous", exact: true }).isDisabled());
+  for (const [number, count] of [[2, 50], [3, 5]]) {
+    const previousEntry = await history.locator(".history-entry").first().elementHandle();
+    await history.getByRole("button", { name: "Next", exact: true }).click();
+    await page.waitForFunction((entry) => !entry.isConnected, previousEntry);
+    await history.getByText(`Page ${number}`, { exact: true }).waitFor();
+    await waitForHistoryCount(count);
+    pageStatements.push(...await history.locator(".history-sql").allTextContents());
+  }
+  assert.equal(pageStatements.length, 105);
   assert.equal(new Set(pageStatements).size, 105);
-  assert.equal(await history.getByRole("button", { name: "Load more", exact: true }).count(), 0);
+  assert.ok(await history.getByRole("button", { name: "Next", exact: true }).isDisabled());
+  const lastEntry = await history.locator(".history-entry").first().elementHandle();
+  await history.getByRole("button", { name: "Previous", exact: true }).click();
+  await page.waitForFunction((entry) => !entry.isConnected, lastEntry);
+  await waitForHistoryCount(50);
+  assert.deepEqual(await history.locator(".history-sql").allTextContents(), pageStatements.slice(50, 100));
   await shot("11-history-pages");
 
   step("personal variables a connection needs are asked once and saved in user.toml");
@@ -4888,6 +4907,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const closedHistory = page.getByRole("complementary", { name: "Query history", exact: true });
     await closedHistory.getByRole("textbox", { name: "Search query history" }).fill("close_cancel_marker");
     await waitForHistoryCount(1);
+    await closedHistory.getByText("Error details", { exact: true }).click();
     await closedHistory.locator(".history-error", { hasText: "Query cancelled" }).waitFor();
     await page.getByRole("button", { name: "Close query history" }).click();
     // Reopen (Ctrl+Shift+T): back in place, with name, SQL and connection; disconnected,

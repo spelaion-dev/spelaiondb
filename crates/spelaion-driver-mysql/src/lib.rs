@@ -20,10 +20,10 @@ use futures_util::StreamExt;
 use mysql_async::prelude::Queryable;
 use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, LogicalType,
-    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject,
-    ServerObject, TableInfo, TlsMode, TransactionState,
+    CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, ContextDialect,
+    DatabaseContext, Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive,
+    LikeFilter, LogicalType, NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema,
+    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -162,7 +162,7 @@ impl Driver for MysqlDriver {
             id: conn.id(),
         });
         let (requests, receiver) = mpsc::channel(8);
-        tokio::spawn(actor(conn, receiver));
+        tokio::spawn(actor(conn, receiver, Some(params.database.clone())));
         Ok(Box::new(MysqlConnection {
             requests,
             cancel,
@@ -181,6 +181,12 @@ impl Driver for MysqlDriver {
 type Rows = Vec<Vec<Option<String>>>;
 
 enum Request {
+    DatabaseContext {
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
+    CurrentDatabase {
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
     Execute {
         sql: String,
         batch_size: usize,
@@ -203,7 +209,8 @@ enum Request {
 }
 
 /// Owns the connection until every handle is dropped.
-async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>) {
+async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>, database: Option<String>) {
+    let mut context = DatabaseContext::new(ContextDialect::Mysql, database);
     // An error is an ERR packet, which carries no status: the last OK packet may be older than
     // a deadlock that rolled the transaction back.
     let mut status_stale = false;
@@ -213,9 +220,36 @@ async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>) {
                 sql,
                 batch_size,
                 events,
-            } => status_stale = !execute(&mut conn, &sql, batch_size, &events).await,
+            } => {
+                let outcome = execute(&mut conn, &sql, batch_size, &events).await;
+                let complete = matches!(outcome, ExecutionOutcome::Complete);
+                context.observe(&sql, complete);
+                if matches!(outcome, ExecutionOutcome::Uncertain) {
+                    context.refresh(None);
+                }
+                status_stale = !complete;
+            }
             Request::Rows { sql, params, reply } => {
                 let result = rows(&mut conn, &sql, params).await;
+                context.observe(&sql, result.is_ok());
+                if result.is_err() && !matches!(&result, Err(DriverError::Database { .. })) {
+                    context.refresh(None);
+                }
+                status_stale = result.is_err();
+                let _ = reply.send(result);
+            }
+            Request::DatabaseContext { reply } => {
+                let _ = reply.send(Ok(context.snapshot()));
+            }
+            Request::CurrentDatabase { reply } => {
+                let result = rows(&mut conn, "SELECT DATABASE()", vec![])
+                    .await
+                    .map(|rows| {
+                        rows.into_iter()
+                            .next()
+                            .and_then(|row| row.into_iter().next().flatten())
+                    });
+                context.refresh(result.as_ref().ok().cloned().flatten());
                 status_stale = result.is_err();
                 let _ = reply.send(result);
             }
@@ -283,19 +317,30 @@ async fn rows(conn: &mut Conn, sql: &str, params: Vec<String>) -> Result<Rows> {
 
 /// Runs one statement and streams its first result set. If the receiver goes away (tab
 /// closed), reading stops; the connection discards the rest before the next statement.
-/// Returns whether it ran to its end: an error leaves no fresh OK packet behind.
+/// An interrupted response may have changed context before the client lost its result.
+enum ExecutionOutcome {
+    Complete,
+    Failed,
+    Uncertain,
+}
+
 async fn execute(
     conn: &mut Conn,
     sql: &str,
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
-) -> bool {
+) -> ExecutionOutcome {
     let send = |event| async move { events.send(event).await.is_ok() };
     let mut result = match conn.query_iter(sql).await {
         Ok(result) => result,
         Err(e) => {
+            let definite = matches!(&e,mysql_async::Error::Server(server) if server.code!=ER_QUERY_INTERRUPTED);
             send(Err(map_error_in(e, sql))).await;
-            return false;
+            return if definite {
+                ExecutionOutcome::Failed
+            } else {
+                ExecutionOutcome::Uncertain
+            };
         }
     };
     let columns = result.columns().unwrap_or_else(|| Arc::from(Vec::new()));
@@ -312,7 +357,7 @@ async fn execute(
                 }
                 Err(e) => {
                     send(Err(map_error_in(e, sql))).await;
-                    return false;
+                    return ExecutionOutcome::Uncertain;
                 }
             }
         }
@@ -331,7 +376,7 @@ async fn execute(
             .collect();
         let schema = Arc::new(ResultSchema::new(metas));
         if !send(Ok(ExecEvent::Columns(schema.clone()))).await {
-            return false;
+            return ExecutionOutcome::Uncertain;
         }
         let new_builders = || {
             schema
@@ -353,7 +398,7 @@ async fn execute(
                     Ok(None) => break,
                     Err(e) => {
                         send(Err(map_error_in(e, sql))).await;
-                        return false;
+                        return ExecutionOutcome::Uncertain;
                     }
                 },
             };
@@ -366,27 +411,27 @@ async fn execute(
                         mismatch,
                     )))
                     .await;
-                    return false;
+                    return ExecutionOutcome::Uncertain;
                 }
             }
             pending += 1;
             if pending == batch_size {
                 let batch = finish(&schema, &mut builders);
                 if !send(batch.map(ExecEvent::Batch)).await {
-                    return false;
+                    return ExecutionOutcome::Uncertain;
                 }
                 pending = 0;
             }
         }
         if pending > 0 && !send(finish(&schema, &mut builders).map(ExecEvent::Batch)).await {
-            return false;
+            return ExecutionOutcome::Uncertain;
         }
     }
     let affected = result.affected_rows();
     // Only the first result set is shown; the rest (from procedures) is discarded.
     if let Err(e) = result.drop_result().await {
         send(Err(map_error_in(e, sql))).await;
-        return false;
+        return ExecutionOutcome::Uncertain;
     }
     let rows_affected = (columns.is_empty() && reports_row_count(sql)).then_some(affected);
     // The server counts the statement's warnings and notes in its last OK packet: only when
@@ -394,12 +439,12 @@ async fn execute(
     if conn.get_warnings() > 0 && dialect::first_word(sql) != "show" {
         for notice in warnings(conn).await {
             if !send(Ok(ExecEvent::Notice(notice))).await {
-                return true;
+                return ExecutionOutcome::Complete;
             }
         }
     }
     send(Ok(ExecEvent::Done { rows_affected })).await;
-    true
+    ExecutionOutcome::Complete
 }
 
 /// Most warnings read after one statement.
@@ -544,11 +589,21 @@ impl Connection for MysqlConnection {
     }
 
     async fn current_database(&self) -> Result<Option<String>> {
-        let rows = self.rows("SELECT DATABASE()", vec![]).await?;
-        Ok(rows
-            .into_iter()
-            .next()
-            .and_then(|row| row.into_iter().next().flatten()))
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::CurrentDatabase { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
+    }
+
+    async fn database_context(&self) -> Result<Option<String>> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::DatabaseContext { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
     }
 
     /// MySQL calls its databases schemas: the same list as the explorer.

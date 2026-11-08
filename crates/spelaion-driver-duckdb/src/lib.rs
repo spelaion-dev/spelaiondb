@@ -24,9 +24,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use duckdb::{AccessMode, Config, InterruptHandle};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey,
-    Result, SchemaInfo, SchemaObject, TableInfo, TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
+    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter,
+    ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject, TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -248,6 +248,8 @@ enum Command {
         events: mpsc::Sender<Result<ExecEvent>>,
     },
     Version(Reply<String>),
+    CurrentDatabase(Reply<String>),
+    DatabaseContext(Reply<Option<String>>),
     Schemas(LikeFilter, Reply<Vec<SchemaInfo>>),
     Objects(String, LikeFilter, Reply<Vec<ObjectInfo>>),
     Describe(String, String, Reply<TableInfo>),
@@ -261,6 +263,11 @@ enum Command {
 
 /// Loop of the connection thread. Ends when the `DuckdbConnection` is dropped.
 fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>) {
+    // Initialization happens before the actor accepts any user SQL.
+    let mut context = DatabaseContext::new(
+        ContextDialect::Duckdb,
+        introspect::current_database(conn).ok(),
+    );
     while let Some(command) = inbox.blocking_recv() {
         match command {
             Command::Execute {
@@ -268,7 +275,12 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
                 batch_size,
                 events,
             } => {
-                if let Err(e) = exec::execute(conn, &sql, batch_size, &events) {
+                let result = exec::execute(conn, &sql, batch_size, &events);
+                context.observe(&sql, result.is_ok());
+                if result.is_err() && !matches!(&result, Err(DriverError::Database { .. })) {
+                    context.refresh(None);
+                }
+                if let Err(e) = result {
                     let _ = events.blocking_send(Err(e));
                 }
             }
@@ -280,6 +292,14 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             }
             Command::Schemas(like, reply) => {
                 let _ = reply.send(introspect::list_schemas(conn, &like));
+            }
+            Command::CurrentDatabase(reply) => {
+                let result = introspect::current_database(conn);
+                context.refresh(result.as_ref().ok().cloned());
+                let _ = reply.send(result);
+            }
+            Command::DatabaseContext(reply) => {
+                let _ = reply.send(Ok(context.snapshot()));
             }
             Command::Objects(schema, like, reply) => {
                 let _ = reply.send(introspect::list_objects(conn, &schema, &like));
@@ -376,6 +396,13 @@ impl Connection for DuckdbConnection {
 
     async fn server_version(&self) -> Result<String> {
         self.ask(Command::Version).await
+    }
+
+    async fn current_database(&self) -> Result<Option<String>> {
+        self.ask(Command::CurrentDatabase).await.map(Some)
+    }
+    async fn database_context(&self) -> Result<Option<String>> {
+        self.ask(Command::DatabaseContext).await
     }
 
     async fn transaction_state(&self) -> Result<TransactionState> {

@@ -6,6 +6,7 @@
 //! sorting, the native part is never lost.
 
 mod column;
+mod database_context;
 mod dialect;
 mod error;
 mod filter;
@@ -23,6 +24,7 @@ use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 
 pub use column::{ColumnMeta, ResultSchema};
+pub use database_context::{ContextDialect, DatabaseContext};
 pub use dialect::{Dialect, StatementSpan};
 pub use error::DriverError;
 pub use filter::{LikeFilter, NameFilter, literal_pattern, pattern_matches};
@@ -187,6 +189,11 @@ pub trait Connection: Send + Sync {
         Err(DriverError::Other(
             "changing database is not supported".into(),
         ))
+    }
+    /// A local snapshot for history observers: never executes SQL or changes ROW_COUNT,
+    /// diagnostics, transaction state or query results. `None` means unknown/unset.
+    async fn database_context(&self) -> Result<Option<String>> {
+        Ok(None)
     }
     /// Change this session's database without changing the saved connection.
     async fn select_database(&self, _database: &str) -> Result<()> {

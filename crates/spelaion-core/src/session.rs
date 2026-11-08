@@ -435,6 +435,9 @@ impl Session {
         kind: RunKind,
         run_options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
+        // This run is requested now, even if history or another run delays its first poll.
+        // A cancel during those waits stops it; a later, newly requested run gets a new epoch.
+        let cancels_at_start = self.cancels.load(Ordering::SeqCst);
         let (managed, count_statement) = match kind {
             RunKind::User => (true, true),
             RunKind::Generated => (false, true),
@@ -455,7 +458,6 @@ impl Session {
         Box::pin(async_stream::stream! {
             // One script at a time; Commit, Rollback and the toggle wait for none.
             let _running = control.lock_owned().await;
-            let cancels_at_start = cancels.load(Ordering::SeqCst);
             let cancelled = || cancels.load(Ordering::SeqCst) != cancels_at_start;
             let follow = transaction.borrow().supported;
             let mut on_error = run_options.on_error;
@@ -467,6 +469,12 @@ impl Session {
                     break;
                 }
                 yield CoreEvent::StatementStarted { index, span };
+                // A stream consumer may await history/context work after this yield. A cancel
+                // during that pause must stop before BEGIN or the user's SQL reaches a driver.
+                if cancelled() {
+                    summary.stop = Some(ScriptStop::Cancelled { index });
+                    break;
+                }
                 let started = Instant::now();
                 summary.executed += 1;
                 let text = span.text(&script);

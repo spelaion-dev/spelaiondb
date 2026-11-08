@@ -384,7 +384,7 @@ export const commands = {
 	 */
 	saveSnippet: (name: string, sql: string, connection: string | null) => typedError<number, string>(__TAURI_INVOKE("save_snippet", { name, sql, connection })),
 	/**  Saved queries of the open workspace and the personal ones, by name. */
-	listSnippets: (search: string) => typedError<SnippetItem[], string>(__TAURI_INVOKE("list_snippets", { search })),
+	listSnippets: (search: string) => typedError<SnippetItem_Serialize[], string>(__TAURI_INVOKE("list_snippets", { search })),
 	deleteSnippet: (id: number) => typedError<boolean, string>(__TAURI_INVOKE("delete_snippet", { id })),
 	/**
 	 *  The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
@@ -466,6 +466,14 @@ export const commands = {
 	setTunnelPorts: (range: TunnelPortsItem | null) => typedError<null, string>(__TAURI_INVOKE("set_tunnel_ports", { range })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
+	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
+	historyDatabases: () => typedError<string[], string>(__TAURI_INVOKE("history_databases")),
+	pinHistory: (id: number, pinned: boolean) => typedError<boolean, string>(__TAURI_INVOKE("pin_history", { id, pinned })),
+	exportHistory: (exportId: number, filter: HistoryFilterItem_Deserialize, path: string) => typedError<number, string>(__TAURI_INVOKE("export_history", { exportId, filter, path })),
+	snippetPage: (search: string, folder: number | null, unfiled: boolean, limit: number, offset: number) => typedError<SnippetItem_Serialize[], string>(__TAURI_INVOKE("snippet_page", { search, folder, unfiled, limit, offset })),
+	snippetFolders: () => typedError<SnippetFolderItem[], string>(__TAURI_INVOKE("snippet_folders")),
+	createSnippetFolder: (name: string) => typedError<number, string>(__TAURI_INVOKE("create_snippet_folder", { name })),
+	moveSnippet: (id: number, folder: number | null) => typedError<null, string>(__TAURI_INVOKE("move_snippet", { id, folder })),
 	setHistoryEnabled: (connection: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
 	/**
 	 *  Opens a session (`session` is chosen by the UI). If a password is needed, it says so
@@ -1492,6 +1500,28 @@ export type GridPreferencesItem = {
 	boolCheckboxes: boolean,
 };
 
+export type HistoryFilterItem = HistoryFilterItem_Serialize | HistoryFilterItem_Deserialize;
+
+export type HistoryFilterItem_Deserialize = {
+	search: string,
+	status?: HistoryStatusItem | null,
+	database?: string | null,
+	fromMs?: number | null,
+	untilMs?: number | null,
+	pinned: boolean,
+	throughId?: number | null,
+};
+
+export type HistoryFilterItem_Serialize = {
+	search: string,
+	status: HistoryStatusItem | null,
+	database: string | null,
+	fromMs: number | null,
+	untilMs: number | null,
+	pinned: boolean,
+	throughId: number | null,
+};
+
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
 
 export type HistoryItem_Deserialize = {
@@ -1503,6 +1533,8 @@ export type HistoryItem_Deserialize = {
 	rows: number,
 	error?: string | null,
 	cancelled: boolean,
+	database?: string | null,
+	pinned: boolean,
 };
 
 export type HistoryItem_Serialize = {
@@ -1514,7 +1546,25 @@ export type HistoryItem_Serialize = {
 	rows: number,
 	error: string | null,
 	cancelled: boolean,
+	database: string | null,
+	pinned: boolean,
 };
+
+export type HistoryPageItem = HistoryPageItem_Serialize | HistoryPageItem_Deserialize;
+
+export type HistoryPageItem_Deserialize = {
+	entries: HistoryItem_Deserialize[],
+	hasMore: boolean,
+	throughId: number,
+};
+
+export type HistoryPageItem_Serialize = {
+	entries: HistoryItem_Serialize[],
+	hasMore: boolean,
+	throughId: number,
+};
+
+export type HistoryStatusItem = "success" | "error" | "cancelled";
 
 /**  One hop of the tunnel editor. The password travels apart and never reaches the file. */
 export type HopDraftItem = HopDraftItem_Serialize | HopDraftItem_Deserialize;
@@ -2530,8 +2580,17 @@ export type SessionLost_Serialize = {
 	openTransaction: boolean,
 };
 
+export type SnippetFolderItem = {
+	id: number,
+	name: string,
+	personal: boolean,
+};
+
 /**  A saved query; `connection` is empty when it was saved without one. */
-export type SnippetItem = {
+export type SnippetItem = SnippetItem_Serialize | SnippetItem_Deserialize;
+
+/**  A saved query; `connection` is empty when it was saved without one. */
+export type SnippetItem_Deserialize = {
 	id: number,
 	name: string,
 	statement: string,
@@ -2539,6 +2598,19 @@ export type SnippetItem = {
 	updatedMs: number,
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
+	folderId?: number | null,
+};
+
+/**  A saved query; `connection` is empty when it was saved without one. */
+export type SnippetItem_Serialize = {
+	id: number,
+	name: string,
+	statement: string,
+	connection: string,
+	updatedMs: number,
+	/**  Saved outside any repository: visible from every workspace. */
+	personal: boolean,
+	folderId: number | null,
 };
 
 /**  A `.sql` file read by the core: its text with `\n` line breaks. */
