@@ -76,10 +76,12 @@ export function ResultFilter(props: {
           }
         }}
       />
+      {/* The label shows only its short text; the longer explanation is a separate node that
+          the filter's aria-describedby reads, so the label is not announced twice. */}
       {props.scope && <span className="result-filter-scope" title={t(props.scope === "page" ? "results.filterPageHint" : "queryPaging.filterLoaded")}>
         {t(props.scope === "page" ? "results.filterPageOnly" : "queryPaging.loadedOnly")}
-        <span id={scopeId} className="sr-only">{t(props.scope === "page" ? "results.filterPageHint" : "queryPaging.filterLoaded")}</span>
       </span>}
+      {props.scope && <span id={scopeId} className="sr-only">{t(props.scope === "page" ? "results.filterPageHint" : "queryPaging.filterLoaded")}</span>}
     </div>
   );
 }
