@@ -17,6 +17,8 @@ testing/docker/keys/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+# Files a real DataGrip wrote, kept as test fixtures.
+!/crates/spelaion-config/tests/fixtures/datagrip/DataGripProjects/default/.idea/
 .DS_Store
 Thumbs.db
 *.log

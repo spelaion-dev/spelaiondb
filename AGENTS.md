@@ -57,9 +57,15 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   explorer filters connections by (`normalize_tags` in `draft.rs`): both bounded and without
   hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
-  password is forgotten when that hop points to another server). `dbeaver.rs` reads DBeaver's
-  connections and saved credentials for the import (passwords only as `Secret`, to the
-  keychain; its connection types map to the closest built-in type).
+  password is forgotten when that hop points to another server).
+  Importing connections from other clients (ADR-039): `import.rs` is the flow every client
+  shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
+  they reach, replace in place, target folder, what was not mapped, passwords read from another
+  app's keychain only on import); a client is a reader that returns `ImportedConnection`s.
+  `dbeaver.rs` reads DBeaver's connections and saved credentials (passwords only as `Secret`,
+  to the keychain; its connection types map to the closest built-in type); `datagrip.rs` reads
+  DataGrip's (and other JetBrains IDEs') XML data sources and SSH configurations, tested against
+  files a real DataGrip wrote (`tests/fixtures/datagrip`).
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no

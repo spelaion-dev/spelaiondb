@@ -61,8 +61,8 @@ import {
   type RiskKind,
   type KubernetesDraftItem,
   type KubePortItem_Serialize,
-  type DbeaverItem_Serialize,
-  type DbeaverScan_Serialize,
+  type ImportItem_Serialize,
+  type ImportScan_Serialize,
   type ImportReport,
   type RowChangeItem_Deserialize,
   type UpdateStatus_Serialize,
@@ -120,9 +120,9 @@ export type ConnectionItem = ConnectionItem_Serialize;
 export type ConnectionTypeItem = ConnectionTypeItem_Serialize;
 export type TransactionStatusItem = TransactionStatusItem_Serialize;
 export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
-export type DbeaverItem = DbeaverItem_Serialize;
+export type ImportItem = ImportItem_Serialize;
 export type KubePort = KubePortItem_Serialize;
-export type DbeaverScan = DbeaverScan_Serialize;
+export type ImportScan = ImportScan_Serialize;
 export type RowChangeItem = RowChangeItem_Deserialize;
 export type CellEditItem = CellEditItem_Deserialize;
 export type UrlFields = UrlFields_Serialize;

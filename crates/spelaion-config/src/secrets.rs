@@ -85,6 +85,25 @@ pub trait SecretBackend: Send + Sync {
     fn keychain_available(&self) -> bool {
         true
     }
+    /// Reads an entry another application wrote in the system keychain (`service` and
+    /// `account` as that application named them), to import its connections. Only for an
+    /// import the user asked for, with passwords; `Ok(None)` when there is no such entry or
+    /// no way to read it here. The default reads nothing.
+    fn other_app_keychain_get(
+        &self,
+        _service: &str,
+        _account: &str,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+}
+
+/// A secret another application stored as bytes: UTF-8, as the JetBrains IDEs write it, or
+/// nothing. Trailing NULs are dropped.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) fn decode_other_app_secret(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    Some(text.trim_end_matches('\0').to_string())
 }
 
 /// Why the keychain cannot be used when there is none, for every message that mentions it.
@@ -168,6 +187,35 @@ impl SecretBackend for SystemBackend {
 
     fn keychain_available(&self) -> bool {
         ensure_store().is_ok()
+    }
+
+    fn other_app_keychain_get(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<String>, String> {
+        // Only the macOS keychain: it finds a generic password by service and account, the
+        // system asks the user before handing over another application's entry, and it is the
+        // one place a JetBrains IDE puts passwords there. On Windows the IDEs keep them in their
+        // own KeePass database, and Secret Service items of other applications carry their own
+        // attributes, which this store does not search by: nothing is read there.
+        #[cfg(target_os = "macos")]
+        {
+            ensure_store()?;
+            match keyring_core::Entry::new(service, account)
+                .map_err(|e| e.to_string())?
+                .get_secret()
+            {
+                Ok(bytes) => Ok(decode_other_app_secret(&bytes)),
+                Err(keyring_core::Error::NoEntry) => Ok(None),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (service, account);
+            Ok(None)
+        }
     }
 
     fn env(&self, name: &str) -> Option<String> {
@@ -272,5 +320,19 @@ mod tests {
         ] {
             assert_eq!(s.parse::<SecretRef>().unwrap().to_string(), s);
         }
+    }
+
+    #[test]
+    fn other_apps_secrets_are_read_as_utf8() {
+        assert_eq!(
+            decode_other_app_secret(b"fake-pass").as_deref(),
+            Some("fake-pass")
+        );
+        assert_eq!(
+            decode_other_app_secret("pässword".as_bytes()).as_deref(),
+            Some("pässword")
+        );
+        assert_eq!(decode_other_app_secret(b"abcd\0").as_deref(), Some("abcd"));
+        assert!(decode_other_app_secret(&[0xff, 0xfe, 0xfd]).is_none());
     }
 }

@@ -27,7 +27,7 @@ import { confirmOpenTransactions, reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
 import { fieldList } from "../fieldNames";
-import { DbeaverImport } from "./DbeaverImport";
+import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
@@ -50,7 +50,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const [engines, setEngines] = useState<EngineItem[]>([]);
   const [engine, setEngine] = useState<EngineItem | null>(null);
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [importing, setImporting] = useState<ImportClientId | null>(null);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -103,7 +103,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
             {editing
               ? t("editTitle", { name: initial?.name ?? editing })
               : importing
-                ? t("dbeaver.title")
+                ? t("importer.title", { client: IMPORT_CLIENTS.find((c) => c.id === importing)?.label })
                 : engine
                   ? t("formTitle", { engine: engine.name })
                   : t("title")}
@@ -142,7 +142,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
             </>
           )
         ) : importing ? (
-          <DbeaverImport onBack={() => setImporting(false)} onDone={close} />
+          <ConnectionImport client={importing} onBack={() => setImporting(null)} onDone={close} />
         ) : engine ? (
           <ConnectionForm
             engine={engine}
@@ -157,7 +157,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : (
           <EnginePicker
             engines={engines}
-            onImport={() => setImporting(true)}
+            onImport={(client) => setImporting(client)}
             onPick={(picked, fields) => {
               setPrefill(fields ?? null);
               setEngine(picked);
@@ -182,7 +182,7 @@ function EnginePicker({
 }: {
   engines: EngineItem[];
   onPick(engine: EngineItem, fields?: UrlFields): void;
-  onImport(): void;
+  onImport(client: ImportClientId): void;
 }) {
   const { t } = useTranslation("connections");
   const [search, setSearch] = useState("");
@@ -241,8 +241,12 @@ function EnginePicker({
         </p>
       )}
       <div className="import-row">
-        <span className="muted small">{t("dbeaver.or")}</span>
-        <button onClick={onImport}>{t("dbeaver.button")}</button>
+        <span className="muted small">{t("importer.or")}</span>
+        {IMPORT_CLIENTS.map((client) => (
+          <button key={client.id} onClick={() => onImport(client.id)}>
+            {t("importer.button", { client: client.label })}
+          </button>
+        ))}
       </div>
       <div className="engine-groups">
         {CATEGORIES.map((category) => {

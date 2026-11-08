@@ -13,11 +13,13 @@ mod accounts;
 mod check;
 mod conn_url;
 mod copy;
+mod datagrip;
 mod dbeaver;
 mod draft;
 mod edit;
 mod engine_change;
 mod error;
+mod import;
 mod load;
 pub mod mcp_clients;
 mod migrate;
@@ -39,10 +41,8 @@ pub use copy::{
     ClipboardConnection, Duplicated, MAX_CLIPBOARD_TEXT, Pasted, connection_clipboard_text,
     duplicate_connection, paste_connection,
 };
-pub use dbeaver::{
-    DbeaverConnection, DbeaverError, DbeaverProxy, DbeaverSsh, ImportPlan, dbeaver_workspace,
-    import_plan, read_dbeaver,
-};
+pub use datagrip::{DatagripError, datagrip_dirs, jetbrains_dir, read_datagrip};
+pub use dbeaver::{DbeaverError, dbeaver_workspace, read_dbeaver};
 pub use draft::{
     CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, SessionDraft, add_connection,
     connection_revision, connections_dir, delete_connection, normalize_tags, slug,
@@ -54,6 +54,11 @@ pub use edit::{
 };
 pub use engine_change::EngineChange;
 pub use error::{ConfigError, ResolveError};
+pub use import::{
+    DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedProxy, ImportedSsh,
+    ImportedTls, KeychainItem, TargetFolder, find_duplicate, import_names, import_plan,
+    read_stored_passwords, replacement_draft,
+};
 pub use load::{
     CONNECTION_TYPES_FILE, Config, ConnectionEntry, ConnectionId, Source, TunnelEntry, TypesLayer,
     WORKSPACE_DIR, default_user_dir, ensure_private_dir, find_workspace, load, valid_type_id,

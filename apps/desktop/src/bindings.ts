@@ -438,8 +438,11 @@ export const commands = {
 	bindParams: (session: string, sql: string, values: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("bind_params", { session, sql, values })),
 	/**  Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form. */
 	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
-	/**  The DBeaver connections under a folder (DBeaver's workspace if none), without secrets. */
-	scanDbeaver: (path: string | null) => typedError<DbeaverScan_Serialize, string>(__TAURI_INVOKE("scan_dbeaver", { path })),
+	/**
+	 *  The connections of a client under a folder (where the client keeps them if none), with the
+	 *  connections each would duplicate; without secrets.
+	 */
+	scanConnections: (client: string, path: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path })),
 	/**  The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015). */
 	kubeContexts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form, personal, editing })),
 	/**  The namespaces of the chosen context. */
@@ -449,11 +452,12 @@ export const commands = {
 	/**  The ports of the chosen resource: a service's ports or its containers' ports. */
 	kubePorts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form, personal, editing })),
 	/**
-	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelaionDB files. The
-	 *  folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
-	 *  DBeaver saved go to the keychain, otherwise they are asked when connecting.
+	 *  Imports the chosen connections (and their SSH tunnels) as SpelaionDB files. The client's
+	 *  files are read again here, so passwords never leave Rust: with `save_passwords` the ones
+	 *  the client saved go to the keychain (those it keeps in the system keychain are only read
+	 *  now), otherwise they are asked when connecting.
 	 */
-	importDbeaver: (path: string | null, ids: string[], personal: boolean, savePasswords: boolean) => typedError<ImportReport, string>(__TAURI_INVOKE("import_dbeaver", { path, ids, personal, savePasswords })),
+	importConnections: (client: string, path: string | null, choices: ImportChoice[], target: ImportTarget) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, choices, target })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: (root: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace", { root })),
@@ -1175,73 +1179,6 @@ export type ConstraintKindItem = "primary_key" | "unique" | "check";
 /**  What "Create" in the explorer can start (see `spelaion_core::CreateKind`). */
 export type CreateKindItem = "table" | "view" | "materializedView" | "sequence" | "schema";
 
-/**
- *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
- *  a password.
- */
-export type DbeaverItem = DbeaverItem_Serialize | DbeaverItem_Deserialize;
-
-/**
- *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
- *  a password.
- */
-export type DbeaverItem_Deserialize = {
-	id: string,
-	name: string,
-	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it. */
-	engine?: string | null,
-	/**  Why it cannot be imported, if it cannot. */
-	unsupported?: string | null,
-	/**  `host:port/database`, or the file for SQLite and DuckDB. */
-	target: string,
-	user: string,
-	env: string,
-	hasPassword: boolean,
-	/**  `user@host:port` of its SSH tunnel. */
-	ssh?: string | null,
-	/**  `host:port` of its SOCKS proxy. */
-	proxy?: string | null,
-};
-
-/**
- *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
- *  a password.
- */
-export type DbeaverItem_Serialize = {
-	id: string,
-	name: string,
-	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it. */
-	engine: string | null,
-	/**  Why it cannot be imported, if it cannot. */
-	unsupported: string | null,
-	/**  `host:port/database`, or the file for SQLite and DuckDB. */
-	target: string,
-	user: string,
-	env: string,
-	hasPassword: boolean,
-	/**  `user@host:port` of its SSH tunnel. */
-	ssh: string | null,
-	/**  `host:port` of its SOCKS proxy. */
-	proxy: string | null,
-};
-
-/**  What `scan_dbeaver` found, and where. */
-export type DbeaverScan = DbeaverScan_Serialize | DbeaverScan_Deserialize;
-
-/**  What `scan_dbeaver` found, and where. */
-export type DbeaverScan_Deserialize = {
-	dir: string,
-	connections: DbeaverItem_Deserialize[],
-};
-
-/**  What `scan_dbeaver` found, and where. */
-export type DbeaverScan_Serialize = {
-	dir: string,
-	connections: DbeaverItem_Serialize[],
-};
-
 /**  A connection made by "Duplicate" (ADR-030). */
 export type DuplicatedItem = {
 	id: string,
@@ -1351,6 +1288,12 @@ export type EngineItem_Serialize = {
 
 /**  The answer to a paused run. */
 export type ErrorAnswerItem = "stop" | "skip" | "skipAll";
+
+/**  A connection that already exists, by name. */
+export type ExistingItem = {
+	id: string,
+	name: string,
+};
 
 export type ExplainCheck = {
 	sql: string,
@@ -1697,7 +1640,94 @@ export type HopDraftItem_Serialize = {
 
 export type IfExistsItem = "fail" | "append" | "replace";
 
+/**  One connection to import, and what to do if it already exists. */
+export type ImportChoice = {
+	id: string,
+	/**  `import` (as a copy when the name is taken), `replace` or `skip`. */
+	action: string,
+};
+
 export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown";
+
+/**
+ *  A connection found in another client's files. No secret travels: only whether a password
+ *  comes with it.
+ */
+export type ImportItem = ImportItem_Serialize | ImportItem_Deserialize;
+
+/**
+ *  A connection found in another client's files. No secret travels: only whether a password
+ *  comes with it.
+ */
+export type ImportItem_Deserialize = {
+	id: string,
+	name: string,
+	folder: string,
+	/**
+	 *  `postgres`, `mysql`, `mariadb`, `sqlserver`, `sqlite`, `duckdb`; `None` when SpelaionDB
+	 *  cannot open it.
+	 */
+	engine?: string | null,
+	/**  Why it cannot be imported, if it cannot. */
+	unsupported?: string | null,
+	/**  `host:port/database`, or the file for SQLite and DuckDB. */
+	target: string,
+	user: string,
+	env: string,
+	hasPassword: boolean,
+	/**  `user@host:port` of its SSH tunnel. */
+	ssh?: string | null,
+	/**  `host:port` of its SOCKS proxy. */
+	proxy?: string | null,
+	/**  Its TLS mode, when it sets one. */
+	tls?: TlsModeItem | null,
+	readOnly: boolean,
+	/**
+	 *  The connection it would duplicate among the personal connections, and among the
+	 *  project's.
+	 */
+	existingPersonal?: ExistingItem | null,
+	existingProject?: ExistingItem | null,
+	/**  What the client has that SpelaionDB does not import. */
+	unmapped: string[],
+};
+
+/**
+ *  A connection found in another client's files. No secret travels: only whether a password
+ *  comes with it.
+ */
+export type ImportItem_Serialize = {
+	id: string,
+	name: string,
+	folder: string,
+	/**
+	 *  `postgres`, `mysql`, `mariadb`, `sqlserver`, `sqlite`, `duckdb`; `None` when SpelaionDB
+	 *  cannot open it.
+	 */
+	engine: string | null,
+	/**  Why it cannot be imported, if it cannot. */
+	unsupported: string | null,
+	/**  `host:port/database`, or the file for SQLite and DuckDB. */
+	target: string,
+	user: string,
+	env: string,
+	hasPassword: boolean,
+	/**  `user@host:port` of its SSH tunnel. */
+	ssh: string | null,
+	/**  `host:port` of its SOCKS proxy. */
+	proxy: string | null,
+	/**  Its TLS mode, when it sets one. */
+	tls: TlsModeItem | null,
+	readOnly: boolean,
+	/**
+	 *  The connection it would duplicate among the personal connections, and among the
+	 *  project's.
+	 */
+	existingPersonal: ExistingItem | null,
+	existingProject: ExistingItem | null,
+	/**  What the client has that SpelaionDB does not import. */
+	unmapped: string[],
+};
 
 /**
  *  How the source is read. Characters travel as strings: the delimiter is one character, the
@@ -1759,13 +1789,16 @@ export type ImportProgressItem = {
 };
 
 /**
- *  The outcome of an import: the names given to the new connections (`(DBeaver)` is added
- *  when the name was taken) and those left out.
+ *  The outcome of an import: the names given to the new connections (`(DataGrip)` is added
+ *  when the name was taken), the ones replaced, and those left out.
  */
 export type ImportReport = {
 	imported: string[],
+	replaced: string[],
 	tunnels: string[],
 	skipped: ImportSkip[],
+	/**  Connections imported without the password the client kept in the keychain, and why. */
+	passwordErrors: ImportSkip[],
 };
 
 /**  The user's choices; the core writes every statement from them. */
@@ -1788,6 +1821,21 @@ export type ImportRiskItem = {
 	risk: RiskKind,
 };
 
+/**  What a scan found, and where. */
+export type ImportScan = ImportScan_Serialize | ImportScan_Deserialize;
+
+/**  What a scan found, and where. */
+export type ImportScan_Deserialize = {
+	dir: string,
+	connections: ImportItem_Deserialize[],
+};
+
+/**  What a scan found, and where. */
+export type ImportScan_Serialize = {
+	dir: string,
+	connections: ImportItem_Serialize[],
+};
+
 /**  One connection that could not be imported, and why. */
 export type ImportSkip = {
 	name: string,
@@ -1798,6 +1846,16 @@ export type ImportSkip = {
 export type ImportSourceItem = { kind: "file"; path: string } | 
 /**  Pasted or clipboard text. */
 { kind: "text"; text: string };
+
+/**  Where the connections go. */
+export type ImportTarget = {
+	personal: boolean,
+	savePasswords: boolean,
+	/**  A folder to put them in; empty for the top level. */
+	folder: string,
+	/**  Keep the client's folders under it. */
+	keepClientFolders: boolean,
+};
 
 export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
 
