@@ -3,6 +3,7 @@
 
 mod dto;
 mod files;
+mod import;
 mod interaction;
 mod library;
 mod mcp;
@@ -57,6 +58,8 @@ struct AppState {
     tests: ConnectionTests,
     /// Streaming exports running, by the id the UI gave them (ADR-034).
     exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
+    /// Imports running, by the id the UI gave them (ADR-038).
+    imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ImportCancel>>>,
 }
 
 struct DesktopSession {
@@ -4278,6 +4281,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             mcp::audit_sessions,
             mcp::export_audit,
             mcp::clear_audit,
+            import::import_preview,
+            import::import_plan,
+            import::run_import,
+            import::cancel_import,
             get_language,
             set_language,
             get_theme,
@@ -4530,6 +4537,7 @@ pub fn run() {
         quitting: AtomicBool::new(false),
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
+        imports: std::sync::Mutex::new(HashMap::new()),
     };
 
     let typed = builder.invoke_handler();

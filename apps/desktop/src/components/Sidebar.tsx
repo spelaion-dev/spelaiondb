@@ -48,6 +48,7 @@ import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
 import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
+import { useImport } from "./ImportDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard, pasteIsForText } from "../connectionCopies";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
@@ -2077,6 +2078,16 @@ function SchemaNode({
             {t("refreshAllSchemas")}
           </button>
           <FilterMenuItems kind="schemas" names={[schema]} onFilterName={onFilterName} close={() => setMenu(null)} />
+          <hr />
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              useImport.getState().open({ session, connectionId, schema, table: null, text: null });
+            }}
+          >
+            {t("importNewTable")}
+          </button>
           {actions && actions.create.some((kind) => kind !== "schema") && <hr />}
           {actions?.create
             .filter((kind) => kind !== "schema")
@@ -2472,6 +2483,17 @@ function ObjectNode({
               ? t("exportTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
               : t("exportTable")}
           </button>
+          {!view && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                useImport.getState().open({ session, connectionId, schema: object.schema, table: object.name, text: null });
+              }}
+            >
+              {t("importData")}
+            </button>
+          )}
           <button role="menuitem" onClick={refresh}>
             {t("refresh")}
           </button>

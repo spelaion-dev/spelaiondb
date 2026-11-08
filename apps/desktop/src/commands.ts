@@ -23,6 +23,7 @@ import {
 } from "./tabActions";
 import { FOCUS_EXPLORER_FILTER_EVENT } from "./components/Sidebar";
 import { openFound } from "./components/OpenObjectDialog";
+import { useImport } from "./components/ImportDialog";
 
 export interface CommandContext {
   /** The tab the command acts on: the menu's tab, or the active one (none behind Settings). */
@@ -61,6 +62,32 @@ function toggleSection(section: "connections" | "processes") {
   useApp.getState().setSidebarSection((current) => (current === section ? null : section));
 }
 
+/** The open session an import from the active tab copies: the tab's own, or the explorer's for
+ *  its connection. */
+function importSession(context: CommandContext): { session: string; connectionId: string } | null {
+  const tab = tabOf(context);
+  if (!tab?.connectionId) return null;
+  if (tab.status === "connected") return { session: tab.id, connectionId: tab.connectionId };
+  if (useApp.getState().explorerConnected.includes(tab.connectionId)) {
+    return { session: `meta:${tab.connectionId}`, connectionId: tab.connectionId };
+  }
+  return null;
+}
+
+/** Opens the import with the clipboard's text, into the active tab's connection (ADR-038). */
+async function importFromClipboard(context: CommandContext) {
+  const target = importSession(context);
+  if (!target) return;
+  let text: string | null = null;
+  try {
+    text = (await navigator.clipboard.readText()) || null;
+  } catch {
+    // The dialog's own Paste button says why the clipboard could not be read.
+  }
+  const schema = tabOf(context)?.table?.schema ?? null;
+  useImport.getState().open({ ...target, schema, table: null, text });
+}
+
 function stepTab(back: boolean) {
   const app = useApp.getState();
   const order = app.tabs.map((tab) => tab.id);
@@ -74,6 +101,10 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "palette.show": { run: () => useApp.getState().setPaletteOpen(true) },
   "object.openByName": { run: () => useApp.getState().setOpenObject({ connectionId: null }) },
   "connection.add": { run: () => useApp.getState().setConnectionDialog({ kind: "add" }) },
+  "data.importClipboard": {
+    enabled: (c) => importSession(c) !== null,
+    run: (c) => importFromClipboard(c),
+  },
   "tab.new": { run: () => useApp.getState().addTab(null) },
   "tab.rename": {
     enabled: (c) => tabOf(c) !== undefined,

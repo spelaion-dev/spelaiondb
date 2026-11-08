@@ -382,6 +382,8 @@
     "proceedRunning": "Cerrar y cancelar"
   },
   "exportTable": "Exportar…",
+  "importData": "Importar datos…",
+  "importNewTable": "Importar datos en una tabla nueva…",
   "exportTables_one": "Exportar {{formattedCount}} tabla…",
   "exportTables_other": "Exportar {{formattedCount}} tablas…"
 }
