@@ -1,0 +1,40 @@
+{
+  "capturedAtUtc": "2026-11-08T17:20:03.078Z",
+  "executable": "sdb17-final-desktop.exe",
+  "executableSha256": "A2EBCAE59F0E9579D68035A918B6A160AB3AA553753996B18F43E25C4AE72FD3",
+  "baselineRuntime": "SDB-17 source 982f1d2 on base 6b9b74a; later cfg(test)-only fix equals merged 77a2fb9 runtime",
+  "query": "before-query.sql",
+  "underlyingQuery": "query.sql",
+  "screenshots": [
+    {
+      "name": "before-plan-light-1400.png",
+      "width": 1400,
+      "height": 900,
+      "theme": "light",
+      "sha256": "e322714c5f6832fdb18fcd649c1bc82142927718d37dd0b28e777e4f91e3a2aa"
+    },
+    {
+      "name": "before-plan-light-900.png",
+      "width": 900,
+      "height": 600,
+      "theme": "light",
+      "sha256": "0dfa14a68880acaa15f8a7d1d96b6fbc6b718197c83a10f83dedcec01cb5bccb"
+    },
+    {
+      "name": "before-plan-dark-1400.png",
+      "width": 1400,
+      "height": 900,
+      "theme": "dark",
+      "sha256": "5b81ce58fba353c19358c931f8f0c2d9c8ee79542f7a1c04afd58aa589512107"
+    },
+    {
+      "name": "before-plan-dark-900.png",
+      "width": 900,
+      "height": 600,
+      "theme": "dark",
+      "sha256": "93b691776ea60d3d09093d7bcd13839daee48d1c3b99e80751c391874cded06f"
+    }
+  ],
+  "success": true,
+  "profileRemoved": true
+}

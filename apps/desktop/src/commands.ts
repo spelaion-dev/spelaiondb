@@ -9,6 +9,7 @@ import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./comma
 import { closeQueryTab, connectTabFromExplorer, explorerDatabase } from "./connect";
 import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
+import { openSavedPlan } from "./planFiles";
 import { EDITOR_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type Tab } from "./store";
 import {
   closable,
@@ -48,7 +49,7 @@ function tabOf(context: CommandContext): Tab | undefined {
 /** A SQL editor tab (not a table's data or details). */
 function editorTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && !tab.table && !tab.tableDetails ? tab : undefined;
+  return tab && !tab.table && !tab.tableDetails && !tab.plan ? tab : undefined;
 }
 
 function editorCommand(command: EditorCommand): CommandBinding["run"] {
@@ -113,7 +114,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "tab.duplicate": {
     enabled: (c) => {
       const tab = tabOf(c);
-      return tab !== undefined && !tab.tableDetails;
+      return tab !== undefined && !tab.tableDetails && !tab.plan;
     },
     run: (c) => c.tab && duplicateTab(c.tab),
   },
@@ -156,6 +157,8 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     run: (c) => c.tab && toggleResultsMaximized(c.tab),
   },
   "file.open": { run: () => openFileDialog() },
+  "file.openPlan": { run: () => openSavedPlan() },
+  "editor.explain": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("explain") },
   "file.save": {
     enabled: (c) => editorTab(c) !== undefined,
     // A file tab saves its file; a console saves its query by name (ADR-036).

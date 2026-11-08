@@ -154,9 +154,10 @@ test("global shortcuts find their command; AltGr characters and editor keys do n
 
 test("the editor menu and keymap derive actions from the central palette registry", () => {
   const editor = menuCommands("editor");
-  assert.equal(editor.length, 15);
+  assert.equal(editor.length, 16);
+  assert.ok(editor.some(command => command.id === "editor.explain" && command.shortcut === undefined));
   for (const command of editor) {
-    assert.equal(command.scope, "editor");
+    assert.equal(command.scope, command.shortcut ? "editor" : undefined);
     assert.ok(paletteCommands().includes(command));
   }
   const menu = functionSource("components/EditorMenu.tsx", "EditorMenu");

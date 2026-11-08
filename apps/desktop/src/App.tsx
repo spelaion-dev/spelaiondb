@@ -9,6 +9,8 @@ import { DeleteConnection } from "./components/DeleteConnection";
 import { MoveConnection } from "./components/MoveConnection";
 import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
+import { PlanFileTab } from "./components/PlanViewer";
+import { openSavedPlan } from "./planFiles";
 import { TabBar } from "./components/TabBar";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
@@ -92,7 +94,11 @@ export default function App() {
 
   useEffect(() => {
     // The open folder's tabs come back disconnected, with their text (ADR-036).
-    void loadConnections().finally(() => void restoreTabs());
+    void loadConnections().finally(async () => {
+      await restoreTabs();
+      const path = await commands.startupPlanPath();
+      if (path) await openSavedPlan(path);
+    });
     const unlisten = events.interactionRequest.listen((e) =>
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );
@@ -209,7 +215,7 @@ export default function App() {
               tabs.map((t) => (
                 // All mounted (the editor keeps its state); only the active one is visible.
                 <div key={t.id} className="tab-panel" hidden={t.id !== activeTab}>
-                  {t.tableDetails ? <TableDetailsView tab={t} /> : <EditorTab tab={t} />}
+                  {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : <EditorTab tab={t} />}
                 </div>
               ))
             )}

@@ -35,6 +35,7 @@ export interface SqlEditorHandle {
   format(): void;
   runCurrent(): void;
   runScript(): void;
+  currentRequest(): Promise<RunRequest | null>;
 }
 
 interface Props {
@@ -342,6 +343,17 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
       }
     },
     runCurrent: () => { if (view.current) run(view.current); },
+    currentRequest: async () => {
+      const v = view.current;
+      if (!v) return null;
+      const doc = v.state.doc.toString(), selection = v.state.selection;
+      if (!selection.main.empty) return { text: v.state.sliceDoc(selection.main.from, selection.main.to), from: selection.main.from };
+      const span = await call(commands.statementAt(callbacks.current.engine ?? "postgres", doc, indexToByte(doc, selection.main.head)));
+      if (!span || !v.dom.isConnected || v.state.doc.toString() !== doc || !v.state.selection.eq(selection)) return null;
+      const from = byteToIndex(doc, span.start), to = byteToIndex(doc, span.end);
+      flash(v, from, to);
+      return { text: doc.slice(from, to), from };
+    },
     runScript: () => { if (view.current) runAll(view.current); },
   }));
 

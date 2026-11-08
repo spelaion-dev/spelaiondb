@@ -95,6 +95,7 @@ function FileMenu({ x, y, onClose }: { x: number; y: number; onClose(): void }) 
       }}
     >
       <CommandMenuItem id="file.open" tab={null} onClose={onClose} />
+      <CommandMenuItem id="file.openPlan" tab={null} onClose={onClose} />
       <hr />
       <div className="menu-heading muted small">{t("files.recent")}</div>
       {recent !== null && recent.length === 0 && <div className="menu-empty muted small">{t("files.noRecent")}</div>}
