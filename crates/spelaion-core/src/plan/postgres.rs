@@ -43,12 +43,10 @@ fn identifier(name: &str) -> String {
     }
 }
 
-pub(super) fn parse(raw: &str, name: &str) -> Result<PlanDocument, PlanError> {
-    let json: Value = serde_json::from_str(raw.trim_start_matches('\u{feff}'))
-        .map_err(|e| PlanError::Invalid(e.to_string()))?;
-    let root = match &json {
+pub(super) fn parse(raw: &str, json: &Value, name: &str) -> Result<PlanDocument, PlanError> {
+    let root = match json {
         Value::Array(a) if a.len() == 1 => &a[0],
-        Value::Object(_) => &json,
+        Value::Object(_) => json,
         _ => {
             return Err(PlanError::Invalid(
                 "expected one PostgreSQL JSON plan".into(),
@@ -67,7 +65,7 @@ pub(super) fn parse(raw: &str, name: &str) -> Result<PlanDocument, PlanError> {
     let mut doc=PlanDocument {
         raw:raw.to_owned(),
         summary:PlanSummary{
-            id:0,engine:"postgres".into(),name:name.into(),analyzed,buffers,
+            id:0,engine:"postgres".into(),name:name.into(),raw_format:PlanRawFormat::Json,analyzed,buffers,
             total_cost:nodes.first().and_then(|n|n.metrics.cost),
             planning_ms:number(root,"Planning Time")?,execution_ms:number(root,"Execution Time")?,
             highest_cost:None,slowest:None,estimate_gap:None,sequential_scans:0,sorts:0,temporary_operations:0,
@@ -157,6 +155,7 @@ fn visit(
         index_condition: text(value, "Index Cond")?,
         hash_condition: text(value, "Hash Cond")?,
         sort_method: text(value, "Sort Method")?,
+        detail: None,
         sort_spilled,
         sequential_scan,
         parallel: value

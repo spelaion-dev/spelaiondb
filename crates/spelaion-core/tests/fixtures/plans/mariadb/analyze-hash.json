@@ -1,0 +1,72 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.097167418
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 93753.59643,
+    "r_loops": 1,
+    "r_total_time_ms": 1380.038909,
+    "filesort": {
+      "sort_key": "o.total desc",
+      "r_loops": 1,
+      "r_total_time_ms": 0.330899588,
+      "r_limit": 20,
+      "r_used_priority_queue": true,
+      "r_output_rows": 21,
+      "r_sort_mode": "sort_key,rowid",
+      "temporary_table": {
+        "nested_loop": [
+          {
+            "table": {
+              "table_name": "c",
+              "access_type": "ALL",
+              "loops": 1,
+              "r_loops": 1,
+              "rows": 1000,
+              "r_rows": 1000,
+              "cost": 0.177274,
+              "r_table_time_ms": 0.103962132,
+              "r_other_time_ms": 0.065185227,
+              "r_engine_stats": {
+                "pages_accessed": 5
+              },
+              "filtered": 100,
+              "r_filtered": 100
+            }
+          },
+          {
+            "block-nl-join": {
+              "table": {
+                "table_name": "o",
+                "access_type": "ALL",
+                "loops": 1000,
+                "r_loops": 1,
+                "rows": 118219,
+                "r_rows": 120000,
+                "cost": 10998.82445,
+                "r_table_time_ms": 13.02813929,
+                "r_other_time_ms": 2.412643961,
+                "r_engine_stats": {
+                  "pages_accessed": 972
+                },
+                "filtered": 100,
+                "r_filtered": 9,
+                "attached_condition": "o.created >= '2026-10-01'"
+              },
+              "buffer_type": "flat",
+              "buffer_size": "172KiB",
+              "join_type": "BNL",
+              "attached_condition": "c.`name` = convert(concat('customer ',o.customer_id) using utf8mb4)",
+              "r_loops": 1000,
+              "r_filtered": 0.1,
+              "r_unpack_time_ms": 324.2664856,
+              "r_other_time_ms": 1039.813981,
+              "r_effective_rows": 10800
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,4 +1,5 @@
-// Real native visual-plan regression, synthetic PG database, private profile/CDP and captures.
+// Real native visual-plan regression, synthetic PG, MySQL and MariaDB databases, private
+// profile/CDP and captures.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -28,12 +29,32 @@ if (container.status !== 0 || !/^[a-f0-9]{12,64}$/.test(containerId)) {
   assert.equal(fallback.status, 0, fallback.stderr); containerId = fallback.stdout.trim();
 }
 assert.match(containerId, /^[a-f0-9]{12,64}$/);
+// MySQL and MariaDB get their own disposable database too, with the plan fixtures' data.
+const mysqlDatabase = `spelaion_plan47_${randomUUID().replaceAll("-", "")}`;
+assert.match(mysqlDatabase, /^spelaion_plan47_[a-f0-9]{32}$/);
+function serviceContainer(service) {
+  for (const file of [resolve(root, "../../testing/docker/compose.yaml"), join(root, "testing/docker/compose.yaml")]) {
+    const found = spawnSync("docker", ["compose", "-f", file, "ps", "-q", service], { encoding: "utf8", windowsHide: true });
+    const id = found.stdout.trim();
+    if (found.status === 0 && /^[a-f0-9]{12,64}$/.test(id)) return id;
+  }
+  throw new Error(`no ${service} container`);
+}
+const mysqlServers = [
+  { service: "mysql", client: "mysql", name: "Plan fixture (MySQL)", engine: "mysql", port: 13306 },
+  { service: "mariadb", client: "mariadb", name: "Plan fixture (MariaDB)", engine: "mariadb", port: 13307 },
+].map(server => ({ ...server, container: serviceContainer(server.service), created: false }));
+function mysqlSql(server, text, db) {
+  const result = spawnSync("docker", ["exec", "-i", server.container, server.client, "-uroot", "-pspelaion-root", "--batch", "--raw", "--skip-column-names", ...(db ? [db] : [])], { input: text, encoding: "utf8", windowsHide: true });
+  assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+}
 function sql(text, db = database) {
   const result = spawnSync("docker", ["exec", "-i", containerId, "psql", "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1", "-U", "spelaion", "-d", db], { input: text, encoding: "utf8", windowsHide: true });
   assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
 }
 mkdirSync(shots, { recursive: true }); mkdirSync(join(profile, "connections"));
 for (const [id, readOnly] of [["plan-fixture", false], ["readonly-plan", true]]) writeFileSync(join(profile, "connections", `${id}.toml`), `schema_version=1\nname="${readOnly ? "Read-only plan" : "Plan fixture (PostgreSQL)"}"\nengine="postgres"\nenv="dev"\nhost="127.0.0.1"\nport=15432\ndatabase="${database}"\nuser="spelaion"\npassword={secret="env:SPELAION_PLAN_PASSWORD"}\nread_only=${readOnly}\n[session]\nschema="plan_fixture"\nsetup="SET search_path TO plan_fixture, public; SELECT * FROM plan_fixture.missing_setup_relation;"\nignore_setup_errors=true\n[tls]\nmode="require"\n`);
+for (const server of mysqlServers) writeFileSync(join(profile, "connections", `plan-${server.engine}.toml`), `schema_version=1\nname="${server.name}"\nengine="${server.engine}"\nenv="dev"\nhost="127.0.0.1"\nport=${server.port}\ndatabase="${mysqlDatabase}"\nuser="spelaion"\npassword={secret="env:SPELAION_PLAN_PASSWORD"}\n[tls]\nmode="require"\n`);
 const portServer = createServer(); portServer.listen(0, "127.0.0.1"); await once(portServer, "listening");
 const port = portServer.address().port; await new Promise(done => portServer.close(done));
 const query = "SELECT c.region, count(*) AS orders,\n       sum(o.amount) AS revenue\nFROM plan_fixture.orders AS o\nJOIN plan_fixture.customers AS c\n  ON c.id = o.customer_id\nWHERE o.amount > 900\nGROUP BY c.region;";
@@ -102,6 +123,10 @@ async function capture(name, theme, width, height) {
 try {
   sql(`CREATE DATABASE "${database}"`, "postgres"); created = true;
   sql(readFileSync(join(root, "crates/spelaion-core/tests/fixtures/plans/postgres/setup.sql"), "utf8"));
+  for (const server of mysqlServers) {
+    mysqlSql(server, `CREATE DATABASE \`${mysqlDatabase}\`; GRANT ALL ON \`${mysqlDatabase}\`.* TO 'spelaion'@'%';`); server.created = true;
+    mysqlSql(server, readFileSync(join(root, "crates/spelaion-core/tests/fixtures/plans/mysql/setup.sql"), "utf8"), mysqlDatabase);
+  }
   await start();
   await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("set_language", { language: "en" }));
   await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("set_theme", { theme: "light" }));
@@ -218,16 +243,62 @@ try {
   assert.ok(denied, "read-only UPDATE ANALYZE is rejected in core, independently of UI");
   assert.equal(sql("SELECT count(*) FROM plan_fixture.customers WHERE region='changed'"), before);
   await capture("after-readonly-dark-1400.png", "dark", 1400, 900);
+  // MySQL and MariaDB: the same viewer over the same core tree, with each engine's own SQL.
+  const mysqlQuery = "SELECT c.country, count(*) AS orders, sum(o.total) AS revenue\nFROM orders AS o JOIN customers AS c ON c.id = o.customer_id\nWHERE o.status = 'paid'\nGROUP BY c.country\nORDER BY revenue DESC;";
+  let mysqlText = null;
+  for (const server of mysqlServers) {
+    await page.locator(".connection-row").filter({ hasText: server.name }).getByTitle("New query", { exact: true }).click();
+    panel = page.locator(".tab-panel:not([hidden])"); await panel.locator(".status-connecting").waitFor({ state: "detached" });
+    await replace(panel, mysqlQuery);
+    await panel.locator(".editor-actions").getByRole("button", { name: "Explain query", exact: true }).click();
+    plan = panel.getByRole("region", { name: "Execution plan", exact: true });
+    await plan.getByText("Estimates only", { exact: false }).waitFor();
+    assert.equal(await plan.getByLabel("BUFFERS", { exact: true }).isDisabled(), true, `${server.engine} has no BUFFERS`);
+    assert.equal(await plan.getByLabel("BUFFERS", { exact: true }).isChecked(), false, `${server.engine} does not show BUFFERS as applied`);
+    await plan.getByRole("button", { name: "Tree & table", exact: true }).click();
+    await plan.locator(".plan-table tbody tr").first().waitFor();
+    assert.match(await plan.locator(".plan-table").innerText(), /Nested loop/);
+    if (server.engine === "mysql") await capture("sdb47-mysql-estimated-tree-dark-1400.png", "dark", 1400, 900);
+    await plan.getByLabel("ANALYZE", { exact: true }).check();
+    await panel.locator(".editor-actions").getByRole("button", { name: "Explain query", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Execute and analyze", exact: true }).click();
+    await plan.getByText("Actual execution", { exact: false }).waitFor();
+    await plan.getByRole("button", { name: "Tree & table", exact: true }).click();
+    await plan.locator(".plan-table tbody tr").first().waitFor();
+    const lookup = server.engine === "mysql" ? "Single-row index lookup" : "Index lookup";
+    await plan.locator(".plan-node-name").filter({ hasText: lookup }).first().click();
+    const inspector = plan.locator(".plan-inspector");
+    await inspector.getByRole("heading", { name: "Engine detail", exact: true }).or(inspector.getByRole("heading", { name: "Filter", exact: true })).first().waitFor();
+    if (server.engine === "mysql") assert.match(await inspector.innerText(), /Single-row index lookup on c using PRIMARY/);
+    await capture(`sdb47-${server.engine}-analyze-tree-dark-1400.png`, "dark", 1400, 900);
+    await plan.getByRole("button", { name: "Overview", exact: true }).click();
+    await plan.locator(".plan-capabilities summary").click();
+    assert.match(await plan.locator(".plan-capabilities").innerText(), server.engine === "mysql" ? /MySQL/ : /MariaDB/);
+    await plan.locator(".plan-capabilities").scrollIntoViewIfNeeded();
+    await capture(`sdb47-${server.engine}-analyze-overview-dark-1400.png`, "dark", 1400, 900);
+    if (server.engine === "mysql") {
+      const textFile = join(profile, "saved-mysql-plan.txt");
+      await page.evaluate(path => { window.__spelaionSavePath = path; }, textFile);
+      await plan.getByRole("button", { name: "Save raw plan…", exact: true }).click();
+      await plan.getByRole("status").filter({ hasText: "Saved to" }).waitFor();
+      mysqlText = readFileSync(textFile, "utf8"); assert.match(mysqlText, /^-> /);
+      const cliMysql = spawnSync(cli, ["plan", textFile, "--limit", "100"], { encoding: "utf8", windowsHide: true });
+      assert.equal(cliMysql.status, 0, cliMysql.stderr); const parsed = JSON.parse(cliMysql.stdout);
+      assert.equal(parsed.summary.engine, "mysql"); assert.equal(parsed.summary.analyzed, true); assert.equal(parsed.summary.rawFormat, "text");
+    }
+  }
+  assert.ok(mysqlText, "a MySQL ANALYZE plan was saved as text");
   await stop();
   await start(["--plan", rawFile]);
   await page.getByRole("region", { name:"Execution plan", exact:true }).getByText("Actual execution", { exact:false }).waitFor();
   assert.equal(sql("SELECT count(*) FROM plan_fixture.customers"), "1000");
   provenance.success = true;
-  console.log("Plans passed: selected-session PG, warning, tree/table, graph, raw, save/open, CSV, CLI path, readonly guard and native screenshots.");
+  console.log("Plans passed: selected-session PG, warning, tree/table, graph, raw, save/open, CSV, CLI path, readonly guard, MySQL and MariaDB estimated/ANALYZE plans and native screenshots.");
 } catch (error) { await page?.screenshot({ path: join(shots, "failure.png") }).catch(() => undefined); throw error; }
 finally {
   await stop();
   if (created) { sql(`DROP DATABASE "${database}" WITH (FORCE)`, "postgres"); provenance.databaseDropped = true; }
+  for (const server of mysqlServers) if (server.created) mysqlSql(server, `DROP DATABASE IF EXISTS \`${mysqlDatabase}\``);
   try { rmSync(profile, { recursive:true, force:true }); provenance.profileRemoved = true; } catch { console.log(`Owned profile retained: ${profile}`); }
   writeFileSync(join(shots, "capture-provenance.json"), JSON.stringify(provenance, null, 2) + "\n");
 }

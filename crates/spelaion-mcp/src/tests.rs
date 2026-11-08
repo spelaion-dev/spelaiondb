@@ -294,6 +294,98 @@ async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning()
 }
 
 #[tokio::test]
+async fn mysql_and_mariadb_plans_return_the_core_tree_and_never_analyze() {
+    for (variable, engine) in [
+        ("SPELAION_TEST_MYSQL", "mysql"),
+        ("SPELAION_TEST_MARIADB", "mariadb"),
+    ] {
+        let Ok(address) = std::env::var(variable) else {
+            eprintln!("{variable} not set: MCP {engine} plans not tested");
+            continue;
+        };
+        let (host, port) = address.rsplit_once(':').unwrap();
+        let dir = temp(&format!("plans-{engine}"));
+        std::fs::create_dir_all(dir.join("connections")).unwrap();
+        std::fs::write(
+            dir.join("connections/plans.toml"),
+            format!(
+                "schema_version=1\nname='Plans'\nengine='{engine}'\nhost='{host}'\nport={port}\nuser='spelaion'\ndatabase='spelaion'\n[mcp]\nexposed=true\n"
+            ),
+        )
+        .unwrap();
+        let server = server(None, &dir, true);
+        let entry = server.entry("~/plans").unwrap();
+        let mut resolved = Resolver::new(&server.state.config, &server.state.trust, &SystemBackend)
+            .resolve(&entry.id)
+            .unwrap();
+        resolved.password =
+            spelaion_config::Password::Value(spelaion_driver_api::Secret::new("spelaion"));
+        resolved.params.read_only = true;
+        let open = open_connection(
+            resolved,
+            &server.state.engines,
+            OpenOptions {
+                tunnels: server.state.tunnels.clone(),
+                known_hosts: KnownHosts {
+                    team_file: None,
+                    user_file: None,
+                    app_file: dir.join("known_hosts"),
+                },
+                interaction: Arc::new(NonInteractive),
+                password: None,
+                read_only_session: true,
+            },
+            Arc::new(ResultStore::new()),
+        )
+        .await
+        .unwrap();
+        server.state.sessions.lock().await.insert(
+            ("~/plans".into(), Use::Read),
+            Arc::new(tokio::sync::Mutex::new(open)),
+        );
+        let arguments = |sql: &str| ExplainArgs {
+            connection: "~/plans".into(),
+            sql: Some(sql.into()),
+            structured: Some(true),
+            output_format: None,
+            plan_id: None,
+            offset: None,
+            limit: Some(50),
+            release: None,
+        };
+        let result = server
+            .explain(
+                &call("explain_query"),
+                arguments("SELECT 1 AS a UNION ALL SELECT 2"),
+            )
+            .await
+            .unwrap();
+        assert!(!refused(&result), "{engine}: {}", body(&result));
+        let json: serde_json::Value = serde_json::from_str(&body(&result)).unwrap();
+        assert_eq!(json["summary"]["engine"], engine);
+        assert_eq!(json["summary"]["analyzed"], false);
+        assert!(!json["page"]["nodes"].as_array().unwrap().is_empty());
+        for sql in [
+            "EXPLAIN ANALYZE SELECT 1",
+            "ANALYZE FORMAT=JSON SELECT 1",
+            "SELECT 1; DELETE FROM t",
+            "UPDATE t SET v=1",
+            "DELETE FROM t",
+        ] {
+            assert!(
+                refused(
+                    &server
+                        .explain(&call("explain_query"), arguments(sql))
+                        .await
+                        .unwrap()
+                ),
+                "{engine}: {sql}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn the_switch_takes_writes_away_from_a_running_server() {
     let p = personal(false);
     // As before ADR-033: the connection lets agents write.

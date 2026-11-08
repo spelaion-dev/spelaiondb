@@ -1,6 +1,6 @@
 # Execution plans
 
-In a PostgreSQL query tab, choose **Explain query** in the action column, editor menu or
+In a PostgreSQL, MySQL or MariaDB query tab, choose **Explain query** in the action column, editor menu or
 command palette. The selected text, or the statement under the cursor, is planned on that
 tab's existing session. Temporary tables, search paths and the current transaction are
 preserved. Parameters use the same value dialog as an ordinary query.
@@ -15,6 +15,20 @@ an estimated UPDATE and an analyzed SELECT do not switch it to manual commit, wh
 analyzed UPDATE does. An already manual session stays manual. No plan command reconnects,
 retries, commits or rolls back the user's transaction automatically. The tab's statement
 timeout override also applies. Explicit plan runs enter query history.
+
+What runs on each engine:
+
+| Engine | Estimated | ANALYZE (executes) |
+| --- | --- | --- |
+| PostgreSQL | `EXPLAIN (FORMAT JSON, VERBOSE TRUE)` | adds `ANALYZE TRUE`, and `BUFFERS` when ticked |
+| MySQL | `EXPLAIN FORMAT=JSON` | `EXPLAIN ANALYZE FORMAT=TREE` (an operator tree as text) |
+| MariaDB | `EXPLAIN FORMAT=JSON` | `ANALYZE FORMAT=JSON` |
+
+BUFFERS exists only on PostgreSQL. MySQL and MariaDB share a dialect, so the ANALYZE syntax
+comes from the engine the connection was opened as. Each flavor's ANALYZE is a syntax error on
+the other one: a connection that names the wrong engine is refused by the server before the
+statement runs. MySQL does not analyze every statement (a single-table UPDATE, for one); its
+`<not executable by iterator executor>` answer is reported as such, and nothing ran.
 
 Read-only connections permit estimated read plans only. ANALYZE is refused in the core,
 including when a caller bypasses the disabled UI control. The policy comes from the actual
@@ -59,6 +73,36 @@ heap fetches or loops, missing planned workers, at least 100 reads exceeding cac
 zero-loop steps. A never-executed step receives only that finding. Check the workload and
 server measurements before changing indexes, statistics or settings.
 
+## MySQL and MariaDB
+
+Both engines' JSON lists **tables in join order** inside query blocks, not an operator tree.
+The tree shows what the JSON names: query blocks, nested loops (one node over the tables it
+joins; a single table is not a join), MariaDB's block nested loops, ordering, grouping, sorts,
+temporary tables, materializations, unions and subqueries. Each table carries its access type
+(full table scan, index lookup…), key, attached condition, index condition, and the possible
+keys, key parts and `ref` in its engine detail. Estimated rows are rows examined per scan ×
+filtered % (the rows a table passes on per scan, like PostgreSQL's estimate). A table's cost is
+its own read and evaluation cost; the query block's is the query's. Tables are named by their
+alias in the query, so relation counts count aliases.
+
+MySQL's `EXPLAIN ANALYZE` tree (and a saved `FORMAT=TREE` or format version 2 JSON, which a
+session with `explain_json_format_version = 2` returns) is an operator tree with inclusive
+costs and, after ANALYZE, actual rows and time per loop, multiplied by loops for totals, as on
+PostgreSQL. The step text (`Index lookup on c using PRIMARY (id=o.customer_id)`) is kept as
+the engine detail; the node type, table, index and conditions are read from it without
+guessing (a `<temporary>` table is not a relation). Self metrics subtract children only when
+they ran as often as the parent, never under LIMIT, nested loops or subqueries. MySQL reports
+no buffers, workers or sort memory, and prints no figures for a hash join's build step.
+
+MariaDB's `ANALYZE FORMAT=JSON` adds loops (`r_loops`), rows read per loop (`r_rows`), the share
+kept by the attached condition (`r_filtered`: the rest count as rows filtered), each table's
+own time (`r_table_time_ms` + `r_other_time_ms`) and InnoDB page accesses (`r_engine_stats`:
+accesses not read from disk are buffer hits, pages read from disk are reads; MariaDB omits zero
+counters). Query blocks carry inclusive totals across loops; a sort's time, and a block join's
+unpacking and condition time, are their own. A table has no inclusive time, so one with a
+materialized child shows only its self time. Optimization time is the planning time. A
+single-table UPDATE or DELETE reports no loops; its rows and times still mark it as measured.
+
 ## Files and CLI
 
 The file menu and palette expose **Open saved plan**. The desktop also accepts
@@ -72,12 +116,14 @@ spelaiondb plan path/to/plan.json --csv path/to/plan.csv
 ```
 
 JSON pages include `summary`, `page.nodes` and `page.nextOffset`; continue with the returned
-offset. CSV exports the full tree from the local file.
+offset. CSV exports the full tree from the local file. Plans are recognized by their shape:
+PostgreSQL or MySQL/MariaDB JSON, or MySQL's text tree. Saving a raw MySQL ANALYZE plan writes
+a `.txt` file; every other plan is JSON.
 
 ## MCP
 
 Existing `explain_query` JSON/TOON output and the user's format preference are preserved.
-Set `structured: true` for PostgreSQL to receive the same core tree, metrics and findings:
+Set `structured: true` for PostgreSQL, MySQL or MariaDB to receive the same core tree, metrics and findings:
 
 ```json
 {"connection":"~/reporting","sql":"SELECT * FROM orders WHERE id=1","structured":true,"limit":50}
@@ -110,7 +156,9 @@ identity. Bitmap index nodes inherit the namespace of their bitmap heap access w
 Saved non-verbose files can omit schemas; their available names are preserved without
 guessing, and relation/index counts can combine homonyms whose namespaces are unavailable.
 
-Real PostgreSQL fixtures, exact SQL and provenance are in
-[`crates/spelaion-core/tests/fixtures/plans/postgres`](../crates/spelaion-core/tests/fixtures/plans/postgres/README.md).
-Other engines can build on the common model in their own features; this change implements
-PostgreSQL only. The view includes an engine capability note.
+Real fixtures, exact SQL and provenance are in
+[`postgres`](../crates/spelaion-core/tests/fixtures/plans/postgres/README.md),
+[`mysql`](../crates/spelaion-core/tests/fixtures/plans/mysql/README.md) and
+[`mariadb`](../crates/spelaion-core/tests/fixtures/plans/mariadb/README.md) under
+`crates/spelaion-core/tests/fixtures/plans`. SQLite, DuckDB and SQL Server can build on the
+common model in their own features. The view includes each engine's capability note.

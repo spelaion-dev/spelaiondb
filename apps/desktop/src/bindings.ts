@@ -2331,6 +2331,11 @@ export type PlanNode_Deserialize = {
 	indexCondition?: string | null,
 	hashCondition?: string | null,
 	sortMethod?: string | null,
+	/**
+	 *  The engine's own text for this step, when it says more than the node type
+	 *  (MySQL's `Index lookup on c using PRIMARY (id=o.customer_id)`).
+	 */
+	detail?: string | null,
 	sortSpilled: boolean,
 	sequentialScan: boolean,
 	parallel: boolean,
@@ -2352,6 +2357,11 @@ export type PlanNode_Serialize = {
 	indexCondition: string | null,
 	hashCondition: string | null,
 	sortMethod: string | null,
+	/**
+	 *  The engine's own text for this step, when it says more than the node type
+	 *  (MySQL's `Index lookup on c using PRIMARY (id=o.customer_id)`).
+	 */
+	detail: string | null,
 	sortSpilled: boolean,
 	sequentialScan: boolean,
 	parallel: boolean,
@@ -2376,6 +2386,11 @@ export type PlanPage_Serialize = {
 	total: number,
 	nextOffset: number | null,
 };
+
+/**  How the engine wrote the original plan, so a saved copy keeps a fitting extension. */
+export type PlanRawFormat = "json" | 
+/**  MySQL's EXPLAIN ANALYZE tree. */
+"text";
 
 export type PlanSort = "tree" | "nodeType" | "relation" | "index" | "cost" | "selfCost" | "estimatedRows" | "actualRowsPerLoop" | "actualRows" | "time" | "selfTime" | "timePerLoop" | "loops" | "buffersHit" | "buffersRead" | "rowsRemoved" | "heapFetches" | "workersPlanned" | "workersLaunched" | "temporaryRead" | "temporaryWritten" | "sortSpace" | "findings";
 
@@ -2423,6 +2438,7 @@ export type PlanSummary_Deserialize = {
 	id: number,
 	engine: string,
 	name: string,
+	rawFormat: PlanRawFormat,
 	analyzed: boolean,
 	buffers: boolean,
 	totalCost?: number | null,
@@ -2448,6 +2464,7 @@ export type PlanSummary_Serialize = {
 	id: number,
 	engine: string,
 	name: string,
+	rawFormat: PlanRawFormat,
 	analyzed: boolean,
 	buffers: boolean,
 	totalCost: number | null,

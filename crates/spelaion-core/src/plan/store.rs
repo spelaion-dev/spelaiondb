@@ -255,7 +255,7 @@ impl PlanDocument {
         cancel: &crate::ExportCancel,
     ) -> Result<(), PlanError> {
         use spelaion_driver_api::{ColumnMeta, LogicalType, Value};
-        const NAMES: [&str; 30] = [
+        const NAMES: [&str; 31] = [
             "Node",
             "Parent",
             "Depth",
@@ -285,6 +285,7 @@ impl PlanDocument {
             "Filter",
             "Index condition",
             "Hash condition",
+            "Detail",
             "Findings",
         ];
         let numeric = |i: usize| i < 3 || (7..25).contains(&i);
@@ -349,6 +350,7 @@ impl PlanDocument {
                 text(&n.filter),
                 text(&n.index_condition),
                 text(&n.hash_condition),
+                text(&n.detail),
                 Value::Text(
                     n.findings
                         .iter()

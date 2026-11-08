@@ -108,7 +108,9 @@ export function PlanViewer({ summary, controls, onBack }: { summary: PlanSummary
   async function save(csv: boolean) {
     setError(null); setNotice(null);
     try {
-      const path = await chooseSavePath({ title: t(csv ? "plan.exportCsv" : "plan.saveRaw"), defaultPath: csv ? "execution-plan.csv" : "execution-plan.json", filters: [{ name: t(csv ? "plan.csvFiles" : "plan.files"), extensions: csv ? ["csv"] : ["json"] }] });
+      // The raw plan keeps the engine's own format: JSON, or MySQL's EXPLAIN ANALYZE text.
+      const raw = summary.rawFormat === "text" ? { file: "execution-plan.txt", name: "plan.textFiles", extension: "txt" } : { file: "execution-plan.json", name: "plan.jsonFiles", extension: "json" };
+      const path = await chooseSavePath({ title: t(csv ? "plan.exportCsv" : "plan.saveRaw"), defaultPath: csv ? "execution-plan.csv" : raw.file, filters: [{ name: t(csv ? "plan.csvFiles" : raw.name), extensions: [csv ? "csv" : raw.extension] }] });
       if (!path) return;
       const id = ++exportSequence; exportRef.current = id; setExportId(id);
       await call(commands.exportPlan(id, summary.id, view, path, csv));
@@ -140,7 +142,7 @@ export function PlanViewer({ summary, controls, onBack }: { summary: PlanSummary
         <button className="ghost plan-node-name" onClick={() => setSelected(node)} aria-pressed={selected?.id === node.id}><span className="muted small">{node.id + 1}</span>{node.nodeType}</button></div></td><td><code>{node.relation}</code></td><td><code>{node.index}</code></td>{METRICS.map(metric => <td key={metric.key} className="plan-numeric">{fmt(metric.value(node))}</td>)}<td>{node.findings.length > 0 && <button className="ghost plan-finding-count" onClick={() => setSelected(node)}>{t("plan.findingCount", { count: node.findings.length })}</button>}</td></tr>)}</tbody></table></div>}</div>
         <aside className="plan-inspector" aria-label={t("plan.details")}>{selected ? <><h3>{selected.nodeType} <span className="muted small">#{selected.id + 1}</span></h3>{selected.relation && <p><code>{selected.relation}</code></p>}{selected.index && <p><code>{selected.index}</code></p>}{selected.joinType && <p>{t("plan.joinType", { value: selected.joinType })}</p>}
           <dl className="plan-detail-metrics">{METRICS.map(metric => <div key={metric.key}><dt>{t(`plan.metrics.${metric.label}`)}</dt><dd>{fmt(metric.value(selected))}</dd></div>)}</dl>
-          {[["filter", selected.filter], ["indexCondition", selected.indexCondition], ["hashCondition", selected.hashCondition], ["sortMethod", selected.sortMethod]].map(([key, value]) => value && <div key={key}><h4>{t(`plan.${key}`)}</h4><pre>{value}</pre></div>)}
+          {[["detail", selected.detail], ["filter", selected.filter], ["indexCondition", selected.indexCondition], ["hashCondition", selected.hashCondition], ["sortMethod", selected.sortMethod]].map(([key, value]) => value && <div key={key}><h4>{t(`plan.${key}`)}</h4><pre>{value}</pre></div>)}
           <h4>{t("plan.findings")}</h4>{selected.findings.length ? <ul className="plan-findings">{selected.findings.map(finding => <li key={finding.kind}><strong>{t(`plan.findingNames.${finding.kind}`)}</strong><p>{t(`plan.findingHelp.${finding.kind}`, { defaultValue: finding.explanation })}</p></li>)}</ul> : <p className="muted">{t("plan.noStepFindings")}</p>}
         </> : <div className="empty">{t("plan.selectStep")}</div>}</aside>
       </div>{paging}

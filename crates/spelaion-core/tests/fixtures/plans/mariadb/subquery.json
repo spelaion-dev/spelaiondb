@@ -1,0 +1,109 @@
+{
+  "query_block": {
+    "union_result": {
+      "query_specifications": [
+        {
+          "query_block": {
+            "select_id": 1,
+            "cost": 82.05502942,
+            "nested_loop": [
+              {
+                "table": {
+                  "table_name": "c",
+                  "access_type": "range",
+                  "possible_keys": ["PRIMARY", "customers_country"],
+                  "key": "customers_country",
+                  "key_length": "8",
+                  "used_key_parts": ["country"],
+                  "loops": 1,
+                  "rows": 400,
+                  "cost": 0.06193776,
+                  "filtered": 100,
+                  "attached_condition": "c.country in ('ES','FR')",
+                  "using_index": true
+                }
+              },
+              {
+                "table": {
+                  "table_name": "<derived3>",
+                  "access_type": "ref",
+                  "possible_keys": ["key0"],
+                  "key": "key0",
+                  "key_length": "4",
+                  "used_key_parts": ["customer_id"],
+                  "ref": ["spelaion_plan47_e1c6ac1e501bbc23.c.id"],
+                  "loops": 400,
+                  "rows": 10,
+                  "cost": 81.99309166,
+                  "filtered": 100,
+                  "materialized": {
+                    "query_block": {
+                      "select_id": 3,
+                      "cost": 0.291780747,
+                      "filesort": {
+                        "sort_key": "orders.customer_id",
+                        "temporary_table": {
+                          "nested_loop": [
+                            {
+                              "table": {
+                                "table_name": "orders",
+                                "access_type": "ALL",
+                                "possible_keys": ["orders_customer"],
+                                "loops": 1,
+                                "rows": 118219,
+                                "cost": 20.2379278,
+                                "filtered": 100,
+                                "attached_condition": "orders.`status` = 'new'"
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "subqueries": [
+              {
+                "subquery_cache": {
+                  "state": "uninitialized",
+                  "query_block": {
+                    "select_id": 2,
+                    "cost": 0.21553744,
+                    "nested_loop": [
+                      {
+                        "table": {
+                          "table_name": "o2",
+                          "access_type": "ref",
+                          "possible_keys": ["orders_customer"],
+                          "key": "orders_customer",
+                          "key_length": "4",
+                          "used_key_parts": ["customer_id"],
+                          "ref": ["spelaion_plan47_e1c6ac1e501bbc23.c.id"],
+                          "loops": 1,
+                          "rows": 118,
+                          "cost": 0.21553744,
+                          "filtered": 100
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "query_block": {
+            "select_id": 4,
+            "operation": "UNION",
+            "table": {
+              "message": "No tables used"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -43,11 +43,15 @@ pub struct PlanCapabilities {
 }
 
 pub fn plan_capabilities(session: &Session, policy: &ExplainPolicy) -> PlanCapabilities {
-    let supported = session.dialect().name() == "postgres";
+    let engine = session.dialect().name();
+    let supported = matches!(engine, "postgres" | "mysql");
+    // MySQL and MariaDB share a dialect but not the ANALYZE syntax: it needs the flavor of
+    // the connection that was actually opened.
+    let analyzable = engine == "postgres" || policy.flavor.is_some();
     PlanCapabilities {
         estimated: supported,
-        analyze: supported && !policy.read_only,
-        buffers: supported && !policy.read_only,
+        analyze: supported && analyzable && !policy.read_only,
+        buffers: engine == "postgres" && !policy.read_only,
         note: if !supported {
             format!(
                 "Normalized execution plans are not available for {} yet.",
@@ -67,21 +71,32 @@ pub struct ExplainPolicy {
     read_only: bool,
     safeguards: Safeguards,
     timeout: Option<std::time::Duration>,
+    flavor: Option<Flavor>,
 }
 impl ExplainPolicy {
     pub fn for_connection(open: &OpenConnection) -> Self {
+        use spelaion_config::Engine;
         Self {
             read_only: open.resolved.params.read_only,
             safeguards: open.resolved.safeguards(),
             timeout: open.resolved.statement_timeout,
+            // The driver was opened for this engine. If the server is the other flavor, its
+            // ANALYZE syntax is a syntax error there, refused before anything runs.
+            flavor: match open.resolved.engine {
+                Engine::Mysql => Some(Flavor::Mysql),
+                Engine::Mariadb => Some(Flavor::Mariadb),
+                Engine::Postgres | Engine::Sqlite | Engine::Duckdb | Engine::Sqlserver => None,
+            },
         }
     }
-    /// For trusted library adapters that own a Session directly.
+    /// For trusted library adapters that own a Session directly. Without the connection's
+    /// engine, MySQL and MariaDB plans are estimated only.
     pub fn new(read_only: bool, safeguards: Safeguards) -> Self {
         Self {
             read_only,
             safeguards,
             timeout: None,
+            flavor: None,
         }
     }
 }
@@ -115,7 +130,7 @@ fn prepare(
     policy: &ExplainPolicy,
 ) -> Result<PreparedPlan, PlanError> {
     let engine = session.dialect().name();
-    if engine != "postgres" {
+    if !matches!(engine, "postgres" | "mysql") {
         return Err(PlanError::Unsupported(engine.into()));
     }
     if sql.len() > 1024 * 1024 {
@@ -138,9 +153,19 @@ fn prepare(
     ) {
         return Err(PlanError::Invalid("this statement cannot be explained; choose one SELECT, VALUES, INSERT, UPDATE, DELETE or MERGE".into()));
     }
+    if options.buffers && engine != "postgres" {
+        return Err(PlanError::Invalid(
+            "BUFFERS is only available for PostgreSQL plans".into(),
+        ));
+    }
     if options.buffers && !options.analyze {
         return Err(PlanError::Invalid(
             "enable ANALYZE before requesting execution buffers".into(),
+        ));
+    }
+    if options.analyze && policy.read_only {
+        return Err(PlanError::Execution(
+            "this connection is read-only: ANALYZE executes the query".into(),
         ));
     }
     let intent = if options.analyze {
@@ -148,12 +173,23 @@ fn prepare(
     } else {
         "SELECT 1".into()
     };
-    let sql = format!(
-        "EXPLAIN (FORMAT JSON, VERBOSE TRUE, ANALYZE {}, BUFFERS {})\n{}",
-        options.analyze,
-        options.buffers,
-        sql.trim()
-    );
+    let sql = match (engine, options.analyze, policy.flavor) {
+        ("postgres", analyze, _) => format!(
+            "EXPLAIN (FORMAT JSON, VERBOSE TRUE, ANALYZE {analyze}, BUFFERS {})\n{}",
+            options.buffers,
+            sql.trim()
+        ),
+        (_, false, _) => format!("EXPLAIN FORMAT=JSON\n{}", sql.trim()),
+        // Each flavor's ANALYZE is a syntax error on the other one, so a connection opened
+        // as the wrong engine is refused by the server before the statement runs.
+        (_, true, Some(Flavor::Mysql)) => format!("EXPLAIN ANALYZE FORMAT=TREE\n{}", sql.trim()),
+        (_, true, Some(Flavor::Mariadb)) => format!("ANALYZE FORMAT=JSON\n{}", sql.trim()),
+        (_, true, None) => {
+            return Err(PlanError::Invalid(
+                "ANALYZE needs the connection's engine (MySQL or MariaDB)".into(),
+            ));
+        }
+    };
     if policy.read_only {
         // The PostgreSQL driver's read_only flag does not establish a server barrier.
         // Preserve the established classifier: estimated read plans only, no ANALYZE.
@@ -189,12 +225,15 @@ pub fn explain_preflight(
 }
 
 /// Estimated read plans for agents retain every existing classifier, native read-only
-/// transaction and timeout barrier. This entry point cannot request ANALYZE.
+/// transaction and timeout barrier. This entry point cannot request ANALYZE. The open
+/// connection only names the engine (MySQL or MariaDB) that wrote the plan.
 pub async fn explain_read_only(
-    session: &Session,
+    open: &OpenConnection,
     sql: &str,
     limits: &crate::ReadLimits,
 ) -> Result<PlanDocument, PlanError> {
+    let session = &open.session;
+    let flavor = ExplainPolicy::for_connection(open).flavor;
     let prepared = prepare(
         session,
         sql,
@@ -211,7 +250,7 @@ pub async fn explain_read_only(
         ));
     }
     let raw = result.rows[0][0].to_string();
-    parse_plan(&raw, "Execution plan")
+    parse_plan_from(&raw, "Execution plan", flavor)
 }
 
 /// An explicit user run on the source session: serialized, cancellable, transactional and
@@ -312,6 +351,6 @@ pub async fn explain(
             .value_at(0, 0)
             .ok_or_else(|| PlanError::Invalid("missing EXPLAIN JSON".into()))?
             .to_string();
-        parse_plan(&raw, "Execution plan")
+        parse_plan_from(&raw, "Execution plan", policy.flavor)
     })()
 }

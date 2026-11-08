@@ -402,7 +402,7 @@ async fn plans_require_execution_warning_and_reject_multiple_or_non_explainable_
         timeout: Duration::from_secs(2),
     };
     assert!(
-        plan::explain_read_only(&open.session, "SELECT pg_sleep(30)", &read)
+        plan::explain_read_only(&open, "SELECT pg_sleep(30)", &read)
             .await
             .is_ok(),
         "estimated plans do not execute expressions"
@@ -413,9 +413,7 @@ async fn plans_require_execution_warning_and_reject_multiple_or_non_explainable_
         "EXPLAIN ANALYZE SELECT 1",
     ] {
         assert!(
-            plan::explain_read_only(&open.session, sql, &read)
-                .await
-                .is_err(),
+            plan::explain_read_only(&open, sql, &read).await.is_err(),
             "{sql}"
         );
     }

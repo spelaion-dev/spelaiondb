@@ -185,7 +185,8 @@ pub struct ExplainArgs {
     pub connection: String,
     /// One read query for a new plan; omit when paging a cached plan_id.
     pub sql: Option<String>,
-    /// Opt in to the normalized PostgreSQL tree; omitted keeps the user's JSON/TOON output.
+    /// Opt in to the normalized plan tree (PostgreSQL, MySQL, MariaDB); omitted keeps the
+    /// user's JSON/TOON output.
     pub structured: Option<bool>,
     /// Legacy output only; omitted keeps the user's configured JSON/TOON format.
     pub output_format: Option<OutputFormat>,
@@ -619,7 +620,7 @@ impl SpelaionMcp {
         }
         let started = std::time::Instant::now();
         let document = plan::explain_read_only(
-            &open.session,
+            &open,
             sql,
             &ReadLimits {
                 max_rows: max_rows.min(1),
@@ -975,7 +976,7 @@ impl SpelaionMcp {
     }
 
     #[tool(
-        description = "Shows an estimated read-query plan, never ANALYZE. Set structured=true on PostgreSQL for the same normalized core tree, metrics and findings as the desktop. Responses are complete JSON pages within 60 KB: continue with connection, plan_id=summary.id and offset=page.nextOffset, omitting sql (no re-execution). Release with release=true. By default, preserve the user's JSON/TOON output_format on every engine.",
+        description = "Shows an estimated read-query plan, never ANALYZE. Set structured=true on PostgreSQL, MySQL or MariaDB for the same normalized core tree, metrics and findings as the desktop. Responses are complete JSON pages within 60 KB: continue with connection, plan_id=summary.id and offset=page.nextOffset, omitting sql (no re-execution). Release with release=true. By default, preserve the user's JSON/TOON output_format on every engine.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn explain_query(
