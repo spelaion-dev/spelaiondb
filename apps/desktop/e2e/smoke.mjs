@@ -2889,6 +2889,114 @@ try {
   await autoCommit.waitFor();
   assert.ok(await autoCommit.isChecked());
 
+  step("session setup: a default schema and setup statements open tabs in that schema, and a write in it is refused on a read-only connection");
+  // ADR-037. A schema of its own on the Docker PostgreSQL, made from the tab still open there.
+  await replaceQuery(
+    panel,
+    "drop schema if exists smoke_setup cascade;\ncreate schema smoke_setup;\ncreate table smoke_setup.only_here (id int);\ninsert into smoke_setup.only_here values (42);",
+  );
+  await run(panel);
+  // The DROP is asked about first, as any risky statement (guard.rs).
+  const dropSetup = page.getByRole("dialog", { name: "Run these statements?" });
+  await dropSetup.getByRole("button", { name: "Run anyway" }).click();
+  await dropSetup.waitFor({ state: "detached" });
+  await panel.getByText("4 statements: 4 OK", { exact: false }).first().waitFor();
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  {
+    let wizard = page.locator(".modal.wizard");
+    await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+    await wizard.getByRole("heading", { name: "New PostgreSQL connection" }).waitFor();
+    assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Kubernetes", "Session", "Options"]);
+    await wizard.getByLabel("Name", { exact: true }).fill("PG session setup");
+    await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+    await wizard.getByLabel("Port", { exact: true }).fill("15432");
+    await wizard.getByLabel("Database", { exact: true }).fill("spelaion");
+    await wizard.getByLabel("User", { exact: true }).fill("spelaion");
+    await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+    await wizard.getByRole("tab", { name: "Session" }).click();
+    // What each engine can set comes from the core: PostgreSQL has a schema and four levels.
+    const isolation = wizard.getByLabel("Isolation level", { exact: true });
+    assert.deepEqual(await isolation.locator("option").allTextContents(), ["The server's default", "Read uncommitted", "Read committed", "Repeatable read", "Serializable"]);
+    const ignoreErrors = wizard.getByRole("checkbox", { name: "Ignore errors in these statements" });
+    assert.ok(await ignoreErrors.isDisabled(), "nothing to ignore without setup statements");
+    await wizard.getByLabel("Default schema", { exact: true }).fill("smoke_setup");
+    await isolation.selectOption("repeatable-read");
+    await wizard.getByLabel("Run when a session opens", { exact: true }).fill("SET search_path TO smoke_setup, public;\nSET TIME ZONE 'UTC';");
+    assert.ok(!(await ignoreErrors.isDisabled()));
+    await shot("sdb-14-session-tab");
+    await wizard.getByRole("tab", { name: "Options" }).click();
+    await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+    await wizard.getByRole("button", { name: "Save", exact: true }).click();
+    await wizard.waitFor({ state: "detached" });
+    await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor();
+    const saved = readFileSync(join(userDir, "connections", "pg-session-setup.toml"), "utf8");
+    assert.match(saved, /\[session\]/);
+    assert.match(saved, /schema = "smoke_setup"/);
+    assert.match(saved, /isolation = "repeatable-read"/);
+    assert.match(saved, /SET TIME ZONE 'UTC';/);
+
+    // The tab opens in that schema, with the setup's settings: unqualified names are found there.
+    const setupPanel = await newQuery(
+      "PG session setup",
+      "select id, current_schema() as in_schema, current_setting('TimeZone') as tz, current_setting('transaction_isolation') as iso from only_here;",
+    );
+    await run(setupPanel);
+    await page.getByRole("dialog").getByText("Password for PG session setup").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await setupPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    const schemaPicker = setupPanel.getByRole("combobox", { name: "Schema", exact: true });
+    await page.waitForFunction(() => document.querySelector('.tab-panel:not([hidden]) select[name="schema"]')?.value === "smoke_setup");
+    assert.ok((await schemaPicker.locator("option").allTextContents()).includes("public"));
+    // The setup's SELECTs and SETs are not the user's queries: no setup error banner, no extra results.
+    assert.equal(await setupPanel.locator(".setup-skipped").count(), 0);
+    await shot("sdb-14-schema-picker");
+    // Switching the picker changes only this tab's session.
+    await schemaPicker.selectOption("public");
+    await page.waitForFunction(() => document.querySelector('.tab-panel:not([hidden]) select[name="schema"]')?.value === "public");
+    await replaceQuery(setupPanel, "select current_schema() as in_schema;");
+    await run(setupPanel);
+    await setupPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await schemaPicker.selectOption("smoke_setup");
+    await page.waitForFunction(() => document.querySelector('.tab-panel:not([hidden]) select[name="schema"]')?.value === "smoke_setup");
+
+    // A setup statement that writes is refused on a read-only connection, before anything is saved.
+    await (await connectionMenu("PG session setup")).getByRole("button", { name: "Edit…" }).click();
+    wizard = page.locator(".modal.wizard");
+    await wizard.getByRole("heading", { name: "Edit PG session setup" }).waitFor();
+    await wizard.getByRole("tab", { name: "Options" }).click();
+    await wizard.getByRole("checkbox", { name: "Read-only", exact: true }).check();
+    await wizard.getByRole("tab", { name: "Session" }).click();
+    await wizard.getByText("may only read and change session settings", { exact: false }).waitFor();
+    // Its label wraps it, so its accessible name includes the text it holds: found by name.
+    const setupBox = wizard.locator('textarea[name="sessionSetup"]');
+    assert.equal(await setupBox.inputValue(), "SET search_path TO smoke_setup, public;\nSET TIME ZONE 'UTC';");
+    await setupBox.fill("SET search_path TO smoke_setup, public;\ninsert into smoke_setup.only_here values (1);");
+    await wizard.getByRole("checkbox", { name: "Ignore errors in these statements" }).check();
+    await wizard.getByRole("button", { name: "Save changes" }).click();
+    await wizard.locator(".test-result .error", { hasText: "statement 2 of 2 cannot run on this session" }).waitFor();
+    await shot("sdb-14-refused-on-read-only");
+    await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
+    await wizard.waitFor({ state: "detached" });
+    assert.doesNotMatch(readFileSync(join(userDir, "connections", "pg-session-setup.toml"), "utf8"), /insert into/);
+
+    // Leave the run as it was: the schema, the tab and the connection go.
+    await replaceQuery(setupPanel, "drop schema smoke_setup cascade;");
+    await run(setupPanel);
+    const dropSchema = page.getByRole("dialog", { name: "Run these statements?" });
+    await dropSchema.getByRole("button", { name: "Run anyway" }).click();
+    await dropSchema.waitFor({ state: "detached" });
+    await setupPanel.locator(".editor-action-cancel").waitFor({ state: "detached" });
+    await setupPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    await page.locator(".tabbar .tab.active .close").click();
+    await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor();
+    await (await connectionMenu("PG session setup")).getByRole("button", { name: "Delete…" }).click();
+    const deleteSetup = page.getByRole("dialog", { name: "Delete connection?" });
+    await deleteSetup.getByRole("button", { name: "Delete", exact: true }).click();
+    await deleteSetup.waitFor({ state: "detached" });
+    await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor({ state: "detached" });
+  }
+
   step("MySQL and MariaDB: password, TLS, types and the schema explorer");
   // Only an encrypted session has a cipher: the row exists only if TLS is on.
   for (const [connection, version, status] of [
@@ -3431,7 +3539,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("heading", { name: "New SQLite connection" }).waitFor();
   // SQLite has no SSL tab; SSH is for a file on a server (ADR-018).
-  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSH", "Options"]);
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSH", "Session", "Options"]);
   await wizard.getByLabel("Name", { exact: true }).fill("Shop copy");
   await wizard.getByLabel("File", { exact: true }).fill(join(demo, "data", "shop.db"));
   await wizard.getByRole("tab", { name: "Options" }).click();
@@ -3716,7 +3824,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard");
   await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
-  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Kubernetes", "Options"]);
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSL", "SSH", "Kubernetes", "Session", "Options"]);
   await wizard.getByLabel("Name", { exact: true }).fill("Docker PG (wizard)");
   await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
   await wizard.getByLabel("Port", { exact: true }).fill("15432");
@@ -4316,7 +4424,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   wizard = page.locator(".modal.wizard").first();
   await wizard.locator(".engine-card", { hasText: "SQLite" }).click();
   await wizard.getByLabel("Name", { exact: true }).fill("Shop on a server");
-  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSH", "Options"]);
+  assert.deepEqual(await wizard.getByRole("tab").allTextContents(), ["Main", "SSH", "Session", "Options"]);
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
   await wizard.getByRole("tab", { name: "SSH" }).click();

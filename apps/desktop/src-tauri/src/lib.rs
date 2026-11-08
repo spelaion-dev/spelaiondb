@@ -912,6 +912,7 @@ async fn add_connection(
     let id = {
         let config = state.config.read().await;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
+        check_setup_before_saving(&state, &config, &file)?;
         let id =
             spelaion_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
                 .map_err(|e| e.to_string())?;
@@ -924,6 +925,23 @@ async fn add_connection(
     };
     state.reload().await;
     Ok(id.to_string())
+}
+
+/// A session setup the connection's sessions would refuse (ADR-037: a write on a read-only or
+/// Production connection) is refused before it is saved, with the core's message.
+fn check_setup_before_saving(
+    state: &AppState,
+    config: &spelaion_config::Config,
+    file: &spelaion_config::ConnectionFile,
+) -> CmdResult<()> {
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let safeguards = spelaion_config::ConnectionTypes::load(config, &trust)
+        .resolve(file.env.as_deref())
+        .ok()
+        .flatten()
+        .map(|kind| kind.safeguards)
+        .unwrap_or_default();
+    spelaion_core::check_file_setup(file, &safeguards).map_err(|e| e.to_string())
 }
 
 /// Checks whether an existing connection can be opened in the editor.
@@ -995,6 +1013,8 @@ async fn update_connection(
     {
         let config = state.config.read().await;
         let id = parse_id(&connection);
+        let file = draft.to_file(&config).map_err(|e| e.to_string())?;
+        check_setup_before_saving(&state, &config, &file)?;
         let written = spelaion_config::update_connection_at_revision(
             &config,
             &parse_id(&connection),
@@ -1620,6 +1640,13 @@ async fn connect(
         .server_version()
         .await
         .map_err(|e| e.to_string())?;
+    let setup_skipped = open
+        .setup
+        .skipped
+        .iter()
+        .cloned()
+        .map(SkippedSetupItem::from)
+        .collect();
     // Editor tabs follow their transaction under their type's safeguards (ADR-031); the
     // explorer's and table data tabs' sessions stay in auto-commit.
     if editor {
@@ -1647,7 +1674,10 @@ async fn connect(
     if let Some(old) = old.and_then(|o| Arc::try_unwrap(o.open).ok()) {
         old.close().await;
     }
-    Ok(ConnectOutcome::Connected { server_version })
+    Ok(ConnectOutcome::Connected {
+        server_version,
+        setup_skipped,
+    })
 }
 
 /// Open an independent tab from an existing explorer session, reusing its in-memory

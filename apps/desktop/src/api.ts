@@ -99,6 +99,7 @@ import {
   type OpenTabItem_Deserialize,
   type RecentFileItem,
   type RestoreNoteItem,
+  type SkippedSetupItem,
   type RestoredTabsItem_Serialize,
   type SaveFileOutcome,
   type SqlFileItem,
@@ -165,7 +166,7 @@ export type { ErrorAnswerItem, OnErrorItem, ScriptPreferencesItem };
 export type RunOptionsItem = RunOptionsItem_Deserialize;
 export type ScriptSummaryItem = ScriptSummaryItem_Deserialize;
 /** `.sql` files and the open tabs kept between runs (ADR-036). */
-export type { FileFormatItem, RecentFileItem, RestoreNoteItem, SaveFileOutcome, SqlFileItem };
+export type { FileFormatItem, RecentFileItem, RestoreNoteItem, SaveFileOutcome, SkippedSetupItem, SqlFileItem };
 export type OpenTabItem = OpenTabItem_Deserialize;
 export type RestoredTabsItem = RestoredTabsItem_Serialize;
 

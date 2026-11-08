@@ -1997,6 +1997,19 @@ select {
   border: 1px solid var(--line);
   border-radius: 6px;
 }
+.connection-form textarea.session-setup {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  padding: var(--space-sm) var(--space-md);
+  font-family: var(--font-code);
+  font-size: var(--text-md);
+  line-height: var(--leading-md);
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
 .connection-form input:disabled,
 .connection-form select:disabled {
   opacity: 0.55;

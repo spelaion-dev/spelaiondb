@@ -282,10 +282,22 @@ type CloudToken = "awsRds" | "azureAd" | "googleCloudSql";
 const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
 /** Engines that log in with a client certificate or a cloud token. */
 const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
-type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "options";
+type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "session" | "options";
 
 /** The core's limit (`ConnectionFile::MAX_DESCRIPTION`); the core checks it again. */
 const DESCRIPTION_MAX = 2000;
+/** The core's limits (`SessionConfig::MAX_SETUP`, `MAX_SCHEMA`); the core checks them again. */
+const SETUP_MAX = 20000;
+const SCHEMA_MAX = 128;
+/** An example of each engine's session setup, shown while the field is empty (SQL, not prose). */
+const SETUP_EXAMPLES: Record<string, string> = {
+  postgres: "SET search_path TO app, public;\nSET TIME ZONE 'UTC';",
+  mysql: "SET time_zone = '+00:00';",
+  mariadb: "SET time_zone = '+00:00';",
+  sqlserver: "SET DATEFORMAT ymd;\nSET LOCK_TIMEOUT 5000;",
+  duckdb: "SET TimeZone = 'UTC';",
+  sqlite: "PRAGMA foreign_keys = ON;",
+};
 
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
@@ -423,6 +435,10 @@ function ConnectionForm(props: {
     keepalive: network ? 300 : null,
     connectTimeout: null,
     statementTimeout: null,
+    sessionSetup: "",
+    ignoreSetupErrors: false,
+    defaultSchema: "",
+    isolation: null,
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
   // Types and what they do come from the core (ADR-029).
@@ -615,10 +631,14 @@ function ConnectionForm(props: {
 
   const onServer = remoteFile && useTunnel;
   const tabs: FormTab[] = network
-    ? ["main", "ssl", "ssh", "kubernetes", "options"]
+    ? ["main", "ssl", "ssh", "kubernetes", "session", "options"]
     : remoteFile
-      ? ["main", "ssh", "options"]
-      : ["main", "options"];
+      ? ["main", "ssh", "session", "options"]
+      : ["main", "session", "options"];
+  // Where the session setup may only read and change settings (ADR-037), as the core decides
+  // when the session opens: a read-only connection or a type that confirms data changes.
+  const setupRestricted = draft.readOnly || Boolean(selectedType?.safeguards.confirmDataChanges);
+  const databaseIsSchema = engine.id === "mysql" || engine.id === "mariadb";
   return (
     <>
     <form
@@ -943,6 +963,71 @@ function ConnectionForm(props: {
             />
           </div>
         )}
+
+        <div id="connection-tab-session" role="tabpanel" hidden={tab !== "session"}>
+          {(engine.sessionSchema || engine.isolationLevels.length > 0) && (
+            <fieldset>
+              <legend>{t("sections.session")}</legend>
+              {engine.sessionSchema && (
+                <>
+                  <Field label={databaseIsSchema ? t("fields.defaultDatabase") : t("fields.defaultSchema")}>
+                    <input
+                      type="text"
+                      name="defaultSchema"
+                      maxLength={SCHEMA_MAX}
+                      value={draft.defaultSchema}
+                      placeholder={t("fields.defaultSchemaPlaceholder")}
+                      onChange={(e) => update({ defaultSchema: e.target.value })}
+                    />
+                  </Field>
+                  <p className="muted small">{databaseIsSchema ? t("fields.defaultDatabaseHint") : t("fields.defaultSchemaHint")}</p>
+                </>
+              )}
+              {engine.isolationLevels.length > 0 && (
+                <>
+                  <Field label={t("fields.isolation")}>
+                    <select aria-label={t("fields.isolation")} name="isolation" value={draft.isolation ?? ""} onChange={(e) => update({ isolation: e.target.value || null })}>
+                      <option value="">{t("isolation.default")}</option>
+                      {engine.isolationLevels.map((level) => (
+                        <option key={level} value={level}>
+                          {t(`isolation.${level}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <p className="muted small">{t("fields.isolationHint")}</p>
+                </>
+              )}
+            </fieldset>
+          )}
+          <fieldset>
+            <legend>{t("sections.setup")}</legend>
+            <Field label={t("fields.sessionSetup")}>
+              <textarea
+                className="session-setup"
+                name="sessionSetup"
+                rows={6}
+                spellCheck={false}
+                maxLength={SETUP_MAX}
+                value={draft.sessionSetup}
+                placeholder={SETUP_EXAMPLES[engine.id] ?? ""}
+                onChange={(e) => update({ sessionSetup: e.target.value })}
+              />
+            </Field>
+            <label className="check">
+              <input
+                type="checkbox"
+                name="ignoreSetupErrors"
+                checked={draft.ignoreSetupErrors && draft.sessionSetup.trim() !== ""}
+                disabled={draft.sessionSetup.trim() === ""}
+                onChange={(e) => update({ ignoreSetupErrors: e.target.checked })}
+              />
+              {t("fields.ignoreSetupErrors")}
+            </label>
+            <p className="muted small">{t("fields.sessionSetupHint")}</p>
+            {setupRestricted && <p className="muted small">{t("fields.sessionSetupRestricted")}</p>}
+          </fieldset>
+        </div>
 
         <div id="connection-tab-options" role="tabpanel" hidden={tab !== "options"}>
           <fieldset>

@@ -674,5 +674,12 @@
     "hide": "Ocultar el panel de referencias",
     "followFailed": "No se pudo abrir la fila referenciada: {{detail}}",
     "accessibleKey": "Clave foránea: {{shortcut}} abre la fila referenciada."
+  },
+  "schema": "Esquema",
+  "schemaHint": "Dónde busca esta pestaña los nombres sin esquema",
+  "noSchema": "Sin esquema",
+  "setupSkipped": {
+    "title": "Algunas sentencias de inicio de la conexión fallaron y se saltaron",
+    "item": "Sentencia {{index}} ({{statement}}): {{message}}"
   }
 }

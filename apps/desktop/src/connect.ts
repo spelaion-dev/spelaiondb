@@ -144,6 +144,8 @@ async function openSessionInner(session: string, connectionId: string): Promise<
     outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember, editor));
   }
   if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables") return null;
+  // Setup statements the connection skipped (ADR-037) are said in the tab until dismissed.
+  useApp.getState().updateTab(session, { setupSkipped: outcome.setupSkipped.length > 0 ? outcome.setupSkipped : undefined });
   return outcome.serverVersion;
 }
 

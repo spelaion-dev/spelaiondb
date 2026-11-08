@@ -26,6 +26,7 @@ import { toggleResultsMaximized } from "../tabActions";
 import { Icon } from "./Icons";
 import { useCompletionCatalog } from "../useCompletionCatalog";
 import { mayChangeCompletionCatalog } from "../sqlCompletion";
+import { useEngineInfo } from "../engines";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 function databaseSwitching(engine: string | undefined): boolean {
@@ -78,6 +79,14 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const workspaceChanging = useApp((s) => s.workspaceChanging);
   const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
   const supportsDatabase = !tab.table && databaseSwitching(connection?.engine);
+  // A schema picker where the session has a schema of its own and no database picker does it
+  // (PostgreSQL, DuckDB): it shows, and changes, where unqualified names are found (ADR-037).
+  const engineInfo = useEngineInfo(connection?.engine);
+  const supportsSchema = !tab.table && !supportsDatabase && Boolean(engineInfo?.sessionSchema);
+  const [schemas, setSchemas] = useState<string[]>([]);
+  const [schema, setSchema] = useState<string | null>(null);
+  const [schemaBusy, setSchemaBusy] = useState(false);
+  const [schemaRefresh, setSchemaRefresh] = useState(0);
   const [databases, setDatabases] = useState<string[]>([]);
   const [database, setDatabase] = useState<string | null>(null);
   const [databaseBusy, setDatabaseBusy] = useState(false);
@@ -499,6 +508,45 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => { cancelled = true; };
   }, [supportsDatabase, tab.id, tab.status, tab.connectionId, tab.run?.running, databaseRefresh]);
 
+  // The session's schema, read after connecting and after each script (a SET search_path in
+  // it changes it), as the database is.
+  useEffect(() => {
+    if (!supportsSchema || tab.status !== "connected") {
+      setSchema(null);
+      setSchemas([]);
+      return;
+    }
+    if (tab.run?.running) return;
+    let cancelled = false;
+    Promise.all([call(commands.listSchemas(tab.id, null, false)), call(commands.activeSchema(tab.id))])
+      .then(([list, current]) => {
+        if (cancelled) return;
+        setSchemas(list.filter((item) => !item.system || item.name === current).map((item) => item.name));
+        setSchema(current);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSchemas([]);
+          setSchema(null);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [supportsSchema, tab.id, tab.status, tab.connectionId, tab.run?.running, schemaRefresh]);
+
+  async function changeSchema(next: string) {
+    if (!next || schemaBusy) return;
+    setSchemaBusy(true);
+    try {
+      await call(commands.setActiveSchema(tab.id, next));
+      setSchema(next);
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    } finally {
+      setSchemaBusy(false);
+      setSchemaRefresh((n) => n + 1);
+    }
+  }
+
   async function changeDatabase(next: string) {
     if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!next || databaseBusyRef.current) return;
@@ -535,7 +583,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
     call(commands.setActiveSchema(tab.id, schemaRequest.schema))
       .then(() => setNotice({ text: t("activeSchemaSet", { schema: schemaRequest.schema }), error: false }))
-      .catch((e: unknown) => setNotice({ text: message(e), error: true }));
+      .catch((e: unknown) => setNotice({ text: message(e), error: true }))
+      .finally(() => setSchemaRefresh((n) => n + 1));
     // Once per request.
   }, [schemaRequest]);
 
@@ -791,6 +840,20 @@ export function EditorTab({ tab }: { tab: Tab }) {
         ) : (
           <button className="ghost" disabled={tab.status === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
         ))}
+        {supportsSchema && tab.status === "connected" && (
+          <select
+            aria-label={t("schema")}
+            title={t("schemaHint")}
+            name="schema"
+            value={schema ?? ""}
+            onChange={(e) => void changeSchema(e.target.value)}
+            disabled={running || schemaBusy || historySaving || workspaceChanging || activeResult?.paging?.loading}
+          >
+            <option value="" disabled>{t("noSchema")}</option>
+            {schema && !schemas.includes(schema) && <option value={schema}>{schema}</option>}
+            {schemas.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        )}
         {tab.lost ? (
           <span className="status status-lost" role="alert" title={tab.lostTransaction ? `${tab.lost}
 ${t("transaction.lostWithTransaction")}` : tab.lost}>
@@ -831,6 +894,21 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           </button>
         ))}
       </div>
+      {tab.setupSkipped && tab.setupSkipped.length > 0 && (
+        <div className="banner restore-notes setup-skipped" role="status" aria-label={t("setupSkipped.title")}>
+          <div>
+            <strong>{t("setupSkipped.title")}</strong>
+            <ul>
+              {tab.setupSkipped.map((skipped) => (
+                <li key={skipped.index}>
+                  {t("setupSkipped.item", { index: skipped.index, statement: skipped.statement, message: skipped.message })}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <button className="ghost small" onClick={() => updateTab(tab.id, { setupSkipped: undefined })}>{t("restore.dismiss")}</button>
+        </div>
+      )}
       {tab.restoreNotes && tab.restoreNotes.length > 0 && (
         <div className="banner restore-notes" role="status">
           <ul>
