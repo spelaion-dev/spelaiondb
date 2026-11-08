@@ -2380,6 +2380,99 @@ try {
   await page.keyboard.press("Control+w");
   await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor({ state: "detached" });
 
+  step("foreign keys: open the referenced row, and the rows that point back to it");
+  {
+    const gridBox = async () => {
+      let box = null;
+      for (let i = 0; i < 40 && !box; i++) {
+        box = await panel.locator(".grid-scroller").boundingBox();
+        if (!box) await page.waitForTimeout(100);
+      }
+      return box;
+    };
+    await ordersNode.locator(".label").dblclick();
+    await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+    // The table's keys are known once the references panel can be shown.
+    const toggle = panel.getByRole("button", { name: "References panel" });
+    await toggle.waitFor();
+    // The first row's customer_id, as the grid has it.
+    let box = await gridBox();
+    let widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+    const customerCell = { x: box.x + 52 + widths[0] + 20, y: box.y + 36 + 13 };
+    await page.mouse.click(customerCell.x, customerCell.y);
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Control+c");
+    const customerId = (await copied(before + 1)).trimEnd();
+    assert.match(customerId, /^\d+$/);
+    // The cell's menu follows the key; Ctrl+Enter does the same from the keyboard.
+    await page.mouse.click(customerCell.x, customerCell.y, { button: "right" });
+    const follow = panel.locator(".result-grid-menu").getByRole("menuitem", { name: /^Open referenced row in customer/ });
+    await follow.waitFor();
+    assert.match(await follow.innerText(), /Ctrl\+Enter/);
+    await page.keyboard.press("Escape");
+    await shot("sdb-11-key-links");
+    // A click on the cell's link opens the referenced customer in a new table data tab.
+    await page.mouse.click(box.x + 52 + widths[0] + widths[1] - 8 - 6, customerCell.y);
+    await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor();
+    await range.filter({ hasText: "rows 1–1" }).waitFor();
+    assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), `id = ${customerId}`);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await shot("sdb-11-referenced-row");
+
+    // Back the other way: the customer's orders in the references panel.
+    await panel.getByRole("button", { name: "References panel" }).click();
+    const references = panel.getByRole("complementary", { name: "References of the row" });
+    await references.waitFor();
+    await references.getByRole("heading", { name: "Rows that point here" }).waitFor();
+    const ordersKey = references.locator(".reference-key", { hasText: "orders" });
+    await ordersKey.locator(".reference-rows li").first().waitFor();
+    assert.match(await ordersKey.locator(".reference-columns").innerText(), /^customer_id → id$/);
+    assert.match(await ordersKey.locator(".reference-rows li").first().innerText(), new RegExp(`customer_id: ${customerId}`));
+    await shot("sdb-11-references-panel");
+    await setTheme("dark", "dark");
+    await ordersKey.locator(".reference-rows li").first().waitFor();
+    await shot("sdb-11-references-panel-dark");
+    await setTheme("light", "light");
+    await ordersKey.locator(".reference-rows li").first().waitFor();
+    // "Open rows" opens every order of this customer, filtered by the core.
+    await ordersKey.getByRole("button", { name: "Open rows" }).click();
+    await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
+    assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), `customer_id = ${customerId}`);
+    await panel.locator(".statusline", { hasText: /\d+ rows?/ }).waitFor();
+    // And forward again from there, with the keyboard: Ctrl+Enter on customer_id.
+    box = await gridBox();
+    widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 36 + 13);
+    await page.keyboard.press("Control+Enter");
+    await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor();
+    assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), `id = ${customerId}`);
+    // Its page loaded (closing a tab that is still running asks first).
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    // The four tabs opened here, closed one at a time (closing is asynchronous).
+    for (let i = 0; i < 4; i++) {
+      const open = await page.locator(".tabbar .tab").count();
+      await page.keyboard.press("Control+w");
+      await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n - 1, open);
+    }
+    assert.equal(await page.locator(".tabbar .tab", { hasText: "customer" }).count(), 0);
+
+    // The table details' References: the keys of other tables that point to customer.
+    await customerNode.locator(".twisty").click();
+    const customerChildren = customerNode.locator("xpath=..");
+    const referencesFolder = customerChildren.getByRole("button", { name: "Expand or collapse References", exact: true });
+    await referencesFolder.waitFor();
+    assert.equal(await referencesFolder.locator(".muted").innerText(), "1");
+    await referencesFolder.dblclick();
+    const referencesTab = page.getByRole("region", { name: "References of customer" });
+    await referencesTab.waitFor();
+    await referencesTab.getByRole("cell", { name: "main.orders" }).waitFor();
+    await shot("sdb-11-references-tab");
+    await page.keyboard.press("Control+w");
+    await referencesTab.waitFor({ state: "detached" });
+    await customerNode.locator(".twisty").click();
+  }
+
   step("query parameters: :name values asked once, written in by the core");
   await replaceQuery(panel, "select :name as who, :n + 1 as next, :name || '!' as again;");
   await run(panel);

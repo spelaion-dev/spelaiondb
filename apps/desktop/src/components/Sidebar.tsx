@@ -27,6 +27,7 @@ import {
   type ServerObjectKindItem,
   type SqlTemplateItem,
   type TableDetails,
+  type TableKeyItem,
 } from "../api";
 import {
   confirmOpenTransactions,
@@ -2059,6 +2060,8 @@ function ObjectNode({
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
+  /** Foreign keys of other tables that point to this one; none when they cannot be read. */
+  const [references, setReferences] = useState<TableKeyItem[]>([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [menu, setMenu] = useContextMenu();
   const sort = useSortByName();
@@ -2089,7 +2092,12 @@ function ObjectNode({
     setLoadingDetails(true);
     setError(null);
     try {
-      setDetails(await call(commands.describeTable(session, object.schema, object.name, columnFilter)));
+      const [described, referencing] = await Promise.all([
+        call(commands.describeTable(session, object.schema, object.name, columnFilter)),
+        call(commands.referencingKeys(session, object.schema, object.name)).catch((): TableKeyItem[] => []),
+      ]);
+      setDetails(described);
+      setReferences(referencing);
     } catch (e) {
       setDetails(null);
       setError(errorText(e));
@@ -2473,6 +2481,21 @@ function ObjectNode({
                 />
               );
             })}
+          </Folder>
+          <Folder label={t("folders.references")} count={references.length} icon="foreignKeys" onOpenView={() => openDetails("references")}>
+            {sort(references, (key) => `${key.table}.${key.name}`).map((key) => (
+              <LeafRow
+                key={`${key.schema}.${key.table}:${key.name}`}
+                session={session}
+                connectionId={connectionId}
+                schema={object.schema}
+                label={key.schema === object.schema ? key.table : `${key.schema}.${key.table}`}
+                detail={`${key.name}: (${key.otherColumns.join(", ")}) → (${key.columns.join(", ")})`}
+                icon="foreignKeys"
+                target={null}
+                onChanged={refresh}
+              />
+            ))}
           </Folder>
           <Folder label={t("folders.indexes")} count={details.indexes.length} icon="indexes" onOpenView={() => openDetails("indexes")}>
             {sort(details.indexes, (index) => index.name).map((index) => (

@@ -144,6 +144,7 @@
     "columns": "Columnas",
     "constraints": "Restricciones",
     "foreignKeys": "Claves foráneas",
+    "references": "Referencias",
     "indexes": "Índices"
   },
   "tableDetails": {
@@ -171,7 +172,10 @@
     "actions": "Acciones",
     "count_one": "{{count}} elemento",
     "count_other": "{{count}} elementos",
-    "close": "Cerrar"
+    "close": "Cerrar",
+    "referencingTable": "Tabla que referencia",
+    "openData": "Abrir datos",
+    "referencesHint": "Claves foráneas de otras tablas que apuntan a {{table}}"
   },
   "newTableElement": {
     "title": "Añadir a {{section}} de {{table}}",

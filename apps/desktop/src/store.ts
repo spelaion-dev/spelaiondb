@@ -67,7 +67,7 @@ export interface RunState {
 }
 
 export type TabStatus = "disconnected" | "connecting" | "connected";
-export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers";
+export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "references" | "indexes" | "triggers";
 
 /**
  * A tab, in the order the tab bar shows it (pinned tabs first). The fields kept when a tab is
@@ -269,8 +269,9 @@ interface AppStore {
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
   addTab(connectionId: string | null, sql?: string): string;
-  /** Opens a table data tab on a table (its first page loads when it appears). */
-  addTableTab(connectionId: string, schema: string, name: string): string;
+  /** Opens a table data tab on a table (its first page loads when it appears), filtered by
+   *  `filter` when given (a followed foreign key's, written by the core). */
+  addTableTab(connectionId: string, schema: string, name: string, filter?: string): string;
   addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
   /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
   closeTabs(ids: string[]): void;
@@ -367,10 +368,10 @@ export const useApp = create<AppStore>((set) => ({
     set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, recentTabs: [id, ...s.recentTabs] }));
     return id;
   },
-  addTableTab: (connectionId, schema, name): string => {
+  addTableTab: (connectionId, schema, name, filter = ""): string => {
     const app: AppStore = useApp.getState();
     const id: string = app.addTab(connectionId);
-    app.updateTab(id, { table: { schema, name, filter: "", orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
+    app.updateTab(id, { table: { schema, name, filter, orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
     return id;
   },
   addTableDetailsTab: (connectionId, schema, name, kind): string => {

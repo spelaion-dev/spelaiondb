@@ -1630,6 +1630,146 @@ pub struct ForeignKeyDetails {
     pub referenced_columns: Vec<String>,
 }
 
+/// Which way a foreign key goes from a table (see `spelaion_core::KeyDirection`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyDirectionItem {
+    Outgoing,
+    Incoming,
+}
+
+impl From<spelaion_core::KeyDirection> for KeyDirectionItem {
+    fn from(direction: spelaion_core::KeyDirection) -> Self {
+        match direction {
+            spelaion_core::KeyDirection::Outgoing => Self::Outgoing,
+            spelaion_core::KeyDirection::Incoming => Self::Incoming,
+        }
+    }
+}
+
+impl From<KeyDirectionItem> for spelaion_core::KeyDirection {
+    fn from(direction: KeyDirectionItem) -> Self {
+        match direction {
+            KeyDirectionItem::Outgoing => Self::Outgoing,
+            KeyDirectionItem::Incoming => Self::Incoming,
+        }
+    }
+}
+
+/// A foreign key seen from a table: its own (outgoing) or another table's that points to it
+/// (incoming). `schema` and `table` are the other table.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableKeyItem {
+    pub direction: KeyDirectionItem,
+    pub name: String,
+    pub schema: String,
+    pub table: String,
+    /// This table's columns, in the key's order.
+    pub columns: Vec<String>,
+    /// The other table's columns, in the same order.
+    pub other_columns: Vec<String>,
+}
+
+impl From<spelaion_core::TableKey> for TableKeyItem {
+    fn from(key: spelaion_core::TableKey) -> Self {
+        Self {
+            direction: key.direction.into(),
+            name: key.name,
+            schema: key.schema,
+            table: key.table,
+            columns: key.columns,
+            other_columns: key.other_columns,
+        }
+    }
+}
+
+/// The key the UI wants to follow, by name: the core looks its columns up in the catalog.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyRefItem {
+    pub direction: KeyDirectionItem,
+    pub schema: String,
+    pub table: String,
+    pub name: String,
+}
+
+impl From<KeyRefItem> for spelaion_core::KeyRef {
+    fn from(key: KeyRefItem) -> Self {
+        Self {
+            direction: key.direction.into(),
+            schema: key.schema,
+            table: key.table,
+            name: key.name,
+        }
+    }
+}
+
+/// Where a followed key leads: a table data tab of `schema.table` with the core's `filter`.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyTargetItem {
+    pub schema: String,
+    pub table: String,
+    pub filter: String,
+}
+
+impl From<spelaion_core::KeyTarget> for KeyTargetItem {
+    fn from(target: spelaion_core::KeyTarget) -> Self {
+        Self {
+            schema: target.schema,
+            table: target.table,
+            filter: target.filter,
+        }
+    }
+}
+
+/// One key of a row in the references panel: where it leads and its first rows (as text,
+/// `None` for NULL); or the column that is NULL in this row (it references nothing through
+/// this key); or why it could not be read.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RowReferenceItem {
+    pub key: TableKeyItem,
+    pub target: Option<KeyTargetItem>,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Option<String>>>,
+    pub more: bool,
+    pub null_column: Option<String>,
+    pub error: Option<String>,
+}
+
+impl From<spelaion_core::RowReference> for RowReferenceItem {
+    fn from(reference: spelaion_core::RowReference) -> Self {
+        let empty = Self {
+            key: reference.key.into(),
+            target: None,
+            columns: Vec::new(),
+            rows: Vec::new(),
+            more: false,
+            null_column: None,
+            error: None,
+        };
+        match reference.outcome {
+            spelaion_core::ReferenceOutcome::Rows(target, rows) => Self {
+                target: Some(target.into()),
+                columns: rows.columns,
+                rows: rows.rows,
+                more: rows.more,
+                ..empty
+            },
+            spelaion_core::ReferenceOutcome::Null { column } => Self {
+                null_column: Some(column),
+                ..empty
+            },
+            spelaion_core::ReferenceOutcome::Failed(error) => Self {
+                error: Some(error),
+                ..empty
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexDetails {

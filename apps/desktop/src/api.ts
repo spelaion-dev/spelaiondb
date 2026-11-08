@@ -48,6 +48,10 @@ import {
   type SchemaItem,
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
+  type TableKeyItem,
+  type KeyTargetItem,
+  type KeyRefItem,
+  type RowReferenceItem_Serialize,
   type RiskKind,
   type KubernetesDraftItem,
   type KubePortItem_Serialize,
@@ -129,6 +133,8 @@ export type { SchemaObjectKindItem, ServerObjectKindItem };
 // The channel delivers the deserialization variant (optional fields).
 export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
+export type { TableKeyItem, KeyTargetItem, KeyRefItem };
+export type RowReferenceItem = RowReferenceItem_Serialize;
 export type IndexDetails = TableDetails["indexes"][number];
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
 export type McpAccessItem = McpAccessItem_Serialize;

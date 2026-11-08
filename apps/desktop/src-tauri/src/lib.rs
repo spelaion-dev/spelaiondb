@@ -3549,6 +3549,123 @@ async fn count_table_rows(
     Ok(spelaion_core::count_table_rows(&open.session, &schema, &name, &filter).await? as f64)
 }
 
+/// The foreign keys a table data tab can follow: the table's own, then those of other tables
+/// that point to it, from the catalog.
+#[tauri::command]
+#[specta::specta]
+async fn table_keys(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<TableKeyItem>> {
+    let open = state.session(&session).await?;
+    let keys = spelaion_core::table_keys(open.session.connection().as_ref(), &schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(keys.into_iter().map(TableKeyItem::from).collect())
+}
+
+/// The foreign keys of other tables that point to `schema.table` (the explorer's and the table
+/// details' "References"), from the catalog.
+#[tauri::command]
+#[specta::specta]
+async fn referencing_keys(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<TableKeyItem>> {
+    let open = state.session(&session).await?;
+    let keys = open
+        .session
+        .connection()
+        .list_referencing_keys(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(keys
+        .into_iter()
+        .map(|key| TableKeyItem {
+            direction: KeyDirectionItem::Incoming,
+            name: key.name,
+            schema: key.schema,
+            table: key.table,
+            columns: key.referenced_columns,
+            other_columns: key.columns,
+        })
+        .collect())
+}
+
+/// Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
+/// of `schema.table`): the core finds the key in the catalog again, reads the row's typed
+/// values and writes the filter of the table data tab it leads to.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn follow_key(
+    session: String,
+    result: u32,
+    row: u32,
+    schema: String,
+    table: String,
+    key: KeyRefItem,
+    state: State<'_, AppState>,
+) -> CmdResult<KeyTargetItem> {
+    let open = state.session(&session).await?;
+    let key = spelaion_core::find_key(
+        open.session.connection().as_ref(),
+        &schema,
+        &table,
+        &key.into(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    spelaion_core::follow(open.session.dialect().as_ref(), &stored, row as usize, &key)
+        .map(KeyTargetItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// The references panel of a table data tab: every foreign key of the row at `row` (the
+/// table's own and those that point to it), each with up to `limit` of the rows it leads to,
+/// read in turn on the tab's session.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn row_references(
+    session: String,
+    result: u32,
+    row: u32,
+    schema: String,
+    table: String,
+    limit: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<RowReferenceItem>> {
+    let open = state.session(&session).await?;
+    let keys = spelaion_core::table_keys(open.session.connection().as_ref(), &schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    let targets = {
+        let stored = state
+            .results
+            .get(ResultId(result.into()))
+            .ok_or("result freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        spelaion_core::reference_targets(
+            open.session.dialect().as_ref(),
+            &stored,
+            row as usize,
+            keys,
+        )
+    };
+    let references = spelaion_core::read_references(&open.session, targets, u64::from(limit)).await;
+    Ok(references.into_iter().map(RowReferenceItem::from).collect())
+}
+
 /// An identifier quoted for the session's engine (for an ORDER BY the UI writes).
 #[tauri::command]
 #[specta::specta]
@@ -3976,6 +4093,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             find_step,
             clear_find,
             table_filter_condition,
+            table_keys,
+            referencing_keys,
+            follow_key,
+            row_references,
             export_result,
             export_rerun_check,
             export_query,
