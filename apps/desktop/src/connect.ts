@@ -5,7 +5,7 @@
 import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
-import { useApp, useDialogs } from "./store";
+import { type Tab, useApp, useDialogs } from "./store";
 
 /**
  * Fired on `window` with a connection id when the explorer refreshes all its schemas: editor
@@ -72,13 +72,23 @@ async function showTransaction(session: string) {
   }
 }
 
-/** A tab's name as its tab shows it. */
-export function tabName(id: string): string {
-  const tab = useApp.getState().tabs.find((t) => t.id === id);
-  if (!tab) return id;
+/** A tab's name as its tab shows it: the user's name for it, or its default one. */
+export function tabLabel(tab: Tab): string {
+  if (tab.title) return tab.title;
+  return defaultTabLabel(tab);
+}
+
+/** What a tab is called before the user renames it. */
+export function defaultTabLabel(tab: Tab): string {
   if (tab.tableDetails) return `${tab.tableDetails.name} · ${i18n.t(`shell:folders.${tab.tableDetails.kind}`)}`;
   if (tab.table) return tab.table.name;
   return i18n.t("shell:queryTab", { number: tab.number });
+}
+
+/** A tab's name as its tab shows it, by id. */
+export function tabName(id: string): string {
+  const tab = useApp.getState().tabs.find((t) => t.id === id);
+  return tab ? tabLabel(tab) : id;
 }
 
 /**
@@ -169,16 +179,65 @@ export function explorerDatabase(connectionId: string, schema: string): string |
   return engine === "mysql" || engine === "mariadb" ? schema : undefined;
 }
 
-/** Closes a query tab: its session is disconnected and its results are freed in the core (a
- *  script still running finishes and is recorded). Ctrl+Shift+T reopens it, without results. */
-export async function closeQueryTab(id: string) {
-  const tab = useApp.getState().tabs.find((t) => t.id === id);
-  if (!tab) return;
-  if (tab.savingEdits) return;
-  if (tab.pendingEdits && !(await confirm(i18n.t("editor:edit.closeUnsaved"), { kind: "warning" }))) return;
-  if (!(await confirmOpenTransactions([id], "close"))) return;
-  if (useApp.getState().tabs.find((t) => t.id === id)?.savingEdits) return;
-  useApp.getState().closeTab(id);
-  void call(commands.disconnect(id)).catch(() => undefined);
-  for (const r of tab.run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
+/**
+ * Closes tabs, asking once for all of them first: unsaved row edits, transactions the server
+ * would roll back (the core says which, ADR-031) and queries still running. A running query is
+ * cancelled (a run paused after an error stops, ADR-035), its session disconnected and its
+ * results freed in the core. Ctrl+Shift+T reopens an SQL tab, without results or session.
+ */
+export async function closeTabs(ids: string[]) {
+  const find = (id: string) => useApp.getState().tabs.find((t) => t.id === id);
+  const targets = ids.map(find).filter((t): t is Tab => t !== undefined && !t.savingEdits);
+  if (targets.length === 0) return;
+  const unsaved = targets.filter((t) => t.pendingEdits);
+  if (unsaved.length > 0) {
+    const text = unsaved.length === 1 && targets.length === 1
+      ? i18n.t("editor:edit.closeUnsaved")
+      : i18n.t("editor:edit.closeUnsavedMany", { count: unsaved.length, tabs: unsaved.map(tabLabel).join(", ") });
+    if (!(await confirm(text, { kind: "warning" }))) return;
+  }
+  const sessions = targets.map((t) => t.id);
+  if (!(await confirmClose(sessions))) return;
+  // Saving started while the question was open: that tab stays.
+  const closing = sessions.filter((id) => {
+    const tab = find(id);
+    return tab !== undefined && !tab.savingEdits;
+  });
+  if (closing.length === 0) return;
+  const runs = new Map(closing.map((id) => [id, find(id)?.run ?? null]));
+  stopScriptQuestion(closing);
+  useApp.getState().closeTabs(closing);
+  for (const id of closing) {
+    const run = runs.get(id);
+    void (async () => {
+      // The core stops the run that sent the statement, then the session closes.
+      if (run?.running) await call(commands.cancel(id)).catch(() => undefined);
+      await call(commands.disconnect(id)).catch(() => undefined);
+    })();
+    for (const r of run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
+  }
+}
+
+/** Closes one tab (the tab's ×, Ctrl+W). */
+export function closeQueryTab(id: string) {
+  return closeTabs([id]);
+}
+
+/** Running queries and open transactions among the tabs to close: one question for all. */
+async function confirmClose(sessions: string[]): Promise<boolean> {
+  const running = sessions.filter((id) => useApp.getState().tabs.find((t) => t.id === id)?.run?.running);
+  let open: string[] = [];
+  try {
+    open = await call(commands.sessionsToConfirm(sessions));
+  } catch {
+    // The sessions are gone: nothing is left to roll back.
+  }
+  if (open.length === 0 && running.length === 0) return true;
+  return useDialogs.getState().askOpenTransactions(open.map(tabName), "close", running.map(tabName));
+}
+
+/** A run of a closing tab that waits for an answer after an error stops: its dialog goes. */
+function stopScriptQuestion(closing: string[]) {
+  const question = useDialogs.getState().scriptError;
+  if (question && closing.includes(question.tab)) question.resolve("stop");
 }

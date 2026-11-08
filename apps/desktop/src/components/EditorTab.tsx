@@ -20,6 +20,8 @@ import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
+import { toggleResultsMaximized } from "../tabActions";
+import { Icon } from "./Icons";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 function databaseSwitching(engine: string | undefined): boolean {
@@ -735,6 +737,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   const running = tab.run?.running ?? false;
+  const maximized = !tab.table && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
   return (
     <div className="editor-tab">
@@ -821,7 +824,9 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
         )}
         {!tab.table && (
         <>
-        <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane">
+        {/* Maximized results hide the editor without unmounting it: its text, undo and
+            cursor stay as they were. */}
+        <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane" hidden={maximized}>
           <div className="editor-actions" role="toolbar" aria-label={t("editorActions")}>
             {running ? (
               <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
@@ -860,6 +865,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
         </div>
         <div
           className="divider"
+          hidden={maximized}
           onPointerDown={startDrag}
           onDoubleClick={() => setEditorShare(0.42)}
           role="separator"
@@ -881,8 +887,9 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
         />
         </>
         )}
-        <div style={{ flex: tab.table ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
+        <div style={{ flex: tab.table || maximized ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
           <Results
+            maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
             run={tab.run}
             session={tab.id}
             connectionId={tab.connectionId}
@@ -947,7 +954,10 @@ function Results({
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
+  maximize,
 }: {
+  /** The button that hides the SQL editor (SQL tabs only). */
+  maximize?: { maximized: boolean; onToggle(): void };
   run: RunState | null;
   session: string;
   connectionId: string | null;
@@ -973,7 +983,19 @@ function Results({
   const [viewerWidth, setViewerWidth] = useState(420);
   /** Columns hidden in each result's grid (positions only), for the export dialog. */
   const [hiddenColumns, setHiddenColumns] = useState<Record<number, number[]>>({});
-  if (!run) return <div className="empty">{t("results.empty")}</div>;
+  const maximizeButton = maximize && (
+    <button
+      className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
+      aria-pressed={maximize.maximized}
+      aria-label={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
+      title={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
+      onClick={maximize.onToggle}
+    >
+      <Icon name={maximize.maximized ? "minimize" : "maximize"} />
+    </button>
+  );
+  // Nothing to show yet: the button only brings the editor back if it was hidden.
+  if (!run) return <div className="empty">{t("results.empty")}{maximize?.maximized && maximizeButton}</div>;
   const active = run.results.find((r) => r.id === run.activeResult) ?? null;
   const showMessages = active === null;
   const error = run.error ? translatedError(run.error, t, numbers) : null;
@@ -1018,6 +1040,7 @@ function Results({
             hidden={hiddenColumns[active.id] ?? []}
           />
         </div>}
+        {maximizeButton}
       </div>
       {active && filterError?.result === active.id && <div id={`result-filter-error-${active.id}`} className="result-filter-error" role="alert">{filterError.message}</div>}
       <div className="result-body">

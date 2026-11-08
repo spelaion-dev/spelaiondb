@@ -13,5 +13,24 @@
     "install": "Instalar y reiniciar",
     "installing": "Instalando…",
     "later": "Más tarde"
+  },
+  "tabs": {
+    "menu": "Acciones de {{name}}",
+    "rename": "Cambiar nombre",
+    "renameLabel": "Nuevo nombre de {{name}}",
+    "duplicate": "Duplicar",
+    "copyOf": "{{name}} (copia)",
+    "pin": "Fijar",
+    "unpin": "Soltar",
+    "unpinButton": "Soltar {{name}}",
+    "pinned": "Fijada",
+    "close": "Cerrar",
+    "closeOthers": "Cerrar las demás",
+    "closeRight": "Cerrar las de la derecha",
+    "closeAll": "Cerrar todas",
+    "reopen": "Reabrir la pestaña cerrada",
+    "running": "Hay una consulta en ejecución",
+    "switcher": "Pestañas usadas recientemente",
+    "switcherHint": "Mantén Ctrl pulsado y pulsa Tab para moverte; suelta Ctrl para cambiar."
   }
 }

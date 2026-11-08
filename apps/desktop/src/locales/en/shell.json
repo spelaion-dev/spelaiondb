@@ -367,7 +367,11 @@
       "close": "Close and roll back",
       "disconnect": "Disconnect and roll back",
       "quit": "Quit and roll back"
-    }
+    },
+    "titleRunning": "Close while a query runs?",
+    "running_one": "This tab's query is still running. Closing cancels it:",
+    "running_other": "These tabs have queries still running. Closing cancels them:",
+    "proceedRunning": "Close and cancel"
   },
   "exportTable": "Export…",
   "exportTables_one": "Export {{formattedCount}} table…",

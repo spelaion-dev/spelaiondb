@@ -974,6 +974,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   for (const tag of activeTags) if (!filterTags.some((other) => sameTag(other, tag))) filterTags.push(tag);
   const filtering = filterText !== "" || activeTags.length > 0;
   const explorer = usePreferences((s) => s.explorer);
+  // A preference being saved takes no other change until it is done (setExplorer ignores it).
+  const savingPreference = usePreferences((s) => s.saving !== null);
   const explorerConnected = useApp((s) => s.explorerConnected);
   const tabs = useApp((s) => s.tabs);
   const tabConnected = tabs.filter((tab) => tab.status === "connected").map((tab) => tab.connectionId);
@@ -1096,6 +1098,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           <button
             className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
             onClick={() => void usePreferences.getState().setExplorer({ ...explorer, linkWithEditor: !explorer.linkWithEditor })}
+            disabled={savingPreference}
             aria-label={t("linkWithEditor")}
             aria-pressed={explorer.linkWithEditor}
             title={t("linkWithEditorHint")}

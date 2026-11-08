@@ -298,12 +298,32 @@ connections that must never change.
 | Shift+Alt+F | Format the selection or the script |
 | Ctrl+S | Save the SQL as a named query |
 | Ctrl+T / Ctrl+W | New query tab / close the tab (its connection and results are freed) |
-| Ctrl+Shift+T | Reopen the last closed tab with its SQL |
-| Ctrl+Tab, Ctrl+Shift+Tab | Next / previous tab (also Ctrl+PageDown / Ctrl+PageUp) |
+| Ctrl+Shift+T | Reopen the last closed tab with its SQL, connection and name (disconnected) |
+| Ctrl+Tab, Ctrl+Shift+Tab | Switch to a recently used tab: keep Ctrl down, press Tab to move, release to switch |
+| Ctrl+PageDown / Ctrl+PageUp | Next / previous tab in the bar |
+| Ctrl+Shift+PageDown / PageUp | Move the tab right / left |
+| Ctrl+F2 (F2 on a focused tab) | Rename the tab |
+| Ctrl+Alt+D / Ctrl+Alt+P | Duplicate / pin or unpin the tab |
+| Ctrl+Alt+W / Ctrl+Alt+R / Ctrl+Shift+W | Close the other tabs / the tabs to the right / all tabs |
+| Ctrl+Alt+M | Maximize or restore the results panel |
 | Ctrl+, | Settings |
 | Ctrl+C, Ctrl+Shift+C | Copy the grid selection (with headers) |
 | Enter, Esc | Open / close the cell viewer |
 | Ctrl+Shift+J | Jump to a column of the result by name |
+
+### Tabs
+
+Right-click a tab (or press Shift+F10 on it) to rename, duplicate, pin or close it, or to
+close the others, the ones to its right or all of them. Double-click a tab to rename it, drag
+it to reorder, and middle-click it to close it. A spinner on the tab shows that its query is
+running.
+
+Closing tabs asks once, listing every tab whose transaction the server would roll back and
+every tab whose running query would be cancelled. Pinned tabs sort first and stay open when
+you close the others, the ones to the right or all; their × becomes an unpin button so a stray
+click never closes one, but closing that tab itself (Ctrl+W or **Close** in its menu) does.
+A reopened tab brings back its SQL, connection and name, never its results or session: it
+starts disconnected and runs nothing until you do.
 
 ## Working with results
 

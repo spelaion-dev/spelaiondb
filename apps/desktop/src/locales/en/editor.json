@@ -355,7 +355,9 @@
     "discard": "Discard",
     "applied_one": "Applied {{count}} change",
     "applied_other": "Applied {{count}} changes",
-    "applyFirst": "Apply or discard the pending changes first"
+    "applyFirst": "Apply or discard the pending changes first",
+    "closeUnsavedMany_one": "{{count}} tab has unsaved row changes ({{tabs}}). Discard them and close?",
+    "closeUnsavedMany_other": "{{count}} tabs have unsaved row changes ({{tabs}}). Discard them and close?"
   },
   "activeSchemaSet": "Unqualified names are looked up in {{schema}} now",
   "transaction": {
@@ -470,5 +472,7 @@
     "failedAgain": "Running it again in a new session failed: {{reason}}",
     "loadedInstead_one": "Export the row loaded instead",
     "loadedInstead_other": "Export the {{formattedCount}} rows loaded instead"
-  }
+  },
+  "maximizeResults": "Maximize results (Ctrl+Alt+M)",
+  "restoreResults": "Restore the editor (Ctrl+Alt+M)"
 }
