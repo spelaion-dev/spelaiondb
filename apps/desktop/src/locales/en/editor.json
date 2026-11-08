@@ -534,5 +534,8 @@
     "insertInsert": "Insert INSERT snippet",
     "insertUpdate": "Insert UPDATE snippet",
     "failed": "Could not perform editor action: {{reason}}"
+  },
+  "completion": {
+    "loadFailed": "Could not load completion metadata: {{reason}}. Refresh the connection in the explorer to try again."
   }
 }

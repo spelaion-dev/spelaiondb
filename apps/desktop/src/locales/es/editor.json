@@ -534,5 +534,8 @@
     "insertInsert": "Insertar fragmento INSERT",
     "insertUpdate": "Insertar fragmento UPDATE",
     "failed": "No se pudo realizar la acción del editor: {{reason}}"
+  },
+  "completion": {
+    "loadFailed": "No se pudieron cargar los metadatos de las sugerencias: {{reason}}. Actualiza la conexión en el explorador para volver a intentarlo."
   }
 }

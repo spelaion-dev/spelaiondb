@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-i18n.mjs && node --test scripts/explorer-sort.test.mjs scripts/fuzzy.test.mjs scripts/commands.test.mjs scripts/editor-actions.test.mjs && tsc --noEmit && vite build",
+    "build": "node scripts/check-i18n.mjs && node --test scripts/explorer-sort.test.mjs scripts/fuzzy.test.mjs scripts/commands.test.mjs scripts/editor-actions.test.mjs scripts/sql-completion.test.mjs && tsc --noEmit && vite build",
     "bindings": "cargo run -q -p spelaion-desktop --features bindings --bin export-bindings",
     "tauri": "tauri"
   },
