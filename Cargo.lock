@@ -5777,7 +5777,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5795,7 +5795,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-config"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "aes 0.8.4",
  "apple-native-keyring-store",
@@ -5815,7 +5815,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -5840,7 +5840,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-desktop"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5864,7 +5864,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-api"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5875,7 +5875,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-duckdb"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5887,7 +5887,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-mysql"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5901,7 +5901,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-postgres"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -5920,7 +5920,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-sqlite"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5933,7 +5933,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-sqlserver"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5948,7 +5948,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-mcp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rmcp",
  "rusqlite",
@@ -5965,7 +5965,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-ssh"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -5980,7 +5980,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-store"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
