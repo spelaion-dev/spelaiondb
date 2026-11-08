@@ -65,7 +65,8 @@
     "restoreEditor": "Restaurar el editor",
     "saveQuery": "Guardar la consulta",
     "cancelQuery": "Cancelar la consulta",
-    "explorerFilter": "Filtrar el explorador"
+    "explorerFilter": "Filtrar el explorador",
+    "importClipboard": "Importar datos del portapapeles…"
   },
   "palette": {
     "title": "Paleta de comandos",

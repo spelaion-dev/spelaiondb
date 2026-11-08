@@ -2997,6 +2997,76 @@ try {
     await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor({ state: "detached" });
   }
 
+  step("import: a CSV into a new table, with its preview, columns and SQL shown first");
+  {
+    // ADR-038. A value made of quotes and SQL must arrive as plain text.
+    const csvPath = join(userDir, "smoke-import.csv");
+    const tricky = `Robert'); DROP TABLE orders; -- "quoted"`;
+    writeFileSync(
+      csvPath,
+      [
+        "id,name,amount,day,note",
+        "1,plain,10.50,2024-01-31,x",
+        `2,"${tricky.replaceAll('"', '""')}",3,2024-02-29,`,
+        `3,"two\nlines",7.25,2024-03-01,y`,
+        "",
+      ].join("\r\n"),
+    );
+    const mainSchema = page.getByRole("button", { name: "Expand or collapse schema main" });
+    await mainSchema.waitFor();
+    await mainSchema.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Import data into a new table…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Import data" });
+    await dialog.waitFor();
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, csvPath);
+    await dialog.getByRole("button", { name: "Choose file…" }).click();
+    const preview = dialog.getByRole("region", { name: "Preview" });
+    await preview.locator("tbody tr").nth(2).waitFor();
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    // The core's types: integer, decimal and date; mixed or missing values are text.
+    assert.deepEqual(await preview.locator("th .import-kind").allTextContents(), ["Integer", "Text", "Decimal", "Date", "Text"]);
+    await dialog.getByText("Types detected from 3 rows.").waitFor();
+    // The note column is left out.
+    await preview.getByRole("button", { name: "Leave out note" }).click();
+    await preview.getByRole("button", { name: "Import note again" }).waitFor();
+    await shot("sdb-10-preview");
+    await dialog.getByRole("button", { name: "Next", exact: true }).click();
+    assert.equal(await dialog.locator('input[name="import-table"]').inputValue(), "smoke_import");
+    const mapping = dialog.getByRole("region", { name: "Columns" });
+    assert.equal(await mapping.locator("tbody tr").count(), 4);
+    assert.equal(await mapping.getByRole("textbox", { name: "Type of the column for amount" }).inputValue(), "NUMERIC");
+    await shot("sdb-10-mapping");
+    await dialog.getByRole("button", { name: "Review SQL…" }).click();
+    const sql = dialog.locator(".import-sql");
+    await sql.waitFor();
+    const text = await sql.innerText();
+    // SQLite's quoting leaves plain names as they are.
+    assert.ok(text.startsWith("CREATE TABLE smoke_import (\n  id INTEGER,\n  name TEXT,\n  amount NUMERIC,\n  day DATE\n)"), text);
+    assert.ok(text.endsWith("INSERT INTO smoke_import (id, name, amount, day) VALUES (?, ?, ?, ?)"), text);
+    await shot("sdb-10-review");
+    await dialog.getByRole("button", { name: "Import", exact: true }).click();
+    await dialog.getByText(/^Imported 3 rows into smoke_import in /).waitFor();
+    await shot("sdb-10-done");
+    await dialog.getByRole("button", { name: "Open table" }).click();
+    await dialog.waitFor({ state: "detached" });
+    await page.locator(".tabbar .tab.active", { hasText: "smoke_import" }).waitFor();
+    await page.locator(".tab-panel:not([hidden]) .statusline", { hasText: "3 rows" }).waitFor();
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab.active", { hasText: "smoke_import" }).waitFor({ state: "detached" });
+
+    // The tricky value arrived as text; then the table goes again.
+    const check = await newQuery("Shop (SQLite)", `select id from smoke_import where name = '${tricky.replaceAll("'", "''")}' and amount = 3;`);
+    await run(check);
+    await check.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await replaceQuery(check, "drop table smoke_import;");
+    await run(check);
+    const dropImported = page.getByRole("dialog", { name: "Run these statements?" });
+    await dropImported.getByRole("button", { name: "Run anyway" }).click();
+    await dropImported.waitFor({ state: "detached" });
+    await check.getByText("Statement 1: OK", { exact: false }).first().waitFor();
+    await page.locator(".tabbar .tab.active .close").click();
+  }
+
   step("MySQL and MariaDB: password, TLS, types and the schema explorer");
   // Only an encrypted session has a cipher: the row exists only if TLS is on.
   for (const [connection, version, status] of [

@@ -32,6 +32,24 @@ export const commands = {
 	exportAudit: (filter: AuditFilterItem_Deserialize, format: AuditFormatItem, path: string) => typedError<number, string>(__TAURI_INVOKE("export_audit", { filter, format, path })),
 	/**  Empties the MCP activity log, leaving a record that it was cleared (done by the core). */
 	clearAudit: () => typedError<number, string>(__TAURI_INVOKE("clear_audit")),
+	/**
+	 *  Reads the start of the source and detects its columns' types for the engine of `session`.
+	 *  `options: None` guesses them from the source.
+	 */
+	importPreview: (session: string, source: ImportSourceItem, options: ImportOptionsItem | null) => typedError<ImportPreviewItem, string>(__TAURI_INVOKE("import_preview", { session, source, options })),
+	/**
+	 *  The statements an import will run, written by the core and checked against the table (read
+	 *  on `session`, the explorer's), and what the guard asks to confirm.
+	 */
+	importPlan: (session: string, request: ImportRequestItem) => typedError<ImportPlanItem, string>(__TAURI_INVOKE("import_plan", { session, request })),
+	/**
+	 *  Runs an import in a session of its own: the core writes the plan again, refuses a
+	 *  read-only connection and an unconfirmed plan that needs a confirmation, and loads the rows
+	 *  in transactions, reporting progress on `on_progress`.
+	 */
+	runImport: (source: string, importId: number, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<ImportOutcome, string>(__TAURI_INVOKE("run_import", { source, importId, request, confirmed, onProgress })),
+	/**  Stops a running import: the batch it is in is rolled back; committed batches stay. */
+	cancelImport: (importId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_import", { importId })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -736,6 +754,12 @@ export type ColumnItem = {
 	logical: string,
 	nativeType: string,
 };
+
+/**  What a column's sampled values look like. */
+export type ColumnKindItem = "integer" | "decimal" | "float" | "boolean" | "date" | "timestamp" | "timestampTz" | "text";
+
+/**  Where one column of the source goes. */
+export type ColumnMappingItem = { kind: "skip" } | { kind: "existing"; column: string } | { kind: "new"; name: string; sqlType: string };
 
 /**  A table column's statistics, counted by the server with read-only queries. */
 export type ColumnStatsItem = ColumnStatsItem_Serialize | ColumnStatsItem_Deserialize;
@@ -1629,6 +1653,69 @@ export type HopDraftItem_Serialize = {
 	passwordOther: string,
 };
 
+export type IfExistsItem = "fail" | "append" | "replace";
+
+export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown";
+
+/**
+ *  How the source is read. Characters travel as strings: the delimiter is one character, the
+ *  quote and the escape one or none.
+ */
+export type ImportOptionsItem = {
+	format: ImportFormatItem,
+	encoding: SourceEncodingItem,
+	delimiter: string,
+	/**  Empty: values are never quoted. */
+	quote: string,
+	/**  Empty: a quote inside a quoted value is written twice. */
+	escape: string,
+	header: boolean,
+	/**  Empty: no text is NULL. */
+	nullText: string,
+	emptyAsNull: boolean,
+	trim: boolean,
+	/**  `strftime` patterns; empty: ISO. */
+	dateFormat: string,
+	timestampFormat: string,
+	/**  `UTC` or an offset (`+02:00`); empty: none. */
+	timeZone: string,
+};
+
+/**  How an import ended. */
+export type ImportOutcome = { kind: "done"; schema: string; table: string; rows: number | null; createdTable: boolean; millis: number | null } | 
+/**  The plan needs a confirmation: ask, then run again with `confirmed`. */
+{ kind: "needsConfirmation" } | { kind: "cancelled"; committed: number | null } | { kind: "failed"; message: string; 
+/**  Rows committed before the failure (they stay). */
+committed: number | null };
+
+/**  What will run, written by the core, to show before it does. */
+export type ImportPlanItem = {
+	statements: string[],
+	insert: string,
+	schema: string,
+	table: string,
+	columns: string[],
+	createsTable: boolean,
+	risks: ImportRiskItem[],
+};
+
+/**  The start of the source: its columns, their types and the first rows (values cut short). */
+export type ImportPreviewItem = {
+	options: ImportOptionsItem,
+	/**  The encoding the source was read in. */
+	encoding: SourceEncodingItem,
+	columns: PreviewColumnItem[],
+	rows: ((string | null)[])[],
+	sampled: number,
+	more: boolean,
+	suggestedTable: string,
+};
+
+export type ImportProgressItem = {
+	read: number | null,
+	committed: number | null,
+};
+
 /**
  *  The outcome of an import: the names given to the new connections (`(DBeaver)` is added
  *  when the name was taken) and those left out.
@@ -1639,11 +1726,38 @@ export type ImportReport = {
 	skipped: ImportSkip[],
 };
 
+/**  The user's choices; the core writes every statement from them. */
+export type ImportRequestItem = {
+	source: ImportSourceItem,
+	options: ImportOptionsItem,
+	target: ImportTargetItem,
+	/**  One per column of the source, in its order. */
+	columns: ColumnMappingItem[],
+	/**  Rows per transaction; 0: one transaction. */
+	commitEvery: number,
+};
+
+/**
+ *  A statement of the plan the guard asks to confirm (`statement` = the number of statements is
+ *  the rows' statement).
+ */
+export type ImportRiskItem = {
+	statement: number,
+	risk: RiskKind,
+};
+
 /**  One connection that could not be imported, and why. */
 export type ImportSkip = {
 	name: string,
 	reason: string,
 };
+
+/**  Where the rows come from. */
+export type ImportSourceItem = { kind: "file"; path: string } | 
+/**  Pasted or clipboard text. */
+{ kind: "text"; text: string };
+
+export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
 
 export type IndexDetails = {
 	name: string,
@@ -2100,6 +2214,15 @@ export type PastedItem = {
 	name: string,
 	/**  Settings of the text that were not taken, by the file's field names. */
 	leftOut: string[],
+};
+
+export type PreviewColumnItem = {
+	name: string,
+	kind: ColumnKindItem,
+	/**  The type a new column gets on this connection's engine. */
+	sqlType: string,
+	samples: string[],
+	nulls: number,
 };
 
 export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;
@@ -2655,6 +2778,8 @@ export type SnippetItem_Serialize = {
 	personal: boolean,
 	folderId: number | null,
 };
+
+export type SourceEncodingItem = "auto" | "utf8" | "utf16Le" | "utf16Be" | "windows1252";
 
 /**  A `.sql` file read by the core: its text with `\n` line breaks. */
 export type SqlFileItem = {

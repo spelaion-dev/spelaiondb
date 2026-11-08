@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ExportDialog } from "./components/ExportDialog";
+import { ImportDialog } from "./components/ImportDialog";
 import { ActivityBar } from "./components/ActivityBar";
 import { McpPage } from "./components/McpPage";
 import { AddConnection } from "./components/AddConnection";
@@ -232,6 +233,7 @@ export default function App() {
       )}
       {paletteOpen && <CommandPalette onClose={() => useApp.getState().setPaletteOpen(false)} />}
       <ExportDialog />
+      <ImportDialog />
       <Dialogs />
     </div>
   );

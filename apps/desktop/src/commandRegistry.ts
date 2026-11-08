@@ -40,6 +40,7 @@ export const COMMANDS = [
   { id: "palette.show", category: "general", label: "app:commands.palette", shortcut: "Ctrl+Shift+P", scope: "global", hidden: true },
   { id: "object.openByName", category: "general", label: "app:commands.openObject", shortcut: "Ctrl+Shift+D", scope: "global" },
   { id: "connection.add", category: "general", label: "connections:add", menus: ["welcome"] },
+  { id: "data.importClipboard", category: "general", label: "app:commands.importClipboard", shortcut: "Ctrl+Alt+V", scope: "global" },
   { id: "tab.new", category: "tab", label: "app:newQuery", shortcut: "Ctrl+T", scope: "global", menus: ["welcome"] },
   { id: "tab.rename", category: "tab", label: "app:tabs.rename", shortcut: "Ctrl+F2", scope: "global", menus: ["tab"] },
   { id: "tab.duplicate", category: "tab", label: "app:tabs.duplicate", shortcut: "Ctrl+Alt+D", scope: "global", menus: ["tab"] },

@@ -65,7 +65,8 @@
     "restoreEditor": "Restore the editor",
     "saveQuery": "Save query",
     "cancelQuery": "Cancel the query",
-    "explorerFilter": "Filter the explorer"
+    "explorerFilter": "Filter the explorer",
+    "importClipboard": "Import data from the clipboard…"
   },
   "palette": {
     "title": "Command palette",
