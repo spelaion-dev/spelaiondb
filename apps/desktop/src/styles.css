@@ -2531,6 +2531,104 @@ select {
   overflow-wrap: anywhere;
 }
 
+/* ---------------------------------------------------------------- references panel */
+.references-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-xs) 0 var(--space-lg);
+}
+.reference-section {
+  margin: 0;
+  padding: var(--space-lg) var(--space-lg) var(--space-xs);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.reference-keys,
+.reference-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.reference-key {
+  padding: var(--space-sm) var(--space-lg) var(--space-md);
+  border-bottom: 1px solid var(--line);
+}
+.reference-key-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+.reference-key-title {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.reference-table,
+.reference-columns,
+.reference-rows li,
+.reference-field dt,
+.reference-field dd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reference-table {
+  font-size: var(--text-md);
+  line-height: var(--leading-md);
+  font-weight: 600;
+}
+.reference-columns {
+  color: var(--muted);
+  font-family: var(--font-code);
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+}
+.reference-key-heading > button { flex: none; }
+.reference-note {
+  margin: var(--space-xs) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.references-body > .reference-note,
+.references-body > .error {
+  padding: var(--space-md) var(--space-lg);
+  margin: 0;
+}
+.reference-fields {
+  display: grid;
+  grid-template-columns: minmax(64px, max-content) minmax(0, 1fr);
+  gap: var(--space-2xs) var(--space-md);
+  margin: var(--space-sm) 0 0;
+}
+.reference-field { display: contents; }
+.reference-field dt {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.reference-field dd,
+.reference-rows li {
+  margin: 0;
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.reference-rows {
+  margin-top: var(--space-sm);
+}
+.reference-rows li {
+  padding: var(--space-2xs) 0;
+}
+.reference-rows li + li { border-top: 1px solid var(--line); }
+
 /* ---------------------------------------------------------------- jump to column */
 .column-jump {
   position: absolute;

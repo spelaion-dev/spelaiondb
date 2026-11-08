@@ -144,6 +144,7 @@
     "columns": "Columns",
     "constraints": "Constraints",
     "foreignKeys": "Foreign keys",
+    "references": "References",
     "indexes": "Indexes"
   },
   "tableDetails": {
@@ -171,7 +172,10 @@
     "actions": "Actions",
     "count_one": "{{count}} item",
     "count_other": "{{count}} items",
-    "close": "Close"
+    "close": "Close",
+    "referencingTable": "Referencing table",
+    "openData": "Open data",
+    "referencesHint": "Foreign keys of other tables that point to {{table}}"
   },
   "newTableElement": {
     "title": "Add to {{section}} of {{table}}",

@@ -175,6 +175,14 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
   })();
 }
 
+/** Opens a table data tab on `schema.table` filtered by `filter` (a followed foreign key's,
+ *  written by the core), on a session of its own opened like `source`'s. */
+export function openTableData(connectionId: string, source: string, schema: string, table: string, filter = ""): string {
+  const id = useApp.getState().addTableTab(connectionId, schema, table, filter);
+  connectTabFromExplorer(id, source, explorerDatabase(connectionId, schema));
+  return id;
+}
+
 /** MySQL and MariaDB call databases schemas in their explorer. */
 export function explorerDatabase(connectionId: string, schema: string): string | undefined {
   const engine = useApp.getState().connections.find((item) => item.id === connectionId)?.engine;

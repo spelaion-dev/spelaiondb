@@ -258,7 +258,8 @@
     "columns_other": "{{count}} columnas",
     "rowMode": "Fila",
     "cellMode": "Celda",
-    "rowTitle": "Fila {{number}}"
+    "rowTitle": "Fila {{number}}",
+    "referencesMode": "Referencias"
   },
   "format": "Formatear",
   "formatHint": "Formatea la selección o todo el script (Mayús+Alt+F)",
@@ -537,5 +538,31 @@
   },
   "completion": {
     "loadFailed": "No se pudieron cargar los metadatos de las sugerencias: {{reason}}. Actualiza la conexión en el explorador para volver a intentarlo."
+  },
+  "references": {
+    "title": "Referencias de la fila",
+    "rowTitle": "Referencias de la fila {{number}}",
+    "outgoing": "Esta fila apunta a",
+    "incoming": "Filas que apuntan aquí",
+    "openRow": "Abrir fila",
+    "openRows": "Abrir filas",
+    "openRowHint": "Abrir la fila de {{table}} en una pestaña de tabla nueva",
+    "openRowsHint": "Abrir todas las filas de {{table}} que apuntan aquí en una pestaña de tabla nueva",
+    "nullKey": "{{column}} es NULL: esta fila no apunta a nada por esta clave.",
+    "failed": "No se pudieron leer las referencias: {{detail}}",
+    "missing": "Ninguna fila tiene esta clave: falta la fila referenciada.",
+    "noRows": "Ninguna fila apunta aquí.",
+    "more_one": "Se muestra {{count}} fila. Ábrelas para verlas todas.",
+    "more_other": "Se muestran las primeras {{count}} filas. Ábrelas para verlas todas.",
+    "none": "Esta tabla no tiene claves foráneas y ninguna apunta a ella.",
+    "loading": "Cargando referencias…",
+    "close": "Cerrar el panel de referencias (Esc)",
+    "openReferenced": "Abrir la fila referenciada en {{table}}",
+    "show": "Mostrar referencias",
+    "toggle": "Panel de referencias",
+    "showPanel": "Mostrar el panel de referencias",
+    "hide": "Ocultar el panel de referencias",
+    "followFailed": "No se pudo abrir la fila referenciada: {{detail}}",
+    "accessibleKey": "Clave foránea: {{shortcut}} abre la fila referenciada."
   }
 }

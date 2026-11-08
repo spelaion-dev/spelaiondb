@@ -258,7 +258,8 @@
     "columns_other": "{{count}} columns",
     "rowMode": "Row",
     "cellMode": "Cell",
-    "rowTitle": "Row {{number}}"
+    "rowTitle": "Row {{number}}",
+    "referencesMode": "References"
   },
   "format": "Format",
   "formatHint": "Format the selection or the whole script (Shift+Alt+F)",
@@ -537,5 +538,31 @@
   },
   "completion": {
     "loadFailed": "Could not load completion metadata: {{reason}}. Refresh the connection in the explorer to try again."
+  },
+  "references": {
+    "title": "References of the row",
+    "rowTitle": "References of row {{number}}",
+    "outgoing": "This row points to",
+    "incoming": "Rows that point here",
+    "openRow": "Open row",
+    "openRows": "Open rows",
+    "openRowHint": "Open the row of {{table}} in a new table tab",
+    "openRowsHint": "Open every row of {{table}} that points here in a new table tab",
+    "nullKey": "{{column}} is NULL: this row points to nothing through this key.",
+    "failed": "Could not read the references: {{detail}}",
+    "missing": "No row has this key: the referenced row is missing.",
+    "noRows": "No rows point here.",
+    "more_one": "Showing the first {{count}} row. Open them to see all.",
+    "more_other": "Showing the first {{count}} rows. Open them to see all.",
+    "none": "This table has no foreign keys, and none point to it.",
+    "loading": "Loading references…",
+    "close": "Close the references panel (Esc)",
+    "openReferenced": "Open referenced row in {{table}}",
+    "show": "Show references",
+    "toggle": "References panel",
+    "showPanel": "Show references panel",
+    "hide": "Hide references panel",
+    "followFailed": "Could not open the referenced row: {{detail}}",
+    "accessibleKey": "Foreign key: {{shortcut}} opens the referenced row."
   }
 }

@@ -207,6 +207,28 @@ export const commands = {
 	 */
 	tableFilterCondition: (session: string, result: number, column: number, op: FilterOpItem, row: number | null, value: string, filter: string) => typedError<string, string>(__TAURI_INVOKE("table_filter_condition", { session, result, column, op, row, value, filter })),
 	/**
+	 *  The foreign keys a table data tab can follow: the table's own, then those of other tables
+	 *  that point to it, from the catalog.
+	 */
+	tableKeys: (session: string, schema: string, table: string) => typedError<TableKeyItem[], string>(__TAURI_INVOKE("table_keys", { session, schema, table })),
+	/**
+	 *  The foreign keys of other tables that point to `schema.table` (the explorer's and the table
+	 *  details' "References"), from the catalog.
+	 */
+	referencingKeys: (session: string, schema: string, table: string) => typedError<TableKeyItem[], string>(__TAURI_INVOKE("referencing_keys", { session, schema, table })),
+	/**
+	 *  Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
+	 *  of `schema.table`): the core finds the key in the catalog again, reads the row's typed
+	 *  values and writes the filter of the table data tab it leads to.
+	 */
+	followKey: (session: string, result: number, row: number, schema: string, table: string, key: KeyRefItem) => typedError<KeyTargetItem, string>(__TAURI_INVOKE("follow_key", { session, result, row, schema, table, key })),
+	/**
+	 *  The references panel of a table data tab: every foreign key of the row at `row` (the
+	 *  table's own and those that point to it), each with up to `limit` of the rows it leads to,
+	 *  read in turn on the tab's session.
+	 */
+	rowReferences: (session: string, result: number, row: number, schema: string, table: string, limit: number) => typedError<RowReferenceItem_Serialize[], string>(__TAURI_INVOKE("row_references", { session, result, row, schema, table, limit })),
+	/**
 	 *  Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
 	 *  rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
 	 *  are the shown columns, in order.
@@ -1473,6 +1495,24 @@ export type InteractionRequest = {
 	request: InteractionKind,
 };
 
+/**  Which way a foreign key goes from a table (see `spelaion_core::KeyDirection`). */
+export type KeyDirectionItem = "outgoing" | "incoming";
+
+/**  The key the UI wants to follow, by name: the core looks its columns up in the catalog. */
+export type KeyRefItem = {
+	direction: KeyDirectionItem,
+	schema: string,
+	table: string,
+	name: string,
+};
+
+/**  Where a followed key leads: a table data tab of `schema.table` with the core's `filter`. */
+export type KeyTargetItem = {
+	schema: string,
+	table: string,
+	filter: string,
+};
+
 /**  A port of a Kubernetes resource, for the port picker. */
 export type KubePortItem = KubePortItem_Serialize | KubePortItem_Deserialize;
 
@@ -2063,6 +2103,43 @@ export type RowChangeItem_Deserialize = { kind: "update"; row: number; values: C
 /**  A pending change of a table data tab (ADR-014), by position in the page shown. */
 export type RowChangeItem_Serialize = { kind: "update"; row: number; values: CellEditItem_Serialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Serialize[] };
 
+/**
+ *  One key of a row in the references panel: where it leads and its first rows (as text,
+ *  `None` for NULL); or the column that is NULL in this row (it references nothing through
+ *  this key); or why it could not be read.
+ */
+export type RowReferenceItem = RowReferenceItem_Serialize | RowReferenceItem_Deserialize;
+
+/**
+ *  One key of a row in the references panel: where it leads and its first rows (as text,
+ *  `None` for NULL); or the column that is NULL in this row (it references nothing through
+ *  this key); or why it could not be read.
+ */
+export type RowReferenceItem_Deserialize = {
+	key: TableKeyItem,
+	target?: KeyTargetItem | null,
+	columns: string[],
+	rows: ((string | null)[])[],
+	more: boolean,
+	nullColumn?: string | null,
+	error?: string | null,
+};
+
+/**
+ *  One key of a row in the references panel: where it leads and its first rows (as text,
+ *  `None` for NULL); or the column that is NULL in this row (it references nothing through
+ *  this key); or why it could not be read.
+ */
+export type RowReferenceItem_Serialize = {
+	key: TableKeyItem,
+	target: KeyTargetItem | null,
+	columns: string[],
+	rows: ((string | null)[])[],
+	more: boolean,
+	nullColumn: string | null,
+	error: string | null,
+};
+
 /**  How one run goes: its error mode and, if set, its own statement timeout. */
 export type RunOptionsItem = RunOptionsItem_Serialize | RunOptionsItem_Deserialize;
 
@@ -2344,6 +2421,21 @@ export type TableExportItem = {
 	name: string,
 	filter: string,
 	orderBy: string,
+};
+
+/**
+ *  A foreign key seen from a table: its own (outgoing) or another table's that points to it
+ *  (incoming). `schema` and `table` are the other table.
+ */
+export type TableKeyItem = {
+	direction: KeyDirectionItem,
+	name: string,
+	schema: string,
+	table: string,
+	/**  This table's columns, in the key's order. */
+	columns: string[],
+	/**  The other table's columns, in the same order. */
+	otherColumns: string[],
 };
 
 /**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */
