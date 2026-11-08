@@ -174,6 +174,7 @@ The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in
 - **Language:** English, Spanish or the system language. Translations are bundled with the
   application and work offline. Database and SSH server messages are shown as received.
 - **History:** what query history stores and where to turn it off.
+- **Editor:** whether restored tabs connect again at startup (off by default).
 
 Preferences are stored in the personal `state.db` and apply to every workspace.
 
@@ -296,7 +297,9 @@ connections that must never change.
 | Ctrl+Enter | Run the selection or the statement under the cursor |
 | Ctrl+Shift+Enter | Run the whole script |
 | Shift+Alt+F | Format the selection or the script |
-| Ctrl+S | Save the SQL as a named query |
+| Ctrl+S | Save the file of a file tab; in a console, save the SQL as a named query |
+| Ctrl+O | Open a `.sql` file in a new tab |
+| Ctrl+Shift+S | Save the tab as a `.sql` file (a console becomes a file tab) |
 | Ctrl+T / Ctrl+W | New query tab / close the tab (its connection and results are freed) |
 | Ctrl+Shift+T | Reopen the last closed tab with its SQL, connection and name (disconnected) |
 | Ctrl+Tab, Ctrl+Shift+Tab | Switch to a recently used tab: keep Ctrl down, press Tab to move, release to switch |
@@ -324,6 +327,22 @@ you close the others, the ones to the right or all; their × becomes an unpin bu
 click never closes one, but closing that tab itself (Ctrl+W or **Close** in its menu) does.
 A reopened tab brings back its SQL, connection and name, never its results or session: it
 starts disconnected and runs nothing until you do.
+
+### SQL files and tabs that survive a restart
+
+**Ctrl+O** (or the folder button next to **+**) opens a `.sql` file in a tab named after it;
+the same button lists the recent files. **Ctrl+S** saves it, keeping its encoding (UTF-8 with
+or without a BOM, UTF-16, Windows-1252) and its line endings; **Ctrl+Shift+S** saves any tab as
+a file. A ● on the tab marks unsaved changes, and closing it asks to save them. If the file
+changed on disk since it was opened (a `git pull`, another editor), saving asks before
+overwriting it. Files are written whole or not at all (a temporary file, then a rename).
+
+Open tabs, consoles and files alike, come back after a restart or a crash (losing at most the
+last second of typing), with their text, name and connection, and unsaved changes still
+unsaved. They come back **disconnected** and never with their results: nothing runs on its
+own. A tab whose connection was deleted keeps its text and says so. Each folder keeps its own
+tabs. **Settings → Editor → Reconnect the last connections at startup** connects the restored
+tabs (it may ask for a password), and still runs nothing.
 
 ## Working with results
 

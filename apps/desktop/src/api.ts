@@ -85,6 +85,13 @@ import {
   type RunOptionsItem_Deserialize,
   type ScriptPreferencesItem,
   type ScriptSummaryItem_Deserialize,
+  type FileFormatItem,
+  type OpenTabItem_Deserialize,
+  type RecentFileItem,
+  type RestoreNoteItem,
+  type RestoredTabsItem_Serialize,
+  type SaveFileOutcome,
+  type SqlFileItem,
 } from "./bindings";
 
 export { commands, events };
@@ -140,6 +147,10 @@ export type { ErrorAnswerItem, OnErrorItem, ScriptPreferencesItem };
 /** How one run goes (ADR-035). */
 export type RunOptionsItem = RunOptionsItem_Deserialize;
 export type ScriptSummaryItem = ScriptSummaryItem_Deserialize;
+/** `.sql` files and the open tabs kept between runs (ADR-036). */
+export type { FileFormatItem, RecentFileItem, RestoreNoteItem, SaveFileOutcome, SqlFileItem };
+export type OpenTabItem = OpenTabItem_Deserialize;
+export type RestoredTabsItem = RestoredTabsItem_Serialize;
 
 type Typed<T> = { status: "ok"; data: T } | { status: "error"; error: string };
 

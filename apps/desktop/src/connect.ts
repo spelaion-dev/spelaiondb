@@ -5,6 +5,7 @@
 import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
+import { confirmUnsavedFiles } from "./sqlFiles";
 import { type Tab, useApp, useDialogs } from "./store";
 
 /**
@@ -80,6 +81,7 @@ export function tabLabel(tab: Tab): string {
 
 /** What a tab is called before the user renames it. */
 export function defaultTabLabel(tab: Tab): string {
+  if (tab.file) return tab.file.name;
   if (tab.tableDetails) return `${tab.tableDetails.name} · ${i18n.t(`shell:folders.${tab.tableDetails.kind}`)}`;
   if (tab.table) return tab.table.name;
   return i18n.t("shell:queryTab", { number: tab.number });
@@ -196,6 +198,8 @@ export async function closeTabs(ids: string[]) {
       : i18n.t("editor:edit.closeUnsavedMany", { count: unsaved.length, tabs: unsaved.map(tabLabel).join(", ") });
     if (!(await confirm(text, { kind: "warning" }))) return;
   }
+  // File tabs with unsaved changes (ADR-036): save, don't save or cancel.
+  if (!(await confirmUnsavedFiles(targets.map((t) => t.id)))) return;
   const sessions = targets.map((t) => t.id);
   if (!(await confirmClose(sessions))) return;
   // Saving started while the question was open: that tab stays.

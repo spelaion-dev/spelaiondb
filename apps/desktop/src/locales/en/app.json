@@ -31,6 +31,19 @@
     "reopen": "Reopen closed tab",
     "running": "A query is running",
     "switcher": "Recently used tabs",
-    "switcherHint": "Keep Ctrl down and press Tab to move; release Ctrl to switch."
+    "switcherHint": "Keep Ctrl down and press Tab to move; release Ctrl to switch.",
+    "unsaved": "Unsaved changes",
+    "saveFile": "Save file",
+    "saveFileAs": "Save as file…",
+    "reloadFile": "Reload from disk"
+  },
+  "files": {
+    "menu": "Open a file or a recent one",
+    "open": "Open file…",
+    "recent": "Recent files",
+    "noRecent": "No recent files yet.",
+    "missing": "{{path}} (no longer on disk)",
+    "missingShort": "missing",
+    "forget": "Remove {{name}} from recent files"
   }
 }

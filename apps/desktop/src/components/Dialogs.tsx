@@ -16,6 +16,7 @@ export function Dialogs() {
   const openTransactions = useDialogs((s) => s.openTransactions);
   const params = useDialogs((s) => s.params);
   const text = useDialogs((s) => s.text);
+  const choice = useDialogs((s) => s.choice);
   const interaction = useDialogs((s) => s.interactions[0]);
   if (interaction) return <InteractionDialog key={interaction.id} />;
   if (trust) return <TrustDialog />;
@@ -23,6 +24,7 @@ export function Dialogs() {
   if (variables) return <VariablesDialog key={variables.names.join(",")} />;
   if (params) return <ParamsDialog />;
   if (text) return <TextDialog />;
+  if (choice) return <ChoiceDialog key={choice.title} />;
   if (risk) return <RiskDialog />;
   // Closing a tab whose run waits for this answer asks first; closing it stops that run.
   if (openTransactions) return <OpenTransactionsDialog />;
@@ -332,6 +334,32 @@ function ScriptErrorDialog() {
         </button>
         <button onClick={() => request.resolve("skip")}>{t("scriptError.skip")}</button>
         <button onClick={() => request.resolve("skipAll")}>{t("scriptError.skipAll")}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** A question with a few answers, such as saving a file before closing its tab (ADR-036). */
+function ChoiceDialog() {
+  const request = useDialogs((s) => s.choice);
+  const first = useRef<HTMLButtonElement>(null);
+  useEffect(() => first.current?.focus(), []);
+  if (!request) return null;
+  const primary = request.choices.findIndex((c) => c.primary);
+  return (
+    <Modal title={request.title} onCancel={() => request.resolve(null)}>
+      <p className="choice-message">{request.message}</p>
+      <div className="modal-actions">
+        {request.choices.map((c, i) => (
+          <button
+            key={c.id}
+            ref={i === (primary < 0 ? 0 : primary) ? first : undefined}
+            className={c.danger ? "danger" : c.primary ? "primary" : undefined}
+            onClick={() => request.resolve(c.id)}
+          >
+            {c.label}
+          </button>
+        ))}
       </div>
     </Modal>
   );

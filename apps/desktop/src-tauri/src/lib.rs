@@ -2,6 +2,7 @@
 //! database or security logic here: only translation between UI commands and the core.
 
 mod dto;
+mod files;
 mod interaction;
 mod mcp;
 mod update;
@@ -22,7 +23,7 @@ use spelaion_config::{
 use spelaion_core::{
     Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect, OpenConnection,
     OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth, SortKey,
-    StreamExport, TunnelPool, open_connection, write_result,
+    StreamExport, TabKeeper, TunnelPool, open_connection, write_result,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -47,6 +48,8 @@ struct AppState {
     results: Arc<ResultStore>,
     sessions: Mutex<HashMap<String, DesktopSession>>,
     history: QueryHistory,
+    /// Writes the open tabs to the local store on a deadline (ADR-036).
+    tabs: TabKeeper,
     pending: Pending,
     /// The user confirmed quitting with transactions open (ADR-031).
     quitting: AtomicBool,
@@ -3905,6 +3908,15 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_grid_preferences,
             get_script_preferences,
             set_script_preferences,
+            files::open_sql_file,
+            files::save_sql_file,
+            files::recent_files,
+            files::forget_recent_file,
+            files::restore_tabs_for_workspace,
+            files::save_tabs,
+            files::flush_tabs,
+            files::get_reconnect_on_start,
+            files::set_reconnect_on_start,
             notify_run_finished,
             update::update_check,
             update::update_install,
@@ -4099,6 +4111,8 @@ pub fn run() {
     let config = load(workspace.as_deref(), &user_dir);
     let history = QueryHistory::open(spelaion_config::state_db(&user_dir))
         .expect("error while opening the local query history");
+    // Its writer runs on Tauri's runtime, which `block_on` starts here.
+    let tabs = tauri::async_runtime::block_on(async { TabKeeper::spawn(history.clone()) });
     let state = AppState {
         user_dir,
         workspace: RwLock::new(workspace),
@@ -4109,6 +4123,7 @@ pub fn run() {
         results: Arc::new(ResultStore::new()),
         sessions: Mutex::new(HashMap::new()),
         history,
+        tabs,
         pending: Pending::default(),
         quitting: AtomicBool::new(false),
         tests: ConnectionTests::default(),
@@ -4142,7 +4157,12 @@ pub fn run() {
             // Tauri exits without dropping the state: stop each `kubectl port-forward`
             // first, or it would outlive the app (ADR-015).
             if let tauri::RunEvent::Exit = event {
-                let tunnels = app.state::<AppState>().tunnels.clone();
+                let state = app.state::<AppState>();
+                // The open tabs the core already has are written now, not in a second
+                // (ADR-036).
+                let tabs = state.tabs.clone();
+                let _ = tauri::async_runtime::block_on(tabs.flush());
+                let tunnels = state.tunnels.clone();
                 tauri::async_runtime::block_on(tunnels.close_all());
             }
         });

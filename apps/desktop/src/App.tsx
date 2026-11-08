@@ -22,6 +22,8 @@ import { usePreferences } from "./preferences";
 import { useUpdate } from "./update";
 import { SAVE_QUERY_EVENT, useApp, useDialogs } from "./store";
 import { topDialog, useModalFocus } from "./modalFocus";
+import { openFileDialog, saveTab, saveTabAs } from "./sqlFiles";
+import { restoreTabs } from "./tabPersistence";
 
 const SIDEBAR_DEFAULT = 290;
 const SIDEBAR_MIN = 210;
@@ -84,7 +86,8 @@ export default function App() {
   }
 
   useEffect(() => {
-    void loadConnections();
+    // The open folder's tabs come back disconnected, with their text (ADR-036).
+    void loadConnections().finally(() => void restoreTabs());
     const unlisten = events.interactionRequest.listen((e) =>
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );
@@ -144,10 +147,20 @@ export default function App() {
         e.preventDefault();
         if (e.shiftKey) app.reopenTab();
         else app.addTab(null);
+      } else if (mod && key === "o" && !e.shiftKey) {
+        e.preventDefault();
+        if (!app.settingsOpen) void openFileDialog();
+      } else if (mod && key === "s" && e.shiftKey) {
+        // Any editor tab to a `.sql` file (ADR-036).
+        e.preventDefault();
+        if (active) void saveTabAs(active);
       } else if (mod && key === "s") {
         e.preventDefault();
         const target = e.target instanceof Element ? e.target : null;
-        if (app.activeTab && !app.settingsOpen && target?.closest(".editor-pane")) {
+        // A file tab saves its file; a console saves its query by name, as before.
+        if (active && app.tabs.find((t) => t.id === active)?.file) {
+          void saveTab(active);
+        } else if (app.activeTab && !app.settingsOpen && target?.closest(".editor-pane")) {
           window.dispatchEvent(new CustomEvent(SAVE_QUERY_EVENT, { detail: app.activeTab }));
         }
       } else if (mod && key === "w") {
@@ -256,6 +269,7 @@ export default function App() {
                   <button onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}>
                     {t("connections:add")}
                   </button>
+                  <button onClick={() => void openFileDialog()}>{t("files.open")}</button>
                 </div>
                 <p className="welcome-shortcut">{t("newQueryShortcut")}</p>
               </div>

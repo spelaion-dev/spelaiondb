@@ -27,7 +27,7 @@ export function applyTheme(preference: ThemePreference): void {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export type PreferenceSetting = "language" | "theme" | "explorer" | "grid" | "script";
+export type PreferenceSetting = "language" | "theme" | "explorer" | "grid" | "script" | "editor";
 
 export interface PreferenceError {
   setting: PreferenceSetting;
@@ -44,6 +44,8 @@ interface PreferencesStore {
   grid: GridPreferences;
   /** How scripts run: the default error mode and the opt-in notification (ADR-035). */
   script: ScriptPreferencesItem;
+  /** Connect the restored tabs at startup (ADR-036): connect only, never run. Off by default. */
+  reconnectOnStart: boolean;
   loading: boolean;
   saving: PreferenceSetting | null;
   error: PreferenceError | null;
@@ -53,6 +55,7 @@ interface PreferencesStore {
   setExplorer(next: ExplorerPreferences): Promise<void>;
   setGrid(next: GridPreferences): Promise<void>;
   setScript(next: ScriptPreferencesItem): Promise<void>;
+  setReconnectOnStart(next: boolean): Promise<void>;
   clearError(): void;
 }
 
@@ -62,18 +65,22 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
   explorer: { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false },
   grid: { zebra: true, nullText: true, boolCheckboxes: false },
   script: { onError: "stop", notify: false, notifyAfterSeconds: 30 },
+  reconnectOnStart: false,
   loading: true,
   saving: null,
   error: null,
   async load() {
-    const [language, theme, explorer, grid, script] = await Promise.allSettled([
+    const [language, theme, explorer, grid, script, reconnect] = await Promise.allSettled([
       call(commands.getLanguage()),
       call(commands.getTheme()),
       call(commands.getExplorerPreferences()),
       call(commands.getGridPreferences()),
       call(commands.getScriptPreferences()),
+      call(commands.getReconnectOnStart()),
     ]);
     let error: PreferenceError | null = null;
+    if (reconnect.status === "fulfilled") set({ reconnectOnStart: reconnect.value });
+    else error = { setting: "editor", phase: "load", detail: errorText(reconnect.reason) };
     if (script.status === "fulfilled") set({ script: script.value });
     else error = { setting: "script", phase: "load", detail: errorText(script.reason) };
     if (grid.status === "fulfilled") set({ grid: grid.value });
@@ -143,6 +150,18 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
       await call(commands.setScriptPreferences(next));
     } catch (e) {
       set({ script: previous, error: { setting: "script", phase: "save", detail: errorText(e) } });
+    } finally {
+      set({ saving: null });
+    }
+  },
+  async setReconnectOnStart(next) {
+    if (get().saving) return;
+    const previous = get().reconnectOnStart;
+    set({ reconnectOnStart: next, saving: "editor", error: null });
+    try {
+      await call(commands.setReconnectOnStart(next));
+    } catch (e) {
+      set({ reconnectOnStart: previous, error: { setting: "editor", phase: "save", detail: errorText(e) } });
     } finally {
       set({ saving: null });
     }

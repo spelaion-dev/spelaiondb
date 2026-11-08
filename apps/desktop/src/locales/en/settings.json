@@ -159,5 +159,11 @@
     "notify": "Notify me when a long run finishes while the app is in the background",
     "notifyAfter": "Only runs longer than (seconds)",
     "notifyHint": "The notification says which tab finished and whether something failed; it never contains SQL or data."
+  },
+  "editor": {
+    "title": "Editor",
+    "restoreHint": "Open tabs come back after a restart with their text and connection, disconnected: consoles and files, including unsaved changes. Their results are never kept.",
+    "reconnect": "Reconnect the last connections at startup",
+    "reconnectHint": "Only connects (it may ask for a password); nothing runs on its own."
   }
 }

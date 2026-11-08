@@ -962,6 +962,18 @@ select {
 }
 .tab-menu hr { width: 100%; }
 .menu-shortcut { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+/* SQL files (ADR-036): the unsaved dot, the file button's menu and its recent files. */
+.tab-unsaved { flex: none; width: var(--space-md); height: var(--space-md); border-radius: 50%; background: var(--accent); }
+.file-menu { max-width: min(560px, calc(100vw - var(--space-xl))); }
+.file-menu .menu-heading,
+.file-menu .menu-empty { padding: var(--space-xs) var(--space-md); font-size: var(--text-sm); }
+.recent-file { display: flex; align-items: center; gap: var(--space-2xs); }
+.recent-file > button[role="menuitem"] { flex: 1; min-width: 0; }
+.recent-file .recent-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; direction: rtl; text-align: left; }
+.recent-file .recent-forget { flex: none; display: grid; place-items: center; width: var(--control-sm); height: var(--control-sm); padding: 0; }
+.restore-notes { flex-direction: row; align-items: flex-start; justify-content: space-between; margin: var(--space-sm) var(--space-md) 0; }
+.restore-notes ul { margin: 0; padding-left: var(--space-xl); }
+.choice-message { white-space: pre-wrap; line-height: 1.5; max-width: 72ch; }
 /* Ctrl+Tab: the tabs most recently used first. */
 .tab-switcher {
   position: fixed;

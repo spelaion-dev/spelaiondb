@@ -474,5 +474,46 @@
     "loadedInstead_other": "Export the {{formattedCount}} rows loaded instead"
   },
   "maximizeResults": "Maximize results (Ctrl+Alt+M)",
-  "restoreResults": "Restore the editor (Ctrl+Alt+M)"
+  "restoreResults": "Restore the editor (Ctrl+Alt+M)",
+  "files": {
+    "sqlFiles": "SQL files",
+    "allFiles": "All files",
+    "openTitle": "Open SQL file",
+    "openFailed": "Could not open the file",
+    "saveFailed": "Could not save {{name}}",
+    "changedTitle": "{{name}} changed on disk",
+    "changedMessage": "The file changed since this tab opened or saved it. Overwrite it with this tab's text, reload it from disk (this tab's unsaved changes are lost), or cancel.",
+    "cancel": "Cancel",
+    "reload": "Reload from disk",
+    "overwrite": "Overwrite",
+    "deletedTitle": "{{name}} was deleted",
+    "deletedMessage": "The file is no longer on disk. Save this tab's text there again?",
+    "writeAgain": "Save it again",
+    "encodingTitle": "{{name}} cannot hold this text",
+    "encodingMessage": "The file is in {{encoding}}, which cannot hold the character “{{character}}”. Save it as UTF-8 instead?",
+    "saveUtf8": "Save as UTF-8",
+    "saveAsTitle": "Save as SQL file",
+    "defaultName": "query",
+    "unsavedTitle_one": "Save the changes to {{names}}?",
+    "unsavedTitle_other": "Save the changes to {{count}} files?",
+    "unsavedMessage_one": "They are lost if you don't save them.",
+    "unsavedMessage_other": "They are lost if you don't save them: {{names}}.",
+    "dontSave": "Don't save",
+    "save": "Save",
+    "reloadTitle": "Reload {{name}} from disk?",
+    "reloadMessage": "This tab's unsaved changes are lost.",
+    "saveFile": "Save file",
+    "saveFileHint": "Save the file (Ctrl+S)",
+    "saveAs": "Save as file",
+    "saveAsHint": "Save as a .sql file (Ctrl+Shift+S)",
+    "saved": "Saved {{name}}",
+    "close": "Close"
+  },
+  "restore": {
+    "connectionMissing": "The connection “{{connection}}” no longer exists: choose another one to run this tab.",
+    "fileMissing": "The file is no longer on disk: this is the text the tab had, unsaved.",
+    "fileUnreadable": "The file could not be read ({{message}}): this is the text the tab had, unsaved.",
+    "fileChangedOnDisk": "The file changed on disk while the app was closed: these are your unsaved changes, and saving asks before overwriting it.",
+    "dismiss": "Dismiss"
+  }
 }
