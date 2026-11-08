@@ -36,7 +36,15 @@ export function useModalFocus() {
       if (next && !previous.has(next) && lastFocus && !next.contains(lastFocus)) previous.set(next, lastFocus);
       active = next;
       if (restore?.isConnected && (!next || next.contains(restore))) {
-        restore.focus({ preventScroll: true });
+        // Give focus back once the event that closed the dialog is over. Restoring it inside
+        // that event hands the rest of the key to the restored control: an Enter that submitted
+        // a dialog would press the button that opened it (opening it again) or type a line
+        // break into the editor. Nothing is restored if something else took the focus first.
+        const target = restore;
+        setTimeout(() => {
+          const current = document.activeElement;
+          if (target.isConnected && (current === null || current === document.body)) target.focus({ preventScroll: true });
+        }, 0);
       } else if (next && !next.contains(document.activeElement)) {
         (focusable(next)[0] ?? next).focus({ preventScroll: true });
       }
