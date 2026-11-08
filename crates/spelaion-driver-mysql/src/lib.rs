@@ -21,9 +21,10 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, ContextDialect,
-    DatabaseContext, Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive,
-    LikeFilter, LogicalType, NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema,
-    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
+    DatabaseContext, Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
+    InsertTarget, KeepAlive, LikeFilter, LogicalType, NameFilter, Notice, ObjectInfo,
+    ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
+    TlsMode, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -173,6 +174,7 @@ impl Driver for MysqlDriver {
                 explain: true,
                 editable_results: false,
                 schemas: true,
+                insert_rows: true,
             },
         }))
     }
@@ -205,6 +207,12 @@ enum Request {
     /// The transaction flag of the last OK packet: nothing is sent (ADR-031).
     TransactionState {
         reply: oneshot::Sender<Result<TransactionState>>,
+    },
+    /// A multi-row INSERT of an import (ADR-038): `?` placeholders, values bound.
+    Insert {
+        sql: String,
+        values: Vec<Option<String>>,
+        reply: oneshot::Sender<Result<u64>>,
     },
 }
 
@@ -255,6 +263,19 @@ async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>, database: 
             }
             Request::KeepAlive { reply } => {
                 let _ = reply.send(keep_alive(&mut conn).await);
+            }
+            Request::Insert { sql, values, reply } => {
+                let params: Vec<mysql_async::Value> = values
+                    .into_iter()
+                    .map(|v| v.map_or(mysql_async::Value::NULL, |t| t.into_bytes().into()))
+                    .collect();
+                let result = conn
+                    .exec_drop(sql.as_str(), mysql_async::Params::Positional(params))
+                    .await
+                    .map(|()| conn.affected_rows())
+                    .map_err(map_error);
+                status_stale = result.is_err();
+                let _ = reply.send(result);
             }
             Request::TransactionState { reply } => {
                 // `DO 0` touches no table, so it opens nothing, and its OK packet is fresh.
@@ -496,6 +517,13 @@ fn reports_row_count(sql: &str) -> bool {
     COUNTED.iter().any(|k| first.eq_ignore_ascii_case(k))
 }
 
+/// A prepared statement takes at most 65,535 placeholders.
+const MAX_PLACEHOLDERS: usize = 65_535;
+/// Rows per INSERT of an import.
+const MAX_INSERT_ROWS: usize = 1_000;
+/// About this much data per INSERT, well under the default `max_allowed_packet` (64 MiB).
+const MAX_INSERT_BYTES: usize = 4 * 1024 * 1024;
+
 struct MysqlConnection {
     requests: mpsc::Sender<Request>,
     cancel: Arc<MysqlCancel>,
@@ -607,6 +635,33 @@ impl Connection for MysqlConnection {
     }
 
     /// MySQL calls its databases schemas: the same list as the explorer.
+    /// Prepared multi-row INSERTs with `?` placeholders. `LOAD DATA LOCAL INFILE` is not used:
+    /// it needs `local_infile` on the server and the client, off by default (ADR-038).
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        target.check_rows(&rows)?;
+        let mut inserted = 0;
+        for chunk in
+            target.statement_chunks(rows, MAX_PLACEHOLDERS, MAX_INSERT_ROWS, MAX_INSERT_BYTES)
+        {
+            let sql = target.insert_sql(&dialect::MysqlDialect, chunk.len(), |_| "?".into());
+            let (reply, response) = oneshot::channel();
+            self.requests
+                .send(Request::Insert {
+                    sql,
+                    values: chunk.into_iter().flatten().collect(),
+                    reply,
+                })
+                .await
+                .map_err(|_| closed())?;
+            inserted += response.await.map_err(|_| closed())??;
+        }
+        Ok(inserted)
+    }
+
     async fn list_databases(&self) -> Result<Vec<String>> {
         Ok(introspect::list_schemas(self, &LikeFilter::default())
             .await?

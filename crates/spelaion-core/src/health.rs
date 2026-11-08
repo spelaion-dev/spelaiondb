@@ -15,9 +15,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, KeepAlive,
-    NameFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject, ServerObject,
-    TableInfo, TransactionState,
+    CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, InsertTarget,
+    KeepAlive, NameFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject,
+    ServerObject, TableInfo, TransactionState,
 };
 use spelaion_ssh::TunnelState;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, watch};
@@ -490,6 +490,15 @@ impl Connection for Tracked {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.procedure_call(object).await)
     }
+
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        let _busy = self.activity.begin().await;
+        self.observe(self.inner.insert_rows(target, rows).await)
+    }
 }
 
 #[cfg(test)]
@@ -568,6 +577,7 @@ mod tests {
                 explain: false,
                 editable_results: false,
                 schemas: false,
+                insert_rows: false,
             },
             release: tokio::sync::Notify::new(),
             in_transaction: Default::default(),

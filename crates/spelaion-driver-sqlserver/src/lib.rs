@@ -19,9 +19,9 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
-    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter,
-    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject,
-    ServerObject, TableInfo, TlsMode, TransactionState,
+    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive,
+    LikeFilter, NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo,
+    SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -148,6 +148,7 @@ impl Driver for SqlServerDriver {
                 explain: false,
                 editable_results: false,
                 schemas: true,
+                insert_rows: true,
             },
         }))
     }
@@ -179,6 +180,13 @@ enum Request {
     /// The TDS transaction descriptor, or `XACT_STATE()` when it may be stale (ADR-031).
     TransactionState {
         reply: oneshot::Sender<Result<TransactionState>>,
+    },
+    /// Rows of an import (ADR-038): a TDS bulk load into a staging table, then one
+    /// `INSERT … SELECT`.
+    Insert {
+        target: InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+        reply: oneshot::Sender<Result<u64>>,
     },
 }
 
@@ -250,6 +258,15 @@ async fn actor(
             }
             Request::DatabaseContext { reply } => {
                 let _ = reply.send(Ok(context.snapshot()));
+            }
+            Request::Insert {
+                target,
+                rows,
+                reply,
+            } => {
+                let result = bulk_insert(&mut client, &target, rows).await;
+                transaction_state_unknown = result.is_err();
+                let _ = reply.send(result);
             }
             Request::CurrentDatabase { reply } => {
                 // SHOWPLAN can return text/XML instead of executing a SELECT. Only the
@@ -323,6 +340,71 @@ async fn actor(
         }
     }
     let _ = client.close().await;
+}
+
+/// An import's rows (ADR-038): a TDS bulk load (the protocol's own bulk path) into a temporary
+/// table of `nvarchar(max)` columns, whose names are ours, then one `INSERT … SELECT` that lets
+/// the server convert each value to its column's type, in the order the rows came. The values
+/// are the bulk load's data: they are never SQL text. The staging table lives in the session (and
+/// in its transaction: a rollback drops it, and the next batch creates it again).
+async fn bulk_insert(
+    client: &mut SqlClient,
+    target: &InsertTarget,
+    rows: Vec<Vec<Option<String>>>,
+) -> Result<u64> {
+    let width = target.columns.len();
+    let staging = format!("#spelaion_import_{width}");
+    let names: Vec<String> = (1..=width).map(|i| format!("c{i}")).collect();
+    let create = format!(
+        "if object_id('tempdb..{staging}') is null create table {staging}          (spelaion_row bigint identity(1, 1), {})",
+        names
+            .iter()
+            .map(|n| format!("{n} nvarchar(max) null"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    run_batch(client, &create).await?;
+    {
+        let columns: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut load = client
+            .bulk_insert_columns(&staging, &columns)
+            .await
+            .map_err(|e| map_error(e, None))?;
+        for row in rows {
+            let mut token = tiberius::TokenRow::new();
+            for value in row {
+                token.push(tiberius::ColumnData::String(
+                    value.map(std::borrow::Cow::Owned),
+                ));
+            }
+            load.send(token).await.map_err(|e| map_error(e, None))?;
+        }
+        load.finalize().await.map_err(|e| map_error(e, None))?;
+    }
+    let insert = format!(
+        "INSERT INTO {} {} SELECT {} FROM {staging} ORDER BY spelaion_row",
+        target.qualified(&SqlServerDialect),
+        target.column_list(&SqlServerDialect),
+        names.join(", ")
+    );
+    let inserted = client
+        .execute(insert.as_str(), &[])
+        .await
+        .map_err(|e| map_error(e, None))?
+        .total();
+    run_batch(client, &format!("truncate table {staging}")).await?;
+    Ok(inserted)
+}
+
+async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<()> {
+    client
+        .simple_query(sql)
+        .await
+        .map_err(|e| map_error(e, Some(sql)))?
+        .into_results()
+        .await
+        .map_err(|e| map_error(e, Some(sql)))?;
+    Ok(())
 }
 
 async fn rows(client: &mut SqlClient, sql: &str, params: &[String]) -> Result<Rows> {
@@ -652,6 +734,28 @@ impl Connection for SqlServerConnection {
             .next()
             .and_then(|row| row.into_iter().next().flatten())
             .unwrap_or_default())
+    }
+
+    /// A TDS bulk load into a staging table, then `INSERT … SELECT` (see `bulk_insert`).
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        target.check_rows(&rows)?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::Insert {
+                target: target.clone(),
+                rows,
+                reply,
+            })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
     }
 
     async fn current_database(&self) -> Result<Option<String>> {
