@@ -20,6 +20,7 @@ mod history;
 pub mod kube;
 mod objects;
 mod open;
+mod open_tabs;
 mod params;
 mod processes;
 mod query_page;
@@ -28,6 +29,7 @@ mod results;
 mod script;
 mod session;
 mod sort;
+mod sql_file;
 mod table_data;
 mod transaction;
 mod write;
@@ -69,6 +71,7 @@ pub use objects::{
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,
 };
+pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
 pub use params::{ParamError, bind_params, script_params};
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};
@@ -84,8 +87,12 @@ pub use spelaion_store::{
     ToolOutput,
 };
 pub use spelaion_store::{
-    Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences, ScriptErrorMode,
-    ScriptPreferences,
+    Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences, RecentFile,
+    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
+};
+pub use sql_file::{
+    FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
+    content_hash, read_sql_file, write_sql_file,
 };
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,

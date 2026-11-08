@@ -1,12 +1,17 @@
 //! SpelaionDB local storage (ADR-011): a SQLite database in the personal directory.
 //!
-//! Query history, saved queries (snippets) and the MCP audit log. The schema cache will
-//! come here with its own migration.
+//! Query history, saved queries (snippets), the MCP audit log, and the editor's open tabs and
+//! recent files (ADR-036). The schema cache will come here with its own migration.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+
+mod tabs;
+pub use tabs::{
+    FileEncoding, LineEnding, MAX_RECENT_FILES, RecentFile, SavedFile, SavedTab, SavedTabs,
+};
 
 #[derive(Debug, thiserror::Error)]
 #[error("local store: {0}")]
@@ -128,7 +133,42 @@ const MIGRATIONS: &[&str] = &["create table audit (
     // Still append-only: the triggers above stay; clearing is `clear_audit`.
     "alter table audit add column session text;
     alter table audit add column tool text;
-    create index audit_session on audit (session, at_ms);"
+    create index audit_session on audit (session, at_ms);",
+    // Open editor tabs per workspace (ADR-036), restored after a restart, disconnected: never
+    // results, secrets, or a session's or transaction's state. A file tab keeps what it needs to
+    // save the file the way it was read and to notice a change on disk.
+    "create table open_tabs (
+        workspace         text not null,
+        position          integer not null check (position >= 0),
+        active            integer not null check (active in (0, 1)),
+        title             text,
+        text              text not null,
+        connection        text,
+        pinned            integer not null check (pinned in (0, 1)),
+        on_error          text check (on_error in ('stop', 'continue', 'ask')),
+        timeout_seconds   integer check (timeout_seconds > 0),
+        snippet_name      text,
+        file_path         text check (length(file_path) > 0),
+        file_hash         text,
+        file_encoding     text check (file_encoding in
+                            ('utf-8', 'utf-8-bom', 'utf-16le', 'utf-16be', 'windows-1252')),
+        file_line_ending  text check (file_line_ending in ('lf', 'crlf', 'cr')),
+        file_modified     integer check (file_modified in (0, 1)),
+        primary key (workspace, position),
+        check ((file_path is null) = (file_encoding is null)
+           and (file_path is null) = (file_line_ending is null)
+           and (file_path is null) = (file_modified is null))
+    );
+    create table recent_files (
+        path       text primary key check (length(path) > 0),
+        opened_ms  integer not null
+    );
+    create trigger personal_settings_editor_insert before insert on personal_settings
+        when new.key = 'editor.reconnect_on_start' and new.value not in ('on', 'off')
+        begin select raise(abort, 'unsupported editor setting'); end;
+    create trigger personal_settings_editor_update before update on personal_settings
+        when new.key = 'editor.reconnect_on_start' and new.value not in ('on', 'off')
+        begin select raise(abort, 'unsupported editor setting'); end;"
 ];
 
 /// Milliseconds since 1970 (UTC); 0 if the clock is before it.
@@ -530,6 +570,15 @@ pub enum ScriptErrorMode {
 }
 
 impl ScriptErrorMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "stop" => Some(ScriptErrorMode::Stop),
+            "continue" => Some(ScriptErrorMode::Continue),
+            "ask" => Some(ScriptErrorMode::Ask),
+            _ => None,
+        }
+    }
+
     fn as_str(self) -> &'static str {
         match self {
             ScriptErrorMode::Stop => "stop",
@@ -2289,7 +2338,8 @@ mod tests {
         {
             let mut conn = Connection::open(&path).unwrap();
             let tx = conn.transaction().unwrap();
-            let before = MIGRATIONS.len() - 1;
+            // Every migration before the activity's (the ninth).
+            let before = 8;
             for migration in &MIGRATIONS[..before] {
                 tx.execute_batch(migration).unwrap();
             }

@@ -125,12 +125,18 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
   `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
   `open.rs`); a tunnel file's is per SSH hop.
+  `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a
+  BOM, UTF-16, Windows-1252, the file's line ending, temp file + rename, a content hash that
+  refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
+  writes them at most a second after a change) and checks them before they come back
+  (`restore_tabs`): never results, secrets or session state, and nothing is run.
   `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
   `classify.rs`, any change there needs tests that try to get around it.
 - `crates/spelaion-store`: local SQLite (audit, query history, saved queries, personal settings,
-  the explorer's filters and bookmarks; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
+  the explorer's filters and bookmarks, the editor's open tabs per workspace and recent files in
+  `tabs.rs`; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
   `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
