@@ -38,11 +38,12 @@ function view(value: string | null, column: ColumnItem): View {
   return { kind: "text", text: value };
 }
 
-export type ViewerMode = "cell" | "row" | "references";
+export type ViewerMode = "cell" | "row" | "references" | "calc";
 
-const MODE_LABELS: Record<ViewerMode, string> = { cell: "viewer.cellMode", row: "viewer.rowMode", references: "viewer.referencesMode" };
+const MODE_LABELS: Record<ViewerMode, string> = { cell: "viewer.cellMode", row: "viewer.rowMode", references: "viewer.referencesMode", calc: "viewer.calcMode" };
 
-/** The side panel's views: the cell, its row and, in a table data tab, the row's references. */
+/** The side panel's views: the cell, its row, in a table data tab the row's references, and the
+ *  numbers about the selection. */
 export function ViewerModes(props: { modes: ViewerMode[]; mode: ViewerMode; onMode(mode: ViewerMode): void }) {
   const { t } = useTranslation("editor");
   return (

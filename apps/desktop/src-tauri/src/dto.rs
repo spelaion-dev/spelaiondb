@@ -4167,3 +4167,172 @@ pub struct RecentFileItem {
     /// Still on disk (checked when listed).
     pub exists: bool,
 }
+
+/// The numbers about a grid selection (the calc panel), computed by the core over the stored
+/// result. Values are text as the grid shows them; counts are exact up to 2^53.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionStatsItem {
+    pub cells: f64,
+    pub nulls: f64,
+    /// Cells that are not NULL.
+    pub values: f64,
+    pub distinct: f64,
+    /// More different values than the core counts: `distinct` reads "N+".
+    pub distinct_capped: bool,
+    /// Numeric values: what sum, average and median take.
+    pub numbers: f64,
+    pub sum: Option<String>,
+    pub avg: Option<String>,
+    pub median: Option<String>,
+    /// Too many numbers for a median.
+    pub median_capped: bool,
+    /// `None` when the selection mixes values that do not compare (numbers and text).
+    pub min: Option<String>,
+    pub max: Option<String>,
+    /// The most frequent value, when one repeats.
+    pub mode: Option<String>,
+    pub mode_count: f64,
+}
+
+impl From<spelaion_core::SelectionStats> for SelectionStatsItem {
+    fn from(s: spelaion_core::SelectionStats) -> Self {
+        Self {
+            cells: s.cells as f64,
+            nulls: s.nulls as f64,
+            values: s.values as f64,
+            distinct: s.distinct as f64,
+            distinct_capped: s.distinct_capped,
+            numbers: s.numbers as f64,
+            sum: s.sum,
+            avg: s.avg,
+            median: s.median,
+            median_capped: s.median_capped,
+            min: s.min,
+            max: s.max,
+            mode: s.mode,
+            mode_count: s.mode_count as f64,
+        }
+    }
+}
+
+/// A column of a table data tab, for its statistics: the tab's table and filter.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnStatsTarget {
+    pub schema: String,
+    pub name: String,
+    pub filter: String,
+}
+
+/// Whether a statistic could be computed.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum StatStateItem {
+    Done,
+    /// The column's type has no such number (booleans have no minimum).
+    NotForType,
+    /// The engine refused it: its message.
+    Failed {
+        message: String,
+    },
+}
+
+impl<T> From<&spelaion_core::Stat<T>> for StatStateItem {
+    fn from(stat: &spelaion_core::Stat<T>) -> Self {
+        match stat {
+            spelaion_core::Stat::Value(_) => Self::Done,
+            spelaion_core::Stat::NotForType => Self::NotForType,
+            spelaion_core::Stat::Failed(message) => Self::Failed {
+                message: message.clone(),
+            },
+        }
+    }
+}
+
+/// One of a column's most frequent values.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TopValueItem {
+    /// `None` for NULL.
+    pub text: Option<String>,
+    pub count: f64,
+    /// The condition the core wrote to keep these rows (added to the tab's filter with
+    /// `add_table_condition`); `None` when the value is too long to filter by.
+    pub condition: Option<String>,
+}
+
+/// A table column's statistics, counted by the server with read-only queries.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnStatsItem {
+    /// Rows the numbers describe (`sampleRows` when sampled).
+    pub rows: f64,
+    pub sampled: bool,
+    pub sample_rows: f64,
+    pub nulls: f64,
+    pub distinct: Option<f64>,
+    pub distinct_state: StatStateItem,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub range_state: StatStateItem,
+    pub top: Vec<TopValueItem>,
+    pub top_state: StatStateItem,
+    /// The statements that ran, every one a read.
+    pub statements: Vec<String>,
+}
+
+impl ColumnStatsItem {
+    pub fn new(s: spelaion_core::ColumnStats, sample_rows: u64) -> Self {
+        let distinct_state = StatStateItem::from(&s.distinct);
+        let range_state = StatStateItem::from(&s.range);
+        let top_state = StatStateItem::from(&s.top);
+        let (min, max) = match s.range {
+            spelaion_core::Stat::Value(range) => range,
+            spelaion_core::Stat::NotForType | spelaion_core::Stat::Failed(_) => (None, None),
+        };
+        Self {
+            rows: s.rows as f64,
+            sampled: s.sampled,
+            sample_rows: sample_rows as f64,
+            nulls: s.nulls as f64,
+            distinct: match s.distinct {
+                spelaion_core::Stat::Value(n) => Some(n as f64),
+                spelaion_core::Stat::NotForType | spelaion_core::Stat::Failed(_) => None,
+            },
+            distinct_state,
+            min,
+            max,
+            range_state,
+            top: match s.top {
+                spelaion_core::Stat::Value(top) => top
+                    .into_iter()
+                    .map(|v| TopValueItem {
+                        text: v.text,
+                        count: v.count as f64,
+                        condition: v.condition,
+                    })
+                    .collect(),
+                spelaion_core::Stat::NotForType | spelaion_core::Stat::Failed(_) => Vec::new(),
+            },
+            top_state,
+            statements: s.statements,
+        }
+    }
+}
+
+/// How asking for a column's statistics ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ColumnStatsOutcome {
+    Done { stats: Box<ColumnStatsItem> },
+    Cancelled,
+}

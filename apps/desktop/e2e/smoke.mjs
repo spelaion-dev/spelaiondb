@@ -2473,6 +2473,77 @@ try {
     await customerNode.locator(".twisty").click();
   }
 
+  step("selection numbers and column statistics");
+  {
+    await customerNode.locator(".label").dblclick();
+    await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor();
+    await range.filter({ hasText: "rows 1–500" }).waitFor();
+    let box = null;
+    for (let i = 0; i < 40 && !box; i++) {
+      box = await panel.locator(".grid-scroller").boundingBox();
+      if (!box) await page.waitForTimeout(100);
+    }
+    const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+    // The whole id column (Ctrl+Space): the core adds up 1 to 500.
+    await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+    await page.keyboard.press("Control+Space");
+    await panel.getByRole("button", { name: "Selection numbers panel" }).click();
+    const calc = panel.getByRole("complementary", { name: "Selection numbers" });
+    await calc.waitFor();
+    const field = (name) => calc.locator(".reference-field", { has: page.locator("dt", { hasText: new RegExp(`^${name}$`) }) }).locator("dd");
+    await field("Sum").filter({ hasText: /^125250$/ }).waitFor();
+    assert.equal(await field("Count").innerText(), "500");
+    assert.equal(await field("Distinct").innerText(), "500");
+    assert.equal(await field("NULLs").innerText(), "0");
+    assert.equal(await field("Average").innerText(), "250.5");
+    assert.equal(await field("Median").innerText(), "250.5");
+    assert.equal(await field("Minimum").innerText(), "1");
+    assert.equal(await field("Maximum").innerText(), "500");
+    await shot("sdb-12-calc-panel");
+    // Names are not numbers: no sum, but their minimum, maximum and counts.
+    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 36 + 13);
+    await page.keyboard.press("Control+Space");
+    await calc.getByText("No numbers in the selection.").waitFor();
+    assert.equal(await field("Count").innerText(), "500");
+    await setTheme("dark", "dark");
+    await calc.getByText("No numbers in the selection.").waitFor();
+    await shot("sdb-12-calc-panel-dark");
+    await setTheme("light", "light");
+    await calc.getByRole("button", { name: "Close selection numbers (Esc)" }).click();
+    await calc.waitFor({ state: "detached" });
+
+    // The country column's statistics, counted by the server with read-only queries.
+    box = await panel.locator(".grid-scroller").boundingBox();
+    const countryX = box.x + 52 + widths[0] + widths[1] + widths[2] + 20;
+    await page.mouse.click(countryX, box.y + 18, { button: "right" });
+    await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Column statistics" }).click();
+    const stats = page.getByRole("dialog", { name: "Statistics of country" });
+    await stats.waitFor();
+    await stats.locator(".column-stats-top li").first().waitFor();
+    await stats.getByText("Read-only queries on the whole table, in a separate session.").waitFor();
+    const statField = (name) => stats.locator(".reference-field", { has: page.locator("dt", { hasText: new RegExp(`^${name}$`) }) }).locator("dd");
+    assert.equal(await statField("Rows").innerText(), "500");
+    assert.equal(await statField("NULLs").innerText(), "0");
+    assert.match(await statField("Distinct").innerText(), /^\d+$/);
+    assert.equal(await stats.locator(".column-stats-sampled").count(), 0);
+    await shot("sdb-12-column-stats");
+    // Every statement shown is a SELECT.
+    await stats.locator(".column-stats-sql summary").click();
+    const statements = (await stats.locator(".column-stats-sql pre").innerText()).split(/;\n\n/);
+    assert.equal(statements.length, 5);
+    for (const sql of statements) assert.match(sql, /^SELECT /);
+    // A most frequent value filters the table by it, with the core's condition.
+    const first = stats.locator(".column-stats-value").first();
+    const value = await first.locator(".column-stats-text").innerText();
+    const count = Number((await first.locator(".column-stats-count").innerText()).replace(/\D/g, ""));
+    await first.click();
+    await stats.waitFor({ state: "detached" });
+    await page.waitForFunction((v) => document.querySelector('input[aria-label="WHERE"]')?.value === `country = '${v}'`, value);
+    await range.filter({ hasText: `rows 1–${count}` }).waitFor();
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor({ state: "detached" });
+  }
+
   step("query parameters: :name values asked once, written in by the core");
   await replaceQuery(panel, "select :name as who, :n + 1 as next, :name || '!' as again;");
   await run(panel);

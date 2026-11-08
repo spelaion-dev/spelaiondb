@@ -52,6 +52,12 @@ import {
   type KeyTargetItem,
   type KeyRefItem,
   type RowReferenceItem_Serialize,
+  type SelectionStatsItem_Serialize,
+  type ColumnStatsItem_Serialize,
+  type ColumnStatsOutcome_Serialize,
+  type ColumnStatsTarget,
+  type TopValueItem_Serialize,
+  type StatStateItem,
   type RiskKind,
   type KubernetesDraftItem,
   type KubePortItem_Serialize,
@@ -135,6 +141,11 @@ export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
 export type { TableKeyItem, KeyTargetItem, KeyRefItem };
 export type RowReferenceItem = RowReferenceItem_Serialize;
+export type SelectionStatsItem = SelectionStatsItem_Serialize;
+export type ColumnStatsItem = ColumnStatsItem_Serialize;
+export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize;
+export type TopValueItem = TopValueItem_Serialize;
+export type { ColumnStatsTarget, StatStateItem };
 export type IndexDetails = TableDetails["indexes"][number];
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
 export type McpAccessItem = McpAccessItem_Serialize;
