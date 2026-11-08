@@ -1841,13 +1841,14 @@ try {
   await viewsFolder.click();
   assert.equal(await viewsFolder.getAttribute("aria-expanded"), "false");
   const linkWithEditor = page.getByRole("button", { name: "Link with editor" });
+  // The toggle is a saved preference: its state shows once the save is done, so wait for it.
   await linkWithEditor.click();
-  assert.equal(await linkWithEditor.getAttribute("aria-pressed"), "true");
+  await linkWithEditor.and(page.locator('[aria-pressed="true"]')).waitFor();
   await page.waitForFunction(() =>
     document.querySelector('[aria-label="Expand or collapse Views"]')?.getAttribute("aria-expanded") === "true",
   );
   await linkWithEditor.click();
-  assert.equal(await linkWithEditor.getAttribute("aria-pressed"), "false");
+  await linkWithEditor.and(page.locator('[aria-pressed="false"]')).waitFor();
   // Bookmarks: listed above the connections; a click shows the object in the tree.
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Add bookmark" }).click();
@@ -2024,7 +2025,11 @@ try {
       const before = await page.evaluate(() => window.__copied.length);
       await page.mouse.click(grid.x + 52 + 20, grid.y + 36 + 13);
       await page.keyboard.press("Control+c");
-      firstId = (await copied(before + 1)).trimEnd();
+      // While that page is on its way there may be no cell to copy yet: try again, not wait.
+      const copiedNow = await page
+        .waitForFunction((n) => window.__copied.length > n, before, { timeout: 3000 })
+        .then(() => true, () => false);
+      if (copiedNow) firstId = (await page.evaluate(() => window.__copied[window.__copied.length - 1])).trimEnd();
     }
     assert.equal(firstId, "50000");
   }
