@@ -2,7 +2,7 @@
 
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
-    ObjectInfo, ObjectKind, Result, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, TableInfo,
 };
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, Row};
@@ -248,4 +248,42 @@ pub async fn describe_table(client: &Client, schema: &str, name: &str) -> Result
         foreign_keys,
         constraints,
     })
+}
+
+/// The foreign keys pointing to `schema.name`. Those of partitions are left out: they are
+/// copies of their parent table's key, which is listed.
+pub async fn list_referencing_keys(
+    client: &Client,
+    schema: &str,
+    name: &str,
+) -> Result<Vec<ReferencingKey>> {
+    let rows = client
+        .query(
+            "select n.nspname::text, c.relname::text, con.conname::text,
+                    array(select a.attname::text from unnest(con.conkey) with ordinality k(n, o)
+                          join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.n order by k.o),
+                    array(select a.attname::text from unnest(con.confkey) with ordinality k(n, o)
+                          join pg_attribute a on a.attrelid = con.confrelid and a.attnum = k.n order by k.o)
+             from pg_constraint con
+             join pg_class c on c.oid = con.conrelid
+             join pg_namespace n on n.oid = c.relnamespace
+             where con.contype = 'f' and not c.relispartition
+               and con.confrelid = (select t.oid from pg_class t
+                                    join pg_namespace tn on tn.oid = t.relnamespace
+                                    where tn.nspname = $1 and t.relname = $2)
+             order by 1, 2, 3",
+            &[&schema, &name],
+        )
+        .await
+        .map_err(map_error)?;
+    Ok(rows
+        .iter()
+        .map(|r| ReferencingKey {
+            schema: r.get(0),
+            table: r.get(1),
+            name: r.get(2),
+            columns: r.get(3),
+            referenced_columns: r.get(4),
+        })
+        .collect())
 }

@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, KeepAlive,
-    NameFilter, ObjectInfo, Result, SchemaInfo, SchemaObject, ServerObject, TableInfo,
-    TransactionState,
+    NameFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject, ServerObject,
+    TableInfo, TransactionState,
 };
 use spelaion_ssh::TunnelState;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, watch};
@@ -428,6 +428,11 @@ impl Connection for Tracked {
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.describe_table(schema, name).await)
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        let _busy = self.activity.begin().await;
+        self.observe(self.inner.list_referencing_keys(schema, name).await)
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {

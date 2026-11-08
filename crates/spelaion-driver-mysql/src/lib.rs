@@ -22,8 +22,8 @@ use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, LogicalType,
-    NameFilter, Notice, ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject,
-    TableInfo, TlsMode, TransactionState,
+    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject,
+    ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -603,6 +603,10 @@ impl Connection for MysqlConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, self.flavor, schema, name).await
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        introspect::list_referencing_keys(self, schema, name).await
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {

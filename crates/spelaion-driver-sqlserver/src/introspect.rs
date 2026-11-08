@@ -4,7 +4,7 @@
 
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
-    ObjectInfo, ObjectKind, Result, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, TableInfo,
 };
 
 use crate::SqlServerConnection;
@@ -328,6 +328,44 @@ pub async fn describe_table(
         foreign_keys,
         constraints,
     })
+}
+
+/// The foreign keys pointing to `schema.name`, from any schema of the database.
+pub async fn list_referencing_keys(
+    conn: &SqlServerConnection,
+    schema: &str,
+    name: &str,
+) -> Result<Vec<ReferencingKey>> {
+    let rows = conn
+        .rows(
+            "select schema_name(pt.schema_id), pt.name, fk.name, pc.name, rc.name              from sys.foreign_keys fk              join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id              join sys.tables pt on pt.object_id = fkc.parent_object_id              join sys.columns pc on pc.object_id = fkc.parent_object_id and pc.column_id = fkc.parent_column_id              join sys.columns rc on rc.object_id = fkc.referenced_object_id and rc.column_id = fkc.referenced_column_id              where fk.referenced_object_id = object_id(quotename(@P1) + '.' + quotename(@P2))              order by 1, 2, 3, fkc.constraint_column_id",
+            vec![schema.to_string(), name.to_string()],
+        )
+        .await?;
+    Ok(group_referencing_keys(&rows))
+}
+
+/// Rows of (schema, table, key, column, referenced column), ordered by key and position, as
+/// one [`ReferencingKey`] per key.
+fn group_referencing_keys(rows: &[Vec<Option<String>>]) -> Vec<ReferencingKey> {
+    let mut keys: Vec<ReferencingKey> = Vec::new();
+    for row in rows {
+        let (schema, table, name) = (text(row, 0), text(row, 1), text(row, 2));
+        match keys.last_mut() {
+            Some(key) if key.schema == schema && key.table == table && key.name == name => {
+                key.columns.push(text(row, 3));
+                key.referenced_columns.push(text(row, 4));
+            }
+            _ => keys.push(ReferencingKey {
+                schema,
+                table,
+                name,
+                columns: vec![text(row, 3)],
+                referenced_columns: vec![text(row, 4)],
+            }),
+        }
+    }
+    keys
 }
 
 #[cfg(test)]

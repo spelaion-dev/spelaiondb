@@ -443,6 +443,36 @@ async fn introspection_describes_tables() {
     assert_eq!(orders.foreign_keys.len(), 1);
     assert_eq!(orders.foreign_keys[0].referenced_table, "customer");
     assert_eq!(orders.foreign_keys[0].referenced_columns, ["id"]);
+    // Seen from the other side, with the primary key filled in the same way.
+    let referencing = conn
+        .list_referencing_keys("main", "customer")
+        .await
+        .unwrap();
+    assert_eq!(referencing.len(), 1);
+    assert_eq!(
+        (
+            referencing[0].table.as_str(),
+            referencing[0].name.as_str(),
+            &referencing[0].columns[..],
+            &referencing[0].referenced_columns[..]
+        ),
+        (
+            "orders",
+            "fk_0",
+            &["customer_id".to_string()][..],
+            &["id".to_string()][..]
+        )
+    );
+    let to_orders = conn.list_referencing_keys("main", "orders").await.unwrap();
+    assert_eq!(to_orders.len(), 1);
+    assert_eq!(to_orders[0].table, "line");
+    assert_eq!(to_orders[0].columns, ["order_id"]);
+    assert!(
+        conn.list_referencing_keys("main", "line")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let line = conn.describe_table("main", "line").await.unwrap();
     assert_eq!(line.primary_key, ["order_id", "n"]);

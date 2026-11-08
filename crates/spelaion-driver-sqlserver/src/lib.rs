@@ -20,8 +20,8 @@ use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
     EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, Notice, ObjectInfo,
-    Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
-    TransactionState,
+    ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
+    TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -668,6 +668,10 @@ impl Connection for SqlServerConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, schema, name).await
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        introspect::list_referencing_keys(self, schema, name).await
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {

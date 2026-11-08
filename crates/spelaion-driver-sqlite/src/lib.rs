@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use rusqlite::{InterruptHandle, OpenFlags};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, SchemaInfo,
-    SchemaObject, TableInfo, TransactionState,
+    EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey,
+    Result, SchemaInfo, SchemaObject, TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -141,6 +141,7 @@ enum Command {
     Schemas(Reply<Vec<SchemaInfo>>),
     Objects(String, Reply<Vec<ObjectInfo>>),
     Describe(String, String, Reply<TableInfo>),
+    Referencing(String, String, Reply<Vec<ReferencingKey>>),
     /// A catalog query from `catalog.rs`.
     Catalog(String, Reply<Vec<catalog::Row>>),
     /// `sqlite3_get_autocommit`: no query (ADR-031).
@@ -174,6 +175,9 @@ fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>
             }
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(&conn, &schema, &name));
+            }
+            Command::Referencing(schema, name, reply) => {
+                let _ = reply.send(introspect::list_referencing_keys(&conn, &schema, &name));
             }
             Command::Catalog(sql, reply) => {
                 let _ = reply.send(introspect::query(&conn, &sql));
@@ -254,6 +258,12 @@ impl Connection for SqliteConnection {
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Describe(schema, name, reply))
+            .await
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        let (schema, name) = (schema.to_string(), name.to_string());
+        self.ask(|reply| Command::Referencing(schema, name, reply))
             .await
     }
 

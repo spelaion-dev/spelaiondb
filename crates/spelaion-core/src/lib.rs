@@ -25,6 +25,7 @@ mod params;
 mod processes;
 mod query_page;
 mod readonly;
+mod references;
 mod results;
 mod script;
 mod session;
@@ -76,6 +77,11 @@ pub use params::{ParamError, bind_params, script_params};
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
+pub use references::{
+    FollowError, KeyDirection, KeyRef, KeyRows, KeyTarget, MAX_PREVIEW_ROWS, PREVIEW_CHARS,
+    ReferenceOutcome, RowReference, TableKey, find_key, follow, key_rows, read_references,
+    reference_targets, table_keys,
+};
 pub use results::{ResultId, ResultStore, StoredResult};
 pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
@@ -96,7 +102,7 @@ pub use sql_file::{
 };
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
-    table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
+    key_filter, table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
 };
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use write::{

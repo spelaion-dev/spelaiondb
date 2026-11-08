@@ -1,7 +1,9 @@
 //! SQLite catalog of a local file, through rusqlite (queries and rows in `catalog.rs`).
 
 use rusqlite::types::Value as SqlValue;
-use spelaion_driver_api::{DriverError, LikeFilter, ObjectInfo, Result, SchemaInfo, TableInfo};
+use spelaion_driver_api::{
+    DriverError, LikeFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, TableInfo,
+};
 
 use crate::catalog::{self, Row};
 use crate::exec::map_error;
@@ -53,4 +55,14 @@ pub fn describe_table(conn: &rusqlite::Connection, schema: &str, name: &str) -> 
         )?);
     }
     Ok(table)
+}
+
+pub fn list_referencing_keys(
+    conn: &rusqlite::Connection,
+    schema: &str,
+    name: &str,
+) -> Result<Vec<ReferencingKey>> {
+    let rows = query(conn, &catalog::referencing_keys_sql(schema, name))?;
+    let primary_key = catalog::names(&query(conn, &catalog::primary_key_sql(schema, name))?);
+    Ok(catalog::referencing_keys(schema, &rows, &primary_key))
 }

@@ -127,6 +127,8 @@ pub enum ConditionError {
     NullValue,
     #[error("the filter has a -- comment: remove it to add a condition after it")]
     LineComment,
+    #[error("a key needs at least one column")]
+    EmptyKey,
 }
 
 /// "Filter by this value" in a table data tab: the condition added to its `WHERE`, written by
@@ -221,6 +223,27 @@ pub fn value_condition(
         FilterOp::Contains => like(false, containing(&needle()?), true),
         FilterOp::NotContains => like(true, containing(&needle()?), true),
     })
+}
+
+/// The filter of a followed foreign key (SDB-11): each column of the table it leads to equal
+/// to the key's value in the row it starts from, joined with AND in the key's order. Each
+/// condition is written as "filter by this value" writes one (the column quoted for the engine,
+/// the engine's literal for the value's type), so the UI never writes it. A NULL in any column
+/// means the row references nothing through that key (MATCH SIMPLE): refused.
+pub fn key_filter(
+    dialect: &dyn Dialect,
+    columns: &[(String, LogicalType, Value)],
+) -> Result<String, ConditionError> {
+    if columns.is_empty() {
+        return Err(ConditionError::EmptyKey);
+    }
+    columns
+        .iter()
+        .map(|(column, logical, value)| {
+            value_condition(dialect, column, *logical, FilterOp::Eq, value)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|conditions| conditions.join(" AND "))
 }
 
 /// `%…%` around a text, its own `%`, `_`, `!` and `[` escaped with `!` (MySQL reads `\` in
@@ -544,6 +567,57 @@ mod tests {
             condition("duckdb", LogicalType::Text, FilterOp::Like, text("a%")),
             "\"my col\" ILIKE 'a%'"
         );
+    }
+
+    #[test]
+    fn key_filters_join_one_quoted_condition_per_column() {
+        let columns = |values: Vec<Value>| -> Vec<(String, LogicalType, Value)> {
+            ["order region", "number"]
+                .into_iter()
+                .zip(values)
+                .map(|(name, value)| {
+                    let logical = match value {
+                        Value::Int(_) => LogicalType::Int,
+                        _ => LogicalType::Text,
+                    };
+                    (name.to_string(), logical, value)
+                })
+                .collect()
+        };
+        assert_eq!(
+            key_filter(
+                &Named("postgres"),
+                &columns(vec![Value::Text("E'U".into()), Value::Int(7)])
+            ),
+            Ok("\"order region\" = 'E''U' AND \"number\" = 7".into())
+        );
+        assert_eq!(
+            key_filter(
+                &Named("sqlserver"),
+                &columns(vec![Value::Text("ñ".into()), Value::Int(7)])
+            ),
+            Ok("[order region] = N'ñ' AND [number] = 7".into())
+        );
+        // A NULL part references nothing; an empty key is not a key.
+        assert_eq!(
+            key_filter(
+                &Named("mysql"),
+                &columns(vec![Value::Text("EU".into()), Value::Null])
+            ),
+            Err(ConditionError::NullValue)
+        );
+        assert_eq!(
+            key_filter(&Named("mysql"), &[]),
+            Err(ConditionError::EmptyKey)
+        );
+        // A value that tries to close the condition stays a literal, and the page is checked.
+        let filter = key_filter(
+            &SqliteDialect,
+            &columns(vec![Value::Text("x') OR 1=1 --".into()), Value::Int(1)]),
+        )
+        .unwrap();
+        assert_eq!(filter, "\"order region\" = 'x'') OR 1=1 --' AND number = 1");
+        assert!(table_page_sql(&SqliteDialect, &page(&filter, "")).is_ok());
     }
 
     #[test]

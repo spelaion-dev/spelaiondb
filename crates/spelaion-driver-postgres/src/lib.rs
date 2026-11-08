@@ -20,8 +20,8 @@ use futures_util::{StreamExt, TryStreamExt};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, Notice,
-    ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
-    TransactionState,
+    ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject,
+    TableInfo, TransactionState,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -291,6 +291,10 @@ impl Connection for PgConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(&self.client, schema, name).await
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        introspect::list_referencing_keys(&self.client, schema, name).await
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {

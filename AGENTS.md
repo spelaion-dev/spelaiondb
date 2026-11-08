@@ -20,6 +20,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
   (SQLite's in `catalog.rs`); each driver's test file checks them against its engine.
+  `list_referencing_keys` is `describe_table`'s foreign keys seen from the other side: the keys
+  of every table that point to one (in each driver's `introspect.rs`).
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
@@ -107,6 +109,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it), and
   writes "filter by this value" conditions into its WHERE from the typed cell.
+  `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
+  read from the catalog again each time (the UI only names one), the values come from the
+  stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
+  composite, multi-level and self-referencing keys on every engine.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
   `export.rs` also holds the CSV options and formula escaping of files;

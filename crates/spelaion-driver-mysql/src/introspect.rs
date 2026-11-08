@@ -3,7 +3,7 @@
 
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
-    ObjectInfo, ObjectKind, Result, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, TableInfo,
 };
 
 use crate::{Flavor, MysqlConnection};
@@ -334,6 +334,47 @@ pub(crate) async fn describe_table(
         foreign_keys,
         constraints,
     })
+}
+
+/// The foreign keys pointing to `schema.name`, from any database of the server.
+pub async fn list_referencing_keys(
+    conn: &MysqlConnection,
+    schema: &str,
+    name: &str,
+) -> Result<Vec<ReferencingKey>> {
+    let rows = conn
+        .rows(
+            "select table_schema, table_name, constraint_name, column_name, referenced_column_name
+             from information_schema.key_column_usage
+             where referenced_table_schema = ? and referenced_table_name = ?
+             order by table_schema, table_name, constraint_name, ordinal_position",
+            vec![schema.to_string(), name.to_string()],
+        )
+        .await?;
+    Ok(group_referencing_keys(&rows))
+}
+
+/// Rows of (schema, table, key, column, referenced column), ordered by key and position, as
+/// one [`ReferencingKey`] per key.
+fn group_referencing_keys(rows: &[Vec<Option<String>>]) -> Vec<ReferencingKey> {
+    let mut keys: Vec<ReferencingKey> = Vec::new();
+    for row in rows {
+        let (schema, table, name) = (text(row, 0), text(row, 1), text(row, 2));
+        match keys.last_mut() {
+            Some(key) if key.schema == schema && key.table == table && key.name == name => {
+                key.columns.push(text(row, 3));
+                key.referenced_columns.push(text(row, 4));
+            }
+            _ => keys.push(ReferencingKey {
+                schema,
+                table,
+                name,
+                columns: vec![text(row, 3)],
+                referenced_columns: vec![text(row, 4)],
+            }),
+        }
+    }
+    keys
 }
 
 #[cfg(test)]
