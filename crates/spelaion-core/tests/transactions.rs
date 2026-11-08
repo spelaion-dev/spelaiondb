@@ -381,6 +381,96 @@ async fn smart_commit_switches_to_manual_on_the_first_write() {
 }
 
 #[tokio::test]
+async fn schema_metadata_keeps_user_transaction_counts_on_every_engine() {
+    for engine in engines().await {
+        let name = engine.name;
+        let table = unique("tx_metadata");
+        run(&engine.a, &format!("create table {table} (id int)"))
+            .await
+            .unwrap();
+        engine.a.follow_transactions(&SMART).await;
+        let schema = spelaion_core::active_schema(&engine.a).await.unwrap();
+        assert_eq!(engine.a.transaction_status().statements, 0, "{name}");
+        assert_eq!(
+            engine.a.transaction_status().state,
+            Some(TransactionState::Idle),
+            "{name}: metadata does not start a transaction"
+        );
+
+        run(&engine.a, &format!("insert into {table} values (1)"))
+            .await
+            .unwrap();
+        let results_before = engine.a.results().len();
+        for _ in 0..3 {
+            assert_eq!(
+                spelaion_core::active_schema(&engine.a).await.unwrap(),
+                schema,
+                "{name}"
+            );
+            let status = engine.a.transaction_status();
+            assert!(status.is_open() && status.smart_switched, "{name}");
+            assert_eq!(status.statements, 1, "{name}: metadata is not user work");
+            assert_eq!(engine.a.results().len(), results_before, "{name}");
+        }
+
+        // An explicit generated action still counts, even though its SQL is core-written.
+        assert_eq!(
+            spelaion_core::count_rows(&engine.a, schema.as_deref().unwrap_or(""), &table)
+                .await
+                .unwrap(),
+            1,
+            "{name}"
+        );
+        assert_eq!(engine.a.transaction_status().statements, 2, "{name}");
+        engine.a.rollback().await.unwrap();
+        assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
+
+        engine.a.set_auto_commit(false).await.unwrap();
+        spelaion_core::active_schema(&engine.a).await.unwrap();
+        assert_eq!(
+            engine.a.transaction_status().state,
+            Some(TransactionState::Idle),
+            "{name}: metadata does not send manual-mode BEGIN"
+        );
+        assert_eq!(engine.a.transaction_status().statements, 0, "{name}");
+        run(&engine.b, &format!("drop table {table}"))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn postgres_smart_commit_schema_refresh_does_not_add_a_second_statement() {
+    let Some(params) = server("SPELAION_TEST_PG", "spelaion", "spelaion") else {
+        return;
+    };
+    let session = connect(&PostgresDriver, &params).await;
+    session.follow_transactions(&SMART).await;
+    run(&session, "create temp table smart_metadata (id int)")
+        .await
+        .unwrap();
+    assert_eq!(session.transaction_status().statements, 1);
+    for _ in 0..3 {
+        assert_eq!(
+            spelaion_core::active_schema(&session)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("public")
+        );
+        assert_eq!(session.transaction_status().statements, 1);
+    }
+    // Setting the schema is a user's action, unlike reading the current one.
+    spelaion_core::set_active_schema(&session, "public")
+        .await
+        .unwrap();
+    assert_eq!(session.transaction_status().statements, 2);
+    spelaion_core::active_schema(&session).await.unwrap();
+    assert_eq!(session.transaction_status().statements, 2);
+    assert!(session.rollback().await.unwrap().status.auto_commit);
+}
+
+#[tokio::test]
 async fn statements_that_end_a_transaction_keep_the_badge_true() {
     for engine in engines().await {
         let name = engine.name;

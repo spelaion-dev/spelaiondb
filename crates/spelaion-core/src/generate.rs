@@ -499,7 +499,19 @@ pub async fn count_rows(session: &Session, schema: &str, name: &str) -> Result<i
 /// Runs one statement written by the core and returns the first cell of its result: `None`
 /// when it returns no result (`KILL`) or no rows. The result is freed, also on failure.
 pub(crate) async fn scalar_value(session: &Session, sql: &str) -> Result<Option<Value>, String> {
-    let mut events = session.run_generated(sql);
+    scalar_result(session, session.run_generated(sql)).await
+}
+
+/// The first cell of a fixed internal metadata read, excluded from the user's transaction
+/// statement count. It uses the same session and result cleanup as generated user actions.
+pub(crate) async fn scalar_metadata(session: &Session, sql: &str) -> Result<Option<Value>, String> {
+    scalar_result(session, session.run_metadata(sql)).await
+}
+
+async fn scalar_result(
+    session: &Session,
+    mut events: futures_util::stream::BoxStream<'static, CoreEvent>,
+) -> Result<Option<Value>, String> {
     let mut results = Vec::new();
     let mut failure = None;
     while let Some(event) = events.next().await {
@@ -697,6 +709,134 @@ mod tests {
     use super::*;
     use spelaion_driver_api::{ColumnInfo, ObjectInfo};
     use spelaion_driver_sqlite::SqliteDialect;
+
+    async fn metadata_session(safeguards: spelaion_config::Safeguards) -> std::sync::Arc<Session> {
+        use spelaion_driver_api::{ConnectParams, Driver};
+        let driver = spelaion_driver_sqlite::SqliteDriver::default();
+        let session = std::sync::Arc::new(Session::new(
+            driver
+                .connect(&ConnectParams {
+                    database: ":memory:".into(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap(),
+            driver.dialect(),
+            std::sync::Arc::new(crate::ResultStore::new()),
+        ));
+        session.follow_transactions(&safeguards).await;
+        session
+    }
+
+    #[tokio::test]
+    async fn metadata_reads_share_the_session_lock_and_clean_partial_failures() {
+        let session = metadata_session(spelaion_config::Safeguards {
+            smart_commit: true,
+            ..Default::default()
+        })
+        .await;
+        let mut user_run = session.run_script("CREATE TABLE metadata_items (id integer)");
+        assert!(matches!(
+            user_run.next().await,
+            Some(CoreEvent::StatementStarted { .. })
+        ));
+        let (started, waiting) = tokio::sync::oneshot::channel();
+        let source = session.clone();
+        let mut metadata = tokio::spawn(async move {
+            started.send(()).unwrap();
+            scalar_metadata(&source, "SELECT 'main'").await
+        });
+        waiting.await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut metadata)
+                .await
+                .is_err(),
+            "metadata waits for the user's session control lock"
+        );
+        assert_eq!(
+            session.commit().await.unwrap_err(),
+            crate::TransactionError::Busy
+        );
+        while let Some(event) = user_run.next().await {
+            assert!(!matches!(event, CoreEvent::StatementFailed { .. }));
+        }
+        assert_eq!(
+            metadata.await.unwrap().unwrap(),
+            Some(Value::Text("main".into()))
+        );
+        assert_eq!(session.transaction_status().statements, 1);
+        assert!(session.results().is_empty());
+
+        // A generated user mutation remains counted and frees its RETURNING result.
+        assert_eq!(
+            scalar_value(
+                &session,
+                "INSERT INTO metadata_items VALUES (1) RETURNING id"
+            )
+            .await
+            .unwrap(),
+            Some(Value::Int(1))
+        );
+        assert_eq!(session.transaction_status().statements, 2);
+        assert!(session.results().is_empty());
+        assert!(
+            scalar_metadata(&session, "SELECT 42; SELECT missing_metadata_column")
+                .await
+                .is_err()
+        );
+        assert!(
+            session.results().is_empty(),
+            "even partial results are freed"
+        );
+        assert_eq!(session.transaction_status().statements, 2);
+        assert!(session.transaction_status().is_open());
+        session.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_metadata_frees_results_without_opening_a_manual_transaction() {
+        let session = metadata_session(spelaion_config::Safeguards {
+            manual_commit: true,
+            ..Default::default()
+        })
+        .await;
+        let source = session.clone();
+        let metadata = tokio::spawn(async move {
+            scalar_metadata(
+                &source,
+                "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers) SELECT n FROM numbers",
+            )
+            .await
+        });
+        let running = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while session.results().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        session.cancel().await.unwrap();
+        running.expect("the real SQLite metadata query started returning rows");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), metadata)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        assert!(session.results().is_empty());
+        let status = session.transaction_status();
+        assert!(!status.auto_commit);
+        assert_eq!(status.state, Some(crate::TransactionState::Idle));
+        assert_eq!(status.statements, 0);
+        assert_eq!(
+            scalar_metadata(&session, "SELECT 'usable after cancel'")
+                .await
+                .unwrap(),
+            Some(Value::Text("usable after cancel".into()))
+        );
+        assert_eq!(session.transaction_status(), status);
+        assert!(session.results().is_empty());
+    }
 
     /// Backtick quoting like MySQL's, without depending on that driver.
     struct Backticks;
