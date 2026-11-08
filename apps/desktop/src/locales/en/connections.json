@@ -394,6 +394,17 @@
     "pastedWithout": "“{{name}}” was pasted as a personal connection, already saved. Its password is asked when connecting. Not taken from the clipboard: {{fields}}. Check it, or close.",
     "clipboardUnavailable": "The clipboard could not be read: select a connection and press Ctrl+V."
   },
+  "move": {
+    "menu": "Move to folder…",
+    "title": "Move {{name}} to a folder",
+    "personalHint": "Its file moves inside your personal connections. Its stored password, filters and bookmarks go with it.",
+    "projectHint": "Its file moves inside the repository's .spelaion/connections/: your team sees the move when you commit it. Its stored password, filters and bookmarks go with it.",
+    "noFolder": "No folder",
+    "folderHint": "Nested folders with /, such as prod/eu. Empty for no folder.",
+    "confirm": "Move",
+    "moving": "Moving…",
+    "inUse": "Disconnect the tabs that use {{name}} before moving it."
+  },
   "engineChange": {
     "title": "Engine change",
     "summary": "Engine: {{from}} → {{to}}. Nothing is saved until you save.",

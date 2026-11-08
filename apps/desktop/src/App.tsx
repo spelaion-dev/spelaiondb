@@ -5,6 +5,7 @@ import { ActivityBar } from "./components/ActivityBar";
 import { McpPage } from "./components/McpPage";
 import { AddConnection } from "./components/AddConnection";
 import { DeleteConnection } from "./components/DeleteConnection";
+import { MoveConnection } from "./components/MoveConnection";
 import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
 import { TabBar } from "./components/TabBar";
@@ -44,6 +45,7 @@ export default function App() {
   const closeSettings = useApp((s) => s.closeSettings);
   const connectionDialog = useApp((s) => s.connectionDialog);
   const deletingConnection = useApp((s) => s.deletingConnection);
+  const movingConnection = useApp((s) => s.movingConnection);
   // Save errors are shown next to the setting; only startup load errors need a banner.
   const preferenceError = usePreferences((s) => (s.error?.phase === "load" ? s.error : null));
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -223,6 +225,7 @@ export default function App() {
         <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : "add"} dialog={connectionDialog} />
       )}
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
+      {movingConnection && <MoveConnection key={movingConnection.id} connection={movingConnection} />}
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       {openObject && (
         <OpenObjectDialog initialConnection={openObject.connectionId} onClose={() => useApp.getState().setOpenObject(null)} />

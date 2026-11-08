@@ -23,6 +23,7 @@ pub mod mcp_clients;
 mod migrate;
 mod model;
 mod name_pattern;
+mod relocate;
 mod resolve;
 mod secrets;
 mod trust;
@@ -68,6 +69,7 @@ pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
     NameValues,
 };
+pub use relocate::{Moved, move_connection};
 pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
     ResolvedTunnel, Resolver, TunnelSettings,

@@ -158,7 +158,9 @@
     "notifications": "Notifications",
     "notify": "Notify me when a long run finishes while the app is in the background",
     "notifyAfter": "Only runs longer than (seconds)",
-    "notifyHint": "The notification says which tab finished and whether something failed; it never contains SQL or data."
+    "notifyHint": "The notification says which tab finished and whether something failed; it never contains SQL or data.",
+    "confirmDelay": "Pause before “Run anyway” (seconds)",
+    "confirmDelayHint": "In the confirmation of a risky statement (DROP, DELETE without WHERE, data changes on Production…), “Run anyway” stays disabled this long, so it is never pressed on reflex. 0 enables it at once. Which statements ask first is not changed."
   },
   "editor": {
     "title": "Editor",

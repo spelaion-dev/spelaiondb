@@ -40,6 +40,8 @@ import {
   SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
 import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInfo";
+import { connectionMatch } from "../connectionSearch";
+import { folderOf, moveConnection } from "../connectionMoves";
 import { sortByName } from "../explorerSort";
 import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
@@ -123,6 +125,44 @@ export const FOCUS_EXPLORER_FILTER_EVENT = "spelaion-focus-explorer-filter";
 
 /** Tags shown next to a connection's name; the others are only in its tooltip. */
 const VISIBLE_TAGS = 2;
+
+/** Whether the quick filter finds a connection: by name, tags, type, host or description,
+ * forgiving a typo (`connectionSearch.ts`). An empty filter keeps all. */
+function connectionFound(connection: ConnectionItem, filter: string): boolean {
+  return connectionMatch(filter, { ...connection, typeName: connection.kind?.name }) !== null;
+}
+
+/** How far the pointer moves before pressing a connection becomes dragging it. */
+const DRAG_THRESHOLD = 5;
+
+/** A connection being dragged to another folder, and the folder under the pointer. */
+interface ConnectionDrag {
+  id: string;
+  personal: boolean;
+  from: string;
+  pointer: number;
+  startX: number;
+  startY: number;
+  dragging: boolean;
+  /** The folder it would drop into (`""` for none), or null over nothing it can drop on. */
+  target: string | null;
+}
+
+/** The pointer handlers that make a connection row draggable, and what the tree shows. */
+interface DragSupport {
+  drag: ConnectionDrag | null;
+  rowHandlers(connection: ConnectionItem): Pick<
+    React.HTMLAttributes<HTMLDivElement>,
+    "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onClickCapture"
+  >;
+}
+
+/** The folder a drop target at this point stands for, in the dragged connection's layer. */
+function dropFolderAt(x: number, y: number, personal: boolean): string | null {
+  const target = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop-folder]");
+  if (!target || (target.dataset.dropPersonal === "true") !== personal) return null;
+  return target.dataset.dropFolder ?? null;
+}
 
 /** Whether a name contains the quick filter's text, ignoring case. An empty filter keeps all. */
 function matchesFilter(name: string, filter: string): boolean {
@@ -1009,12 +1049,78 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       current = false;
     };
   }, [explorer.linkWithEditor, linked]);
-  /** With a filter, connections whose name matches, and those already expanded; with tags,
-   * only connections that have them all (tags describe connections, not what is inside). */
+  /** With a filter, connections it finds (by name, tags, type, host or description) and those
+   * already expanded; with tags, only connections that have them all (tags describe
+   * connections, not what is inside). */
   const shown = (c: ConnectionItem) =>
     (!explorer.connectedOnly || connected(c)) &&
     hasTags(c, activeTags) &&
-    (matchesFilter(c.name, filterText) || openConnections.includes(c.id));
+    (connectionFound(c, filterText) || openConnections.includes(c.id));
+
+  /** What went wrong moving a connection to another folder. */
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [drag, setDragState] = useState<ConnectionDrag | null>(null);
+  const dragRef = useRef<ConnectionDrag | null>(null);
+  /** A drag ends with a click on the row it started from: it must not act. */
+  const swallowClick = useRef(false);
+  const setDrag = (next: ConnectionDrag | null) => {
+    dragRef.current = next;
+    setDragState(next);
+  };
+  useEffect(() => {
+    if (!drag?.dragging) return;
+    // Escape puts it back where it was.
+    const cancel = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDrag(null);
+    };
+    window.addEventListener("keydown", cancel, true);
+    return () => window.removeEventListener("keydown", cancel, true);
+  }, [drag?.dragging]);
+  const dragSupport: DragSupport = {
+    drag,
+    rowHandlers: (c) => ({
+      onPointerDown: (e) => {
+        if (e.button !== 0 || (e.target as Element).closest("button, input, a")) return;
+        setDrag({ id: c.id, personal: c.personal, from: folderOf(c), pointer: e.pointerId, startX: e.clientX, startY: e.clientY, dragging: false, target: null });
+      },
+      onPointerMove: (e) => {
+        const current = dragRef.current;
+        if (!current || current.id !== c.id || current.pointer !== e.pointerId) return;
+        if (!current.dragging) {
+          if (Math.hypot(e.clientX - current.startX, e.clientY - current.startY) < DRAG_THRESHOLD) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }
+        const target = dropFolderAt(e.clientX, e.clientY, current.personal);
+        if (!current.dragging || target !== current.target) setDrag({ ...current, dragging: true, target });
+      },
+      onPointerUp: (e) => {
+        const current = dragRef.current;
+        if (!current || current.id !== c.id) return;
+        setDrag(null);
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+        if (!current.dragging) return;
+        swallowClick.current = true;
+        setTimeout(() => {
+          swallowClick.current = false;
+        }, 0);
+        if (current.target === null || current.target === current.from) return;
+        setMoveError(null);
+        moveConnection(c, current.target).catch((err: unknown) => setMoveError(t("moveFailed", { name: c.name, detail: errorText(err) })));
+      },
+      onPointerCancel: () => setDrag(null),
+      onClickCapture: (e) => {
+        if (!swallowClick.current) return;
+        swallowClick.current = false;
+        e.stopPropagation();
+        e.preventDefault();
+      },
+    }),
+  };
+  const dropClass = (personal: boolean, folder: string) =>
+    drag?.dragging && drag.personal === personal && drag.target === folder ? " drop-target" : "";
 
   async function openFolder() {
     const path = await open({ directory: true, title: t("openFolderTitle") });
@@ -1217,6 +1323,14 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           )}
         </div>
       )}
+      {moveError && (
+        <div className="banner" role="alert">
+          {moveError}
+          <button className="ghost small" aria-label={t("connections:close")} onClick={() => setMoveError(null)}>
+            ×
+          </button>
+        </div>
+      )}
       {pasteError && (
         <div className="banner" role="alert">
           {pasteError}
@@ -1226,7 +1340,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         </div>
       )}
       <div
-        className="tree"
+        className={`tree${drag?.dragging ? " drag-active" : ""}`}
         onPaste={(e) => {
           // Ctrl+V in the explorer (not in a text field): a connection from the clipboard.
           if (pasteIsForText(e.target)) return;
@@ -1256,16 +1370,39 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             />
           </div>
         )}
+        {drag?.dragging && !drag.personal && drag.from !== "" && (
+          // Repository connections without a folder have no title to drop on: this is theirs.
+          <div className={`group-title drop-zone${dropClass(false, "")}`} data-drop-folder="" data-drop-personal="false">
+            {t("moveToNoFolder")}
+          </div>
+        )}
         {[...groups.entries()].map(([group, items]) => {
           const first = items[0];
-          const label = first
-            ? (first.personal ? [t("personal")] : [])
-                .concat(first.folders)
-                .join(" / ")
-            : "";
+          // Each part of the title is a folder to drop a dragged connection on.
+          const segments = first
+            ? [
+                ...(first.personal ? [{ label: t("personal"), folder: "" }] : []),
+                ...first.folders.map((label, i) => ({ label, folder: first.folders.slice(0, i + 1).join("/") })),
+              ]
+            : [];
           return (
             <div key={group}>
-              {label && <div className="group-title">{label}</div>}
+              {first && segments.length > 0 && (
+                <div className="group-title">
+                  {segments.map((segment, i) => (
+                    <span key={segment.folder + i}>
+                      {i > 0 && " / "}
+                      <span
+                        className={`group-segment${dropClass(first.personal, segment.folder)}`}
+                        data-drop-folder={segment.folder}
+                        data-drop-personal={String(first.personal)}
+                      >
+                        {segment.label}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
               {items.map((c) => (
                 <ConnectionNode
                   // A new engine starts the node again: what it showed belongs to the old one.
@@ -1273,6 +1410,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
                   connection={c}
                   filter={filterText}
                   onPasteError={setPasteError}
+                  dragSupport={dragSupport}
+                  dropClass={dropClass(c.personal, folderOf(c))}
                 />
               ))}
             </div>
@@ -1287,10 +1426,16 @@ function ConnectionNode({
   connection,
   filter,
   onPasteError,
+  dragSupport,
+  dropClass,
 }: {
   connection: ConnectionItem;
   filter: string;
   onPasteError(message: string | null): void;
+  /** Dragging this row to another folder. */
+  dragSupport: DragSupport;
+  /** " drop-target" while a dragged connection would land in this row's folder. */
+  dropClass: string;
 }) {
   const { t } = useTranslation("shell");
   /** The outcome of copying this connection, or of an action of its menus, under its row. */
@@ -1457,8 +1602,8 @@ function ConnectionNode({
   const foldersFirst = usePreferences((s) => s.explorer.foldersFirst);
   const sort = useSortByName();
   const shownSchemas = schemas && sort(schemas.filter((s) => showSystem || !s.system), (s) => s.name);
-  // A connection whose name matches the quick filter shows everything in it.
-  const inner = matchesFilter(connection.name, filter) ? "" : filter;
+  // A connection the quick filter finds shows everything in it.
+  const inner = connectionFound(connection, filter) ? "" : filter;
   const shownServerObjects = sort(
     serverObjects.filter((o) => (showSystem || !o.system) && matchesFilter(o.name, inner)),
     (o) => o.name,
@@ -1489,8 +1634,11 @@ function ConnectionNode({
     >
       <div
         ref={connectionRow}
-        className={`row connection-row${connectionRevealed}`}
+        className={`row connection-row${connectionRevealed}${dropClass}${dragSupport.drag?.dragging && dragSupport.drag.id === connection.id ? " dragged" : ""}`}
         tabIndex={-1}
+        data-drop-folder={folderOf(connection)}
+        data-drop-personal={String(connection.personal)}
+        {...dragSupport.rowHandlers(connection)}
         onContextMenu={(e) => {
           e.preventDefault();
           setRowMenu({ x: e.clientX, y: e.clientY });
@@ -1604,6 +1752,15 @@ function ConnectionNode({
             }}
           >
             {t("connections:copies.duplicate")}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setRowMenu(null);
+              useApp.getState().setMovingConnection(connection);
+            }}
+          >
+            {t("connections:move.menu")}
           </button>
           <button
             role="menuitem"

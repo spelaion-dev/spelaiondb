@@ -896,6 +896,8 @@ pub struct ConnectionItem {
     pub kind: Option<ConnectionTypeItem>,
     pub folders: Vec<String>,
     pub personal: bool,
+    /// The server's host name, for the explorer's search; `None` for a file database.
+    pub host: Option<String>,
     pub tunnel: Option<String>,
     pub mcp_exposed: bool,
     pub history_enabled: bool,
@@ -1303,6 +1305,8 @@ pub struct ScriptPreferencesItem {
     pub on_error: OnErrorItem,
     pub notify: bool,
     pub notify_after_seconds: u32,
+    /// Seconds before "Run anyway" is enabled in a risky statement's confirmation.
+    pub confirm_delay_seconds: u32,
 }
 
 impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
@@ -1311,6 +1315,7 @@ impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
             on_error: p.on_error.into(),
             notify: p.notify,
             notify_after_seconds: p.notify_after_seconds,
+            confirm_delay_seconds: p.confirm_delay_seconds,
         }
     }
 }
@@ -1321,6 +1326,7 @@ impl From<ScriptPreferencesItem> for spelaion_core::ScriptPreferences {
             on_error: p.on_error.into(),
             notify: p.notify,
             notify_after_seconds: p.notify_after_seconds,
+            confirm_delay_seconds: p.confirm_delay_seconds,
         }
     }
 }
@@ -2817,6 +2823,16 @@ pub struct DuplicatedItem {
     pub name: String,
     /// Its password was in the keychain and the copy has its own entry now.
     pub password_copied: bool,
+}
+
+/// A connection moved to another folder.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedItem {
+    /// Its identifier now.
+    pub id: String,
+    /// Its keychain password moved to the new identifier's entry.
+    pub password_moved: bool,
 }
 
 /// The clipboard form of a connection: no secrets, nothing that runs a program.

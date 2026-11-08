@@ -489,6 +489,39 @@ select {
   letter-spacing: 0.04em;
   color: var(--muted);
 }
+/* Dragging a connection to another folder: each part of a folder title, the "No folder" zone
+   and the rows of a folder are drop targets; the one under the pointer is marked. */
+.group-segment {
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2xs);
+}
+.tree.drag-active {
+  cursor: grabbing;
+  user-select: none;
+}
+.tree.drag-active .group-segment,
+.tree.drag-active .drop-zone {
+  outline: 1px dashed var(--line-strong);
+  outline-offset: -1px;
+}
+.drop-zone {
+  margin: var(--space-xs) var(--space-md);
+  border-radius: var(--radius-md);
+}
+.group-segment.drop-target,
+.drop-zone.drop-target {
+  background: var(--accent-soft);
+  color: var(--fg);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+/* The rows of the folder it would land in: one soft block, not a box per row. */
+.connection-row.drop-target {
+  background: var(--accent-soft);
+}
+.connection-row.dragged {
+  opacity: 0.6;
+}
 .node .children {
   padding-left: 16px;
 }

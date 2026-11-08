@@ -11,6 +11,9 @@
 //! (`.spelaion/known_hosts`) and of the team's connection types (ADR-029: every type and its
 //! name and safeguards, not its badge's tone or description). A `git pull` that changes one, or adds a new one, stops it from
 //! being used until the user has seen the change and accepted it.
+//!
+//! Moving a repository connection to another folder through the app takes its pin to the new
+//! identifier as it was ([`TrustStore::move_connection`]): a move is never a review.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -445,6 +448,37 @@ impl TrustStore {
             self.save()?;
         }
         Ok(())
+    }
+
+    /// A repository connection the user moved to another folder through the app: what was
+    /// pinned for it now belongs to its new identifier, as it was. Nothing is pinned from the
+    /// file, so a move never adds trust: a connection as trusted stays usable, a changed one
+    /// stays refused with the same difference to review, and a new one stays new. A pin left
+    /// at the new identifier by an older connection is dropped, never inherited.
+    pub fn move_connection(
+        &mut self,
+        config: &Config,
+        from: &ConnectionId,
+        to: &ConnectionId,
+    ) -> Result<(), ConfigError> {
+        let root = workspace_root(config)?;
+        if from.source != Source::Workspace || to.source != Source::Workspace {
+            return Err(ConfigError::new(
+                &root,
+                "only repository connections are pinned",
+            ));
+        }
+        let old = (root.clone(), connection_item(from));
+        let new = (root, connection_item(to));
+        match self.pins.remove(&old) {
+            Some(snapshot) => {
+                self.pins.insert(new, snapshot);
+            }
+            None => {
+                self.pins.remove(&new);
+            }
+        }
+        self.save()
     }
 
     /// Record an edit only when its original connection was already trusted.

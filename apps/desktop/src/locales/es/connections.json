@@ -394,6 +394,17 @@
     "pastedWithout": "«{{name}}» se ha pegado como conexión personal, ya guardada. Su contraseña se pide al conectar. No se ha tomado del portapapeles: {{fields}}. Revísala o cierra.",
     "clipboardUnavailable": "No se ha podido leer el portapapeles: selecciona una conexión y pulsa Ctrl+V."
   },
+  "move": {
+    "menu": "Mover a carpeta…",
+    "title": "Mover {{name}} a una carpeta",
+    "personalHint": "Su archivo se mueve dentro de tus conexiones personales. Su contraseña guardada, sus filtros y sus marcadores van con él.",
+    "projectHint": "Su archivo se mueve dentro de .spelaion/connections/ del repositorio: tu equipo verá el cambio cuando lo confirmes en git. Su contraseña guardada, sus filtros y sus marcadores van con él.",
+    "noFolder": "Sin carpeta",
+    "folderHint": "Carpetas anidadas con /, como prod/eu. Vacío para ninguna carpeta.",
+    "confirm": "Mover",
+    "moving": "Moviendo…",
+    "inUse": "Desconecta las pestañas que usan {{name}} antes de moverla."
+  },
   "engineChange": {
     "title": "Cambio de motor",
     "summary": "Motor: {{from}} → {{to}}. No se guarda nada hasta que guardes.",

@@ -187,8 +187,12 @@ function EditorSettings() {
   );
 }
 
-/** How scripts run from the editor (ADR-035): what a run does when a statement fails, and the
- *  opt-in notification when a long run finishes in the background. */
+/** Longest pause before "Run anyway" the core accepts (`ScriptPreferences::MAX_CONFIRM_DELAY`). */
+const MAX_CONFIRM_DELAY = 10;
+
+/** How scripts run from the editor (ADR-035): what a run does when a statement fails, the pause
+ *  before "Run anyway" in a risky statement's confirmation, and the opt-in notification when a
+ *  long run finishes in the background. */
 function ScriptSettings() {
   const { t } = useTranslation("settings");
   const script = usePreferences((s) => s.script);
@@ -196,6 +200,16 @@ function ScriptSettings() {
   const setScript = usePreferences((s) => s.setScript);
   const [after, setAfter] = useState(String(script.notifyAfterSeconds));
   useEffect(() => setAfter(String(script.notifyAfterSeconds)), [script.notifyAfterSeconds]);
+  const [delay, setDelay] = useState(String(script.confirmDelaySeconds));
+  useEffect(() => setDelay(String(script.confirmDelaySeconds)), [script.confirmDelaySeconds]);
+  const saveDelay = () => {
+    const seconds = Math.trunc(Number(delay));
+    if (delay.trim() !== "" && Number.isFinite(seconds) && seconds >= 0 && seconds <= MAX_CONFIRM_DELAY) {
+      if (seconds !== script.confirmDelaySeconds) void setScript({ ...script, confirmDelaySeconds: seconds });
+    } else {
+      setDelay(String(script.confirmDelaySeconds));
+    }
+  };
   const saveAfter = () => {
     const seconds = Math.trunc(Number(after));
     if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 86400) {
@@ -216,6 +230,21 @@ function ScriptSettings() {
         ))}
       </fieldset>
       <p className="muted small">{t("scripts.onErrorHint")}</p>
+      <label className="field port">
+        <span>{t("scripts.confirmDelay")}</span>
+        <input
+          type="number"
+          name="scriptConfirmDelay"
+          min={0}
+          max={MAX_CONFIRM_DELAY}
+          value={delay}
+          disabled={busy}
+          onChange={(e) => setDelay(e.target.value)}
+          onBlur={saveDelay}
+          onKeyDown={(e) => e.key === "Enter" && saveDelay()}
+        />
+      </label>
+      <p className="muted small">{t("scripts.confirmDelayHint")}</p>
       <fieldset className="settings-choice" disabled={busy}>
         <legend>{t("scripts.notifications")}</legend>
         <label className="check">

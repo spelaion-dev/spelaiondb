@@ -256,6 +256,24 @@ pub(crate) fn portable_path(path: &str, root: Option<&Path>) -> String {
     path.to_string()
 }
 
+/// The folders of a typed folder path (`Prod / EU` → `["prod", "eu"]`): each part made a slug,
+/// empty parts dropped (`""` is no folder). A part with nothing left of it is an error.
+pub(crate) fn folder_parts(folder: &str) -> Result<Vec<String>, ConfigError> {
+    let normalized = folder.trim().trim_matches('/').replace('\\', "/");
+    let mut parts = Vec::new();
+    for part in normalized.split('/').filter(|p| !p.is_empty()) {
+        let part = slug(part);
+        if part.is_empty() {
+            return Err(ConfigError::new(
+                Path::new(folder),
+                format!("invalid folder: {folder:?}"),
+            ));
+        }
+        parts.push(part);
+    }
+    Ok(parts)
+}
+
 impl ConnectionDraft {
     /// Identifier (and file path without `.toml`): `folder/slug(name)`.
     pub fn id(&self) -> Result<ConnectionId, ConfigError> {
@@ -266,18 +284,7 @@ impl ConnectionDraft {
                 "the name needs at least one letter or digit",
             ));
         }
-        let folder = self.folder.trim().trim_matches('/').replace('\\', "/");
-        let mut parts = Vec::new();
-        for part in folder.split('/').filter(|p| !p.is_empty()) {
-            let part = slug(part);
-            if part.is_empty() {
-                return Err(ConfigError::new(
-                    Path::new(&self.folder),
-                    format!("invalid folder: {:?}", self.folder),
-                ));
-            }
-            parts.push(part);
-        }
+        let mut parts = folder_parts(&self.folder)?;
         parts.push(file);
         Ok(ConnectionId {
             source: self.source,
@@ -860,6 +867,19 @@ pub fn update_connection(
     Ok(parsed)
 }
 
+/// Removes the folders a deleted or moved file at `file_path` left empty, up to (never
+/// including) `root`.
+pub(crate) fn remove_empty_folders(root: &Path, file_path: &Path) {
+    let mut dir = file_path.parent();
+    while let Some(current) = dir {
+        // `remove_dir` only removes empty directories: it stops at the first one in use.
+        if current == root || !current.starts_with(root) || std::fs::remove_dir(current).is_err() {
+            break;
+        }
+        dir = current.parent();
+    }
+}
+
 /// Deletes a connection file, its default keychain entry and the folders it leaves empty.
 pub fn delete_connection(
     config: &Config,
@@ -871,15 +891,7 @@ pub fn delete_connection(
     })?;
     std::fs::remove_file(&entry.file_path)
         .map_err(|e| ConfigError::new(&entry.file_path, format!("could not delete: {e}")))?;
-    let root = connections_dir(config, id.source)?;
-    let mut dir = entry.file_path.parent();
-    while let Some(current) = dir {
-        // `remove_dir` only removes empty directories: it stops at the first one in use.
-        if current == root || !current.starts_with(&root) || std::fs::remove_dir(current).is_err() {
-            break;
-        }
-        dir = current.parent();
-    }
+    remove_empty_folders(&connections_dir(config, id.source)?, &entry.file_path);
     if uses_default_keychain(&entry.file) {
         let account = connection_account(config, &entry.id);
         crate::secrets::forget(backend, &account).map_err(|message| ResolveError::Secret {

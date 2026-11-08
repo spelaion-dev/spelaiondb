@@ -546,6 +546,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
                 .map(ConnectionTypeItem::from),
             folders: c.folders().into_iter().map(String::from).collect(),
             personal: c.id.source == Source::User,
+            host: c.file.host.clone(),
             tunnel: c.file.tunnel.clone(),
             mcp_exposed: c.file.mcp.exposed,
             history_enabled,
@@ -1051,6 +1052,60 @@ async fn duplicate_connection(
         id: duplicated.id.to_string(),
         name: duplicated.name,
         password_copied: duplicated.password_copied,
+    })
+}
+
+/// Moves a connection to another folder (`""` for none) in its layer. The core moves its
+/// file, its keychain password and, for a repository connection, what trust pinned for it,
+/// without adding any (ADR-022); its explorer filter, bookmarks, history setting and saved
+/// tabs follow. A connection in use is not moved: the UI disconnects it first.
+#[tauri::command]
+#[specta::specta]
+async fn move_connection(
+    connection: String,
+    folder: String,
+    state: State<'_, AppState>,
+) -> CmdResult<MovedItem> {
+    let id = parse_id(&connection);
+    let in_use = state
+        .sessions
+        .lock()
+        .await
+        .values()
+        .any(|session| session.open.resolved.id == id);
+    if in_use {
+        return Err("the connection is in use: disconnect it before moving it".into());
+    }
+    // Tabs waiting to be written carry the old identifier: written first, then moved with it.
+    state.tabs.flush().await.map_err(|e| e.to_string())?;
+    let (moved, workspace) = {
+        let config = state.config.read().await;
+        let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+        let moved =
+            spelaion_config::move_connection(&config, &mut trust, &id, &folder, &SystemBackend)
+                .map_err(|e| e.to_string())?;
+        let workspace = match id.source {
+            Source::User => None,
+            Source::Workspace => Some(history_workspace(&config, Source::Workspace)),
+        };
+        (moved, workspace)
+    };
+    let to = moved.id.to_string();
+    let settings = if moved.id == id {
+        Ok(())
+    } else {
+        state
+            .history
+            .move_connection(workspace, connection, to.clone())
+            .await
+    };
+    state.reload().await;
+    // The file is where the user put it: settings that could not follow are said, not undone.
+    settings
+        .map_err(|e| format!("the connection moved, but its explorer settings did not: {e}"))?;
+    Ok(MovedItem {
+        id: to,
+        password_moved: moved.password_moved,
     })
 }
 
@@ -4214,6 +4269,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             delete_connection,
             change_connection_engine,
             duplicate_connection,
+            move_connection,
             copy_connection,
             paste_connection,
             get_connection_name_pattern,

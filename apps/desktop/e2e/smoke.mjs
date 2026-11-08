@@ -359,14 +359,77 @@ try {
   });
   await setTheme("light", "light");
 
+  let panel;
   step("trust the repository");
   await page.getByRole("button", { name: "Review and trust" }).click();
   await page.getByRole("dialog").getByText("Trust this repository?").waitFor();
   await shot("02-trust");
   await page.getByRole("button", { name: "Trust", exact: true }).click();
 
+  step("connection search: a typo in the name, or the type, finds the connection");
+  await page.keyboard.press("Control+Shift+F");
+  const connectionFilter = page.getByRole("searchbox", { name: "Filter the explorer" });
+  await connectionFilter.fill("shpo");
+  await page.locator(".connection-row", { hasText: "Shop (SQLite)" }).waitFor();
+  assert.equal(await page.locator(".connection-row").count(), 1, "only Shop matches a typo of its name");
+  await shot("sdb-13-search-typo");
+  // The type's name finds every connection of that type (Production: the one behind bastions).
+  await connectionFilter.fill("production");
+  await page.locator(".connection-row", { hasText: "Postgres behind bastions" }).waitFor();
+  assert.equal(await page.locator(".connection-row").count(), 1);
+  await connectionFilter.fill("");
+  await page.keyboard.press("Escape");
+  await connectionFilter.waitFor({ state: "detached" });
+
+  step("move a repository connection between folders: drag and drop, Move to folder…, still trusted");
+  const shopBefore = readFileSync(shopFile, "utf8");
+  const movedShop = join(demo, ".spelaion", "connections", "docker", "shop.toml");
+  const nestedShop = join(demo, ".spelaion", "connections", "docker", "eu", "shop.toml");
+  // Drags with real pointer events: press on the name, move past the threshold, drop on target.
+  async function dragConnection(name, target) {
+    const label = page.locator(".connection-row", { hasText: name }).locator(".label");
+    const from = await label.boundingBox();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 + 12, { steps: 3 });
+    const to = await target().boundingBox();
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 8 });
+    await target().and(page.locator(".drop-target")).waitFor();
+  }
+  const dockerTitle = () => page.locator('.group-segment[data-drop-folder="docker"][data-drop-personal="false"]');
+  await dragConnection("Shop (SQLite)", dockerTitle);
+  await shot("sdb-13-dragging");
+  await page.mouse.up();
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll(".group-title")].some(
+      (title) => title.textContent === "docker" && title.parentElement?.textContent?.includes("Shop (SQLite)"),
+    ),
+  );
+  assert.ok(existsSync(movedShop) && !existsSync(shopFile), "the file moved into docker/");
+  assert.equal(readFileSync(movedShop, "utf8"), shopBefore, "byte for byte");
+  await shot("sdb-13-dropped");
+  // It keeps working, and is still trusted: the explorer connects with no review of a change.
+  await page.getByRole("button", { name: "Expand or collapse Shop (SQLite)", exact: true }).click();
+  await page.getByRole("button", { name: "Expand or collapse schema main", exact: true }).waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "This changed since you trusted the repository" }).count(), 0);
+  // Into a new nested folder from the dialog; the explorer's own session closes for the move.
+  await (await connectionMenu("Shop (SQLite)")).getByRole("button", { name: "Move to folder…" }).click();
+  const moveDialog = page.getByRole("dialog", { name: "Move Shop (SQLite) to a folder" });
+  await moveDialog.getByLabel("Folder", { exact: true }).fill("docker/eu");
+  await shot("sdb-13-move-dialog");
+  await moveDialog.getByRole("button", { name: "Move", exact: true }).click();
+  await moveDialog.waitFor({ state: "detached" });
+  await page.locator('.group-segment[data-drop-folder="docker/eu"]').waitFor();
+  assert.ok(existsSync(nestedShop) && !existsSync(movedShop));
+  // Back to no folder by dragging it onto "No folder"; the empty folders go.
+  await dragConnection("Shop (SQLite)", () => page.locator('.drop-zone[data-drop-folder=""]'));
+  await page.mouse.up();
+  await page.locator('.group-segment[data-drop-folder="docker/eu"]').waitFor({ state: "detached" });
+  assert.ok(existsSync(shopFile) && !existsSync(join(demo, ".spelaion", "connections", "docker", "eu")));
+  assert.equal(readFileSync(shopFile, "utf8"), shopBefore);
+
   step("SQLite: aggregation");
-  let panel = await newQuery(
+  panel = await newQuery(
     "Shop (SQLite)",
     "select c.country, count(*) as orders, round(sum(o.total), 2) as total\nfrom orders o\njoin customer c on c.id = o.customer_id\ngroup by c.country\norder by total desc;",
   );
@@ -1213,11 +1276,29 @@ try {
   await page.keyboard.press("Enter");
   await risk.waitFor({ state: "detached" });
   await panel.locator(".result-tabs button", { hasText: "Result 3" }).waitFor();
+  // A personal pause before "Run anyway" (Settings → Scripts): the button counts down first.
+  await withSettings("scripts", async (settings) => {
+    const delay = settings.locator('input[name="scriptConfirmDelay"]');
+    await delay.fill("2");
+    await delay.press("Enter");
+    await page.waitForFunction(() => !document.querySelector('input[name="scriptConfirmDelay"]')?.matches(":disabled"));
+  });
   await actions.getByRole("button", { name: "Run script", exact: true }).click();
   risk = page.getByRole("dialog", { name: "Run these statements?" });
+  const runAnyway = risk.getByRole("button", { name: /^Run anyway/ });
+  assert.match(await runAnyway.innerText(), /^Run anyway \([12]\)$/);
+  assert.ok(await runAnyway.isDisabled(), "disabled during the pause");
+  await shot("sdb-13-run-anyway-pause");
+  await risk.getByRole("button", { name: "Run anyway", exact: true }).waitFor();
   await shot("05d-risky-statements");
-  await risk.getByRole("button", { name: "Run anyway" }).click();
+  await risk.getByRole("button", { name: "Run anyway", exact: true }).click();
   await risk.waitFor({ state: "detached" });
+  await withSettings("scripts", async (settings) => {
+    const delay = settings.locator('input[name="scriptConfirmDelay"]');
+    await delay.fill("0");
+    await delay.press("Enter");
+    await page.waitForFunction(() => !document.querySelector('input[name="scriptConfirmDelay"]')?.matches(":disabled"));
+  });
   await panel.getByText("Statement 3: 2 rows", { exact: false }).waitFor();
 
   step("script runs: continue, ask (skip, stop), the summary, and the guard in every mode");

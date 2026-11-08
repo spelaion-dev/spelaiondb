@@ -195,8 +195,8 @@ to an action that is also in a context menu, never its only way in.
 | Tab bar (connection row) | what the tab is connected to and its state | connection and database pickers, status with Reconnect, type badge, transaction controls; Refresh / Cancel on table tabs |
 | Results toolbar and grid | the active result and its selection | result tabs, filter, Export…, maximize; row edits with Save changes / Discard above the grid; copy, sort and filters in the grid's menus; in a table data tab, a foreign key cell's link and Open referenced row, and the side panel's references of the active row; the side panel's selection numbers (also in the cell menu); in a table data tab, Column statistics in the header menu |
 | Tab strip | tabs and files | new tab, the file menu (Open…, recent files: the app has no menu bar), each tab's context menu |
-| Explorer header | the explorer itself | link with editor, connected only, quick filter, add connection |
-| Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create, Rename…, Drop… (last, red) |
+| Explorer header | the explorer itself | link with editor, connected only, quick filter (finds connections by name, tag, type or host, forgiving a typo), add connection |
+| Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create, Move to folder… (also by dragging the connection onto a folder title), Rename…, Drop… (last, red) |
 | Activity bar | panels and pages | explorer, processes; history, saved queries, MCP and Settings at the bottom |
 | Settings | preferences for every workspace | applied and saved as they change, with no Save button |
 | Command palette | every app command, and the actions of connections and loaded objects | Ctrl+Shift+P: commands with their shortcuts, connections, the explorer's loaded objects (open data, open structure, new console, copy names, show in explorer) and recent files |

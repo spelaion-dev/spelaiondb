@@ -97,6 +97,15 @@ export function ConnectionMenu({
             {t("connections:copies.duplicate")}
           </button>
           <button
+            className="menu-item"
+            onClick={() => {
+              setOpen(false);
+              useApp.getState().setMovingConnection(connection);
+            }}
+          >
+            {t("connections:move.menu")}
+          </button>
+          <button
             className="menu-item danger-text"
             onClick={() => {
               setOpen(false);

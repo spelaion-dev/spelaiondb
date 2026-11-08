@@ -244,6 +244,8 @@ interface AppStore {
   connectionDialog: ConnectionDialog | null;
   /** Connection waiting for the user to confirm its deletion. */
   deletingConnection: ConnectionItem | null;
+  /** The connection whose "Move to folder…" dialog is open. */
+  movingConnection: ConnectionItem | null;
   historyRevision: number;
   historySaving: string[];
   workspaceChanging: boolean;
@@ -305,6 +307,7 @@ interface AppStore {
   closeSettings(): void;
   setConnectionDialog(dialog: ConnectionDialog | null): void;
   setDeletingConnection(connection: ConnectionItem | null): void;
+  setMovingConnection(connection: ConnectionItem | null): void;
   refreshHistory(): void;
   setHistorySaving(connection: string, saving: boolean): void;
   setWorkspaceChanging(changing: boolean): void;
@@ -338,6 +341,7 @@ export const useApp = create<AppStore>((set) => ({
   settingsOpen: false,
   connectionDialog: null,
   deletingConnection: null,
+  movingConnection: null,
   historyRevision: 0,
   historySaving: [],
   workspaceChanging: false,
@@ -503,6 +507,7 @@ export const useApp = create<AppStore>((set) => ({
   refreshSnippets: () => set((s) => ({ snippetsRevision: s.snippetsRevision + 1 })),
   setConnectionDialog: (connectionDialog) => set({ connectionDialog }),
   setDeletingConnection: (deletingConnection) => set({ deletingConnection }),
+  setMovingConnection: (movingConnection) => set({ movingConnection }),
   openSettings: () => set({ settingsOpen: true }),
   closeSettings: () => set({ settingsOpen: false }),
   refreshHistory: () => set((s) => ({ historyRevision: s.historyRevision + 1 })),
