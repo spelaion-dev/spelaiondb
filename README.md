@@ -174,6 +174,7 @@ The gear button at the bottom of the sidebar (or `Ctrl+,`) opens **Settings** in
 - **Language:** English, Spanish or the system language. Translations are bundled with the
   application and work offline. Database and SSH server messages are shown as received.
 - **History:** what query history stores and where to turn it off.
+- **Editor:** whether restored tabs connect again at startup (off by default).
 
 Preferences are stored in the personal `state.db` and apply to every workspace.
 
@@ -296,14 +297,52 @@ connections that must never change.
 | Ctrl+Enter | Run the selection or the statement under the cursor |
 | Ctrl+Shift+Enter | Run the whole script |
 | Shift+Alt+F | Format the selection or the script |
-| Ctrl+S | Save the SQL as a named query |
+| Ctrl+S | Save the file of a file tab; in a console, save the SQL as a named query |
+| Ctrl+O | Open a `.sql` file in a new tab |
+| Ctrl+Shift+S | Save the tab as a `.sql` file (a console becomes a file tab) |
 | Ctrl+T / Ctrl+W | New query tab / close the tab (its connection and results are freed) |
-| Ctrl+Shift+T | Reopen the last closed tab with its SQL |
-| Ctrl+Tab, Ctrl+Shift+Tab | Next / previous tab (also Ctrl+PageDown / Ctrl+PageUp) |
+| Ctrl+Shift+T | Reopen the last closed tab with its SQL, connection and name (disconnected) |
+| Ctrl+Tab, Ctrl+Shift+Tab | Switch to a recently used tab: keep Ctrl down, press Tab to move, release to switch |
+| Ctrl+PageDown / Ctrl+PageUp | Next / previous tab in the bar |
+| Ctrl+Shift+PageDown / PageUp | Move the tab right / left |
+| Ctrl+F2 (F2 on a focused tab) | Rename the tab |
+| Ctrl+Alt+D / Ctrl+Alt+P | Duplicate / pin or unpin the tab |
+| Ctrl+Alt+W / Ctrl+Alt+R / Ctrl+Shift+W | Close the other tabs / the tabs to the right / all tabs |
+| Ctrl+Alt+M | Maximize or restore the results panel |
 | Ctrl+, | Settings |
 | Ctrl+C, Ctrl+Shift+C | Copy the grid selection (with headers) |
 | Enter, Esc | Open / close the cell viewer |
 | Ctrl+Shift+J | Jump to a column of the result by name |
+
+### Tabs
+
+Right-click a tab (or press Shift+F10 on it) to rename, duplicate, pin or close it, or to
+close the others, the ones to its right or all of them. Double-click a tab to rename it, drag
+it to reorder, and middle-click it to close it. A spinner on the tab shows that its query is
+running.
+
+Closing tabs asks once, listing every tab whose transaction the server would roll back and
+every tab whose running query would be cancelled. Pinned tabs sort first and stay open when
+you close the others, the ones to the right or all; their × becomes an unpin button so a stray
+click never closes one, but closing that tab itself (Ctrl+W or **Close** in its menu) does.
+A reopened tab brings back its SQL, connection and name, never its results or session: it
+starts disconnected and runs nothing until you do.
+
+### SQL files and tabs that survive a restart
+
+**Ctrl+O** (or the folder button next to **+**) opens a `.sql` file in a tab named after it;
+the same button lists the recent files. **Ctrl+S** saves it, keeping its encoding (UTF-8 with
+or without a BOM, UTF-16, Windows-1252) and its line endings; **Ctrl+Shift+S** saves any tab as
+a file. A ● on the tab marks unsaved changes, and closing it asks to save them. If the file
+changed on disk since it was opened (a `git pull`, another editor), saving asks before
+overwriting it. Files are written whole or not at all (a temporary file, then a rename).
+
+Open tabs, consoles and files alike, come back after a restart or a crash (losing at most the
+last second of typing), with their text, name and connection, and unsaved changes still
+unsaved. They come back **disconnected** and never with their results: nothing runs on its
+own. A tab whose connection was deleted keeps its text and says so. Each folder keeps its own
+tabs. **Settings → Editor → Reconnect the last connections at startup** connects the restored
+tabs (it may ask for a password), and still runs nothing.
 
 ## Working with results
 
@@ -381,7 +420,13 @@ anything that reaches files or other servers are always refused, and read-only c
 never let agents write. Every engine is served (PostgreSQL, MySQL, MariaDB, SQL Server,
 SQLite and DuckDB), each behind its own read-only barrier (ADR-020); for DuckDB, agents never
 reach files or the network. A read-only database user is still the safest choice for agents
-that only read. Install the binary and add it to Claude Code:
+that only read. One switch makes every agent read-only, whatever each connection allows
+(ADR-033; `spelaiondb mcp --read-only` does the same for one server). Query rows come back as
+JSON or as compact TOON (`output_format`, or your default). The app's **MCP server** page
+(the chip icon above Settings) sets it up in Claude Desktop, Claude Code, Codex, Cursor,
+Windsurf and Antigravity with one click: it shows the change to the client's file first, keeps
+a backup, and touches only its own entry. The installers ship the `spelaiondb` command next to
+the app. Without the app, install the binary and add it to Claude Code:
 
 ```bash
 cargo install --path apps/cli
@@ -391,7 +436,8 @@ cargo install --path apps/cli
 claude mcp add spelaiondb -- spelaiondb mcp
 ```
 
-Every query and write, run or refused, is recorded: `spelaiondb audit`.
+Every tool call, run or refused, is recorded on your computer: the MCP page's Activity tab
+shows, filters, exports and clears it (secrets masked), and so does `spelaiondb audit`.
 
 - Architecture: [`docs/architecture.md`](docs/architecture.md)
 - Decisions: [`docs/adr/`](docs/adr/README.md)

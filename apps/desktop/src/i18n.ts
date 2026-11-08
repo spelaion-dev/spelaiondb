@@ -10,6 +10,8 @@ import enConnections from "./locales/en/connections.json";
 import esConnections from "./locales/es/connections.json";
 import enSettings from "./locales/en/settings.json";
 import esSettings from "./locales/es/settings.json";
+import enMcp from "./locales/en/mcp.json";
+import esMcp from "./locales/es/mcp.json";
 
 export type LanguagePreference = "system" | "en" | "es";
 
@@ -28,14 +30,14 @@ export function applyLanguage(preference: LanguagePreference): Promise<unknown> 
 
 void i18n.use(initReactI18next).init({
   resources: {
-    en: { app: enApp, connections: enConnections, editor: enEditor, settings: enSettings, shell: enShell },
-    es: { app: esApp, connections: esConnections, editor: esEditor, settings: esSettings, shell: esShell },
+    en: { app: enApp, connections: enConnections, editor: enEditor, mcp: enMcp, settings: enSettings, shell: enShell },
+    es: { app: esApp, connections: esConnections, editor: esEditor, mcp: esMcp, settings: esSettings, shell: esShell },
   },
   lng: systemLanguage(),
   fallbackLng: "en",
   supportedLngs: ["en", "es"],
   nonExplicitSupportedLngs: true,
-  ns: ["app", "connections", "editor", "settings", "shell"],
+  ns: ["app", "connections", "editor", "mcp", "settings", "shell"],
   defaultNS: "app",
   initAsync: false,
   interpolation: { escapeValue: false }, // React escapes interpolated text when rendering.

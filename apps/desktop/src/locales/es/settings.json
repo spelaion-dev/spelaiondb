@@ -11,7 +11,12 @@
     "system": "Igual que el sistema",
     "light": "Claro",
     "dark": "Oscuro",
-    "hint": "Se aplica a todos los espacios de trabajo y se guarda en tu configuración personal."
+    "hint": "Se aplica a todos los espacios de trabajo y se guarda en tu configuración personal.",
+    "grid": "Rejilla de resultados",
+    "zebra": "Filas alternas sombreadas",
+    "nullText": "Mostrar NULL como texto (desactivado: celda vacía)",
+    "boolCheckboxes": "Mostrar los booleanos como casillas",
+    "gridHint": "Solo cambia cómo se dibujan las celdas: al copiar y exportar se conservan los valores."
   },
   "language": {
     "title": "Idioma",
@@ -30,6 +35,75 @@
     "sortingHint": "Sin orden alfabético, los nombres siguen el orden que devuelve la base de datos. Las columnas mantienen siempre el orden de su tabla. Carpetas primero pone los roles, usuarios y similares antes de los esquemas.",
     "serverSideFilters": "Usar filtros en el servidor",
     "serverSideFiltersHint": "Los filtros de una conexión van dentro de las consultas al catálogo de la base de datos, así un servidor con miles de esquemas o tablas solo envía lo que los pasa. Desactivado, se leen todos los nombres y se filtran en este equipo; lo que ves es lo mismo."
+  },
+  "connections": {
+    "title": "Conexiones",
+    "namePattern": "Nombre de las conexiones nuevas",
+    "namePatternIntro": "El formulario de nueva conexión pone este patrón como nombre mientras lo rellenas, hasta que escribas un nombre propio.",
+    "pattern": "Patrón",
+    "variables": "Variables",
+    "variable": {
+      "host": "El nombre del servidor",
+      "port": "El puerto (el del motor si se deja vacío)",
+      "database": "La base de datos, o el nombre de un archivo sin su extensión",
+      "user": "El usuario",
+      "engine": "El nombre del motor, como PostgreSQL",
+      "env": "El id del tipo de conexión, tal como se eligió (dev, test, prod…)",
+      "file": "El nombre de un archivo de SQLite o DuckDB"
+    },
+    "syntax": "Pulsa una variable para añadirla. {a|b} toma la primera que tenga valor; una llave doble escribe una llave. Un patrón vacío no sugiere nombre.",
+    "unknown": "Variables desconocidas: {{names}}",
+    "preview": "Vista previa",
+    "previewServer": "Un servidor PostgreSQL",
+    "previewFile": "Un archivo SQLite",
+    "previewEmpty": "(sin nombre)",
+    "save": "Guardar",
+    "reset": "Volver al predeterminado",
+    "saved": "Guardado.",
+    "hint": "Solo para conexiones nuevas: al editar y al importar de DBeaver se mantienen sus nombres."
+  },
+  "types": {
+    "title": "Tipos de conexión",
+    "intro": "El tipo de una conexión se muestra como una insignia junto a la conexión y en su editor, y le da salvaguardas. Los tipos del proyecto se comparten con tu equipo; puedes añadir los tuyos y cambiar la insignia de cualquiera solo para ti. Las salvaguardas solo se suman: puedes activar una, pero no desactivar una que active el proyecto o Producción.",
+    "builtIn": "integrado",
+    "team": "proyecto",
+    "personal": "personal",
+    "changedByYou": "cambiado por ti",
+    "edit": "Editar…",
+    "delete": "Eliminar",
+    "reset": "Deshacer mis cambios",
+    "new": "Nuevo tipo…",
+    "newTitle": "Nuevo tipo de conexión",
+    "editTitle": "Tipo de conexión {{name}}",
+    "overrideHint": "Tus cambios se guardan en tu configuración personal y solo se aplican en este equipo.",
+    "id": "Id",
+    "name": "Nombre",
+    "tone": "Tono de la insignia",
+    "toneDefault": "Por defecto ({{tone}})",
+    "tones": {
+      "neutral": "Gris",
+      "green": "Verde",
+      "blue": "Azul",
+      "amber": "Ámbar",
+      "red": "Rojo"
+    },
+    "preview": "Insignia",
+    "description": "Descripción",
+    "safeguards": "Salvaguardas",
+    "confirmExecution": "Preguntar antes de ejecutar cualquier SQL",
+    "confirmDataChanges": "Preguntar antes de cambiar datos",
+    "manualCommit": "Abrir las pestañas del editor sin auto-commit",
+    "manualCommitHint": "Los cambios esperan a Commit o Rollback; la pestaña puede activar auto-commit.",
+    "smartCommit": "Smart commit: pasar a confirmación manual en el primer cambio",
+    "smartCommitHint": "La primera sentencia que cambia datos abre una transacción que espera a Commit o Rollback; después la pestaña vuelve a auto-commit.",
+    "closeIdle": "Cerrar conexiones inactivas tras (minutos)",
+    "closeIdleHint": "Nada se reconecta ni se vuelve a ejecutar solo. Una conexión con una transacción abierta nunca se cierra.",
+    "never": "nunca",
+    "closesAfter": "se cierra tras {{minutes}} min inactiva",
+    "noSafeguards": "Sin salvaguardas",
+    "inheritedHint": "Las salvaguardas en gris las activa el proyecto o Producción y no se pueden desactivar.",
+    "cancel": "Cancelar",
+    "save": "Guardar"
   },
   "history": {
     "title": "Historial",
@@ -71,5 +145,25 @@
     "installing": "Instalando…",
     "hint": "Las actualizaciones van firmadas y solo se instalan cuando pulsas «Instalar y reiniciar». Las pestañas abiertas vuelven con su SQL, sin ejecutarlo.",
     "error": "No se pudo buscar actualizaciones:"
+  },
+  "scripts": {
+    "title": "Scripts",
+    "onError": "Cuando una sentencia falla",
+    "mode": {
+      "stop": "Detener el script",
+      "continue": "Seguir con la siguiente sentencia",
+      "ask": "Preguntar: detener, saltar o saltar todos"
+    },
+    "onErrorHint": "Cada pestaña del editor puede elegir otro modo para sus ejecuciones. Una ejecución cancelada siempre se detiene, igual que una sentencia fallida que abortó o deshizo su transacción. Las sentencias peligrosas se siguen confirmando antes de ejecutar.",
+    "notifications": "Notificaciones",
+    "notify": "Avisarme cuando termine una ejecución larga con la aplicación en segundo plano",
+    "notifyAfter": "Solo ejecuciones de más de (segundos)",
+    "notifyHint": "La notificación dice qué pestaña terminó y si algo falló; nunca incluye SQL ni datos."
+  },
+  "editor": {
+    "title": "Editor",
+    "restoreHint": "Las pestañas abiertas vuelven tras reiniciar con su texto y su conexión, desconectadas: consolas y archivos, incluidos los cambios sin guardar. Sus resultados nunca se guardan.",
+    "reconnect": "Volver a conectar las últimas conexiones al arrancar",
+    "reconnectHint": "Solo conecta (puede pedir una contraseña); nada se ejecuta solo."
   }
 }

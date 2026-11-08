@@ -11,7 +11,12 @@ import {
   type ColumnItem,
   type ConnectionDraftItem_Deserialize,
   type ConnectionItem_Serialize,
+  type ConnectionTypeDraft_Deserialize,
+  type ConnectionTypeItem_Serialize,
+  type TransactionStatusItem_Serialize,
   type EngineItem_Serialize,
+  type EngineChangeItem_Serialize,
+  type NamePatternPreview_Serialize,
   type HopDraftItem_Deserialize,
   type SshAuthItem,
   type TunnelDraftItem_Deserialize,
@@ -29,6 +34,7 @@ import {
   type ObjectItem_Serialize,
   type ObjectPathItem,
   type ExplorerPreferencesItem,
+  type GridPreferencesItem,
   type ExplorerFilterItem,
   type NameFilterItem,
   type NewIndexKindItem,
@@ -53,6 +59,7 @@ import {
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
   type FilterOpItem,
+  type NameStyleItem,
   type SqlTemplateItem,
   type SnippetItem,
   type TextFormat,
@@ -61,11 +68,37 @@ import {
   type UrlFields_Serialize,
   type PasswordMode,
   type WorkspaceInfo_Serialize,
+  type ConnectionTestOutcome_Serialize,
+  type TestReportItem,
+  type TestStepItem,
+  type McpAccessItem_Serialize,
+  type McpClientItem_Serialize,
+  type McpClientsItem_Serialize,
+  type McpInstallPlanItem,
+  type McpSettingsItem,
+  type ToolOutputItem,
+  type AuditEventItem_Serialize,
+  type AuditSessionItem,
+  type AuditStatusItem,
+  type ErrorAnswerItem,
+  type OnErrorItem,
+  type RunOptionsItem_Deserialize,
+  type ScriptPreferencesItem,
+  type ScriptSummaryItem_Deserialize,
+  type FileFormatItem,
+  type OpenTabItem_Deserialize,
+  type RecentFileItem,
+  type RestoreNoteItem,
+  type RestoredTabsItem_Serialize,
+  type SaveFileOutcome,
+  type SqlFileItem,
 } from "./bindings";
 
 export { commands, events };
 export type { ImportReport, KubernetesDraftItem };
-export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
+export type EngineChangeItem = EngineChangeItem_Serialize;
+export type NamePatternPreview = NamePatternPreview_Serialize;
+export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
 export type HopDraft = HopDraftItem_Deserialize;
 export type TunnelDraft = TunnelDraftItem_Deserialize;
 export type ProxyDraft = ProxyDraftItem_Deserialize;
@@ -73,6 +106,9 @@ export type NetworkProfileItem = NetworkProfileItem_Serialize;
 export type ConnectionDraft = ConnectionDraftItem_Deserialize;
 export type EngineItem = EngineItem_Serialize;
 export type ConnectionItem = ConnectionItem_Serialize;
+export type ConnectionTypeItem = ConnectionTypeItem_Serialize;
+export type TransactionStatusItem = TransactionStatusItem_Serialize;
+export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
 export type DbeaverItem = DbeaverItem_Serialize;
 export type KubePort = KubePortItem_Serialize;
 export type DbeaverScan = DbeaverScan_Serialize;
@@ -82,6 +118,7 @@ export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
 export type ObjectItem = ObjectItem_Serialize;
 export type ExplorerPreferences = ExplorerPreferencesItem;
+export type GridPreferences = GridPreferencesItem;
 export type ExplorerFilter = ExplorerFilterItem;
 export type NameFilter = NameFilterItem;
 export type { BookmarkItem, CreateKindItem, FilterActionItem, FilterKindItem, NewIndexKindItem, ObjectActionsItem, ObjectChangeItem, ObjectPathItem, ObjectTargetItem };
@@ -94,9 +131,26 @@ export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
 export type IndexDetails = TableDetails["indexes"][number];
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
+export type McpAccessItem = McpAccessItem_Serialize;
+export type McpClientItem = McpClientItem_Serialize;
+export type McpClientsItem = McpClientsItem_Serialize;
+export type { McpInstallPlanItem, McpSettingsItem, ToolOutputItem };
+export type AuditEventItem = AuditEventItem_Serialize;
+export type { AuditSessionItem, AuditStatusItem };
 export type UpdateStatus = UpdateStatus_Serialize;
-/** What `connect` and `testConnection` return. */
+/** What `connect` returns. */
 export type ConnectResult = ConnectOutcome_Serialize;
+/** What `testConnection` returns; its steps arrive through a channel (ADR-032). */
+export type ConnectionTestResult = ConnectionTestOutcome_Serialize;
+export type { TestReportItem, TestStepItem };
+export type { ErrorAnswerItem, OnErrorItem, ScriptPreferencesItem };
+/** How one run goes (ADR-035). */
+export type RunOptionsItem = RunOptionsItem_Deserialize;
+export type ScriptSummaryItem = ScriptSummaryItem_Deserialize;
+/** `.sql` files and the open tabs kept between runs (ADR-036). */
+export type { FileFormatItem, RecentFileItem, RestoreNoteItem, SaveFileOutcome, SqlFileItem };
+export type OpenTabItem = OpenTabItem_Deserialize;
+export type RestoredTabsItem = RestoredTabsItem_Serialize;
 
 type Typed<T> = { status: "ok"; data: T } | { status: "error"; error: string };
 

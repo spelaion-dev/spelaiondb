@@ -78,6 +78,19 @@ pub struct ConnectParams {
     /// The database is on another machine and is reached by running a program there
     /// (SQLite on a server, ADR-018); `database` is its path on that machine.
     pub remote: Option<Remote>,
+    /// How long connecting may take: the TCP connection, TLS and the login. `None` for
+    /// [`ConnectParams::DEFAULT_CONNECT_TIMEOUT`] (ADR-032).
+    pub connect_timeout: Option<std::time::Duration>,
+}
+
+impl ConnectParams {
+    pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+    /// The connect timeout that applies.
+    pub fn connect_timeout(&self) -> std::time::Duration {
+        self.connect_timeout
+            .unwrap_or(Self::DEFAULT_CONNECT_TIMEOUT)
+    }
 }
 
 /// Connection encryption. Same names and meaning as libpq's `sslmode`.
@@ -155,6 +168,14 @@ pub trait Connection: Send + Sync {
     /// do not support it: an idle session in a forgotten transaction must not be kept alive.
     async fn keep_alive(&self) -> Result<KeepAlive> {
         Err(DriverError::Other("this engine has no keep-alive".into()))
+    }
+    /// Whether a transaction is open on this session, as the server says it (ADR-031). Where the
+    /// protocol carries it, no round trip is made. Engines that cannot tell do not support it:
+    /// the session then stays in auto-commit.
+    async fn transaction_state(&self) -> Result<TransactionState> {
+        Err(DriverError::Other(
+            "this engine cannot tell whether a transaction is open".into(),
+        ))
     }
     /// The connection is known to be closed (the server ended it, the network dropped it),
     /// without asking the server.
@@ -267,6 +288,17 @@ pub enum KeepAlive {
     Alive,
     /// A transaction is open: the core sends no more keep-alives until the session is used.
     InTransaction,
+}
+
+/// What [`Connection::transaction_state`] found (ADR-031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    /// No transaction is open: each statement commits as it runs.
+    Idle,
+    /// A transaction is open: its changes wait for `COMMIT` or `ROLLBACK`.
+    Open,
+    /// A transaction is open but failed: the engine will only roll it back.
+    Failed,
 }
 
 #[async_trait]

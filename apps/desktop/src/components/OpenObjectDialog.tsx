@@ -99,14 +99,15 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             e.preventDefault();
+            e.stopPropagation();
             onClose();
-          } else if (e.key === "ArrowDown") {
+          } else if (e.target instanceof HTMLInputElement && e.key === "ArrowDown") {
             e.preventDefault();
             setActive((i) => Math.min(i + 1, found.length - 1));
-          } else if (e.key === "ArrowUp") {
+          } else if (e.target instanceof HTMLInputElement && e.key === "ArrowUp") {
             e.preventDefault();
             setActive((i) => Math.max(i - 1, 0));
-          } else if (e.key === "Enter") {
+          } else if (e.target instanceof HTMLInputElement && e.key === "Enter") {
             e.preventDefault();
             choose(found[active]);
           }

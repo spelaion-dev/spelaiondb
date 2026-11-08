@@ -3,12 +3,16 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+pub mod audit;
 mod catalog;
 mod classify;
+mod conn_test;
 mod cursor;
 mod edit;
 mod export;
+mod export_stream;
 mod filter;
+mod find;
 mod generate;
 mod guard;
 mod health;
@@ -16,27 +20,46 @@ mod history;
 pub mod kube;
 mod objects;
 mod open;
+mod open_tabs;
 mod params;
 mod processes;
 mod query_page;
 mod readonly;
 mod results;
+mod script;
 mod session;
 mod sort;
+mod sql_file;
 mod table_data;
+mod transaction;
 mod write;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use classify::{ReadKind, classify_read_only};
+pub use conn_test::{
+    FailureKind, REDACTED, Redactor, StepFailure, StepKind, StepObserver, StepStatus, TestOptions,
+    TestReport, TestScope, TestStep, classify_driver, classify_ssh, test_connection,
+    test_network_profile,
+};
 pub use cursor::statement_at;
 pub use edit::{
     CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements,
     editable_query_source, editable_query_table,
 };
-pub use export::{ExportFormat, ExportOptions, GenericDialect, export_to_file, write_result};
+pub use export::{
+    CopyError, CsvOptions, ExportFormat, ExportOptions, FileSummary, GenericDialect, MAX_IN_LIST,
+    NameStyle, TextEncoding, column_in_list, column_names, export_to_file, formula_escaped,
+    write_result,
+};
+pub use export_stream::{
+    DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, RerunCheck,
+    StreamExport, TableSource, TablesError, export_query, export_table, export_tables, file_name,
+    follow_session_context, rerun_check,
+};
 pub use filter::{ColumnFilter, FilterOp};
+pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
-pub use guard::{Risk, RiskyStatement, script_risks};
+pub use guard::{NeedsConfirmation, Risk, RiskyStatement, check_script, script_risks};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, QueryHistory};
 pub use objects::{
@@ -48,19 +71,38 @@ pub use objects::{
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,
 };
+pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
 pub use params::{ParamError, bind_params, script_params};
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use results::{ResultId, ResultStore, StoredResult};
-pub use session::{CoreEvent, Session, StatementError};
-pub use sort::{SortKey, ViewError};
-pub use spelaion_store::{Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind};
-pub use spelaion_store::{HistoryEntry, Snippet};
-pub use table_data::{
-    MAX_PAGE_ROWS, PageError, TablePage, count_table_rows, table_count_sql, table_page_sql,
+pub use session::{
+    AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
+    ScriptSummary, Session, StatementError,
 };
-pub use write::{WriteError, WriteLimits, WriteResult, check_write};
+pub use sort::{SortKey, ViewError};
+pub use spelaion_store::{
+    AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, Snippet,
+    ToolOutput,
+};
+pub use spelaion_store::{
+    Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences, RecentFile,
+    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
+};
+pub use sql_file::{
+    FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
+    content_hash, read_sql_file, write_sql_file,
+};
+pub use table_data::{
+    ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
+    table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
+};
+pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
+pub use write::{
+    AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
+    agent_view, check_write,
+};
 
 /// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file
 /// is never touched.

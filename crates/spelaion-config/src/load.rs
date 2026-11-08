@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 
 use crate::error::ConfigError;
-use crate::model::{ConnectionFile, Engine, SCHEMA_VERSION, TunnelFile, UserFile};
+use crate::model::{
+    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, SCHEMA_VERSION, TunnelFile,
+    UserFile,
+};
 
 /// Configuration directory inside a repository.
 pub const WORKSPACE_DIR: &str = ".spelaion";
@@ -69,6 +72,33 @@ pub struct TunnelEntry {
     pub file: TunnelFile,
 }
 
+/// File name of the connection types (ADR-029), in `.spelaion/` and in the personal directory.
+pub const CONNECTION_TYPES_FILE: &str = "connection-types.toml";
+
+/// One layer's `connection-types.toml` (ADR-029).
+#[derive(Debug, Clone, Default)]
+pub enum TypesLayer {
+    /// No file.
+    #[default]
+    Absent,
+    Loaded {
+        path: PathBuf,
+        file: ConnectionTypesFile,
+    },
+    /// The file exists but does not load: connections with a type label are refused until it
+    /// is fixed, because a missing type would loosen its safeguards.
+    Broken(ConfigError),
+}
+
+impl TypesLayer {
+    pub fn file(&self) -> Option<&ConnectionTypesFile> {
+        match self {
+            TypesLayer::Loaded { file, .. } => Some(file),
+            TypesLayer::Absent | TypesLayer::Broken(_) => None,
+        }
+    }
+}
+
 /// All the configuration visible from a directory.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -78,6 +108,10 @@ pub struct Config {
     pub user: UserFile,
     pub connections: Vec<ConnectionEntry>,
     pub tunnels: Vec<TunnelEntry>,
+    /// The repository's connection types (ADR-029): used only once it is trusted.
+    pub team_types: TypesLayer,
+    /// The user's connection types.
+    pub user_types: TypesLayer,
     /// Files with problems. A broken file does not prevent loading the rest.
     pub problems: Vec<ConfigError>,
 }
@@ -116,6 +150,28 @@ pub fn default_user_dir() -> Option<PathBuf> {
     let _ = absolute;
     // The brand's folder: the products of the family share it (ADR-023).
     base.map(|d| d.join("spelaion"))
+}
+
+/// Creates the personal directory if needed and keeps it private: it holds the query history,
+/// the audit and the personal variables. On Unix the default umask leaves a new folder
+/// readable by every local user (0755), so a folder open to its group or to others is closed
+/// to 0700; with the root private, nothing inside it is reachable, whatever each file's mode.
+/// Windows' per-user profile folders are already private.
+pub fn ensure_private_dir(dir: &Path) -> Result<(), ConfigError> {
+    std::fs::create_dir_all(dir).map_err(|e| ConfigError::new(dir, e.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir)
+            .map_err(|e| ConfigError::new(dir, e.to_string()))?
+            .permissions()
+            .mode();
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| ConfigError::new(dir, e.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 /// The configuration folder of the repository at `root`: `.spelaion/`, or `.spelunk/` (its
@@ -164,6 +220,13 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
         }
     }
     config.workspace_root = start.and_then(find_workspace);
+    config.user_types = load_types(&user_dir.join(CONNECTION_TYPES_FILE), &mut config.problems);
+    if let Some(root) = &config.workspace_root {
+        config.team_types = load_types(
+            &workspace_dir(root).join(CONNECTION_TYPES_FILE),
+            &mut config.problems,
+        );
+    }
 
     let mut layers = vec![(Source::User, user_dir.to_path_buf())];
     if let Some(root) = &config.workspace_root {
@@ -212,6 +275,91 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
     }
     config.connections.sort_by(|a, b| a.id.cmp(&b.id));
     config
+}
+
+fn load_types(path: &Path, problems: &mut Vec<ConfigError>) -> TypesLayer {
+    if !path.exists() {
+        return TypesLayer::Absent;
+    }
+    match parse_file::<ConnectionTypesFile>(path).and_then(|file| validate_types(path, file)) {
+        Ok(file) => TypesLayer::Loaded {
+            path: path.to_path_buf(),
+            file,
+        },
+        Err(e) => {
+            problems.push(e.clone());
+            TypesLayer::Broken(e)
+        }
+    }
+}
+
+/// A connection type's id: lowercase ASCII letters, digits, `-` and `_`, starting with a
+/// letter or digit, at most 40 characters.
+pub fn valid_type_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 40
+        && id
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+pub(crate) fn validate_types(
+    path: &Path,
+    file: ConnectionTypesFile,
+) -> Result<ConnectionTypesFile, ConfigError> {
+    check_version(path, file.schema_version)?;
+    for (id, kind) in &file.types {
+        validate_type(id, kind).map_err(|m| ConfigError::new(path, m))?;
+    }
+    Ok(file)
+}
+
+/// One type of a `connection-types.toml`; the message names it.
+pub(crate) fn validate_type(id: &str, kind: &ConnectionTypeConfig) -> Result<(), String> {
+    if !valid_type_id(id) {
+        return Err(format!(
+            "connection type {id:?}: an id is lowercase letters, digits, - and _ (at most 40)"
+        ));
+    }
+    if id == crate::types::PRODUCTION_ALIAS {
+        return Err(format!(
+            "connection type {id:?} is another name of Production: define [types.{}] instead",
+            crate::types::PRODUCTION
+        ));
+    }
+    if let Some(name) = &kind.name {
+        let length = name.trim().chars().count();
+        if length == 0 || length > ConnectionTypeConfig::MAX_NAME {
+            return Err(format!(
+                "connection type {id:?}: the name needs 1 to {} characters",
+                ConnectionTypeConfig::MAX_NAME
+            ));
+        }
+    }
+    if kind
+        .description
+        .as_ref()
+        .is_some_and(|d| d.chars().count() > ConnectionTypeConfig::MAX_DESCRIPTION)
+    {
+        return Err(format!(
+            "connection type {id:?}: the description is at most {} characters",
+            ConnectionTypeConfig::MAX_DESCRIPTION
+        ));
+    }
+    if kind
+        .close_idle_after
+        .is_some_and(|s| s > ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER)
+    {
+        return Err(format!(
+            "connection type {id:?}: close_idle_after is in seconds, at most {} (0 turns it off)",
+            ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER
+        ));
+    }
+    Ok(())
 }
 
 /// `.toml` files under `dir`, recursively (subdirectories are explorer folders).
@@ -379,6 +527,35 @@ pub(crate) fn validate_connection(
             ));
         }
     }
+    if let Some(seconds) = file.connect_timeout {
+        if file.engine.is_file() {
+            return Err(ConfigError::new(
+                path,
+                "connect_timeout is for database servers: a local file is opened, not connected to",
+            ));
+        }
+        if seconds == 0 || seconds > ConnectionFile::MAX_CONNECT_TIMEOUT {
+            return Err(ConfigError::new(
+                path,
+                format!(
+                    "connect_timeout is in seconds, from 1 to {}",
+                    ConnectionFile::MAX_CONNECT_TIMEOUT
+                ),
+            ));
+        }
+    }
+    if file
+        .statement_timeout
+        .is_some_and(|s| s > ConnectionFile::MAX_STATEMENT_TIMEOUT)
+    {
+        return Err(ConfigError::new(
+            path,
+            format!(
+                "statement_timeout is in seconds, at most {} (0 turns it off)",
+                ConnectionFile::MAX_STATEMENT_TIMEOUT
+            ),
+        ));
+    }
     if let Some(port) = file.local_port {
         if file.tunnel.is_none() || remote_sqlite {
             return Err(ConfigError::new(
@@ -399,6 +576,10 @@ pub(crate) fn validate_connection(
             "sqlite3 only applies to a SQLite file on a server (a connection with a tunnel)",
         ));
     }
+    if let Some(description) = &file.description {
+        check_description(description).map_err(|m| ConfigError::new(path, m))?;
+    }
+    check_tags(&file.tags).map_err(|m| ConfigError::new(path, m))?;
     if let Some(kubernetes) = &file.kubernetes {
         if file.tunnel.is_some() {
             return Err(ConfigError::new(
@@ -479,6 +660,73 @@ pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFil
         ));
     }
     Ok(file)
+}
+
+/// Characters that change how the text around them is shown without being seen themselves:
+/// control characters (terminal escapes, NUL…) and Unicode's bidirectional overrides and
+/// zero-width marks. They could hide text in a terminal or in an agent's listing.
+pub(crate) fn is_hidden_char(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// A description: plain text over lines and tabs, of a bounded length.
+fn check_description(description: &str) -> Result<(), String> {
+    if description.chars().count() > ConnectionFile::MAX_DESCRIPTION {
+        return Err(format!(
+            "description is at most {} characters",
+            ConnectionFile::MAX_DESCRIPTION
+        ));
+    }
+    if description
+        .chars()
+        .any(|c| is_hidden_char(c) && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err("description can only hold text, line breaks and tabs".into());
+    }
+    Ok(())
+}
+
+/// One tag: what the form would have saved (trimmed, single spaces), short, without commas
+/// (they separate tags when typed) and without hidden characters.
+pub(crate) fn check_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err("a tag cannot be empty".into());
+    }
+    if tag.chars().count() > ConnectionFile::MAX_TAG {
+        return Err(format!(
+            "tag {tag:?} is longer than {} characters",
+            ConnectionFile::MAX_TAG
+        ));
+    }
+    if tag.chars().any(|c| is_hidden_char(c) || c == ',')
+        || tag.trim() != tag
+        || tag.contains("  ")
+        || tag.chars().any(|c| c.is_whitespace() && c != ' ')
+    {
+        return Err(format!(
+            "tag {tag:?} can only hold text separated by single spaces, without commas"
+        ));
+    }
+    Ok(())
+}
+
+/// The tags of a connection: each valid, a bounded number, none repeated ignoring case.
+fn check_tags(tags: &[String]) -> Result<(), String> {
+    if tags.len() > ConnectionFile::MAX_TAGS {
+        return Err(format!(
+            "a connection has at most {} tags",
+            ConnectionFile::MAX_TAGS
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for tag in tags {
+        check_tag(tag)?;
+        if !seen.insert(tag.to_lowercase()) {
+            return Err(format!("tag {tag:?} is repeated"));
+        }
+    }
+    Ok(())
 }
 
 /// `svc/<name>`, `pod/<name>` or `deployment/<name>` (and kubectl's other spellings).

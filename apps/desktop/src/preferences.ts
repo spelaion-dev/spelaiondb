@@ -1,8 +1,8 @@
-// Personal interface preferences (theme, language and the explorer). They are stored by the core in the
+// Personal interface preferences (theme, language, the explorer and the result grid). They are stored by the core in the
 // personal state.db; this module only applies them to the document and keeps the UI state.
 
 import { create } from "zustand";
-import { call, commands, type ExplorerPreferences } from "./api";
+import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -27,8 +27,10 @@ export function applyTheme(preference: ThemePreference): void {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+export type PreferenceSetting = "language" | "theme" | "explorer" | "grid" | "script" | "editor";
+
 export interface PreferenceError {
-  setting: "language" | "theme" | "explorer";
+  setting: PreferenceSetting;
   phase: "load" | "save";
   detail: string;
 }
@@ -38,13 +40,22 @@ interface PreferencesStore {
   theme: ThemePreference;
   /** How the explorer shows its tree. */
   explorer: ExplorerPreferences;
+  /** How the result grid draws its cells. */
+  grid: GridPreferences;
+  /** How scripts run: the default error mode and the opt-in notification (ADR-035). */
+  script: ScriptPreferencesItem;
+  /** Connect the restored tabs at startup (ADR-036): connect only, never run. Off by default. */
+  reconnectOnStart: boolean;
   loading: boolean;
-  saving: "language" | "theme" | "explorer" | null;
+  saving: PreferenceSetting | null;
   error: PreferenceError | null;
   load(): Promise<void>;
   setLanguage(next: LanguagePreference): Promise<void>;
   setTheme(next: ThemePreference): Promise<void>;
   setExplorer(next: ExplorerPreferences): Promise<void>;
+  setGrid(next: GridPreferences): Promise<void>;
+  setScript(next: ScriptPreferencesItem): Promise<void>;
+  setReconnectOnStart(next: boolean): Promise<void>;
   clearError(): void;
 }
 
@@ -52,16 +63,28 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
   language: "system",
   theme: "system",
   explorer: { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false },
+  grid: { zebra: true, nullText: true, boolCheckboxes: false },
+  script: { onError: "stop", notify: false, notifyAfterSeconds: 30 },
+  reconnectOnStart: false,
   loading: true,
   saving: null,
   error: null,
   async load() {
-    const [language, theme, explorer] = await Promise.allSettled([
+    const [language, theme, explorer, grid, script, reconnect] = await Promise.allSettled([
       call(commands.getLanguage()),
       call(commands.getTheme()),
       call(commands.getExplorerPreferences()),
+      call(commands.getGridPreferences()),
+      call(commands.getScriptPreferences()),
+      call(commands.getReconnectOnStart()),
     ]);
     let error: PreferenceError | null = null;
+    if (reconnect.status === "fulfilled") set({ reconnectOnStart: reconnect.value });
+    else error = { setting: "editor", phase: "load", detail: errorText(reconnect.reason) };
+    if (script.status === "fulfilled") set({ script: script.value });
+    else error = { setting: "script", phase: "load", detail: errorText(script.reason) };
+    if (grid.status === "fulfilled") set({ grid: grid.value });
+    else error = { setting: "grid", phase: "load", detail: errorText(grid.reason) };
     if (explorer.status === "fulfilled") set({ explorer: explorer.value });
     else error = { setting: "explorer", phase: "load", detail: errorText(explorer.reason) };
     if (theme.status === "fulfilled") {
@@ -115,6 +138,43 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
       await call(commands.setExplorerPreferences(next));
     } catch (e) {
       set({ explorer: previous, error: { setting: "explorer", phase: "save", detail: errorText(e) } });
+    } finally {
+      set({ saving: null });
+    }
+  },
+  async setScript(next) {
+    if (get().saving) return;
+    const previous = get().script;
+    set({ script: next, saving: "script", error: null });
+    try {
+      await call(commands.setScriptPreferences(next));
+    } catch (e) {
+      set({ script: previous, error: { setting: "script", phase: "save", detail: errorText(e) } });
+    } finally {
+      set({ saving: null });
+    }
+  },
+  async setReconnectOnStart(next) {
+    if (get().saving) return;
+    const previous = get().reconnectOnStart;
+    set({ reconnectOnStart: next, saving: "editor", error: null });
+    try {
+      await call(commands.setReconnectOnStart(next));
+    } catch (e) {
+      set({ reconnectOnStart: previous, error: { setting: "editor", phase: "save", detail: errorText(e) } });
+    } finally {
+      set({ saving: null });
+    }
+  },
+  async setGrid(next) {
+    if (get().saving) return;
+    // The grid repaints at once; if saving fails it goes back to what was saved.
+    const previous = get().grid;
+    set({ grid: next, saving: "grid", error: null });
+    try {
+      await call(commands.setGridPreferences(next));
+    } catch (e) {
+      set({ grid: previous, error: { setting: "grid", phase: "save", detail: errorText(e) } });
     } finally {
       set({ saving: null });
     }

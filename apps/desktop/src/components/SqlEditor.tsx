@@ -36,6 +36,8 @@ interface Props {
   /** Formatting failed (the formatter could not read the SQL). */
   onFormatError(message: string): void;
   value: string;
+  /** Changes when `value` was replaced from outside the editor, which then shows it. */
+  revision?: number;
   onChange(value: string): void;
   engine: string | null;
   /** Known tables → columns (may be empty), for autocompletion. */
@@ -222,7 +224,7 @@ function language(engine: string | null, tables: Record<string, string[]>) {
   return sql({ dialect: (engine && dialects[engine]) || PostgreSQL, schema: tables, upperCaseKeywords: false });
 }
 
-export function SqlEditor({ handle, onFormatError, value, onChange, engine, tables, onRun, error }: Props) {
+export function SqlEditor({ handle, onFormatError, value, revision, onChange, engine, tables, onRun, error }: Props) {
   const { t } = useTranslation("editor");
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -327,6 +329,18 @@ export function SqlEditor({ handle, onFormatError, value, onChange, engine, tabl
   useEffect(() => {
     view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, tables)) });
   }, [engine, tables]);
+
+  // Text replaced from outside the editor (a file reloaded from disk, ADR-036): a new
+  // `revision` makes the editor show `value`. Only then: a render that arrives late while the
+  // user types must never put back older text.
+  useEffect(() => {
+    const editor = view.current;
+    if (!editor || revision === undefined) return;
+    const current = editor.state.doc.toString();
+    if (current !== value) editor.dispatch({ changes: { from: 0, to: current.length, insert: value } });
+    // Only a new revision replaces the text.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revision]);
 
   useEffect(() => {
     const editor = view.current;

@@ -403,6 +403,14 @@ where
     async fn get_info(&mut self) -> crate::Result<ReceivedToken> {
         let info = TokenInfo::decode(self.conn).await?;
         event!(Level::DEBUG, "{}", info.message);
+        // SpelaionDB patch: keep `PRINT` and low-severity `RAISERROR` output for the caller.
+        self.conn.context_mut().push_info(crate::InfoMessage {
+            number: info.number,
+            class: info.class,
+            message: info.message.clone(),
+            procedure: info.procedure.clone(),
+            line: info.line,
+        });
         Ok(ReceivedToken::Info(info))
     }
 

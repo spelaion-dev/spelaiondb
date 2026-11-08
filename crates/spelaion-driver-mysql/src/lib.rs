@@ -22,8 +22,8 @@ use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, LogicalType,
-    NameFilter, ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject,
-    TableInfo, TlsMode,
+    NameFilter, Notice, ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject,
+    TableInfo, TlsMode, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -54,8 +54,6 @@ impl MysqlDriver {
         }
     }
 }
-
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Server error "Query execution was interrupted" (after `KILL QUERY`).
 const ER_QUERY_INTERRUPTED: u16 = 1317;
@@ -116,13 +114,13 @@ fn tls_opts(params: &ConnectParams) -> Option<SslOpts> {
     }
 }
 
-async fn open(opts: Opts) -> std::result::Result<Conn, mysql_async::Error> {
-    match tokio::time::timeout(CONNECT_TIMEOUT, Conn::new(opts)).await {
+async fn open(opts: Opts, timeout: Duration) -> std::result::Result<Conn, mysql_async::Error> {
+    match tokio::time::timeout(timeout, Conn::new(opts)).await {
         Ok(result) => result,
         Err(_) => Err(mysql_async::Error::Io(mysql_async::IoError::Io(
             std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                format!("no response in {} s", CONNECT_TIMEOUT.as_secs()),
+                format!("no response in {} s", timeout.as_secs()),
             ),
         ))),
     }
@@ -146,19 +144,21 @@ impl Driver for MysqlDriver {
         // drivers (with more than one compiled in, rustls would not choose).
         let _ = rustls::crypto::ring::default_provider().install_default();
         let mut opts = opts(params, tls_opts(params));
-        let conn = match open(opts.clone()).await {
+        let timeout = params.connect_timeout();
+        let conn = match open(opts.clone(), timeout).await {
             // `prefer`: without TLS only if the server does not offer it.
             Err(mysql_async::Error::Driver(
                 mysql_async::DriverError::NoClientSslFlagFromServer,
             )) if params.tls == TlsMode::Prefer => {
                 opts = self::opts(params, None);
-                open(opts.clone()).await
+                open(opts.clone(), timeout).await
             }
             other => other,
         }
         .map_err(map_error)?;
         let cancel = Arc::new(MysqlCancel {
             opts,
+            timeout,
             id: conn.id(),
         });
         let (requests, receiver) = mpsc::channel(8);
@@ -196,22 +196,47 @@ enum Request {
     KeepAlive {
         reply: oneshot::Sender<Result<KeepAlive>>,
     },
+    /// The transaction flag of the last OK packet: nothing is sent (ADR-031).
+    TransactionState {
+        reply: oneshot::Sender<Result<TransactionState>>,
+    },
 }
 
 /// Owns the connection until every handle is dropped.
 async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>) {
+    // An error is an ERR packet, which carries no status: the last OK packet may be older than
+    // a deadlock that rolled the transaction back.
+    let mut status_stale = false;
     while let Some(request) = requests.recv().await {
         match request {
             Request::Execute {
                 sql,
                 batch_size,
                 events,
-            } => execute(&mut conn, &sql, batch_size, &events).await,
+            } => status_stale = !execute(&mut conn, &sql, batch_size, &events).await,
             Request::Rows { sql, params, reply } => {
-                let _ = reply.send(rows(&mut conn, &sql, params).await);
+                let result = rows(&mut conn, &sql, params).await;
+                status_stale = result.is_err();
+                let _ = reply.send(result);
             }
             Request::KeepAlive { reply } => {
                 let _ = reply.send(keep_alive(&mut conn).await);
+            }
+            Request::TransactionState { reply } => {
+                // `DO 0` touches no table, so it opens nothing, and its OK packet is fresh.
+                let refreshed = if status_stale {
+                    conn.query_drop("DO 0").await.map_err(map_error)
+                } else {
+                    Ok(())
+                };
+                status_stale = refreshed.is_err();
+                let _ = reply.send(refreshed.map(|()| {
+                    if in_transaction(&conn) {
+                        TransactionState::Open
+                    } else {
+                        TransactionState::Idle
+                    }
+                }));
             }
         }
     }
@@ -221,15 +246,21 @@ async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>) {
 /// The server reports an open transaction in the status of every OK packet: with one open,
 /// nothing is sent at all.
 async fn keep_alive(conn: &mut Conn) -> Result<KeepAlive> {
-    let open = conn.last_ok_packet().is_some_and(|ok| {
-        ok.status_flags()
-            .contains(mysql_async::consts::StatusFlags::SERVER_STATUS_IN_TRANS)
-    });
-    if open {
+    if in_transaction(conn) {
         return Ok(KeepAlive::InTransaction);
     }
     conn.ping().await.map_err(map_error)?;
     Ok(KeepAlive::Alive)
+}
+
+/// The server's transaction flag in the status of the last OK packet (every statement ends
+/// with one). MySQL has no failed state: after an error the transaction stays open, or the
+/// server rolled it back (a deadlock) and says so in the flag.
+fn in_transaction(conn: &Conn) -> bool {
+    conn.last_ok_packet().is_some_and(|ok| {
+        ok.status_flags()
+            .contains(mysql_async::consts::StatusFlags::SERVER_STATUS_IN_TRANS)
+    })
 }
 
 async fn rows(conn: &mut Conn, sql: &str, params: Vec<String>) -> Result<Rows> {
@@ -252,18 +283,19 @@ async fn rows(conn: &mut Conn, sql: &str, params: Vec<String>) -> Result<Rows> {
 
 /// Runs one statement and streams its first result set. If the receiver goes away (tab
 /// closed), reading stops; the connection discards the rest before the next statement.
+/// Returns whether it ran to its end: an error leaves no fresh OK packet behind.
 async fn execute(
     conn: &mut Conn,
     sql: &str,
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
-) {
+) -> bool {
     let send = |event| async move { events.send(event).await.is_ok() };
     let mut result = match conn.query_iter(sql).await {
         Ok(result) => result,
         Err(e) => {
             send(Err(map_error_in(e, sql))).await;
-            return;
+            return false;
         }
     };
     let columns = result.columns().unwrap_or_else(|| Arc::from(Vec::new()));
@@ -280,7 +312,7 @@ async fn execute(
                 }
                 Err(e) => {
                     send(Err(map_error_in(e, sql))).await;
-                    return;
+                    return false;
                 }
             }
         }
@@ -299,7 +331,7 @@ async fn execute(
             .collect();
         let schema = Arc::new(ResultSchema::new(metas));
         if !send(Ok(ExecEvent::Columns(schema.clone()))).await {
-            return;
+            return false;
         }
         let new_builders = || {
             schema
@@ -321,7 +353,7 @@ async fn execute(
                     Ok(None) => break,
                     Err(e) => {
                         send(Err(map_error_in(e, sql))).await;
-                        return;
+                        return false;
                     }
                 },
             };
@@ -334,30 +366,61 @@ async fn execute(
                         mismatch,
                     )))
                     .await;
-                    return;
+                    return false;
                 }
             }
             pending += 1;
             if pending == batch_size {
                 let batch = finish(&schema, &mut builders);
                 if !send(batch.map(ExecEvent::Batch)).await {
-                    return;
+                    return false;
                 }
                 pending = 0;
             }
         }
         if pending > 0 && !send(finish(&schema, &mut builders).map(ExecEvent::Batch)).await {
-            return;
+            return false;
         }
     }
     let affected = result.affected_rows();
     // Only the first result set is shown; the rest (from procedures) is discarded.
     if let Err(e) = result.drop_result().await {
         send(Err(map_error_in(e, sql))).await;
-        return;
+        return false;
     }
     let rows_affected = (columns.is_empty() && reports_row_count(sql)).then_some(affected);
+    // The server counts the statement's warnings and notes in its last OK packet: only when
+    // there are some does it cost a round trip to read them (ADR-035).
+    if conn.get_warnings() > 0 && dialect::first_word(sql) != "show" {
+        for notice in warnings(conn).await {
+            if !send(Ok(ExecEvent::Notice(notice))).await {
+                return true;
+            }
+        }
+    }
     send(Ok(ExecEvent::Done { rows_affected })).await;
+    true
+}
+
+/// Most warnings read after one statement.
+const MAX_WARNINGS: usize = 100;
+
+/// The last statement's warnings and notes (`SHOW WARNINGS`), as notices: "Warning: Data
+/// truncated for column 'v' at row 1 (1265)". A failure to read them is not the statement's.
+async fn warnings(conn: &mut Conn) -> Vec<Notice> {
+    let rows: Vec<(String, u32, String)> = match conn
+        .query(format!("SHOW WARNINGS LIMIT {MAX_WARNINGS}"))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return Vec::new(),
+    };
+    rows.into_iter()
+        .map(|(level, code, message)| Notice {
+            severity: level.to_uppercase(),
+            message: format!("{message} ({code})"),
+        })
+        .collect()
 }
 
 fn raw_values(row: mysql_async::Row) -> Vec<Option<Vec<u8>>> {
@@ -449,6 +512,17 @@ impl Connection for MysqlConnection {
         let (reply, response) = oneshot::channel();
         self.requests
             .send(Request::KeepAlive { reply })
+            .await
+            .map_err(|_| DriverError::Connection("the connection is closed".into()))?;
+        response
+            .await
+            .map_err(|_| DriverError::Connection("the connection is closed".into()))?
+    }
+
+    async fn transaction_state(&self) -> Result<TransactionState> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::TransactionState { reply })
             .await
             .map_err(|_| DriverError::Connection("the connection is closed".into()))?;
         response
@@ -563,13 +637,16 @@ fn tokio_stream_from<T: Send + 'static>(
 /// `KILL QUERY` from a second connection with the same options (and the same tunnel).
 struct MysqlCancel {
     opts: Opts,
+    timeout: Duration,
     id: u32,
 }
 
 #[async_trait]
 impl CancelHandle for MysqlCancel {
     async fn cancel(&self) -> Result<()> {
-        let mut conn = open(self.opts.clone()).await.map_err(map_error)?;
+        let mut conn = open(self.opts.clone(), self.timeout)
+            .await
+            .map_err(map_error)?;
         let result = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
         let _ = conn.disconnect().await;
         result.map_err(map_error)

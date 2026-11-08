@@ -35,7 +35,8 @@ async fn trigger_bodies_run_as_one_statement() {
             events.last(),
             Some(CoreEvent::ScriptFinished {
                 executed: 5,
-                failed: false
+                failed: false,
+                ..
             })
         ),
         "{events:#?}"

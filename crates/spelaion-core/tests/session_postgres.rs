@@ -182,7 +182,8 @@ async fn runs_a_script_statement_by_statement() {
         events.last(),
         Some(CoreEvent::ScriptFinished {
             executed: 4,
-            failed: false
+            failed: false,
+            ..
         })
     ));
 
@@ -235,7 +236,8 @@ async fn stops_at_the_first_error_and_points_to_it() {
         events.last(),
         Some(CoreEvent::ScriptFinished {
             executed: 2,
-            failed: true
+            failed: true,
+            ..
         })
     ));
 }
@@ -287,8 +289,9 @@ async fn results_sort_by_typed_values_across_batches() {
             &spelaion_core::ExportOptions {
                 format: spelaion_core::ExportFormat::Tsv,
                 rows,
-                columns: column..column + 1,
+                columns: vec![column],
                 header: false,
+                csv: spelaion_core::CsvOptions::default(),
             },
             &spelaion_core::GenericDialect,
             &mut out,

@@ -8,6 +8,30 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	workspaceInfo: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("workspace_info")),
+	/**  Every AI client: its file, whether our server is there, and its manual configuration. */
+	mcpClients: () => typedError<McpClientsItem_Serialize, string>(__TAURI_INVOKE("mcp_clients")),
+	/**  The change that installs our server in one client, to show before writing it. */
+	mcpPlanInstall: (clientId: string) => typedError<McpInstallPlanItem, string>(__TAURI_INVOKE("mcp_plan_install", { clientId })),
+	/**  Writes the change the user was shown, and nothing else (the core checks the fingerprint). */
+	mcpApplyInstall: (clientId: string, fingerprint: string) => typedError<McpInstallDoneItem_Serialize, string>(__TAURI_INVOKE("mcp_apply_install", { clientId, fingerprint })),
+	mcpSettings: () => typedError<McpSettingsItem, string>(__TAURI_INVOKE("mcp_settings")),
+	/**  Read-only mode for every agent (ADR-033): `spelaiondb mcp` reads it on every call. */
+	setMcpReadOnly: (readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_read_only", { readOnly })),
+	setMcpOutputFormat: (format: ToolOutputItem) => typedError<null, string>(__TAURI_INVOKE("set_mcp_output_format", { format })),
+	/**  What agents can do on each connection, as the core decides it. */
+	mcpAccess: () => typedError<McpAccessItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
+	/**  The MCP activity the filter keeps, newest first (ADR-033); secrets masked by the core. */
+	auditEvents: (filter: AuditFilterItem_Deserialize, offset: number, limit: number) => typedError<AuditPageItem_Serialize, string>(__TAURI_INVOKE("audit_events", { filter, offset, limit })),
+	auditTools: () => typedError<string[], string>(__TAURI_INVOKE("audit_tools")),
+	/**  The latest `spelaiondb mcp` processes and their calls. */
+	auditSessions: () => typedError<AuditSessionItem[], string>(__TAURI_INVOKE("audit_sessions")),
+	/**
+	 *  Writes the activity the filter keeps to a file the user chose; the core masks secrets and
+	 *  writes it. Returns how many events were written.
+	 */
+	exportAudit: (filter: AuditFilterItem_Deserialize, format: AuditFormatItem, path: string) => typedError<number, string>(__TAURI_INVOKE("export_audit", { filter, format, path })),
+	/**  Empties the MCP activity log, leaving a record that it was cleared (done by the core). */
+	clearAudit: () => typedError<number, string>(__TAURI_INVOKE("clear_audit")),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -16,6 +40,48 @@ export const commands = {
 	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
 	getExplorerPreferences: () => typedError<ExplorerPreferencesItem, string>(__TAURI_INVOKE("get_explorer_preferences")),
 	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
+	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
+	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
+	/**
+	 *  How scripts run from the editor: the default error mode and the opt-in notification
+	 *  (ADR-035).
+	 */
+	getScriptPreferences: () => typedError<ScriptPreferencesItem, string>(__TAURI_INVOKE("get_script_preferences")),
+	setScriptPreferences: (preferences: ScriptPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_script_preferences", { preferences })),
+	/**
+	 *  Reads a `.sql` file the user picked (or one from the recent files or a kept tab) and puts
+	 *  it first in the recent files.
+	 */
+	openSqlFile: (path: string) => typedError<SqlFileItem, string>(__TAURI_INVOKE("open_sql_file", { path })),
+	/**
+	 *  Saves a tab's text to `path`. `format` is the file's (`None`: a new file, UTF-8 and the
+	 *  platform's line break); `expected_hash` is what the tab last read or saved (`None`: write
+	 *  whatever is there, after a "save as" dialog or the user's "overwrite").
+	 */
+	saveSqlFile: (path: string, text: string, format: FileFormatItem | null, expectedHash: string | null) => typedError<SaveFileOutcome, string>(__TAURI_INVOKE("save_sql_file", { path, text, format, expectedHash })),
+	/**  The recent files, newest first, each saying whether it is still there. */
+	recentFiles: () => typedError<RecentFileItem[], string>(__TAURI_INVOKE("recent_files")),
+	forgetRecentFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("forget_recent_file", { path })),
+	/**
+	 *  The open folder's kept tabs, checked by the core: every one comes back disconnected,
+	 *  with its text and a note when its connection or file is gone. Nothing is run.
+	 */
+	restoreTabsForWorkspace: () => typedError<RestoredTabsItem_Serialize, string>(__TAURI_INVOKE("restore_tabs_for_workspace")),
+	/**
+	 *  The open tabs as they are now, for the folder `scope` (from `restore_tabs_for_workspace`).
+	 *  The core writes them within a second (ADR-036).
+	 */
+	saveTabs: (scope: string, tabs: OpenTabItem_Deserialize[], active: number | null) => typedError<null, string>(__TAURI_INVOKE("save_tabs", { scope, tabs, active })),
+	/**  Writes the tabs waiting now (before switching folders). */
+	flushTabs: () => typedError<null, string>(__TAURI_INVOKE("flush_tabs")),
+	getReconnectOnStart: () => typedError<boolean, string>(__TAURI_INVOKE("get_reconnect_on_start")),
+	setReconnectOnStart: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_reconnect_on_start", { enabled })),
+	/**
+	 *  A system notification that a long run finished in the background (ADR-035). The app sends
+	 *  it only when the user turned it on; its text names the tab and counts statements, never SQL,
+	 *  data or error text.
+	 */
+	notifyRunFinished: (title: string, body: string) => typedError<null, string>(__TAURI_INVOKE("notify_run_finished", { title, body })),
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
@@ -24,14 +90,26 @@ export const commands = {
 	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
+	/**
+	 *  Whether there is a system keychain. Without one (Linux with no Secret Service running) the
+	 *  forms cannot offer to save a password: it is asked when connecting.
+	 */
+	keychainAvailable: () => __TAURI_INVOKE<boolean>("keychain_available"),
 	/**  Tunnels a new connection can use (from the repository and the personal directory). */
 	listTunnels: () => typedError<TunnelItem[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**
-	 *  Opens and closes a connection that has not been saved yet. Nothing is written: neither
-	 *  the file nor the keychain. `editing` is the connection being edited, if any: its stored
-	 *  password is used when none is typed.
+	 *  Tests a connection that may not be saved yet, step by step (ADR-032): every change to its
+	 *  steps goes through `on_step`, and `stop_connection_test(test)` stops it. Nothing is
+	 *  written: neither the file nor the keychain. `editing` is the connection being edited, if
+	 *  any: its stored password is used when none is typed. `network_only` stops before logging
+	 *  in. The steps, their errors and the diagnostics come from the core, redacted.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing })),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null, networkOnly: boolean, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, test, onStep })),
+	/**
+	 *  Stops a running connection or network profile test: the running step is dropped and
+	 *  whatever it opened is closed. Nothing is retried.
+	 */
+	stopConnectionTest: (test: number) => __TAURI_INVOKE<void>("stop_connection_test", { test }),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
 	 *  configuration. Returns the new connection's identifier.
@@ -48,13 +126,40 @@ export const commands = {
 	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
 	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
 	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
+	/**
+	 *  The form mapped to another engine (ADR-030): what still applies is kept, the rest is
+	 *  changed or dropped by the core; nothing is saved until the form is.
+	 */
+	changeConnectionEngine: (draft: ConnectionDraftItem_Deserialize, engine: string) => typedError<MappedConnectionItem_Serialize, string>(__TAURI_INVOKE("change_connection_engine", { draft, engine })),
+	/**
+	 *  Duplicates a connection next to the original (ADR-030). A stored password is copied to the
+	 *  copy's own keychain entry by the core; a repository connection must be as trusted.
+	 */
+	duplicateConnection: (connection: string) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
+	/**  The text Ctrl+C puts on the clipboard for a connection: without secrets or programs. */
+	copyConnection: (connection: string) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
+	/**  A personal connection from clipboard text, checked by the core as untrusted input. */
+	pasteConnection: (text: string) => typedError<PastedItem, string>(__TAURI_INVOKE("paste_connection", { text })),
+	/**  The pattern new connections are named with (ADR-030). */
+	getConnectionNamePattern: () => typedError<string, string>(__TAURI_INVOKE("get_connection_name_pattern")),
+	/**  Sets the pattern (checked by the core) or, with null, goes back to the default. */
+	setConnectionNamePattern: (pattern: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_name_pattern", { pattern })),
+	/**  Checks a pattern and shows what it gives for two sample connections, for Settings. */
+	previewConnectionNamePattern: (pattern: string) => __TAURI_INVOKE<NamePatternPreview_Serialize>("preview_connection_name_pattern", { pattern }),
+	/**
+	 *  The name the user's pattern gives the connection being added, as the form is now; null
+	 *  when the pattern is empty (no suggestions).
+	 */
+	suggestConnectionName: (draft: ConnectionDraftItem_Deserialize) => typedError<string | null, string>(__TAURI_INVOKE("suggest_connection_name", { draft })),
 	/**  The form of an existing tunnel, to edit it. */
 	tunnelDraft: (name: string, personal: boolean) => typedError<[TunnelDraftItem_Serialize, string], string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
 	/**
-	 *  Opens the tunnel's hops and closes them again. Nothing is written. `passwords[i]` is the
-	 *  password typed for hop `i`; stored ones are used when none is typed.
+	 *  Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
+	 *  again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
+	 *  are used when none is typed. Steps go through `on_step`; `stop_connection_test(test)`
+	 *  stops it.
 	 */
-	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelTestOutcome, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword })),
+	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<TunnelTestOutcome_Serialize, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword, test, onStep })),
 	/**  Saves a new tunnel (and its `keychain` passwords) and reloads the configuration. */
 	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelItem, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords, proxyPassword })),
 	/**  Saves an edited tunnel (same file and name) and reloads the configuration. */
@@ -67,10 +172,67 @@ export const commands = {
 	 */
 	copyRows: (result: number, session: string, range: CellRange, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
 	/**
-	 *  Writes a whole result to a file the user chose (in a blocking task: it may be millions of
-	 *  rows). Returns how many rows were written.
+	 *  Column names for the clipboard: plain, quoted for the engine, qualified with the table
+	 *  (a table data tab's) or one per line; written by the core.
 	 */
-	exportResult: (result: number, session: string, path: string, format: TextFormat) => typedError<number | null, string>(__TAURI_INVOKE("export_result", { result, session, path, format })),
+	copyColumnNames: (result: number, session: string, columns: number[], style: NameStyleItem, table: TableRefItem | null) => typedError<string, string>(__TAURI_INVOKE("copy_column_names", { result, session, columns, style, table })),
+	/**
+	 *  Every different value of a column (all its rows, in the current view) as an SQL `IN`
+	 *  list with the engine's literals; refused beyond the core's limit rather than cut.
+	 */
+	copyColumnInList: (result: number, session: string, column: number) => typedError<string, string>(__TAURI_INVOKE("copy_column_in_list", { result, session, column })),
+	/**
+	 *  Searches a result's loaded rows in the core (Ctrl+F) and keeps the matches for
+	 *  `find_matches` and `find_step`. A newer search on the same result stops this one (`None`).
+	 */
+	findInResult: (result: number, text: string, matchCase: boolean, columns: number[]) => typedError<FindOutcome | null, string>(__TAURI_INVOKE("find_in_result", { result, text, matchCase, columns })),
+	/**
+	 *  The matches of the last search in rows `[first_row, first_row + rows)`, to highlight
+	 *  what the grid shows.
+	 */
+	findMatches: (result: number, firstRow: number, rows: number) => typedError<FindMatchItem[], string>(__TAURI_INVOKE("find_matches", { result, firstRow, rows })),
+	/**
+	 *  The next match after the cell (`row`, `column`), or the previous one with `backwards`,
+	 *  going round; `None` without matches (or once the rows moved).
+	 */
+	findStep: (result: number, row: number, column: number, backwards: boolean) => typedError<FindStepItem | null, string>(__TAURI_INVOKE("find_step", { result, row, column, backwards })),
+	/**  Forgets a result's search (the find bar closed). */
+	clearFind: (result: number) => typedError<null, string>(__TAURI_INVOKE("clear_find", { result })),
+	/**
+	 *  "Filter by this value" in a table data tab: the core writes the condition from the typed
+	 *  value (the cell at `row` of the page, or `value` typed for the column) and returns the
+	 *  tab's filter with it added. The page's SELECT is checked when it loads.
+	 */
+	tableFilterCondition: (session: string, result: number, column: number, op: FilterOpItem, row: number | null, value: string, filter: string) => typedError<string, string>(__TAURI_INVOKE("table_filter_condition", { session, result, column, op, row, value, filter })),
+	/**
+	 *  Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
+	 *  rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
+	 *  are the shown columns, in order.
+	 */
+	exportResult: (result: number, session: string, path: string, options: ExportFileOptions_Deserialize, range: CellRange | null) => typedError<ExportSummaryItem, string>(__TAURI_INVOKE("export_result", { result, session, path, options, range })),
+	/**
+	 *  Before offering to run a query (or a table data tab) again for an export: whether it may
+	 *  be (only a single read), and whether the tab has an open transaction whose uncommitted
+	 *  changes the export will not see (ADR-034).
+	 */
+	exportRerunCheck: (session: string, sql: string | null) => typedError<RerunCheckItem_Serialize, string>(__TAURI_INVOKE("export_rerun_check", { session, sql })),
+	/**
+	 *  Runs a query again in a new session and streams every row to `path` (ADR-034). Only a single
+	 *  read is run; a connection type that confirms execution needs `confirmed`.
+	 */
+	exportQuery: (source: string, exportId: number, sql: string, path: string, options: ExportFileOptions_Deserialize, confirmed: boolean, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportOutcome, string>(__TAURI_INVOKE("export_query", { source, exportId, sql, path, options, confirmed, onProgress })),
+	/**
+	 *  Streams every row of a table data tab's view (its filter and order, not just the loaded
+	 *  page) to `path`, through the core's own SELECT.
+	 */
+	exportTableData: (source: string, exportId: number, view: TableExportItem, path: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportOutcome, string>(__TAURI_INVOKE("export_table_data", { source, exportId, view, path, options, onProgress })),
+	/**
+	 *  Streams explorer tables and views, one file each, into `folder`, never over an existing
+	 *  file. Stops at a cancel or an error; the files written before stay.
+	 */
+	exportTables: (source: string, exportId: number, tables: RelationRefItem[], folder: string, extension: string, options: ExportFileOptions_Deserialize, onProgress: Channel<ExportProgressItem_Deserialize>) => typedError<ExportTablesOutcome_Serialize, string>(__TAURI_INVOKE("export_tables", { source, exportId, tables, folder, extension, options, onProgress })),
+	/**  Stops a running streaming export: its statement and its writer; no file is left. */
+	cancelExport: (exportId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_export", { exportId })),
 	/**
 	 *  The full text of one cell (`None` for NULL), for the cell viewer: the grid only paints
 	 *  what fits, and the row may not be in its cache.
@@ -181,7 +343,7 @@ export const commands = {
 	createDatabase: (engine: string, path: string) => typedError<null, string>(__TAURI_INVOKE("create_database", { engine, path })),
 	/**
 	 *  Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
-	 *  without WHERE, DROP, TRUNCATE, or any write on a production connection.
+	 *  without WHERE, DROP, TRUNCATE, and whatever the connection's type asks for (ADR-029).
 	 */
 	scriptRisks: (session: string, sql: string) => typedError<RiskyItem[], string>(__TAURI_INVOKE("script_risks", { session, sql })),
 	/**  The `:name` placeholders of a script, in order, so the UI can ask for their values. */
@@ -222,6 +384,22 @@ export const commands = {
 	 *  the configuration. Only those entries change; the rest of the file stays as it was.
 	 */
 	setUserVars: (values: { [key in string]: string }) => typedError<null, string>(__TAURI_INVOKE("set_user_vars", { values })),
+	/**
+	 *  Every connection type (ADR-029): built-in, the team's (from a trusted repository) and the
+	 *  user's, with every layer applied.
+	 */
+	listConnectionTypes: () => typedError<ConnectionTypeItem_Serialize[], string>(__TAURI_INVOKE("list_connection_types")),
+	/**
+	 *  Saves the user's definition of a connection type (a new one, or their changes to a
+	 *  built-in or team type) in their `connection-types.toml`. Safeguards only add up: the core
+	 *  keeps what other layers turn on.
+	 */
+	saveConnectionType: (id: string, draft: ConnectionTypeDraft_Deserialize) => typedError<null, string>(__TAURI_INVOKE("save_connection_type", { id, draft })),
+	/**
+	 *  Removes the user's definition of a connection type: a type of their own goes, and a
+	 *  built-in or team one goes back to how the others define it.
+	 */
+	deleteConnectionType: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection_type", { id })),
 	/**  The personal range of local ports for SSH tunnels (`[tunnels]` in `user.toml`), if set. */
 	tunnelPorts: () => typedError<TunnelPortsItem | null, string>(__TAURI_INVOKE("tunnel_ports")),
 	/**  Every tunnel file as a network profile (ADR-027), for Settings → Network. */
@@ -238,21 +416,26 @@ export const commands = {
 	 *  Opens a session (`session` is chosen by the UI). If a password is needed, it says so
 	 *  instead of failing, so the UI can ask for it.
 	 */
-	connect: (session: string, connection: string, password: string | null, remember: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember })),
+	connect: (session: string, connection: string, password: string | null, remember: boolean, editor: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember, editor })),
 	/**
 	 *  Open an independent tab from an existing explorer session, reusing its in-memory
 	 *  credentials and exact resolved connection. Passwords never cross back into the UI.
 	 */
-	connectFromSession: (source: string, session: string, database: string | null) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database })),
+	connectFromSession: (source: string, session: string, database: string | null, editor: boolean) => typedError<string, string>(__TAURI_INVOKE("connect_from_session", { source, session, database, editor })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
-	runScript: (session: string, sql: string, confirmed: boolean, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, onEvent })),
+	runScript: (session: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, options, onEvent })),
+	/**
+	 *  Answers a run paused after an error (ADR-035). The core refuses a ticket that is not the
+	 *  pause it is waiting on.
+	 */
+	answerScriptError: (session: string, ticket: number, answer: ErrorAnswerItem) => typedError<null, string>(__TAURI_INVOKE("answer_script_error", { session, ticket, answer })),
 	/**  Whether a SELECT matches the conservative rules for fetching pages. */
 	queryPageSupported: (session: string, sql: string) => typedError<boolean, string>(__TAURI_INVOKE("query_page_supported", { session, sql })),
 	/**  Run the first page, keeping the original SQL in the user's query history. */
-	runQueryPage: (session: string, sql: string, limit: number, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, onEvent })),
+	runQueryPage: (session: string, sql: string, limit: number, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_query_page", { session, sql, limit, options, onEvent })),
 	appendQueryPage: (session: string, result: number, sql: string, limit: number, offset: number) => typedError<number, string>(__TAURI_INVOKE("append_query_page", { session, result, sql, limit, offset })),
 	countQueryRows: (session: string, sql: string) => typedError<number | null, string>(__TAURI_INVOKE("count_query_rows", { session, sql })),
 	cancel: (session: string) => typedError<null, string>(__TAURI_INVOKE("cancel", { session })),
@@ -309,15 +492,112 @@ export const commands = {
 	editableQueryTable: (session: string, result: number, sql: string) => typedError<EditableTableItem | null, string>(__TAURI_INVOKE("editable_query_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
 	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
+	/**  An editor tab's transaction, as the core last read it (ADR-031). */
+	transactionStatus: (session: string) => typedError<TransactionStatusItem_Serialize, string>(__TAURI_INVOKE("transaction_status", { session })),
+	/**
+	 *  Turns an editor tab's auto-commit on or off; the core refuses to turn it on while a
+	 *  transaction is open (ADR-031).
+	 */
+	setAutoCommit: (session: string, on: boolean) => typedError<TransactionStatusItem_Serialize, string>(__TAURI_INVOKE("set_auto_commit", { session, on })),
+	commitTransaction: (session: string) => typedError<TransactionOutcomeItem_Serialize, string>(__TAURI_INVOKE("commit_transaction", { session })),
+	rollbackTransaction: (session: string) => typedError<TransactionOutcomeItem_Serialize, string>(__TAURI_INVOKE("rollback_transaction", { session })),
+	/**
+	 *  Of these sessions, the ones whose closing must be confirmed: a transaction with work in it
+	 *  is open (ADR-031). The UI asks before closing a tab, switching its connection or
+	 *  disconnecting; the core decides who needs the question.
+	 */
+	sessionsToConfirm: (sessions: string[]) => typedError<string[], string>(__TAURI_INVOKE("sessions_to_confirm", { sessions })),
+	/**  Quits after the user confirmed closing tabs with open transactions (`QuitBlocked`). */
+	quitApp: () => typedError<null, string>(__TAURI_INVOKE("quit_app")),
 };
 
 /** Events */
 export const events = {
+	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
-	sessionLost: makeEvent<SessionLost, SessionLost>("session-lost"),
+	quitBlocked: makeEvent<QuitBlocked, QuitBlocked>("quit-blocked"),
+	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
+	transactionChanged: makeEvent<TransactionChanged_Serialize, TransactionChanged_Deserialize>("transaction-changed"),
 };
 
 /* Types */
+/**  One MCP call, with its secrets already masked by the core. */
+export type AuditEventItem = AuditEventItem_Serialize | AuditEventItem_Deserialize;
+
+/**  One MCP call, with its secrets already masked by the core. */
+export type AuditEventItem_Deserialize = {
+	id: number,
+	atMs: number,
+	session?: string | null,
+	client: string,
+	connection: string,
+	tool?: string | null,
+	statement: string,
+	status: AuditStatusItem,
+	rows?: number | null,
+	durationMs?: number | null,
+	detail?: string | null,
+};
+
+/**  One MCP call, with its secrets already masked by the core. */
+export type AuditEventItem_Serialize = {
+	id: number,
+	atMs: number,
+	session: string | null,
+	client: string,
+	connection: string,
+	tool: string | null,
+	statement: string,
+	status: AuditStatusItem,
+	rows: number | null,
+	durationMs: number | null,
+	detail: string | null,
+};
+
+export type AuditFilterItem = AuditFilterItem_Serialize | AuditFilterItem_Deserialize;
+
+export type AuditFilterItem_Deserialize = {
+	search: string,
+	tool?: string | null,
+	status?: AuditStatusItem | null,
+	session?: string | null,
+};
+
+export type AuditFilterItem_Serialize = {
+	search: string,
+	tool: string | null,
+	status: AuditStatusItem | null,
+	session: string | null,
+};
+
+export type AuditFormatItem = "csv" | "json";
+
+export type AuditPageItem = AuditPageItem_Serialize | AuditPageItem_Deserialize;
+
+export type AuditPageItem_Deserialize = {
+	events: AuditEventItem_Deserialize[],
+	/**  How many the filter keeps in all. */
+	total: number,
+};
+
+export type AuditPageItem_Serialize = {
+	events: AuditEventItem_Serialize[],
+	/**  How many the filter keeps in all. */
+	total: number,
+};
+
+export type AuditSessionItem = {
+	session: string,
+	client: string,
+	startedMs: number,
+	endedMs: number,
+	calls: number,
+	refused: number,
+	failed: number,
+};
+
+export type AuditStatusItem = "ok" | "error" | "refused" | "cleared";
+
 /**  An object bookmarked in the explorer (ADR-026). */
 export type BookmarkItem = {
 	connection: string,
@@ -345,12 +625,21 @@ export type CellEditItem_Serialize = {
 	value: string | null,
 };
 
-/**  A rectangle of a result: rows and columns by position. */
+/**
+ *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
+ *  out the columns it hides).
+ */
 export type CellRange = {
 	firstRow: number,
 	rows: number,
-	firstColumn: number,
-	columns: number,
+	columns: number[],
+};
+
+/**  The clipboard form of a connection: no secrets, nothing that runs a program. */
+export type ClipboardConnectionItem = {
+	text: string,
+	/**  Settings left out of the text, by the file's field names. */
+	leftOut: string[],
 };
 
 export type ColumnDetails = ColumnDetails_Serialize | ColumnDetails_Deserialize;
@@ -441,6 +730,10 @@ export type ConnectionDraftItem_Deserialize = {
 	personal: boolean,
 	folder: string,
 	name: string,
+	/**  Free text, over lines if needed; empty for none. */
+	description: string,
+	/**  As typed; the core normalises and validates them. */
+	tags: string[],
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	env: string,
@@ -466,6 +759,10 @@ export type ConnectionDraftItem_Deserialize = {
 	readOnly: boolean,
 	/**  Seconds idle before a keep-alive (ADR-028); null or 0 for off. */
 	keepalive?: number | null,
+	/**  Seconds the database may take to connect (ADR-032); null for the default. */
+	connectTimeout?: number | null,
+	/**  Seconds a statement may run from the editor (ADR-035); `None` or 0 for no limit. */
+	statementTimeout?: number | null,
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
@@ -479,6 +776,10 @@ export type ConnectionDraftItem_Serialize = {
 	personal: boolean,
 	folder: string,
 	name: string,
+	/**  Free text, over lines if needed; empty for none. */
+	description: string,
+	/**  As typed; the core normalises and validates them. */
+	tags: string[],
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	env: string,
@@ -504,6 +805,10 @@ export type ConnectionDraftItem_Serialize = {
 	readOnly: boolean,
 	/**  Seconds idle before a keep-alive (ADR-028); null or 0 for off. */
 	keepalive: number | null,
+	/**  Seconds the database may take to connect (ADR-032); null for the default. */
+	connectTimeout: number | null,
+	/**  Seconds a statement may run from the editor (ADR-035); `None` or 0 for no limit. */
+	statementTimeout: number | null,
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
@@ -515,8 +820,14 @@ export type ConnectionItem_Deserialize = {
 	/**  `prod/orders`, or `~/local` if it is personal. */
 	id: string,
 	name: string,
+	/**  What the database is for, in the user's words; may span lines. */
+	description?: string | null,
+	/**  Short labels to find the connection; filtered on in the explorer. */
+	tags: string[],
 	engine: string,
 	env?: string | null,
+	/**  The type `env` names (ADR-029); `None` for no label or a plain one. */
+	kind?: ConnectionTypeItem_Deserialize | null,
 	folders: string[],
 	personal: boolean,
 	tunnel?: string | null,
@@ -529,14 +840,134 @@ export type ConnectionItem_Serialize = {
 	/**  `prod/orders`, or `~/local` if it is personal. */
 	id: string,
 	name: string,
+	/**  What the database is for, in the user's words; may span lines. */
+	description: string | null,
+	/**  Short labels to find the connection; filtered on in the explorer. */
+	tags: string[],
 	engine: string,
 	env: string | null,
+	/**  The type `env` names (ADR-029); `None` for no label or a plain one. */
+	kind: ConnectionTypeItem_Serialize | null,
 	folders: string[],
 	personal: boolean,
 	tunnel: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
 	readOnly: boolean,
+};
+
+/**
+ *  What testing a connection from its form gives (ADR-032). The steps arrive as they change
+ *  through the command's channel; this is the end.
+ */
+export type ConnectionTestOutcome = ConnectionTestOutcome_Serialize | ConnectionTestOutcome_Deserialize;
+
+/**
+ *  What testing a connection from its form gives (ADR-032). The steps arrive as they change
+ *  through the command's channel; this is the end.
+ */
+export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" } | 
+/**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
+{ kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string } | 
+/**  Personal `${user.…}` variables to ask for first (ADR-022). */
+{ kind: "missingVariables"; names: string[] };
+
+/**
+ *  What testing a connection from its form gives (ADR-032). The steps arrive as they change
+ *  through the command's channel; this is the end.
+ */
+export type ConnectionTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" } | 
+/**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
+{ kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string } | 
+/**  Personal `${user.…}` variables to ask for first (ADR-022). */
+{ kind: "missingVariables"; names: string[] };
+
+/**
+ *  One type as the Settings page edits it: what the personal layer says (empty texts and
+ *  `null` for what it leaves to the team or the built-in definition).
+ */
+export type ConnectionTypeDraft = ConnectionTypeDraft_Serialize | ConnectionTypeDraft_Deserialize;
+
+/**
+ *  One type as the Settings page edits it: what the personal layer says (empty texts and
+ *  `null` for what it leaves to the team or the built-in definition).
+ */
+export type ConnectionTypeDraft_Deserialize = {
+	name: string,
+	tone?: ToneItem | null,
+	description: string,
+	confirmExecution: boolean,
+	confirmDataChanges: boolean,
+	closeIdleAfter?: number | null,
+	manualCommit?: boolean,
+	smartCommit?: boolean,
+};
+
+/**
+ *  One type as the Settings page edits it: what the personal layer says (empty texts and
+ *  `null` for what it leaves to the team or the built-in definition).
+ */
+export type ConnectionTypeDraft_Serialize = {
+	name: string,
+	tone: ToneItem | null,
+	description: string,
+	confirmExecution: boolean,
+	confirmDataChanges: boolean,
+	closeIdleAfter: number | null,
+	manualCommit: boolean,
+	smartCommit: boolean,
+};
+
+/**
+ *  A connection type with every layer applied (ADR-029). The UI shows it; the core decides
+ *  what it does.
+ */
+export type ConnectionTypeItem = ConnectionTypeItem_Serialize | ConnectionTypeItem_Deserialize;
+
+/**
+ *  A connection type with every layer applied (ADR-029). The UI shows it; the core decides
+ *  what it does.
+ */
+export type ConnectionTypeItem_Deserialize = {
+	id: string,
+	name: string,
+	/**  The tone of its badge. */
+	tone: ToneItem,
+	description?: string | null,
+	builtIn: boolean,
+	team: boolean,
+	/**  Production: every change is confirmed. */
+	production: boolean,
+	safeguards: SafeguardsItem_Deserialize,
+	/**  What the built-in and team definitions turn on: the user cannot switch it off. */
+	inherited: SafeguardsItem_Deserialize,
+	/**  The user's own definition or changes, if any. */
+	personal?: ConnectionTypeDraft_Deserialize | null,
+};
+
+/**
+ *  A connection type with every layer applied (ADR-029). The UI shows it; the core decides
+ *  what it does.
+ */
+export type ConnectionTypeItem_Serialize = {
+	id: string,
+	name: string,
+	/**  The tone of its badge. */
+	tone: ToneItem,
+	description: string | null,
+	builtIn: boolean,
+	team: boolean,
+	/**  Production: every change is confirmed. */
+	production: boolean,
+	safeguards: SafeguardsItem_Serialize,
+	/**  What the built-in and team definitions turn on: the user cannot switch it off. */
+	inherited: SafeguardsItem_Serialize,
+	/**  The user's own definition or changes, if any. */
+	personal: ConnectionTypeDraft_Serialize | null,
 };
 
 export type ConstraintDetails = ConstraintDetails_Serialize | ConstraintDetails_Deserialize;
@@ -629,6 +1060,14 @@ export type DbeaverScan_Serialize = {
 	connections: DbeaverItem_Serialize[],
 };
 
+/**  A connection made by "Duplicate" (ADR-030). */
+export type DuplicatedItem = {
+	id: string,
+	name: string,
+	/**  Its password was in the keychain and the copy has its own entry now. */
+	passwordCopied: boolean,
+};
+
 export type EditableTableItem = {
 	schema: string,
 	name: string,
@@ -647,6 +1086,38 @@ item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string 
 export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string };
+
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem = EngineChangeItem_Serialize | EngineChangeItem_Deserialize;
+
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem_Deserialize = {
+	from: string,
+	to: string,
+	kept: string[],
+	changed: FieldChangeItem_Deserialize[],
+	dropped: string[],
+	required: string[],
+};
+
+/**
+ *  What changing a connection's engine does to its settings (ADR-030), by the file's field
+ *  names. Values are what the form shows: a password only as its reference.
+ */
+export type EngineChangeItem_Serialize = {
+	from: string,
+	to: string,
+	kept: string[],
+	changed: FieldChangeItem_Serialize[],
+	dropped: string[],
+	required: string[],
+};
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
 export type EngineItem = EngineItem_Serialize | EngineItem_Deserialize;
@@ -675,6 +1146,9 @@ export type EngineItem_Serialize = {
 	available: boolean,
 };
 
+/**  The answer to a paused run. */
+export type ErrorAnswerItem = "stop" | "skip" | "skipAll";
+
 /**  A connection's explorer filter: personal, per workspace and connection (ADR-025). */
 export type ExplorerFilterItem = {
 	schemas: NameFilterItem,
@@ -692,6 +1166,109 @@ export type ExplorerPreferencesItem = {
 	serverSideFilters: boolean,
 	linkWithEditor: boolean,
 };
+
+/**  How an export writes its file (ADR-034). The core checks the delimiter. */
+export type ExportFileOptions = ExportFileOptions_Serialize | ExportFileOptions_Deserialize;
+
+/**  How an export writes its file (ADR-034). The core checks the delimiter. */
+export type ExportFileOptions_Deserialize = {
+	format: TextFormat,
+	/**  Column names as the first line (CSV and TSV). */
+	header: boolean,
+	/**  One character (CSV only). */
+	delimiter: string,
+	nullText: string,
+	escapeFormulas: boolean,
+	encoding: TextEncodingItem,
+	/**  Columns of the result by position, in order (the shown ones); `None`: all. */
+	columns?: number[] | null,
+};
+
+/**  How an export writes its file (ADR-034). The core checks the delimiter. */
+export type ExportFileOptions_Serialize = {
+	format: TextFormat,
+	/**  Column names as the first line (CSV and TSV). */
+	header: boolean,
+	/**  One character (CSV only). */
+	delimiter: string,
+	nullText: string,
+	escapeFormulas: boolean,
+	encoding: TextEncodingItem,
+	/**  Columns of the result by position, in order (the shown ones); `None`: all. */
+	columns: number[] | null,
+};
+
+/**  How a streaming export ended. */
+export type ExportOutcome = { kind: "done"; summary: ExportSummaryItem } | { kind: "cancelled" } | 
+/**  The connection's type confirms execution: ask, then export again with `confirmed`. */
+{ kind: "needsConfirmation" } | 
+/**  Not a read: only the loaded rows can be exported. */
+{ kind: "notARead"; message: string } | { kind: "failed"; message: string };
+
+/**
+ *  Rows and bytes written so far by a streaming export; `table` is the position of the table
+ *  being written when several are exported.
+ */
+export type ExportProgressItem = ExportProgressItem_Serialize | ExportProgressItem_Deserialize;
+
+/**
+ *  Rows and bytes written so far by a streaming export; `table` is the position of the table
+ *  being written when several are exported.
+ */
+export type ExportProgressItem_Deserialize = {
+	table?: number | null,
+	rows: number | null,
+	bytes: number | null,
+};
+
+/**
+ *  Rows and bytes written so far by a streaming export; `table` is the position of the table
+ *  being written when several are exported.
+ */
+export type ExportProgressItem_Serialize = {
+	table: number | null,
+	rows: number | null,
+	bytes: number | null,
+};
+
+/**  What writing an export file did. */
+export type ExportSummaryItem = {
+	rows: number | null,
+	bytes: number | null,
+	/**  Characters the encoding lacks, written as `?`. */
+	replaced: number | null,
+};
+
+/**  How exporting several tables ended: the files written, and where it stopped if it did. */
+export type ExportTablesOutcome = ExportTablesOutcome_Serialize | ExportTablesOutcome_Deserialize;
+
+/**  How exporting several tables ended: the files written, and where it stopped if it did. */
+export type ExportTablesOutcome_Deserialize = {
+	files: ExportedFileItem[],
+	cancelled: boolean,
+	/**  Position of the table that failed, with why. */
+	failedTable?: number | null,
+	error?: string | null,
+};
+
+/**  How exporting several tables ended: the files written, and where it stopped if it did. */
+export type ExportTablesOutcome_Serialize = {
+	files: ExportedFileItem[],
+	cancelled: boolean,
+	/**  Position of the table that failed, with why. */
+	failedTable: number | null,
+	error: string | null,
+};
+
+/**  A file written by `export_tables`. */
+export type ExportedFileItem = {
+	schema: string,
+	name: string,
+	path: string,
+	summary: ExportSummaryItem,
+};
+
+export type FailureKindItem = "config" | "passwordRequired" | "cancelled" | "proxyAuth" | "sshAuth" | "hostUnreachable" | "hostKeyChanged" | "hostKeyRejected" | "dbAuth" | "dbNotFound" | "tls" | "timeout" | "kubernetes" | "other";
 
 /**
  *  One field of a changed repository item. Repository files hold secret references, never
@@ -719,18 +1296,49 @@ export type FieldChangeItem_Serialize = {
 	after: string | null,
 };
 
+/**  The encoding a `.sql` file was read in and is written back in. */
+export type FileEncodingItem = "utf8" | "utf8Bom" | "utf16Le" | "utf16Be" | "windows1252";
+
+export type FileFormatItem = {
+	encoding: FileEncodingItem,
+	lineEnding: LineEndingItem,
+};
+
 /**  What "Hide" and "Show only" in the explorer do with one name. */
 export type FilterActionItem = "hide" | "showOnly";
 
 export type FilterKindItem = "schemas" | "objects" | "columns";
 
 /**  A column filter operator (see `spelaion_core::FilterOp`). */
-export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "isNull" | "isNotNull";
+export type FilterOpItem = "eq" | "notEq" | "gt" | "lt" | "ge" | "le" | "like" | "notLike" | "contains" | "notContains" | "isNull" | "isNotNull";
 
 /**  Rows left after filtering a result, out of all it has. */
 export type FilterOutcome = {
 	rows: number,
 	total: number,
+};
+
+/**  A cell that matches the search: its row in the current view and its column. */
+export type FindMatchItem = {
+	row: number,
+	column: number,
+};
+
+/**
+ *  What a search in a result found (`None` from `find_in_result` when a newer search on the
+ *  same result replaced it).
+ */
+export type FindOutcome = {
+	count: number,
+	/**  More matches than the core keeps: the count reads "N+". */
+	truncated: boolean,
+};
+
+/**  The match stepped to, and its place among all of them (from 0). */
+export type FindStepItem = {
+	index: number,
+	row: number,
+	column: number,
 };
 
 export type ForeignKeyDetails = {
@@ -749,6 +1357,13 @@ export type FoundObjectItem_Deserialize = { kind: "relation"; object: ObjectItem
 
 /**  What "Open object by name" found: a relation or another object of a schema. */
 export type FoundObjectItem_Serialize = { kind: "relation"; object: ObjectItem_Serialize } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
+
+/**  How the result grid draws its cells; personal, like the theme. */
+export type GridPreferencesItem = {
+	zebra: boolean,
+	nullText: boolean,
+	boolCheckboxes: boolean,
+};
 
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
 
@@ -827,6 +1442,14 @@ export type IndexDetails = {
 	definition: string,
 };
 
+/**
+ *  A dialog nobody waits for any more (the connection test that asked was stopped, or
+ *  the answer took too long): the UI closes it.
+ */
+export type InteractionClosed = {
+	id: number,
+};
+
 export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; port: number; algorithm: string; fingerprint: string } | { kind: "secret"; title: string; prompt: string; echo: boolean; label: SecretLabel };
 
 /**  Dialog the tunnel needs to show. The UI answers with `answer_interaction`. */
@@ -861,11 +1484,194 @@ export type KubernetesDraftItem = {
 	kubectl: string,
 };
 
+/**  The line break a `.sql` file is written with. */
+export type LineEndingItem = "lf" | "crLf" | "cr";
+
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem = MappedConnectionItem_Serialize | MappedConnectionItem_Deserialize;
+
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem_Deserialize = {
+	draft: ConnectionDraftItem_Deserialize,
+	change: EngineChangeItem_Deserialize,
+};
+
+/**  The form of a connection mapped to another engine, and what that did. */
+export type MappedConnectionItem_Serialize = {
+	draft: ConnectionDraftItem_Serialize,
+	change: EngineChangeItem_Serialize,
+};
+
+/**  What agents can do on one connection, as the core decides it. */
+export type McpAccessItem = McpAccessItem_Serialize | McpAccessItem_Deserialize;
+
+/**  What agents can do on one connection, as the core decides it. */
+export type McpAccessItem_Deserialize = {
+	id: string,
+	name: string,
+	engine: string,
+	personal: boolean,
+	visibility: McpVisibilityItem,
+	/**  For a visible connection. */
+	access?: McpAccessKindItem | null,
+	reason?: McpReadOnlyReasonItem | null,
+	kind?: ConnectionTypeItem_Deserialize | null,
+};
+
+/**  What agents can do on one connection, as the core decides it. */
+export type McpAccessItem_Serialize = {
+	id: string,
+	name: string,
+	engine: string,
+	personal: boolean,
+	visibility: McpVisibilityItem,
+	/**  For a visible connection. */
+	access: McpAccessKindItem | null,
+	reason: McpReadOnlyReasonItem | null,
+	kind: ConnectionTypeItem_Serialize | null,
+};
+
+export type McpAccessKindItem = "readOnly" | "readWrite";
+
+export type McpCliItem = {
+	path: string,
+	source: McpCliSourceItem,
+};
+
+/**  Where the `spelaiondb` the clients will run was found. */
+export type McpCliSourceItem = "bundled" | "path" | "override";
+
+/**  One AI client's card. */
+export type McpClientItem = McpClientItem_Serialize | McpClientItem_Deserialize;
+
+/**  One AI client's card. */
+export type McpClientItem_Deserialize = {
+	id: string,
+	name: string,
+	path: string,
+	state: McpInstallStateItem,
+	/**  Why the file cannot be read, if it cannot. */
+	problem?: string | null,
+	/**  The whole configuration, to copy into the file by hand. */
+	manualConfig: string,
+	manualLanguage: McpConfigLanguageItem,
+	/**  `claude mcp add …`, for Claude Code. */
+	addCommand?: string | null,
+};
+
+/**  One AI client's card. */
+export type McpClientItem_Serialize = {
+	id: string,
+	name: string,
+	path: string,
+	state: McpInstallStateItem,
+	/**  Why the file cannot be read, if it cannot. */
+	problem: string | null,
+	/**  The whole configuration, to copy into the file by hand. */
+	manualConfig: string,
+	manualLanguage: McpConfigLanguageItem,
+	/**  `claude mcp add …`, for Claude Code. */
+	addCommand: string | null,
+};
+
+export type McpClientsItem = McpClientsItem_Serialize | McpClientsItem_Deserialize;
+
+export type McpClientsItem_Deserialize = {
+	/**  `None`: no `spelaiondb` was found, so nothing can be installed. */
+	cli?: McpCliItem | null,
+	clients: McpClientItem_Deserialize[],
+};
+
+export type McpClientsItem_Serialize = {
+	/**  `None`: no `spelaiondb` was found, so nothing can be installed. */
+	cli: McpCliItem | null,
+	clients: McpClientItem_Serialize[],
+};
+
+export type McpConfigLanguageItem = "json" | "toml";
+
+export type McpDiffKindItem = "same" | "added" | "removed" | "gap";
+
+export type McpDiffLineItem = {
+	kind: McpDiffKindItem,
+	text: string,
+	/**  Lines left out, for a gap. */
+	skipped: number,
+};
+
+export type McpInstallDoneItem = McpInstallDoneItem_Serialize | McpInstallDoneItem_Deserialize;
+
+export type McpInstallDoneItem_Deserialize = {
+	/**  Where the previous file was kept, if there was one. */
+	backup?: string | null,
+};
+
+export type McpInstallDoneItem_Serialize = {
+	/**  Where the previous file was kept, if there was one. */
+	backup: string | null,
+};
+
+/**  The change that installs our server in one client, shown before it is written. */
+export type McpInstallPlanItem = {
+	client: string,
+	path: string,
+	/**  The file does not exist yet. */
+	creates: boolean,
+	diff: McpDiffLineItem[],
+	/**  Sent back to write exactly this change. */
+	fingerprint: string,
+};
+
+export type McpInstallStateItem = "noFile" | "notInstalled" | "installed" | "different" | "unreadable";
+
+export type McpReadOnlyReasonItem = "allAgents" | "connection" | "writesDenied" | "confirmUnsupported";
+
+export type McpSettingsItem = {
+	readOnly: boolean,
+	outputFormat: ToolOutputItem,
+};
+
+export type McpVisibilityItem = "visible" | "notExposed" | "untrusted";
+
 /**  Include and exclude patterns for one kind of name (ADR-025). */
 export type NameFilterItem = {
 	include: string[],
 	exclude: string[],
 };
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview = NamePatternPreview_Serialize | NamePatternPreview_Deserialize;
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview_Deserialize = {
+	/**  For a PostgreSQL server; empty when the pattern is not valid. */
+	server: string,
+	/**  For a SQLite file. */
+	file: string,
+	/**  Why the pattern is not valid. */
+	error?: string | null,
+	/**  Unknown variables, each shown to the user. */
+	unknown: string[],
+	/**  Every variable a pattern can use. */
+	variables: string[],
+};
+
+/**  A connection name pattern checked and shown for two sample connections. */
+export type NamePatternPreview_Serialize = {
+	/**  For a PostgreSQL server; empty when the pattern is not valid. */
+	server: string,
+	/**  For a SQLite file. */
+	file: string,
+	/**  Why the pattern is not valid. */
+	error: string | null,
+	/**  Unknown variables, each shown to the user. */
+	unknown: string[],
+	/**  Every variable a pattern can use. */
+	variables: string[],
+};
+
+/**  How column names are copied (see `spelaion_core::NameStyle`). */
+export type NameStyleItem = "plain" | "quoted" | "qualified" | "list";
 
 /**
  *  A tunnel file shown as a network profile (ADR-027), for Settings → Network. Only what the
@@ -907,6 +1713,11 @@ export type NetworkProfileItem_Serialize = {
 export type NewIndexKindItem = "index" | "uniqueIndex" | "uniqueConstraint" | "primaryKey";
 
 export type NewTableElementItem = { kind: "column"; name: string; dataType: string; nullable: boolean; default: string } | { kind: "constraint"; name: string; constraintKind: string; columns: string[]; expression: string } | { kind: "foreignKey"; name: string; columns: string[]; referencedSchema: string; referencedTable: string; referencedColumns: string[] } | { kind: "index"; name: string; columns: string[]; unique: boolean } | { kind: "trigger"; name: string; timing: string; event: string; body: string };
+
+export type NoticeItem = {
+	severity: string,
+	message: string,
+};
 
 /**  What the explorer may offer on a session's engine (ADR-026). */
 export type ObjectActionsItem = {
@@ -989,11 +1800,70 @@ export type ObjectTargetItem_Serialize = { kind: "schema"; name: string } |
 /**  `relation` is the `kind` of an `ObjectItem`: `table`, `view`… */
 { kind: "relation"; schema: string; name: string; relation: string } | { kind: "column"; schema: string; table: string; name: string } | { kind: "index"; schema: string; table: string; name: string; primary: boolean } | { kind: "constraint"; schema: string; table: string; name: string; constraint: ConstraintKindItem } | { kind: "foreignKey"; schema: string; table: string; name: string } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
 
+/**  What a run does when a statement fails (ADR-035). */
+export type OnErrorItem = "stop" | "continue" | "ask";
+
+/**  The file behind a kept file tab. */
+export type OpenTabFileItem = OpenTabFileItem_Serialize | OpenTabFileItem_Deserialize;
+
+/**  The file behind a kept file tab. */
+export type OpenTabFileItem_Deserialize = {
+	path: string,
+	hash?: string | null,
+	format: FileFormatItem,
+	/**  The text differs from the file: it is restored as unsaved. */
+	modified: boolean,
+};
+
+/**  The file behind a kept file tab. */
+export type OpenTabFileItem_Serialize = {
+	path: string,
+	hash: string | null,
+	format: FileFormatItem,
+	/**  The text differs from the file: it is restored as unsaved. */
+	modified: boolean,
+};
+
+/**  An editor tab as kept between runs: text and settings, never results or session state. */
+export type OpenTabItem = OpenTabItem_Serialize | OpenTabItem_Deserialize;
+
+/**  An editor tab as kept between runs: text and settings, never results or session state. */
+export type OpenTabItem_Deserialize = {
+	title?: string | null,
+	text: string,
+	connection?: string | null,
+	pinned: boolean,
+	onError?: OnErrorItem | null,
+	timeoutSeconds?: number | null,
+	snippetName?: string | null,
+	file?: OpenTabFileItem_Deserialize | null,
+};
+
+/**  An editor tab as kept between runs: text and settings, never results or session state. */
+export type OpenTabItem_Serialize = {
+	title: string | null,
+	text: string,
+	connection: string | null,
+	pinned: boolean,
+	onError: OnErrorItem | null,
+	timeoutSeconds: number | null,
+	snippetName: string | null,
+	file: OpenTabFileItem_Serialize | null,
+};
+
 export type PasswordMode = "none" | "keychain" | "prompt" | "env" | 
 /**  A reference the form cannot build (`op://…`, `cmd:…`, `keychain:<name>`), kept as is. */
 "other" | 
 /**  Short-lived tokens from a cloud provider's CLI (ADR-022). */
 "awsRds" | "azureAd" | "googleCloudSql";
+
+/**  A personal connection made from clipboard text (ADR-030). */
+export type PastedItem = {
+	id: string,
+	name: string,
+	/**  Settings of the text that were not taken, by the file's field names. */
+	leftOut: string[],
+};
 
 export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;
 
@@ -1084,8 +1954,82 @@ export type ProxyDraftItem_Serialize = {
 
 export type ProxyTypeItem = "socks5" | "http";
 
+/**
+ *  The window was asked to close while these tabs have a transaction open: the UI asks, then
+ *  calls `quit_app` (ADR-031).
+ */
+export type QuitBlocked = {
+	sessions: string[],
+};
+
+export type RecentFileItem = {
+	path: string,
+	name: string,
+	/**  Still on disk (checked when listed). */
+	exists: boolean,
+};
+
+/**  A table or view chosen in the explorer. */
+export type RelationRefItem = {
+	schema: string,
+	name: string,
+};
+
+/**  What the export dialog says before running a query again (see `spelaion_core::RerunCheck`). */
+export type RerunCheckItem = RerunCheckItem_Serialize | RerunCheckItem_Deserialize;
+
+/**  What the export dialog says before running a query again (see `spelaion_core::RerunCheck`). */
+export type RerunCheckItem_Deserialize = {
+	refused?: string | null,
+	openTransaction: boolean,
+};
+
+/**  What the export dialog says before running a query again (see `spelaion_core::RerunCheck`). */
+export type RerunCheckItem_Serialize = {
+	refused: string | null,
+	openTransaction: boolean,
+};
+
+/**  Why a restored tab is not exactly as it was kept. */
+export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } | { kind: "fileMissing" } | { kind: "fileUnreadable"; message: string } | { kind: "fileChangedOnDisk" };
+
+export type RestoredTabItem = RestoredTabItem_Serialize | RestoredTabItem_Deserialize;
+
+export type RestoredTabItem_Deserialize = {
+	tab: OpenTabItem_Deserialize,
+	notes: RestoreNoteItem[],
+};
+
+export type RestoredTabItem_Serialize = {
+	tab: OpenTabItem_Serialize,
+	notes: RestoreNoteItem[],
+};
+
+/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+export type RestoredTabsItem = RestoredTabsItem_Serialize | RestoredTabsItem_Deserialize;
+
+/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+export type RestoredTabsItem_Deserialize = {
+	/**  Which folder they belong to: sent back with every `save_tabs`. */
+	scope: string,
+	tabs: RestoredTabItem_Deserialize[],
+	active?: number | null,
+	/**  The personal "reconnect at startup" setting: connect only, never run. */
+	reconnect: boolean,
+};
+
+/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+export type RestoredTabsItem_Serialize = {
+	/**  Which folder they belong to: sent back with every `save_tabs`. */
+	scope: string,
+	tabs: RestoredTabItem_Serialize[],
+	active: number | null,
+	/**  The personal "reconnect at startup" setting: connect only, never run. */
+	reconnect: boolean,
+};
+
 /**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
-export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "productionWrite";
+export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "dataChange" | "execution";
 
 /**  A statement of a script that needs confirmation; `start`/`end` in UTF-8 bytes. */
 export type RiskyItem = {
@@ -1103,6 +2047,59 @@ export type RowChangeItem_Deserialize = { kind: "update"; row: number; values: C
 
 /**  A pending change of a table data tab (ADR-014), by position in the page shown. */
 export type RowChangeItem_Serialize = { kind: "update"; row: number; values: CellEditItem_Serialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Serialize[] };
+
+/**  How one run goes: its error mode and, if set, its own statement timeout. */
+export type RunOptionsItem = RunOptionsItem_Serialize | RunOptionsItem_Deserialize;
+
+/**  How one run goes: its error mode and, if set, its own statement timeout. */
+export type RunOptionsItem_Deserialize = {
+	onError: OnErrorItem,
+	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
+	timeoutSeconds?: number | null,
+};
+
+/**  How one run goes: its error mode and, if set, its own statement timeout. */
+export type RunOptionsItem_Serialize = {
+	onError: OnErrorItem,
+	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
+	timeoutSeconds: number | null,
+};
+
+/**  What a connection type asks for (ADR-029). */
+export type SafeguardsItem = SafeguardsItem_Serialize | SafeguardsItem_Deserialize;
+
+/**  What a connection type asks for (ADR-029). */
+export type SafeguardsItem_Deserialize = {
+	confirmExecution: boolean,
+	confirmDataChanges: boolean,
+	/**  Seconds. */
+	closeIdleAfter?: number | null,
+	/**  Editor tabs start with auto-commit off (ADR-031). */
+	manualCommit: boolean,
+	/**  The first write switches a tab to manual commit (ADR-031). */
+	smartCommit: boolean,
+};
+
+/**  What a connection type asks for (ADR-029). */
+export type SafeguardsItem_Serialize = {
+	confirmExecution: boolean,
+	confirmDataChanges: boolean,
+	/**  Seconds. */
+	closeIdleAfter: number | null,
+	/**  Editor tabs start with auto-commit off (ADR-031). */
+	manualCommit: boolean,
+	/**  The first write switches a tab to manual commit (ADR-031). */
+	smartCommit: boolean,
+};
+
+/**  What a save did. The conflicts are answers, not errors: the app asks the user. */
+export type SaveFileOutcome = { kind: "saved"; path: string; name: string; hash: string; format: FileFormatItem } | 
+/**  The file changed on disk since it was read or saved: overwrite, reload or cancel. */
+{ kind: "changedOnDisk" } | 
+/**  The file was deleted on disk since: write it again or cancel. */
+{ kind: "deletedOnDisk" } | 
+/**  The file's encoding cannot hold this character: save as UTF-8 instead? */
+{ kind: "unrepresentable"; character: string; encoding: string };
 
 export type SchemaItem = {
 	name: string,
@@ -1148,15 +2145,74 @@ export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
 export type ScriptEvent_Deserialize = 
 /**  Byte range of the statement within the script. */
-{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null } | { kind: "statementFailed"; index: number; message: string; code?: string | null; detail?: string | null; hint?: string | null; 
+{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected?: number | null; elapsedMs: number | null; 
+/**  Until the engine's first answer. */
+executionMs: number | null; 
+/**  Reading the rows after it. */
+fetchMs: number | null } | { kind: "statementFailed"; index: number; message: string; code?: string | null; detail?: string | null; hint?: string | null; 
 /**  Error position in bytes within the script, to underline it. */
-scriptOffset?: number | null; cancelled: boolean } | { kind: "scriptFinished"; executed: number; failed: boolean } | { kind: "historyWarning"; message: string };
+scriptOffset?: number | null; cancelled: boolean; 
+/**  It ran longer than the run's statement timeout. */
+timedOut: boolean } | 
+/**  The run waits for `answer_script_error` with this ticket (ADR-035). */
+{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
 
 export type ScriptEvent_Serialize = 
 /**  Byte range of the statement within the script. */
-{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null } | { kind: "statementFailed"; index: number; message: string; code: string | null; detail: string | null; hint: string | null; 
+{ kind: "statementStarted"; index: number; start: number; end: number } | { kind: "resultStarted"; index: number; result: number; columns: ColumnItem[] } | { kind: "rows"; index: number; result: number; totalRows: number } | { kind: "notice"; index: number; severity: string; message: string } | { kind: "statementFinished"; index: number; rowsAffected: number | null; elapsedMs: number | null; 
+/**  Until the engine's first answer. */
+executionMs: number | null; 
+/**  Reading the rows after it. */
+fetchMs: number | null } | { kind: "statementFailed"; index: number; message: string; code: string | null; detail: string | null; hint: string | null; 
 /**  Error position in bytes within the script, to underline it. */
-scriptOffset: number | null; cancelled: boolean } | { kind: "scriptFinished"; executed: number; failed: boolean } | { kind: "historyWarning"; message: string };
+scriptOffset: number | null; cancelled: boolean; 
+/**  It ran longer than the run's statement timeout. */
+timedOut: boolean } | 
+/**  The run waits for `answer_script_error` with this ticket (ADR-035). */
+{ kind: "errorPaused"; index: number; ticket: number; remaining: number } | { kind: "scriptFinished"; executed: number; failed: boolean; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string };
+
+/**  How scripts run from the editor, shared by every workspace. */
+export type ScriptPreferencesItem = {
+	onError: OnErrorItem,
+	notify: boolean,
+	notifyAfterSeconds: number,
+};
+
+/**  Why a run stopped with statements left. */
+export type ScriptStopItem = {
+	kind: ScriptStopKind,
+	/**  The statement it stopped at. */
+	index: number,
+};
+
+export type ScriptStopKind = "failed" | "cancelled" | "transactionAborted" | "transactionRolledBack" | "closed";
+
+/**  "N statements: X ok, Y failed", and where the time went (ADR-035). */
+export type ScriptSummaryItem = ScriptSummaryItem_Serialize | ScriptSummaryItem_Deserialize;
+
+/**  "N statements: X ok, Y failed", and where the time went (ADR-035). */
+export type ScriptSummaryItem_Deserialize = {
+	statements: number,
+	executed: number,
+	succeeded: number,
+	failed: number,
+	notRun: number,
+	stop?: ScriptStopItem | null,
+	executionMs: number | null,
+	fetchMs: number | null,
+};
+
+/**  "N statements: X ok, Y failed", and where the time went (ADR-035). */
+export type ScriptSummaryItem_Serialize = {
+	statements: number,
+	executed: number,
+	succeeded: number,
+	failed: number,
+	notRun: number,
+	stop: ScriptStopItem | null,
+	executionMs: number | null,
+	fetchMs: number | null,
+};
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
@@ -1188,9 +2244,38 @@ export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "e
  *  An editor session's connection is gone (ADR-028): the tab shows it and offers to
  *  reconnect. Nothing was re-run.
  */
-export type SessionLost = {
+export type SessionLost = SessionLost_Serialize | SessionLost_Deserialize;
+
+/**
+ *  An editor session's connection is gone (ADR-028): the tab shows it and offers to
+ *  reconnect. Nothing was re-run.
+ */
+export type SessionLost_Deserialize = {
 	session: string,
 	reason: string,
+	/**  Closed by its connection type after this many seconds idle (ADR-029), not lost. */
+	idleSeconds?: number | null,
+	/**
+	 *  A transaction was open when it was lost: the server rolls back what was not committed
+	 *  (ADR-031).
+	 */
+	openTransaction: boolean,
+};
+
+/**
+ *  An editor session's connection is gone (ADR-028): the tab shows it and offers to
+ *  reconnect. Nothing was re-run.
+ */
+export type SessionLost_Serialize = {
+	session: string,
+	reason: string,
+	/**  Closed by its connection type after this many seconds idle (ADR-029), not lost. */
+	idleSeconds: number | null,
+	/**
+	 *  A transaction was open when it was lost: the server rolls back what was not committed
+	 *  (ADR-031).
+	 */
+	openTransaction: boolean,
 };
 
 /**  A saved query; `connection` is empty when it was saved without one. */
@@ -1202,6 +2287,17 @@ export type SnippetItem = {
 	updatedMs: number,
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
+};
+
+/**  A `.sql` file read by the core: its text with `\n` line breaks. */
+export type SqlFileItem = {
+	path: string,
+	/**  The file's name, for the tab's title. */
+	name: string,
+	text: string,
+	format: FileFormatItem,
+	/**  SHA-256 of the file's bytes, sent back with the next save. */
+	hash: string,
 };
 
 /**  SQL the explorer can write for a table (see `spelaion_core::SqlTemplate`). */
@@ -1227,6 +2323,14 @@ export type TableDetails_Serialize = {
 	indexes: IndexDetails[],
 };
 
+/**  A table data tab's view to export: every row its filter keeps, in its order. */
+export type TableExportItem = {
+	schema: string,
+	name: string,
+	filter: string,
+	orderBy: string,
+};
+
 /**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */
 export type TablePageItem = {
 	schema: string,
@@ -1243,8 +2347,76 @@ export type TableRefItem = {
 	name: string,
 };
 
+export type TestFailureItem = {
+	kind: FailureKindItem,
+	message: string,
+	/**  The core's English hint; the UI shows its translation of `kind`. */
+	hint: string,
+};
+
+/**  The end of a connection test: its steps and the diagnostics to copy, redacted by the core. */
+export type TestReportItem = TestReportItem_Serialize | TestReportItem_Deserialize;
+
+/**  The end of a connection test: its steps and the diagnostics to copy, redacted by the core. */
+export type TestReportItem_Deserialize = {
+	ok: boolean,
+	stopped: boolean,
+	networkOnly: boolean,
+	serverVersion?: string | null,
+	steps: TestStepItem_Deserialize[],
+	diagnostics: string,
+};
+
+/**  The end of a connection test: its steps and the diagnostics to copy, redacted by the core. */
+export type TestReportItem_Serialize = {
+	ok: boolean,
+	stopped: boolean,
+	networkOnly: boolean,
+	serverVersion: string | null,
+	steps: TestStepItem_Serialize[],
+	diagnostics: string,
+};
+
+/**  One line of the connection test's log. */
+export type TestStepItem = TestStepItem_Serialize | TestStepItem_Deserialize;
+
+/**  One line of the connection test's log. */
+export type TestStepItem_Deserialize = {
+	kind: TestStepKindItem_Deserialize,
+	status: TestStepStatusItem,
+	failure?: TestFailureItem | null,
+	elapsedMs?: number | null,
+	/**  The core's English line, for anything the UI does not translate. */
+	title: string,
+};
+
+/**  One line of the connection test's log. */
+export type TestStepItem_Serialize = {
+	kind: TestStepKindItem_Serialize,
+	status: TestStepStatusItem,
+	failure: TestFailureItem | null,
+	elapsedMs: number | null,
+	/**  The core's English line, for anything the UI does not translate. */
+	title: string,
+};
+
+export type TestStepKindItem = TestStepKindItem_Serialize | TestStepKindItem_Deserialize;
+
+export type TestStepKindItem_Deserialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
+/**  `hop` counts from 1. */
+{ kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context?: string | null; namespace?: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
+
+export type TestStepKindItem_Serialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
+/**  `hop` counts from 1. */
+{ kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context: string | null; namespace: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
+
+export type TestStepStatusItem = "pending" | "running" | "ok" | "failed" | "skipped" | "stopped";
+
+/**  Character encoding of an exported file (see `spelaion_core::TextEncoding`). */
+export type TextEncodingItem = "utf8" | "utf8Bom" | "utf16Le" | "windows1252";
+
 /**  Text format to copy or export rows in. */
-export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList";
+export type TextFormat = "tsv" | "csv" | "json" | "sqlInsert" | "markdown" | "inList" | "html";
 
 /**  A piece of a script, in UTF-8 bytes like every position the core gives. */
 export type TextSpan = {
@@ -1253,6 +2425,86 @@ export type TextSpan = {
 };
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
+
+/**  The tone of a connection type's badge, from the app's fixed palette (ADR-029). */
+export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";
+
+export type ToolOutputItem = "json" | "toon";
+
+/**
+ *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
+ *  auto-commit toggle (ADR-031).
+ */
+export type TransactionChanged = TransactionChanged_Serialize | TransactionChanged_Deserialize;
+
+/**
+ *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
+ *  auto-commit toggle (ADR-031).
+ */
+export type TransactionChanged_Deserialize = {
+	session: string,
+	status: TransactionStatusItem_Deserialize,
+};
+
+/**
+ *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the
+ *  auto-commit toggle (ADR-031).
+ */
+export type TransactionChanged_Serialize = {
+	session: string,
+	status: TransactionStatusItem_Serialize,
+};
+
+/**  What a Commit or Rollback said. */
+export type TransactionOutcomeItem = TransactionOutcomeItem_Serialize | TransactionOutcomeItem_Deserialize;
+
+/**  What a Commit or Rollback said. */
+export type TransactionOutcomeItem_Deserialize = {
+	status: TransactionStatusItem_Deserialize,
+	notices: NoticeItem[],
+};
+
+/**  What a Commit or Rollback said. */
+export type TransactionOutcomeItem_Serialize = {
+	status: TransactionStatusItem_Serialize,
+	notices: NoticeItem[],
+};
+
+/**  What the core last read about a transaction (ADR-031). */
+export type TransactionStateItem = "idle" | "open" | 
+/**  Open, but the engine will only roll it back. */
+"failed";
+
+/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
+export type TransactionStatusItem = TransactionStatusItem_Serialize | TransactionStatusItem_Deserialize;
+
+/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
+export type TransactionStatusItem_Deserialize = {
+	/**  The tab follows its transaction (an editor tab on an engine that can tell). */
+	supported: boolean,
+	autoCommit: boolean,
+	/**  The connection type's smart commit. */
+	smartCommit: boolean,
+	/**  Manual commit came from smart commit: it ends with the transaction. */
+	smartSwitched: boolean,
+	state?: TransactionStateItem | null,
+	/**  Statements run in the open transaction. */
+	statements: number,
+};
+
+/**  An editor tab's transaction, as the core keeps it (ADR-031). The UI only shows it. */
+export type TransactionStatusItem_Serialize = {
+	/**  The tab follows its transaction (an editor tab on an engine that can tell). */
+	supported: boolean,
+	autoCommit: boolean,
+	/**  The connection type's smart commit. */
+	smartCommit: boolean,
+	/**  Manual commit came from smart commit: it ends with the transaction. */
+	smartSwitched: boolean,
+	state: TransactionStateItem | null,
+	/**  Statements run in the open transaction. */
+	statements: number,
+};
 
 export type TunnelDraftItem = TunnelDraftItem_Serialize | TunnelDraftItem_Deserialize;
 
@@ -1296,8 +2548,16 @@ export type TunnelPortsItem = {
 	max: number,
 };
 
-/**  Result of testing a tunnel from the editor. */
-export type TunnelTestOutcome = { kind: "connected" } | 
+/**  Result of testing a network profile from its editor (ADR-032). */
+export type TunnelTestOutcome = TunnelTestOutcome_Serialize | TunnelTestOutcome_Deserialize;
+
+/**  Result of testing a network profile from its editor (ADR-032). */
+export type TunnelTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize } | 
+/**  The repository is not trusted: ask before resolving anything. */
+{ kind: "untrusted" };
+
+/**  Result of testing a network profile from its editor (ADR-032). */
+export type TunnelTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize } | 
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
 

@@ -14,8 +14,8 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
-use crate::draft::{ConnectionDraft, PasswordChoice, slug};
-use crate::load::Source;
+use crate::draft::{ConnectionDraft, PasswordChoice, normalize_tags, slug};
+use crate::load::{Source, check_tag, is_hidden_char};
 use crate::model::{ConnectionFile, Engine, ProxyType, SshAuth, TlsModeConfig, TunnelFile};
 use crate::tunnel_draft::{HopDraft, ProxyDraft, TunnelDraft, TunnelDraftOptions, TunnelPasswords};
 
@@ -30,6 +30,10 @@ pub struct DbeaverConnection {
     /// DBeaver's own identifier (`mysql8-18f…`), to pick connections to import.
     pub id: String,
     pub name: String,
+    /// DBeaver's description of the connection; empty for none.
+    pub description: String,
+    /// DBeaver's tags, a name → value map: `name`, or `name=value` when it has a value.
+    pub tags: Vec<String>,
     /// DBeaver folder, `a/b` for nested ones.
     pub folder: String,
     /// The engine, or why SpelaionDB cannot open it (yet).
@@ -40,7 +44,8 @@ pub struct DbeaverConnection {
     pub database: String,
     pub user: String,
     pub password: Option<Secret>,
-    /// DBeaver's connection type (`dev`, `test`, `prod` or a custom one).
+    /// The built-in type closest to DBeaver's connection type (`dev`, `test` or `prod`,
+    /// ADR-029); empty for none.
     pub env: String,
     pub ssh: Option<DbeaverSsh>,
     /// DBeaver's SOCKS proxy handler (`socks_proxy`), alone or in front of the SSH tunnel.
@@ -139,13 +144,18 @@ pub fn read_dbeaver(dir: &Path) -> Result<Vec<DbeaverConnection>, DbeaverError> 
             .collect();
         files.sort();
         for file in files {
-            let text = std::fs::read_to_string(&file).map_err(|e| unreadable(&file, e))?;
-            let json: Json = serde_json::from_str(&text).map_err(|e| unreadable(&file, e))?;
+            let content = std::fs::read_to_string(&file).map_err(|e| unreadable(&file, e))?;
+            let json: Json = serde_json::from_str(&content).map_err(|e| unreadable(&file, e))?;
             let Some(connections) = json.get("connections").and_then(Json::as_object) else {
                 continue;
             };
+            let types = json.get("connection-types");
             for (id, connection) in connections {
-                out.push(connection_of(id, connection, credentials.get(id)));
+                let mut found = connection_of(id, connection, credentials.get(id));
+                let dbeaver_type =
+                    text(connection.get("configuration").and_then(|c| c.get("type")));
+                found.env = closest_type(&dbeaver_type, types.and_then(|t| t.get(&dbeaver_type)));
+                out.push(found);
             }
         }
     }
@@ -225,6 +235,37 @@ fn seconds(value: Option<&Json>) -> Option<u32> {
     positive(value).map(|ms| u32::try_from(ms.div_ceil(1000)).unwrap_or(u32::MAX))
 }
 
+/// The built-in type closest to a DBeaver connection type (ADR-029): DBeaver's own `dev`,
+/// `test` and `prod` are ours; a custom one that asks before running or changing anything is
+/// Production (never looser than it was), otherwise its id or name decides, and Development
+/// when nothing does. DBeaver's colors are not imported.
+fn closest_type(dbeaver: &str, definition: Option<&Json>) -> String {
+    let id = crate::types::type_id(dbeaver);
+    if id.is_empty() {
+        return String::new();
+    }
+    if ["dev", "test", crate::types::PRODUCTION].contains(&id.as_str()) {
+        return id;
+    }
+    let flag =
+        |key: &str| definition.and_then(|d| d.get(key)).and_then(Json::as_bool) == Some(true);
+    if flag("confirm-data-change") || flag("confirm-execute") {
+        return crate::types::PRODUCTION.into();
+    }
+    let words = format!(
+        "{id} {}",
+        text(definition.and_then(|d| d.get("name"))).to_lowercase()
+    );
+    let has = |parts: &[&str]| parts.iter().any(|p| words.contains(p));
+    if has(&["prod", "live"]) {
+        crate::types::PRODUCTION.into()
+    } else if has(&["test", "qa", "uat", "stag", "preprod"]) {
+        "test".into()
+    } else {
+        "dev".into()
+    }
+}
+
 fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverConnection {
     let config = json.get("configuration").unwrap_or(&Json::Null);
     let provider = text(json.get("provider")).to_lowercase();
@@ -260,6 +301,21 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
     DbeaverConnection {
         id: id.to_string(),
         name: text(json.get("name")),
+        description: text(json.get("description")),
+        tags: json
+            .get("tags")
+            .and_then(Json::as_object)
+            .map(|map| {
+                map.iter()
+                    .map(|(name, value)| match text(Some(value)) {
+                        value if value.is_empty() || value == name.trim() => {
+                            name.trim().to_string()
+                        }
+                        value => format!("{}={value}", name.trim()),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         folder: text(json.get("folder")),
         engine,
         host: text(config.get("host")),
@@ -267,7 +323,7 @@ fn connection_of(id: &str, json: &Json, credentials: Option<&Json>) -> DbeaverCo
         database,
         user,
         password,
-        env: text(config.get("type")),
+        env: closest_type(&text(config.get("type")), None),
         ssh: ssh_of(config, credentials),
         proxy: proxy_of(config, credentials),
     }
@@ -437,6 +493,8 @@ pub fn import_plan(
             source,
             folder: connection.folder.to_lowercase(),
             name: connection.name.clone(),
+            description: importable_description(&connection.description),
+            tags: importable_tags(&connection.tags),
             engine,
             env: connection.env.clone(),
             host: if sqlite {
@@ -471,6 +529,8 @@ pub fn import_plan(
             read_only: false,
             // Like a connection made in the form: idle sessions are kept alive (ADR-028).
             keepalive: (!sqlite).then_some(ConnectionFile::SUGGESTED_KEEPALIVE),
+            connect_timeout: None,
+            statement_timeout: None,
             mcp_exposed: false,
             mcp_writes: false,
         },
@@ -481,6 +541,38 @@ pub fn import_plan(
         },
         tunnel,
     }
+}
+
+/// A DBeaver description as SpelaionDB accepts it: without hidden characters and cut to the
+/// longest description, so one long note does not stop the connection from being imported.
+fn importable_description(description: &str) -> String {
+    description
+        .chars()
+        .filter(|c| !is_hidden_char(*c) || matches!(c, '\n' | '\r' | '\t'))
+        .take(ConnectionFile::MAX_DESCRIPTION)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// DBeaver tags as SpelaionDB accepts them: commas become spaces, hidden characters go,
+/// and a tag that is still too long, or one past the most a connection holds, is left out,
+/// so a tag does not stop the connection from being imported.
+fn importable_tags(tags: &[String]) -> Vec<String> {
+    let cleaned: Vec<String> = tags
+        .iter()
+        .map(|tag| {
+            tag.chars()
+                .filter(|c| !is_hidden_char(*c) || c.is_whitespace())
+                .map(|c| if c == ',' { ' ' } else { c })
+                .collect()
+        })
+        .collect();
+    normalize_tags(&cleaned)
+        .into_iter()
+        .filter(|tag| check_tag(tag).is_ok())
+        .take(ConnectionFile::MAX_TAGS)
+        .collect()
 }
 
 #[cfg(test)]
@@ -500,9 +592,19 @@ mod tests {
             dir.join("data-sources.json"),
             r#"{
               "folders": {"Prod": {}},
+              "connection-types": {
+                "prod": {"name": "Production", "color": "247,159,129", "confirm-execute": true},
+                "QA Team": {"name": "QA team", "color": "0,128,255", "description": "Shared QA",
+                  "auto-commit": false, "confirm-execute": true, "confirm-data-change": true,
+                  "smart-commit": true, "auto-close-transactions": true,
+                  "auto-close-connections": true, "close-connections-period": 900},
+                "white": {"name": "Plain", "color": "255,255,255"}
+              },
               "connections": {
                 "postgres-jdbc-1": {
                   "provider": "postgresql", "driver": "postgres-jdbc", "name": "Orders PG",
+                  "description": "Orders of the EU shop.\nAsk #data before heavy queries.",
+                  "tags": {"team": "", "region": "eu", "billing": "billing"},
                   "folder": "Prod", "save-password": true,
                   "configuration": {
                     "host": "db.internal", "port": "5432", "database": "orders", "type": "prod",
@@ -514,7 +616,7 @@ mod tests {
                 },
                 "mariaDB-2": {
                   "provider": "mysql", "driver": "mariaDB", "name": "Shop Maria",
-                  "configuration": {"host": "localhost", "port": "3306", "database": "shop", "type": "dev"}
+                  "configuration": {"host": "localhost", "port": "3306", "database": "shop", "type": "QA Team"}
                 },
                 "sqlite_jdbc-3": {
                   "provider": "sqlite", "driver": "sqlite_jdbc", "name": "Local file",
@@ -522,7 +624,7 @@ mod tests {
                 },
                 "oracle_thin-4": {
                   "provider": "oracle", "driver": "oracle_thin", "name": "Legacy",
-                  "configuration": {"host": "ora", "port": "1521"}
+                  "configuration": {"host": "ora", "port": "1521", "type": "white"}
                 },
                 "duckdb_jdbc-5": {
                   "provider": "duckdb", "driver": "duckdb_jdbc", "name": "Analytics",
@@ -577,6 +679,16 @@ mod tests {
             ("app", "prod", "Prod")
         );
         assert_eq!(pg.password.as_ref().map(Secret::expose), Some("s3cret"));
+        assert_eq!(
+            pg.description,
+            "Orders of the EU shop.\nAsk #data before heavy queries."
+        );
+        assert_eq!(by_id("mariaDB-2").description, "");
+        // A tag without a value (or with its own name as value) is its name.
+        let mut tags = pg.tags.clone();
+        tags.sort();
+        assert_eq!(tags, ["billing", "region=eu", "team"]);
+        assert!(by_id("mariaDB-2").tags.is_empty());
         let ssh = pg.ssh.as_ref().unwrap();
         assert_eq!(
             (ssh.host.as_str(), ssh.port, ssh.user.as_str()),
@@ -596,6 +708,27 @@ mod tests {
             (Ok(Engine::Mariadb), "root")
         );
         assert!(maria.password.is_none() && maria.ssh.is_none());
+        // DBeaver's types map to the closest built-in one; its colors are ignored.
+        assert_eq!(pg.env, "prod");
+        assert_eq!(
+            maria.env, "prod",
+            "a custom type that confirms changes stays as strict"
+        );
+        assert_eq!(by_id("oracle_thin-4").env, "dev");
+        assert_eq!(by_id("sqlite_jdbc-3").env, "dev");
+        assert_eq!(
+            import_plan(maria, Engine::Mariadb, Source::User, false, "")
+                .connection
+                .env,
+            "prod"
+        );
+        let quiet = |name: &str| serde_json::json!({ "name": name });
+        assert_eq!(closest_type("QA", Some(&quiet("QA team"))), "test");
+        assert_eq!(closest_type("x1", Some(&quiet("Staging"))), "test");
+        assert_eq!(closest_type("x2", Some(&quiet("Live shop"))), "prod");
+        assert_eq!(closest_type("Production", None), "prod");
+        assert_eq!(closest_type("sandbox", Some(&quiet("Sandbox"))), "dev");
+        assert_eq!(closest_type("", None), "");
         assert_eq!(by_id("sqlite_jdbc-3").database, "C:\\data\\local.db");
         assert!(by_id("oracle_thin-4").engine.is_err());
         let duck = by_id("duckdb_jdbc-5");
@@ -705,6 +838,13 @@ mod tests {
         assert_eq!(kept.connection.local_port, Some(15432));
         assert_eq!(kept.connection.keepalive, Some(300));
         assert_eq!(
+            kept.connection.description,
+            "Orders of the EU shop.\nAsk #data before heavy queries."
+        );
+        let mut tags = kept.connection.tags.clone();
+        tags.sort();
+        assert_eq!(tags, ["billing", "region=eu", "team"]);
+        assert_eq!(
             secrets.hops[0].as_ref().map(Secret::expose),
             Some("hop-pass")
         );
@@ -717,5 +857,52 @@ mod tests {
         assert_eq!(plan.connection.password, PasswordChoice::None);
         assert!(plan.connection.host.is_empty() && plan.tunnel.is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn descriptions_are_imported_as_spelaiondb_accepts_them() {
+        assert_eq!(
+            importable_description("  Sales\r\n\tby region "),
+            "Sales\r\n\tby region"
+        );
+        // Escapes and bidirectional overrides are dropped; the text around them stays.
+        assert_eq!(
+            importable_description("safe\u{1b}[2J text \u{202e}desrever"),
+            "safe[2J text desrever"
+        );
+        let long = "x".repeat(ConnectionFile::MAX_DESCRIPTION + 50);
+        assert_eq!(
+            importable_description(&long).chars().count(),
+            ConnectionFile::MAX_DESCRIPTION
+        );
+    }
+
+    #[test]
+    fn tags_are_imported_as_spelaiondb_accepts_them() {
+        let tags: Vec<String> = [
+            " eu ",
+            "EU",
+            "a,b",
+            "hidden\u{202e}mark",
+            "",
+            "far too long for a tag of a connection",
+            "multi \t word",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        // Repeats ignoring case, empty and over-long tags are left out; the rest is cleaned.
+        assert_eq!(
+            importable_tags(&tags),
+            ["eu", "a b", "hiddenmark", "multi word"]
+        );
+        let many: Vec<String> = (0..30).map(|i| format!("t{i}")).collect();
+        assert_eq!(importable_tags(&many).len(), ConnectionFile::MAX_TAGS);
+        // What is imported is a valid connection.
+        let draft_tags = importable_tags(&tags);
+        assert!(
+            draft_tags.iter().all(|t| check_tag(t).is_ok()),
+            "{draft_tags:?}"
+        );
     }
 }

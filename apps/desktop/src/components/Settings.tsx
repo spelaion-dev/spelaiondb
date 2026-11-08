@@ -5,15 +5,16 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
-import { usePreferences, type ThemePreference } from "../preferences";
+import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
 import { useUpdate } from "../update";
-import { call, commands, type NetworkProfileItem } from "../api";
+import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
+import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
-type Category = "appearance" | "language" | "explorer" | "history" | "network" | "updates";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "history", "network", "updates"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates" | "scripts" | "editor";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates", "scripts", "editor"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -60,9 +61,13 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "appearance" && <AppearanceSettings />}
         {category === "language" && <LanguageSettings />}
         {category === "explorer" && <ExplorerSettings />}
+        {category === "connections" && <ConnectionSettings />}
+        {category === "types" && <ConnectionTypesSettings />}
         {category === "history" && <HistorySettings />}
         {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}
+        {category === "scripts" && <ScriptSettings />}
+        {category === "editor" && <EditorSettings />}
       </section>
     </div>
   );
@@ -95,7 +100,7 @@ function Choice<T extends string>(props: {
   );
 }
 
-function SaveError({ setting }: { setting: "language" | "theme" | "explorer" }) {
+function SaveError({ setting }: { setting: PreferenceSetting }) {
   const { t } = useTranslation("settings");
   const error = usePreferences((s) => s.error);
   if (error?.setting !== setting) return null;
@@ -127,6 +132,112 @@ function AppearanceSettings() {
       />
       <p className="muted small">{t("appearance.hint")}</p>
       <SaveError setting="theme" />
+      <GridSettings />
+    </>
+  );
+}
+
+/** The editor's tabs (ADR-036): they always come back after a restart, disconnected; this
+ *  only chooses whether their connections connect again (never run anything). */
+function EditorSettings() {
+  const { t } = useTranslation("settings");
+  const reconnect = usePreferences((s) => s.reconnectOnStart);
+  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const setReconnect = usePreferences((s) => s.setReconnectOnStart);
+  return (
+    <>
+      <p className="muted small">{t("editor.restoreHint")}</p>
+      <label className="check">
+        <input type="checkbox" name="reconnectOnStart" checked={reconnect} disabled={busy} onChange={(e) => void setReconnect(e.target.checked)} />
+        {t("editor.reconnect")}
+      </label>
+      <p className="muted small">{t("editor.reconnectHint")}</p>
+      <SaveError setting="editor" />
+    </>
+  );
+}
+
+/** How scripts run from the editor (ADR-035): what a run does when a statement fails, and the
+ *  opt-in notification when a long run finishes in the background. */
+function ScriptSettings() {
+  const { t } = useTranslation("settings");
+  const script = usePreferences((s) => s.script);
+  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const setScript = usePreferences((s) => s.setScript);
+  const [after, setAfter] = useState(String(script.notifyAfterSeconds));
+  useEffect(() => setAfter(String(script.notifyAfterSeconds)), [script.notifyAfterSeconds]);
+  const saveAfter = () => {
+    const seconds = Math.trunc(Number(after));
+    if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 86400) {
+      if (seconds !== script.notifyAfterSeconds) void setScript({ ...script, notifyAfterSeconds: seconds });
+    } else {
+      setAfter(String(script.notifyAfterSeconds));
+    }
+  };
+  return (
+    <>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("scripts.onError")}</legend>
+        {(["stop", "continue", "ask"] as const).map((mode) => (
+          <label key={mode} className="check">
+            <input type="radio" name="scriptOnError" value={mode} checked={script.onError === mode} onChange={() => void setScript({ ...script, onError: mode })} />
+            {t(`scripts.mode.${mode}`)}
+          </label>
+        ))}
+      </fieldset>
+      <p className="muted small">{t("scripts.onErrorHint")}</p>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("scripts.notifications")}</legend>
+        <label className="check">
+          <input type="checkbox" name="scriptNotify" checked={script.notify} onChange={(e) => void setScript({ ...script, notify: e.target.checked })} />
+          {t("scripts.notify")}
+        </label>
+        <label className="field port">
+          <span>{t("scripts.notifyAfter")}</span>
+          <input
+            type="number"
+            name="scriptNotifyAfter"
+            min={1}
+            max={86400}
+            value={after}
+            disabled={!script.notify}
+            onChange={(e) => setAfter(e.target.value)}
+            onBlur={saveAfter}
+            onKeyDown={(e) => e.key === "Enter" && saveAfter()}
+          />
+        </label>
+      </fieldset>
+      <p className="muted small">{t("scripts.notifyHint")}</p>
+      <SaveError setting="script" />
+    </>
+  );
+}
+
+/** How the result grid draws its cells: zebra rows, NULL and booleans. */
+function GridSettings() {
+  const { t } = useTranslation("settings");
+  const grid = usePreferences((s) => s.grid);
+  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const setGrid = usePreferences((s) => s.setGrid);
+  return (
+    <>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("appearance.grid")}</legend>
+        <label className="check">
+          <input type="checkbox" name="zebra" checked={grid.zebra} onChange={(e) => void setGrid({ ...grid, zebra: e.target.checked })} />
+          {t("appearance.zebra")}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="nullText" checked={grid.nullText} onChange={(e) => void setGrid({ ...grid, nullText: e.target.checked })} />
+          {t("appearance.nullText")}
+        </label>
+        <label className="check">
+          <input type="checkbox" name="boolCheckboxes" checked={grid.boolCheckboxes} onChange={(e) => void setGrid({ ...grid, boolCheckboxes: e.target.checked })} />
+          {t("appearance.boolCheckboxes")}
+        </label>
+      </fieldset>
+      <p className="muted small">{t("appearance.gridHint")}</p>
+      <SaveError setting="grid" />
     </>
   );
 }
@@ -231,7 +342,7 @@ function HistorySettings() {
       <p>{t("history.stored")}</p>
       <p>{t("history.perConnection")}</p>
       <p className="muted small">{t("history.audit")}</p>
-      <button onClick={() => setHistoryOpen(true)}>{t("history.open")}</button>
+      <button onClick={() => { setHistoryOpen(true); useApp.getState().closeSettings(); }}>{t("history.open")}</button>
     </>
   );
 }
@@ -310,6 +421,107 @@ function NetworkProfiles() {
 }
 
 /** The range of local ports SSH tunnels listen on, for a firewall that only allows some. */
+/** The pattern new connections are named with (ADR-030), checked and previewed by the core. */
+function ConnectionSettings() {
+  const { t } = useTranslation("settings");
+  const [pattern, setPattern] = useState<string | null>(null);
+  const [preview, setPreview] = useState<NamePatternPreview | null>(null);
+  const [status, setStatus] = useState<{ kind: "idle" | "saved" } | { kind: "error"; message: string }>({ kind: "idle" });
+  const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+  useEffect(() => {
+    call(commands.getConnectionNamePattern())
+      .then(setPattern)
+      .catch((e: unknown) => setStatus({ kind: "error", message: errorText(e) }));
+  }, []);
+  useEffect(() => {
+    if (pattern === null) return;
+    let current = true;
+    void commands.previewConnectionNamePattern(pattern).then((p) => current && setPreview(p));
+    return () => {
+      current = false;
+    };
+  }, [pattern]);
+
+  async function save(next: string | null) {
+    try {
+      await call(commands.setConnectionNamePattern(next));
+      if (next === null) setPattern(await call(commands.getConnectionNamePattern()));
+      setStatus({ kind: "saved" });
+    } catch (e) {
+      setStatus({ kind: "error", message: errorText(e) });
+    }
+  }
+
+  if (pattern === null) return status.kind === "error" ? <p className="error small" role="alert">{status.message}</p> : null;
+  const valid = preview !== null && preview.error === null;
+  return (
+    <section aria-label={t("connections.namePattern")}>
+      <h3>{t("connections.namePattern")}</h3>
+      <p>{t("connections.namePatternIntro")}</p>
+      <label className="field">
+        <span>{t("connections.pattern")}</span>
+        <input
+          type="text"
+          value={pattern}
+          spellCheck={false}
+          autoComplete="off"
+          aria-invalid={!valid}
+          onChange={(e) => {
+            setPattern(e.target.value);
+            setStatus({ kind: "idle" });
+          }}
+        />
+      </label>
+      <div className="pattern-variables" aria-label={t("connections.variables")}>
+        {preview?.variables.map((name) => (
+          <button
+            key={name}
+            className="ghost small"
+            title={t(`connections.variable.${name}`)}
+            onClick={() => {
+              setPattern(`${pattern}{${name}}`);
+              setStatus({ kind: "idle" });
+            }}
+          >
+            {`{${name}}`}
+          </button>
+        ))}
+      </div>
+      <p className="muted small">{t("connections.syntax")}</p>
+      {preview && preview.unknown.length > 0 && (
+        <p className="error small" role="alert">
+          {t("connections.unknown", { names: preview.unknown.map((n) => `{${n}}`).join(", ") })}
+        </p>
+      )}
+      {preview?.error && preview.unknown.length === 0 && (
+        <p className="error small" role="alert">
+          {preview.error}
+        </p>
+      )}
+      {valid && (
+        <dl className="pattern-preview" aria-label={t("connections.preview")}>
+          <dt>{t("connections.previewServer")}</dt>
+          <dd>{preview.server || <span className="muted">{t("connections.previewEmpty")}</span>}</dd>
+          <dt>{t("connections.previewFile")}</dt>
+          <dd>{preview.file || <span className="muted">{t("connections.previewEmpty")}</span>}</dd>
+        </dl>
+      )}
+      <div className="form-row">
+        <button disabled={!valid} onClick={() => void save(pattern)}>
+          {t("connections.save")}
+        </button>
+        <button className="ghost" onClick={() => void save(null)}>
+          {t("connections.reset")}
+        </button>
+      </div>
+      {status.kind === "saved" && <p className="small" role="status">{t("connections.saved")}</p>}
+      {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
+      <p className="muted small">{t("connections.hint")}</p>
+    </section>
+  );
+}
+
 function PortRange() {
   const { t } = useTranslation("settings");
   const [min, setMin] = useState("");

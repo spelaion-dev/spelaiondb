@@ -11,6 +11,9 @@ Thanks for wanting to help. Bug reports, ideas and pull requests are all welcome
   propose a new ADR that supersedes it instead of working around it.
 - **Big changes:** open an issue first, so we can agree on the approach before you spend time on
   it.
+- **Where work is tracked:** the maintainers plan and track their work in Plane; GitHub issues
+  are where anyone else reports bugs and proposes ideas. An issue we accept is linked from
+  Plane, so it is not done twice.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and commit
   messages.
 
@@ -52,7 +55,8 @@ SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TE
 - Work on a branch of your own, from an up-to-date `dev`, and open the pull request against
   **`dev`**. Nobody pushes to `dev` or `main`: they are protected, and `main` only receives
   releases.
-- Assign the issue to yourself before starting, so two people do not do the same work.
+- Before starting on an issue, say on it that you are taking it, so two people do not do the
+  same work.
 - Rebase on `dev` if it moved while you worked (`git fetch` and `git rebase origin/dev`).
 - One change per pull request, with tests that would fail without it. Changes to the security
   barriers (read-only mode, agents' writes, repository trust) need tests that try to get around

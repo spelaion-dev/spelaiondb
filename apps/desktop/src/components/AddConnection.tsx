@@ -9,20 +9,28 @@ import {
   call,
   commands,
   type ConnectionDraft,
+  type EngineChangeItem,
   type EngineItem,
   type PasswordMode,
   type TlsModeItem,
   type TunnelItem,
   type UrlFields,
 } from "../api";
+import { tagsInUse } from "../connectionInfo";
 import { type ConnectionDialog, useApp, useDialogs } from "../store";
+import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./ConnectionTypePicker";
 import { EngineIcon } from "./EngineIcon";
+import { TagInput } from "./TagInput";
 import { refreshConnections } from "./Sidebar";
-import { chooseSavePath } from "../dialogs";
-import { reviewChanges } from "../connect";
+import { chooseSavePath, openFilters } from "../dialogs";
+import { confirmOpenTransactions, reviewChanges } from "../connect";
+import { useKeychainAvailable } from "../keychain";
+import { ensureEditorAccess } from "../connectionCopies";
+import { fieldList } from "../fieldNames";
 import { DbeaverImport } from "./DbeaverImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
+import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -46,31 +54,32 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** The engine the edited connection has on disk, and what switching it did (ADR-030). */
+  const [savedEngine, setSavedEngine] = useState<string | null>(null);
+  const [engineChange, setEngineChange] = useState<EngineChangeItem | null>(null);
+  const [carriedPassword, setCarriedPassword] = useState("");
+
+  /** The core maps the form to another engine; the form starts again with the result. */
+  async function changeEngine(next: EngineItem, current: ConnectionDraft, password: string) {
+    const mapped = await call(commands.changeConnectionEngine(current, next.id));
+    setInitial(mapped.draft as ConnectionDraft);
+    setEngine(next);
+    setCarriedPassword(password);
+    setEngineChange(next.id === savedEngine ? null : mapped.change);
+  }
 
   useEffect(() => {
     void commands.engineCatalog().then(async (catalog) => {
       setEngines(catalog);
       if (!editing) return;
       try {
-        let access = await call(commands.connectionEditorAccess(editing));
-        if (access.kind === "untrusted") {
-          const shown = useApp.getState().workspace?.workspace ?? null;
-          if (!(await useDialogs.getState().askTrust(shown))) { close(); return; }
-          useApp.getState().setWorkspace(await call(commands.trustWorkspace(shown ?? "")));
-          access = await call(commands.connectionEditorAccess(editing));
-        }
-        if (access.kind === "changed") {
-          const accepted = await useDialogs.getState().askChange({ item: access.item, isNew: access.new, fields: access.fields });
-          if (!accepted) { close(); return; }
-          await call(commands.acceptChange(access.root, access.item, access.new, access.fields));
-          access = await call(commands.connectionEditorAccess(editing));
-        }
-        if (access.kind !== "ready") { close(); return; }
+        if (!(await ensureEditorAccess(editing))) { close(); return; }
         // The "Serialize" variant only differs in optional markers: same fields.
         const [saved, revision] = await call(commands.connectionDraft(editing));
         const draft = saved as ConnectionDraft;
         setRevision(revision);
         setInitial(draft);
+        setSavedEngine(draft.engine);
         setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
       } catch (e) {
         setLoadError(errorText(e));
@@ -106,7 +115,32 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         {loadError ? (
           <p className="error wizard-error" role="alert">{loadError}</p>
         ) : editing ? (
-          engine && initial && revision !== null && <ConnectionForm engine={engine} editing={editing} initial={initial} revision={revision} onCancel={close} onSaved={close} />
+          engine &&
+          initial &&
+          revision !== null && (
+            <>
+              {dialog.kind === "edit" && dialog.notice && (
+                <p className="banner wizard-notice" role="status">
+                  {dialog.notice}
+                </p>
+              )}
+              <ConnectionForm
+                // Another engine is another form, started from what the core mapped.
+                key={engine.id}
+                engine={engine}
+                editing={editing}
+                initial={initial}
+                initialPassword={carriedPassword}
+                revision={revision}
+                engines={engines.filter((e) => e.available)}
+                savedEngine={savedEngine ?? engine.id}
+                engineChange={engineChange}
+                onChangeEngine={changeEngine}
+                onCancel={close}
+                onSaved={close}
+              />
+            </>
+          )
         ) : importing ? (
           <DbeaverImport onBack={() => setImporting(false)} onDone={close} />
         ) : engine ? (
@@ -241,12 +275,6 @@ function EnginePicker({
   );
 }
 
-type TestState =
-  | { kind: "idle" }
-  | { kind: "testing" }
-  | { kind: "ok"; version: string }
-  | { kind: "error"; message: string };
-
 /** How the form asks for credentials, like DBeaver's "Authentication" selector. */
 type AuthMethod = "password" | "env" | "none" | "other" | "token";
 /** Short-lived tokens from a cloud provider's CLI (ADR-022): the core writes the command. */
@@ -256,12 +284,38 @@ const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
 const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
 type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "options";
 
+/** The core's limit (`ConnectionFile::MAX_DESCRIPTION`); the core checks it again. */
+const DESCRIPTION_MAX = 2000;
+
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
     <label className={`field ${className ?? ""}`}>
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+/** What switching the engine kept, changed and dropped, shown before saving (ADR-030). */
+function EngineChangeSummary({ change, engines }: { change: EngineChangeItem; engines: EngineItem[] }) {
+  const { t } = useTranslation("connections");
+  const engineName = (id: string) => engines.find((e) => e.id === id)?.name ?? id;
+  const shown = (value: string | null) => value ?? t("engineChange.none");
+  return (
+    <div className="banner engine-change" role="status" aria-label={t("engineChange.title")}>
+      <strong>{t("engineChange.summary", { from: engineName(change.from), to: engineName(change.to) })}</strong>
+      {change.kept.length > 0 && <p>{t("engineChange.kept", { fields: fieldList(change.kept) })}</p>}
+      {change.changed.length > 0 && (
+        <p>
+          {t("engineChange.changed", {
+            fields: change.changed.map((c) => `${fieldList([c.field])}: ${shown(c.before)} → ${shown(c.after)}`).join("; "),
+          })}
+        </p>
+      )}
+      {change.dropped.length > 0 && <p>{t("engineChange.dropped", { fields: fieldList(change.dropped) })}</p>}
+      {change.required.length > 0 && <p className="error">{t("engineChange.required", { fields: fieldList(change.required) })}</p>}
+      <p className="muted small">{t("engineChange.hint")}</p>
+    </div>
   );
 }
 
@@ -291,6 +345,13 @@ function ConnectionForm(props: {
   revision?: string;
   /** Values read from a pasted connection URL. */
   prefill?: UrlFields;
+  /** A password typed before the engine was switched, kept in the new form. */
+  initialPassword?: string;
+  /** Editing: the engines it can switch to, the one on disk, and what the last switch did. */
+  engines?: EngineItem[];
+  savedEngine?: string;
+  engineChange?: EngineChangeItem | null;
+  onChangeEngine?(engine: EngineItem, current: ConnectionDraft, password: string): Promise<void>;
   onBack?(): void;
   onCancel(): void;
   onSaved(): void;
@@ -299,6 +360,9 @@ function ConnectionForm(props: {
   const { t } = useTranslation("connections");
   const workspace = useApp((s) => s.workspace);
   const hasWorkspace = Boolean(workspace?.workspace);
+  /** Tags other connections already use, offered while typing a new one. */
+  const connections = useApp((s) => s.connections);
+  const knownTags = tagsInUse(connections);
   const network = engine.access === "network";
   // A SQLite file may be on a server, opened there through an SSH tunnel (ADR-018).
   const remoteFile = engine.id === "sqlite";
@@ -312,12 +376,23 @@ function ConnectionForm(props: {
   );
   const passwordless = PASSWORDLESS_ENGINES.includes(engine.id);
   const [savePassword, setSavePassword] = useState(initial ? initial.passwordMode !== "prompt" : true);
+  // Without a system keychain a new connection asks for its password; an edited one keeps
+  // what its file says (a repository file is the team's) unless the user unticks it.
+  const keychain = useKeychainAvailable();
+  useEffect(() => {
+    if (keychain === false && !initial) setSavePassword(false);
+  }, [keychain, initial]);
   const [useTunnel, setUseTunnel] = useState(Boolean(initial?.tunnel));
   // Kubernetes and an SSH tunnel exclude each other (the core rejects both).
   const [useKubernetes, setUseKubernetes] = useState(Boolean(initial?.kubernetes));
   const [kubernetes, setKubernetes] = useState(initial?.kubernetes ?? EMPTY_KUBERNETES);
-  const [password, setPassword] = useState(prefill?.password ?? "");
-  const [test, setTest] = useState<TestState>({ kind: "idle" });
+  const [password, setPassword] = useState(prefill?.password ?? props.initialPassword ?? "");
+  /** The user typed a name: the pattern stops filling it (until the field is emptied). */
+  const [nameTyped, setNameTyped] = useState(Boolean(editing));
+  const [engineError, setEngineError] = useState<string | null>(null);
+  // The step-by-step test (ADR-032); `testError` is a failure before any step could run.
+  const test = useConnectionTest();
+  const [testError, setTestError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -325,6 +400,8 @@ function ConnectionForm(props: {
     personal: !hasWorkspace,
     folder: "",
     name: prefill ? prefill.database.split(/[\\/]/).pop() || prefill.host : "",
+    description: "",
+    tags: [],
     engine: engine.id,
     env: "",
     host: prefill?.host || (network ? "localhost" : ""),
@@ -344,8 +421,14 @@ function ConnectionForm(props: {
     localPort: null,
     // New connections keep idle sessions alive (ADR-028); 0 or empty turns it off.
     keepalive: network ? 300 : null,
+    connectTimeout: null,
+    statementTimeout: null,
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
+  // Types and what they do come from the core (ADR-029).
+  const connectionTypes = useConnectionTypes();
+  const editedConnection = useApp((s) => s.connections.find((c) => c.id === editing));
+  const savedType = editing && initial ? { env: initial.env, kind: editedConnection?.kind ?? null } : null;
 
   const [tunnelEditor, setTunnelEditor] = useState<TunnelEditorMode | null>(null);
   async function loadTunnels(select?: string) {
@@ -363,7 +446,8 @@ function ConnectionForm(props: {
   const selectedTunnel = tunnels.find((item) => item.name === tunnel);
 
   const changed = () => {
-    setTest({ kind: "idle" });
+    test.clear();
+    setTestError(null);
     setSaveError(null);
   };
   const update = (patch: Partial<typeof draft>) => {
@@ -372,12 +456,14 @@ function ConnectionForm(props: {
   };
   const setPort = useCallback((port: number) => {
     setDraft((d) => ({ ...d, port }));
-    setTest({ kind: "idle" });
+    test.clear();
+    setTestError(null);
     setSaveError(null);
   }, []);
 
   // Agents write only on an exposed connection that is not read-only (ADR-019).
   const agentsWrite = draft.mcpWrites && draft.mcpExposed && !draft.readOnly;
+  const selectedType = pickedType(connectionTypes, draft.env, savedType);
   // What the core receives: the form's choices mapped to the configuration format.
   const passwordMode: PasswordMode =
     !network || auth === "none"
@@ -401,7 +487,22 @@ function ConnectionForm(props: {
     kubernetes: network && useKubernetes ? kubernetes : null,
   };
   const typedPassword = auth === "password" ? password : "";
-  const busy = saving || test.kind === "testing";
+  const busy = saving || test.running;
+
+  // A new connection is named by the personal pattern (ADR-030) until the user types a name.
+  const suggestKey = JSON.stringify([request.engine, request.host, request.port, request.database, request.user, request.env]);
+  useEffect(() => {
+    if (nameTyped) return;
+    let current = true;
+    call(commands.suggestConnectionName(request))
+      .then((name) => {
+        if (current && name !== null) setDraft((d) => ({ ...d, name }));
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [suggestKey, nameTyped]);
 
   async function trustForKubernetes(): Promise<boolean> {
     if (useApp.getState().workspace?.trusted) return true;
@@ -420,10 +521,11 @@ function ConnectionForm(props: {
     const path = await open({
       multiple: false,
       directory: false,
-      filters:
+      filters: openFilters(
         field === "database"
           ? [...databaseFilters(), { name: t("allFiles"), extensions: ["*"] }]
           : [{ name: t("certificates"), extensions: ["pem", "crt", "cer", "key"] }, { name: t("allFiles"), extensions: ["*"] }],
+      ),
     });
     if (typeof path === "string") update({ [field]: path });
   }
@@ -436,12 +538,14 @@ function ConnectionForm(props: {
   /** A new, empty database file created by the core (never over an existing one). */
   async function createDatabase() {
     setFileError(null);
-    const path = await chooseSavePath({
-      defaultPath: DATABASE_FILES[engine.id]?.fallback ?? "database.db",
-      filters: databaseFilters(),
-    });
-    if (!path) return;
     try {
+      // Inside the try: a dialog that fails (a missing permission, no portal on Linux)
+      // must show its error, not leave the button doing nothing.
+      const path = await chooseSavePath({
+        defaultPath: DATABASE_FILES[engine.id]?.fallback ?? "database.db",
+        filters: databaseFilters(),
+      });
+      if (!path) return;
       await call(commands.createDatabase(engine.id, path));
       const stem = (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]*$/, "");
       update(draft.name.trim() ? { database: path } : { database: path, name: stem });
@@ -450,45 +554,32 @@ function ConnectionForm(props: {
     }
   }
 
-  async function runTest() {
-    setTest({ kind: "testing" });
+  /** The step-by-step test (ADR-032): the core runs and classifies each step and builds the
+   *  diagnostics; this answers the questions that come before it and shows the log. */
+  async function runTest(networkOnly: boolean) {
+    setTestError(null);
     try {
-      let outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
+      const attempt = () =>
+        test.run((id, onStep) => call(commands.testConnection(request, typedPassword || null, editing ?? null, networkOnly, id, onStep)));
+      let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
-          setTest({ kind: "idle" });
+          test.clear();
           return;
         }
         useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
-        outcome = await call(commands.testConnection(request, typedPassword || null, editing ?? null));
+        outcome = await attempt();
       }
       // The tunnel this connection uses may have changed in the repository.
-      const reviewed = await reviewChanges(outcome, () =>
-        call(commands.testConnection(request, typedPassword || null, editing ?? null)),
-      );
-      if (!reviewed) {
-        setTest({ kind: "idle" });
+      const reviewed = await reviewChanges(outcome, attempt);
+      if (!reviewed || reviewed.kind !== "tested") {
+        test.clear();
         return;
       }
-      outcome = reviewed;
-      switch (outcome.kind) {
-        case "connected":
-          setTest({ kind: "ok", version: outcome.serverVersion });
-          break;
-        case "passwordRequired":
-          setTest({ kind: "error", message: t("test.passwordRequired") });
-          break;
-        case "authFailed":
-          setTest({ kind: "error", message: outcome.message });
-          break;
-        case "untrusted":
-        case "changed":
-        case "missingVariables":
-          setTest({ kind: "idle" });
-          break;
-      }
+      test.finish(reviewed.report);
     } catch (e) {
-      setTest({ kind: "error", message: errorText(e) });
+      test.clear();
+      setTestError(errorText(e));
     }
   }
 
@@ -498,7 +589,21 @@ function ConnectionForm(props: {
     try {
       // Only a saved password reaches the keychain; otherwise it was just for the test.
       const stored = passwordMode === "keychain" && password ? password : null;
+      // Changing the engine closes its tabs' sessions: ask first if a transaction is open.
+      if (editing && props.savedEngine && props.savedEngine !== engine.id) {
+        const sessions = useApp.getState().tabs.filter((tab) => tab.connectionId === editing).map((tab) => tab.id);
+        if (!(await confirmOpenTransactions(sessions, "disconnect"))) return;
+      }
       await call(editing ? commands.updateConnection(editing, request, stored, props.revision ?? "") : commands.addConnection(request, stored));
+      if (editing && props.savedEngine && props.savedEngine !== engine.id) {
+        // Its open sessions belong to the old engine: closed; tabs connect again when run.
+        const app = useApp.getState();
+        const tabs = app.tabs.filter((tab) => tab.connectionId === editing);
+        await Promise.all(
+          [...tabs.map((tab) => tab.id), `meta:${editing}`].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
+        );
+        for (const tab of tabs) app.updateTab(tab.id, { status: "disconnected", serverVersion: null });
+      }
       await refreshConnections();
       props.onSaved();
     } catch (e) {
@@ -526,9 +631,45 @@ function ConnectionForm(props: {
     >
       <div className="form-top">
         <Field label={t("fields.name")} className="grow">
-          <input type="text" autoFocus value={draft.name} placeholder={t("fields.namePlaceholder", { engine: engine.name })} onChange={(e) => update({ name: e.target.value })} />
+          <input
+            type="text"
+            autoFocus
+            value={draft.name}
+            placeholder={t("fields.namePlaceholder", { engine: engine.name })}
+            onChange={(e) => {
+              update({ name: e.target.value });
+              setNameTyped(e.target.value.trim() !== "");
+            }}
+          />
         </Field>
+        {props.engines && props.onChangeEngine && (
+          <Field label={t("fields.engine")}>
+            <select
+              aria-label={t("fields.engine")}
+              value={engine.id}
+              disabled={busy}
+              onChange={(e) => {
+                const next = props.engines?.find((item) => item.id === e.target.value);
+                if (!next || !props.onChangeEngine) return;
+                setEngineError(null);
+                props.onChangeEngine(next, request, password).catch((err: unknown) => setEngineError(errorText(err)));
+              }}
+            >
+              {props.engines.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
+      {props.engineChange && <EngineChangeSummary change={props.engineChange} engines={props.engines ?? []} />}
+      {engineError && (
+        <p className="error small" role="alert">
+          {engineError}
+        </p>
+      )}
       <div className="form-tabs" role="tablist">
         {tabs.map((id) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} aria-controls={`connection-tab-${id}`} onClick={() => setTab(id)}>
@@ -603,10 +744,15 @@ function ConnectionForm(props: {
                       />
                     </Field>
                     <label className="check">
-                      <input type="checkbox" checked={savePassword} onChange={(e) => { setSavePassword(e.target.checked); changed(); }} />
+                      <input
+                        type="checkbox"
+                        checked={savePassword}
+                        disabled={keychain === false && !savePassword}
+                        onChange={(e) => { setSavePassword(e.target.checked); changed(); }}
+                      />
                       {t("fields.savePassword")}
                     </label>
-                    <p className="muted small">{savePassword ? t("auth.savedHint") : t("auth.askHint")}</p>
+                    <p className="muted small">{keychain === false ? t("auth.noKeychainHint") : savePassword ? t("auth.savedHint") : t("auth.askHint")}</p>
                   </>
                 )}
                 {auth === "other" && (
@@ -800,6 +946,34 @@ function ConnectionForm(props: {
 
         <div id="connection-tab-options" role="tabpanel" hidden={tab !== "options"}>
           <fieldset>
+            <legend>{t("sections.about")}</legend>
+            {/* What kind of connection it is, what it is for, and labels to find it. */}
+            <Field label={t("fields.env")}>
+              <ConnectionTypePicker types={connectionTypes} env={draft.env} saved={savedType} onChange={(env) => update({ env })} />
+            </Field>
+            <Field label={t("fields.description")}>
+              <textarea
+                className="description"
+                rows={3}
+                maxLength={DESCRIPTION_MAX}
+                value={draft.description}
+                placeholder={t("fields.descriptionPlaceholder")}
+                onChange={(e) => update({ description: e.target.value })}
+              />
+            </Field>
+            <p className="muted small">{t("fields.descriptionHint")}</p>
+            <div className="field">
+              <span>{t("fields.tags")}</span>
+              <TagInput
+                label={t("fields.tags")}
+                tags={draft.tags}
+                suggestions={knownTags}
+                onChange={(tags) => update({ tags })}
+              />
+            </div>
+            <p className="muted small">{t("fields.tagsHint")}</p>
+          </fieldset>
+          <fieldset>
             <legend>{t("sections.organization")}</legend>
             <div className="form-row" role="radiogroup" aria-label={t("fields.saveIn")}>
               <span>{t("fields.saveIn")}</span>
@@ -820,19 +994,9 @@ function ConnectionForm(props: {
             <p className="muted small">
               {editing ? t("fields.fixedLocationHint") : draft.personal ? t("fields.personalHint") : t("fields.projectHint")}
             </p>
-            <div className="form-pair">
-              <Field label={t("fields.folder")} className="grow">
-                <input type="text" value={draft.folder} disabled={Boolean(editing)} placeholder={t("fields.folderPlaceholder")} onChange={(e) => update({ folder: e.target.value })} />
-              </Field>
-              <Field label={t("fields.env")} className="grow">
-                <input type="text" list="env-labels" value={draft.env} placeholder="dev, staging, prod…" onChange={(e) => update({ env: e.target.value })} />
-                <datalist id="env-labels">
-                  <option value="dev" />
-                  <option value="staging" />
-                  <option value="prod" />
-                </datalist>
-              </Field>
-            </div>
+            <Field label={t("fields.folder")}>
+              <input type="text" value={draft.folder} disabled={Boolean(editing)} placeholder={t("fields.folderPlaceholder")} onChange={(e) => update({ folder: e.target.value })} />
+            </Field>
           </fieldset>
           {network && (
             <fieldset>
@@ -848,8 +1012,34 @@ function ConnectionForm(props: {
                 />
               </Field>
               <p className="muted small">{t("fields.keepaliveHint")}</p>
+              <Field label={t("fields.connectTimeout")} className="port">
+                <input
+                  type="number"
+                  min={1}
+                  max={600}
+                  value={draft.connectTimeout ?? ""}
+                  placeholder="15"
+                  onChange={(e) => update({ connectTimeout: e.target.value ? Math.max(1, Math.trunc(Number(e.target.value))) : null })}
+                />
+              </Field>
+              <p className="muted small">{t("fields.connectTimeoutHint")}</p>
             </fieldset>
           )}
+          <fieldset>
+            <legend>{t("sections.statements")}</legend>
+            <Field label={t("fields.statementTimeout")} className="port">
+              <input
+                type="number"
+                name="statementTimeout"
+                min={0}
+                max={86400}
+                value={draft.statementTimeout ?? ""}
+                placeholder={t("fields.statementTimeoutNone")}
+                onChange={(e) => update({ statementTimeout: e.target.value ? Math.max(0, Math.trunc(Number(e.target.value))) : null })}
+              />
+            </Field>
+            <p className="muted small">{t("fields.statementTimeoutHint")}</p>
+          </fieldset>
           <fieldset>
             <legend>{t("sections.safety")}</legend>
             <label className="check">
@@ -871,7 +1061,7 @@ function ConnectionForm(props: {
                 <option value="write">{t("fields.mcpWrite")}</option>
               </select>
             </Field>
-            {agentsWrite && draft.env.trim().toLowerCase() === "prod" && (
+            {agentsWrite && selectedType?.safeguards.confirmDataChanges && (
               <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
             )}
             <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
@@ -879,14 +1069,26 @@ function ConnectionForm(props: {
         </div>
       </div>
 
+      {test.steps && (
+        <ConnectionTestLog steps={test.steps} report={test.report} running={test.running} onStop={test.stop} onClose={test.clear} />
+      )}
       <div className="wizard-footer">
-        <button type="button" onClick={() => void runTest()} disabled={busy}>
+        <button type="button" onClick={() => void runTest(false)} disabled={busy}>
           {t("test.button")}
         </button>
+        {(network || onServer) && (
+          <button type="button" onClick={() => void runTest(true)} disabled={busy}>
+            {t("test.network")}
+          </button>
+        )}
         <div className="test-result" role="status">
-          {test.kind === "testing" && <span className="muted">{t("test.testing")}</span>}
-          {test.kind === "ok" && <span className="ok">{t("test.ok", { version: test.version })}</span>}
-          {test.kind === "error" && <span className="error">{test.message}</span>}
+          <TestSummary
+            steps={test.steps}
+            report={test.report}
+            running={test.running}
+            okText={(report) => (report.networkOnly ? t("testLog.okNetwork") : t("test.ok", { version: report.serverVersion ?? "" }))}
+          />
+          {testError && <span className="error">{testError}</span>}
           {saveError && <span className="error">{saveError}</span>}
         </div>
         {props.onBack && (

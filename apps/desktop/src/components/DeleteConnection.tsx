@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem } from "../api";
 import { useApp } from "../store";
+import { confirmOpenTransactions } from "../connect";
 import { refreshConnections } from "./Sidebar";
 
 export function DeleteConnection({ connection }: { connection: ConnectionItem }) {
@@ -23,6 +24,7 @@ export function DeleteConnection({ connection }: { connection: ConnectionItem })
     try {
       const app = useApp.getState();
       const tabs = app.tabs.filter((tab) => tab.connectionId === connection.id);
+      if (!(await confirmOpenTransactions(tabs.map((tab) => tab.id), "disconnect"))) return;
       // Close what uses it before the file disappears: tabs stay open, without a connection.
       await Promise.all(
         [...tabs.map((tab) => tab.id), `meta:${connection.id}`].map((session) =>
@@ -42,7 +44,9 @@ export function DeleteConnection({ connection }: { connection: ConnectionItem })
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" aria-label={t("deleteTitle")}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={t("deleteTitle")} onKeyDown={(e) => {
+        if (e.key === "Escape") { e.stopPropagation(); if (!deleting) close(); }
+      }}>
         <h2>{t("deleteTitle")}</h2>
         <p>
           <Trans t={t} i18nKey="deleteExplanation" values={{ name: connection.name, file }} components={{ strong: <strong />, code: <code /> }} />

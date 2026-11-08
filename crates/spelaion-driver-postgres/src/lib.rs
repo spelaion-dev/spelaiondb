@@ -21,6 +21,7 @@ use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, Notice,
     ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
+    TransactionState,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -55,7 +56,7 @@ impl Driver for PostgresDriver {
             .user(&params.user)
             .dbname(&params.database)
             .application_name(params.application_name.as_deref().unwrap_or("SpelaionDB"))
-            .connect_timeout(Duration::from_secs(15))
+            .connect_timeout(params.connect_timeout())
             // TCP keepalive after a minute idle, so a NAT in front of the server does not drop
             // a direct connection (ADR-028); tokio-postgres waits two hours by default.
             .keepalives(true)
@@ -208,6 +209,20 @@ impl Connection for PgConnection {
     }
 
     async fn keep_alive(&self) -> Result<KeepAlive> {
+        match self.transaction_state().await? {
+            TransactionState::Idle => {}
+            TransactionState::Open | TransactionState::Failed => {
+                return Ok(KeepAlive::InTransaction);
+            }
+        }
+        self.client
+            .simple_query("select 1")
+            .await
+            .map_err(map_error)?;
+        Ok(KeepAlive::Alive)
+    }
+
+    async fn transaction_state(&self) -> Result<TransactionState> {
         // ReadyForQuery exposes the server's actual transaction state without a query.
         // A dropped prepared statement may still be awaiting its close response: wait for
         // the protocol to settle rather than treating that transient state as a transaction.
@@ -216,16 +231,12 @@ impl Connection for PgConnection {
                 return Err(DriverError::Connection("the connection is closed".into()));
             }
             match self.client.transaction_status() {
-                Some(b'I') => break,
-                Some(_) => return Ok(KeepAlive::InTransaction),
+                Some(b'I') => return Ok(TransactionState::Idle),
+                Some(b'E') => return Ok(TransactionState::Failed),
+                Some(_) => return Ok(TransactionState::Open),
                 None => tokio::time::sleep(Duration::from_millis(5)).await,
             }
         }
-        self.client
-            .simple_query("select 1")
-            .await
-            .map_err(map_error)?;
-        Ok(KeepAlive::Alive)
     }
 
     fn is_closed(&self) -> bool {

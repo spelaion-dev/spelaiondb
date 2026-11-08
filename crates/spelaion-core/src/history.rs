@@ -8,12 +8,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use spelaion_store::{
-    Bookmark, ExplorerFilter, ExplorerPreferences, HistoryEntry, NewHistoryEntry, Snippet, Store,
-    StoreError,
+    AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, ExplorerFilter,
+    ExplorerPreferences, GridPreferences, HistoryEntry, NewHistoryEntry, RecentFile, SavedTabs,
+    ScriptPreferences, Snippet, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{CoreEvent, ResultId, Session};
+use crate::{CoreEvent, ResultId, ScriptOptions, Session};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
@@ -29,6 +30,8 @@ pub enum HistoryError {
     UnsupportedTheme,
     #[error("a saved query needs a name of 1 to {MAX_SNIPPET_NAME} characters")]
     InvalidSnippetName,
+    #[error("{0}")]
+    NamePattern(#[from] spelaion_config::NamePatternError),
 }
 
 /// Longest name of a saved query, in characters.
@@ -54,6 +57,13 @@ enum Request {
     GetUpdateCheck {
         reply: Reply<bool>,
     },
+    GetNamePattern {
+        reply: Reply<Option<String>>,
+    },
+    SetNamePattern {
+        pattern: Option<String>,
+        reply: Reply<()>,
+    },
     GetExplorer {
         reply: Reply<ExplorerPreferences>,
     },
@@ -61,8 +71,53 @@ enum Request {
         preferences: ExplorerPreferences,
         reply: Reply<()>,
     },
+    GetGrid {
+        reply: Reply<GridPreferences>,
+    },
+    SetGrid {
+        preferences: GridPreferences,
+        reply: Reply<()>,
+    },
+    GetScript {
+        reply: Reply<ScriptPreferences>,
+    },
+    SetScript {
+        preferences: ScriptPreferences,
+        reply: Reply<()>,
+    },
     SetUpdateCheck {
         enabled: bool,
+        reply: Reply<()>,
+    },
+    GetMcp {
+        reply: Reply<(bool, ToolOutput)>,
+    },
+    AuditEvents {
+        filter: AuditFilter,
+        limit: usize,
+        offset: usize,
+        reply: Reply<(Vec<AuditRecord>, i64)>,
+    },
+    AuditAll {
+        filter: AuditFilter,
+        reply: Reply<Vec<AuditEntry>>,
+    },
+    AuditTools {
+        reply: Reply<Vec<String>>,
+    },
+    AuditSessions {
+        limit: usize,
+        reply: Reply<Vec<AuditSession>>,
+    },
+    ClearAudit {
+        reply: Reply<i64>,
+    },
+    SetMcpReadOnly {
+        read_only: bool,
+        reply: Reply<()>,
+    },
+    SetMcpOutput {
+        format: ToolOutput,
         reply: Reply<()>,
     },
     List {
@@ -128,6 +183,33 @@ enum Request {
         id: i64,
         reply: Reply<bool>,
     },
+    SaveOpenTabs {
+        workspace: String,
+        tabs: SavedTabs,
+        reply: Reply<()>,
+    },
+    OpenTabs {
+        workspace: String,
+        reply: Reply<SavedTabs>,
+    },
+    AddRecentFile {
+        path: String,
+        reply: Reply<()>,
+    },
+    RecentFiles {
+        reply: Reply<Vec<RecentFile>>,
+    },
+    RemoveRecentFile {
+        path: String,
+        reply: Reply<bool>,
+    },
+    GetReconnectOnStart {
+        reply: Reply<bool>,
+    },
+    SetReconnectOnStart {
+        enabled: bool,
+        reply: Reply<()>,
+    },
 }
 
 /// Personal history shared by editor sessions. Dropping all handles shuts down its actor.
@@ -139,7 +221,7 @@ pub struct QueryHistory {
 impl QueryHistory {
     /// Opens and migrates the local store synchronously, for application startup.
     pub fn open(path: PathBuf) -> Result<Self, HistoryError> {
-        let store = Store::open(&path)?;
+        let mut store = Store::open(&path)?;
         let (requests, mut receiver) = mpsc::channel(32);
         std::thread::Builder::new()
             .name("spelaion-history".into())
@@ -161,14 +243,74 @@ impl QueryHistory {
                         Request::GetUpdateCheck { reply } => {
                             let _ = reply.send(store.get_update_check());
                         }
+                        Request::GetNamePattern { reply } => {
+                            let _ = reply.send(store.get_connection_name_pattern());
+                        }
+                        Request::SetNamePattern { pattern, reply } => {
+                            let _ =
+                                reply.send(store.set_connection_name_pattern(pattern.as_deref()));
+                        }
                         Request::GetExplorer { reply } => {
                             let _ = reply.send(store.get_explorer_preferences());
                         }
                         Request::SetExplorer { preferences, reply } => {
                             let _ = reply.send(store.set_explorer_preferences(&preferences));
                         }
+                        Request::GetGrid { reply } => {
+                            let _ = reply.send(store.get_grid_preferences());
+                        }
+                        Request::SetGrid { preferences, reply } => {
+                            let _ = reply.send(store.set_grid_preferences(&preferences));
+                        }
+                        Request::GetScript { reply } => {
+                            let _ = reply.send(store.get_script_preferences());
+                        }
+                        Request::SetScript { preferences, reply } => {
+                            let _ = reply.send(store.set_script_preferences(&preferences));
+                        }
                         Request::SetUpdateCheck { enabled, reply } => {
                             let _ = reply.send(store.set_update_check(enabled));
+                        }
+                        Request::GetMcp { reply } => {
+                            let _ = reply.send(
+                                store
+                                    .mcp_read_only()
+                                    .and_then(|r| Ok((r, store.mcp_output_format()?))),
+                            );
+                        }
+                        Request::AuditEvents {
+                            filter,
+                            limit,
+                            offset,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                store
+                                    .audit_events(&filter, limit, offset)
+                                    .and_then(|events| Ok((events, store.audit_count(&filter)?))),
+                            );
+                        }
+                        Request::AuditAll { filter, reply } => {
+                            let _ = reply.send(
+                                store
+                                    .audit_events(&filter, usize::MAX >> 1, 0)
+                                    .map(|records| records.into_iter().map(|r| r.entry).collect()),
+                            );
+                        }
+                        Request::AuditTools { reply } => {
+                            let _ = reply.send(store.audit_tools());
+                        }
+                        Request::AuditSessions { limit, reply } => {
+                            let _ = reply.send(store.audit_sessions(limit));
+                        }
+                        Request::ClearAudit { reply } => {
+                            let _ = reply.send(store.clear_audit("SpelaionDB"));
+                        }
+                        Request::SetMcpReadOnly { read_only, reply } => {
+                            let _ = reply.send(store.set_mcp_read_only(read_only));
+                        }
+                        Request::SetMcpOutput { format, reply } => {
+                            let _ = reply.send(store.set_mcp_output_format(format));
                         }
                         Request::List {
                             workspace,
@@ -261,6 +403,31 @@ impl QueryHistory {
                         Request::DeleteSnippet { id, reply } => {
                             let _ = reply.send(store.delete_snippet(id));
                         }
+                        Request::SaveOpenTabs {
+                            workspace,
+                            tabs,
+                            reply,
+                        } => {
+                            let _ = reply.send(store.save_open_tabs(&workspace, &tabs));
+                        }
+                        Request::OpenTabs { workspace, reply } => {
+                            let _ = reply.send(store.open_tabs(&workspace));
+                        }
+                        Request::AddRecentFile { path, reply } => {
+                            let _ = reply.send(store.add_recent_file(&path));
+                        }
+                        Request::RecentFiles { reply } => {
+                            let _ = reply.send(store.recent_files());
+                        }
+                        Request::RemoveRecentFile { path, reply } => {
+                            let _ = reply.send(store.remove_recent_file(&path));
+                        }
+                        Request::GetReconnectOnStart { reply } => {
+                            let _ = reply.send(store.reconnect_on_start());
+                        }
+                        Request::SetReconnectOnStart { enabled, reply } => {
+                            let _ = reply.send(store.set_reconnect_on_start(enabled));
+                        }
                     }
                 }
             })
@@ -314,6 +481,28 @@ impl QueryHistory {
             .await
     }
 
+    /// The pattern the connection form names new connections with (ADR-030): the user's,
+    /// or [`spelaion_config::DEFAULT_NAME_PATTERN`] until they choose one.
+    pub async fn connection_name_pattern(&self) -> Result<String, HistoryError> {
+        Ok(self
+            .request(|reply| Request::GetNamePattern { reply })
+            .await?
+            .unwrap_or_else(|| spelaion_config::DEFAULT_NAME_PATTERN.to_string()))
+    }
+
+    /// Checks the pattern before it reaches the store: an unknown variable is refused, never
+    /// dropped. `None` goes back to the default; an empty pattern suggests no name.
+    pub async fn set_connection_name_pattern(
+        &self,
+        pattern: Option<String>,
+    ) -> Result<(), HistoryError> {
+        if let Some(pattern) = &pattern {
+            spelaion_config::NamePattern::parse(pattern)?;
+        }
+        self.request(|reply| Request::SetNamePattern { pattern, reply })
+            .await
+    }
+
     /// How the explorer shows its tree (system objects, sorting).
     pub async fn explorer_preferences(&self) -> Result<ExplorerPreferences, HistoryError> {
         self.request(|reply| Request::GetExplorer { reply }).await
@@ -324,6 +513,87 @@ impl QueryHistory {
         preferences: ExplorerPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetExplorer { preferences, reply })
+            .await
+    }
+
+    /// How the result grid draws its cells (zebra rows, NULL, booleans).
+    pub async fn grid_preferences(&self) -> Result<GridPreferences, HistoryError> {
+        self.request(|reply| Request::GetGrid { reply }).await
+    }
+
+    pub async fn set_grid_preferences(
+        &self,
+        preferences: GridPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetGrid { preferences, reply })
+            .await
+    }
+
+    /// The MCP server's settings (ADR-033): read-only mode for every agent, and the default
+    /// output of query tools.
+    pub async fn mcp_settings(&self) -> Result<(bool, ToolOutput), HistoryError> {
+        self.request(|reply| Request::GetMcp { reply }).await
+    }
+
+    /// The MCP activity `filter` keeps (ADR-033), newest first, with how many there are in all.
+    /// Secrets are masked by the caller (`audit::redacted`) before anything is shown.
+    pub async fn audit_events(
+        &self,
+        filter: AuditFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<AuditRecord>, i64), HistoryError> {
+        self.request(|reply| Request::AuditEvents {
+            filter,
+            limit,
+            offset,
+            reply,
+        })
+        .await
+    }
+
+    /// Every entry `filter` keeps, for an export.
+    pub async fn audit_all(&self, filter: AuditFilter) -> Result<Vec<AuditEntry>, HistoryError> {
+        self.request(|reply| Request::AuditAll { filter, reply })
+            .await
+    }
+
+    pub async fn audit_tools(&self) -> Result<Vec<String>, HistoryError> {
+        self.request(|reply| Request::AuditTools { reply }).await
+    }
+
+    pub async fn audit_sessions(&self, limit: usize) -> Result<Vec<AuditSession>, HistoryError> {
+        self.request(|reply| Request::AuditSessions { limit, reply })
+            .await
+    }
+
+    /// Empties the MCP activity log, leaving a record that it was cleared. Returns how many
+    /// entries went.
+    pub async fn clear_audit(&self) -> Result<i64, HistoryError> {
+        self.request(|reply| Request::ClearAudit { reply }).await
+    }
+
+    pub async fn set_mcp_read_only(&self, read_only: bool) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetMcpReadOnly { read_only, reply })
+            .await
+    }
+
+    pub async fn set_mcp_output_format(&self, format: ToolOutput) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetMcpOutput { format, reply })
+            .await
+    }
+
+    /// How scripts run from the editor (ADR-035): the default error mode and the opt-in
+    /// notification.
+    pub async fn script_preferences(&self) -> Result<ScriptPreferences, HistoryError> {
+        self.request(|reply| Request::GetScript { reply }).await
+    }
+
+    pub async fn set_script_preferences(
+        &self,
+        preferences: ScriptPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetScript { preferences, reply })
             .await
     }
 
@@ -482,6 +752,54 @@ impl QueryHistory {
             .await
     }
 
+    /// Replaces the open tabs kept for `workspace` (ADR-036). The desktop writes them through
+    /// [`crate::TabKeeper`], which decides how often.
+    pub async fn save_open_tabs(
+        &self,
+        workspace: String,
+        tabs: SavedTabs,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SaveOpenTabs {
+            workspace,
+            tabs,
+            reply,
+        })
+        .await
+    }
+
+    /// The open tabs kept for `workspace`, as saved; [`crate::restore_tabs`] checks them.
+    pub async fn open_tabs(&self, workspace: String) -> Result<SavedTabs, HistoryError> {
+        self.request(|reply| Request::OpenTabs { workspace, reply })
+            .await
+    }
+
+    /// Puts a file first in the recent files (ADR-036).
+    pub async fn add_recent_file(&self, path: String) -> Result<(), HistoryError> {
+        self.request(|reply| Request::AddRecentFile { path, reply })
+            .await
+    }
+
+    /// The recent files, newest first.
+    pub async fn recent_files(&self) -> Result<Vec<RecentFile>, HistoryError> {
+        self.request(|reply| Request::RecentFiles { reply }).await
+    }
+
+    pub async fn remove_recent_file(&self, path: String) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::RemoveRecentFile { path, reply })
+            .await
+    }
+
+    /// Whether the app connects restored tabs at startup; off by default (ADR-036).
+    pub async fn reconnect_on_start(&self) -> Result<bool, HistoryError> {
+        self.request(|reply| Request::GetReconnectOnStart { reply })
+            .await
+    }
+
+    pub async fn set_reconnect_on_start(&self, enabled: bool) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetReconnectOnStart { enabled, reply })
+            .await
+    }
+
     async fn record(&self, entry: NewHistoryEntry) -> Result<(), HistoryError> {
         self.request(|reply| Request::Record { entry, reply }).await
     }
@@ -496,10 +814,18 @@ impl QueryHistory {
         workspace: String,
         connection: String,
     ) -> BoxStream<'static, CoreEvent> {
-        self.run_script_with_original(session, sql, workspace, connection, None)
+        self.run_script_with_original(
+            session,
+            sql,
+            workspace,
+            connection,
+            None,
+            ScriptOptions::default(),
+        )
     }
 
-    /// Execute generated pagination SQL while recording the user's original SELECT.
+    /// Runs a script with its error mode and timeout (ADR-035); `original` is the SQL to record
+    /// instead (generated pagination SQL records the user's SELECT).
     pub fn run_script_with_original(
         &self,
         session: &Session,
@@ -507,8 +833,9 @@ impl QueryHistory {
         workspace: String,
         connection: String,
         original: Option<String>,
+        options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
-        let mut events = session.run_script(sql);
+        let mut events = session.run_script_with(sql, options);
         let sql = sql.to_string();
         let history = self.clone();
         Box::pin(async_stream::stream! {
@@ -568,7 +895,8 @@ impl QueryHistory {
                     CoreEvent::ResultStarted { .. }
                     | CoreEvent::Notice { .. }
                     | CoreEvent::ScriptFinished { .. }
-                    | CoreEvent::HistoryWarning { .. } => {}
+                    | CoreEvent::ErrorPaused { .. }
+            | CoreEvent::HistoryWarning { .. } => {}
                 }
                 yield event;
             }
@@ -733,6 +1061,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connection_name_patterns_are_checked_and_persistent() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "spelaion-core-name-pattern-{}-{nonce}/state.db",
+            std::process::id()
+        ));
+        let history = QueryHistory::open(path.clone()).unwrap();
+        assert_eq!(
+            history.connection_name_pattern().await.unwrap(),
+            spelaion_config::DEFAULT_NAME_PATTERN
+        );
+        for invalid in ["{hots}", "{database", "x}", "{}"] {
+            assert!(matches!(
+                history
+                    .set_connection_name_pattern(Some(invalid.into()))
+                    .await,
+                Err(HistoryError::NamePattern(_))
+            ));
+        }
+        history
+            .set_connection_name_pattern(Some("{engine} · {host}".into()))
+            .await
+            .unwrap();
+        drop(history);
+        let reopened = QueryHistory::open(path).unwrap();
+        assert_eq!(
+            reopened.connection_name_pattern().await.unwrap(),
+            "{engine} · {host}"
+        );
+        reopened.set_connection_name_pattern(None).await.unwrap();
+        assert_eq!(
+            reopened.connection_name_pattern().await.unwrap(),
+            spelaion_config::DEFAULT_NAME_PATTERN
+        );
+    }
+
+    #[tokio::test]
     async fn snippet_names_are_checked_before_reaching_the_store_actor() {
         let (requests, receiver) = mpsc::channel(1);
         drop(receiver);
@@ -793,7 +1161,8 @@ mod tests {
             events.last(),
             Some(CoreEvent::ScriptFinished {
                 executed: 1,
-                failed: false
+                failed: false,
+                ..
             })
         ));
         assert!(

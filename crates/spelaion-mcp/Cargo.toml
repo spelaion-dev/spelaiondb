@@ -1,6 +1,6 @@
 [package]
 name = "spelaion-mcp"
-description = "SpelaionDB MCP server: agents query, they do not write (ADR-008)"
+description = "SpelaionDB MCP server: agents query, and write only where allowed (ADR-008, ADR-019)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,7 +14,14 @@ spelaion-ssh.workspace = true
 spelaion-store.workspace = true
 rmcp = { version = "3", features = ["server", "transport-io", "macros"] }
 serde = { version = "1", features = ["derive"] }
+# JSON strings of the query output (format.rs).
+serde_json = "1"
 tokio = { workspace = true, features = ["sync", "time", "io-std"] }
+
+[dev-dependencies]
+rusqlite = { version = "0.41", features = ["bundled"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+toml = "1"
 
 [lints]
 workspace = true

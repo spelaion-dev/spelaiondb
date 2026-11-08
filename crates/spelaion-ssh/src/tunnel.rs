@@ -18,6 +18,7 @@ use crate::auth::authenticate;
 use crate::hostkeys::{self, KnownHosts};
 use crate::{
     HopSpec, Interaction, LocalPort, ProxySpec, SecretRequest, SshError, Target, TunnelSpec,
+    TunnelStage,
 };
 
 /// A command running on a tunnel's last hop ([`Tunnel::exec`]).
@@ -143,6 +144,17 @@ impl Tunnel {
         known_hosts: &KnownHosts,
         ui: Arc<dyn Interaction>,
     ) -> Result<Tunnel, SshError> {
+        Self::connect_observed(spec, known_hosts, ui, &|_| {}).await
+    }
+
+    /// Like [`Tunnel::connect`], telling `observe` each part as it starts, so the connection
+    /// test can say which one failed (ADR-032). An error belongs to the last part started.
+    pub async fn connect_observed(
+        spec: &TunnelSpec,
+        known_hosts: &KnownHosts,
+        ui: Arc<dyn Interaction>,
+        observe: &(dyn Fn(TunnelStage) + Send + Sync),
+    ) -> Result<Tunnel, SshError> {
         if spec.hops.is_empty() && spec.proxy.is_none() {
             return Err(SshError::Other("the tunnel has no hops".into()));
         }
@@ -153,12 +165,16 @@ impl Tunnel {
             ));
         }
         if spec.hops.is_empty() {
+            observe(TunnelStage::Proxy);
             return Self::proxy_only(spec, &ui).await;
         }
         if spec.hops.iter().skip(1).any(|h| h.command.is_some()) {
             return Err(SshError::Other(
                 "only the first hop can use an external command (command)".into(),
             ));
+        }
+        if spec.proxy.is_some() {
+            observe(TunnelStage::Proxy);
         }
         // Human interaction is not part of the network handshake timeout.
         let mut proxy = spec.proxy.clone();
@@ -188,6 +204,10 @@ impl Tunnel {
         let mut child = None;
 
         for (hop, hop_spec) in spec.hops.iter().enumerate() {
+            // The first hop behind a proxy starts once the proxy has let us through.
+            if hop > 0 || proxy.is_none() {
+                observe(TunnelStage::Hop(hop));
+            }
             let outcome = Arc::new(Mutex::new(None));
             let handler = HopHandler {
                 hop,
@@ -202,17 +222,24 @@ impl Tunnel {
             let handshake = async {
                 match (sessions.last(), &hop_spec.command) {
                     (None, Some(command)) => {
-                        let (stream, process, stderr) = spawn_command(command, hop_spec, hop)?;
-                        child = Some(process);
-                        let result = client::connect_stream(config.clone(), stream, handler).await;
-                        Ok(result.map_err(|e| {
-                            let stderr = stderr.lock().expect("lock poisoned").trim().to_string();
-                            if stderr.is_empty() {
-                                e.to_string()
-                            } else {
-                                format!("{e} — the command said: {stderr}")
+                        let (stream, mut process, stderr) = spawn_command(command, hop_spec, hop)?;
+                        match client::connect_stream(config.clone(), stream, handler).await {
+                            Ok(session) => {
+                                child = Some(process);
+                                Ok(Ok(session))
                             }
-                        }))
+                            Err(e) => {
+                                // A command that failed may have just exited: its error output
+                                // is still on its way. Stop it and wait (briefly) for the rest.
+                                let _ = process.start_kill();
+                                let said = stderr.collect(COMMAND_STDERR_WAIT).await;
+                                Ok(Err(if said.is_empty() {
+                                    e.to_string()
+                                } else {
+                                    format!("{e} — the command said: {said}")
+                                }))
+                            }
+                        }
                     }
                     (None, None) => match &proxy {
                         // The first hop through the proxy (ADR-027).
@@ -225,6 +252,7 @@ impl Tunnel {
                                 &ui,
                             )
                             .await?;
+                            observe(TunnelStage::Hop(hop));
                             Ok(client::connect_stream(config.clone(), stream, handler)
                                 .await
                                 .map_err(|e| e.to_string()))
@@ -263,7 +291,13 @@ impl Tunnel {
             };
             let connected = match tokio::time::timeout(timeout, handshake).await {
                 Ok(result) => result?,
-                Err(_) => Err(format!("no response in {}", seconds(timeout))),
+                Err(_) => {
+                    return Err(SshError::Timeout {
+                        hop,
+                        host: hop_spec.host.clone(),
+                        after: timeout,
+                    });
+                }
             };
             let mut session = match connected {
                 Ok(session) => session,
@@ -375,6 +409,46 @@ the server refused to run a command (it may allow only port forwarding)
             stdout: Box::pin(stdout),
             control: RemoteSignals(write),
         })
+    }
+
+    /// Checks that the tunnel reaches `target`: opens a connection to it from the last hop
+    /// (or through the proxy alone) and closes it at once, within `timeout`. Nothing is sent
+    /// to the target. The connection test's "reach the database" step (ADR-032).
+    pub async fn probe(&self, target: &Target, timeout: Duration) -> Result<(), SshError> {
+        if let TunnelState::Down { reason } = &*self.state.borrow() {
+            return Err(SshError::Other(format!("the tunnel is down: {reason}")));
+        }
+        let failed = |message: String, timed_out: bool| SshError::Target {
+            host: target.host.clone(),
+            port: target.port,
+            message,
+            timed_out,
+        };
+        match (&self.proxy_only, self.sessions.last()) {
+            (Some((proxy, _)), _) => {
+                // Its password was asked when the tunnel opened.
+                let ui: Arc<dyn Interaction> = Arc::new(crate::NonInteractive);
+                crate::proxy::connect(proxy, &target.host, target.port, timeout, &ui).await?;
+                Ok(())
+            }
+            (None, Some(last)) => {
+                let open = last.channel_open_direct_tcpip(
+                    target.host.clone(),
+                    target.port.into(),
+                    "127.0.0.1",
+                    0,
+                );
+                match tokio::time::timeout(timeout, open).await {
+                    Ok(Ok(channel)) => {
+                        let _ = channel.close().await;
+                        Ok(())
+                    }
+                    Ok(Err(e)) => Err(failed(e.to_string(), false)),
+                    Err(_) => Err(failed(format!("no answer in {}", seconds(timeout)), true)),
+                }
+            }
+            (None, None) => Err(SshError::Other("the tunnel has no hops".into())),
+        }
     }
 
     /// Local port that leads to `target` through the last session, on any free port.
@@ -577,7 +651,7 @@ async fn forward(
 }
 
 /// `15 s`, or `1.5 s` for a fraction.
-fn seconds(duration: Duration) -> String {
+pub(crate) fn seconds(duration: Duration) -> String {
     let secs = duration.as_secs_f64();
     if secs.fract() == 0.0 {
         format!("{secs:.0} s")
@@ -588,12 +662,33 @@ fn seconds(duration: Duration) -> String {
 
 type CommandStream = tokio::io::Join<tokio::process::ChildStdout, tokio::process::ChildStdin>;
 
+/// How long a failed hop command's error output may take to arrive after it is stopped.
+const COMMAND_STDERR_WAIT: Duration = Duration::from_secs(2);
+
+/// A hop command's error output, read as it comes so the command never blocks on it.
+struct CommandStderr {
+    text: Arc<Mutex<String>>,
+    reader: Option<JoinHandle<()>>,
+}
+
+impl CommandStderr {
+    /// Everything it said, once its output ends or `wait` passes. Read as soon as the
+    /// handshake fails, a command that exits at once (`sh` does, faster than `cmd`) would
+    /// otherwise have said nothing yet.
+    async fn collect(self, wait: Duration) -> String {
+        if let Some(reader) = self.reader {
+            let _ = tokio::time::timeout(wait, reader).await;
+        }
+        self.text.lock().expect("lock poisoned").trim().to_string()
+    }
+}
+
 /// Launches a hop's command (`ProxyCommand`) and uses its stdin/stdout as the connection.
 fn spawn_command(
     command: &str,
     spec: &HopSpec,
     hop: usize,
-) -> Result<(CommandStream, Child, Arc<Mutex<String>>), SshError> {
+) -> Result<(CommandStream, Child, CommandStderr), SshError> {
     let command = command
         .replace("%h", &spec.host)
         .replace("%p", &spec.port.to_string());
@@ -613,7 +708,7 @@ fn spawn_command(
     let stdin = child.stdin.take().expect("piped stdin");
     // stderr is kept to explain failures (and must be read so the command does not block).
     let stderr_text = Arc::new(Mutex::new(String::new()));
-    if let Some(mut stderr) = child.stderr.take() {
+    let reader = child.stderr.take().map(|mut stderr| {
         let sink = stderr_text.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 4096];
@@ -626,9 +721,16 @@ fn spawn_command(
                     text.push_str(&String::from_utf8_lossy(&buf[..n]));
                 }
             }
-        });
-    }
-    Ok((tokio::io::join(stdout, stdin), child, stderr_text))
+        })
+    });
+    Ok((
+        tokio::io::join(stdout, stdin),
+        child,
+        CommandStderr {
+            text: stderr_text,
+            reader,
+        },
+    ))
 }
 
 /// `sh -c <command>` or, on Windows, `cmd /C <command>`. On Windows the command is passed

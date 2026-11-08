@@ -50,9 +50,27 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   regenerate the schema: `SPELAION_UPDATE_SCHEMA=1 cargo test -p spelaion-config`.
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
+  A connection's `description` is the user's free text (the explorer's tooltip, and what
+  `list_connections` tells agents a database is for) and its `tags` are short labels the
+  explorer filters connections by (`normalize_tags` in `draft.rs`): both bounded and without
+  hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server). `dbeaver.rs` reads DBeaver's
-  connections and saved credentials for the import (passwords only as `Secret`, to the keychain).
+  connections and saved credentials for the import (passwords only as `Secret`, to the
+  keychain; its connection types map to the closest built-in type).
+  ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
+  inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
+  untrusted input (a personal connection through the form's checks, password always asked, no
+  `${env:…}`, nothing that runs a program); `engine_change.rs` maps a connection to another
+  engine (kept, changed, dropped, to fill in); `name_pattern.rs` renders the name of new
+  connections from the personal pattern. Any change to `copy.rs` needs tests that try to get
+  around it.
+  `types.rs` resolves a connection's type (ADR-029): `env` names one by id (built-in `dev`,
+  `test`, `prod`/`production`, or one in `.spelaion/connection-types.toml`, honoured only as
+  trusted, or in the user's `connection-types.toml`); looks come from the user first, and
+  safeguards only add up across layers, so nothing can loosen Production. Any change there
+  needs tests that try to get around it (`tests/connection_types.rs`); `types_edit.rs` writes
+  the user's types.
 - `crates/spelaion-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
   it receives a `TunnelSpec`. `KnownHosts` checks the team's `.spelaion/known_hosts` first
   (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Dialogs go through the `Interaction` trait. Tests against the
@@ -65,33 +83,78 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   ports for the form's Kubernetes tab; tests against a kind cluster with
   `SPELAION_TEST_K8S=<kubeconfig>` (see `testing/k8s`).
 - `crates/spelaion-core`: `open_connection` (resolved configuration → tunnel from the
-  `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts, stops at
-  the first error) and `ResultStore` (results in the core, served in Arrow IPC windows).
+  `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts: stop,
+  continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
+  ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
+  IPC windows).
   `catalog.rs` lists the engines of the "add connection" picker (planned ones included).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
   there needs tests that try to get around them. `guard.rs` lists the statements the app
-  must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, production
-  writes); `run_script` refuses unconfirmed risky scripts. `health.rs` keeps idle sessions
-  alive and marks a session lost (ADR-028): every use goes through its `Tracked` connection, and
-  nothing is ever reconnected or re-run there. `sort.rs` orders stored results
+  must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
+  connection's type asks for: data changes on Production, every run where it confirms
+  execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
+  decides it. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  closes the ones a connection type says are idle too long, never with a transaction open
+  (ADR-029): every use goes through its `Tracked` connection, and
+  nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's
+  transaction: the state always comes from the driver (`Connection::transaction_state`, read
+  after every statement), manual commit opens one with the engine's `BEGIN`, smart commit is a
+  connection type safeguard, and `Session::close_needs_confirmation` is the check before
+  closing a tab, disconnecting or quitting; core-written statements use `run_generated`, never
+  the manual-commit `BEGIN`; `tests/transactions.rs` runs it on every engine. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
-  one view)
+  one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows)
   and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
-  the paged SELECT of the table data tab (the filter typed by the user cannot change it).
+  the paged SELECT of the table data tab (the filter typed by the user cannot change it), and
+  writes "filter by this value" conditions into its WHERE from the typed cell.
+  `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
+  runs those conditions, lists and names on every engine.
+  `export.rs` also holds the CSV options and formula escaping of files;
+  `export_stream.rs` streams a query, a table data tab or explorer tables to a file
+  (ADR-034): only a single read is ever run again, in its own session and inside the engine's
+  read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
+  tests that try to get around it (`tests/export_stream.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
   `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
   create, new index…); `tests/object_actions.rs` runs each engine's statements on that engine.
+  `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
+  hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
+  `Tunnel::probe`, login), its own tunnel, Stop that closes what it opened, failures classified
+  there and a `Redactor` every label, message and the diagnostics text pass through: any change
+  there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
+  `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
+  `open.rs`); a tunnel file's is per SSH hop.
+  `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a
+  BOM, UTF-16, Windows-1252, the file's line ending, temp file + rename, a content hash that
+  refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
+  writes them at most a second after a change) and checks them before they come back
+  (`restore_tabs`): never results, secrets or session state, and nothing is run.
   `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
   `classify.rs`, any change there needs tests that try to get around it.
 - `crates/spelaion-store`: local SQLite (audit, query history, saved queries, personal settings,
-  the explorer's filters and bookmarks; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
+  the explorer's filters and bookmarks, the editor's open tabs per workspace and recent files in
+  `tabs.rs`; later the schema cache). `spelaion-core::QueryHistory` owns its desktop actor and wraps
   session execution to record each executed statement before its completion is delivered.
 - `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
   `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
-  (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions.
+  (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions. What agents may
+  do on a connection is `spelaion-core::agent_access` (`write.rs`): the user's read-only mode
+  for every agent (ADR-033, `mcp.read_only` in the store, read on every call, failing closed)
+  only takes writes away. Query rows go out as JSON or TOON (`format.rs`); any change there
+  keeps every cell quoted so data cannot add rows or fields.
+  `spelaion-config::mcp_clients` finds each AI client's file and writes our entry there for the
+  app's MCP page (ADR-033): only our entry changes, JSON edited as text at the spans it finds,
+  Codex's TOML with `toml_edit`, a backup first, and only the change the user saw (its
+  fingerprint). Tests and the smoke test point it at `SPELAION_MCP_CLIENTS_HOME`, never at the
+  user's files; `SPELAION_CLI` names the `spelaiondb` it installs. The installers ship the CLI
+  next to the app (`externalBin`, only in `tauri.release.conf.json`).
+  Every MCP tool call goes to the store's append-only `audit` table with its tool and its
+  process's session; the app's Activity tab reads it through `spelaion-core::audit`, which masks
+  secrets (`redact_secrets`) before anything is shown or exported. Clearing (`clear_audit`) is
+  the only delete and leaves a record.
 - `apps/desktop`: Tauri 2 + React app. `src-tauri` is a thin adapter over the core; the
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
@@ -114,7 +177,7 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   only change through pull requests whose CI is green (the four jobs of `ci.yml`), and they
   cannot be force-pushed or deleted.
 - **One task, one short branch**, named after who works on it and what (`pablo/filters`,
-  `paco/issue-11`, `claude/…`, `codex/…`), from an up-to-date `dev`. Never work on someone
+  `paco/sdb-11`, `claude/…`, `codex/…`), from an up-to-date `dev`. Never work on someone
   else's branch.
 - **Fetch before starting and before pushing** (`git fetch` and rebase on `origin/dev`):
   someone else may have merged in the meantime. Never force-push a branch someone else uses,
@@ -128,13 +191,33 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   `.github/CODEOWNERS` (the read-only and write barriers, secrets, trust, SSH host keys, the
   patched TLS libraries, updates, CI itself) waits for an owner's approval. The author cannot
   approve their own: the other owner does.
-- An issue is the unit of work: assign it to yourself before starting, so two people do not
-  change the same thing.
+- A Plane work item is the unit of work (see "Work tracking" below).
 - To release, open a pull request `dev` → `main` and merge nothing else into `dev` until it is
   tagged (fixes for the release only). Merge it when green, with a merge commit; a maintainer
   then fast-forwards `dev` to `main` (`git merge --ff-only origin/main`, the one push to `dev`
   that is not a pull request), so they stay in step, and tags `main` with `vX.Y.Z`. Never turn
   on "delete branch on merge": it would delete `dev`.
+
+## Work tracking
+The team's tracker is **Plane**: workspace `spelaion`, project `spelaiondb`, identifier `SDB`
+(agents reach it through the `plane` MCP server). GitHub issues are for reports from people
+outside the team.
+- Each release is a Plane module (`v0.7 — …`). Labels give the type, the area and the size
+  (S / M / L); `adr-needed` marks a change of direction.
+- **Before starting:** take an item, assign it to yourself and move it to *In Progress*, so
+  two people do not change the same thing. Read its description: its "Constraints" and "Done
+  when" are part of the task.
+- **Opening the pull request:** move the item to *In Review*, link the pull request from the
+  item, and write the item's identifier (`SDB-12`) in the pull request's description. Keep it
+  out of commit subjects: they go into the release notes as they are.
+- **Merged:** move the item to *Done*. Dropped: *Cancelled*, with a comment saying why.
+- Work found along the way becomes a new item in *Backlog*, not part of the current pull
+  request.
+- "Decide: …" items end in an ADR. ADRs live in `docs/adr/`, never only in Plane: the item
+  links to the ADR's pull request, and any work that follows gets its own items.
+- An external GitHub issue that we accept gets a Plane item that links to it. When its fix is
+  merged into `dev`, close the issue by hand ("Fixed by #N"): closing keywords only act when
+  the change reaches `main`.
 
 ## Non-negotiable rules
 - `spelaion-core` does not depend on Tauri. The app, the CLI and the MCP are thin adapters.
@@ -155,6 +238,8 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
 ## Frontend style
 - React + strict TypeScript. Types that cross from Rust are generated, not handwritten.
 - Result data never goes into React state: it lives in the core and is requested in windows.
+- Read `docs/ui-guidelines.md` before any UI change: use its tokens (never literal colors,
+  sizes, radii or shadows), its components and its verification steps.
 
 ## Before calling something done
 - `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`.

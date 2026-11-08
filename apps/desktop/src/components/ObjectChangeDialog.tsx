@@ -97,7 +97,8 @@ export function ObjectChangeDialog({
   }
 
   const readOnly = connection?.readOnly ?? false;
-  const production = connection?.env?.toLowerCase().startsWith("prod") ?? false;
+  // Decided by the core from the connection's type (ADR-029).
+  const production = connection?.kind?.safeguards.confirmDataChanges ?? false;
   return (
     <div className="modal-backdrop">
       <form
@@ -110,7 +111,7 @@ export function ObjectChangeDialog({
           if (sql && !readOnly && !busy) void run();
         }}
         onKeyDown={(e) => {
-          if (e.key === "Escape" && !busy) onClose();
+          if (e.key === "Escape") { e.stopPropagation(); if (!busy) onClose(); }
         }}
       >
         <h2>{title}</h2>
@@ -156,14 +157,14 @@ export function ObjectChangeDialog({
             {t("objectChange.openInEditor")}
           </button>
           <span className="spacer" />
-          <button type="button" onClick={onClose} disabled={busy}>
+          <button type="button" onClick={onClose} disabled={busy} autoFocus={danger && !rename}>
             {t("cancel")}
           </button>
           <button
             type="submit"
             className={danger ? "danger" : "primary"}
             disabled={!sql || readOnly || busy}
-            autoFocus={!rename}
+            autoFocus={!rename && !danger}
           >
             {busy ? t("objectChange.running") : confirmLabel}
           </button>

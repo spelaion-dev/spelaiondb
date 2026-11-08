@@ -499,7 +499,7 @@ pub async fn count_rows(session: &Session, schema: &str, name: &str) -> Result<i
 /// Runs one statement written by the core and returns the first cell of its result: `None`
 /// when it returns no result (`KILL`) or no rows. The result is freed, also on failure.
 pub(crate) async fn scalar_value(session: &Session, sql: &str) -> Result<Option<Value>, String> {
-    let mut events = session.run_script(sql);
+    let mut events = session.run_generated(sql);
     let mut results = Vec::new();
     let mut failure = None;
     while let Some(event) = events.next().await {
@@ -511,6 +511,7 @@ pub(crate) async fn scalar_value(session: &Session, sql: &str) -> Result<Option<
             | CoreEvent::Notice { .. }
             | CoreEvent::StatementFinished { .. }
             | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::ErrorPaused { .. }
             | CoreEvent::HistoryWarning { .. } => {}
         }
     }
@@ -848,6 +849,13 @@ mod tests {
             "DELETE FROM `shop`.`order lines`\n-- No primary or unique key: every column identifies the row.\nWHERE `id` = :id\n  AND `unit price` = :unit_price\n  AND `qty` = :qty;\n"
         );
         // Generated writes never trip the "without WHERE" guard.
-        assert!(crate::script_risks(&SqliteDialect, &sql.replace('`', "\""), false).is_empty());
+        assert!(
+            crate::script_risks(
+                &SqliteDialect,
+                &sql.replace('`', "\""),
+                &spelaion_config::Safeguards::default(),
+            )
+            .is_empty()
+        );
     }
 }

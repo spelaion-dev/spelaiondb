@@ -6,14 +6,23 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
 import type { EditableTableItem } from "../bindings";
-import { openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
+import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
 import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
+import { connectionTooltip } from "../connectionInfo";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
+import { RunOptionsButton, runOptionsOf } from "./RunOptions";
+import { summaryMessages, summaryShort } from "../scriptRun";
+import { saveTab, saveTabAs } from "../sqlFiles";
+import { notifyFinished } from "../notify";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
+import { TransactionControls } from "./TransactionControls";
+import { TypeBadge } from "./TypeBadge";
+import { toggleResultsMaximized } from "../tabActions";
+import { Icon } from "./Icons";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 function databaseSwitching(engine: string | undefined): boolean {
@@ -24,13 +33,14 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-function EditorActionIcon({ name }: { name: "run" | "script" | "format" | "save" | "cancel" }) {
+function EditorActionIcon({ name }: { name: "run" | "script" | "format" | "save" | "saveAs" | "cancel" }) {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
       {name === "run" && <path d="M6.5 3.8v12.4l9-6.2z" fill="currentColor" stroke="none" />}
       {name === "script" && <><path d="M3.5 4h9M3.5 7.5h6M3.5 11h4M3.5 14.5h4" /><path d="M11 9.5v6l4.5-3z" fill="currentColor" stroke="none" /></>}
       {name === "format" && <><path d="M4 4.5h12M4 8h8M7 11.5h9M7 15h6" /><path d="M4 11v4" /></>}
       {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4z" /><path d="M6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
+      {name === "saveAs" && <><path d="M5 3.5h6.5L15 7v9.5H5z" /><path d="M11.5 3.5V7H15M8 12.5h4M10 10.5v4" /></>}
       {name === "cancel" && <rect x="5" y="5" width="10" height="10" rx="1" fill="currentColor" stroke="none" />}
     </svg>
   );
@@ -77,6 +87,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const lastRequest = useRef<RunRequest | null>(null);
   const executedRequest = useRef<RunRequest | null>(null);
   const startingRun = useRef(false);
+  /** The text of each statement of the running script, by index: what an export runs again. */
+  const statementTexts = useRef<Record<number, string>>({});
   /** Values given to `:name` placeholders in this tab, offered again next time. */
   const paramValues = useRef<Record<string, string>>({});
   const editor = useRef<SqlEditorHandle>(null);
@@ -188,9 +200,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
     ];
     try {
       let confirmed = false;
-      if (connection?.env?.toLowerCase().startsWith("prod")) {
+      // The core decided the type's safeguards; it refuses unconfirmed edits too.
+      if (connection?.kind?.safeguards.confirmDataChanges) {
         const statements = await call(commands.previewTableEdits(tab.id, result.id, view.schema, view.name, changes));
-        const ok = await useDialogs.getState().askRisks(connection.name, statements.map((sql) => ({ sql, risk: "productionWrite" as const })));
+        const ok = await useDialogs.getState().askRisks(connection.name, statements.map((sql) => ({ sql, risk: "dataChange" as const })));
         if (!ok) return;
         confirmed = true;
       }
@@ -515,7 +528,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const current = useApp.getState().tabs.find((t) => t.id === tab.id);
     // A lost session is reconnected only from its banner, and nothing is run then (ADR-028).
     if (current?.lost) {
-      updateTab(tab.id, { run: errorRun(current.lost, { key: "messages.connectionLost", values: { detail: current.lost } }) });
+      updateTab(tab.id, {
+        run: current.idleClosed
+          ? errorRun(current.lost, { key: "messages.idleClosed", values: { minutes: idleMinutes(current.idleClosed) } })
+          : errorRun(current.lost, { key: "messages.connectionLost", values: { detail: current.lost } }),
+      });
       return false;
     }
     const status = current?.status;
@@ -532,7 +549,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         updateTab(tab.id, { status: "disconnected" });
         return false;
       }
-      updateTab(tab.id, { status: "connected", serverVersion: version, lost: undefined });
+      updateTab(tab.id, { status: "connected", serverVersion: version, lost: undefined, idleClosed: undefined });
       return true;
     } catch (e) {
       const detail = message(e);
@@ -544,16 +561,17 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** Opens a new session for a tab whose session was lost. Nothing is run: the user runs
    *  the statement again. */
   async function reconnect() {
-    updateTab(tab.id, { lost: undefined });
+    updateTab(tab.id, { lost: undefined, idleClosed: undefined, lostTransaction: undefined });
     if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
   }
 
   async function changeConnection(id: string) {
     if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
     setTables({});
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
-    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined });
+    updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
   }
 
   async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize) {
@@ -605,10 +623,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
       run: { running: true, results: [], activeResult: null, messages: [], error: null, startedAt, elapsedMs: null },
     });
     const channel = new Channel<ScriptEvent>();
-    channel.onmessage = (event) => handle(event, sent, startedAt, queryPage);
+    // The last error, for the question a paused run asks (ADR-035).
+    const failures = new Map<number, string>();
+    channel.onmessage = (event) => handle(event, sent, startedAt, queryPage, failures);
+    const options = runOptionsOf(tab);
     try {
-      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, channel));
-      else await call(commands.runScript(tab.id, sent.text, confirmed, channel));
+      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, options, channel));
+      else await call(commands.runScript(tab.id, sent.text, confirmed, options, channel));
     } catch (e) {
       const detail = message(e);
       updateRun(tab.id, (r) => ({ ...r, running: false, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));
@@ -618,17 +639,21 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
   }
 
-  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null) {
+  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null, failures: Map<number, string>) {
     switch (event.kind) {
       case "statementStarted":
+        if (event.index === 0) statementTexts.current = {};
+        statementTexts.current[event.index] = request.text.slice(byteToIndex(request.text, event.start), byteToIndex(request.text, event.end));
         break;
-      case "resultStarted":
+      case "resultStarted": {
+        const sql = page ? page.sql : statementTexts.current[event.index];
         updateRun(tab.id, (r) => ({
           ...r,
-          results: [...r.results, { id: event.result, statement: event.index, columns: event.columns, rows: 0, complete: false, ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) }],
+          results: [...r.results, { id: event.result, statement: event.index, columns: event.columns, rows: 0, complete: false, ...(sql ? { sql } : {}), ...(page ? { paging: { ...page, hasMore: false, loading: false } } : {}) }],
           activeResult: r.activeResult ?? event.result,
         }));
         break;
+      }
       case "rows":
         updateRun(tab.id, (r) => ({
           ...r,
@@ -642,10 +667,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: event.message, translation: { key: "messages.historySaveFailed", values: { detail: event.message } } }] }));
         break;
       case "statementFinished": {
-        const ms = Math.round(event.elapsedMs ?? 0);
+        const timing = { duration: Math.round(event.elapsedMs ?? 0), execution: Math.round(event.executionMs ?? 0), fetch: Math.round(event.fetchMs ?? 0) };
         const translation: Translation = event.rowsAffected == null
-          ? { key: "messages.statementOk", values: { index: event.index + 1, duration: ms } }
-          : { key: "messages.statementRows", values: { index: event.index + 1, count: event.rowsAffected, duration: ms } };
+          ? { key: "messages.statementOk", values: { index: event.index + 1, ...timing } }
+          : { key: "messages.statementRows", values: { index: event.index + 1, count: event.rowsAffected, ...timing } };
         updateRun(tab.id, (r) => ({
           ...r,
           results: r.results.map((x) => (x.statement === event.index ? { ...x, complete: true, ...(x.paging ? { paging: { ...x.paging, hasMore: x.rows === x.paging.pageSize } } : {}) } : x)),
@@ -657,17 +682,39 @@ export function EditorTab({ tab }: { tab: Tab }) {
         const offset =
           event.scriptOffset == null || request.bound ? null : request.from + byteToIndex(request.text, event.scriptOffset);
         const diagnostic = { message: event.message, detail: event.detail, hint: event.hint, code: event.code, cancelled: event.cancelled };
+        failures.set(event.index, event.message);
+        const key = event.cancelled ? "messages.statementCancelled" : event.timedOut ? "messages.statementTimedOut" : "messages.statementFailed";
         updateRun(tab.id, (r) => ({
           ...r,
           error: { message: event.message, offset, diagnostic },
-          messages: [...r.messages, { kind: "error", text: event.message, translation: { key: event.cancelled ? "messages.statementCancelled" : "messages.statementFailed", values: { index: event.index + 1, reason: event.message } } }],
+          messages: [...r.messages, { kind: "error", text: event.message, translation: { key, values: { index: event.index + 1, reason: event.message } } }],
         }));
         break;
       }
-      case "scriptFinished":
-        updateRun(tab.id, (r) => ({ ...r, running: false, elapsedMs: performance.now() - startedAt }));
-        useApp.getState().refreshHistory();
+      case "errorPaused": {
+        // The core waits for the answer to this ticket; the dialog only asks (ADR-035).
+        const ticket = event.ticket;
+        updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: "", translation: { key: "messages.paused", values: { index: event.index + 1 } } }] }));
+        void useDialogs.getState()
+          .askScriptError({ tab: tab.id, statement: event.index + 1, message: failures.get(event.index) ?? "", remaining: event.remaining })
+          .then((answer) => call(commands.answerScriptError(tab.id, ticket, answer)))
+          .catch(() => undefined);
         break;
+      }
+      case "scriptFinished": {
+        const elapsedMs = performance.now() - startedAt;
+        const summary = event.summary;
+        updateRun(tab.id, (r) => ({
+          ...r,
+          running: false,
+          elapsedMs,
+          summary,
+          messages: summary.statements > 1 || summary.stop ? [...r.messages, ...summaryMessages(summary)] : r.messages,
+        }));
+        useApp.getState().refreshHistory();
+        notifyFinished(tab, summary, elapsedMs);
+        break;
+      }
     }
   }
 
@@ -692,15 +739,26 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   const running = tab.run?.running ?? false;
+  const maximized = !tab.table && (tab.resultsMaximized ?? false);
+  const kind = connection?.kind ?? null;
   return (
     <div className="editor-tab">
       <div className="toolbar">
-        <select value={tab.connectionId ?? ""} onChange={(e) => void changeConnection(e.target.value)} aria-label={t("connection")} disabled={running || databaseBusy || tab.status === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
+        <select
+          value={tab.connectionId ?? ""}
+          onChange={(e) => void changeConnection(e.target.value)}
+          aria-label={t("connection")}
+          // The chosen connection's description, which an open list may not show per option.
+          title={(() => {
+            const chosen = connections.find((c) => c.id === tab.connectionId);
+            return chosen ? connectionTooltip(chosen) : t("connection");
+          })()}
+          disabled={running || databaseBusy || tab.status === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
           <option value="">{t("noConnection")}</option>
           {connections.map((c) => (
-            <option key={c.id} value={c.id}>
+            <option key={c.id} value={c.id} title={connectionTooltip(c)}>
               {c.name} ({c.engine}
-              {c.env ? `, ${c.env}` : ""})
+              {c.kind ? `, ${c.kind.name}` : c.env ? `, ${c.env}` : ""})
             </option>
           ))}
         </select>
@@ -714,8 +772,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
           <button className="ghost" disabled={tab.status === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
         ))}
         {tab.lost ? (
-          <span className="status status-lost" role="alert" title={tab.lost}>
-            {t("status.lost")}
+          <span className="status status-lost" role="alert" title={tab.lostTransaction ? `${tab.lost}
+${t("transaction.lostWithTransaction")}` : tab.lost}>
+            {tab.idleClosed ? t("status.idleClosed", { minutes: idleMinutes(tab.idleClosed) }) : t("status.lost")}
+            {tab.lostTransaction && <span className="small">{t("transaction.lostWithTransaction")}</span>}
             <button className="ghost small" disabled={workspaceChanging} onClick={() => void reconnect()}>
               {t("reconnect")}
             </button>
@@ -725,7 +785,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
             {t(`status.${tab.status}`)}{tab.status === "connected" && tab.serverVersion ? ` · ${tab.serverVersion}` : ""}
           </span>
         )}
-        {connection?.env?.toLowerCase().startsWith("prod") && <span className="badge badge-prod">{t("production")}</span>}
+        {kind && <TypeBadge type={kind} />}
+        {!tab.table && tab.status === "connected" && <TransactionControls tab={tab} running={running} onNotice={setNotice} />}
         {notice && (
           <span className={`small format-error ${notice.error ? "error" : "muted"}`} role={notice.error ? "alert" : "status"}>
             {notice.text}
@@ -750,6 +811,22 @@ export function EditorTab({ tab }: { tab: Tab }) {
           </button>
         ))}
       </div>
+      {tab.restoreNotes && tab.restoreNotes.length > 0 && (
+        <div className="banner restore-notes" role="status">
+          <ul>
+            {tab.restoreNotes.map((note, i) => (
+              <li key={i}>
+                {note.kind === "connectionMissing"
+                  ? t("restore.connectionMissing", { connection: note.connection })
+                  : note.kind === "fileUnreadable"
+                    ? t("restore.fileUnreadable", { message: note.message })
+                    : t(`restore.${note.kind}`)}
+              </li>
+            ))}
+          </ul>
+          <button className="ghost small" onClick={() => updateTab(tab.id, { restoreNotes: undefined })}>{t("restore.dismiss")}</button>
+        </div>
+      )}
       <div className="editor-body" ref={body}>
         {tab.table && (
           <TableDataBar
@@ -765,7 +842,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
         )}
         {!tab.table && (
         <>
-        <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane">
+        {/* Maximized results hide the editor without unmounting it: its text, undo and
+            cursor stay as they were. */}
+        <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane" hidden={maximized}>
           <div className="editor-actions" role="toolbar" aria-label={t("editorActions")}>
             {running ? (
               <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} onClick={() => void call(commands.cancel(tab.id)).catch(() => undefined)}>
@@ -779,18 +858,29 @@ export function EditorTab({ tab }: { tab: Tab }) {
             <button className="editor-action editor-action-run" aria-label={t("runScript")} title={t("runScriptHint")} disabled={running || historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => editor.current?.runScript()}>
               <EditorActionIcon name="script" />
             </button>
+            <RunOptionsButton tab={tab} disabled={running} />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
               <EditorActionIcon name="format" />
             </button>
-            <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
-              <EditorActionIcon name="save" />
+            {tab.file ? (
+              <button className="editor-action" aria-label={t("files.saveFile")} title={t("files.saveFileHint")} onClick={() => void saveTab(tab.id)}>
+                <EditorActionIcon name="save" />
+              </button>
+            ) : (
+              <button className="editor-action" aria-label={t("snippets.save")} title={t("snippets.saveHint")} onClick={() => void saveQuery()}>
+                <EditorActionIcon name="save" />
+              </button>
+            )}
+            <button className="editor-action" aria-label={t("files.saveAs")} title={t("files.saveAsHint")} onClick={() => void saveTabAs(tab.id)}>
+              <EditorActionIcon name="saveAs" />
             </button>
           </div>
           <SqlEditor
             handle={editor}
             onFormatError={(reason) => setNotice({ text: t("formatFailed", { reason }), error: true })}
             value={tab.sql}
+            revision={tab.textRevision}
             onChange={(sql) => {
               if (notice?.error) setNotice(null);
               updateTab(tab.id, { sql });
@@ -801,14 +891,39 @@ export function EditorTab({ tab }: { tab: Tab }) {
             error={editorError}
           />
         </div>
-        <div className="divider" onPointerDown={startDrag} role="separator" aria-orientation="horizontal" aria-label={t("resizeEditor")} />
+        <div
+          className="divider"
+          hidden={maximized}
+          onPointerDown={startDrag}
+          onDoubleClick={() => setEditorShare(0.42)}
+          role="separator"
+          tabIndex={0}
+          aria-orientation="horizontal"
+          aria-label={t("resizeEditor")}
+          aria-valuemin={12}
+          aria-valuemax={85}
+          aria-valuenow={Math.round(editorShare * 100)}
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 0.1 : 0.02;
+            if (e.key === "ArrowUp") setEditorShare((share) => Math.max(0.12, share - step));
+            else if (e.key === "ArrowDown") setEditorShare((share) => Math.min(0.85, share + step));
+            else if (e.key === "Home") setEditorShare(0.12);
+            else if (e.key === "End") setEditorShare(0.85);
+            else return;
+            e.preventDefault();
+          }}
+        />
         </>
         )}
-        <div style={{ flex: tab.table ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
+        <div style={{ flex: tab.table || maximized ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
           <Results
+            maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
             run={tab.run}
             session={tab.id}
+            connectionId={tab.connectionId}
+            table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
             serverSort={tab.table ? { sort: tab.table.sort, onSort: (sort) => void sortTable(sort) } : undefined}
+            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0 }) } : undefined}
             editing={editing}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
             pendingEdits={pendingCount > 0}
@@ -853,25 +968,34 @@ function errorRun(text: string, translation?: Translation): RunState {
 function Results({
   run,
   session,
+  connectionId,
+  table,
   onSelect,
   onSorted,
   onFiltered,
   onColumnFiltered,
   serverSort,
+  tableData,
   editing,
   readOnlyHint,
   pendingEdits,
   onLoadMore,
   onCountQuery,
   onQueryPageSize,
+  maximize,
 }: {
+  /** The button that hides the SQL editor (SQL tabs only). */
+  maximize?: { maximized: boolean; onToggle(): void };
   run: RunState | null;
   session: string;
+  connectionId: string | null;
+  table: { schema: string; name: string; filter: string; orderBy: string } | null;
   onSelect(id: number | null): void;
   onSorted(result: number, sort: SortState | undefined): void;
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
   onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
   serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
+  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void };
   editing?: GridEditing;
   readOnlyHint?: boolean;
   pendingEdits: boolean;
@@ -882,9 +1006,24 @@ function Results({
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const [filteringResult, setFilteringResult] = useState<number | null>(null);
+  const [filterError, setFilterError] = useState<{ result: number; message: string } | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerWidth, setViewerWidth] = useState(420);
-  if (!run) return <div className="empty">{t("results.empty")}</div>;
+  /** Columns hidden in each result's grid (positions only), for the export dialog. */
+  const [hiddenColumns, setHiddenColumns] = useState<Record<number, number[]>>({});
+  const maximizeButton = maximize && (
+    <button
+      className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
+      aria-pressed={maximize.maximized}
+      aria-label={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
+      title={maximize.maximized ? t("restoreResults") : t("maximizeResults")}
+      onClick={maximize.onToggle}
+    >
+      <Icon name={maximize.maximized ? "minimize" : "maximize"} />
+    </button>
+  );
+  // Nothing to show yet: the button only brings the editor back if it was hidden.
+  if (!run) return <div className="empty">{t("results.empty")}{maximize?.maximized && maximizeButton}</div>;
   const active = run.results.find((r) => r.id === run.activeResult) ?? null;
   const showMessages = active === null;
   const error = run.error ? translatedError(run.error, t, numbers) : null;
@@ -898,6 +1037,7 @@ function Results({
       }
     }}>
       <div className="result-tabs">
+        <div className="result-tab-list">
         {run.results.map((r, i) => (
           <button key={r.id} className={r.id === run.activeResult ? "active" : ""} onClick={() => onSelect(r.id)}>
             {t("results.result", { number: numbers.format(i + 1) })}
@@ -906,17 +1046,31 @@ function Results({
         <button className={showMessages ? "active" : ""} onClick={() => onSelect(null)}>
           {t("results.messages")}{run.messages.some((m) => m.kind === "error") ? " ⚠" : ""}
         </button>
-        {active && (
+        </div>
+        {active && <div className="result-tools">
           <ResultFilter
             key={`filter-${active.id}`}
             result={active}
+            scope={serverSort ? "page" : active.paging?.hasMore ? "loaded" : undefined}
+            errorId={`result-filter-error-${active.id}`}
+            onError={(message) => setFilterError(message ? { result: active.id, message } : null)}
             onFiltered={(filter, rows, total) => onFiltered(active.id, filter, rows, total)}
             onPending={(pending) => setFilteringResult(pending ? active.id : null)}
             locked={!!active.paging?.loading || (editing !== undefined && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0))}
           />
-        )}
-        {active && <ExportButton key={`export-${active.id}`} result={active} session={session} />}
+          <ExportButton
+            key={`export-${active.id}`}
+            result={active}
+            session={session}
+            connectionId={connectionId}
+            sql={table ? null : (active.sql ?? null)}
+            table={table}
+            hidden={hiddenColumns[active.id] ?? []}
+          />
+        </div>}
+        {maximizeButton}
       </div>
+      {active && filterError?.result === active.id && <div id={`result-filter-error-${active.id}`} className="result-filter-error" role="alert">{filterError.message}</div>}
       <div className="result-body">
         {active ? (
           <ResultGrid
@@ -925,6 +1079,7 @@ function Results({
             onSorted={(sort) => onSorted(active.id, sort)}
             onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
             serverSort={serverSort}
+            tableData={tableData}
             editing={filteringResult === active.id ? undefined : editing}
             viewerOpen={viewerOpen}
             onViewerOpen={setViewerOpen}
@@ -934,6 +1089,7 @@ function Results({
             onLoadMore={() => onLoadMore(active.id)}
             onCountQuery={() => onCountQuery(active.id)}
             onQueryPageSize={onQueryPageSize}
+            onHiddenColumns={(hidden) => setHiddenColumns((current) => ({ ...current, [active.id]: hidden }))}
           />
         ) : (
           <div className="messages">
@@ -958,6 +1114,10 @@ function Results({
                     : t("results.rows", { count: active.rows, formattedCount: numbers.format(active.rows) })
                 }${active.complete ? "" : t("results.loading")} · `
               : ""}
+            {(() => {
+              const short = summaryShort(run.summary);
+              return short ? `${translated(short, t, numbers)} · ` : "";
+            })()}
             {run.elapsedMs != null ? t("results.duration", { duration: numbers.format(Math.round(run.elapsedMs)) }) : ""}
           </span>
         )}
@@ -966,4 +1126,9 @@ function Results({
       </div>
     </div>
   );
+}
+
+/** Whole minutes for an idle time in seconds, at least one. */
+function idleMinutes(seconds: number): number {
+  return Math.max(1, Math.round(seconds / 60));
 }

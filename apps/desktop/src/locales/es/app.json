@@ -2,6 +2,7 @@
   "retryConnections": "Reintentar la carga de conexiones",
   "closeTab": "Cerrar {{name}}",
   "newQueryShortcut": "Nueva consulta (Ctrl+T)",
+  "welcomeEyebrow": "Espacio de trabajo de bases de datos",
   "welcome": "Selecciona una conexión a la izquierda o abre una consulta nueva.",
   "newQuery": "Nueva consulta",
   "resizeSidebar": "Ajustar la anchura del panel de conexiones",
@@ -12,5 +13,37 @@
     "install": "Instalar y reiniciar",
     "installing": "Instalando…",
     "later": "Más tarde"
+  },
+  "tabs": {
+    "menu": "Acciones de {{name}}",
+    "rename": "Cambiar nombre",
+    "renameLabel": "Nuevo nombre de {{name}}",
+    "duplicate": "Duplicar",
+    "copyOf": "{{name}} (copia)",
+    "pin": "Fijar",
+    "unpin": "Soltar",
+    "unpinButton": "Soltar {{name}}",
+    "pinned": "Fijada",
+    "close": "Cerrar",
+    "closeOthers": "Cerrar las demás",
+    "closeRight": "Cerrar las de la derecha",
+    "closeAll": "Cerrar todas",
+    "reopen": "Reabrir la pestaña cerrada",
+    "running": "Hay una consulta en ejecución",
+    "switcher": "Pestañas usadas recientemente",
+    "switcherHint": "Mantén Ctrl pulsado y pulsa Tab para moverte; suelta Ctrl para cambiar.",
+    "unsaved": "Cambios sin guardar",
+    "saveFile": "Guardar archivo",
+    "saveFileAs": "Guardar como archivo…",
+    "reloadFile": "Volver a cargar del disco"
+  },
+  "files": {
+    "menu": "Abrir un archivo o uno reciente",
+    "open": "Abrir archivo…",
+    "recent": "Archivos recientes",
+    "noRecent": "Aún no hay archivos recientes.",
+    "missing": "{{path}} (ya no está en el disco)",
+    "missingShort": "no está",
+    "forget": "Quitar {{name}} de los archivos recientes"
   }
 }

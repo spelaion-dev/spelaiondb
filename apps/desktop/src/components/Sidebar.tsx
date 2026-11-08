@@ -29,20 +29,27 @@ import {
   type TableDetails,
 } from "../api";
 import {
+  confirmOpenTransactions,
   connectTabFromExplorer,
   explorerDatabase,
   EXPLORER_REFRESH_EVENT,
+  EXPLORER_SESSION_CLOSED_EVENT,
   openSession,
   SCHEMAS_REFRESHED_EVENT,
   SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
+import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInfo";
 import { sortByName } from "../explorerSort";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
+import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
+import { useExport } from "./ExportDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
+import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard, pasteIsForText } from "../connectionCopies";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
+import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 
 function errorText(e: unknown): string {
@@ -112,6 +119,9 @@ function useContextMenu() {
 /** Fired on `window` to put the keyboard in the explorer's quick filter (Ctrl+Shift+F). */
 export const FOCUS_EXPLORER_FILTER_EVENT = "spelaion-focus-explorer-filter";
 
+/** Tags shown next to a connection's name; the others are only in its tooltip. */
+const VISIBLE_TAGS = 2;
+
 /** Whether a name contains the quick filter's text, ignoring case. An empty filter keeps all. */
 function matchesFilter(name: string, filter: string): boolean {
   return filter === "" || name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
@@ -176,7 +186,7 @@ function GeneratedSqlDialog({ initialSql, onClose }: { initialSql: string; onClo
   return (
     <div className="modal-backdrop">
       <section className="modal generated-sql-dialog" role="dialog" aria-modal="true" aria-label={t("generatedSql.title")}
-        onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
+        onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
         <h2>{t("generatedSql.title")}</h2>
         <textarea autoFocus spellCheck={false} aria-label={t("generatedSql.editor")} value={sql}
           onChange={(e) => { setSql(e.target.value); setCopied(false); }} />
@@ -946,6 +956,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   );
   const [showProblems, setShowProblems] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
+  /** What the last paste of a connection (Ctrl+V) went wrong with. */
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const filter = useApp((s) => s.explorerFilter);
   const openConnections = useApp((s) => s.openConnections);
   const filterBox = useRef<HTMLInputElement>(null);
@@ -955,7 +967,16 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     return () => window.removeEventListener(FOCUS_EXPLORER_FILTER_EVENT, focus);
   }, []);
   const filterText = filter ?? "";
+  const explorerTags = useApp((s) => s.explorerTags);
+  /** Tags a connection must have to be shown: only while the quick filter is open. */
+  const activeTags = filter === null ? [] : explorerTags;
+  /** The tags offered in the quick filter: those in use, and any still selected. */
+  const filterTags = tagsInUse(connections);
+  for (const tag of activeTags) if (!filterTags.some((other) => sameTag(other, tag))) filterTags.push(tag);
+  const filtering = filterText !== "" || activeTags.length > 0;
   const explorer = usePreferences((s) => s.explorer);
+  // A preference being saved takes no other change until it is done (setExplorer ignores it).
+  const savingPreference = usePreferences((s) => s.saving !== null);
   const explorerConnected = useApp((s) => s.explorerConnected);
   const tabs = useApp((s) => s.tabs);
   const tabConnected = tabs.filter((tab) => tab.status === "connected").map((tab) => tab.connectionId);
@@ -986,24 +1007,32 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       current = false;
     };
   }, [explorer.linkWithEditor, linked]);
-  /** With a filter, connections whose name matches, and those already expanded. */
+  /** With a filter, connections whose name matches, and those already expanded; with tags,
+   * only connections that have them all (tags describe connections, not what is inside). */
   const shown = (c: ConnectionItem) =>
     (!explorer.connectedOnly || connected(c)) &&
+    hasTags(c, activeTags) &&
     (matchesFilter(c.name, filterText) || openConnections.includes(c.id));
 
   async function openFolder() {
     const path = await open({ directory: true, title: t("openFolderTitle") });
     if (typeof path !== "string") return;
     const app = useApp.getState();
-    // A connection ID can refer to a different server in the next folder. Keep the SQL,
-    // but make the user choose a connection again before executing any existing tab.
+    // A connection ID can refer to a different server in the next folder: the tabs on screen
+    // are kept under this folder and the next folder's own tabs come back (ADR-036).
     if (
       app.tabs.some((t) => t.status === "connecting" || t.run?.running) ||
       app.historySaving.length > 0
     )
       return;
+    // Changing folder closes every tab's session (ADR-031): ask first if a transaction is open.
+    if (!(await confirmOpenTransactions(app.tabs.map((t) => t.id), "disconnect"))) return;
     app.setWorkspaceChanging(true);
     setFolderError(null);
+    // Tabs belong to the folder they were opened in (ADR-036): the old folder's are written
+    // now, and the new folder's come back once it is open.
+    await flushTabs();
+    detachTabs();
     try {
       const sessions = [
         ...app.tabs.map((t) => t.id),
@@ -1027,6 +1056,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       setFolderError(errorText(e));
       await refreshConnections().catch(() => undefined);
     } finally {
+      await restoreTabs();
       app.setWorkspaceChanging(false);
     }
   }
@@ -1055,59 +1085,65 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const folderName = workspace?.workspace?.split(/[\\/]/).filter(Boolean).pop();
   return (
     <aside id="connections-sidebar" className="sidebar" hidden={hidden}>
-      <div className="sidebar-header">
-        <div className="workspace-name" title={workspace?.workspace ?? ""}>
-          {folderName ?? t("noFolder")}
+      <div className="sidebar-header connections-header">
+        <div className="sidebar-workspace">
+          <div className="workspace-name" title={workspace?.workspace ?? ""}>
+            {folderName ?? t("noFolder")}
+          </div>
+          <button
+            className="ghost"
+            onClick={() => void openFolder()}
+            title={t("openAnotherFolder")}
+            disabled={cannotSwitch}
+          >
+            {t("openFolder")}
+          </button>
         </div>
-        <button
-          className="ghost"
-          onClick={() => void openFolder()}
-          title={t("openAnotherFolder")}
-          disabled={cannotSwitch}
-        >
-          {t("openFolder")}
-        </button>
-        <button
-          className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
-          onClick={() => void usePreferences.getState().setExplorer({ ...explorer, linkWithEditor: !explorer.linkWithEditor })}
-          aria-label={t("linkWithEditor")}
-          aria-pressed={explorer.linkWithEditor}
-          title={t("linkWithEditorHint")}
-        >
-          <LinkIcon />
-        </button>
-        <button
-          className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
-          onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: !explorer.connectedOnly })}
-          aria-label={t("connectedOnly")}
-          aria-pressed={explorer.connectedOnly}
-          title={t("connectedOnly")}
-        >
-          <PlugIcon />
-        </button>
-        <button
-          className={`ghost icon-button${filter !== null ? " active" : ""}`}
-          onClick={() => {
-            const app = useApp.getState();
-            if (app.explorerFilter === null) {
-              app.setExplorerFilter("");
-              window.dispatchEvent(new Event(FOCUS_EXPLORER_FILTER_EVENT));
-            } else app.setExplorerFilter(null);
-          }}
-          aria-label={t("quickFilter")}
-          aria-pressed={filter !== null}
-          title={t("quickFilterHint")}
-        >
-          <SearchIcon />
-        </button>
-        <button
-          className="ghost add-connection"
-          onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
-          aria-label={t("connections:add")}
-          title={t("connections:add")}
-        >
-          +
-        </button>
+        <div className="sidebar-tools">
+          <span className="sidebar-section-title">{t("connections")}</span>
+          <button
+            className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
+            onClick={() => void usePreferences.getState().setExplorer({ ...explorer, linkWithEditor: !explorer.linkWithEditor })}
+            disabled={savingPreference}
+            aria-label={t("linkWithEditor")}
+            aria-pressed={explorer.linkWithEditor}
+            title={t("linkWithEditorHint")}
+          >
+            <LinkIcon />
+          </button>
+          <button
+            className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
+            onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: !explorer.connectedOnly })}
+            aria-label={t("connectedOnly")}
+            aria-pressed={explorer.connectedOnly}
+            title={t("connectedOnly")}
+          >
+            <PlugIcon />
+          </button>
+          <button
+            className={`ghost icon-button${filter !== null ? " active" : ""}`}
+            onClick={() => {
+              const app = useApp.getState();
+              if (app.explorerFilter === null) {
+                app.setExplorerFilter("");
+                window.dispatchEvent(new Event(FOCUS_EXPLORER_FILTER_EVENT));
+              } else app.setExplorerFilter(null);
+            }}
+            aria-label={t("quickFilter")}
+            aria-pressed={filter !== null}
+            title={t("quickFilterHint")}
+          >
+            <SearchIcon />
+          </button>
+          <button
+            className="ghost add-connection"
+            onClick={() => useApp.getState().setConnectionDialog({ kind: "add" })}
+            aria-label={t("connections:add")}
+            title={t("connections:add")}
+          >
+            +
+          </button>
+        </div>
       </div>
       {filter !== null && (
         <div className="explorer-filter">
@@ -1125,6 +1161,25 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
               }
             }}
           />
+          {filterTags.length > 0 && (
+            <div className="tag-filter" role="group" aria-label={t("tagFilter")}>
+              {filterTags.map((tag) => {
+                const active = activeTags.some((other) => sameTag(other, tag));
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={`tag-filter-chip${active ? " active" : ""}`}
+                    aria-pressed={active}
+                    title={t("tagFilterHint", { tag })}
+                    onClick={() => useApp.getState().toggleExplorerTag(tag)}
+                  >
+                    #{tag}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
       {folderError && (
@@ -1160,12 +1215,29 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           )}
         </div>
       )}
-      <div className="tree">
+      {pasteError && (
+        <div className="banner" role="alert">
+          {pasteError}
+          <button className="ghost small" aria-label={t("connections:close")} onClick={() => setPasteError(null)}>
+            ×
+          </button>
+        </div>
+      )}
+      <div
+        className="tree"
+        onPaste={(e) => {
+          // Ctrl+V in the explorer (not in a text field): a connection from the clipboard.
+          if (pasteIsForText(e.target)) return;
+          e.preventDefault();
+          setPasteError(null);
+          pasteConnection(e.clipboardData.getData("text/plain")).catch((err: unknown) => setPasteError(errorText(err)));
+        }}
+      >
         <BookmarksSection />
-        {connections.length > 0 && filterText !== "" && !connections.some(shown) && (
+        {connections.length > 0 && filtering && !connections.some(shown) && (
           <div className="empty small">{t("quickFilterNothing")}</div>
         )}
-        {connections.length > 0 && filterText === "" && explorer.connectedOnly && !connections.some(shown) && (
+        {connections.length > 0 && !filtering && explorer.connectedOnly && !connections.some(shown) && (
           <div className="empty small">
             {t("noneConnected")}{" "}
             <button className="link" onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: false })}>
@@ -1194,9 +1266,11 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
               {label && <div className="group-title">{label}</div>}
               {items.map((c) => (
                 <ConnectionNode
-                  key={`${workspace?.workspace ?? ""}:${c.id}`}
+                  // A new engine starts the node again: what it showed belongs to the old one.
+                  key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
                   connection={c}
                   filter={filterText}
+                  onPasteError={setPasteError}
                 />
               ))}
             </div>
@@ -1207,8 +1281,34 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   );
 }
 
-function ConnectionNode({ connection, filter }: { connection: ConnectionItem; filter: string }) {
+function ConnectionNode({
+  connection,
+  filter,
+  onPasteError,
+}: {
+  connection: ConnectionItem;
+  filter: string;
+  onPasteError(message: string | null): void;
+}) {
   const { t } = useTranslation("shell");
+  /** The outcome of copying this connection, or of an action of its menus, under its row. */
+  const [rowNote, setRowNote] = useState<{ error: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (!rowNote || rowNote.error) return;
+    const timer = window.setTimeout(() => setRowNote(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [rowNote]);
+  const rowError = (e: unknown) => setRowNote({ error: true, text: errorText(e) });
+  function copy() {
+    setRowNote(null);
+    copyConnection(connection)
+      .then((text) => text && setRowNote({ error: false, text }))
+      .catch(rowError);
+  }
+  function duplicate() {
+    setRowNote(null);
+    duplicateConnection(connection).catch(rowError);
+  }
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [schemas, setSchemas] = useState<SchemaItem[] | null>(null);
@@ -1247,6 +1347,21 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
     window.addEventListener(EXPLORER_REFRESH_EVENT, refresh);
     return () => window.removeEventListener(EXPLORER_REFRESH_EVENT, refresh);
   }, [connection.id, schemas]);
+  // The explorer's session was lost or closed for being idle (ADR-029): the tree collapses and
+  // says why; expanding it again reconnects, nothing else does.
+  useEffect(() => {
+    const closed = (event: Event) => {
+      const detail = (event as CustomEvent<{ connectionId: string; idleSeconds: number | null }>).detail;
+      if (detail.connectionId !== connection.id) return;
+      setSchemas(null);
+      setServerObjects([]);
+      setOpen(false);
+      useApp.getState().setExplorerConnected(connection.id, false);
+      setError(detail.idleSeconds != null ? t("idleClosed", { minutes: Math.max(1, Math.round(detail.idleSeconds / 60)) }) : null);
+    };
+    window.addEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
+    return () => window.removeEventListener(EXPLORER_SESSION_CLOSED_EVENT, closed);
+  }, [connection.id, t]);
 
   function newQuery() {
     const tab = addTab(connection.id);
@@ -1361,7 +1476,8 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       onFilterName={filterName}
     />
   ));
-  const prod = connection.env?.toLowerCase().startsWith("prod");
+  // The type comes from the core (ADR-029).
+  const kind = connection.kind;
   return (
     <div
       className="node"
@@ -1372,9 +1488,17 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
       <div
         ref={connectionRow}
         className={`row connection-row${connectionRevealed}`}
+        tabIndex={-1}
         onContextMenu={(e) => {
           e.preventDefault();
           setRowMenu({ x: e.clientX, y: e.clientY });
+        }}
+        onKeyDown={(e) => {
+          // Ctrl+C copies the connection (objects keep copying their names, ADR-026).
+          if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
+            e.preventDefault();
+            copy();
+          }
         }}
       >
         <button
@@ -1389,19 +1513,45 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
         <span
           className="label"
           onDoubleClick={newQuery}
-          title={connection.id}
+          // The description, then the marks after the name, which may not fit.
+          title={connectionTooltip(connection, [
+            kind ? t("typeTooltip", { name: kind.name }) : null,
+            connection.tunnel ? t("tunnel", { name: connection.tunnel }) : null,
+            connection.tags.length > 0 ? t("tagsTooltip", { tags: connection.tags.join(", ") }) : null,
+          ])}
         >
           {connection.name}
         </span>
-        {connection.tunnel && (
-          <span
-            className="tag"
-            title={t("tunnel", { name: connection.tunnel })}
-          >
-            SSH
+        {(kind || connection.tunnel || connection.tags.length > 0) && (
+          // In order of importance, each shown whole or not at all: the type, SSH, then a few
+          // quiet tags (a click filters the explorer by one). The name's tooltip has them all.
+          <span className="connection-marks">
+            {kind && <TypeBadge type={kind} small />}
+            {connection.tunnel && (
+              <span
+                className="tag"
+                title={t("tunnel", { name: connection.tunnel })}
+              >
+                SSH
+              </span>
+            )}
+            {connection.tags.slice(0, VISIBLE_TAGS).map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className="connection-tag"
+                aria-label={t("tagFilterHint", { tag })}
+                title={t("tagFilterHint", { tag })}
+                onClick={() => useApp.getState().toggleExplorerTag(tag)}
+              >
+                #{tag}
+              </button>
+            ))}
+            {connection.tags.length > VISIBLE_TAGS && (
+              <span className="connection-tag-more">+{connection.tags.length - VISIBLE_TAGS}</span>
+            )}
           </span>
         )}
-        {prod && <span className="tag tag-prod">prod</span>}
         {!isFilterEmpty(filters, "schemas") && (
           <span className="tag" title={t("filteredHint")}>
             {t("filtered")}
@@ -1418,8 +1568,14 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
           connection={connection}
           onRefresh={schemas ? () => void refreshAll() : undefined}
           onConfigureFilters={() => configureFilter()}
+          onError={(message) => setRowNote({ error: true, text: message })}
         />
       </div>
+      {rowNote && (
+        <div className={`${rowNote.error ? "error" : "muted"} small row-note`} role={rowNote.error ? "alert" : "status"}>
+          {rowNote.text}
+        </div>
+      )}
       {rowMenu && (
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: rowMenu.x, top: rowMenu.y }}>
           {schemas && (
@@ -1437,6 +1593,38 @@ function ConnectionNode({ connection, filter }: { connection: ConnectionItem; fi
           <button role="menuitem" onClick={() => configureFilter("schemas")}>
             {t("configureSchemaFilter")}
           </button>
+          <hr />
+          <button
+            role="menuitem"
+            onClick={() => {
+              setRowMenu(null);
+              duplicate();
+            }}
+          >
+            {t("connections:copies.duplicate")}
+          </button>
+          <button
+            role="menuitem"
+            title="Ctrl+C"
+            onClick={() => {
+              setRowMenu(null);
+              copy();
+            }}
+          >
+            {t("connections:copies.copy")}
+          </button>
+          <button
+            role="menuitem"
+            title="Ctrl+V"
+            onClick={() => {
+              setRowMenu(null);
+              onPasteError(null);
+              pasteFromClipboard().catch((e: unknown) => onPasteError(errorText(e)));
+            }}
+          >
+            {t("connections:copies.paste")}
+          </button>
+          <hr />
           {schemas && (
             <button
               role="menuitem"
@@ -2094,6 +2282,18 @@ function ObjectNode({
           </button>
           <button role="menuitem" onClick={() => void countRows()}>
             {t("sql.count")}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              const tables = (chosen ? selection : [object]).map((o) => ({ schema: o.schema, name: o.name }));
+              useExport.getState().open({ kind: "tables", session, connectionId, tables });
+            }}
+          >
+            {chosen && selection.length > 1
+              ? t("exportTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
+              : t("exportTable")}
           </button>
           <button role="menuitem" onClick={refresh}>
             {t("refresh")}

@@ -37,6 +37,9 @@ enum Command {
         /// Maximum time per query, in seconds.
         #[arg(long, default_value_t = 30)]
         timeout: u64,
+        /// Every connection read-only for this server, whatever each one allows (ADR-033).
+        #[arg(long)]
+        read_only: bool,
     },
     /// Lists the visible connections and whether they are exposed to the MCP.
     Connections {
@@ -104,16 +107,25 @@ fn check(path: Option<PathBuf>, strict: bool) -> Result<()> {
 }
 
 fn user_dir(cli: &Cli) -> Result<PathBuf> {
-    if let Some(dir) = &cli.user_dir {
-        return Ok(dir.clone());
-    }
-    let dir =
-        default_user_dir().ok_or_else(|| anyhow!("the configuration directory cannot be found"))?;
-    // First start after the rename (ADR-023): the old personal folder is copied, not moved.
-    if let Some(old) = spelaion_config::legacy_user_dir()
-        && let Err(e) = spelaion_config::migrate_user_dir(&old, &dir)
-    {
-        eprintln!("could not copy the old personal folder: {e}");
+    let dir = match &cli.user_dir {
+        Some(dir) => dir.clone(),
+        None => {
+            let dir = default_user_dir()
+                .ok_or_else(|| anyhow!("the configuration directory cannot be found"))?;
+            // First start after the rename (ADR-023): the old personal folder is copied, not
+            // moved.
+            if let Some(old) = spelaion_config::legacy_user_dir()
+                && let Err(e) = spelaion_config::migrate_user_dir(&old, &dir)
+            {
+                eprintln!("could not copy the old personal folder: {e}");
+            }
+            dir
+        }
+    };
+    // Query history and audit live there: other local users must not read them. On stderr:
+    // in `spelaiondb mcp`, stdout is the protocol.
+    if let Err(e) = spelaion_config::ensure_private_dir(&dir) {
+        eprintln!("could not make the personal folder private: {e}");
     }
     Ok(dir)
 }
@@ -135,12 +147,17 @@ async fn main() -> Result<()> {
     let user_dir = user_dir(&cli)?;
     match cli.command {
         Command::Check { .. } => unreachable!("handled above"),
-        Command::Mcp { workspace, timeout } => {
+        Command::Mcp {
+            workspace,
+            timeout,
+            read_only,
+        } => {
             // stdout is the protocol channel: notices go to stderr.
             let options = spelaion_mcp::ServerOptions {
                 workspace: Some(workspace_or_cwd(workspace)?),
                 user_dir,
                 timeout: Duration::from_secs(timeout),
+                read_only,
             };
             spelaion_mcp::serve_stdio(options)
                 .await
@@ -174,6 +191,13 @@ async fn main() -> Result<()> {
                     origin,
                     c.name()
                 );
+                // Its tags and the user's description, indented under it.
+                if !c.file.tags.is_empty() {
+                    println!("    tags: {}", c.file.tags.join(", "));
+                }
+                for line in c.file.description.as_deref().unwrap_or_default().lines() {
+                    println!("    {}", line.trim_end());
+                }
             }
             for problem in &config.problems {
                 eprintln!("problem: {problem}");
@@ -207,11 +231,17 @@ async fn main() -> Result<()> {
         }
         Command::Audit { limit } => {
             let store = Store::open(&spelaion_config::state_db(&user_dir))?;
-            for e in store.recent(limit)? {
+            // Secrets in statements are masked, as on the app's MCP page (ADR-033).
+            for e in store
+                .recent(limit)?
+                .iter()
+                .map(spelaion_core::audit::redacted)
+            {
                 let decision = match e.decision {
                     Decision::Executed => "executed",
                     Decision::Rejected => "REJECTED",
                     Decision::Failed => "failed",
+                    Decision::Cleared => "log cleared",
                 };
                 let detail = e.detail.map(|d| format!(" — {d}")).unwrap_or_default();
                 println!(

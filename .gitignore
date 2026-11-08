@@ -7,6 +7,8 @@ dist/
 
 # Tauri
 **/src-tauri/gen/schemas/
+# The CLI the release workflow bundles with the app (ADR-033).
+apps/desktop/src-tauri/binaries/
 
 # Test environment (generated keys)
 testing/docker/keys/

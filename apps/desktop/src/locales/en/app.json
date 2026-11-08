@@ -2,6 +2,7 @@
   "retryConnections": "Retry loading connections",
   "closeTab": "Close {{name}}",
   "newQueryShortcut": "New query (Ctrl+T)",
+  "welcomeEyebrow": "Database workspace",
   "welcome": "Pick a connection on the left or open a new query.",
   "newQuery": "New query",
   "resizeSidebar": "Resize the connections panel",
@@ -12,5 +13,37 @@
     "install": "Install and restart",
     "installing": "Installing…",
     "later": "Later"
+  },
+  "tabs": {
+    "menu": "Actions for {{name}}",
+    "rename": "Rename",
+    "renameLabel": "New name for {{name}}",
+    "duplicate": "Duplicate",
+    "copyOf": "{{name}} (copy)",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "unpinButton": "Unpin {{name}}",
+    "pinned": "Pinned",
+    "close": "Close",
+    "closeOthers": "Close others",
+    "closeRight": "Close to the right",
+    "closeAll": "Close all",
+    "reopen": "Reopen closed tab",
+    "running": "A query is running",
+    "switcher": "Recently used tabs",
+    "switcherHint": "Keep Ctrl down and press Tab to move; release Ctrl to switch.",
+    "unsaved": "Unsaved changes",
+    "saveFile": "Save file",
+    "saveFileAs": "Save as file…",
+    "reloadFile": "Reload from disk"
+  },
+  "files": {
+    "menu": "Open a file or a recent one",
+    "open": "Open file…",
+    "recent": "Recent files",
+    "noRecent": "No recent files yet.",
+    "missing": "{{path}} (no longer on disk)",
+    "missingShort": "missing",
+    "forget": "Remove {{name}} from recent files"
   }
 }

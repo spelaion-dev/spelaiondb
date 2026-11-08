@@ -10,7 +10,8 @@ use spelaion_config::{
     Password, PasswordChoice, ProxyDraft, ProxyType, ResolveError, Resolver, SecretBackend, Source,
     SshAuth, SystemBackend, TlsModeConfig, TrustStore, TunnelDraft, TunnelDraftOptions, TunnelFile,
     TunnelPasswords, TunnelSettings, WritePolicy, add_connection, add_tunnel, connection_account,
-    create_connection, delete_tunnel, load, set_value, slug, tunnel_account, update_tunnel,
+    create_connection, delete_connection, delete_tunnel, load, set_value, slug, tunnel_account,
+    update_tunnel,
 };
 use spelaion_driver_api::{Secret, TlsMode};
 
@@ -66,14 +67,31 @@ struct FakeBackend {
     env: BTreeMap<String, String>,
     runs: Mutex<Vec<String>>,
     fail_keychain: bool,
+    /// There is no keychain at all (Linux without a Secret Service).
+    no_keychain: bool,
+    /// The keychain is there, but reading fails (locked, refused).
+    locked_read: bool,
 }
 
 impl SecretBackend for FakeBackend {
     fn keychain_get(&self, account: &str) -> Result<Option<String>, String> {
+        if self.no_keychain {
+            return Err(spelaion_config::KEYCHAIN_UNAVAILABLE.into());
+        }
+        if self.locked_read {
+            return Err("keychain locked".into());
+        }
         Ok(self.keychain.lock().unwrap().get(account).cloned())
     }
 
+    fn keychain_available(&self) -> bool {
+        !self.no_keychain
+    }
+
     fn keychain_set(&self, account: &str, secret: &str) -> Result<(), String> {
+        if self.no_keychain {
+            return Err(spelaion_config::KEYCHAIN_UNAVAILABLE.into());
+        }
         if self.fail_keychain {
             return Err("keychain locked".into());
         }
@@ -85,6 +103,9 @@ impl SecretBackend for FakeBackend {
     }
 
     fn keychain_delete(&self, account: &str) -> Result<(), String> {
+        if self.no_keychain {
+            return Err(spelaion_config::KEYCHAIN_UNAVAILABLE.into());
+        }
         if self.fail_keychain {
             return Err("keychain locked".into());
         }
@@ -494,6 +515,8 @@ fn creates_new_connection_files() {
     let file = ConnectionFile {
         schema_version: 1,
         name: Some("Analytics".into()),
+        description: None,
+        tags: Vec::new(),
         engine: Engine::Sqlite,
         env: None,
         host: None,
@@ -507,6 +530,8 @@ fn creates_new_connection_files() {
         sqlite3: None,
         read_only: true,
         keepalive: None,
+        connect_timeout: None,
+        statement_timeout: None,
         tls: Default::default(),
         mcp: Default::default(),
     };
@@ -593,6 +618,8 @@ fn postgres_draft() -> ConnectionDraft {
         source: Source::Workspace,
         folder: "Prod/EU".into(),
         name: "Orders (prod)".into(),
+        description: String::new(),
+        tags: Vec::new(),
         engine: Engine::Postgres,
         env: "prod".into(),
         host: " db.internal ".into(),
@@ -610,6 +637,8 @@ fn postgres_draft() -> ConnectionDraft {
         sqlite3: String::new(),
         read_only: false,
         keepalive: None,
+        connect_timeout: None,
+        statement_timeout: None,
         mcp_exposed: true,
         mcp_writes: false,
     }
@@ -918,6 +947,242 @@ fn editing_keeps_comments_and_settings_the_form_does_not_show() {
 }
 
 #[test]
+fn descriptions_are_saved_edited_and_validated() {
+    let fx = Fixture::new("draft-description");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+
+    // Trimmed, with `\n` line breaks, and written readable: multi-line in the file.
+    let draft = ConnectionDraft {
+        description: "  Orders of the EU shop.\r\nAsk #data before heavy queries.\n ".into(),
+        ..postgres_draft()
+    };
+    let file = draft.to_file(&config).unwrap();
+    assert_eq!(
+        file.description.as_deref(),
+        Some("Orders of the EU shop.\nAsk #data before heavy queries.")
+    );
+    let id = add_connection(&config, &draft, None, &backend).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.connection(&id).unwrap();
+    let content = std::fs::read_to_string(&entry.file_path).unwrap();
+    assert!(
+        content.contains("Orders of the EU shop.\nAsk #data before heavy queries."),
+        "{content}"
+    );
+    assert_eq!(
+        ConnectionDraft::from_entry(entry).description,
+        "Orders of the EU shop.\nAsk #data before heavy queries."
+    );
+    // Blank is none: the key is not written.
+    let blank = ConnectionDraft {
+        description: " \n ".into(),
+        ..postgres_draft()
+    };
+    assert_eq!(blank.to_file(&config).unwrap().description, None);
+
+    // Too long, or with characters that hide text, is refused.
+    let error = |description: String| {
+        ConnectionDraft {
+            description,
+            ..postgres_draft()
+        }
+        .to_file(&config)
+        .unwrap_err()
+        .to_string()
+    };
+    let longest = "x".repeat(ConnectionFile::MAX_DESCRIPTION);
+    assert!(
+        ConnectionDraft {
+            description: longest.clone(),
+            ..postgres_draft()
+        }
+        .to_file(&config)
+        .is_ok()
+    );
+    assert!(error(format!("{longest}x")).contains("at most 2000"));
+    assert!(error("hidden \u{1b}[8m text".into()).contains("only hold text"));
+    assert!(error("reversed \u{202e}txet".into()).contains("only hold text"));
+    assert!(error("zero\u{200b}width".into()).contains("only hold text"));
+    // Hand-written files are held to the same rules.
+    fx.write(
+        "repo/.spelaion/connections/bad.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"a.db\"\ndescription = \"a\\u0000b\"\n",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(
+        config
+            .problems
+            .iter()
+            .any(|p| p.to_string().contains("only hold text")),
+        "{:?}",
+        config.problems
+    );
+
+    // Editing adds it right after the name, changes it in place and removes it.
+    let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
+    let id = ws("orders");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let described = ConnectionDraft {
+        description: "Line one\nline two".into(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &described, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.starts_with("# Orders database: owned by the data team\nschema_version = 1\nname = \"Orders\"\ndescription = "),
+        "{content}"
+    );
+    assert!(
+        content.contains("host = \"db.internal\" # primary"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert_eq!(
+        config.connection(&id).unwrap().file.description.as_deref(),
+        Some("Line one\nline two")
+    );
+    let cleared = ConnectionDraft {
+        description: String::new(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &cleared, None, &backend).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), HAND_WRITTEN);
+}
+
+fn tags(list: &[&str]) -> Vec<String> {
+    list.iter().map(|t| t.to_string()).collect()
+}
+
+#[test]
+fn tags_are_normalised_validated_and_edited() {
+    let fx = Fixture::new("draft-tags");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend::default();
+
+    // Trimmed, single spaces, empty ones dropped, the first spelling of a repeat kept.
+    let draft = ConnectionDraft {
+        tags: tags(&[" billing ", "EU", "", "eu", "  ", "team  data", "Billing"]),
+        ..postgres_draft()
+    };
+    assert_eq!(
+        draft.to_file(&config).unwrap().tags,
+        ["billing", "EU", "team data"]
+    );
+    let id = add_connection(&config, &draft, None, &backend).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let entry = config.connection(&id).unwrap();
+    assert_eq!(
+        ConnectionDraft::from_entry(entry).tags,
+        ["billing", "EU", "team data"]
+    );
+    let content = std::fs::read_to_string(&entry.file_path).unwrap();
+    assert!(
+        content.contains("tags = [") && content.contains("\"team data\""),
+        "{content}"
+    );
+
+    // Limits: length, count, commas and hidden characters.
+    let error = |list: Vec<String>| {
+        ConnectionDraft {
+            tags: list,
+            ..postgres_draft()
+        }
+        .to_file(&config)
+        .unwrap_err()
+        .to_string()
+    };
+    let longest = "x".repeat(ConnectionFile::MAX_TAG);
+    let at_most: Vec<String> = (0..ConnectionFile::MAX_TAGS)
+        .map(|i| format!("t{i}"))
+        .collect();
+    assert!(
+        ConnectionDraft {
+            tags: [vec![longest.clone()], at_most[1..].to_vec()].concat(),
+            ..postgres_draft()
+        }
+        .to_file(&config)
+        .is_ok()
+    );
+    assert!(error(vec![format!("{longest}x")]).contains("longer than 32"));
+    let too_many: Vec<String> = (0..=ConnectionFile::MAX_TAGS)
+        .map(|i| format!("t{i}"))
+        .collect();
+    assert!(error(too_many).contains("at most 20 tags"));
+    assert!(error(tags(&["a,b"])).contains("without commas"));
+    assert!(error(tags(&["esc\u{1b}[8m"])).contains("without commas"));
+    assert!(error(tags(&["rtl\u{202e}"])).contains("without commas"));
+
+    // Hand-written files are held to the same rules: no repeats ignoring case, no padding.
+    for (name, list) in [
+        ("repeated", "[\"eu\", \"EU\"]"),
+        ("padded", "[\" eu\"]"),
+        ("empty", "[\"\"]"),
+        ("tab", "[\"a\\tb\"]"),
+        ("newline", "[\"a\\nb\"]"),
+    ] {
+        fx.write(
+            &format!("repo/.spelaion/connections/{name}.toml"),
+            &format!(
+                "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"a.db\"\ntags = {list}\n"
+            ),
+        );
+    }
+    let config = load(Some(&fx.repo()), &fx.user());
+    for name in ["repeated", "padded", "empty", "tab", "newline"] {
+        assert!(
+            config.connection(&ws(name)).is_none(),
+            "{name} was accepted"
+        );
+    }
+    assert!(
+        config
+            .problems
+            .iter()
+            .any(|p| p.to_string().contains("tag \"EU\" is repeated")),
+        "{:?}",
+        config.problems
+    );
+
+    // Editing adds them after the description (or the name), changes and removes them.
+    let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
+    let id = ws("orders");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let tagged = ConnectionDraft {
+        tags: tags(&["billing", "eu"]),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &tagged, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.starts_with("# Orders database: owned by the data team\nschema_version = 1\nname = \"Orders\"\ntags = [\"billing\", \"eu\"]\nengine"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let described = ConnectionDraft {
+        description: "Orders".into(),
+        tags: tags(&["eu"]),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &described, None, &backend).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.contains("name = \"Orders\"\ndescription = \"Orders\"\ntags = [\"eu\"]\n"),
+        "{content}"
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let cleared = ConnectionDraft {
+        description: String::new(),
+        tags: Vec::new(),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &cleared, None, &backend).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), HAND_WRITTEN);
+}
+
+#[test]
 fn the_form_lets_agents_write_or_only_read() {
     let fx = Fixture::new("draft-mcp-writes");
     let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
@@ -1171,6 +1436,8 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         source: Source::Workspace,
         folder: String::new(),
         name: "Orders in cluster".into(),
+        description: String::new(),
+        tags: Vec::new(),
         engine: Engine::Postgres,
         env: String::new(),
         host: String::new(),
@@ -1194,6 +1461,8 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         }),
         read_only: false,
         keepalive: None,
+        connect_timeout: None,
+        statement_timeout: None,
         mcp_exposed: false,
         mcp_writes: false,
     }
@@ -1854,6 +2123,176 @@ fn session_keepalives_are_written_resolved_and_refused_for_files() {
         );
         std::fs::remove_file(written).unwrap();
     }
+}
+
+/// A connection's own connect timeout (ADR-032): written by the form, resolved into the
+/// driver's parameters, refused for local files and out of range.
+#[test]
+fn connect_timeouts_are_written_resolved_and_validated() {
+    let fx = Fixture::new("connect-timeout");
+    let path = fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
+    fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
+    fx.write("user/user.toml", "[vars]\ndb_user = \"ana\"\n");
+    let backend = FakeBackend {
+        env: BTreeMap::from([("REGION".into(), "eu".into())]),
+        ..Default::default()
+    };
+    let id = ws("prod/orders");
+    let resolve = |fx: &Fixture| {
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        Resolver::new(&config, &fx.trusted(), &backend)
+            .resolve(&ws("prod/orders"))
+            .unwrap()
+            .params
+    };
+    let params = resolve(&fx);
+    assert_eq!(params.connect_timeout, None);
+    assert_eq!(params.connect_timeout(), std::time::Duration::from_secs(15));
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        connect_timeout: Some(40),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("connect_timeout = 40")
+    );
+    assert_eq!(
+        resolve(&fx).connect_timeout(),
+        std::time::Duration::from_secs(40)
+    );
+    // Emptied in the form: back to the default, and out of the file.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let cleared = ConnectionDraft {
+        connect_timeout: None,
+        statement_timeout: None,
+        ..draft
+    };
+    spelaion_config::update_connection(&config, &id, &cleared, None, &backend).unwrap();
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("connect_timeout")
+    );
+
+    for (file, content, expected) in [
+        (
+            "file.toml",
+            "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"app.db\"\nconnect_timeout = 5\n",
+            "database servers",
+        ),
+        (
+            "zero.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nconnect_timeout = 0\n",
+            "from 1 to 600",
+        ),
+        (
+            "long.toml",
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nconnect_timeout = 601\n",
+            "from 1 to 600",
+        ),
+    ] {
+        let written = fx.write(&format!("repo/.spelaion/connections/{file}"), content);
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(
+            config
+                .problems
+                .iter()
+                .any(|p| p.file.ends_with(file) && p.message.contains(expected)),
+            "{file}: {:?}",
+            config.problems
+        );
+        std::fs::remove_file(written).unwrap();
+    }
+}
+
+#[test]
+fn statement_timeouts_are_written_resolved_and_validated() {
+    let fx = Fixture::new("statement-timeout");
+    let path = fx.write("repo/.spelaion/connections/prod/orders.toml", ORDERS);
+    fx.write("repo/.spelaion/tunnels/bastion.toml", BASTION);
+    fx.write(
+        "user/user.toml",
+        "[vars]
+db_user = \"ana\"
+",
+    );
+    let backend = FakeBackend {
+        env: BTreeMap::from([("REGION".into(), "eu".into())]),
+        ..Default::default()
+    };
+    let id = ws("prod/orders");
+    let resolve = |fx: &Fixture| {
+        let config = load(Some(&fx.repo()), &fx.user());
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        Resolver::new(&config, &fx.trusted(), &backend)
+            .resolve(&ws("prod/orders"))
+            .unwrap()
+            .statement_timeout
+    };
+    assert_eq!(resolve(&fx), None, "no limit by default");
+
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        statement_timeout: Some(90),
+        ..ConnectionDraft::from_entry(config.connection(&id).unwrap())
+    };
+    spelaion_config::update_connection(&config, &id, &draft, None, &backend).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("statement_timeout = 90")
+    );
+    assert_eq!(resolve(&fx), Some(std::time::Duration::from_secs(90)));
+    // 0 means no limit, and leaves the file.
+    let config = load(Some(&fx.repo()), &fx.user());
+    let off = ConnectionDraft {
+        statement_timeout: Some(0),
+        ..draft
+    };
+    spelaion_config::update_connection(&config, &id, &off, None, &backend).unwrap();
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("statement_timeout")
+    );
+    assert_eq!(resolve(&fx), None);
+
+    // Files have statements too; more than a day is refused.
+    let file = fx.write(
+        "repo/.spelaion/connections/file.toml",
+        "schema_version = 1
+engine = \"sqlite\"
+database = \"app.db\"
+statement_timeout = 5
+",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    std::fs::remove_file(file).unwrap();
+    fx.write(
+        "repo/.spelaion/connections/long.toml",
+        "schema_version = 1
+engine = \"postgres\"
+host = \"h\"
+database = \"d\"
+user = \"u\"
+statement_timeout = 86401
+",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(
+        config
+            .problems
+            .iter()
+            .any(|p| p.file.ends_with("long.toml") && p.message.contains("at most 86400")),
+        "{:?}",
+        config.problems
+    );
 }
 
 #[test]
@@ -3333,5 +3772,135 @@ fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
             .problems
             .iter()
             .any(|p| p.to_string().contains("both .spelaion/ and .spelunk/"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_new_personal_folder_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("private-new");
+    let dir = f.base.join("nested/spelaion");
+    spelaion_config::ensure_private_dir(&dir).unwrap();
+    let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "a new personal folder is created private");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_existing_personal_folder_open_to_others_is_closed() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("private-existing");
+    let dir = f.user();
+    std::fs::write(dir.join("user.toml"), "").unwrap();
+    for open in [0o755, 0o750, 0o705, 0o777] {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(open)).unwrap();
+        spelaion_config::ensure_private_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{open:o} is closed to 0700");
+    }
+    // Its contents stay where they were.
+    assert!(dir.join("user.toml").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_private_personal_folder_is_left_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("private-kept");
+    let dir = f.user();
+    // Already private (no group or other bits): a stricter mode chosen by the user is kept.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    spelaion_config::ensure_private_dir(&dir).unwrap();
+    let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(mode, 0o500);
+}
+
+#[test]
+fn without_a_keychain_the_password_is_asked_and_not_remembered() {
+    let fx = Fixture::new("no-keychain");
+    let backend = FakeBackend {
+        no_keychain: true,
+        ..FakeBackend::default()
+    };
+    for reference in ["keychain", "keychain:shared-db"] {
+        let config = with_password(&fx, reference);
+        // Each reference is a new version of the file: trusted as written.
+        let trust = fx.trusted();
+        let resolved = Resolver::new(&config, &trust, &backend)
+            .resolve(&ws("db"))
+            .unwrap();
+        // Asked like "prompt": nowhere to remember it, so nothing is offered.
+        assert_eq!(
+            resolved.password,
+            Password::Prompt { save_to: None },
+            "{reference}"
+        );
+    }
+}
+
+#[test]
+fn a_keychain_that_fails_is_still_an_error() {
+    let fx = Fixture::new("locked-keychain");
+    // There is a keychain, but reading it fails: that is reported, never turned into a prompt.
+    let backend = FakeBackend {
+        locked_read: true,
+        ..FakeBackend::default()
+    };
+    let config = with_password(&fx, "keychain");
+    let trust = fx.trusted();
+    let err = Resolver::new(&config, &trust, &backend)
+        .resolve(&ws("db"))
+        .unwrap_err();
+    assert!(matches!(err, ResolveError::Secret { .. }), "{err}");
+}
+
+#[test]
+fn without_a_keychain_deleting_a_connection_does_not_fail() {
+    let fx = Fixture::new("no-keychain-delete");
+    let config = with_password(&fx, "keychain");
+    let file = fx.repo().join(".spelaion/connections/db.toml");
+    let backend = FakeBackend {
+        no_keychain: true,
+        ..FakeBackend::default()
+    };
+    delete_connection(&config, &ws("db"), &backend).unwrap();
+    assert!(!file.exists());
+
+    // A keychain that is there but refuses to delete is still reported.
+    let config = with_password(&fx, "keychain");
+    let locked = FakeBackend {
+        fail_keychain: true,
+        ..FakeBackend::default()
+    };
+    let err = delete_connection(&config, &ws("db"), &locked).unwrap_err();
+    assert!(matches!(err, ResolveError::Secret { .. }), "{err}");
+}
+
+#[test]
+fn without_a_keychain_saving_a_password_is_refused_and_undone() {
+    let fx = Fixture::new("no-keychain-save");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let backend = FakeBackend {
+        no_keychain: true,
+        ..FakeBackend::default()
+    };
+    let err = add_connection(
+        &config,
+        &postgres_draft(),
+        Some(&Secret::new("x")),
+        &backend,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("no system keychain"),
+        "it says why: {err}"
+    );
+    assert!(
+        !fx.repo()
+            .join(".spelaion/connections/prod/eu/orders-prod.toml")
+            .exists(),
+        "nothing is left half saved"
     );
 }

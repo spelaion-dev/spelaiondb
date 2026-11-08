@@ -4,9 +4,11 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useKeychainAvailable } from "../keychain";
 import { open } from "@tauri-apps/plugin-dialog";
 import { call, commands, type HopDraft, type PasswordMode, type ProxyDraft, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
+import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 
 export type TunnelEditorMode = { kind: "add"; personal: boolean } | { kind: "edit"; name: string; personal: boolean };
 
@@ -31,7 +33,7 @@ interface HopState {
 
 const usesPassword = (auth: SshAuthItem[]) => auth.includes("password") || auth.includes("keyboard-interactive");
 
-function emptyHop(): HopState {
+function emptyHop(savePassword = true): HopState {
   return {
     host: "",
     port: null,
@@ -39,7 +41,7 @@ function emptyHop(): HopState {
     method: "agent",
     auth: ["agent"],
     identityFile: "",
-    savePassword: true,
+    savePassword,
     fixedMode: null,
     passwordEnv: "",
     passwordOther: "",
@@ -141,9 +143,18 @@ export function TunnelEditor(props: {
   const [proxy, setProxy] = useState<ProxyState>(noProxy);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [status, setStatus] = useState<{ kind: "idle" | "testing" | "ok" } | { kind: "error"; message: string }>({ kind: "idle" });
+  const [status, setStatus] = useState<{ kind: "idle" } | { kind: "error"; message: string }>({ kind: "idle" });
+  const log = useConnectionTest();
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Without a system keychain a new tunnel asks for its passwords; an edited one keeps what
+  // its file says (a repository file is the team's) unless the user unticks it.
+  const keychain = useKeychainAvailable();
+  useEffect(() => {
+    if (keychain !== false || editing) return;
+    setHops((list) => list.map((hop) => ({ ...hop, savePassword: false })));
+    setProxy((current) => ({ ...current, savePassword: false }));
+  }, [keychain, editing]);
 
   useEffect(() => {
     if (mode.kind !== "edit") return;
@@ -195,26 +206,33 @@ export function TunnelEditor(props: {
   /** A whole number typed in a field, or null when it is empty. */
   const numberOrNull = (text: string) => (text.trim() === "" ? null : Math.max(0, Math.trunc(Number(text))));
   const passwords = hops.map((hop) => hop.password || null);
+  // Any change to the profile makes the last test's log stale (and stops a running one).
+  const testedKey = JSON.stringify([draft, passwords, proxyPassword]);
+  useEffect(() => log.clear(), [testedKey]);
 
   async function browseKey(i: number) {
     const path = await open({ multiple: false, directory: false });
     if (typeof path === "string") updateHop(i, { identityFile: path });
   }
 
+  /** Tests the profile step by step (ADR-032): the proxy and each hop, in the log. */
   async function test() {
-    setStatus({ kind: "testing" });
+    setStatus({ kind: "idle" });
     try {
-      let outcome = await call(commands.testTunnel(draft, passwords, proxyPassword));
+      const attempt = () => log.run((id, onStep) => call(commands.testTunnel(draft, passwords, proxyPassword, id, onStep)));
+      let outcome = await attempt();
       if (outcome.kind === "untrusted") {
         if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
-          setStatus({ kind: "idle" });
+          log.clear();
           return;
         }
         useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
-        outcome = await call(commands.testTunnel(draft, passwords, proxyPassword));
+        outcome = await attempt();
       }
-      setStatus(outcome.kind === "connected" ? { kind: "ok" } : { kind: "idle" });
+      if (outcome.kind === "tested") log.finish(outcome.report);
+      else log.clear();
     } catch (e) {
+      log.clear();
       setStatus({ kind: "error", message: errorText(e) });
     }
   }
@@ -385,16 +403,23 @@ export function TunnelEditor(props: {
                           />
                         </label>
                         <label className="check">
-                          <input type="checkbox" aria-label={`${label} ${t("fields.savePassword")}`} checked={hop.savePassword} onChange={(e) => updateHop(i, { savePassword: e.target.checked })} />
+                          <input
+                            type="checkbox"
+                            aria-label={`${label} ${t("fields.savePassword")}`}
+                            checked={hop.savePassword}
+                            disabled={keychain === false && !hop.savePassword}
+                            onChange={(e) => updateHop(i, { savePassword: e.target.checked })}
+                          />
                           {t("fields.savePassword")}
                         </label>
+                        {keychain === false && <p className="muted small">{t("auth.noKeychainHint")}</p>}
                       </>
                     ))}
                   <p className="muted small">{t(`tunnel.methodHints.${hop.method}`)}</p>
                 </fieldset>
               );
             })}
-            <button type="button" className="add-hop" onClick={() => setHops((list) => [...list, emptyHop()])}>
+            <button type="button" className="add-hop" onClick={() => setHops((list) => [...list, emptyHop(keychain !== false)])}>
               {t("tunnel.addHop")}
             </button>
 
@@ -449,10 +474,17 @@ export function TunnelEditor(props: {
                   </div>
                   {proxy.user.trim() && !proxy.fixedMode && (
                     <label className="check">
-                      <input type="checkbox" aria-label={t("tunnel.proxySavePassword")} checked={proxy.savePassword} onChange={(e) => updateProxy({ savePassword: e.target.checked })} />
+                      <input
+                        type="checkbox"
+                        aria-label={t("tunnel.proxySavePassword")}
+                        checked={proxy.savePassword}
+                        disabled={keychain === false && !proxy.savePassword}
+                        onChange={(e) => updateProxy({ savePassword: e.target.checked })}
+                      />
                       {t("tunnel.proxySavePassword")}
                     </label>
                   )}
+                  {proxy.user.trim() && !proxy.fixedMode && keychain === false && <p className="muted small">{t("auth.noKeychainHint")}</p>}
                   <p className="muted small">{hops.length === 0 ? t("tunnel.proxyAloneHint") : t("tunnel.proxyHint")}</p>
                 </>
               )}
@@ -509,13 +541,18 @@ export function TunnelEditor(props: {
             </fieldset>
           </div>
 
+          {log.steps && <ConnectionTestLog steps={log.steps} report={log.report} running={log.running} onStop={log.stop} onClose={log.clear} />}
           <div className="wizard-footer">
-            <button type="button" onClick={() => void test()} disabled={busy || status.kind === "testing"}>
+            <button type="button" onClick={() => void test()} disabled={busy || log.running}>
               {t("tunnel.test")}
             </button>
             <div className="test-result" role="status">
-              {status.kind === "testing" && <span className="muted">{t("test.testing")}</span>}
-              {status.kind === "ok" && <span className="ok">{hops.length === 0 ? t("tunnel.okProxy") : t("tunnel.ok", { count: hops.length })}</span>}
+              <TestSummary
+                steps={log.steps}
+                report={log.report}
+                running={log.running}
+                okText={() => (hops.length === 0 ? t("tunnel.okProxy") : t("tunnel.ok", { count: hops.length }))}
+              />
               {status.kind === "error" && <span className="error">{status.message}</span>}
             </div>
             {editing && (

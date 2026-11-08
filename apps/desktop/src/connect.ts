@@ -2,16 +2,23 @@
 // trusted repository items (ADR-022) and the password. Passwords go straight to the
 // backend; they are never kept in the state.
 
-import { call, commands, type ConnectResult } from "./api";
+import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
-import { useApp, useDialogs } from "./store";
+import { confirmUnsavedFiles } from "./sqlFiles";
+import { type Tab, useApp, useDialogs } from "./store";
 
 /**
  * Fired on `window` with a connection id when the explorer refreshes all its schemas: editor
  * tabs on that connection reload the names their autocompletion offers.
  */
 export const SCHEMAS_REFRESHED_EVENT = "spelaion-schemas-refreshed";
+/**
+ * Fired on `window` with `{ connectionId, idleSeconds }` when the explorer's own session of a
+ * connection is lost or closed for being idle (ADR-029): its tree collapses, and expanding it
+ * again reconnects.
+ */
+export const EXPLORER_SESSION_CLOSED_EVENT = "spelaion-explorer-session-closed";
 /** A catalog change in a metadata tab asks the explorer to reread its objects. */
 export const EXPLORER_REFRESH_EVENT = "spelaion-explorer-refresh";
 
@@ -25,33 +32,98 @@ export const SET_ACTIVE_SCHEMA_EVENT = "spelaion-set-active-schema";
  *  is new or changed (shown, and recorded if accepted) and personal `${user.…}` variables
  *  that are not defined yet (asked for and saved). Tries again after each answer; returns
  *  null if the user refused. */
-export async function reviewChanges(
-  outcome: ConnectResult,
-  retry: () => Promise<ConnectResult>,
-): Promise<ConnectResult | null> {
+export async function reviewChanges<T extends ConnectResult | ConnectionTestResult>(
+  outcome: T,
+  retry: () => Promise<T>,
+): Promise<T | null> {
   // A connection and its tunnel may both have changed: one dialog each.
-  for (let i = 0; (outcome.kind === "changed" || outcome.kind === "missingVariables") && i < 10; i++) {
-    if (outcome.kind === "changed") {
-      const accepted = await useDialogs.getState().askChange({ item: outcome.item, isNew: outcome.new, fields: outcome.fields });
+  for (let i = 0; i < 10; i++) {
+    const current: ConnectResult | ConnectionTestResult = outcome;
+    if (current.kind === "changed") {
+      const accepted = await useDialogs.getState().askChange({ item: current.item, isNew: current.new, fields: current.fields });
       if (!accepted) return null;
-      await call(commands.acceptChange(outcome.root, outcome.item, outcome.new, outcome.fields));
-    } else {
-      const values = await useDialogs.getState().askVariables(outcome.names);
+      await call(commands.acceptChange(current.root, current.item, current.new, current.fields));
+    } else if (current.kind === "missingVariables") {
+      const values = await useDialogs.getState().askVariables(current.names);
       if (!values) return null;
       await call(commands.setUserVars(values));
+    } else {
+      break;
     }
     outcome = await retry();
   }
   return outcome;
 }
 
+/** An SQL editor tab: its session follows its transaction (ADR-031). The explorer's, the table
+ *  data tabs' and the process monitor's sessions stay in auto-commit. */
+function isEditorSession(session: string): boolean {
+  const tab = useApp.getState().tabs.find((t) => t.id === session);
+  return Boolean(tab && !tab.table && !tab.tableDetails);
+}
+
+/** Shows the transaction the core keeps for a freshly connected editor tab. */
+async function showTransaction(session: string) {
+  if (!isEditorSession(session)) return;
+  try {
+    const transaction = await call(commands.transactionStatus(session));
+    useApp.getState().updateTab(session, { transaction, lostTransaction: undefined });
+  } catch {
+    // The tab was closed meanwhile.
+  }
+}
+
+/** A tab's name as its tab shows it: the user's name for it, or its default one. */
+export function tabLabel(tab: Tab): string {
+  if (tab.title) return tab.title;
+  return defaultTabLabel(tab);
+}
+
+/** What a tab is called before the user renames it. */
+export function defaultTabLabel(tab: Tab): string {
+  if (tab.file) return tab.file.name;
+  if (tab.tableDetails) return `${tab.tableDetails.name} · ${i18n.t(`shell:folders.${tab.tableDetails.kind}`)}`;
+  if (tab.table) return tab.table.name;
+  return i18n.t("shell:queryTab", { number: tab.number });
+}
+
+/** A tab's name as its tab shows it, by id. */
+export function tabName(id: string): string {
+  const tab = useApp.getState().tabs.find((t) => t.id === id);
+  return tab ? tabLabel(tab) : id;
+}
+
+/**
+ * Asks before closing, disconnecting or quitting sessions with an open transaction (ADR-031):
+ * the core says which ones need the question. True when there is nothing to ask or the user
+ * accepted; also when the core cannot be asked (the sessions are gone).
+ */
+export async function confirmOpenTransactions(sessions: string[], action: "close" | "disconnect" | "quit"): Promise<boolean> {
+  if (sessions.length === 0) return true;
+  let open: string[];
+  try {
+    open = await call(commands.sessionsToConfirm(sessions));
+  } catch {
+    return true;
+  }
+  if (open.length === 0) return true;
+  return useDialogs.getState().askOpenTransactions(open.map(tabName), action);
+}
+
 /** Returns the server version, or null if the user cancelled. Throws if it fails. */
 export async function openSession(session: string, connectionId: string): Promise<string | null> {
+  const version = await openSessionInner(session, connectionId);
+  if (version !== null) await showTransaction(session);
+  return version;
+}
+
+async function openSessionInner(session: string, connectionId: string): Promise<string | null> {
   const app = useApp.getState();
   const dialogs = useDialogs.getState();
   const name = app.connections.find((c) => c.id === connectionId)?.name ?? connectionId;
+  const editor = isEditorSession(session);
 
-  const connect = () => call(commands.connect(session, connectionId, null, false));
+  const connect = () => call(commands.connect(session, connectionId, null, false, editor));
   let outcome = await connect();
   if (outcome.kind === "untrusted") {
     const workspace = app.workspace?.workspace ?? null;
@@ -69,7 +141,7 @@ export async function openSession(session: string, connectionId: string): Promis
     if (outcome.kind === "authFailed") error = outcome.message;
     const answer = await dialogs.askPassword(name, outcome.canRemember, error);
     if (!answer) return null;
-    outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember));
+    outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember, editor));
   }
   if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables") return null;
   return outcome.serverVersion;
@@ -83,13 +155,14 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
   useApp.getState().updateTab(tabId, { status: "connecting", serverVersion: null });
   void (async () => {
     try {
-      const serverVersion = await call(commands.connectFromSession(source, tabId, database ?? null));
+      const serverVersion = await call(commands.connectFromSession(source, tabId, database ?? null, isEditorSession(tabId)));
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") {
         await call(commands.disconnect(tabId)).catch(() => undefined);
         return;
       }
       useApp.getState().updateTab(tabId, { status: "connected", serverVersion });
+      await showTransaction(tabId);
     } catch (e) {
       const tab = useApp.getState().tabs.find((item) => item.id === tabId);
       if (!tab || tab.connectionId !== connectionId || tab.status !== "connecting") return;
@@ -108,15 +181,67 @@ export function explorerDatabase(connectionId: string, schema: string): string |
   return engine === "mysql" || engine === "mariadb" ? schema : undefined;
 }
 
-/** Closes a query tab: its session is disconnected and its results are freed in the core (a
- *  script still running finishes and is recorded). Ctrl+Shift+T reopens it, without results. */
-export async function closeQueryTab(id: string) {
-  const tab = useApp.getState().tabs.find((t) => t.id === id);
-  if (!tab) return;
-  if (tab.savingEdits) return;
-  if (tab.pendingEdits && !(await confirm(i18n.t("editor:edit.closeUnsaved"), { kind: "warning" }))) return;
-  if (useApp.getState().tabs.find((t) => t.id === id)?.savingEdits) return;
-  useApp.getState().closeTab(id);
-  void call(commands.disconnect(id)).catch(() => undefined);
-  for (const r of tab.run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
+/**
+ * Closes tabs, asking once for all of them first: unsaved row edits, transactions the server
+ * would roll back (the core says which, ADR-031) and queries still running. A running query is
+ * cancelled (a run paused after an error stops, ADR-035), its session disconnected and its
+ * results freed in the core. Ctrl+Shift+T reopens an SQL tab, without results or session.
+ */
+export async function closeTabs(ids: string[]) {
+  const find = (id: string) => useApp.getState().tabs.find((t) => t.id === id);
+  const targets = ids.map(find).filter((t): t is Tab => t !== undefined && !t.savingEdits);
+  if (targets.length === 0) return;
+  const unsaved = targets.filter((t) => t.pendingEdits);
+  if (unsaved.length > 0) {
+    const text = unsaved.length === 1 && targets.length === 1
+      ? i18n.t("editor:edit.closeUnsaved")
+      : i18n.t("editor:edit.closeUnsavedMany", { count: unsaved.length, tabs: unsaved.map(tabLabel).join(", ") });
+    if (!(await confirm(text, { kind: "warning" }))) return;
+  }
+  // File tabs with unsaved changes (ADR-036): save, don't save or cancel.
+  if (!(await confirmUnsavedFiles(targets.map((t) => t.id)))) return;
+  const sessions = targets.map((t) => t.id);
+  if (!(await confirmClose(sessions))) return;
+  // Saving started while the question was open: that tab stays.
+  const closing = sessions.filter((id) => {
+    const tab = find(id);
+    return tab !== undefined && !tab.savingEdits;
+  });
+  if (closing.length === 0) return;
+  const runs = new Map(closing.map((id) => [id, find(id)?.run ?? null]));
+  stopScriptQuestion(closing);
+  useApp.getState().closeTabs(closing);
+  for (const id of closing) {
+    const run = runs.get(id);
+    void (async () => {
+      // The core stops the run that sent the statement, then the session closes.
+      if (run?.running) await call(commands.cancel(id)).catch(() => undefined);
+      await call(commands.disconnect(id)).catch(() => undefined);
+    })();
+    for (const r of run?.results ?? []) void call(commands.releaseResult(r.id)).catch(() => undefined);
+  }
+}
+
+/** Closes one tab (the tab's ×, Ctrl+W). */
+export function closeQueryTab(id: string) {
+  return closeTabs([id]);
+}
+
+/** Running queries and open transactions among the tabs to close: one question for all. */
+async function confirmClose(sessions: string[]): Promise<boolean> {
+  const running = sessions.filter((id) => useApp.getState().tabs.find((t) => t.id === id)?.run?.running);
+  let open: string[] = [];
+  try {
+    open = await call(commands.sessionsToConfirm(sessions));
+  } catch {
+    // The sessions are gone: nothing is left to roll back.
+  }
+  if (open.length === 0 && running.length === 0) return true;
+  return useDialogs.getState().askOpenTransactions(open.map(tabName), "close", running.map(tabName));
+}
+
+/** A run of a closing tab that waits for an answer after an error stops: its dialog goes. */
+function stopScriptQuestion(closing: string[]) {
+  const question = useDialogs.getState().scriptError;
+  if (question && closing.includes(question.tab)) question.resolve("stop");
 }

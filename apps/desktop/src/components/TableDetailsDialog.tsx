@@ -141,10 +141,10 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
                 <tbody>{rows.map((row, index) => <tr key={index}>
                   {kind === "columns" && <td><input type="checkbox" aria-label={t("tableDetails.selectColumn", { name: row.column })} checked={selected.includes(row.column!)} onChange={() => setSelected((items) => items.includes(row.column!) ? items.filter((item) => item !== row.column) : [...items, row.column!])} /></td>}
                   {row.cells.map((cell, column) => <td key={column} title={cell}>{cell}</td>)}
-                  <td><div className="table-details-actions">
-                    {(row.definition || row.trigger) && <button type="button" onClick={() => void openDefinition(row)}>{t("openDefinition")}</button>}
-                    {row.column && row.target && <button type="button" onClick={() => setChange({ target: row.target!, name: row.column!, rename: true })}>{t("objectChange.renameMenu")}</button>}
-                    {row.target && <button type="button" className="danger-text" onClick={() => setChange({ target: row.target!, name: row.cells[0] ?? "", rename: false })}>{t("objectChange.dropMenu")}</button>}
+                  <td><div className="table-details-actions table-row-actions">
+                    {(row.definition || row.trigger) && <button type="button" className="ghost" onClick={() => void openDefinition(row)}>{t("openDefinition")}</button>}
+                    {row.column && row.target && <button type="button" className="ghost" onClick={() => setChange({ target: row.target!, name: row.column!, rename: true })}>{t("objectChange.renameMenu")}</button>}
+                    {row.target && <button type="button" className="ghost table-action-drop" onClick={() => setChange({ target: row.target!, name: row.cells[0] ?? "", rename: false })}>{t("objectChange.dropMenu")}</button>}
                   </div></td>
                 </tr>)}</tbody>
               </table>

@@ -46,6 +46,7 @@
     "selectRow": "Select a process to inspect its details and SQL.",
     "noSql": "No statement is running.",
     "ownHint": "This is the monitoring connection.",
+    "ownLabel": "(this session)",
     "copySql": "Copy SQL",
     "openSql": "Open SQL",
     "otherDatabase": "Copy the SQL to open it in a connection to this PostgreSQL database.",
@@ -63,6 +64,7 @@
   },
   "toggleConnection": "Expand or collapse {{connection}}",
   "tunnel": "Tunnel {{name}}",
+  "typeTooltip": "Type: {{name}}",
   "filtered": "filtered",
   "filteredHint": "Some schemas, objects or columns are hidden by this connection's filter (⋯ → Configure filters)",
   "configureFilter": "Configure filter…",
@@ -75,7 +77,7 @@
   "loadingDetails": "Loading table details…",
   "connecting": "Connecting…",
   "quickFilter": "Filter the explorer",
-  "quickFilterHint": "Filter the explorer by name (Ctrl+Shift+F)",
+  "quickFilterHint": "Filter the explorer by name or tag (Ctrl+Shift+F)",
   "quickFilterPlaceholder": "Filter by name",
   "quickFilterNothing": "No connection, schema or loaded object matches the filter.",
   "connectedOnly": "Show only connected connections",
@@ -91,7 +93,13 @@
   "toggleFolder": "Expand or collapse {{name}}",
   "openObject": "{{name}}: open its definition",
   "openDefinition": "Generate DDL",
-  "generatedSql": { "title": "Generated SQL", "editor": "SQL editor", "copy": "Copy", "copied": "Copied", "close": "Close" },
+  "generatedSql": {
+    "title": "Generated SQL",
+    "editor": "SQL editor",
+    "copy": "Copy",
+    "copied": "Copied",
+    "close": "Close"
+  },
   "generateSql": "Generate SQL",
   "generateDdl": "Generate DDL",
   "generateCall": "Generate CALL",
@@ -224,7 +232,12 @@
     "drop": "DROP: removes the object and everything in it",
     "truncate": "TRUNCATE: empties the table",
     "uncheckedWrite": "DELETE or UPDATE that could not be checked for a WHERE",
-    "productionWrite": "Changes a production database",
+    "dataChange": "Changes data where the connection's type asks first",
+    "execution": "Runs on a connection that asks before every run",
+    "executionExplanation": "{{connection}} asks before running anything. Nothing has run yet.",
+    "more_one": "…and {{count}} more statement",
+    "more_other": "…and {{count}} more statements",
+    "runConfirmed": "Run",
     "cancel": "Cancel",
     "run": "Run anyway"
   },
@@ -255,6 +268,7 @@
     "run": "Run"
   },
   "savedQueries": "Saved queries",
+  "mcpServer": "MCP server",
   "change": {
     "title": "This changed since you trusted the repository",
     "newTitle": "New in the repository",
@@ -334,5 +348,32 @@
   "bookmarkOpen": "Bookmark {{name}}: open it",
   "bookmarkOpenMenu": "Open",
   "bookmarkHint": "Click to show it in the explorer, double-click to open it",
-  "showInExplorer": "Show in explorer"
+  "showInExplorer": "Show in explorer",
+  "idleClosed": "Closed after {{minutes}} min without use, as its connection type asks. Expand it to reconnect.",
+  "tagFilter": "Filter connections by tag",
+  "tagFilterHint": "Show only connections tagged {{tag}}",
+  "tagsTooltip": "Tags: {{tags}}",
+  "openTransactions": {
+    "title": {
+      "close": "Close with an open transaction?",
+      "disconnect": "Disconnect with an open transaction?",
+      "quit": "Quit with an open transaction?"
+    },
+    "explanation_one": "This tab has a transaction open. Its session will end, and the server rolls back what was not committed:",
+    "explanation_other": "These tabs have a transaction open. Their sessions will end, and the server rolls back what was not committed:",
+    "hint": "To keep the changes, cancel and press Commit in the tab first.",
+    "cancel": "Cancel",
+    "proceed": {
+      "close": "Close and roll back",
+      "disconnect": "Disconnect and roll back",
+      "quit": "Quit and roll back"
+    },
+    "titleRunning": "Close while a query runs?",
+    "running_one": "This tab's query is still running. Closing cancels it:",
+    "running_other": "These tabs have queries still running. Closing cancels them:",
+    "proceedRunning": "Close and cancel"
+  },
+  "exportTable": "Export…",
+  "exportTables_one": "Export {{formattedCount}} table…",
+  "exportTables_other": "Export {{formattedCount}} tables…"
 }

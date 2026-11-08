@@ -76,7 +76,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         const sources = [`meta:${connection.id}`, ...useApp.getState().tabs.filter((tab) => tab.connectionId === connection.id && tab.status === "connected").map((tab) => tab.id)];
         let version: string | null = null;
         for (const source of sources) {
-          try { version = await call(commands.connectFromSession(source, id, null)); break; } catch { /* Try another open session. */ }
+          try { version = await call(commands.connectFromSession(source, id, null, false)); break; } catch { /* Try another open session. */ }
         }
         if (version === null && !disposed) version = await openSession(id, connection.id);
         if (version === null) {
@@ -151,7 +151,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
       try {
         // PostgreSQL sessions cannot switch databases after connecting. SQL Server and
         // MySQL can select the process's database when opening the query.
-        const version = await call(commands.connectFromSession(id, tab, connection.engine === "postgres" ? null : row.database));
+        const version = await call(commands.connectFromSession(id, tab, connection.engine === "postgres" ? null : row.database, false));
         const current = useApp.getState().tabs.find((item) => item.id === tab);
         if (!current || current.connectionId !== connection.id || current.status !== "connecting") { await call(commands.disconnect(tab)); return; }
         useApp.getState().updateTab(tab, { status: "connected", serverVersion: version });
@@ -194,7 +194,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         <table className="process-table">
           <thead><tr>{["id", "user", "host", "database", "command", "seconds", "state", "sql"].map((name) => <th key={name}>{t(`processMonitor.${name}`)}</th>)}</tr></thead>
           <tbody>{filtered.map((row) => <tr key={row.id} tabIndex={0} aria-selected={selectedId === row.id} onClick={() => setSelectedId(row.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedId(row.id); } }}>
-            <td className="process-id">{row.id}{row.id === snapshot?.ownId && <span className="process-own" title={t("processMonitor.ownHint")}> •</span>}</td><td>{row.user}</td><td>{row.host}</td><td>{row.database ?? "—"}</td><td><span className={`process-state ${row.activity === "idle" ? "idle" : "active"}`}>{row.command}</span></td><td className="process-seconds">{row.seconds ?? "—"}</td><td>{row.state ?? "—"}</td><td className="process-sql">{row.sql ?? "—"}</td>
+            <td className="process-id">{row.id}{row.id === snapshot?.ownId && <span className="process-own" title={t("processMonitor.ownHint")}> {t("processMonitor.ownLabel")}</span>}</td><td>{row.user}</td><td>{row.host}</td><td>{row.database ?? "—"}</td><td><span className={`process-state ${row.activity === "idle" ? "idle" : "active"}`}>{row.command}</span></td><td className="process-seconds">{row.seconds ?? "—"}</td><td>{row.state ?? "—"}</td><td className="process-sql">{row.sql ?? "—"}</td>
           </tr>)}</tbody>
         </table>
         {!busy && snapshot && filtered.length === 0 && <div className="empty">{t("processMonitor.noResults")}</div>}
@@ -208,7 +208,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
             <button disabled={!selected.sql} onClick={() => { if (selected.sql) void navigator.clipboard.writeText(selected.sql).catch((e) => setError(message(e))); }}>{t("processMonitor.copySql")}</button>
             <button disabled={!selected.sql || otherPostgresDatabase} title={otherPostgresDatabase ? t("processMonitor.otherDatabase") : undefined} onClick={() => void openSql(selected)}>{t("processMonitor.openSql")}</button>
             <button title={connection.engine === "sqlserver" ? t("processMonitor.cancelUnavailable") : undefined} disabled={busy || own || connection.readOnly || cannotVerify || connection.engine === "sqlserver" || selected.activity === "idle" || selected.activity === "unknown"} onClick={() => void act(selected, false)}>{t("processMonitor.cancelQuery")}</button>
-            <button disabled={busy || own || connection.readOnly || cannotVerify} onClick={() => void act(selected, true)}>{t("processMonitor.endConnection")}</button>
+            <button className="danger-text" disabled={busy || own || connection.readOnly || cannotVerify} onClick={() => void act(selected, true)}>{t("processMonitor.endConnection")}</button>
             {own && <span className="muted small">{t("processMonitor.ownHint")}</span>}
             {connection.readOnly && <span className="muted small">{t("processMonitor.readOnly")}</span>}
             {cannotVerify && <span className="muted small">{t("processMonitor.cannotVerify")}</span>}

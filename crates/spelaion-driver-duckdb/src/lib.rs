@@ -26,7 +26,7 @@ use duckdb::{AccessMode, Config, InterruptHandle};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
     EventStream, ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Result, SchemaInfo,
-    SchemaObject, TableInfo,
+    SchemaObject, TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -254,6 +254,8 @@ enum Command {
     SchemaObjects(String, LikeFilter, Reply<Vec<SchemaObject>>),
     Definition(Box<SchemaObject>, Reply<String>),
     RelationDefinition(String, String, Reply<String>),
+    /// Whether a transaction is open (ADR-031).
+    TransactionState(Reply<TransactionState>),
 }
 
 /// Loop of the connection thread. Ends when the `DuckdbConnection` is dropped.
@@ -292,6 +294,31 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             }
             Command::RelationDefinition(schema, name, reply) => {
                 let _ = reply.send(objects::relation_definition(conn, &schema, &name));
+            }
+            Command::TransactionState(reply) => {
+                let _ = reply.send(transaction_state(conn));
+            }
+        }
+    }
+}
+
+/// duckdb-rs does not expose DuckDB's auto-commit flag (its `is_autocommit` always says yes),
+/// so the transaction id answers: outside a transaction every statement is a transaction of its
+/// own with a new id; inside one, both statements see the same. In-process, so it costs
+/// microseconds. A transaction that failed refuses any statement until it is rolled back.
+fn transaction_state(conn: &duckdb::Connection) -> Result<TransactionState> {
+    let id = || conn.query_row("select txid_current()", [], |r| r.get::<_, u64>(0));
+    match (id(), id()) {
+        (Ok(first), Ok(second)) => Ok(if first == second {
+            TransactionState::Open
+        } else {
+            TransactionState::Idle
+        }),
+        (Err(e), _) | (_, Err(e)) => {
+            if e.to_string().contains("transaction is aborted") {
+                Ok(TransactionState::Failed)
+            } else {
+                Err(exec::map_error(e))
             }
         }
     }
@@ -345,6 +372,10 @@ impl Connection for DuckdbConnection {
 
     async fn server_version(&self) -> Result<String> {
         self.ask(Command::Version).await
+    }
+
+    async fn transaction_state(&self) -> Result<TransactionState> {
+        self.ask(Command::TransactionState).await
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
