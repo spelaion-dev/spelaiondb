@@ -199,6 +199,16 @@ to an action that is also in a context menu, never its only way in.
 | Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create, Rename…, Drop… (last, red) |
 | Activity bar | panels and pages | explorer, processes; history, saved queries, MCP and Settings at the bottom |
 | Settings | preferences for every workspace | applied and saved as they change, with no Save button |
+| Command palette | every app command, and the actions of connections and loaded objects | Ctrl+Shift+P: commands with their shortcuts, connections, the explorer's loaded objects (open data, open structure, new console, copy names, show in explorer) and recent files |
+
+- App commands (the tab menu, the file menu, the activity bar, the welcome screen and the global
+  shortcuts) are registered once in `commandRegistry.ts`, with their name and shortcut, and what
+  they do is in `commands.ts`. A menu item of those menus is a `CommandMenuItem`, never a button
+  written by hand, so the palette lists it too; `scripts/commands.test.mjs` compares the registry
+  with the menus, the locales and this shortcut map.
+- The palette lists objects only from what the explorer has already read (`catalog.ts`): it
+  never asks a database for more. Menus that act on a selection made in their own region (an
+  explorer row, the grid's cells) stay in that region.
 
 - An option of one connection belongs in its form (Edit connection…), one of one tab in that tab
   (Run options), one of the whole app in Settings.
@@ -214,8 +224,9 @@ to an action that is also in a context menu, never its only way in.
 - A shortcut goes to a frequent action, following DBeaver in the explorer and grid (F2, F5,
   Delete, Ctrl+Shift+D) and VS Code in the editor and tabs. A destructive shortcut opens the
   same confirmation as its menu item (Delete opens the Drop dialog).
-- Global shortcuts live in `App.tsx`'s one handler (and the Ctrl+Tab switcher in `TabBar.tsx`).
-  They do nothing while a modal is open, and never take a key that a focused area uses.
+- Global shortcuts are the registry's (`commandRegistry.ts`, scope `global`), run by `App.tsx`'s
+  one handler (and the Ctrl+Tab switcher in `TabBar.tsx`). They do nothing while a modal is
+  open, and never take a key that a focused area uses.
 - Focused areas (editor, grid, explorer, tab strip) handle their own keys and may give a key a
   local meaning: Ctrl+S in the grid saves pending edits; Ctrl+Shift+C copies with headers in the
   grid and qualified names in the explorer. Text inputs keep their own keys (Ctrl+Z, Ctrl+A).
@@ -223,18 +234,20 @@ to an action that is also in a context menu, never its only way in.
   `e.key`, so a key that AltGr turns into a character never fires the shortcut.
 - Written with modifiers in the order Ctrl, Shift, Alt and keys as printed on the keyboard
   (`Ctrl+Shift+Enter`, `Shift+Alt+F`, `Delete`). Buttons show it in the tooltip, `Label
-  (Shortcut)`; menus right-align it in `.menu-shortcut`. The text comes from one constant next
-  to its handler, as `TAB_SHORTCUTS` in `tabActions.ts` does, not from a translated string.
+  (Shortcut)`; menus right-align it in `.menu-shortcut`. The text comes from the command's entry
+  in `commandRegistry.ts` (or, for a focused area's own key, one constant next to its handler),
+  not from a translated string.
 - A new shortcut is added to this map in the same change.
 
 | Where | Keys |
 |---|---|
-| Anywhere | Ctrl+T new query · Ctrl+Shift+T reopen closed tab · Ctrl+W close tab (or Settings) · Ctrl+Shift+W close all · Ctrl+Alt+W close others · Ctrl+Alt+R close to the right · Ctrl+F2 rename tab · Ctrl+Alt+D duplicate tab · Ctrl+Alt+P pin tab · Ctrl+Tab / Ctrl+Shift+Tab recent tabs · Ctrl+PageDown / PageUp next / previous tab (with Shift: move it) · Ctrl+O open SQL file · Ctrl+S save the file tab, or the console's query by name · Ctrl+Shift+S save as file · Ctrl+Alt+M maximize results · Ctrl+Shift+D open object by name · Ctrl+Shift+F explorer filter · Ctrl+, Settings |
+| Anywhere | Ctrl+Shift+P command palette · Ctrl+T new query · Ctrl+Shift+T reopen closed tab · Ctrl+W close tab (or Settings) · Ctrl+Shift+W close all · Ctrl+Alt+W close others · Ctrl+Alt+R close to the right · Ctrl+F2 rename tab · Ctrl+Alt+D duplicate tab · Ctrl+Alt+P pin tab · Ctrl+Tab / Ctrl+Shift+Tab recent tabs · Ctrl+PageDown / Ctrl+PageUp next / previous tab · Ctrl+Shift+PageDown / Ctrl+Shift+PageUp move the tab · Ctrl+O open SQL file · Ctrl+S save the file tab, or the console's query by name · Ctrl+Shift+S save as file · Ctrl+Alt+M maximize results · Ctrl+Shift+D open object by name · Ctrl+Shift+F explorer filter · Ctrl+, Settings |
 | SQL editor | Ctrl+Enter run selection or statement · Ctrl+Shift+Enter run script · Shift+Alt+F format · Ctrl+Shift+L select all occurrences · Ctrl+click / Alt+click add a cursor · CodeMirror's defaults otherwise |
 | Result grid | arrows, Home, End, PageUp, PageDown (Ctrl: to the edge; Shift: extend) · Ctrl+A all · Shift+Space rows · Ctrl+Space columns · Ctrl+C copy · Ctrl+Shift+C copy with headers · Enter cell viewer, Escape closes it · Ctrl+F find, F3 / Shift+F3 next / previous, Alt+C match case · Ctrl+Shift+J jump to column |
 | Table data edits | F2 edit cell · Alt+Insert add row · Ctrl+Alt+Insert duplicate row · Delete or Alt+Delete delete rows · Ctrl+Z undo the selected rows' edits · Ctrl+Alt+N set NULL · Ctrl+S save changes · Ctrl+R discard all |
 | Explorer row | Enter / Space expand · Ctrl+Enter or double-click open the overview · F5 refresh · F2 rename · Delete Drop… · Ctrl+C copy names (a connection row copies the connection) · Ctrl+Shift+C qualified names · Ctrl+V paste a connection |
 | Tab strip | arrows, Home, End move between tabs · F2 rename · Menu key or Shift+F10 tab menu |
+| Command palette | Up / Down, PageUp / PageDown move · Enter runs a command, or lists an object's actions · Escape or Backspace (empty box) goes back from an object's actions, Escape closes |
 | Dialogs, menus, separators | Escape cancels the topmost · Enter submits a one-field dialog · Tab stays inside a modal · arrows resize a separator (Shift: bigger steps), Home / End to its limits |
 
 ## Dialogs and confirmations

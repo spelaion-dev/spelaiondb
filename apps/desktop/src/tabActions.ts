@@ -1,5 +1,6 @@
-// What the tab bar's menu and its shortcuts do. Closing goes through `closeTabs`, which asks
-// once for every tab with unsaved edits, an open transaction or a running query.
+// What the tab commands do; their names and shortcuts are in `commandRegistry.ts`. Closing goes
+// through `closeTabs`, which asks once for every tab with unsaved edits, an open transaction or
+// a running query.
 //
 // Pinned tabs: "close others", "close to the right" and "close all" leave them open, and their
 // × is replaced by an unpin button, so a stray click never closes one. Closing that tab itself
@@ -8,18 +9,6 @@
 import i18n from "./i18n";
 import { closeTabs } from "./connect";
 import { useApp } from "./store";
-
-/** The shortcuts the menu shows; `App.tsx` and the tab bar handle them. */
-export const TAB_SHORTCUTS = {
-  rename: "Ctrl+F2",
-  duplicate: "Ctrl+Alt+D",
-  pin: "Ctrl+Alt+P",
-  close: "Ctrl+W",
-  closeOthers: "Ctrl+Alt+W",
-  closeRight: "Ctrl+Alt+R",
-  closeAll: "Ctrl+Shift+W",
-  reopen: "Ctrl+Shift+T",
-} as const;
 
 function unpinned(ids: string[]): string[] {
   const tabs = useApp.getState().tabs;

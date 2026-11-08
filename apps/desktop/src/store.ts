@@ -216,6 +216,15 @@ export interface ExplorerReveal {
 /** Window event asking the editor tab whose id is in `detail` to save its query (Ctrl+S). */
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
+/** What the command palette asks of an editor tab: the same as its action column's buttons. */
+export type EditorCommand = "runCurrent" | "runScript" | "format" | "cancel";
+
+/** Window event asking the editor tab `detail.tab` to do `detail.command` (SDB-18). */
+export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";
+
+/** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
+export type SidebarSection = "connections" | "processes" | "mcp" | null;
+
 /** How many closed tabs Ctrl+Shift+T can bring back. */
 const MAX_CLOSED_TABS = 20;
 
@@ -253,6 +262,9 @@ interface AppStore {
   bookmarks: BookmarkItem[];
   /** "Open object by name" is open, on this connection first (or the active tab's). */
   openObject: { connectionId: string | null } | null;
+  /** The command palette (Ctrl+Shift+P) is open. */
+  paletteOpen: boolean;
+  sidebarSection: SidebarSection;
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
   addTab(connectionId: string | null, sql?: string): string;
@@ -308,6 +320,8 @@ interface AppStore {
   /** The explorer showed it (or cannot): later renders do not scroll to it again. */
   revealDone(nonce: number): void;
   setOpenObject(open: { connectionId: string | null } | null): void;
+  setPaletteOpen(open: boolean): void;
+  setSidebarSection(section: SidebarSection | ((current: SidebarSection) => SidebarSection)): void;
   setBookmarks(bookmarks: BookmarkItem[]): void;
 }
 
@@ -332,6 +346,8 @@ export const useApp = create<AppStore>((set) => ({
   explorerSelection: [],
   explorerReveal: null,
   openObject: null,
+  paletteOpen: false,
+  sidebarSection: "connections",
   bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
@@ -510,6 +526,9 @@ export const useApp = create<AppStore>((set) => ({
   revealInExplorer: (target) => set((s) => ({ explorerReveal: { ...target, nonce: (s.explorerReveal?.nonce ?? 0) + 1 } })),
   revealDone: (nonce) => set((s) => (s.explorerReveal?.nonce === nonce ? { explorerReveal: null } : s)),
   setOpenObject: (openObject) => set({ openObject }),
+  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  setSidebarSection: (section) =>
+    set((s) => ({ sidebarSection: typeof section === "function" ? section(s.sidebarSection) : section })),
   setBookmarks: (bookmarks) => set({ bookmarks }),
   setExplorerConnected: (connection, connected) => set((s) => ({
     explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),

@@ -5,7 +5,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RecentFileItem } from "../api";
 import { Icon } from "./Icons";
-import { RECENT_FILES_EVENT, forgetRecentFile, openFileDialog, openFilePath, recentFiles } from "../sqlFiles";
+import { RECENT_FILES_EVENT, forgetRecentFile, openFilePath, recentFiles } from "../sqlFiles";
+import { CommandMenuItem } from "./CommandMenuItem";
 
 export function FileMenuButton() {
   const { t } = useTranslation("app");
@@ -93,19 +94,11 @@ function FileMenu({ x, y, onClose }: { x: number; y: number; onClose(): void }) 
         items[e.key === "ArrowDown" ? (at + 1) % items.length : (at + items.length - 1) % items.length]?.focus();
       }}
     >
-      <button
-        role="menuitem"
-        onClick={() => {
-          onClose();
-          void openFileDialog();
-        }}
-      >
-        <span>{t("files.open")}</span>
-        <span className="menu-shortcut">Ctrl+O</span>
-      </button>
+      <CommandMenuItem id="file.open" tab={null} onClose={onClose} />
       <hr />
       <div className="menu-heading muted small">{t("files.recent")}</div>
       {recent !== null && recent.length === 0 && <div className="menu-empty muted small">{t("files.noRecent")}</div>}
+      {/* The palette lists the recent files too (CommandPalette.tsx). */}
       {recent?.map((file) => (
         <div key={file.path} className="recent-file">
           <button
