@@ -24,6 +24,8 @@ import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
 import { toggleResultsMaximized } from "../tabActions";
 import { Icon } from "./Icons";
+import { useCompletionCatalog } from "../useCompletionCatalog";
+import { mayChangeCompletionCatalog } from "../sqlCompletion";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 function databaseSwitching(engine: string | undefined): boolean {
@@ -82,7 +84,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [databaseError, setDatabaseError] = useState(false);
   const [databaseRefresh, setDatabaseRefresh] = useState(0);
   const databaseBusyRef = useRef(false);
-  const [tables, setTables] = useState<Record<string, string[]>>({});
+  const workspace = useApp((s) => s.workspace?.workspace ?? null);
+  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tab.status === "connected" && !tab.table && (!supportsDatabase || database !== null));
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   const lastRequest = useRef<RunRequest | null>(null);
@@ -457,37 +460,6 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => window.removeEventListener(EDITOR_COMMAND_EVENT, onCommand);
   }, [tab.id]);
 
-  // "Refresh all schemas" in the explorer reloads the names below.
-  const [schemasRefreshed, setSchemasRefreshed] = useState(0);
-  useEffect(() => {
-    const onRefresh = (e: Event) => {
-      if ((e as CustomEvent<string>).detail === tab.connectionId) setSchemasRefreshed((n) => n + 1);
-    };
-    window.addEventListener(SCHEMAS_REFRESHED_EVENT, onRefresh);
-    return () => window.removeEventListener(SCHEMAS_REFRESHED_EVENT, onRefresh);
-  }, [tab.connectionId]);
-
-  // Autocompletion: tables and views of the user schemas.
-  useEffect(() => {
-    if (tab.status !== "connected") return;
-    let cancelled = false;
-    (async () => {
-      // Autocompletion sees every name: the explorer's filters (ADR-025) do not apply here.
-      const schemas = (await call(commands.listSchemas(tab.id, null, false))).filter((s) => !s.system).slice(0, 20);
-      const out: Record<string, string[]> = {};
-      for (const schema of schemas) {
-        for (const o of await call(commands.listObjects(tab.id, schema.name, null, false))) {
-          out[`${o.schema}.${o.name}`] = [];
-          if (o.schema === "public" || o.schema === "main" || o.schema === database) out[o.name] = [];
-        }
-      }
-      if (!cancelled) setTables(out);
-    })().catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [tab.status, tab.id, database, schemasRefreshed]);
-
   // Read the server state after connecting and after each script, including failed scripts:
   // a USE earlier in a script can succeed even when a later statement fails.
   useEffect(() => {
@@ -614,7 +586,6 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
-    setTables({});
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
     updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
   }
@@ -757,6 +728,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
           messages: summary.statements > 1 || summary.stop ? [...r.messages, ...summaryMessages(summary)] : r.messages,
         }));
         useApp.getState().refreshHistory();
+        if (mayChangeCompletionCatalog(request.text, connection?.engine ?? null)) {
+          window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: tab.connectionId }));
+        }
         notifyFinished(tab, summary, elapsedMs);
         break;
       }
@@ -934,11 +908,12 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
               updateTab(tab.id, { sql });
             }}
             engine={connection?.engine ?? null}
-            tables={tables}
+            catalog={completion.catalog}
             onRun={(r) => void run(r)}
             error={editorError}
           />
         </div>
+        {!tab.table && completion.error && <div className="notice error" role="status">{t("completion.loadFailed", { reason: completion.error })}</div>}
         <div
           className="divider"
           hidden={maximized}

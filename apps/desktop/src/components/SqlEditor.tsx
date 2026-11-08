@@ -6,7 +6,7 @@ import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Compartment, countColumn, EditorSelection, EditorState, findColumn, Prec, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
-import { MariaSQL, MSSQL, MySQL, PostgreSQL, SQLite, type SQLDialect, sql } from "@codemirror/lang-sql";
+import { sql } from "@codemirror/lang-sql";
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, foldCode, unfoldCode, indentUnit } from "@codemirror/language";
 import { defaultKeymap, history, historyKeymap, toggleLineComment, toggleBlockComment, cursorMatchingBracket, indentMore, indentLess } from "@codemirror/commands";
 import { tags } from "@lezer/highlight";
@@ -15,6 +15,7 @@ import { closeSearchPanel, gotoLine, highlightSelectionMatches, openSearchPanel,
 import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, completionStatus, startCompletion, snippet, nextSnippetField, prevSnippetField, acceptCompletion } from "@codemirror/autocomplete";
 import { EDITOR_ACTIONS, EDITOR_SNIPPETS as snippets, quotedLines, type EditorActionId } from "../editorActions";
 import { FORMAT_LANGUAGES, leadingCommas } from "../editorFormat";
+import { sqlCompletionSource, sqlDialect, type CompletionCatalog, type KeywordCase } from "../sqlCompletion";
 import { usePreferences } from "../preferences";
 import type { EditorPreferencesItem } from "../bindings";
 import { EditorMenu } from "./EditorMenu";
@@ -46,8 +47,8 @@ interface Props {
   revision?: number;
   onChange(value: string): void;
   engine: string | null;
-  /** Known tables → columns (may be empty), for autocompletion. */
-  tables: Record<string, string[]>;
+  /** Catalog metadata already read in the background, never fetched while typing. */
+  catalog: CompletionCatalog;
   onRun(request: RunRequest): void;
   /** Error to underline, with its JS index in the document. */
   error: { index: number; message: string; source: object } | null;
@@ -66,6 +67,9 @@ const theme = EditorView.theme({
   },
   ".cm-ran": { backgroundColor: "var(--accent-soft)", transition: "background-color 0.3s" },
   ".cm-tooltip": { backgroundColor: "var(--panel)", color: "var(--fg)", border: "1px solid var(--line)" },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--fg)" },
+  ".cm-completionDetail": { color: "var(--muted)" },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail": { color: "var(--fg)" },
 });
 
 // Retain the previous modified click so two Shift+Alt clicks define a rectangle.
@@ -127,7 +131,6 @@ const editorSetup = [
   highlightActiveLineGutter(), highlightSpecialChars(), history(), foldGutter(),
   drawSelection(), dropCursor(), EditorState.allowMultipleSelections.of(true), indentOnInput(),
   syntaxHighlighting(defaultHighlightStyle, { fallback: true }), bracketMatching(), closeBrackets(),
-  autocompletion(),
   rectangleGesture,
   EditorView.clickAddsSelectionRange.of((event) => (event.altKey && !event.shiftKey) || event.ctrlKey || event.metaKey),
   highlightActiveLine(), highlightSelectionMatches({ highlightWordAroundCursor: true }),
@@ -218,10 +221,8 @@ async function formatIn(view: EditorView, engine: string | null, preferences: Ed
   return null;
 }
 
-function language(engine: string | null, tables: Record<string, string[]>) {
-  // DuckDB's SQL comes from PostgreSQL's: the default dialect fits it.
-  const dialects: Record<string, SQLDialect> = { sqlite: SQLite, mysql: MySQL, mariadb: MariaSQL, sqlserver: MSSQL };
-  return sql({ dialect: (engine && dialects[engine]) || PostgreSQL, schema: tables, upperCaseKeywords: false });
+function language(engine: string | null, catalog: CompletionCatalog, keywordCase: KeywordCase) {
+  return [sql({ dialect: sqlDialect(engine) }), autocompletion({ override: [sqlCompletionSource(catalog, engine, keywordCase)] })];
 }
 
 function editorPreferences(p: EditorPreferencesItem) {
@@ -232,7 +233,7 @@ function editorPreferences(p: EditorPreferencesItem) {
   ];
 }
 
-export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, tables, onRun, error }: Props) {
+export function SqlEditor({ handle, onFormatError, onActionError, value, revision, onChange, engine, catalog, onRun, error }: Props) {
   const { t } = useTranslation("editor");
   const preferences = usePreferences((s) => s.editor);
   const settings = useRef(new Compartment());
@@ -366,7 +367,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
           editorSetup,
           syntaxHighlighting(defaultHighlightStyle),
           syntaxHighlighting(sqlKeywords),
-          lang.current.of(language(engine, tables)),
+          lang.current.of(language(engine, catalog, preferences.keywordCase as KeywordCase)),
           locale.current.of([
             EditorState.phrases.of(t("codeMirror", { returnObjects: true }) as Record<string, string>),
             EditorView.contentAttributes.of({ "aria-label": t("sqlEditor") }),
@@ -403,8 +404,8 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
   }, []);
 
   useEffect(() => {
-    view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, tables)) });
-  }, [engine, tables]);
+    view.current?.dispatch({ effects: lang.current.reconfigure(language(engine, catalog, preferences.keywordCase as KeywordCase)) });
+  }, [engine, catalog, preferences.keywordCase]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: settings.current.reconfigure(editorPreferences(preferences)) });

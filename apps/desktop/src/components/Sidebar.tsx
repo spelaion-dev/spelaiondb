@@ -1780,6 +1780,7 @@ function SchemaNode({
     setMenu(null);
     reload();
     setRefreshed((n) => n + 1);
+    window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: connectionId }));
   }
 
   useOnChange(generation, reload);
@@ -2104,13 +2105,17 @@ function ObjectNode({
   }
 
   /** Columns, keys and indexes read again (now if open), and the exact count forgotten. */
-  function refresh() {
+  function reloadDetails() {
     setMenu(null);
     setCount(null);
     if (open) void loadDetails();
     else setDetails(null);
   }
-  useOnChange(generation, refresh);
+  function refresh() {
+    reloadDetails();
+    window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: connectionId }));
+  }
+  useOnChange(generation, reloadDetails);
 
   /** Preview the core's SQL; Open as SQL still opens an editor tab. */
   async function openSql(template: SqlTemplateItem, inEditor = false) {
