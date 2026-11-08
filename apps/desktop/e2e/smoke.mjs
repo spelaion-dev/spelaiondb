@@ -2528,8 +2528,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const mysqlGrid = panel.locator(".grid-scroller");
   const mysqlBox = await mysqlGrid.boundingBox();
   await page.mouse.dblclick(mysqlBox.x + 52 + 20, mysqlBox.y + 36 + 13);
-  await panel.getByRole("textbox", { name: "New value for id" }).fill("901");
-  await panel.getByRole("textbox", { name: "New value for id" }).press("Enter");
+  await panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for id" })).fill("901");
+  await panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for id" })).press("Enter");
   assert.ok(await mysqlPages.getByLabel("Rows per page").isDisabled());
   await mysqlGrid.evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await page.waitForTimeout(300);
@@ -2702,7 +2702,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     };
     // name of row 1 → "edited" (inline editor).
     await page.mouse.dblclick(...(await cellAt(0, 110)));
-    const editor = panel.getByRole("textbox", { name: "New value for name" });
+    const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("edited");
     await editor.press("Enter");
     // The full value panel edits the same pending cell, and can be undone by row.
@@ -2753,7 +2753,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 36 + 13);
-    const editor = panel.getByRole("textbox", { name: "New value for name" });
+    const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("saved by shortcut");
     await editor.press("Control+s");
     await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
@@ -2769,7 +2769,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 36 + 13);
-    const editor = panel.getByRole("textbox", { name: "New value for qty" });
+    // The grid's own editor: the open cell viewer has an edit box with the same name.
+    const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for qty" }));
     await editor.fill("123");
     await editor.press("Enter");
     await page.keyboard.press("Control+z");
@@ -2797,7 +2798,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
     await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 36 + 13);
-    const editor = panel.getByRole("textbox", { name: "New value for name" });
+    const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("query edit");
     await editor.press("Enter");
     await page.keyboard.press("Enter");
