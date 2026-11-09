@@ -2736,6 +2736,92 @@ try {
     await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor({ state: "detached" });
   }
 
+  step("charts from a result: points prepared by the core, bar, line and pie, saved as PNG and SVG");
+  {
+    await replaceQuery(panel, "select c.country, count(*) as orders, round(sum(o.total), 2) as revenue from orders o join customer c on c.id = o.customer_id group by c.country order by revenue desc;");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "6 rows" }).waitFor();
+    await panel.getByRole("button", { name: "Show as chart" }).click();
+    const chart = panel.locator(".result-chart");
+    const note = chart.locator(".chart-note");
+    const svg = chart.locator("svg.chart-svg");
+    // The first text column is X and the first number the values: one bar per row.
+    await note.filter({ hasText: "6 rows, one point each." }).waitFor();
+    assert.equal(await chart.getByRole("combobox", { name: "X axis" }).inputValue(), "0");
+    await svg.locator(".chart-title", { hasText: "orders by country" }).waitFor();
+    assert.equal(await svg.locator("rect").count(), 6);
+    // A second series: a legend names both, each country gets two bars.
+    await chart.getByRole("button", { name: /^Values/ }).click();
+    await chart.getByRole("checkbox", { name: "revenue" }).check();
+    await page.keyboard.press("Escape");
+    await svg.locator(".chart-legend-text", { hasText: "revenue" }).waitFor();
+    assert.equal(await svg.locator("rect").count(), 6 * 2 + 2);
+    await chart.getByRole("checkbox", { name: "revenue" }).waitFor({ state: "detached" });
+    await chart.getByRole("button", { name: /^Values/ }).click();
+    await chart.getByRole("checkbox", { name: "orders" }).uncheck();
+    await page.keyboard.press("Escape");
+    await svg.locator(".chart-title", { hasText: "revenue by country" }).waitFor();
+    // The keyboard reaches every point: its tooltip names the country and its value.
+    await svg.focus();
+    await page.keyboard.press("Home");
+    await chart.locator(".chart-tooltip .chart-tooltip-row", { hasText: "revenue" }).waitFor();
+    await shot("sdb-29-bar-chart");
+    await setTheme("dark", "dark");
+    await shot("sdb-29-bar-chart-dark");
+    await setTheme("light", "light");
+    // Save image…: the core writes a real PNG, or an SVG with the theme's colors written in.
+    const pngPath = join(tmpdir(), `spelaion-chart-${process.pid}.png`);
+    const svgPath = join(tmpdir(), `spelaion-chart-${process.pid}.svg`);
+    await page.evaluate((target) => (window.__spelaionSavePath = target), pngPath);
+    await chart.getByRole("button", { name: "Save image…" }).click();
+    await chart.getByText(`Saved spelaion-chart-${process.pid}.png`).waitFor();
+    assert.deepEqual([...readFileSync(pngPath).subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await page.evaluate((target) => (window.__spelaionSavePath = target), svgPath);
+    await chart.getByRole("button", { name: "Save image…" }).click();
+    await chart.getByText(`Saved spelaion-chart-${process.pid}.svg`).waitFor();
+    const savedSvg = readFileSync(svgPath, "utf8");
+    assert.match(savedSvg, /^<svg[^>]*xmlns="http:\/\/www.w3.org\/2000\/svg"/);
+    assert.ok(savedSvg.includes("revenue by country"));
+    assert.ok(!savedSvg.includes("var(--"), "the saved SVG carries colors, not the app's tokens");
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    rmSync(pngPath, { force: true });
+    rmSync(svgPath, { force: true });
+    // A pie: one series, its largest slices.
+    await chart.getByRole("radio", { name: "Pie" }).click();
+    await svg.locator(".chart-slice").first().waitFor();
+    assert.equal(await svg.locator(".chart-slice").count(), 6);
+    await shot("sdb-29-pie-chart");
+    // Back to the grid.
+    await panel.getByRole("button", { name: "Show as grid" }).click();
+    await chart.waitFor({ state: "detached" });
+
+    // A line over 50,000 orders: grouped by day in the core, 280 points at most.
+    await replaceQuery(panel, "select date(created) as day, round(total, 2) as total from orders order by day;");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "50,000 rows" }).waitFor();
+    await panel.getByRole("button", { name: "Show as chart" }).click();
+    await chart.getByRole("radio", { name: "Line" }).click();
+    await note.filter({ hasText: /^50,000 rows combined into \d+ values of day \(sum of each\)\.$/ }).waitFor();
+    assert.equal(await svg.locator("path.chart-line").count(), 1);
+    await shot("sdb-29-line-chart");
+    // A numeric X with 50,000 values: equal ranges, and the chart says so.
+    await chart.getByRole("combobox", { name: "X axis" }).selectOption({ label: "total" });
+    await note.filter({ hasText: "50,000 rows: total split into 2,000 equal ranges (sum of each)." }).waitFor();
+    await chart.getByRole("combobox", { name: "Combine" }).selectOption("count");
+    await note.filter({ hasText: "(count of each)" }).waitFor();
+    await shot("sdb-29-line-chart-ranges");
+    await panel.getByRole("button", { name: "Show as grid" }).click();
+
+    // A paged query: only its loaded rows, said under the chart.
+    await replaceQuery(panel, "select id, total from orders;");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
+    await panel.getByRole("button", { name: "Show as chart" }).click();
+    await note.filter({ hasText: "Only the loaded rows: load every row to chart the whole result." }).waitFor();
+    await panel.getByRole("button", { name: "Show as grid" }).click();
+    await chart.waitFor({ state: "detached" });
+  }
+
   step("query parameters: :name values asked once, written in by the core");
   await replaceQuery(panel, "select :name as who, :n + 1 as next, :name || '!' as again;");
   await run(panel);

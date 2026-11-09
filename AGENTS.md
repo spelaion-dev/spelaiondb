@@ -133,7 +133,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
   `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
-  only, stopped by a newer one or a cancel)
+  only, stopped by a newer one or a cancel; `chart.rs` prepares a chart's points from that view,
+  ADR-040: at most `MAX_CHART_POINTS`, rows combined by X, and it writes the saved PNG or SVG)
   and `cursor.rs` finds the statement under the editor's cursor. `progress.rs` thins a run's row
   counts to a few a second for the app (a big result streams hundreds of batches a second;
   every other event and the final count go through as they come). `table_data.rs` writes and checks

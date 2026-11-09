@@ -53,6 +53,10 @@ import {
   type KeyRefItem,
   type RowReferenceItem_Serialize,
   type SelectionStatsItem_Serialize,
+  type ChartAggregateItem,
+  type ChartKindItem,
+  type ChartLabelItem,
+  type ChartPointsItem_Serialize,
   type ColumnStatsItem_Serialize,
   type ColumnStatsOutcome_Serialize,
   type ColumnStatsTarget,
@@ -143,6 +147,8 @@ export type TableDetails = TableDetails_Serialize;
 export type { TableKeyItem, KeyTargetItem, KeyRefItem };
 export type RowReferenceItem = RowReferenceItem_Serialize;
 export type SelectionStatsItem = SelectionStatsItem_Serialize;
+export type ChartPointsItem = ChartPointsItem_Serialize;
+export type { ChartAggregateItem, ChartKindItem, ChartLabelItem };
 export type ColumnStatsItem = ColumnStatsItem_Serialize;
 export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize;
 export type TopValueItem = TopValueItem_Serialize;

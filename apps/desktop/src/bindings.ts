@@ -245,6 +245,19 @@ export const commands = {
 	/**  Stops the selection calculation running on a result (the calc panel's Cancel). */
 	cancelSelectionStats: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_selection_stats", { result })),
 	/**
+	 *  The points of a chart over a result (ADR-040): the UI names the X and Y columns, the core
+	 *  reads the current view of the stored result and sends at most `MAX_CHART_POINTS` points,
+	 *  never rows. A newer chart on the same result, or `cancel_chart`, stops this one (`None`).
+	 */
+	resultChart: (result: number, request: ChartRequestItem) => typedError<ChartPointsItem_Serialize | null, string>(__TAURI_INVOKE("result_chart", { result, request })),
+	/**  Stops the chart being prepared on a result (the chart view closed or changed result). */
+	cancelChart: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_chart", { result })),
+	/**
+	 *  Writes a chart image the UI drew to the file the user chose: an SVG's text, or a PNG in
+	 *  base64. The core refuses anything that is not such an image.
+	 */
+	saveChartImage: (path: string, format: ChartImageFormatItem, data: string) => typedError<null, string>(__TAURI_INVOKE("save_chart_image", { path, format, data })),
+	/**
 	 *  A table data tab column's statistics (the column header's "Column statistics"): counted by
 	 *  the server in a new session of the tab's connection, every statement a read inside the
 	 *  engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
@@ -812,6 +825,88 @@ export type CellViewItem_Serialize = {
 
 /**  `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file. */
 export type CellViewKind = "null" | "text" | "bytes" | "withheld" | "tooBig";
+
+/**  How the rows that share a point are combined. */
+export type ChartAggregateItem = "sum" | "avg" | "min" | "max" | "count";
+
+/**  The format of a chart image saved to a file. */
+export type ChartImageFormatItem = "png" | "svg";
+
+/**  The kind of chart drawn from a result (ADR-040). */
+export type ChartKindItem = "bar" | "line" | "pie";
+
+/**  A point's label: the X value as the grid shows it, NULL, or the rows combined in "Other". */
+export type ChartLabelItem = { kind: "value"; text: string } | { kind: "null" } | { kind: "other" };
+
+/**
+ *  The points of a chart, prepared by the core from the stored result: at most
+ *  `MAX_CHART_POINTS` labels and a value per label and series. It never carries rows.
+ */
+export type ChartPointsItem = ChartPointsItem_Serialize | ChartPointsItem_Deserialize;
+
+/**
+ *  The points of a chart, prepared by the core from the stored result: at most
+ *  `MAX_CHART_POINTS` labels and a value per label and series. It never carries rows.
+ */
+export type ChartPointsItem_Deserialize = {
+	labels: ChartLabelItem[],
+	/**  Where each point sits on a continuous X axis, for lines. */
+	positions?: (number | null)[] | null,
+	series: ChartSeriesItem[],
+	reduction: ChartReductionItem,
+	/**  Rows of the current view that were read. */
+	rows: number,
+	/**  Different X values; a lower bound when `groups_capped`. */
+	groups: number,
+	groupsCapped: boolean,
+	/**  Rows left out: their X is NULL or infinite on a continuous axis. */
+	skippedRows: number,
+	/**  Y cells that are NULL or not a number. */
+	emptyValues: number,
+	/**  Pie values with no slice (zero, negative or empty). */
+	hiddenSlices: number,
+};
+
+/**
+ *  The points of a chart, prepared by the core from the stored result: at most
+ *  `MAX_CHART_POINTS` labels and a value per label and series. It never carries rows.
+ */
+export type ChartPointsItem_Serialize = {
+	labels: ChartLabelItem[],
+	/**  Where each point sits on a continuous X axis, for lines. */
+	positions: (number | null)[] | null,
+	series: ChartSeriesItem[],
+	reduction: ChartReductionItem,
+	/**  Rows of the current view that were read. */
+	rows: number,
+	/**  Different X values; a lower bound when `groups_capped`. */
+	groups: number,
+	groupsCapped: boolean,
+	/**  Rows left out: their X is NULL or infinite on a continuous axis. */
+	skippedRows: number,
+	/**  Y cells that are NULL or not a number. */
+	emptyValues: number,
+	/**  Pie values with no slice (zero, negative or empty). */
+	hiddenSlices: number,
+};
+
+/**  How the rows became points. */
+export type ChartReductionItem = "rows" | "grouped" | "ranges" | "other";
+
+/**  What to draw: columns by position in the result, never values. */
+export type ChartRequestItem = {
+	kind: ChartKindItem,
+	x: number,
+	y: number[],
+	aggregate: ChartAggregateItem,
+};
+
+/**  One Y column: a value per point (`null`: no row of that point had a number). */
+export type ChartSeriesItem = {
+	column: number,
+	name: string,
+	values: (number | null)[],
+};
 
 /**  The clipboard form of a connection: no secrets, nothing that runs a program. */
 export type ClipboardConnectionItem = {

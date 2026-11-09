@@ -13,6 +13,7 @@ import { connectionTooltip } from "../connectionInfo";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
+import { defaultChart, ResultChart, type ChartSettings } from "./ResultChart";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { summaryMessages, summaryShort } from "../scriptRun";
@@ -1210,6 +1211,9 @@ function Results({
   const [viewerWidth, setViewerWidth] = useState(420);
   /** Columns hidden in each result's grid (positions only), for the export dialog. */
   const [hiddenColumns, setHiddenColumns] = useState<Record<number, number[]>>({});
+  /** Results shown as a chart instead of the grid, and what each chart draws (ADR-040). */
+  const [chartShown, setChartShown] = useState<Record<number, boolean>>({});
+  const [charts, setCharts] = useState<Record<number, ChartSettings | null>>({});
   const maximizeButton = maximize && (
     <button
       className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
@@ -1266,14 +1270,41 @@ function Results({
             table={table}
             hidden={hiddenColumns[active.id] ?? []}
           />
+          <button
+            type="button"
+            className={`ghost result-chart-toggle${chartShown[active.id] ? " active" : ""}`}
+            aria-pressed={!!chartShown[active.id]}
+            aria-label={t(chartShown[active.id] ? "chart.hide" : "chart.show")}
+            title={t(chartShown[active.id] ? "chart.hide" : "chart.show")}
+            onClick={() => {
+              if (!(active.id in charts)) setCharts((current) => ({ ...current, [active.id]: defaultChart(active.columns) }));
+              setChartShown((current) => ({ ...current, [active.id]: !current[active.id] }));
+            }}
+          >
+            <Icon name="chart" />
+          </button>
         </div>}
         {maximizeButton}
       </div>
       {active && filterError?.result === active.id && <div id={`result-filter-error-${active.id}`} className="result-filter-error" role="alert">{filterError.message}</div>}
       <div className="result-body">
+        {active && chartShown[active.id] && (
+          <ResultChart
+            key={`chart-${active.id}`}
+            result={active}
+            settings={charts[active.id] ?? null}
+            onSettings={(settings) => setCharts((current) => ({ ...current, [active.id]: settings }))}
+            scope={serverSort ? "page" : active.paging?.hasMore ? "loaded" : undefined}
+          />
+        )}
         {active ? (
+          <div className="result-view" hidden={!!chartShown[active.id]}>
           <ResultGrid
             result={active}
+            onChart={(columns) => {
+              setCharts((current) => ({ ...current, [active.id]: defaultChart(active.columns, columns) }));
+              setChartShown((current) => ({ ...current, [active.id]: true }));
+            }}
             session={session}
             onSorted={(sort) => onSorted(active.id, sort)}
             onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
@@ -1290,6 +1321,7 @@ function Results({
             onQueryPageSize={onQueryPageSize}
             onHiddenColumns={(hidden) => setHiddenColumns((current) => ({ ...current, [active.id]: hidden }))}
           />
+          </div>
         ) : (
           <div className="messages">
             {error && <pre className="error-box">{error}</pre>}

@@ -4459,3 +4459,177 @@ pub enum ColumnStatsOutcome {
     Done { stats: Box<ColumnStatsItem> },
     Cancelled,
 }
+
+/// The kind of chart drawn from a result (ADR-040).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartKindItem {
+    Bar,
+    Line,
+    Pie,
+}
+
+impl From<ChartKindItem> for spelaion_core::ChartKind {
+    fn from(kind: ChartKindItem) -> Self {
+        match kind {
+            ChartKindItem::Bar => Self::Bar,
+            ChartKindItem::Line => Self::Line,
+            ChartKindItem::Pie => Self::Pie,
+        }
+    }
+}
+
+/// How the rows that share a point are combined.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartAggregateItem {
+    Sum,
+    Avg,
+    Min,
+    Max,
+    Count,
+}
+
+impl From<ChartAggregateItem> for spelaion_core::ChartAggregate {
+    fn from(aggregate: ChartAggregateItem) -> Self {
+        match aggregate {
+            ChartAggregateItem::Sum => Self::Sum,
+            ChartAggregateItem::Avg => Self::Avg,
+            ChartAggregateItem::Min => Self::Min,
+            ChartAggregateItem::Max => Self::Max,
+            ChartAggregateItem::Count => Self::Count,
+        }
+    }
+}
+
+/// What to draw: columns by position in the result, never values.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartRequestItem {
+    pub kind: ChartKindItem,
+    pub x: u32,
+    pub y: Vec<u32>,
+    pub aggregate: ChartAggregateItem,
+}
+
+impl From<ChartRequestItem> for spelaion_core::ChartRequest {
+    fn from(r: ChartRequestItem) -> Self {
+        Self {
+            kind: r.kind.into(),
+            x: r.x as usize,
+            y: r.y.into_iter().map(|c| c as usize).collect(),
+            aggregate: r.aggregate.into(),
+        }
+    }
+}
+
+/// A point's label: the X value as the grid shows it, NULL, or the rows combined in "Other".
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ChartLabelItem {
+    Value { text: String },
+    Null,
+    Other,
+}
+
+/// One Y column: a value per point (`null`: no row of that point had a number).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartSeriesItem {
+    pub column: u32,
+    pub name: String,
+    pub values: Vec<Option<f64>>,
+}
+
+/// How the rows became points.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartReductionItem {
+    Rows,
+    Grouped,
+    Ranges,
+    Other,
+}
+
+/// The points of a chart, prepared by the core from the stored result: at most
+/// `MAX_CHART_POINTS` labels and a value per label and series. It never carries rows.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartPointsItem {
+    pub labels: Vec<ChartLabelItem>,
+    /// Where each point sits on a continuous X axis, for lines.
+    pub positions: Option<Vec<f64>>,
+    pub series: Vec<ChartSeriesItem>,
+    pub reduction: ChartReductionItem,
+    /// Rows of the current view that were read.
+    pub rows: u32,
+    /// Different X values; a lower bound when `groups_capped`.
+    pub groups: u32,
+    pub groups_capped: bool,
+    /// Rows left out: their X is NULL or infinite on a continuous axis.
+    pub skipped_rows: u32,
+    /// Y cells that are NULL or not a number.
+    pub empty_values: u32,
+    /// Pie values with no slice (zero, negative or empty).
+    pub hidden_slices: u32,
+}
+
+impl From<spelaion_core::ChartData> for ChartPointsItem {
+    fn from(d: spelaion_core::ChartData) -> Self {
+        Self {
+            labels: d
+                .labels
+                .into_iter()
+                .map(|label| match label {
+                    spelaion_core::ChartLabel::Value(text) => ChartLabelItem::Value { text },
+                    spelaion_core::ChartLabel::Null => ChartLabelItem::Null,
+                    spelaion_core::ChartLabel::Other => ChartLabelItem::Other,
+                })
+                .collect(),
+            positions: d.positions,
+            series: d
+                .series
+                .into_iter()
+                .map(|s| ChartSeriesItem {
+                    column: s.column as u32,
+                    name: s.name,
+                    values: s.values,
+                })
+                .collect(),
+            reduction: match d.reduction {
+                spelaion_core::ChartReduction::Rows => ChartReductionItem::Rows,
+                spelaion_core::ChartReduction::Grouped => ChartReductionItem::Grouped,
+                spelaion_core::ChartReduction::Ranges => ChartReductionItem::Ranges,
+                spelaion_core::ChartReduction::Other => ChartReductionItem::Other,
+            },
+            rows: saturating_u32(d.rows),
+            groups: saturating_u32(d.groups),
+            groups_capped: d.groups_capped,
+            skipped_rows: saturating_u32(d.skipped_rows),
+            empty_values: saturating_u32(d.empty_values),
+            hidden_slices: saturating_u32(d.hidden_slices),
+        }
+    }
+}
+
+/// A count for the UI (counts of a stored result fit; a larger one reads as the largest).
+fn saturating_u32(n: u64) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// The format of a chart image saved to a file.
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartImageFormatItem {
+    Png,
+    Svg,
+}
+
+impl From<ChartImageFormatItem> for spelaion_core::ChartImageFormat {
+    fn from(format: ChartImageFormatItem) -> Self {
+        match format {
+            ChartImageFormatItem::Png => Self::Png,
+            ChartImageFormatItem::Svg => Self::Svg,
+        }
+    }
+}

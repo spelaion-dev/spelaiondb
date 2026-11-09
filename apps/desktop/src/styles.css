@@ -53,6 +53,17 @@
   --tone-amber-fg: #8f4207;
   --tone-red-soft: #fce9e8;
   --tone-red-fg: #a8231d;
+  /* Chart series (ADR-040): a categorical palette checked for color vision deficiencies, in a
+     fixed order (series 1 is always --chart-1); "Other" is neutral. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #6250d6;
+  --chart-8: #e34948;
+  --chart-other: var(--tone-neutral);
   --connection-type-label: #535e67;
   --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.18);
   --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.25);
@@ -161,6 +172,15 @@
   --tone-amber-fg: #f0b860;
   --tone-red-soft: #3f2020;
   --tone-red-fg: #ff928a;
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
+  --chart-other: var(--tone-neutral);
   --connection-type-label: #b9c2c5;
   --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.45);
   --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.55);
@@ -3948,3 +3968,157 @@ select {
 .plan-graph-node p { margin:0; }
 .plan-graph-name { width:100%; padding:0; text-align:start; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 @media (max-width:1100px) { .plan-main { flex-direction:column; } .plan-inspector { flex:0 1 var(--plan-inspector-compact-share); max-height:var(--plan-inspector-compact-share); border-inline-start:0; border-top:1px solid var(--line); } .plan-inspector .empty { padding:var(--space-lg); } .plan-heading { padding:var(--space-md); } .plan-heading button { font-size:var(--text-sm); } }
+
+/* Charts from a result (ADR-040). */
+.result-chart-toggle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+.result-chart-toggle.active { color: var(--accent); background: var(--accent-soft); }
+.result-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.result-view[hidden] { display: none; }
+.result-chart {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--panel);
+}
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md) var(--space-lg);
+}
+.chart-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.chart-field select { max-width: 200px; }
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.segmented button {
+  border: none;
+  border-radius: 0;
+  background: none;
+  height: var(--control-md);
+  padding: 0 var(--space-lg);
+}
+.segmented button + button { border-left: 1px solid var(--line-strong); }
+.segmented button:hover { background: var(--hover); }
+.segmented button.active { background: var(--accent-soft); color: var(--fg); font-weight: 600; }
+.segmented button:focus-visible { outline-offset: -2px; }
+.chart-values { position: relative; }
+.chart-values-button {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-values-menu {
+  position: absolute;
+  top: calc(100% + var(--space-xs));
+  left: 0;
+  z-index: var(--z-dropdown);
+  min-width: 200px;
+  max-height: 320px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding: var(--space-sm);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  color: var(--fg);
+}
+.chart-values-menu .check {
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+}
+.chart-values-menu .check:hover { background: var(--hover); }
+.chart-values-menu p { margin: var(--space-xs) var(--space-xs) 0; max-width: 240px; }
+.chart-save {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-left: auto;
+  font-size: var(--text-sm);
+}
+.chart-note {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.chart-plot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.chart-plot > .empty { flex: 1; }
+.chart-host {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.chart-svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  background: var(--panel);
+  font-family: var(--font-ui);
+}
+.chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.chart-title { fill: var(--fg); font-size: var(--text-sm); font-weight: 600; }
+.chart-axis-text { fill: var(--muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.chart-legend-text { fill: var(--fg); font-size: var(--text-xs); }
+.chart-grid { stroke: var(--line); stroke-width: 1; }
+.chart-baseline { stroke: var(--line-strong); stroke-width: 1; }
+.chart-guide { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-dot { stroke: var(--panel); stroke-width: 2; }
+.chart-slice { stroke: var(--panel); stroke-width: 2; }
+.chart-slice.hovered { opacity: 0.85; }
+.chart-tooltip {
+  position: absolute;
+  z-index: var(--z-popover);
+  min-width: 140px;
+  max-width: 220px;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--text-sm);
+  pointer-events: none;
+}
+.chart-tooltip-title { font-weight: 600; overflow-wrap: anywhere; margin-bottom: var(--space-2xs); }
+.chart-tooltip-row { display: flex; align-items: center; gap: var(--space-sm); }
+.chart-tooltip-value { margin-left: auto; font-variant-numeric: tabular-nums; }
+.chart-swatch { width: 10px; height: 10px; border-radius: var(--radius-sm); flex: none; }

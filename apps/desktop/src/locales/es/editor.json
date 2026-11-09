@@ -955,5 +955,58 @@
       "mariadb": "El JSON de MariaDB lista las tablas en el orden del join con filas estimadas (filas × % filtrado) y el coste propio de cada tabla; bucles anidados, joins por bloques, ordenaciones, tablas temporales, materializaciones y subconsultas se muestran como los nombra el JSON. ANALYZE FORMAT=JSON ejecuta la sentencia y añade ciclos, filas leídas por ciclo (r_filtered conserva una parte; el resto cuenta como filtrado), el tiempo propio de cada tabla y los accesos a páginas de InnoDB como aciertos de búfer. Los tiempos de cada bloque de consulta incluyen a sus hijos; el de una ordenación o un join por bloques es propio y las tablas no tienen tiempo inclusivo. Las tablas se nombran por su alias. Las métricas ausentes no se inventan. Los hallazgos son heurísticas.",
       "sqlserver": "Showplan XML aporta costes y estimaciones del optimizador. ANALYZE ejecuta la sentencia y puede añadir contadores de ejecución. Las filas y lecturas físicas se suman entre los hilos; el tiempo transcurrido se muestra solo para un único hilo secuencial e incluye sus hijos. Las métricas ausentes no se inventan. Los desbordamientos de ordenación son avisos del servidor; los hallazgos son heurísticas."
     }
+  },
+  "chart": {
+    "show": "Ver como gráfico",
+    "hide": "Ver como tabla",
+    "fromSelection": "Gráfico de las columnas seleccionadas",
+    "noNumbers": "Ninguna columna de este resultado tiene números que dibujar.",
+    "kind": "Tipo de gráfico",
+    "kinds": {
+      "bar": "Barras",
+      "line": "Líneas",
+      "pie": "Circular"
+    },
+    "x": "Eje X",
+    "slices": "Porciones",
+    "values": "Valores",
+    "noValues": "Ninguno",
+    "valuesHint": "Hasta {{count}} columnas, cada una de un color.",
+    "aggregate": "Combinar",
+    "aggregates": {
+      "sum": "Suma",
+      "avg": "Media",
+      "min": "Mínimo",
+      "max": "Máximo",
+      "count": "Recuento"
+    },
+    "save": "Guardar imagen…",
+    "saved": "Guardado {{name}}",
+    "saveFailed": "No se pudo guardar el gráfico: {{detail}}",
+    "waiting": "El gráfico se dibuja cuando el resultado termina de llegar.",
+    "failed": "No se pudo dibujar el gráfico: {{detail}}",
+    "noRows": "No hay filas que dibujar.",
+    "drawing": "Dibujando el gráfico…",
+    "other": "Otros",
+    "noValue": "Sin valor",
+    "title": "{{aggregate}} de {{y}} por {{x}}",
+    "titlePlain": "{{y}} por {{x}}",
+    "accessible": "Gráfico ({{kind}}): {{title}}, {{count}} puntos. Las flechas se mueven entre los puntos.",
+    "note": {
+      "rows_one": "{{rows}} fila, un punto.",
+      "rows_other": "{{rows}} filas, un punto cada una.",
+      "grouped": "{{rows}} filas combinadas en {{points}} valores de {{x}} ({{aggregate}} de cada uno).",
+      "ranges": "{{rows}} filas: {{x}} dividido en {{points}} rangos iguales ({{aggregate}} de cada uno).",
+      "first": "{{rows}} filas: los primeros {{kept}} valores de {{x}}, el resto combinado en Otros ({{aggregate}}).",
+      "largest": "{{rows}} filas: los {{kept}} valores mayores de {{x}}, el resto combinado en Otros.",
+      "skipped_one": "{{formattedCount}} fila sin {{x}} se queda fuera.",
+      "skipped_other": "{{formattedCount}} filas sin {{x}} se quedan fuera.",
+      "empty_one": "{{formattedCount}} valor vacío no se cuenta.",
+      "empty_other": "{{formattedCount}} valores vacíos no se cuentan.",
+      "hidden_one": "{{formattedCount}} valor cero o negativo no tiene porción.",
+      "hidden_other": "{{formattedCount}} valores cero o negativos no tienen porción.",
+      "page": "Solo las filas de esta página: filtra con WHERE arriba para dibujar toda la tabla.",
+      "loaded": "Solo las filas cargadas: carga todas las filas para dibujar todo el resultado."
+    }
   }
 }
