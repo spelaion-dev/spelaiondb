@@ -25,6 +25,7 @@ fn client_named(name: &str) -> CmdResult<ImportClient> {
         "dbeaver" => Ok(ImportClient::Dbeaver),
         "datagrip" => Ok(ImportClient::Datagrip),
         "tableplus" => Ok(ImportClient::Tableplus),
+        "heidisql" => Ok(ImportClient::Heidisql),
         other => Err(format!("unknown client: {other}")),
     }
 }
@@ -107,6 +108,16 @@ fn read(
             let found = spelaion_config::read_datagrip(&dir, &config_dirs).map_err(other)?;
             Ok((dir, found))
         }
+        ImportClient::Heidisql => match chosen {
+            Some(file) => {
+                let found = spelaion_config::read_heidisql(&file).map_err(other)?;
+                Ok((file, found))
+            }
+            None => {
+                let found = spelaion_config::read_heidisql_registry().map_err(other)?;
+                Ok((PathBuf::from(r"HKCU\Software\HeidiSQL\Servers"), found))
+            }
+        },
         ImportClient::Tableplus => {
             let dir = match chosen {
                 Some(dir) => dir,

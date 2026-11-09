@@ -36,6 +36,7 @@ url = "2"
 # crates: RUSTSEC-2026-0370/0371/0372).
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = { version = "1", default-features = false }
+windows-registry = "0.6.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }

@@ -14,13 +14,14 @@ import { useApp } from "../store";
 import { refreshConnections } from "./Sidebar";
 
 /** The clients connections can be imported from (the core's `ImportClient`). */
-export type ImportClientId = "dbeaver" | "datagrip" | "tableplus";
+export type ImportClientId = "dbeaver" | "datagrip" | "tableplus" | "heidisql";
 
 export const IMPORT_CLIENTS: { id: ImportClientId; label: string; exportExtensions?: string[] }[] = [
   { id: "dbeaver", label: "DBeaver" },
   { id: "datagrip", label: "DataGrip" },
   // TablePlus also exports its connections to a file (encrypted with a password).
   { id: "tableplus", label: "TablePlus", exportExtensions: ["tableplusconnection"] },
+  { id: "heidisql", label: "HeidiSQL", exportExtensions: ["txt"] },
 ];
 
 declare global {
@@ -76,7 +77,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
     };
   }, [dir, props.client, filePassword]);
 
-  function choose(picked: string) {
+  function choose(picked: string | null) {
     setTypedPassword("");
     setFilePassword("");
     setLocked(null);
@@ -189,9 +190,10 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
       <div className="conn-import-source">
         <span className="muted small">{t("importer.from")}</span>
         <code className="conn-import-dir" title={found?.dir ?? dir ?? ""}>
-          {found?.dir ?? dir ?? t("importer.defaultFolder", { client })}
+          {found?.dir ?? dir ?? (props.client === "heidisql" ? t("importer.registrySource") : t("importer.defaultFolder", { client }))}
         </code>
-        <button onClick={() => void pickFolder()}>{t("importer.chooseFolder")}</button>
+        {props.client !== "heidisql" && <button onClick={() => void pickFolder()}>{t("importer.chooseFolder")}</button>}
+        {props.client === "heidisql" && dir && <button onClick={() => choose(null)}>{t("importer.windowsRegistry")}</button>}
         {clientInfo?.exportExtensions && <button onClick={() => void pickExport()}>{t("importer.chooseFile")}</button>}
       </div>
       {error && (
