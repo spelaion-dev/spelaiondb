@@ -2990,6 +2990,64 @@ async fn cancel_selection_stats(result: u32, state: State<'_, AppState>) -> CmdR
     Ok(())
 }
 
+/// The points of a chart over a result (ADR-040): the UI names the X and Y columns, the core
+/// reads the current view of the stored result and sends at most `MAX_CHART_POINTS` points,
+/// never rows. A newer chart on the same result, or `cancel_chart`, stops this one (`None`).
+#[tauri::command]
+#[specta::specta]
+async fn result_chart(
+    result: u32,
+    request: ChartRequestItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<ChartPointsItem>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let request = spelaion_core::ChartRequest::from(request);
+    tokio::task::spawn_blocking(move || {
+        let read = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let ticket = read.chart_ticket();
+        read.chart(&request, &ticket)
+            .map(|data| data.map(ChartPointsItem::from))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops the chart being prepared on a result (the chart view closed or changed result).
+#[tauri::command]
+#[specta::specta]
+async fn cancel_chart(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(stored) = state.results.get(ResultId(result.into())) {
+        stored
+            .read()
+            .map_err(|_| "result lock poisoned")?
+            .cancel_chart();
+    }
+    Ok(())
+}
+
+/// Writes a chart image the UI drew to the file the user chose: an SVG's text, or a PNG in
+/// base64. The core refuses anything that is not such an image.
+#[tauri::command]
+#[specta::specta]
+async fn save_chart_image(
+    path: String,
+    format: ChartImageFormatItem,
+    data: String,
+) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || {
+        spelaion_core::save_chart_image(std::path::Path::new(&path), format.into(), &data)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// A table data tab column's statistics (the column header's "Column statistics"): counted by
 /// the server in a new session of the tab's connection, every statement a read inside the
 /// engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
@@ -4346,6 +4404,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             clear_find,
             selection_stats,
             cancel_selection_stats,
+            result_chart,
+            cancel_chart,
+            save_chart_image,
             column_stats,
             cancel_column_stats,
             add_table_condition,

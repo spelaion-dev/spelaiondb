@@ -98,6 +98,10 @@
   connections and confirmed first on Production like any edit. It waits until the tab has no
   pending changes, since applying it reloads the page.
 
+## Charts (2026-11-09, SDB-29)
+- **A chart is points, not rows** (ADR-040): the core combines the view's rows by X into at most
+  2,000 points and the UI draws them as SVG; what was combined is said under the chart.
+
 ## Alternatives
 Monaco (heavier), AG Grid (DOM, more editing features, heavier).
 

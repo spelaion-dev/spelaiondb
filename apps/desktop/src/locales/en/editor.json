@@ -955,5 +955,58 @@
       "mariadb": "MariaDB's JSON lists tables in join order with estimated rows (rows × filtered %) and each table's own cost; nested loops, block joins, sorts, temporary tables, materializations and subqueries are shown as the JSON names them. ANALYZE FORMAT=JSON executes the statement and adds loops, rows read per loop (r_filtered keeps some; the rest count as filtered), each table's own time and InnoDB page accesses as buffer hits. Query block times include their children; a sort's or block join's time is its own, and tables have no inclusive time. Tables are named by their alias. Missing metrics remain unavailable. Findings are heuristics.",
       "sqlserver": "Showplan XML provides optimizer costs and estimates. ANALYZE executes the statement and may add runtime counters. Rows and physical reads are summed across reported threads; elapsed time appears only for a single serial thread and includes children. Missing metrics remain unavailable. Sort spills are server warnings; findings are heuristics."
     }
+  },
+  "chart": {
+    "show": "Show as chart",
+    "hide": "Show as grid",
+    "fromSelection": "Chart selected columns",
+    "noNumbers": "No column of this result holds numbers to chart.",
+    "kind": "Chart type",
+    "kinds": {
+      "bar": "Bar",
+      "line": "Line",
+      "pie": "Pie"
+    },
+    "x": "X axis",
+    "slices": "Slices",
+    "values": "Values",
+    "noValues": "None",
+    "valuesHint": "Up to {{count}} columns, one color each.",
+    "aggregate": "Combine",
+    "aggregates": {
+      "sum": "Sum",
+      "avg": "Average",
+      "min": "Minimum",
+      "max": "Maximum",
+      "count": "Count"
+    },
+    "save": "Save image…",
+    "saved": "Saved {{name}}",
+    "saveFailed": "Could not save the chart: {{detail}}",
+    "waiting": "The chart is drawn when the result has finished arriving.",
+    "failed": "Could not draw the chart: {{detail}}",
+    "noRows": "No rows to chart.",
+    "drawing": "Drawing the chart…",
+    "other": "Other",
+    "noValue": "No value",
+    "title": "{{aggregate}} of {{y}} by {{x}}",
+    "titlePlain": "{{y}} by {{x}}",
+    "accessible": "{{kind}} chart: {{title}}, {{count}} points. Arrow keys move between points.",
+    "note": {
+      "rows_one": "{{rows}} row, one point.",
+      "rows_other": "{{rows}} rows, one point each.",
+      "grouped": "{{rows}} rows combined into {{points}} values of {{x}} ({{aggregate}} of each).",
+      "ranges": "{{rows}} rows: {{x}} split into {{points}} equal ranges ({{aggregate}} of each).",
+      "first": "{{rows}} rows: the first {{kept}} values of {{x}}, the rest combined in Other ({{aggregate}}).",
+      "largest": "{{rows}} rows: the {{kept}} largest values of {{x}}, the rest combined in Other.",
+      "skipped_one": "{{formattedCount}} row with no {{x}} left out.",
+      "skipped_other": "{{formattedCount}} rows with no {{x}} left out.",
+      "empty_one": "{{formattedCount}} empty value not counted.",
+      "empty_other": "{{formattedCount}} empty values not counted.",
+      "hidden_one": "{{formattedCount}} value that is zero or negative has no slice.",
+      "hidden_other": "{{formattedCount}} values that are zero or negative have no slice.",
+      "page": "Only this page's rows: filter with WHERE above to chart the whole table.",
+      "loaded": "Only the loaded rows: load every row to chart the whole result."
+    }
   }
 }

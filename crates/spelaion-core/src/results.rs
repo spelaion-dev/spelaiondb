@@ -11,6 +11,7 @@ use arrow::error::ArrowError;
 use arrow::ipc::writer::StreamWriter;
 use spelaion_driver_api::{ResultSchema, Value};
 
+use crate::chart::{self, ChartData, ChartError, ChartRequest};
 use crate::filter::{ColumnFilter, matches, validate};
 use crate::find::{FindMatches, FindQuery, FindTicket, search};
 use crate::selection_stats::{self, CellBlock, SelectionStats, StatsTicket};
@@ -45,6 +46,8 @@ pub struct StoredResult {
     find_latest: Arc<AtomicU64>,
     /// The number of the latest selection calculation started (or cancelled).
     stats_latest: Arc<AtomicU64>,
+    /// The number of the latest chart started (or cancelled).
+    chart_latest: Arc<AtomicU64>,
 }
 
 impl StoredResult {
@@ -63,6 +66,7 @@ impl StoredResult {
             find: None,
             find_latest: Arc::new(AtomicU64::new(0)),
             stats_latest: Arc::new(AtomicU64::new(0)),
+            chart_latest: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -297,6 +301,28 @@ impl StoredResult {
     ) -> Result<Option<SelectionStats>, ViewError> {
         self.check_viewable()?;
         selection_stats::compute(self, block, ticket)
+    }
+
+    /// Starts preparing a chart: one still being prepared on this result stops (its
+    /// [`Self::chart`] returns `None`).
+    pub fn chart_ticket(&self) -> StatsTicket {
+        StatsTicket::new(&self.chart_latest)
+    }
+
+    /// Stops the chart being prepared on this result, if any.
+    pub fn cancel_chart(&self) {
+        selection_stats::cancel(&self.chart_latest);
+    }
+
+    /// The points of a chart over the current view (ADR-040), with a read lock only. `None`:
+    /// a newer chart, or a cancel, stopped this one.
+    pub fn chart(
+        &self,
+        request: &ChartRequest,
+        ticket: &StatsTicket,
+    ) -> Result<Option<ChartData>, ChartError> {
+        self.check_viewable()?;
+        chart::prepare(self, request, ticket)
     }
 
     /// The order of the sort (or the server's) keeping only the rows both filters let

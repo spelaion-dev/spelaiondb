@@ -217,6 +217,7 @@ export function ResultGrid({
   onQueryPageSize,
   tableData,
   onHiddenColumns,
+  onChart,
 }: {
   result: ResultMeta;
   session: string;
@@ -236,6 +237,8 @@ export function ResultGrid({
   onQueryPageSize(size: number): void;
   /** The columns hidden in this grid changed (for the export dialog). */
   onHiddenColumns?(hidden: number[]): void;
+  /** "Chart selected columns": the first is the X axis, the numeric ones after it the values. */
+  onChart?(columns: number[]): void;
   /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
    *  can be followed to new table data tabs of `connectionId`. */
@@ -1816,6 +1819,17 @@ export function ResultGrid({
               }}
             >
               {t("calc.open")}
+            </button>
+          )}
+          {selection && onChart && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                onChart(shownIn(bounds(selection)));
+              }}
+            >
+              {t("chart.fromSelection")}
             </button>
           )}
           {menu.cell && (keyColumns.get(menu.cell.col) ?? []).map((key) => (

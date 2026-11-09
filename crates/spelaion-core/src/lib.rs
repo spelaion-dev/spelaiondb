@@ -5,6 +5,7 @@
 
 pub mod audit;
 mod catalog;
+mod chart;
 mod classify;
 mod column_stats;
 mod conn_test;
@@ -43,6 +44,11 @@ mod value_view;
 mod write;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
+pub use chart::{
+    ChartAggregate, ChartData, ChartError, ChartImageFormat, ChartKind, ChartLabel, ChartReduction,
+    ChartRequest, ChartSeries, MAX_CHART_IMAGE_BYTES, MAX_CHART_POINTS, MAX_CHART_SERIES,
+    MAX_LABEL_CHARS, MAX_PIE_GROUPS, MAX_PIE_SLICES, save_chart_image,
+};
 pub use classify::{ReadKind, classify_read_only, classify_session_setup};
 pub use column_stats::{
     ColumnStats, ColumnStatsError, ColumnStatsRequest, ColumnStatsSql, STATS_SAMPLE_ROWS,
