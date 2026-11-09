@@ -8,8 +8,9 @@
 # Speed: the Rust caches are saved only by pushes to `dev` and `main` (pull requests read
 # them): GitHub keeps 10 GB per repository, and one copy per pull request and release pushed
 # the useful ones out, so runs started from scratch (30 minutes instead of 12). On Linux,
-# what does not need the compiler (freeing disk, the Docker services, the Kubernetes cluster)
-# runs in the background while Rust compiles, and the tests wait for it.
+# what does not need the compiler (freeing disk, the system libraries, the Docker services,
+# the Kubernetes cluster) runs in the background while the Rust toolchain and cache are set
+# up and Rust compiles; the steps that need them wait for them.
 #
 # Versions: actions are pinned to a commit (the comment names the release), and Rust to a
 # version, so a run only changes when this file does. `release.yml` pins the same ones: bump
@@ -72,6 +73,21 @@ jobs:
       - name: Free disk space in the background
         run: sudo nohup rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL > /dev/null 2>&1 &
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # libdbus: Linux keychain (Secret Service). WebKitGTK and friends: the Tauri app. Installing
+      # them takes half a minute that setting up Rust and its cache needs anyway, so it runs in
+      # the background: "Wait for the system libraries" below, before the first step that
+      # builds, shows its output and fails the job if it failed.
+      - name: Install the system libraries in the background
+        run: |
+          (
+            status=failed
+            if sudo apt-get update \
+              && sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+            then
+              status=ready
+            fi
+            echo "$status" > "$RUNNER_TEMP/apt.status"
+          ) > "$RUNNER_TEMP/apt.log" 2>&1 &
       # Only installs kind and kubectl: the cluster is created below, in the background. Its
       # name is given so the action deletes it when the job ends.
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
@@ -107,16 +123,19 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'push' }}
-      # libdbus: Linux keychain (Secret Service). WebKitGTK and friends: the Tauri app.
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       # A real SSH agent with the test key, for the agent authentication test.
       - run: |
           ssh-agent -a /tmp/ssh-agent.sock > /dev/null
           echo "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" >> "$GITHUB_ENV"
           SSH_AUTH_SOCK=/tmp/ssh-agent.sock ssh-add testing/docker/keys/id_ed25519
       - run: cargo fmt --all --check
+      - name: Wait for the system libraries
+        run: |
+          timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/apt.status" ]; do sleep 1; done' || true
+          echo "::group::apt-get output"
+          cat "$RUNNER_TEMP/apt.log"
+          echo "::endgroup::"
+          test "$(cat "$RUNNER_TEMP/apt.status" 2> /dev/null)" = ready
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Build the tests first: the services are only needed to run them.
       - run: cargo test --workspace --locked --no-run
