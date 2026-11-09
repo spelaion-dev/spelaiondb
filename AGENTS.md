@@ -74,6 +74,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   as a one-hop tunnel; passwords only from the macOS keychain on import, never its Windows DPAPI
   vault: the workspace forbids `unsafe`), tested against a file a real Workbench wrote
   (`tests/fixtures/workbench`).
+  `pgadmin.rs` reads pgAdmin 4's exported servers JSON (no passwords in it: the preview says they
+  are asked) or its own `pgadmin4.db`, opened read-only and never selecting its encrypted password
+  columns; a database row is turned into the export's shape so one mapping serves both. Tested
+  against files a real pgAdmin wrote (`tests/fixtures/pgadmin`).
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no
