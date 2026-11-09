@@ -38,6 +38,16 @@ tokio-postgres = "0.7"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Debug and test builds keep only what a backtrace needs (function names, files and lines),
+# and none for dependencies. With full debug information every test executable carries a PDB
+# of up to 1 GB on Windows, and one `cargo test --workspace` fills tens of gigabytes. A
+# debugger that needs variables: `CARGO_PROFILE_DEV_DEBUG=2 cargo build`.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # tiberius with a fix to cancelling (see vendor/tiberius/PATCHED.md).
 [patch.crates-io]
 tokio-postgres = { path = "vendor/tokio-postgres" }
