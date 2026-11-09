@@ -26,6 +26,7 @@ mod open_tabs;
 mod params;
 pub mod plan;
 mod processes;
+mod progress;
 mod query_page;
 mod readonly;
 mod references;
@@ -93,6 +94,7 @@ pub use open::{
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
 pub use params::{ParamError, bind_params, script_params};
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
+pub use progress::{ROWS_PROGRESS_INTERVAL, coalesce_rows};
 pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use references::{

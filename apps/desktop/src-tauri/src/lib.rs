@@ -2138,7 +2138,7 @@ async fn start_script(
         confirmed,
     )
     .map_err(|e| e.to_string())?;
-    let mut events = state.history.run_script_in_context(
+    let events = state.history.run_script_in_context(
         &open.session,
         &sql,
         spelaion_core::HistoryScope {
@@ -2165,6 +2165,9 @@ async fn start_script(
             },
         },
     );
+    // A big result streams hundreds of batches a second: the window gets its row count a few
+    // times a second, so redrawing it never keeps Cancel from answering.
+    let mut events = spelaion_core::coalesce_rows(events, spelaion_core::ROWS_PROGRESS_INTERVAL);
     tauri::async_runtime::spawn(async move {
         // `open` lives while the script runs, even if the UI closes the tab halfway.
         let _keep = open;
