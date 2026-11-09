@@ -26,6 +26,7 @@ import { chooseSavePath, openFilters } from "../dialogs";
 import { confirmOpenTransactions, reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
+import { saveHistoryPreference } from "../historyPreference";
 import { fieldList } from "../fieldNames";
 import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
@@ -449,6 +450,9 @@ function ConnectionForm(props: {
   const connectionTypes = useConnectionTypes();
   const editedConnection = useApp((s) => s.connections.find((c) => c.id === editing));
   const savedType = editing && initial ? { env: initial.env, kind: editedConnection?.kind ?? null } : null;
+  // Personal, in the local store and never in the file: saved with the form, apart from it.
+  const savedHistory = editedConnection?.historyEnabled ?? true;
+  const [historyEnabled, setHistoryEnabled] = useState(savedHistory);
 
   const [tunnelEditor, setTunnelEditor] = useState<TunnelEditorMode | null>(null);
   async function loadTunnels(select?: string) {
@@ -614,7 +618,25 @@ function ConnectionForm(props: {
         const sessions = useApp.getState().tabs.filter((tab) => tab.connectionId === editing).map((tab) => tab.id);
         if (!(await confirmOpenTransactions(sessions, "disconnect"))) return;
       }
-      await call(editing ? commands.updateConnection(editing, request, stored, props.revision ?? "") : commands.addConnection(request, stored));
+      if (editing) {
+        // The local setting first: if it cannot change, nothing was written yet.
+        if (historyEnabled !== savedHistory) await saveHistoryPreference(editing, historyEnabled);
+        await call(commands.updateConnection(editing, request, stored, props.revision ?? ""));
+      } else {
+        const id = await call(commands.addConnection(request, stored));
+        await refreshConnections();
+        // The store remembers it per connection identifier (enabled unless set otherwise).
+        const added = useApp.getState().connections.find((c) => c.id === id);
+        if (added && added.historyEnabled !== historyEnabled) {
+          try {
+            await saveHistoryPreference(id, historyEnabled);
+          } catch (e) {
+            // The connection exists: saving this form again would add a second one.
+            useApp.getState().setConnectionDialog({ kind: "edit", id, notice: t("fields.historyNotSaved", { error: errorText(e) }) });
+            return;
+          }
+        }
+      }
       if (editing && props.savedEngine && props.savedEngine !== engine.id) {
         // Its open sessions belong to the old engine: closed; tabs connect again when run.
         const app = useApp.getState();
@@ -1154,6 +1176,14 @@ function ConnectionForm(props: {
               <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
             )}
             <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
+          </fieldset>
+          <fieldset>
+            <legend>{t("sections.onThisComputer")}</legend>
+            <label className="check">
+              <input type="checkbox" name="historyEnabled" checked={historyEnabled} onChange={(e) => { setHistoryEnabled(e.target.checked); setSaveError(null); }} />
+              {t("fields.history")}
+            </label>
+            <p className="muted small">{t("fields.historyHint")}</p>
           </fieldset>
         </div>
       </div>

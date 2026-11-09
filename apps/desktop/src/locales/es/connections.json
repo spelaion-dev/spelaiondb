@@ -27,7 +27,8 @@
     "kubernetes": "Port-forward de Kubernetes",
     "about": "Sobre esta conexión",
     "session": "Valores por defecto",
-    "setup": "Sentencias de inicio"
+    "setup": "Sentencias de inicio",
+    "onThisComputer": "En este equipo"
   },
   "fields": {
     "name": "Nombre",
@@ -69,6 +70,10 @@
     "tunnelHint": "Se llega a la base de datos desde el último salto SSH del perfil, o a través de su proxy si no tiene saltos. Los perfiles se comparten: Ajustes → Red los muestra todos.",
     "passwordOther": "Referencia de la contraseña",
     "fixedLocationHint": "Al editarla, la conexión se queda en el mismo fichero y carpeta.",
+    "history": "Guardar historial de consultas",
+    "historyHint": "Guarda en tu historial local el SQL que ejecutas en esta conexión. Desactívalo antes de ejecutar SQL con contraseñas u otros secretos; el historial anterior se conserva. Solo tú ves este ajuste: se guarda en este equipo, nunca en el fichero de la conexión.",
+    "historyBusy": "El ajuste del historial de consultas todavía se está cambiando. Inténtalo de nuevo en un momento.",
+    "historyNotSaved": "La conexión se ha guardado, pero no se ha podido cambiar su ajuste del historial de consultas: {{error}}",
     "serverFile": "Fichero en el servidor",
     "serverFileHint": "Su ruta en el último salto del túnel. SpelaionDB ejecuta el sqlite3 de ese servidor (3.37 o posterior, en su modo seguro): el fichero no se copia nunca.",
     "useTunnelForFile": "El fichero está en un servidor: abrirlo allí a través de un túnel SSH",

@@ -108,7 +108,7 @@
   "history": {
     "title": "History",
     "stored": "Every query you run from the app is saved on this computer with its connection, time, duration, row count and error. Opening a saved query never runs it.",
-    "perConnection": "Saving is set per connection: open the “⋯” menu next to a connection in the sidebar. Turn it off before running SQL with passwords or other secrets. Turning it off keeps the queries already saved.",
+    "perConnection": "Saving is set per connection: right-click a connection in the explorer, choose Edit… and look in Options. Turn it off before running SQL with passwords or other secrets. Turning it off keeps the queries already saved.",
     "audit": "This history belongs to the desktop app. Queries from AI agents (spelaiondb mcp) go to a separate audit log.",
     "open": "Open query history"
   },

@@ -32,7 +32,7 @@ try {
   await page.locator(".settings-dialog .wizard-header button").click();
   await page.getByRole("button", { name: "Review and trust" }).click();
   await page.getByRole("button", { name: "Trust", exact: true }).click();
-  await page.locator('.connection-row:has-text("Shop (SQLite)") button[title="New query"]').click();
+  await page.locator('.connection-row:has-text("Shop (SQLite)") > .label').dblclick();
   const panel = page.locator(".tab-panel:not([hidden])");
   await panel.locator(".status-connecting").waitFor({ state: "detached" });
   const content = panel.locator(".cm-content");

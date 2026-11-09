@@ -132,7 +132,7 @@ try {
   await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("set_theme", { theme: "light" }));
   await page.reload(); await page.locator(".activity-bar .settings-button").waitFor();
   await page.setViewportSize({ width: 1400, height: 900 });
-  await page.locator(".connection-row").filter({ hasText: "Plan fixture (PostgreSQL)" }).getByTitle("New query", { exact: true }).click();
+  await page.locator(".connection-row").filter({ hasText: "Plan fixture (PostgreSQL)" }).locator(":scope > .label").dblclick();
   let panel = page.locator(".tab-panel:not([hidden])");
   await panel.locator(".status-connecting").waitFor({ state: "detached" });
   await replace(panel, query);
@@ -220,7 +220,7 @@ try {
   await plan.getByText("Actual execution", { exact: false }).waitFor();
   assert.equal(await panel.locator(".cm-content").count(), 0, "saved plans are local viewers, never executable editors");
   await page.setViewportSize({ width: 1400, height: 900 });
-  await page.locator(".connection-row").filter({ hasText: "Read-only plan" }).getByTitle("New query", { exact: true }).click();
+  await page.locator(".connection-row").filter({ hasText: "Read-only plan" }).locator(":scope > .label").dblclick();
   panel = page.locator(".tab-panel:not([hidden])"); await panel.locator(".status-connecting").waitFor({ state: "detached" });
   await replace(panel, "SELECT * FROM plan_fixture.customers WHERE id=1");
   await panel.locator(".editor-actions").getByRole("button", { name: "Explain query", exact: true }).click();
@@ -247,7 +247,7 @@ try {
   const mysqlQuery = "SELECT c.country, count(*) AS orders, sum(o.total) AS revenue\nFROM orders AS o JOIN customers AS c ON c.id = o.customer_id\nWHERE o.status = 'paid'\nGROUP BY c.country\nORDER BY revenue DESC;";
   let mysqlText = null;
   for (const server of mysqlServers) {
-    await page.locator(".connection-row").filter({ hasText: server.name }).getByTitle("New query", { exact: true }).click();
+    await page.locator(".connection-row").filter({ hasText: server.name }).locator(":scope > .label").dblclick();
     panel = page.locator(".tab-panel:not([hidden])"); await panel.locator(".status-connecting").waitFor({ state: "detached" });
     await replace(panel, mysqlQuery);
     await panel.locator(".editor-actions").getByRole("button", { name: "Explain query", exact: true }).click();

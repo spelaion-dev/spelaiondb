@@ -1591,52 +1591,6 @@ select {
 .library-dialog h2 { font-size: var(--text-lg); }
 .library-dialog input { width: 100%; }
 .library-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-md); margin-top: var(--space-2xl); }
-.history-preference {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.history-preference .check {
-  white-space: nowrap;
-}
-.connection-menu {
-  position: relative;
-}
-.connection-menu-popup {
-  position: absolute;
-  right: 0;
-  top: 100%;
-  z-index: 20;
-  width: 250px;
-  padding: 10px 12px;
-  white-space: normal;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-}
-.connection-menu-popup p {
-  margin: 0;
-}
-.connection-menu-popup .menu-item {
-  text-align: left;
-  border: none;
-  background: none;
-  padding: 5px 6px;
-  border-radius: 4px;
-}
-.connection-menu-popup .menu-item:hover {
-  background: var(--accent-soft);
-}
-.connection-menu-popup hr {
-  width: 100%;
-  border: none;
-  border-top: 1px solid var(--line);
-  margin: 2px 0;
-}
 .danger-text {
   color: var(--danger);
 }
