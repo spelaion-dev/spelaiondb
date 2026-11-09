@@ -59,7 +59,7 @@ export async function reviewChanges<T extends ConnectResult | ConnectionTestResu
  *  data tabs' and the process monitor's sessions stay in auto-commit. */
 function isEditorSession(session: string): boolean {
   const tab = useApp.getState().tabs.find((t) => t.id === session);
-  return Boolean(tab && !tab.table && !tab.tableDetails);
+  return Boolean(tab && !tab.table && !tab.tableDetails && !tab.plan);
 }
 
 /** Shows the transaction the core keeps for a freshly connected editor tab. */
@@ -144,6 +144,8 @@ async function openSessionInner(session: string, connectionId: string): Promise<
     outcome = await call(commands.connect(session, connectionId, answer.password, answer.remember, editor));
   }
   if (outcome.kind === "untrusted" || outcome.kind === "changed" || outcome.kind === "missingVariables") return null;
+  // Setup statements the connection skipped (ADR-037) are said in the tab until dismissed.
+  useApp.getState().updateTab(session, { setupSkipped: outcome.setupSkipped.length > 0 ? outcome.setupSkipped : undefined });
   return outcome.serverVersion;
 }
 
@@ -173,6 +175,14 @@ export function connectTabFromExplorer(tabId: string, source: string, database?:
       });
     }
   })();
+}
+
+/** Opens a table data tab on `schema.table` filtered by `filter` (a followed foreign key's,
+ *  written by the core), on a session of its own opened like `source`'s. */
+export function openTableData(connectionId: string, source: string, schema: string, table: string, filter = ""): string {
+  const id = useApp.getState().addTableTab(connectionId, schema, table, filter);
+  connectTabFromExplorer(id, source, explorerDatabase(connectionId, schema));
+  return id;
 }
 
 /** MySQL and MariaDB call databases schemas in their explorer. */

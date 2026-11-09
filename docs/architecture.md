@@ -45,6 +45,13 @@ A summary of how the pieces fit together. The reasons behind each decision are i
    Sorting by a column keeps a row permutation in the core, so windows, copies and exports
    all see the same order.
 
+**Execution plans**
+The core's `plan` module owns the normalized tree, metrics, generic findings, bounded document
+store and raw/CSV file behavior. The desktop executes a core-prepared request on the selected
+session, using the underlying statement for safeguards and transaction intent. CLI file
+reads and MCP normalized pages use the same model; adapters never parse an engine's plan.
+See [execution plans](execution-plans.md) for metric semantics, capabilities and limits.
+
 **A query from an agent (v0.1)**
 1. The agent launches `spelaiondb mcp --profile <profile>`.
 2. `spelaiondb mcp` loads the same config and keychain, and only sees the connections with

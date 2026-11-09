@@ -72,6 +72,10 @@ pub struct FakeBackend {
     pub no_keychain: bool,
     /// The keychain exists but refuses to read (locked).
     pub fail_get: bool,
+    /// Entries other applications wrote, by service and account.
+    pub other_apps: Mutex<BTreeMap<(String, String), String>>,
+    /// Which other applications' entries were read.
+    pub other_app_reads: Mutex<Vec<String>>,
 }
 
 impl SecretBackend for FakeBackend {
@@ -118,6 +122,23 @@ impl SecretBackend for FakeBackend {
     fn run_shell(&self, command: &str) -> Result<String, String> {
         self.runs.lock().unwrap().push(command.into());
         Ok(String::new())
+    }
+
+    fn other_app_keychain_get(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<String>, String> {
+        if self.fail_get {
+            return Err("keychain locked".into());
+        }
+        self.other_app_reads.lock().unwrap().push(service.into());
+        Ok(self
+            .other_apps
+            .lock()
+            .unwrap()
+            .get(&(service.to_string(), account.to_string()))
+            .cloned())
     }
 }
 

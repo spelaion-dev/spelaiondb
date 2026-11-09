@@ -48,11 +48,21 @@ import {
   type SchemaItem,
   type ScriptEvent_Deserialize,
   type TableDetails_Serialize,
+  type TableKeyItem,
+  type KeyTargetItem,
+  type KeyRefItem,
+  type RowReferenceItem_Serialize,
+  type SelectionStatsItem_Serialize,
+  type ColumnStatsItem_Serialize,
+  type ColumnStatsOutcome_Serialize,
+  type ColumnStatsTarget,
+  type TopValueItem_Serialize,
+  type StatStateItem,
   type RiskKind,
   type KubernetesDraftItem,
   type KubePortItem_Serialize,
-  type DbeaverItem_Serialize,
-  type DbeaverScan_Serialize,
+  type ImportItem_Serialize,
+  type ImportScan_Serialize,
   type ImportReport,
   type RowChangeItem_Deserialize,
   type UpdateStatus_Serialize,
@@ -89,6 +99,7 @@ import {
   type OpenTabItem_Deserialize,
   type RecentFileItem,
   type RestoreNoteItem,
+  type SkippedSetupItem,
   type RestoredTabsItem_Serialize,
   type SaveFileOutcome,
   type SqlFileItem,
@@ -109,9 +120,9 @@ export type ConnectionItem = ConnectionItem_Serialize;
 export type ConnectionTypeItem = ConnectionTypeItem_Serialize;
 export type TransactionStatusItem = TransactionStatusItem_Serialize;
 export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
-export type DbeaverItem = DbeaverItem_Serialize;
+export type ImportItem = ImportItem_Serialize;
 export type KubePort = KubePortItem_Serialize;
-export type DbeaverScan = DbeaverScan_Serialize;
+export type ImportScan = ImportScan_Serialize;
 export type RowChangeItem = RowChangeItem_Deserialize;
 export type CellEditItem = CellEditItem_Deserialize;
 export type UrlFields = UrlFields_Serialize;
@@ -129,6 +140,13 @@ export type { SchemaObjectKindItem, ServerObjectKindItem };
 // The channel delivers the deserialization variant (optional fields).
 export type ScriptEvent = ScriptEvent_Deserialize;
 export type TableDetails = TableDetails_Serialize;
+export type { TableKeyItem, KeyTargetItem, KeyRefItem };
+export type RowReferenceItem = RowReferenceItem_Serialize;
+export type SelectionStatsItem = SelectionStatsItem_Serialize;
+export type ColumnStatsItem = ColumnStatsItem_Serialize;
+export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize;
+export type TopValueItem = TopValueItem_Serialize;
+export type { ColumnStatsTarget, StatStateItem };
 export type IndexDetails = TableDetails["indexes"][number];
 export type WorkspaceInfo = WorkspaceInfo_Serialize;
 export type McpAccessItem = McpAccessItem_Serialize;
@@ -148,7 +166,7 @@ export type { ErrorAnswerItem, OnErrorItem, ScriptPreferencesItem };
 export type RunOptionsItem = RunOptionsItem_Deserialize;
 export type ScriptSummaryItem = ScriptSummaryItem_Deserialize;
 /** `.sql` files and the open tabs kept between runs (ADR-036). */
-export type { FileFormatItem, RecentFileItem, RestoreNoteItem, SaveFileOutcome, SqlFileItem };
+export type { FileFormatItem, RecentFileItem, RestoreNoteItem, SaveFileOutcome, SkippedSetupItem, SqlFileItem };
 export type OpenTabItem = OpenTabItem_Deserialize;
 export type RestoredTabsItem = RestoredTabsItem_Serialize;
 

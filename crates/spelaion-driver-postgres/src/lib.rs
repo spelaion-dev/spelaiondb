@@ -16,12 +16,12 @@ use std::time::Duration;
 
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, Notice,
-    ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
-    TransactionState,
+    DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
+    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject,
+    ServerObject, TableInfo, TransactionState,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -109,6 +109,7 @@ impl Driver for PostgresDriver {
                 explain: true,
                 editable_results: false, // comes in v0.2
                 schemas: true,
+                insert_rows: true,
             },
         }))
     }
@@ -293,6 +294,10 @@ impl Connection for PgConnection {
         introspect::describe_table(&self.client, schema, name).await
     }
 
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        introspect::list_referencing_keys(&self.client, schema, name).await
+    }
+
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
         objects::list_schema_objects(&self.client, schema, &LikeFilter::default()).await
     }
@@ -311,6 +316,102 @@ impl Connection for PgConnection {
 
     async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
         objects::procedure_call(&self.client, object).await
+    }
+
+    /// `COPY … FROM STDIN` in text format: the values are the copy's data, never SQL.
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let sql = copy_sql(target, &PostgresDialect);
+        let sink = self
+            .client
+            .copy_in::<_, bytes::Bytes>(&sql)
+            .await
+            .map_err(map_error)?;
+        let mut sink = std::pin::pin!(sink);
+        let mut chunk = String::with_capacity(COPY_CHUNK + 4096);
+        for row in &rows {
+            if row.len() != target.columns.len() {
+                return Err(DriverError::Other(format!(
+                    "a row has {} values for {} columns",
+                    row.len(),
+                    target.columns.len()
+                )));
+            }
+            copy_text_row(&mut chunk, row);
+            if chunk.len() >= COPY_CHUNK {
+                let data = bytes::Bytes::from(std::mem::take(&mut chunk));
+                sink.send(data).await.map_err(map_error)?;
+            }
+        }
+        if !chunk.is_empty() {
+            sink.send(bytes::Bytes::from(chunk))
+                .await
+                .map_err(map_error)?;
+        }
+        sink.as_mut().finish().await.map_err(map_error)
+    }
+}
+
+/// Bytes of COPY data sent at a time.
+const COPY_CHUNK: usize = 256 * 1024;
+
+/// `COPY "schema"."table" ("a", "b") FROM STDIN`: only quoted names; the data follows apart.
+pub fn copy_sql(target: &InsertTarget, dialect: &dyn Dialect) -> String {
+    format!(
+        "COPY {} {} FROM STDIN",
+        target.qualified(dialect),
+        target.column_list(dialect)
+    )
+}
+
+/// One row of COPY's text format: values separated by tabs, `\N` for NULL, and backslashes,
+/// tabs, newlines and carriage returns escaped, so a value can never end its field or its row.
+fn copy_text_row(out: &mut String, row: &[Option<String>]) {
+    for (i, value) in row.iter().enumerate() {
+        if i > 0 {
+            out.push('\t');
+        }
+        match value {
+            None => out.push_str(r"\N"),
+            Some(text) => {
+                for c in text.chars() {
+                    match c {
+                        '\\' => out.push_str(r"\\"),
+                        '\t' => out.push_str(r"\t"),
+                        '\n' => out.push_str(r"\n"),
+                        '\r' => out.push_str(r"\r"),
+                        other => out.push(other),
+                    }
+                }
+            }
+        }
+    }
+    out.push('\n');
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::copy_text_row;
+
+    #[test]
+    fn copy_rows_escape_everything_that_could_end_a_field() {
+        let mut out = String::new();
+        copy_text_row(
+            &mut out,
+            &[
+                Some("a\tb\nc\\d\re".into()),
+                None,
+                Some(r"\N".into()),
+                Some(String::new()),
+            ],
+        );
+        assert_eq!(out, "a\\tb\\nc\\\\d\\re\t\\N\t\\\\N\t\n");
     }
 }
 

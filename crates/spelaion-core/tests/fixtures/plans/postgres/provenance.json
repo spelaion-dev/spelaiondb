@@ -1,0 +1,79 @@
+{
+  "captured_at_utc": "2026-11-08T16:50:50.8132319Z",
+  "generated_by": "sdb46-generate-pg-fixtures.ps1",
+  "compose_file": "testing/docker/compose.yaml",
+  "service": "postgres",
+  "synthetic_customers": 1000,
+  "synthetic_orders": 120000,
+  "owned_temporary_database": "spelaion_plan46_e899121abf1c4b8c80aa907f81000d5f",
+  "database_dropped": true,
+  "fixtures": [
+    {
+      "name": "simple",
+      "json": "simple.json",
+      "sql": "simple.sql",
+      "bytes": 395,
+      "sha256": "caebba701b19932d4527762213b0b3aa1047be29a2e1847287f28f6503e97ce0",
+      "node_types": [
+        "Index Scan"
+      ]
+    },
+    {
+      "name": "join",
+      "json": "join.json",
+      "sql": "join.sql",
+      "bytes": 5469,
+      "sha256": "5b1696cbcac57539f7da0e0fbe21261aebe6a43bf7d13f08e2ba4dc8431edf8a",
+      "node_types": [
+        "Aggregate",
+        "Hash Join",
+        "Seq Scan",
+        "Hash",
+        "Seq Scan"
+      ]
+    },
+    {
+      "name": "cte",
+      "json": "cte.json",
+      "sql": "cte.sql",
+      "bytes": 7434,
+      "sha256": "a5147884591ae27df02938799b8a11c780be637050f7c29789d5f65b7f5e414b",
+      "node_types": [
+        "Aggregate",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Hash Join",
+        "CTE Scan",
+        "Hash",
+        "Seq Scan"
+      ]
+    },
+    {
+      "name": "parallel",
+      "json": "parallel.json",
+      "sql": "parallel.sql",
+      "bytes": 7395,
+      "sha256": "4601e160401f0fc31a8b8ac5406b5e7a7310a615832c970606038bba2d0f5e00",
+      "node_types": [
+        "Aggregate",
+        "Gather",
+        "Aggregate",
+        "Seq Scan"
+      ]
+    },
+    {
+      "name": "spill",
+      "json": "spill.json",
+      "sql": "spill.sql",
+      "bytes": 2123,
+      "sha256": "cb341388b862aa0fc2b0081b648dd4e737a9f73eb48acdc6762f90f14a9e4fb8",
+      "node_types": [
+        "Sort",
+        "Seq Scan"
+      ]
+    }
+  ],
+  "server_version": "PostgreSQL 17.11 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+  "server_version_num": "170011",
+  "docker_image": "sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b"
+}

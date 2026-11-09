@@ -11,6 +11,25 @@
       ],
       "type": "string"
     },
+    "IsolationLevel": {
+      "description": "A transaction isolation level (ADR-037), as SQL names it.",
+      "oneOf": [
+        {
+          "enum": [
+            "read-uncommitted",
+            "read-committed",
+            "repeatable-read",
+            "serializable"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "snapshot",
+          "description": "SQL Server only, where the database allows snapshot isolation.",
+          "type": "string"
+        }
+      ]
+    },
     "KubernetesConfig": {
       "additionalProperties": false,
       "description": "The cluster resource a connection reaches through `kubectl port-forward` (ADR-015).",
@@ -90,6 +109,42 @@
       "required": [
         "secret"
       ],
+      "type": "object"
+    },
+    "SessionConfig": {
+      "additionalProperties": false,
+      "description": "How every new session of a connection starts (ADR-037). Applied in this order when a\nsession opens: the isolation level, the default schema, then the setup statements.",
+      "properties": {
+        "ignore_setup_errors": {
+          "description": "A setup statement the database rejects is skipped instead of failing the session. A\nstatement refused because it writes on a read-only connection still refuses it.",
+          "type": "boolean"
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IsolationLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The isolation level of the session's transactions; the server's default when absent.\nPostgreSQL, MySQL, MariaDB and SQL Server (`snapshot` only there)."
+        },
+        "schema": {
+          "description": "Where unqualified names are found when a session opens: `search_path` on PostgreSQL\n(this schema, then `public`), the database on MySQL and MariaDB, `SET schema` on DuckDB.\nSQL Server and SQLite have no per-session schema.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "setup": {
+          "description": "SQL run on every new session, split into statements like the editor does (`SET\nsearch_path TO app, public;`, `SET TIME ZONE 'UTC';`…). Sent as written: `${…}`\nvariables are not expanded here. On a read-only connection, on Production and in\nagents' sessions it may only read or change session settings; a statement that writes\nrefuses the session. At most 20000 characters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "TlsConfig": {
@@ -255,6 +310,10 @@
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
+    },
+    "session": {
+      "$ref": "#/$defs/SessionConfig",
+      "description": "How every new session starts (ADR-037): setup statements, the default schema and the\nisolation level, applied each time a session opens (reconnecting included)."
     },
     "sqlite3": {
       "description": "SQLite with a tunnel: the file is on the tunnel's last hop, opened by its `sqlite3`\n(ADR-018); this names that program when it is not `sqlite3` on the PATH.",

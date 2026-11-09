@@ -196,3 +196,18 @@ pub struct ForeignKeyInfo {
     pub referenced_table: String,
     pub referenced_columns: Vec<String>,
 }
+
+/// A foreign key of another table that points to the one asked about: what the table details'
+/// "References" lists and what the references panel follows back to the referencing rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferencingKey {
+    /// The referencing table.
+    pub schema: String,
+    pub table: String,
+    /// The constraint's name (SQLite has none: `fk_<id>`, as [`TableInfo::foreign_keys`]).
+    pub name: String,
+    /// Its columns in the referencing table, in the key's order.
+    pub columns: Vec<String>,
+    /// The columns of the referenced table they point to, in the same order.
+    pub referenced_columns: Vec<String>,
+}

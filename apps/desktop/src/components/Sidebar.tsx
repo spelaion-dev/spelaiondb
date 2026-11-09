@@ -27,6 +27,7 @@ import {
   type ServerObjectKindItem,
   type SqlTemplateItem,
   type TableDetails,
+  type TableKeyItem,
 } from "../api";
 import {
   confirmOpenTransactions,
@@ -39,11 +40,15 @@ import {
   SET_ACTIVE_SCHEMA_EVENT,
 } from "../connect";
 import { connectionTooltip, hasTags, sameTag, tagsInUse } from "../connectionInfo";
+import { connectionMatch } from "../connectionSearch";
+import { folderOf, moveConnection } from "../connectionMoves";
 import { sortByName } from "../explorerSort";
+import { useCatalog } from "../catalog";
 import { usePreferences } from "../preferences";
 import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from "../store";
 import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
+import { useImport } from "./ImportDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard, pasteIsForText } from "../connectionCopies";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
@@ -121,6 +126,57 @@ export const FOCUS_EXPLORER_FILTER_EVENT = "spelaion-focus-explorer-filter";
 
 /** Tags shown next to a connection's name; the others are only in its tooltip. */
 const VISIBLE_TAGS = 2;
+
+/** Whether the quick filter finds a connection: by name, tags, type, host or description,
+ * forgiving a typo (`connectionSearch.ts`). An empty filter keeps all. */
+function connectionFound(connection: ConnectionItem, filter: string): boolean {
+  return connectionMatch(filter, { ...connection, typeName: connection.kind?.name }) !== null;
+}
+
+interface ConnectionFolder {
+  name: string;
+  path: string;
+  personal: boolean;
+  items: ConnectionItem[];
+  children: Map<string, ConnectionFolder>;
+}
+
+/** A personal folder and a repository folder with the same name are different folders. */
+function connectionFolderKey(personal: boolean, path: string): string {
+  return JSON.stringify([personal, path]);
+}
+
+/** How far the pointer moves before pressing a connection becomes dragging it. */
+const DRAG_THRESHOLD = 5;
+
+/** A connection being dragged to another folder, and the folder under the pointer. */
+interface ConnectionDrag {
+  id: string;
+  personal: boolean;
+  from: string;
+  pointer: number;
+  startX: number;
+  startY: number;
+  dragging: boolean;
+  /** The folder it would drop into (`""` for none), or null over nothing it can drop on. */
+  target: string | null;
+}
+
+/** The pointer handlers that make a connection row draggable, and what the tree shows. */
+interface DragSupport {
+  drag: ConnectionDrag | null;
+  rowHandlers(connection: ConnectionItem): Pick<
+    React.HTMLAttributes<HTMLDivElement>,
+    "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onClickCapture"
+  >;
+}
+
+/** The folder a drop target at this point stands for, in the dragged connection's layer. */
+function dropFolderAt(x: number, y: number, personal: boolean): string | null {
+  const target = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop-folder]");
+  if (!target || (target.dataset.dropPersonal === "true") !== personal) return null;
+  return target.dataset.dropFolder ?? null;
+}
 
 /** Whether a name contains the quick filter's text, ignoring case. An empty filter keeps all. */
 function matchesFilter(name: string, filter: string): boolean {
@@ -974,7 +1030,29 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const filterTags = tagsInUse(connections);
   for (const tag of activeTags) if (!filterTags.some((other) => sameTag(other, tag))) filterTags.push(tag);
   const filtering = filterText !== "" || activeTags.length > 0;
+  const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
+  const [closedFilteredFolders, setClosedFilteredFolders] = useState<Set<string>>(() => new Set());
+  useEffect(() => setClosedFolders(new Set()), [workspace?.workspace]);
+  /** Show a moved or revealed connection even when one of its parents was folded. */
+  function showConnectionFolder(personal: boolean, path: string) {
+    const parts = path ? path.split("/") : [];
+    const openParents = (previous: Set<string>) => {
+      const next = new Set(previous);
+      if (personal) next.delete(connectionFolderKey(true, ""));
+      for (let i = 1; i <= parts.length; i++) next.delete(connectionFolderKey(personal, parts.slice(0, i).join("/")));
+      return next;
+    };
+    setClosedFolders(openParents);
+    setClosedFilteredFolders(openParents);
+  }
+  const revealConnection = useApp((s) => s.explorerReveal);
+  useEffect(() => {
+    if (!revealConnection) return;
+    const connection = connections.find((c) => c.id === revealConnection.connectionId);
+    if (connection) showConnectionFolder(connection.personal, folderOf(connection));
+  }, [revealConnection?.nonce, connections]);
   const explorer = usePreferences((s) => s.explorer);
+  useEffect(() => setClosedFilteredFolders(new Set()), [filterText, activeTags.join("\u0000"), explorer.connectedOnly]);
   // A preference being saved takes no other change until it is done (setExplorer ignores it).
   const savingPreference = usePreferences((s) => s.saving !== null);
   const explorerConnected = useApp((s) => s.explorerConnected);
@@ -1007,12 +1085,81 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
       current = false;
     };
   }, [explorer.linkWithEditor, linked]);
-  /** With a filter, connections whose name matches, and those already expanded; with tags,
-   * only connections that have them all (tags describe connections, not what is inside). */
+  /** With a filter, connections it finds (by name, tags, type, host or description) and those
+   * already expanded; with tags, only connections that have them all (tags describe
+   * connections, not what is inside). */
   const shown = (c: ConnectionItem) =>
     (!explorer.connectedOnly || connected(c)) &&
     hasTags(c, activeTags) &&
-    (matchesFilter(c.name, filterText) || openConnections.includes(c.id));
+    (connectionFound(c, filterText) || openConnections.includes(c.id));
+
+  /** What went wrong moving a connection to another folder. */
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [drag, setDragState] = useState<ConnectionDrag | null>(null);
+  const dragRef = useRef<ConnectionDrag | null>(null);
+  /** A drag ends with a click on the row it started from: it must not act. */
+  const swallowClick = useRef(false);
+  const setDrag = (next: ConnectionDrag | null) => {
+    dragRef.current = next;
+    setDragState(next);
+  };
+  useEffect(() => {
+    if (!drag?.dragging) return;
+    // Escape puts it back where it was.
+    const cancel = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDrag(null);
+    };
+    window.addEventListener("keydown", cancel, true);
+    return () => window.removeEventListener("keydown", cancel, true);
+  }, [drag?.dragging]);
+  const dragSupport: DragSupport = {
+    drag,
+    rowHandlers: (c) => ({
+      onPointerDown: (e) => {
+        if (e.button !== 0 || (e.target as Element).closest("button, input, a")) return;
+        setDrag({ id: c.id, personal: c.personal, from: folderOf(c), pointer: e.pointerId, startX: e.clientX, startY: e.clientY, dragging: false, target: null });
+      },
+      onPointerMove: (e) => {
+        const current = dragRef.current;
+        if (!current || current.id !== c.id || current.pointer !== e.pointerId) return;
+        if (!current.dragging) {
+          if (Math.hypot(e.clientX - current.startX, e.clientY - current.startY) < DRAG_THRESHOLD) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }
+        const target = dropFolderAt(e.clientX, e.clientY, current.personal);
+        if (!current.dragging || target !== current.target) setDrag({ ...current, dragging: true, target });
+      },
+      onPointerUp: (e) => {
+        const current = dragRef.current;
+        if (!current || current.id !== c.id) return;
+        setDrag(null);
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+        if (!current.dragging) return;
+        swallowClick.current = true;
+        setTimeout(() => {
+          swallowClick.current = false;
+        }, 0);
+        if (current.target === null || current.target === current.from) return;
+        setMoveError(null);
+        const target = current.target;
+        moveConnection(c, target)
+          .then(() => showConnectionFolder(c.personal, target))
+          .catch((err: unknown) => setMoveError(t("moveFailed", { name: c.name, detail: errorText(err) })));
+      },
+      onPointerCancel: () => setDrag(null),
+      onClickCapture: (e) => {
+        if (!swallowClick.current) return;
+        swallowClick.current = false;
+        e.stopPropagation();
+        e.preventDefault();
+      },
+    }),
+  };
+  const dropClass = (personal: boolean, folder: string) =>
+    drag?.dragging && drag.personal === personal && drag.target === folder ? " drop-target" : "";
 
   async function openFolder() {
     const path = await open({ directory: true, title: t("openFolderTitle") });
@@ -1068,15 +1215,66 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     }
   }
 
-  // Group by folder (the id path without its last segment). Connections not in any folder
-  // come first, without a title, so they do not look like part of the previous folder.
-  const groups = new Map<string, ConnectionItem[]>([
-    [JSON.stringify([false]), []],
-  ]);
+  // Keep the folder hierarchy instead of flattening it into headings: folding a parent also
+  // hides its descendants. Rows stay mounted while folded, keeping explorer sessions alive.
+  const repository: ConnectionFolder = { name: "", path: "", personal: false, items: [], children: new Map() };
+  const personal: ConnectionFolder = { name: t("personal"), path: "", personal: true, items: [], children: new Map() };
   for (const c of connections.filter(shown)) {
-    const key = JSON.stringify([c.personal, ...c.folders]);
-    groups.set(key, [...(groups.get(key) ?? []), c]);
+    let folder = c.personal ? personal : repository;
+    for (const name of c.folders) {
+      let child = folder.children.get(name);
+      if (!child) {
+        child = { name, path: folder.path ? `${folder.path}/${name}` : name, personal: c.personal, items: [], children: new Map() };
+        folder.children.set(name, child);
+      }
+      folder = child;
+    }
+    folder.items.push(c);
   }
+
+  const connectionRows = (items: ConnectionItem[]) => items.map((c) => (
+    <ConnectionNode
+      key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
+      connection={c}
+      filter={filterText}
+      onPasteError={setPasteError}
+      dragSupport={dragSupport}
+      dropClass={dropClass(c.personal, folderOf(c))}
+    />
+  ));
+  const renderFolder = (folder: ConnectionFolder): ReactNode => {
+    const key = connectionFolderKey(folder.personal, folder.path);
+    // Filtering reveals matches temporarily without changing the user's folded state.
+    const filtered = filtering || explorer.connectedOnly;
+    const expanded = !(filtered ? closedFilteredFolders : closedFolders).has(key);
+    return (
+      <div key={key} className="connection-folder">
+        <div className="group-title">
+          <button
+            type="button"
+            className="connection-folder-toggle"
+            aria-label={t("toggleFolder", { name: folder.name })}
+            aria-expanded={expanded}
+            onClick={() => (filtered ? setClosedFilteredFolders : setClosedFolders)((previous) => {
+              const next = new Set(previous);
+              if (next.has(key)) next.delete(key); else next.add(key);
+              return next;
+            })}
+          >
+            <span
+              className={`group-segment${dropClass(folder.personal, folder.path)}`}
+              data-drop-folder={folder.path}
+              data-drop-personal={String(folder.personal)}
+            >{folder.name}</span>
+          </button>
+        </div>
+        <div className="connection-folder-children" hidden={!expanded}>
+          {connectionRows(folder.items)}
+          {[...folder.children.values()].map(renderFolder)}
+        </div>
+      </div>
+    );
+  };
 
   useEffect(() => {
     void reloadBookmarks().catch(() => undefined);
@@ -1215,6 +1413,14 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           )}
         </div>
       )}
+      {moveError && (
+        <div className="banner" role="alert">
+          {moveError}
+          <button className="ghost small" aria-label={t("connections:close")} onClick={() => setMoveError(null)}>
+            ×
+          </button>
+        </div>
+      )}
       {pasteError && (
         <div className="banner" role="alert">
           {pasteError}
@@ -1224,7 +1430,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         </div>
       )}
       <div
-        className="tree"
+        className={`tree${drag?.dragging ? " drag-active" : ""}`}
         onPaste={(e) => {
           // Ctrl+V in the explorer (not in a text field): a connection from the clipboard.
           if (pasteIsForText(e.target)) return;
@@ -1254,28 +1460,15 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             />
           </div>
         )}
-        {[...groups.entries()].map(([group, items]) => {
-          const first = items[0];
-          const label = first
-            ? (first.personal ? [t("personal")] : [])
-                .concat(first.folders)
-                .join(" / ")
-            : "";
-          return (
-            <div key={group}>
-              {label && <div className="group-title">{label}</div>}
-              {items.map((c) => (
-                <ConnectionNode
-                  // A new engine starts the node again: what it showed belongs to the old one.
-                  key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
-                  connection={c}
-                  filter={filterText}
-                  onPasteError={setPasteError}
-                />
-              ))}
-            </div>
-          );
-        })}
+        {drag?.dragging && !drag.personal && drag.from !== "" && (
+          // Repository connections without a folder have no title to drop on: this is theirs.
+          <div className={`group-title drop-zone${dropClass(false, "")}`} data-drop-folder="" data-drop-personal="false">
+            {t("moveToNoFolder")}
+          </div>
+        )}
+        {connectionRows(repository.items)}
+        {[...repository.children.values()].map(renderFolder)}
+        {(personal.items.length > 0 || personal.children.size > 0) && renderFolder(personal)}
       </div>
     </aside>
   );
@@ -1285,10 +1478,16 @@ function ConnectionNode({
   connection,
   filter,
   onPasteError,
+  dragSupport,
+  dropClass,
 }: {
   connection: ConnectionItem;
   filter: string;
   onPasteError(message: string | null): void;
+  /** Dragging this row to another folder. */
+  dragSupport: DragSupport;
+  /** " drop-target" while a dragged connection would land in this row's folder. */
+  dropClass: string;
 }) {
   const { t } = useTranslation("shell");
   /** The outcome of copying this connection, or of an action of its menus, under its row. */
@@ -1455,8 +1654,8 @@ function ConnectionNode({
   const foldersFirst = usePreferences((s) => s.explorer.foldersFirst);
   const sort = useSortByName();
   const shownSchemas = schemas && sort(schemas.filter((s) => showSystem || !s.system), (s) => s.name);
-  // A connection whose name matches the quick filter shows everything in it.
-  const inner = matchesFilter(connection.name, filter) ? "" : filter;
+  // A connection the quick filter finds shows everything in it.
+  const inner = connectionFound(connection, filter) ? "" : filter;
   const shownServerObjects = sort(
     serverObjects.filter((o) => (showSystem || !o.system) && matchesFilter(o.name, inner)),
     (o) => o.name,
@@ -1487,17 +1686,29 @@ function ConnectionNode({
     >
       <div
         ref={connectionRow}
-        className={`row connection-row${connectionRevealed}`}
+        className={`row connection-row${connectionRevealed}${dropClass}${dragSupport.drag?.dragging && dragSupport.drag.id === connection.id ? " dragged" : ""}`}
         tabIndex={-1}
+        data-drop-folder={folderOf(connection)}
+        data-drop-personal={String(connection.personal)}
+        {...dragSupport.rowHandlers(connection)}
         onContextMenu={(e) => {
           e.preventDefault();
           setRowMenu({ x: e.clientX, y: e.clientY });
+        }}
+        onDoubleClick={(e) => {
+          // Buttons (the expander and filter tags) keep their own actions.
+          if (!(e.target as Element).closest("button")) newQuery();
         }}
         onKeyDown={(e) => {
           // Ctrl+C copies the connection (objects keep copying their names, ADR-026).
           if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
             e.preventDefault();
             copy();
+          } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey)) {
+            // The menu from the keyboard opens under the row, as a right click would at the pointer.
+            e.preventDefault();
+            const rect = e.currentTarget.getBoundingClientRect();
+            setRowMenu({ x: rect.left + 24, y: rect.bottom });
           }
         }}
       >
@@ -1512,7 +1723,6 @@ function ConnectionNode({
         <EngineIcon engine={connection.engine} />
         <span
           className="label"
-          onDoubleClick={newQuery}
           // The description, then the marks after the name, which may not fit.
           title={connectionTooltip(connection, [
             kind ? t("typeTooltip", { name: kind.name }) : null,
@@ -1557,19 +1767,6 @@ function ConnectionNode({
             {t("filtered")}
           </span>
         )}
-        <button
-          className="ghost small"
-          onClick={newQuery}
-          title={t("newQuery")}
-        >
-          +
-        </button>
-        <ConnectionMenu
-          connection={connection}
-          onRefresh={schemas ? () => void refreshAll() : undefined}
-          onConfigureFilters={() => configureFilter()}
-          onError={(message) => setRowNote({ error: true, text: message })}
-        />
       </div>
       {rowNote && (
         <div className={`${rowNote.error ? "error" : "muted"} small row-note`} role={rowNote.error ? "alert" : "status"}>
@@ -1577,80 +1774,30 @@ function ConnectionNode({
         </div>
       )}
       {rowMenu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: rowMenu.x, top: rowMenu.y }}>
-          {schemas && (
-            <button
-              role="menuitem"
-              title="Ctrl+Shift+D"
-              onClick={() => {
-                setRowMenu(null);
-                useApp.getState().setOpenObject({ connectionId: connection.id });
-              }}
-            >
-              {t("openByName.menu")}
-            </button>
-          )}
-          <button role="menuitem" onClick={() => configureFilter("schemas")}>
-            {t("configureSchemaFilter")}
-          </button>
-          <hr />
-          <button
-            role="menuitem"
-            onClick={() => {
-              setRowMenu(null);
-              duplicate();
-            }}
-          >
-            {t("connections:copies.duplicate")}
-          </button>
-          <button
-            role="menuitem"
-            title="Ctrl+C"
-            onClick={() => {
-              setRowMenu(null);
-              copy();
-            }}
-          >
-            {t("connections:copies.copy")}
-          </button>
-          <button
-            role="menuitem"
-            title="Ctrl+V"
-            onClick={() => {
-              setRowMenu(null);
+        <ConnectionMenu
+          connection={connection}
+          x={rowMenu.x}
+          y={rowMenu.y}
+          connected={schemas !== null}
+          actions={{
+            newQuery,
+            refresh: () => void refreshAll(),
+            configureFilters: () => configureFilter(),
+            createSchema: actions?.create.includes("schema")
+              ? () => openCreate(connection.id, session, "schema", "").catch((e: unknown) => setError(errorText(e)))
+              : undefined,
+            duplicate,
+            copy,
+            paste: () => {
               onPasteError(null);
               pasteFromClipboard().catch((e: unknown) => onPasteError(errorText(e)));
-            }}
-          >
-            {t("connections:copies.paste")}
-          </button>
-          <hr />
-          {schemas && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                setRowMenu(null);
-                void refreshAll();
-              }}
-            >
-              {t("refreshAllSchemas")}
-            </button>
-          )}
-          {schemas && actions?.create.includes("schema") && (
-            <>
-              <hr />
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setRowMenu(null);
-                  openCreate(connection.id, session, "schema", "").catch((e: unknown) => setError(errorText(e)));
-                }}
-              >
-                {t("create.schema")}
-              </button>
-            </>
-          )}
-        </div>
+            },
+          }}
+          onClose={(restoreFocus) => {
+            setRowMenu(null);
+            if (restoreFocus) connectionRow.current?.querySelector<HTMLButtonElement>(".twisty")?.focus();
+          }}
+        />
       )}
       {open && (
         <div className="children">
@@ -1751,10 +1898,13 @@ function SchemaNode({
       ]);
       setOthers(rest);
       setObjects(relations);
+      // The command palette lists what the tree has read (SDB-18).
+      useCatalog.getState().publish({ connectionId, schema, relations, others: rest });
     } catch (e) {
       setError(errorText(e));
     }
   }
+  useEffect(() => () => useCatalog.getState().forget(connectionId, schema), [connectionId, schema]);
 
   async function toggle() {
     setOpen(!open);
@@ -1766,13 +1916,17 @@ function SchemaNode({
   function reload() {
     if (!objects) return;
     if (open) void load();
-    else setObjects(null);
+    else {
+      setObjects(null);
+      useCatalog.getState().forget(connectionId, schema);
+    }
   }
 
   function refresh() {
     setMenu(null);
     reload();
     setRefreshed((n) => n + 1);
+    window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: connectionId }));
   }
 
   useOnChange(generation, reload);
@@ -1911,6 +2065,16 @@ function SchemaNode({
             {t("refreshAllSchemas")}
           </button>
           <FilterMenuItems kind="schemas" names={[schema]} onFilterName={onFilterName} close={() => setMenu(null)} />
+          <hr />
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              useImport.getState().open({ session, connectionId, schema, table: null, text: null });
+            }}
+          >
+            {t("importNewTable")}
+          </button>
           {actions && actions.create.some((kind) => kind !== "schema") && <hr />}
           {actions?.create
             .filter((kind) => kind !== "schema")
@@ -2051,6 +2215,8 @@ function ObjectNode({
   const addTab = useApp((s) => s.addTab);
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<TableDetails | null>(null);
+  /** Foreign keys of other tables that point to this one; none when they cannot be read. */
+  const [references, setReferences] = useState<TableKeyItem[]>([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [menu, setMenu] = useContextMenu();
   const sort = useSortByName();
@@ -2081,7 +2247,12 @@ function ObjectNode({
     setLoadingDetails(true);
     setError(null);
     try {
-      setDetails(await call(commands.describeTable(session, object.schema, object.name, columnFilter)));
+      const [described, referencing] = await Promise.all([
+        call(commands.describeTable(session, object.schema, object.name, columnFilter)),
+        call(commands.referencingKeys(session, object.schema, object.name)).catch((): TableKeyItem[] => []),
+      ]);
+      setDetails(described);
+      setReferences(referencing);
     } catch (e) {
       setDetails(null);
       setError(errorText(e));
@@ -2097,13 +2268,17 @@ function ObjectNode({
   }
 
   /** Columns, keys and indexes read again (now if open), and the exact count forgotten. */
-  function refresh() {
+  function reloadDetails() {
     setMenu(null);
     setCount(null);
     if (open) void loadDetails();
     else setDetails(null);
   }
-  useOnChange(generation, refresh);
+  function refresh() {
+    reloadDetails();
+    window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: connectionId }));
+  }
+  useOnChange(generation, reloadDetails);
 
   /** Preview the core's SQL; Open as SQL still opens an editor tab. */
   async function openSql(template: SqlTemplateItem, inEditor = false) {
@@ -2295,6 +2470,17 @@ function ObjectNode({
               ? t("exportTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
               : t("exportTable")}
           </button>
+          {!view && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                useImport.getState().open({ session, connectionId, schema: object.schema, table: object.name, text: null });
+              }}
+            >
+              {t("importData")}
+            </button>
+          )}
           <button role="menuitem" onClick={refresh}>
             {t("refresh")}
           </button>
@@ -2461,6 +2647,21 @@ function ObjectNode({
                 />
               );
             })}
+          </Folder>
+          <Folder label={t("folders.references")} count={references.length} icon="foreignKeys" onOpenView={() => openDetails("references")}>
+            {sort(references, (key) => `${key.table}.${key.name}`).map((key) => (
+              <LeafRow
+                key={`${key.schema}.${key.table}:${key.name}`}
+                session={session}
+                connectionId={connectionId}
+                schema={object.schema}
+                label={key.schema === object.schema ? key.table : `${key.schema}.${key.table}`}
+                detail={`${key.name}: (${key.otherColumns.join(", ")}) → (${key.columns.join(", ")})`}
+                icon="foreignKeys"
+                target={null}
+                onChanged={refresh}
+              />
+            ))}
           </Folder>
           <Folder label={t("folders.indexes")} count={details.indexes.length} icon="indexes" onOpenView={() => openDetails("indexes")}>
             {sort(details.indexes, (index) => index.name).map((index) => (

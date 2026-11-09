@@ -1,10 +1,14 @@
 //! SpelaionDB desktop app: a thin Tauri adapter over `spelaion-core` (ADR-002). There is no
 //! database or security logic here: only translation between UI commands and the core.
 
+mod connection_import;
 mod dto;
 mod files;
+mod import;
 mod interaction;
+mod library;
 mod mcp;
+mod plans;
 mod update;
 
 use std::collections::HashMap;
@@ -46,6 +50,8 @@ struct AppState {
     engines: Engines,
     tunnels: Arc<TunnelPool>,
     results: Arc<ResultStore>,
+    plans: Arc<spelaion_core::plan::PlanStore>,
+    startup_plan: std::sync::Mutex<Option<String>>,
     sessions: Mutex<HashMap<String, DesktopSession>>,
     history: QueryHistory,
     /// Writes the open tabs to the local store on a deadline (ADR-036).
@@ -56,6 +62,8 @@ struct AppState {
     tests: ConnectionTests,
     /// Streaming exports running, by the id the UI gave them (ADR-034).
     exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
+    /// Imports running, by the id the UI gave them (ADR-038).
+    imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ImportCancel>>>,
 }
 
 struct DesktopSession {
@@ -237,6 +245,29 @@ async fn set_explorer_preferences(
     state
         .history
         .set_explorer_preferences(preferences.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_editor_preferences(state: State<'_, AppState>) -> CmdResult<EditorPreferencesItem> {
+    state
+        .history
+        .editor_preferences()
+        .await
+        .map(Into::into)
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+#[specta::specta]
+async fn set_editor_preferences(
+    preferences: EditorPreferencesItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_editor_preferences(preferences.into())
         .await
         .map_err(|e| e.to_string())
 }
@@ -523,6 +554,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
                 .map(ConnectionTypeItem::from),
             folders: c.folders().into_iter().map(String::from).collect(),
             personal: c.id.source == Source::User,
+            host: c.file.host.clone(),
             tunnel: c.file.tunnel.clone(),
             mcp_exposed: c.file.mcp.exposed,
             history_enabled,
@@ -584,9 +616,10 @@ async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<
 #[tauri::command]
 #[specta::specta]
 async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> {
+    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
     state
         .history
-        .delete_snippet(id.into())
+        .delete_visible_snippet(workspace, id.into())
         .await
         .map_err(|e| e.to_string())
 }
@@ -886,6 +919,7 @@ async fn add_connection(
     let id = {
         let config = state.config.read().await;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
+        check_setup_before_saving(&state, &config, &file)?;
         let id =
             spelaion_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
                 .map_err(|e| e.to_string())?;
@@ -898,6 +932,23 @@ async fn add_connection(
     };
     state.reload().await;
     Ok(id.to_string())
+}
+
+/// A session setup the connection's sessions would refuse (ADR-037: a write on a read-only or
+/// Production connection) is refused before it is saved, with the core's message.
+fn check_setup_before_saving(
+    state: &AppState,
+    config: &spelaion_config::Config,
+    file: &spelaion_config::ConnectionFile,
+) -> CmdResult<()> {
+    let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+    let safeguards = spelaion_config::ConnectionTypes::load(config, &trust)
+        .resolve(file.env.as_deref())
+        .ok()
+        .flatten()
+        .map(|kind| kind.safeguards)
+        .unwrap_or_default();
+    spelaion_core::check_file_setup(file, &safeguards).map_err(|e| e.to_string())
 }
 
 /// Checks whether an existing connection can be opened in the editor.
@@ -969,6 +1020,8 @@ async fn update_connection(
     {
         let config = state.config.read().await;
         let id = parse_id(&connection);
+        let file = draft.to_file(&config).map_err(|e| e.to_string())?;
+        check_setup_before_saving(&state, &config, &file)?;
         let written = spelaion_config::update_connection_at_revision(
             &config,
             &parse_id(&connection),
@@ -1028,6 +1081,60 @@ async fn duplicate_connection(
         id: duplicated.id.to_string(),
         name: duplicated.name,
         password_copied: duplicated.password_copied,
+    })
+}
+
+/// Moves a connection to another folder (`""` for none) in its layer. The core moves its
+/// file, its keychain password and, for a repository connection, what trust pinned for it,
+/// without adding any (ADR-022); its explorer filter, bookmarks, history setting and saved
+/// tabs follow. A connection in use is not moved: the UI disconnects it first.
+#[tauri::command]
+#[specta::specta]
+async fn move_connection(
+    connection: String,
+    folder: String,
+    state: State<'_, AppState>,
+) -> CmdResult<MovedItem> {
+    let id = parse_id(&connection);
+    let in_use = state
+        .sessions
+        .lock()
+        .await
+        .values()
+        .any(|session| session.open.resolved.id == id);
+    if in_use {
+        return Err("the connection is in use: disconnect it before moving it".into());
+    }
+    // Tabs waiting to be written carry the old identifier: written first, then moved with it.
+    state.tabs.flush().await.map_err(|e| e.to_string())?;
+    let (moved, workspace) = {
+        let config = state.config.read().await;
+        let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
+        let moved =
+            spelaion_config::move_connection(&config, &mut trust, &id, &folder, &SystemBackend)
+                .map_err(|e| e.to_string())?;
+        let workspace = match id.source {
+            Source::User => None,
+            Source::Workspace => Some(history_workspace(&config, Source::Workspace)),
+        };
+        (moved, workspace)
+    };
+    let to = moved.id.to_string();
+    let settings = if moved.id == id {
+        Ok(())
+    } else {
+        state
+            .history
+            .move_connection(workspace, connection, to.clone())
+            .await
+    };
+    state.reload().await;
+    // The file is where the user put it: settings that could not follow are said, not undone.
+    settings
+        .map_err(|e| format!("the connection moved, but its explorer settings did not: {e}"))?;
+    Ok(MovedItem {
+        id: to,
+        password_moved: moved.password_moved,
     })
 }
 
@@ -1502,6 +1609,7 @@ async fn connect(
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password: password.clone(),
+        read_only_session: false,
     };
     let open = match open_connection(resolved, &state.engines, options, state.results.clone()).await
     {
@@ -1539,6 +1647,13 @@ async fn connect(
         .server_version()
         .await
         .map_err(|e| e.to_string())?;
+    let setup_skipped = open
+        .setup
+        .skipped
+        .iter()
+        .cloned()
+        .map(SkippedSetupItem::from)
+        .collect();
     // Editor tabs follow their transaction under their type's safeguards (ADR-031); the
     // explorer's and table data tabs' sessions stay in auto-commit.
     if editor {
@@ -1566,7 +1681,10 @@ async fn connect(
     if let Some(old) = old.and_then(|o| Arc::try_unwrap(o.open).ok()) {
         old.close().await;
     }
-    Ok(ConnectOutcome::Connected { server_version })
+    Ok(ConnectOutcome::Connected {
+        server_version,
+        setup_skipped,
+    })
 }
 
 /// Open an independent tab from an existing explorer session, reusing its in-memory
@@ -1604,6 +1722,7 @@ async fn connect_from_session(
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password: password.clone(),
+        read_only_session: false,
     };
     let open = open_connection(
         source_open.resolved.clone(),
@@ -2019,11 +2138,22 @@ async fn start_script(
         confirmed,
     )
     .map_err(|e| e.to_string())?;
-    let mut events = state.history.run_script_with_original(
+    let mut events = state.history.run_script_in_context(
         &open.session,
         &sql,
-        workspace,
-        open.resolved.id.to_string(),
+        spelaion_core::HistoryScope {
+            workspace,
+            connection: open.resolved.id.to_string(),
+            database: (!open.resolved.params.database.is_empty())
+                .then(|| open.resolved.params.database.clone()),
+            switchable_database: matches!(
+                open.resolved.engine,
+                spelaion_config::Engine::Mysql
+                    | spelaion_config::Engine::Mariadb
+                    | spelaion_config::Engine::Sqlserver
+                    | spelaion_config::Engine::Duckdb
+            ),
+        },
         original,
         spelaion_core::ScriptOptions {
             on_error: options.on_error.into(),
@@ -2369,6 +2499,8 @@ async fn open_export_session(
         known_hosts: KnownHosts::for_user(&state.user_dir),
         interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
         password,
+        // Only a single read is ever run again there (ADR-034).
+        read_only_session: true,
     };
     match open_connection(
         source_open.resolved.clone(),
@@ -2597,168 +2729,6 @@ fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
         .map_err(|e| e.to_string())
 }
 
-/// The DBeaver folder to read: the one chosen, or DBeaver's workspace on this system.
-fn dbeaver_dir(path: Option<String>) -> CmdResult<PathBuf> {
-    match path.filter(|p| !p.trim().is_empty()) {
-        Some(path) => Ok(PathBuf::from(path)),
-        None => spelaion_config::dbeaver_workspace()
-            .ok_or_else(|| "DBeaver's folder is unknown on this system".into()),
-    }
-}
-
-/// The DBeaver connections under a folder (DBeaver's workspace if none), without secrets.
-#[tauri::command]
-#[specta::specta]
-async fn scan_dbeaver(path: Option<String>) -> CmdResult<DbeaverScan> {
-    let dir = dbeaver_dir(path)?;
-    let found = tokio::task::spawn_blocking({
-        let dir = dir.clone();
-        move || spelaion_config::read_dbeaver(&dir)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
-    Ok(DbeaverScan {
-        dir: dir.display().to_string(),
-        connections: found.iter().map(DbeaverItem::from).collect(),
-    })
-}
-
-/// Imports the chosen DBeaver connections (and their SSH tunnels) as SpelaionDB files. The
-/// folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
-/// DBeaver saved go to the keychain, otherwise they are asked when connecting.
-#[tauri::command]
-#[specta::specta]
-async fn import_dbeaver(
-    path: Option<String>,
-    ids: Vec<String>,
-    personal: bool,
-    save_passwords: bool,
-    state: State<'_, AppState>,
-) -> CmdResult<ImportReport> {
-    let dir = dbeaver_dir(path)?;
-    let found = tokio::task::spawn_blocking(move || spelaion_config::read_dbeaver(&dir))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    let source = source_of(personal);
-    let mut report = ImportReport {
-        imported: Vec::new(),
-        tunnels: Vec::new(),
-        skipped: Vec::new(),
-    };
-    for connection in found.iter().filter(|c| ids.contains(&c.id)) {
-        let engine = match &connection.engine {
-            Ok(engine) => *engine,
-            Err(reason) => {
-                report.skipped.push(ImportSkip {
-                    name: connection.name.clone(),
-                    reason: reason.clone(),
-                });
-                continue;
-            }
-        };
-        // One network profile per bastion and user (and proxy): connections through the same
-        // one share it.
-        let tunnel_name = connection.tunnel_name().unwrap_or_default();
-        match import_one(
-            &state,
-            connection,
-            engine,
-            source,
-            save_passwords,
-            &tunnel_name,
-        )
-        .await
-        {
-            Ok((name, created_tunnel)) => {
-                report.imported.push(name);
-                if created_tunnel {
-                    report.tunnels.push(tunnel_name);
-                }
-            }
-            Err(reason) => report.skipped.push(ImportSkip {
-                name: connection.name.clone(),
-                reason,
-            }),
-        }
-    }
-    Ok(report)
-}
-
-/// Creates the tunnel (unless one with its name exists) and the connection, trying
-/// `name (DBeaver)`, `name (DBeaver 2)`… when the name is taken.
-async fn import_one(
-    state: &AppState,
-    connection: &spelaion_config::DbeaverConnection,
-    engine: spelaion_config::Engine,
-    source: Source,
-    save_passwords: bool,
-    tunnel_name: &str,
-) -> Result<(String, bool), String> {
-    let plan =
-        spelaion_config::import_plan(connection, engine, source, save_passwords, tunnel_name);
-    let mut created_tunnel = false;
-    if let Some((tunnel, passwords)) = &plan.tunnel {
-        let exists = state
-            .config
-            .read()
-            .await
-            .tunnels
-            .iter()
-            .any(|t| t.source == source && t.name == tunnel_name);
-        if !exists {
-            let config = state.config.read().await;
-            let file = tunnel.to_file(&config).map_err(|e| e.to_string())?;
-            let name = spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
-                .map_err(|e| e.to_string())?;
-            if source == Source::Workspace {
-                TrustStore::load(&state.user_dir)
-                    .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
-                    .map_err(|e| e.to_string())?;
-            }
-            created_tunnel = true;
-        }
-        state.reload().await;
-    }
-    let mut draft = plan.connection;
-    let base = draft.name.clone();
-    for attempt in 0..10 {
-        draft.name = match attempt {
-            0 => base.clone(),
-            1 => format!("{base} (DBeaver)"),
-            n => format!("{base} (DBeaver {n})"),
-        };
-        let added = {
-            let config = state.config.read().await;
-            let file = draft.to_file(&config).map_err(|e| e.to_string())?;
-            let result = spelaion_config::add_connection(
-                &config,
-                &draft,
-                plan.password.as_ref(),
-                &SystemBackend,
-            );
-            if let Ok(id) = &result
-                && source == Source::Workspace
-            {
-                TrustStore::load(&state.user_dir)
-                    .and_then(|mut trust| trust.accept_connection_write(&config, id, &file))
-                    .map_err(|e| e.to_string())?;
-            }
-            result
-        };
-        match added {
-            Ok(_) => {
-                state.reload().await;
-                return Ok((draft.name, created_tunnel));
-            }
-            Err(e) if e.to_string().contains("already exists") => continue,
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    Err("every name tried is taken".into())
-}
-
 /// Creates an empty database file (SQLite or DuckDB) for a new connection. The core never
 /// overwrites an existing file.
 #[tauri::command]
@@ -2969,6 +2939,146 @@ async fn clear_find(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
             .clear_find();
     }
     Ok(())
+}
+
+/// The numbers about a selection of a result (the calc panel): the UI sends the selection's
+/// bounds (rows of the current view and the columns it shows), never cell values, and the
+/// core computes over the stored result. A newer calculation on the same result, or
+/// `cancel_selection_stats`, stops this one (`None`).
+#[tauri::command]
+#[specta::specta]
+async fn selection_stats(
+    result: u32,
+    range: CellRange,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<SelectionStatsItem>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let block = spelaion_core::CellBlock {
+        first_row: range.first_row as usize,
+        rows: range.rows as usize,
+        columns: range.columns.into_iter().map(|c| c as usize).collect(),
+    };
+    tokio::task::spawn_blocking(move || {
+        let read = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let ticket = read.stats_ticket();
+        read.selection_stats(&block, &ticket)
+            .map(|stats| stats.map(SelectionStatsItem::from))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops the selection calculation running on a result (the calc panel's Cancel).
+#[tauri::command]
+#[specta::specta]
+async fn cancel_selection_stats(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(stored) = state.results.get(ResultId(result.into())) {
+        stored
+            .read()
+            .map_err(|_| "result lock poisoned")?
+            .cancel_stats();
+    }
+    Ok(())
+}
+
+/// A table data tab column's statistics (the column header's "Column statistics"): counted by
+/// the server in a new session of the tab's connection, every statement a read inside the
+/// engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
+/// type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
+/// `stats_id` stops it.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn column_stats(
+    source: String,
+    stats_id: u32,
+    table: ColumnStatsTarget,
+    result: u32,
+    column: u32,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<ColumnStatsOutcome> {
+    let (name, logical) = {
+        let stored = state
+            .results
+            .get(ResultId(result.into()))
+            .ok_or("result freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        let meta = stored
+            .schema()
+            .columns
+            .get(column as usize)
+            .ok_or("no such column")?;
+        (meta.name.clone(), meta.logical)
+    };
+    let request = spelaion_core::ColumnStatsRequest {
+        schema: table.schema,
+        table: table.name,
+        column: name,
+        logical,
+        filter: table.filter,
+        sample_rows: spelaion_core::STATS_SAMPLE_ROWS,
+        top: spelaion_core::TOP_VALUES,
+    };
+    // Checked before connecting: a filter that would change the statements never reaches a
+    // new session.
+    {
+        let tab = state.session(&source).await?;
+        spelaion_core::column_stats_sql(tab.session.dialect().as_ref(), &request, false)
+            .map_err(|e| e.to_string())?;
+    }
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, stats_id).await?;
+    // The tab's database (MySQL, SQL Server) or schema, as for exports.
+    let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
+    drop(tab);
+    let outcome = match context {
+        Err(message) => Err(message),
+        Ok(()) => match spelaion_core::column_stats(&open.session, &request, &cancel).await {
+            Ok(stats) => Ok(ColumnStatsOutcome::Done {
+                stats: Box::new(ColumnStatsItem::new(stats, request.sample_rows)),
+            }),
+            Err(spelaion_core::ColumnStatsError::Cancelled) => Ok(ColumnStatsOutcome::Cancelled),
+            Err(e) => Err(e.to_string()),
+        },
+    };
+    close_export_session(&state, stats_id, open).await;
+    outcome
+}
+
+/// Stops a column's statistics while they are counted: the running statement and the rest.
+#[tauri::command]
+#[specta::specta]
+async fn cancel_column_stats(stats_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    let cancel = state
+        .exports
+        .lock()
+        .expect("lock poisoned")
+        .get(&stats_id)
+        .cloned();
+    if let Some(cancel) = cancel {
+        cancel.cancel().await;
+    }
+    Ok(())
+}
+
+/// A table data tab's filter with a condition the core wrote (one of the column statistics'
+/// most frequent values) added with AND. The page's SELECT is checked when it loads.
+#[tauri::command]
+#[specta::specta]
+async fn add_table_condition(
+    session: String,
+    filter: String,
+    condition: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let dialect = dialect_for(&state, &session).await;
+    spelaion_core::add_condition(dialect.as_ref(), &filter, &condition).map_err(|e| e.to_string())
 }
 
 /// "Filter by this value" in a table data tab: the core writes the condition from the typed
@@ -3526,6 +3636,123 @@ async fn count_table_rows(
     Ok(spelaion_core::count_table_rows(&open.session, &schema, &name, &filter).await? as f64)
 }
 
+/// The foreign keys a table data tab can follow: the table's own, then those of other tables
+/// that point to it, from the catalog.
+#[tauri::command]
+#[specta::specta]
+async fn table_keys(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<TableKeyItem>> {
+    let open = state.session(&session).await?;
+    let keys = spelaion_core::table_keys(open.session.connection().as_ref(), &schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(keys.into_iter().map(TableKeyItem::from).collect())
+}
+
+/// The foreign keys of other tables that point to `schema.table` (the explorer's and the table
+/// details' "References"), from the catalog.
+#[tauri::command]
+#[specta::specta]
+async fn referencing_keys(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<TableKeyItem>> {
+    let open = state.session(&session).await?;
+    let keys = open
+        .session
+        .connection()
+        .list_referencing_keys(&schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(keys
+        .into_iter()
+        .map(|key| TableKeyItem {
+            direction: KeyDirectionItem::Incoming,
+            name: key.name,
+            schema: key.schema,
+            table: key.table,
+            columns: key.referenced_columns,
+            other_columns: key.columns,
+        })
+        .collect())
+}
+
+/// Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
+/// of `schema.table`): the core finds the key in the catalog again, reads the row's typed
+/// values and writes the filter of the table data tab it leads to.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn follow_key(
+    session: String,
+    result: u32,
+    row: u32,
+    schema: String,
+    table: String,
+    key: KeyRefItem,
+    state: State<'_, AppState>,
+) -> CmdResult<KeyTargetItem> {
+    let open = state.session(&session).await?;
+    let key = spelaion_core::find_key(
+        open.session.connection().as_ref(),
+        &schema,
+        &table,
+        &key.into(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    spelaion_core::follow(open.session.dialect().as_ref(), &stored, row as usize, &key)
+        .map(KeyTargetItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// The references panel of a table data tab: every foreign key of the row at `row` (the
+/// table's own and those that point to it), each with up to `limit` of the rows it leads to,
+/// read in turn on the tab's session.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn row_references(
+    session: String,
+    result: u32,
+    row: u32,
+    schema: String,
+    table: String,
+    limit: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<RowReferenceItem>> {
+    let open = state.session(&session).await?;
+    let keys = spelaion_core::table_keys(open.session.connection().as_ref(), &schema, &table)
+        .await
+        .map_err(|e| e.to_string())?;
+    let targets = {
+        let stored = state
+            .results
+            .get(ResultId(result.into()))
+            .ok_or("result freed")?;
+        let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        spelaion_core::reference_targets(
+            open.session.dialect().as_ref(),
+            &stored,
+            row as usize,
+            keys,
+        )
+    };
+    let references = spelaion_core::read_references(&open.session, targets, u64::from(limit)).await;
+    Ok(references.into_iter().map(RowReferenceItem::from).collect())
+}
+
 /// An identifier quoted for the session's engine (for an ORDER BY the UI writes).
 #[tauri::command]
 #[specta::specta]
@@ -3883,6 +4110,16 @@ fn raw_handler(invoke: tauri::ipc::Invoke<tauri::Wry>) -> bool {
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![
+            plans::explain_preflight,
+            plans::plan_capabilities,
+            plans::explain_query,
+            plans::open_plan_file,
+            plans::startup_plan_path,
+            plans::plan_page,
+            plans::plan_statistics,
+            plans::plan_raw_window,
+            plans::release_plan,
+            plans::export_plan,
             workspace_info,
             mcp::mcp_clients,
             mcp::mcp_plan_install,
@@ -3896,6 +4133,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             mcp::audit_sessions,
             mcp::export_audit,
             mcp::clear_audit,
+            import::import_preview,
+            import::import_plan,
+            import::run_import,
+            import::cancel_import,
             get_language,
             set_language,
             get_theme,
@@ -3904,6 +4145,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_update_check,
             get_explorer_preferences,
             set_explorer_preferences,
+            get_editor_preferences,
+            set_editor_preferences,
             get_grid_preferences,
             set_grid_preferences,
             get_script_preferences,
@@ -3932,6 +4175,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             delete_connection,
             change_connection_engine,
             duplicate_connection,
+            move_connection,
             copy_connection,
             paste_connection,
             get_connection_name_pattern,
@@ -3950,7 +4194,16 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             find_matches,
             find_step,
             clear_find,
+            selection_stats,
+            cancel_selection_stats,
+            column_stats,
+            cancel_column_stats,
+            add_table_condition,
             table_filter_condition,
+            table_keys,
+            referencing_keys,
+            follow_key,
+            row_references,
             export_result,
             export_rerun_check,
             export_query,
@@ -3988,12 +4241,12 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             script_params,
             bind_params,
             parse_connection_url,
-            scan_dbeaver,
+            connection_import::scan_connections,
             kube_contexts,
             kube_namespaces,
             kube_names,
             kube_ports,
-            import_dbeaver,
+            connection_import::import_connections,
             open_workspace,
             trust_workspace,
             accept_change,
@@ -4006,6 +4259,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_tunnel_ports,
             list_connections,
             list_history,
+            library::history_page,
+            library::history_databases,
+            library::pin_history,
+            library::export_history,
+            library::snippet_page,
+            library::snippet_folders,
+            library::create_snippet_folder,
+            library::move_snippet,
             set_history_enabled,
             connect,
             connect_from_session,
@@ -4099,8 +4360,27 @@ pub fn run() {
         eprintln!("could not make the personal folder private: {e}");
     }
     // Initial folder: command-line argument or the last one opened.
-    let workspace = std::env::args()
-        .nth(1)
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let startup_plan = arguments
+        .windows(2)
+        .find(|args| args[0] == "--plan")
+        .map(|args| args[1].clone())
+        .or_else(|| {
+            arguments
+                .first()
+                .filter(|path| {
+                    Path::new(path).is_file()
+                        && matches!(
+                            Path::new(path).extension().and_then(|s| s.to_str()),
+                            Some("json" | "plan" | "sqlplan" | "xml")
+                        )
+                })
+                .cloned()
+        });
+    let workspace = arguments
+        .first()
+        .filter(|arg| !arg.starts_with('-') && Some(*arg) != startup_plan.as_ref())
+        .cloned()
         .map(PathBuf::from)
         .or_else(|| {
             std::fs::read_to_string(last_workspace_file(&user_dir))
@@ -4121,6 +4401,8 @@ pub fn run() {
         engines: Engines::builtin(),
         tunnels: Arc::new(TunnelPool::new()),
         results: Arc::new(ResultStore::new()),
+        plans: Arc::new(spelaion_core::plan::PlanStore::new()),
+        startup_plan: std::sync::Mutex::new(startup_plan),
         sessions: Mutex::new(HashMap::new()),
         history,
         tabs,
@@ -4128,6 +4410,7 @@ pub fn run() {
         quitting: AtomicBool::new(false),
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
+        imports: std::sync::Mutex::new(HashMap::new()),
     };
 
     let typed = builder.invoke_handler();

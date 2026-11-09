@@ -141,11 +141,41 @@ function AppearanceSettings() {
  *  only chooses whether their connections connect again (never run anything). */
 function EditorSettings() {
   const { t } = useTranslation("settings");
+  const preferences = usePreferences((s) => s.editor);
+  const setEditor = usePreferences((s) => s.setEditor);
   const reconnect = usePreferences((s) => s.reconnectOnStart);
   const busy = usePreferences((s) => s.loading || s.saving !== null);
   const setReconnect = usePreferences((s) => s.setReconnectOnStart);
   return (
     <>
+      <fieldset disabled={busy} className="settings-choice">
+        <legend>{t("editor.display")}</legend>
+        <label className="field"><span>{t("editor.font")}</span>
+          <select name="editorFont" value={preferences.font} onChange={(e) => void setEditor({ ...preferences, font: e.target.value })}>
+            {["system", "Consolas", "Cascadia Code", "Courier New"].map((font) => <option key={font} value={font}>{font === "system" ? t("editor.systemFont") : font}</option>)}
+          </select>
+        </label>
+        <div className="form-pair">
+          {(["fontSize", "lineHeight", "tabSize"] as const).map((key) => <label className="field" key={key}><span>{t(`editor.${key}`)}</span>
+            <select name={`editor-${key}`} value={preferences[key]} onChange={(e) => {
+              const value = Number(e.target.value);
+              void setEditor({ ...preferences, [key]: value, ...(key === "fontSize" && value > preferences.lineHeight ? { lineHeight: [14, 16, 18, 20, 22, 24, 28, 32, 40, 48].find((height) => height >= value)! } : {}) });
+            }}>
+              {(key === "tabSize" ? [1, 2, 3, 4, 6, 8] : key === "fontSize" ? [10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32] : [14, 16, 18, 20, 22, 24, 28, 32, 40, 48].filter((n) => n >= preferences.fontSize)).map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>)}
+        </div>
+        {(["lineNumbers", "wordWrap"] as const).map((key) => <label className="check" key={key}><input type="checkbox" name={`editor-${key}`} checked={preferences[key]} onChange={(e) => void setEditor({ ...preferences, [key]: e.target.checked })} />{t(`editor.${key}`)}</label>)}
+      </fieldset>
+      <fieldset disabled={busy} className="settings-choice">
+        <legend>{t("editor.formatter")}</legend>
+        {(["keywordCase", "indent", "commaPosition"] as const).map((key) => <label className="field" key={key}><span>{t(`editor.${key}`)}</span>
+          <select name={`editor-${key}`} value={preferences[key]} onChange={(e) => void setEditor({ ...preferences, [key]: key === "indent" ? Number(e.target.value) : e.target.value })}>
+            {(key === "indent" ? [1, 2, 3, 4, 6, 8] : key === "keywordCase" ? ["preserve", "upper", "lower"] : ["trailing", "leading"]).map((value) => <option key={value} value={value}>{typeof value === "number" ? value : t(`editor.${value}`)}</option>)}
+          </select>
+        </label>)}
+      </fieldset>
+      <p className="muted small">{t("editor.snippets")}</p>
       <p className="muted small">{t("editor.restoreHint")}</p>
       <label className="check">
         <input type="checkbox" name="reconnectOnStart" checked={reconnect} disabled={busy} onChange={(e) => void setReconnect(e.target.checked)} />
@@ -157,8 +187,12 @@ function EditorSettings() {
   );
 }
 
-/** How scripts run from the editor (ADR-035): what a run does when a statement fails, and the
- *  opt-in notification when a long run finishes in the background. */
+/** Longest pause before "Run anyway" the core accepts (`ScriptPreferences::MAX_CONFIRM_DELAY`). */
+const MAX_CONFIRM_DELAY = 10;
+
+/** How scripts run from the editor (ADR-035): what a run does when a statement fails, the pause
+ *  before "Run anyway" in a risky statement's confirmation, and the opt-in notification when a
+ *  long run finishes in the background. */
 function ScriptSettings() {
   const { t } = useTranslation("settings");
   const script = usePreferences((s) => s.script);
@@ -166,6 +200,16 @@ function ScriptSettings() {
   const setScript = usePreferences((s) => s.setScript);
   const [after, setAfter] = useState(String(script.notifyAfterSeconds));
   useEffect(() => setAfter(String(script.notifyAfterSeconds)), [script.notifyAfterSeconds]);
+  const [delay, setDelay] = useState(String(script.confirmDelaySeconds));
+  useEffect(() => setDelay(String(script.confirmDelaySeconds)), [script.confirmDelaySeconds]);
+  const saveDelay = () => {
+    const seconds = Math.trunc(Number(delay));
+    if (delay.trim() !== "" && Number.isFinite(seconds) && seconds >= 0 && seconds <= MAX_CONFIRM_DELAY) {
+      if (seconds !== script.confirmDelaySeconds) void setScript({ ...script, confirmDelaySeconds: seconds });
+    } else {
+      setDelay(String(script.confirmDelaySeconds));
+    }
+  };
   const saveAfter = () => {
     const seconds = Math.trunc(Number(after));
     if (Number.isFinite(seconds) && seconds >= 1 && seconds <= 86400) {
@@ -186,6 +230,21 @@ function ScriptSettings() {
         ))}
       </fieldset>
       <p className="muted small">{t("scripts.onErrorHint")}</p>
+      <label className="field port">
+        <span>{t("scripts.confirmDelay")}</span>
+        <input
+          type="number"
+          name="scriptConfirmDelay"
+          min={0}
+          max={MAX_CONFIRM_DELAY}
+          value={delay}
+          disabled={busy}
+          onChange={(e) => setDelay(e.target.value)}
+          onBlur={saveDelay}
+          onKeyDown={(e) => e.key === "Enter" && saveDelay()}
+        />
+      </label>
+      <p className="muted small">{t("scripts.confirmDelayHint")}</p>
       <fieldset className="settings-choice" disabled={busy}>
         <legend>{t("scripts.notifications")}</legend>
         <label className="check">

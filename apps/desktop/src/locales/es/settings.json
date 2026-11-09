@@ -108,7 +108,7 @@
   "history": {
     "title": "Historial",
     "stored": "Cada consulta que ejecutas desde la app se guarda en este equipo con su conexión, hora, duración, número de filas y error. Abrir una consulta guardada nunca la ejecuta.",
-    "perConnection": "El guardado se configura por conexión: abre el menú «⋯» junto a la conexión en la barra lateral. Desactívalo antes de ejecutar SQL con contraseñas u otros secretos. Al desactivarlo se conservan las consultas ya guardadas.",
+    "perConnection": "El guardado se configura por conexión: haz clic derecho en una conexión del explorador, elige Editar… y busca en Opciones. Desactívalo antes de ejecutar SQL con contraseñas u otros secretos. Al desactivarlo se conservan las consultas ya guardadas.",
     "audit": "Este historial es de la app de escritorio. Las consultas de los agentes de IA (spelaiondb mcp) van a un registro de auditoría aparte.",
     "open": "Abrir el historial de consultas"
   },
@@ -158,12 +158,32 @@
     "notifications": "Notificaciones",
     "notify": "Avisarme cuando termine una ejecución larga con la aplicación en segundo plano",
     "notifyAfter": "Solo ejecuciones de más de (segundos)",
-    "notifyHint": "La notificación dice qué pestaña terminó y si algo falló; nunca incluye SQL ni datos."
+    "notifyHint": "La notificación dice qué pestaña terminó y si algo falló; nunca incluye SQL ni datos.",
+    "confirmDelay": "Pausa antes de “Ejecutar de todos modos” (segundos)",
+    "confirmDelayHint": "En la confirmación de una sentencia peligrosa (DROP, DELETE sin WHERE, cambios de datos en Producción…), “Ejecutar de todos modos” sigue desactivado este tiempo, para no pulsarlo por reflejo. Con 0 se activa enseguida. No cambia qué sentencias se confirman."
   },
   "editor": {
     "title": "Editor",
     "restoreHint": "Las pestañas abiertas vuelven tras reiniciar con su texto y su conexión, desconectadas: consolas y archivos, incluidos los cambios sin guardar. Sus resultados nunca se guardan.",
     "reconnect": "Volver a conectar las últimas conexiones al arrancar",
-    "reconnectHint": "Solo conecta (puede pedir una contraseña); nada se ejecuta solo."
+    "reconnectHint": "Solo conecta (puede pedir una contraseña); nada se ejecuta solo.",
+    "display": "Visualización",
+    "font": "Fuente",
+    "systemFont": "Monoespaciada del sistema",
+    "fontSize": "Tamaño de fuente (px)",
+    "lineHeight": "Altura de línea (px)",
+    "tabSize": "Tamaño de tabulación",
+    "lineNumbers": "Mostrar números de línea",
+    "wordWrap": "Ajustar líneas largas",
+    "formatter": "Formato SQL",
+    "keywordCase": "Mayúsculas de palabras clave",
+    "indent": "Espacios de sangría",
+    "commaPosition": "Posición de comas",
+    "preserve": "Tal como se escribe",
+    "upper": "Mayúsculas",
+    "lower": "Minúsculas",
+    "trailing": "Final de línea",
+    "leading": "Inicio de línea",
+    "snippets": "Escribe sel, ins o upd y pulsa Tab para expandir un fragmento. Tab avanza al siguiente campo; Mayús+Tab vuelve atrás."
   }
 }

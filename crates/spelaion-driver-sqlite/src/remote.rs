@@ -6,9 +6,11 @@
 //! (`1`, `1.5`, `'text'`, `X'00ff'`, `NULL`), which keeps SQLite's storage classes; columns
 //! get their types as in the local driver, from the first batch (ADR-006). `.changes on`
 //! gives the rows affected, and `.timeout 5000` waits for another writer's lock like the
-//! local driver. Only statements from the core's splitter are sent: one that
-//! starts with `.` (a command of the `sqlite3` shell) or is not complete is refused, so user
-//! text never reaches the shell as a command.
+//! local driver. `.explain off` keeps `EXPLAIN` and `EXPLAIN QUERY PLAN` in quote mode too:
+//! otherwise the shell draws them as a table or a tree, which are not values. Only
+//! statements from the core's splitter are sent: one that starts with `.` (a command of the
+//! `sqlite3` shell) or is not complete is refused, so user text never reaches the shell as a
+//! command.
 
 use std::sync::Arc;
 
@@ -17,8 +19,8 @@ use async_trait::async_trait;
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, Connection, Dialect, DriverError, EventStream,
-    ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, Remote, RemoteControl,
-    RemoteProcess, Result, ResultSchema, SchemaInfo, SchemaObject, TableInfo,
+    ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey, Remote,
+    RemoteControl, RemoteProcess, Result, ResultSchema, SchemaInfo, SchemaObject, TableInfo,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -47,8 +49,8 @@ pub(crate) fn command_line(program: &str, path: &str, read_only: bool) -> Result
     let path = shell_word(path);
     Ok(format!(
         "[ -f {path} ] || {{ echo 'spelaion: no such file on the server'; exit 1; }}; \
-         exec {} -safe -batch -header {}-cmd '.mode quote' -cmd '.changes on' \
-         -cmd '.timeout 5000' {path} 2>&1",
+         exec {} -safe -batch -header {}-cmd '.mode quote' -cmd '.explain off' \
+         -cmd '.changes on' -cmd '.timeout 5000' {path} 2>&1",
         shell_word(program),
         if read_only { "-readonly " } else { "" },
     ))
@@ -654,6 +656,8 @@ pub async fn connect(remote: &Remote, path: &str, read_only: bool) -> Result<Box
             explain: true,
             editable_results: false,
             schemas: true,
+            // Values cannot be bound through the server's sqlite3 shell (ADR-038).
+            insert_rows: false,
         },
     }))
 }
@@ -766,6 +770,14 @@ impl Connection for RemoteConnection {
             );
         }
         Ok(table)
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        let rows = self
+            .rows(catalog::referencing_keys_sql(schema, name))
+            .await?;
+        let primary_key = catalog::names(&self.rows(catalog::primary_key_sql(schema, name)).await?);
+        Ok(catalog::referencing_keys(schema, &rows, &primary_key))
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
@@ -899,7 +911,7 @@ mod tests {
     fn the_command_line_quotes_what_it_is_given() {
         assert_eq!(
             command_line("sqlite3", "/data/it's.db", true).unwrap(),
-            r"[ -f '/data/it'\''s.db' ] || { echo 'spelaion: no such file on the server'; exit 1; }; exec 'sqlite3' -safe -batch -header -readonly -cmd '.mode quote' -cmd '.changes on' -cmd '.timeout 5000' '/data/it'\''s.db' 2>&1"
+            r"[ -f '/data/it'\''s.db' ] || { echo 'spelaion: no such file on the server'; exit 1; }; exec 'sqlite3' -safe -batch -header -readonly -cmd '.mode quote' -cmd '.explain off' -cmd '.changes on' -cmd '.timeout 5000' '/data/it'\''s.db' 2>&1"
         );
         assert!(command_line("sqlite3", "-x.db", false).is_err());
         assert!(command_line("sqlite3", "", false).is_err());

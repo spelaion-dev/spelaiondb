@@ -66,9 +66,9 @@
   "tunnel": "Túnel {{name}}",
   "typeTooltip": "Tipo: {{name}}",
   "filtered": "filtrado",
-  "filteredHint": "El filtro de esta conexión oculta algunos esquemas, objetos o columnas (⋯ → Configurar filtros)",
+  "filteredHint": "El filtro de esta conexión oculta algunos esquemas, objetos o columnas (clic derecho → Configurar filtros…)",
   "configureFilter": "Configurar filtro…",
-  "configureSchemaFilter": "Configurar filtro de esquemas…",
+  "connectionMenu": "Acciones de {{name}}",
   "hideName": "Ocultar {{name}}",
   "showOnlyName": "Mostrar solo {{name}}",
   "hideNames": "Ocultar los {{count}} elegidos",
@@ -77,9 +77,11 @@
   "loadingDetails": "Cargando detalles de la tabla…",
   "connecting": "Conectando…",
   "quickFilter": "Filtrar el explorador",
-  "quickFilterHint": "Filtrar el explorador por nombre o etiqueta (Ctrl+Mayús+F)",
-  "quickFilterPlaceholder": "Filtrar por nombre",
+  "quickFilterHint": "Buscar conexiones por nombre, etiqueta, tipo o servidor, y filtrar lo cargado (Ctrl+Mayús+F)",
+  "quickFilterPlaceholder": "Nombre, etiqueta, tipo o servidor",
   "quickFilterNothing": "Ninguna conexión, esquema u objeto cargado coincide con el filtro.",
+  "moveFailed": "No se pudo mover {{name}}: {{detail}}",
+  "moveToNoFolder": "Sin carpeta",
   "connectedOnly": "Mostrar solo las conexiones conectadas",
   "noneConnected": "Todavía no hay ninguna conexión conectada.",
   "showAllConnections": "Mostrar todas",
@@ -144,6 +146,7 @@
     "columns": "Columnas",
     "constraints": "Restricciones",
     "foreignKeys": "Claves foráneas",
+    "references": "Referencias",
     "indexes": "Índices"
   },
   "tableDetails": {
@@ -171,7 +174,10 @@
     "actions": "Acciones",
     "count_one": "{{count}} elemento",
     "count_other": "{{count}} elementos",
-    "close": "Cerrar"
+    "close": "Cerrar",
+    "referencingTable": "Tabla que referencia",
+    "openData": "Abrir datos",
+    "referencesHint": "Claves foráneas de otras tablas que apuntan a {{table}}"
   },
   "newTableElement": {
     "title": "Añadir a {{section}} de {{table}}",
@@ -239,7 +245,9 @@
     "more_other": "…y {{count}} sentencias más",
     "runConfirmed": "Ejecutar",
     "cancel": "Cancelar",
-    "run": "Ejecutar de todos modos"
+    "run": "Ejecutar de todos modos",
+    "runIn": "Ejecutar de todos modos ({{seconds}})",
+    "runInHint": "Lee antes las sentencias: “Ejecutar de todos modos” se activa tras la pausa elegida en Ajustes → Scripts."
   },
   "sql": {
     "preview": "Ver filas",
@@ -374,6 +382,8 @@
     "proceedRunning": "Cerrar y cancelar"
   },
   "exportTable": "Exportar…",
+  "importData": "Importar datos…",
+  "importNewTable": "Importar datos en una tabla nueva…",
   "exportTables_one": "Exportar {{formattedCount}} tabla…",
   "exportTables_other": "Exportar {{formattedCount}} tablas…"
 }

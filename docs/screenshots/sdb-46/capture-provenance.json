@@ -1,0 +1,146 @@
+{
+  "capturedAtUtc": "2026-11-08T19:00:09.465Z",
+  "checkoutCommit": "87b6ae00c5b0630187801e07ac8713903ea79dfc",
+  "executableSha256": "5e91bd2cf35ae52e15b1f2e5ab3071f942ef6b35d594c900952debaa0953b506",
+  "query": "query.sql",
+  "setup": "crates/spelaion-core/tests/fixtures/plans/postgres/setup.sql",
+  "sessionSetup": "plan_fixture search_path; an intentionally missing setup relation is skipped and shown until dismissed",
+  "screenshots": [
+    {
+      "name": "after-analyze-warning-light-1400.png",
+      "theme": "light",
+      "width": 1400,
+      "height": 900,
+      "sha256": "a54792cd52d00b4aa5fde4189ccb645d77fe3bf0858f7325cd8c790805e0f151"
+    },
+    {
+      "name": "after-plan-overview-light-1400.png",
+      "theme": "light",
+      "width": 1400,
+      "height": 900,
+      "sha256": "c60499ebe4868b5562725d769abbcbe4358babcaa3c3a3e6b9853ea8021f9c1a"
+    },
+    {
+      "name": "after-plan-tree-light-1400.png",
+      "theme": "light",
+      "width": 1400,
+      "height": 900,
+      "sha256": "3c9a210489c09bc3f4961da99be39db6cd00aedc43f417b04753e8a69b534292"
+    },
+    {
+      "name": "after-plan-graph-light-1400.png",
+      "theme": "light",
+      "width": 1400,
+      "height": 900,
+      "sha256": "8055e21ec5305d67588cce1d9dd15713620527d3274d51ca2003dd1161595c12"
+    },
+    {
+      "name": "after-plan-raw-light-1400.png",
+      "theme": "light",
+      "width": 1400,
+      "height": 900,
+      "sha256": "5e3583ce611da0ebc1e39b9eeb9a2a5260703c650e54ca66677f497ba27cc402"
+    },
+    {
+      "name": "after-plan-overview-light-900.png",
+      "theme": "light",
+      "width": 900,
+      "height": 600,
+      "sha256": "cb57c738ceaec41afc960402cf0b9a43f0fc6d7ce6bb591a50327d36a2c458dc"
+    },
+    {
+      "name": "after-plan-tree-light-900.png",
+      "theme": "light",
+      "width": 900,
+      "height": 600,
+      "sha256": "753692d18d0d18d405e9f79653161be2fd8760e1d4d16c8068f95453d069c21c"
+    },
+    {
+      "name": "after-plan-graph-light-900.png",
+      "theme": "light",
+      "width": 900,
+      "height": 600,
+      "sha256": "07eed53c195830247cfc1d4a95ee1696b68b1d2818f438bb87709df50df56b7b"
+    },
+    {
+      "name": "after-plan-raw-light-900.png",
+      "theme": "light",
+      "width": 900,
+      "height": 600,
+      "sha256": "bf3e7088c2125f3ebec94b5656364787ff24afe46466dab7af0007ca9b2251ff"
+    },
+    {
+      "name": "after-plan-overview-dark-1400.png",
+      "theme": "dark",
+      "width": 1400,
+      "height": 900,
+      "sha256": "ca46f1a6ec390a964b8e7400612395b4c603eca7aebcd618722cfb5079673317"
+    },
+    {
+      "name": "after-plan-tree-dark-1400.png",
+      "theme": "dark",
+      "width": 1400,
+      "height": 900,
+      "sha256": "1ab8a8845851e897932495cee762340a683f1fd56efebdd68121b031877e65e8"
+    },
+    {
+      "name": "after-plan-graph-dark-1400.png",
+      "theme": "dark",
+      "width": 1400,
+      "height": 900,
+      "sha256": "0042fb5a7a5c8a712f2260b374ff7dcb0b5a572e71a01cccf9c1bc88d43cc588"
+    },
+    {
+      "name": "after-plan-raw-dark-1400.png",
+      "theme": "dark",
+      "width": 1400,
+      "height": 900,
+      "sha256": "e947b2525141787be4f713b22d0b5bad6a7547476bccd614ec2fe3b3ba6d9833"
+    },
+    {
+      "name": "after-plan-overview-dark-900.png",
+      "theme": "dark",
+      "width": 900,
+      "height": 600,
+      "sha256": "2e7659bc26c06fb631afd67b58645cb7438ba65a88b18ae30d7e9faa83d7160c"
+    },
+    {
+      "name": "after-plan-tree-dark-900.png",
+      "theme": "dark",
+      "width": 900,
+      "height": 600,
+      "sha256": "79e56d05b64efd53b7fa2eaf34ed4ee465f6c58e0c4cea78022164b866e9a5a7"
+    },
+    {
+      "name": "after-plan-graph-dark-900.png",
+      "theme": "dark",
+      "width": 900,
+      "height": 600,
+      "sha256": "69aa7a48bb114a8ff3df4b1137d11c6abf30e2906007ad5fd0cd433c47ca94aa"
+    },
+    {
+      "name": "after-plan-raw-dark-900.png",
+      "theme": "dark",
+      "width": 900,
+      "height": 600,
+      "sha256": "5b357b7acdad43e020be63ec19578647a6ce37810dce4e3ab1a91ae79e50cbaa"
+    },
+    {
+      "name": "after-findings-dark-900.png",
+      "theme": "dark",
+      "width": 900,
+      "height": 600,
+      "sha256": "9397acaa0f2bd084cd8af92a3be2e2e9bbc3e99cdf21fca22dfec054e3e61288"
+    },
+    {
+      "name": "after-readonly-dark-1400.png",
+      "theme": "dark",
+      "width": 1400,
+      "height": 900,
+      "sha256": "816c4cf90f679e9bbe677b4680c94f51c59113b93d934cdbdc2bd6fb510a12e9"
+    }
+  ],
+  "success": true,
+  "databaseDropped": true,
+  "profileRemoved": true
+}

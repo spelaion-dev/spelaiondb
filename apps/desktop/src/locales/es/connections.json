@@ -25,7 +25,10 @@
     "statements": "Sentencias",
     "general": "General",
     "kubernetes": "Port-forward de Kubernetes",
-    "about": "Sobre esta conexión"
+    "about": "Sobre esta conexión",
+    "session": "Valores por defecto",
+    "setup": "Sentencias de inicio",
+    "onThisComputer": "En este equipo"
   },
   "fields": {
     "name": "Nombre",
@@ -67,6 +70,10 @@
     "tunnelHint": "Se llega a la base de datos desde el último salto SSH del perfil, o a través de su proxy si no tiene saltos. Los perfiles se comparten: Ajustes → Red los muestra todos.",
     "passwordOther": "Referencia de la contraseña",
     "fixedLocationHint": "Al editarla, la conexión se queda en el mismo fichero y carpeta.",
+    "history": "Guardar historial de consultas",
+    "historyHint": "Guarda en tu historial local el SQL que ejecutas en esta conexión. Desactívalo antes de ejecutar SQL con contraseñas u otros secretos; el historial anterior se conserva. Solo tú ves este ajuste: se guarda en este equipo, nunca en el fichero de la conexión.",
+    "historyBusy": "El ajuste del historial de consultas todavía se está cambiando. Inténtalo de nuevo en un momento.",
+    "historyNotSaved": "La conexión se ha guardado, pero no se ha podido cambiar su ajuste del historial de consultas: {{error}}",
     "serverFile": "Fichero en el servidor",
     "serverFileHint": "Su ruta en el último salto del túnel. SpelaionDB ejecuta el sqlite3 de ese servidor (3.37 o posterior, en su modo seguro): el fichero no se copia nunca.",
     "useTunnelForFile": "El fichero está en un servidor: abrirlo allí a través de un túnel SSH",
@@ -105,7 +112,18 @@
     "tagsPlaceholder": "facturación, eu, informes…",
     "tagsHint": "Etiquetas cortas para encontrar la conexión: pulsa Intro o escribe una coma después de cada una. Haz clic en una etiqueta del explorador para ver solo las conexiones que la tienen.",
     "tagsFull": "Como mucho {{count}} etiquetas",
-    "removeTag": "Quitar la etiqueta {{tag}}"
+    "removeTag": "Quitar la etiqueta {{tag}}",
+    "defaultSchema": "Esquema por defecto",
+    "defaultDatabase": "Base de datos por defecto",
+    "defaultSchemaPlaceholder": "El del servidor",
+    "defaultSchemaHint": "Las sesiones nuevas buscan primero en este esquema los nombres sin esquema (y luego en public). Cada pestaña puede cambiar a otro.",
+    "defaultDatabaseHint": "Las sesiones nuevas empiezan en esta base de datos, como con USE. Cada pestaña puede cambiar a otra.",
+    "isolation": "Nivel de aislamiento",
+    "isolationHint": "El nivel de aislamiento de cada transacción en las sesiones nuevas. El auto-commit y el commit manual los decide el tipo de conexión.",
+    "sessionSetup": "Ejecutar al abrir una sesión",
+    "ignoreSetupErrors": "Ignorar errores en estas sentencias",
+    "sessionSetupHint": "Se ejecutan en cada sesión nueva, antes que nada, también tras reconectar. No son tus consultas: no van al historial y no se vuelve a ejecutar nada de lo que ejecutaste.",
+    "sessionSetupRestricted": "En esta conexión solo pueden leer y cambiar ajustes de la sesión (search path, zona horaria, rol…): una sentencia que escribe impide abrir la sesión."
   },
   "tls": {
     "disable": "Desactivado",
@@ -192,7 +210,8 @@
     "ssl": "SSL",
     "ssh": "SSH",
     "kubernetes": "Kubernetes",
-    "options": "Opciones"
+    "options": "Opciones",
+    "session": "Sesión"
   },
   "auth": {
     "password": "Usuario y contraseña",
@@ -303,25 +322,52 @@
     "use": "Usar URL",
     "unsupported": "La aplicación aún no tiene driver para esa base de datos."
   },
-  "dbeaver": {
+  "importer": {
     "or": "O trae tus conexiones de otro cliente:",
-    "button": "Importar de DBeaver…",
-    "title": "Importar de DBeaver",
+    "button": "Importar de {{client}}…",
+    "title": "Importar de {{client}}",
     "from": "Desde",
-    "defaultFolder": "El espacio de trabajo de DBeaver",
+    "defaultFolder": "Las carpetas de {{client}}",
     "chooseFolder": "Elegir carpeta…",
-    "reading": "Leyendo las conexiones de DBeaver…",
+    "registrySource": "Registro de Windows",
+    "windowsRegistry": "Usar el registro de Windows",
+    "chooseFile": "Elegir fichero exportado…",
+    "exportFiles": "Exportaciones de {{client}}",
+    "allFiles": "Todos los ficheros",
+    "encrypted": "Este fichero está cifrado. Escribe la contraseña con la que se exportó en {{client}}.",
+    "filePassword": "Contraseña de la exportación",
+    "wrongPassword": "Esa contraseña no abre este fichero. Revísala y vuelve a probar.",
+    "openFile": "Abrir",
+    "reading": "Leyendo las conexiones de {{client}}…",
     "none": "No hay conexiones ahí.",
-    "list": "Conexiones de DBeaver",
+    "list": "Conexiones de {{client}}",
     "passwordSaved": "contraseña guardada",
-    "savePasswords": "Guardar en el llavero del sistema las contraseñas que DBeaver tenía guardadas",
+    "readOnly": "solo lectura",
+    "exists": "Ya está en SpelaionDB como {{name}}",
+    "duplicateAction": "Qué hacer con {{name}}",
+    "skip": "No importarla",
+    "importCopy": "Importarla como copia",
+    "replace": "Sustituir {{name}}",
+    "unmapped_one": "{{count}} ajuste no se importa",
+    "unmapped_other": "{{count}} ajustes no se importan",
+    "folder": "Carpeta",
+    "folderField": "Ponerlas en",
+    "topLevel": "El nivel superior",
+    "keepFolders": "Mantener dentro las carpetas de {{client}}",
+    "passwords": "Contraseñas",
+    "savePasswords": "Guardar en el llavero del sistema las contraseñas que {{client}} tenía guardadas",
     "passwordsHint": "Si no, SpelaionDB las pide al conectar. Las contraseñas nunca se escriben en los ficheros de conexión. Los túneles SSH y los proxies SOCKS también se importan, como perfiles de red.",
     "import_one": "Importar {{count}} conexión",
     "import_other": "Importar {{count}} conexiones",
+    "importing": "Importando…",
     "imported_one": "Importada {{count}} conexión.",
     "imported_other": "Importadas {{count}} conexiones.",
+    "replacedCount_one": "Sustituida {{count}} conexión.",
+    "replacedCount_other": "Sustituidas {{count}} conexiones.",
+    "replacedTag": "sustituida",
     "tunnels_one": "Creado {{count}} perfil de red.",
     "tunnels_other": "Creados {{count}} perfiles de red.",
+    "passwordErrors": "Importadas sin su contraseña guardada (se pide al conectar):",
     "skipped": "No importadas:",
     "close": "Hecho"
   },
@@ -394,6 +440,17 @@
     "pastedWithout": "«{{name}}» se ha pegado como conexión personal, ya guardada. Su contraseña se pide al conectar. No se ha tomado del portapapeles: {{fields}}. Revísala o cierra.",
     "clipboardUnavailable": "No se ha podido leer el portapapeles: selecciona una conexión y pulsa Ctrl+V."
   },
+  "move": {
+    "menu": "Mover a carpeta…",
+    "title": "Mover {{name}} a una carpeta",
+    "personalHint": "Su archivo se mueve dentro de tus conexiones personales. Su contraseña guardada, sus filtros y sus marcadores van con él.",
+    "projectHint": "Su archivo se mueve dentro de .spelaion/connections/ del repositorio: tu equipo verá el cambio cuando lo confirmes en git. Su contraseña guardada, sus filtros y sus marcadores van con él.",
+    "noFolder": "Sin carpeta",
+    "folderHint": "Carpetas anidadas con /, como prod/eu. Vacío para ninguna carpeta.",
+    "confirm": "Mover",
+    "moving": "Moviendo…",
+    "inUse": "Desconecta las pestañas que usan {{name}} antes de moverla."
+  },
   "engineChange": {
     "title": "Cambio de motor",
     "summary": "Motor: {{from}} → {{to}}. No se guarda nada hasta que guardes.",
@@ -403,5 +460,13 @@
     "required": "Falta rellenar: {{fields}}.",
     "none": "(nada)",
     "hint": "La conexión conserva su archivo, filtros, marcadores e historial. Al guardar se cierran sus sesiones abiertas: son del motor anterior, y sus pestañas vuelven a conectar al ejecutar."
+  },
+  "isolation": {
+    "default": "El del servidor",
+    "read-uncommitted": "Read uncommitted",
+    "read-committed": "Read committed",
+    "repeatable-read": "Repeatable read",
+    "serializable": "Serializable",
+    "snapshot": "Snapshot"
   }
 }

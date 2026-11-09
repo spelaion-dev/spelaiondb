@@ -614,6 +614,73 @@ impl From<ExplorerPreferencesItem> for spelaion_core::ExplorerPreferences {
     }
 }
 
+/// Personal editor preferences; all fields checked by the core store.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorPreferencesItem {
+    pub font: String,
+    pub font_size: u8,
+    pub line_height: u8,
+    pub tab_size: u8,
+    pub line_numbers: bool,
+    pub word_wrap: bool,
+    pub keyword_case: String,
+    pub indent: u8,
+    pub comma_position: String,
+}
+impl From<spelaion_core::EditorPreferences> for EditorPreferencesItem {
+    fn from(p: spelaion_core::EditorPreferences) -> Self {
+        let spelaion_core::EditorPreferences {
+            font,
+            font_size,
+            line_height,
+            tab_size,
+            line_numbers,
+            word_wrap,
+            keyword_case,
+            indent,
+            comma_position,
+        } = p;
+        Self {
+            font,
+            font_size,
+            line_height,
+            tab_size,
+            line_numbers,
+            word_wrap,
+            keyword_case,
+            indent,
+            comma_position,
+        }
+    }
+}
+impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
+    fn from(p: EditorPreferencesItem) -> Self {
+        let EditorPreferencesItem {
+            font,
+            font_size,
+            line_height,
+            tab_size,
+            line_numbers,
+            word_wrap,
+            keyword_case,
+            indent,
+            comma_position,
+        } = p;
+        Self {
+            font,
+            font_size,
+            line_height,
+            tab_size,
+            line_numbers,
+            word_wrap,
+            keyword_case,
+            indent,
+            comma_position,
+        }
+    }
+}
+
 /// How the result grid draws its cells; personal, like the theme.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -829,6 +896,8 @@ pub struct ConnectionItem {
     pub kind: Option<ConnectionTypeItem>,
     pub folders: Vec<String>,
     pub personal: bool,
+    /// The server's host name, for the explorer's search; `None` for a file database.
+    pub host: Option<String>,
     pub tunnel: Option<String>,
     pub mcp_exposed: bool,
     pub history_enabled: bool,
@@ -885,6 +954,63 @@ pub struct HistoryItem {
     pub rows: i64,
     pub error: Option<String>,
     pub cancelled: bool,
+    pub database: Option<String>,
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum HistoryStatusItem {
+    Success,
+    Error,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryFilterItem {
+    pub search: String,
+    pub status: Option<HistoryStatusItem>,
+    pub database: Option<String>,
+    #[specta(type=Option<specta_typescript::Number>)]
+    pub from_ms: Option<i64>,
+    #[specta(type=Option<specta_typescript::Number>)]
+    pub until_ms: Option<i64>,
+    pub pinned: bool,
+    #[specta(type=Option<specta_typescript::Number>)]
+    pub through_id: Option<i64>,
+}
+impl From<HistoryFilterItem> for spelaion_core::HistoryFilter {
+    fn from(filter: HistoryFilterItem) -> Self {
+        Self {
+            search: filter.search,
+            status: filter.status.map(|status| match status {
+                HistoryStatusItem::Success => spelaion_core::HistoryStatus::Success,
+                HistoryStatusItem::Error => spelaion_core::HistoryStatus::Error,
+                HistoryStatusItem::Cancelled => spelaion_core::HistoryStatus::Cancelled,
+            }),
+            database: filter.database,
+            from_ms: filter.from_ms,
+            until_ms: filter.until_ms,
+            pinned: filter.pinned,
+            through_id: filter.through_id,
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPageItem {
+    pub entries: Vec<HistoryItem>,
+    pub has_more: bool,
+    #[specta(type=specta_typescript::Number)]
+    pub through_id: i64,
+}
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct SnippetFolderItem {
+    #[specta(type=specta_typescript::Number)]
+    pub id: i64,
+    pub name: String,
+    pub personal: bool,
 }
 
 /// A saved query; `connection` is empty when it was saved without one.
@@ -900,6 +1026,8 @@ pub struct SnippetItem {
     pub updated_ms: i64,
     /// Saved outside any repository: visible from every workspace.
     pub personal: bool,
+    #[specta(type=Option<specta_typescript::Number>)]
+    pub folder_id: Option<i64>,
 }
 
 impl From<spelaion_core::Snippet> for SnippetItem {
@@ -911,6 +1039,7 @@ impl From<spelaion_core::Snippet> for SnippetItem {
             statement: s.statement,
             connection: s.connection,
             updated_ms: s.updated_ms,
+            folder_id: s.folder_id,
         }
     }
 }
@@ -926,6 +1055,8 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
             rows: entry.rows,
             error: entry.error,
             cancelled: entry.cancelled,
+            database: entry.database,
+            pinned: entry.pinned,
         }
     }
 }
@@ -939,16 +1070,14 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
 pub enum ConnectOutcome {
     Connected {
         server_version: String,
+        /// Session setup statements that failed and were skipped (ADR-037): the connection
+        /// ignores setup errors, and the tab says which.
+        setup_skipped: Vec<SkippedSetupItem>,
     },
     /// The password must be asked for. `can_remember`: it can be stored in the keychain.
-    PasswordRequired {
-        can_remember: bool,
-    },
+    PasswordRequired { can_remember: bool },
     /// The server rejected the password (or the user): it must be asked for again.
-    AuthFailed {
-        message: String,
-        can_remember: bool,
-    },
+    AuthFailed { message: String, can_remember: bool },
     /// The repository is not trusted: ask before resolving anything.
     Untrusted,
     /// A repository connection or tunnel is new or changed since the repository was trusted
@@ -962,9 +1091,28 @@ pub enum ConnectOutcome {
     },
     /// The connection uses `${user.…}` variables the user has not defined (ADR-022): ask for
     /// their values, save them with `set_user_vars` and try again.
-    MissingVariables {
-        names: Vec<String>,
-    },
+    MissingVariables { names: Vec<String> },
+}
+
+/// A session setup statement that failed and was skipped (ADR-037).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedSetupItem {
+    /// 1-based.
+    pub index: u32,
+    /// The start of the statement.
+    pub statement: String,
+    pub message: String,
+}
+
+impl From<spelaion_core::SkippedSetup> for SkippedSetupItem {
+    fn from(skipped: spelaion_core::SkippedSetup) -> Self {
+        Self {
+            index: u32::try_from(skipped.index).unwrap_or(u32::MAX),
+            statement: skipped.statement,
+            message: skipped.message,
+        }
+    }
 }
 
 /// Trust status of an existing connection before opening its editor.
@@ -1236,6 +1384,8 @@ pub struct ScriptPreferencesItem {
     pub on_error: OnErrorItem,
     pub notify: bool,
     pub notify_after_seconds: u32,
+    /// Seconds before "Run anyway" is enabled in a risky statement's confirmation.
+    pub confirm_delay_seconds: u32,
 }
 
 impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
@@ -1244,6 +1394,7 @@ impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
             on_error: p.on_error.into(),
             notify: p.notify,
             notify_after_seconds: p.notify_after_seconds,
+            confirm_delay_seconds: p.confirm_delay_seconds,
         }
     }
 }
@@ -1254,6 +1405,7 @@ impl From<ScriptPreferencesItem> for spelaion_core::ScriptPreferences {
             on_error: p.on_error.into(),
             notify: p.notify,
             notify_after_seconds: p.notify_after_seconds,
+            confirm_delay_seconds: p.confirm_delay_seconds,
         }
     }
 }
@@ -1563,6 +1715,146 @@ pub struct ForeignKeyDetails {
     pub referenced_columns: Vec<String>,
 }
 
+/// Which way a foreign key goes from a table (see `spelaion_core::KeyDirection`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyDirectionItem {
+    Outgoing,
+    Incoming,
+}
+
+impl From<spelaion_core::KeyDirection> for KeyDirectionItem {
+    fn from(direction: spelaion_core::KeyDirection) -> Self {
+        match direction {
+            spelaion_core::KeyDirection::Outgoing => Self::Outgoing,
+            spelaion_core::KeyDirection::Incoming => Self::Incoming,
+        }
+    }
+}
+
+impl From<KeyDirectionItem> for spelaion_core::KeyDirection {
+    fn from(direction: KeyDirectionItem) -> Self {
+        match direction {
+            KeyDirectionItem::Outgoing => Self::Outgoing,
+            KeyDirectionItem::Incoming => Self::Incoming,
+        }
+    }
+}
+
+/// A foreign key seen from a table: its own (outgoing) or another table's that points to it
+/// (incoming). `schema` and `table` are the other table.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableKeyItem {
+    pub direction: KeyDirectionItem,
+    pub name: String,
+    pub schema: String,
+    pub table: String,
+    /// This table's columns, in the key's order.
+    pub columns: Vec<String>,
+    /// The other table's columns, in the same order.
+    pub other_columns: Vec<String>,
+}
+
+impl From<spelaion_core::TableKey> for TableKeyItem {
+    fn from(key: spelaion_core::TableKey) -> Self {
+        Self {
+            direction: key.direction.into(),
+            name: key.name,
+            schema: key.schema,
+            table: key.table,
+            columns: key.columns,
+            other_columns: key.other_columns,
+        }
+    }
+}
+
+/// The key the UI wants to follow, by name: the core looks its columns up in the catalog.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyRefItem {
+    pub direction: KeyDirectionItem,
+    pub schema: String,
+    pub table: String,
+    pub name: String,
+}
+
+impl From<KeyRefItem> for spelaion_core::KeyRef {
+    fn from(key: KeyRefItem) -> Self {
+        Self {
+            direction: key.direction.into(),
+            schema: key.schema,
+            table: key.table,
+            name: key.name,
+        }
+    }
+}
+
+/// Where a followed key leads: a table data tab of `schema.table` with the core's `filter`.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyTargetItem {
+    pub schema: String,
+    pub table: String,
+    pub filter: String,
+}
+
+impl From<spelaion_core::KeyTarget> for KeyTargetItem {
+    fn from(target: spelaion_core::KeyTarget) -> Self {
+        Self {
+            schema: target.schema,
+            table: target.table,
+            filter: target.filter,
+        }
+    }
+}
+
+/// One key of a row in the references panel: where it leads and its first rows (as text,
+/// `None` for NULL); or the column that is NULL in this row (it references nothing through
+/// this key); or why it could not be read.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RowReferenceItem {
+    pub key: TableKeyItem,
+    pub target: Option<KeyTargetItem>,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Option<String>>>,
+    pub more: bool,
+    pub null_column: Option<String>,
+    pub error: Option<String>,
+}
+
+impl From<spelaion_core::RowReference> for RowReferenceItem {
+    fn from(reference: spelaion_core::RowReference) -> Self {
+        let empty = Self {
+            key: reference.key.into(),
+            target: None,
+            columns: Vec::new(),
+            rows: Vec::new(),
+            more: false,
+            null_column: None,
+            error: None,
+        };
+        match reference.outcome {
+            spelaion_core::ReferenceOutcome::Rows(target, rows) => Self {
+                target: Some(target.into()),
+                columns: rows.columns,
+                rows: rows.rows,
+                more: rows.more,
+                ..empty
+            },
+            spelaion_core::ReferenceOutcome::Null { column } => Self {
+                null_column: Some(column),
+                ..empty
+            },
+            spelaion_core::ReferenceOutcome::Failed(error) => Self {
+                error: Some(error),
+                ..empty
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexDetails {
@@ -1805,6 +2097,10 @@ pub struct EngineItem {
     pub access: String,
     pub default_port: Option<u16>,
     pub available: bool,
+    /// A session has a schema of its own the connection can choose (ADR-037).
+    pub session_schema: bool,
+    /// Isolation levels a session can be set to (`read-committed`…); empty for one level.
+    pub isolation_levels: Vec<String>,
 }
 
 impl From<spelaion_core::EngineInfo> for EngineItem {
@@ -1820,6 +2116,17 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
             .into(),
             default_port: info.default_port,
             available: info.engine.is_some(),
+            session_schema: info.engine.is_some_and(|e| e.has_session_schema()),
+            isolation_levels: info
+                .engine
+                .map(|engine| {
+                    spelaion_config::IsolationLevel::ALL
+                        .into_iter()
+                        .filter(|level| level.available_on(engine))
+                        .map(|level| level.as_str().to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -1967,6 +2274,14 @@ pub struct ConnectionDraftItem {
     pub mcp_exposed: bool,
     /// Agents may write (`[mcp] writes = "allow"`, ADR-019).
     pub mcp_writes: bool,
+    /// SQL run on every new session (ADR-037); empty for none.
+    pub session_setup: String,
+    /// A setup statement the database rejects is skipped.
+    pub ignore_setup_errors: bool,
+    /// Where unqualified names are found when a session opens; empty for the server's.
+    pub default_schema: String,
+    /// `read-committed`…; null for the server's default.
+    pub isolation: Option<String>,
 }
 
 impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
@@ -2023,6 +2338,18 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             statement_timeout: item.statement_timeout,
             mcp_exposed: item.mcp_exposed,
             mcp_writes: item.mcp_writes,
+            session: spelaion_config::SessionDraft {
+                setup: item.session_setup,
+                ignore_setup_errors: item.ignore_setup_errors,
+                schema: item.default_schema,
+                isolation: match item.isolation.as_deref() {
+                    None | Some("") => None,
+                    Some(text) => Some(
+                        spelaion_config::IsolationLevel::parse(text)
+                            .ok_or_else(|| format!("unknown isolation level: {text}"))?,
+                    ),
+                },
+            },
         })
     }
 }
@@ -2074,6 +2401,13 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             statement_timeout: draft.statement_timeout,
             mcp_exposed: draft.mcp_exposed,
             mcp_writes: draft.mcp_writes,
+            session_setup: draft.session.setup,
+            ignore_setup_errors: draft.session.ignore_setup_errors,
+            default_schema: draft.session.schema,
+            isolation: draft
+                .session
+                .isolation
+                .map(|level| level.as_str().to_string()),
         }
     }
 }
@@ -2465,87 +2799,6 @@ pub struct FindStepItem {
     pub column: u32,
 }
 
-/// A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
-/// a password.
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct DbeaverItem {
-    pub id: String,
-    pub name: String,
-    pub folder: String,
-    /// `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it.
-    pub engine: Option<String>,
-    /// Why it cannot be imported, if it cannot.
-    pub unsupported: Option<String>,
-    /// `host:port/database`, or the file for SQLite and DuckDB.
-    pub target: String,
-    pub user: String,
-    pub env: String,
-    pub has_password: bool,
-    /// `user@host:port` of its SSH tunnel.
-    pub ssh: Option<String>,
-    /// `host:port` of its SOCKS proxy.
-    pub proxy: Option<String>,
-}
-
-impl From<&spelaion_config::DbeaverConnection> for DbeaverItem {
-    fn from(c: &spelaion_config::DbeaverConnection) -> Self {
-        let file = c.engine.as_ref().is_ok_and(|e| e.is_file());
-        Self {
-            id: c.id.clone(),
-            name: c.name.clone(),
-            folder: c.folder.clone(),
-            engine: c.engine.as_ref().ok().map(|e| e.as_str().to_string()),
-            unsupported: c.engine.as_ref().err().cloned(),
-            target: if file {
-                c.database.clone()
-            } else {
-                let port = c.port.map(|p| format!(":{p}")).unwrap_or_default();
-                let database = if c.database.is_empty() {
-                    String::new()
-                } else {
-                    format!("/{}", c.database)
-                };
-                format!("{}{port}{database}", c.host)
-            },
-            user: c.user.clone(),
-            env: c.env.clone(),
-            has_password: c.password.is_some(),
-            ssh: c.ssh.as_ref().map(|s| {
-                let port = s.port.map(|p| format!(":{p}")).unwrap_or_default();
-                format!("{}@{}{port}", s.user, s.host)
-            }),
-            proxy: c
-                .proxy
-                .as_ref()
-                .map(|p| format!("{}:{}", p.host, p.port.unwrap_or(1080))),
-        }
-    }
-}
-
-/// What `scan_dbeaver` found, and where.
-#[derive(Debug, Clone, Serialize, Type)]
-pub struct DbeaverScan {
-    pub dir: String,
-    pub connections: Vec<DbeaverItem>,
-}
-
-/// One connection that could not be imported, and why.
-#[derive(Debug, Clone, Serialize, Type)]
-pub struct ImportSkip {
-    pub name: String,
-    pub reason: String,
-}
-
-/// The outcome of an import: the names given to the new connections (`(DBeaver)` is added
-/// when the name was taken) and those left out.
-#[derive(Debug, Clone, Serialize, Type)]
-pub struct ImportReport {
-    pub imported: Vec<String>,
-    pub tunnels: Vec<String>,
-    pub skipped: Vec<ImportSkip>,
-}
-
 /// The engine behind the id the UI uses (`postgres`, `mysql`…).
 pub fn engine_named(name: &str) -> Result<spelaion_config::Engine, String> {
     use spelaion_config::Engine;
@@ -2610,6 +2863,16 @@ pub struct DuplicatedItem {
     pub name: String,
     /// Its password was in the keychain and the copy has its own entry now.
     pub password_copied: bool,
+}
+
+/// A connection moved to another folder.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedItem {
+    /// Its identifier now.
+    pub id: String,
+    /// Its keychain password moved to the new identifier's entry.
+    pub password_moved: bool,
 }
 
 /// The clipboard form of a connection: no secrets, nothing that runs a program.
@@ -3959,4 +4222,173 @@ pub struct RecentFileItem {
     pub name: String,
     /// Still on disk (checked when listed).
     pub exists: bool,
+}
+
+/// The numbers about a grid selection (the calc panel), computed by the core over the stored
+/// result. Values are text as the grid shows them; counts are exact up to 2^53.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionStatsItem {
+    pub cells: f64,
+    pub nulls: f64,
+    /// Cells that are not NULL.
+    pub values: f64,
+    pub distinct: f64,
+    /// More different values than the core counts: `distinct` reads "N+".
+    pub distinct_capped: bool,
+    /// Numeric values: what sum, average and median take.
+    pub numbers: f64,
+    pub sum: Option<String>,
+    pub avg: Option<String>,
+    pub median: Option<String>,
+    /// Too many numbers for a median.
+    pub median_capped: bool,
+    /// `None` when the selection mixes values that do not compare (numbers and text).
+    pub min: Option<String>,
+    pub max: Option<String>,
+    /// The most frequent value, when one repeats.
+    pub mode: Option<String>,
+    pub mode_count: f64,
+}
+
+impl From<spelaion_core::SelectionStats> for SelectionStatsItem {
+    fn from(s: spelaion_core::SelectionStats) -> Self {
+        Self {
+            cells: s.cells as f64,
+            nulls: s.nulls as f64,
+            values: s.values as f64,
+            distinct: s.distinct as f64,
+            distinct_capped: s.distinct_capped,
+            numbers: s.numbers as f64,
+            sum: s.sum,
+            avg: s.avg,
+            median: s.median,
+            median_capped: s.median_capped,
+            min: s.min,
+            max: s.max,
+            mode: s.mode,
+            mode_count: s.mode_count as f64,
+        }
+    }
+}
+
+/// A column of a table data tab, for its statistics: the tab's table and filter.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnStatsTarget {
+    pub schema: String,
+    pub name: String,
+    pub filter: String,
+}
+
+/// Whether a statistic could be computed.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum StatStateItem {
+    Done,
+    /// The column's type has no such number (booleans have no minimum).
+    NotForType,
+    /// The engine refused it: its message.
+    Failed {
+        message: String,
+    },
+}
+
+impl<T> From<&spelaion_core::Stat<T>> for StatStateItem {
+    fn from(stat: &spelaion_core::Stat<T>) -> Self {
+        match stat {
+            spelaion_core::Stat::Value(_) => Self::Done,
+            spelaion_core::Stat::NotForType => Self::NotForType,
+            spelaion_core::Stat::Failed(message) => Self::Failed {
+                message: message.clone(),
+            },
+        }
+    }
+}
+
+/// One of a column's most frequent values.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TopValueItem {
+    /// `None` for NULL.
+    pub text: Option<String>,
+    pub count: f64,
+    /// The condition the core wrote to keep these rows (added to the tab's filter with
+    /// `add_table_condition`); `None` when the value is too long to filter by.
+    pub condition: Option<String>,
+}
+
+/// A table column's statistics, counted by the server with read-only queries.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnStatsItem {
+    /// Rows the numbers describe (`sampleRows` when sampled).
+    pub rows: f64,
+    pub sampled: bool,
+    pub sample_rows: f64,
+    pub nulls: f64,
+    pub distinct: Option<f64>,
+    pub distinct_state: StatStateItem,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub range_state: StatStateItem,
+    pub top: Vec<TopValueItem>,
+    pub top_state: StatStateItem,
+    /// The statements that ran, every one a read.
+    pub statements: Vec<String>,
+}
+
+impl ColumnStatsItem {
+    pub fn new(s: spelaion_core::ColumnStats, sample_rows: u64) -> Self {
+        let distinct_state = StatStateItem::from(&s.distinct);
+        let range_state = StatStateItem::from(&s.range);
+        let top_state = StatStateItem::from(&s.top);
+        let (min, max) = match s.range {
+            spelaion_core::Stat::Value(range) => range,
+            spelaion_core::Stat::NotForType | spelaion_core::Stat::Failed(_) => (None, None),
+        };
+        Self {
+            rows: s.rows as f64,
+            sampled: s.sampled,
+            sample_rows: sample_rows as f64,
+            nulls: s.nulls as f64,
+            distinct: match s.distinct {
+                spelaion_core::Stat::Value(n) => Some(n as f64),
+                spelaion_core::Stat::NotForType | spelaion_core::Stat::Failed(_) => None,
+            },
+            distinct_state,
+            min,
+            max,
+            range_state,
+            top: match s.top {
+                spelaion_core::Stat::Value(top) => top
+                    .into_iter()
+                    .map(|v| TopValueItem {
+                        text: v.text,
+                        count: v.count as f64,
+                        condition: v.condition,
+                    })
+                    .collect(),
+                spelaion_core::Stat::NotForType | spelaion_core::Stat::Failed(_) => Vec::new(),
+            },
+            top_state,
+            statements: s.statements,
+        }
+    }
+}
+
+/// How asking for a column's statistics ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ColumnStatsOutcome {
+    Done { stats: Box<ColumnStatsItem> },
+    Cancelled,
 }

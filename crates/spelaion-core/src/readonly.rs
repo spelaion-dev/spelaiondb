@@ -200,12 +200,13 @@ impl Session {
             .filter(|word| word.eq_ignore_ascii_case("explain"))
             .map(|_| sql[7..].trim())
             .ok_or_else(|| ReadError::Rejected("EXPLAIN must come first".into()))?;
-        self.drain("set showplan_xml on").await?;
-        let result = self.collect(query, limits.max_rows).await;
-        let off = self.drain("set showplan_xml off").await;
-        let result = result?;
-        off?;
-        Ok(result)
+        // One driver request owns ON, the compiled query, and OFF. In particular, a timeout
+        // dropping this future cannot skip OFF or let another actor request run in between.
+        let events = self
+            .connection()
+            .execute_plan(query, spelaion_driver_api::PlanMode::Estimated)
+            .await?;
+        self.collect_events(events, limits.max_rows).await
     }
 
     /// The ROLLBACK that is harmless outside a transaction, in this engine.
@@ -248,7 +249,15 @@ impl Session {
         let options = ExecOptions {
             batch_size: (max_rows + 1).clamp(1, 10_000),
         };
-        let mut events = self.connection().execute(sql, &options).await?;
+        let events = self.connection().execute(sql, &options).await?;
+        self.collect_events(events, max_rows).await
+    }
+
+    async fn collect_events(
+        &self,
+        mut events: spelaion_driver_api::EventStream,
+        max_rows: usize,
+    ) -> Result<(Vec<ColumnMeta>, Vec<Vec<Value>>, bool), ReadError> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
         let mut truncated = false;

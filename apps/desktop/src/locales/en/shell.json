@@ -66,9 +66,9 @@
   "tunnel": "Tunnel {{name}}",
   "typeTooltip": "Type: {{name}}",
   "filtered": "filtered",
-  "filteredHint": "Some schemas, objects or columns are hidden by this connection's filter (⋯ → Configure filters)",
+  "filteredHint": "Some schemas, objects or columns are hidden by this connection's filter (right-click → Configure filters…)",
   "configureFilter": "Configure filter…",
-  "configureSchemaFilter": "Configure schema filter…",
+  "connectionMenu": "Actions for {{name}}",
   "hideName": "Hide {{name}}",
   "showOnlyName": "Show only {{name}}",
   "hideNames": "Hide the {{count}} chosen",
@@ -77,9 +77,11 @@
   "loadingDetails": "Loading table details…",
   "connecting": "Connecting…",
   "quickFilter": "Filter the explorer",
-  "quickFilterHint": "Filter the explorer by name or tag (Ctrl+Shift+F)",
-  "quickFilterPlaceholder": "Filter by name",
+  "quickFilterHint": "Find connections by name, tag, type or host, and filter what is loaded (Ctrl+Shift+F)",
+  "quickFilterPlaceholder": "Name, tag, type or host",
   "quickFilterNothing": "No connection, schema or loaded object matches the filter.",
+  "moveFailed": "Could not move {{name}}: {{detail}}",
+  "moveToNoFolder": "No folder",
   "connectedOnly": "Show only connected connections",
   "noneConnected": "No connection is connected yet.",
   "showAllConnections": "Show all",
@@ -144,6 +146,7 @@
     "columns": "Columns",
     "constraints": "Constraints",
     "foreignKeys": "Foreign keys",
+    "references": "References",
     "indexes": "Indexes"
   },
   "tableDetails": {
@@ -171,7 +174,10 @@
     "actions": "Actions",
     "count_one": "{{count}} item",
     "count_other": "{{count}} items",
-    "close": "Close"
+    "close": "Close",
+    "referencingTable": "Referencing table",
+    "openData": "Open data",
+    "referencesHint": "Foreign keys of other tables that point to {{table}}"
   },
   "newTableElement": {
     "title": "Add to {{section}} of {{table}}",
@@ -239,7 +245,9 @@
     "more_other": "…and {{count}} more statements",
     "runConfirmed": "Run",
     "cancel": "Cancel",
-    "run": "Run anyway"
+    "run": "Run anyway",
+    "runIn": "Run anyway ({{seconds}})",
+    "runInHint": "Read the statements first: “Run anyway” is enabled after the pause set in Settings → Scripts."
   },
   "sql": {
     "preview": "View rows",
@@ -374,6 +382,8 @@
     "proceedRunning": "Close and cancel"
   },
   "exportTable": "Export…",
+  "importData": "Import data…",
+  "importNewTable": "Import data into a new table…",
   "exportTables_one": "Export {{formattedCount}} table…",
   "exportTables_other": "Export {{formattedCount}} tables…"
 }

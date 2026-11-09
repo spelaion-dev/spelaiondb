@@ -1,0 +1,75 @@
+{
+  "query": "/* select#1 */ select `c`.`country` AS `country`,count(0) AS `orders`,sum(`o`.`total`) AS `revenue` from `spelaion_plan47_e1c6ac1e501bbc23`.`orders` `o` join `spelaion_plan47_e1c6ac1e501bbc23`.`customers` `c` where ((`c`.`id` = `o`.`customer_id`) and (`o`.`status` = 'paid')) group by `c`.`country` order by `revenue` desc",
+  "inputs": [
+    {
+      "inputs": [
+        {
+          "inputs": [
+            {
+              "inputs": [
+                {
+                  "inputs": [
+                    {
+                      "alias": "o",
+                      "operation": "Table scan on o",
+                      "table_name": "orders",
+                      "access_type": "table",
+                      "schema_name": "spelaion_plan47_e1c6ac1e501bbc23",
+                      "used_columns": [
+                        "id",
+                        "customer_id",
+                        "status",
+                        "total"
+                      ],
+                      "estimated_rows": 108446.0,
+                      "estimated_total_cost": 11156.85
+                    }
+                  ],
+                  "condition": "(o.`status` = 'paid')",
+                  "operation": "Filter: (o.`status` = 'paid')",
+                  "access_type": "filter",
+                  "estimated_rows": 10844.600161597133,
+                  "estimated_total_cost": 11156.85
+                },
+                {
+                  "alias": "c",
+                  "covering": false,
+                  "operation": "Single-row index lookup on c using PRIMARY (id=o.customer_id)",
+                  "index_name": "PRIMARY",
+                  "table_name": "customers",
+                  "access_type": "index",
+                  "schema_name": "spelaion_plan47_e1c6ac1e501bbc23",
+                  "used_columns": [
+                    "id",
+                    "country"
+                  ],
+                  "estimated_rows": 1.0,
+                  "lookup_condition": "id=o.customer_id",
+                  "index_access_type": "index_lookup",
+                  "estimated_total_cost": 0.250009221179067
+                }
+              ],
+              "join_type": "inner join",
+              "operation": "Nested loop inner join",
+              "access_type": "join",
+              "estimated_rows": 10844.600161597133,
+              "join_algorithm": "nested_loop",
+              "estimated_total_cost": 14952.460056558997
+            }
+          ],
+          "operation": "Aggregate using temporary table",
+          "access_type": "temp_table_aggregate"
+        }
+      ],
+      "operation": "Table scan on <temporary>",
+      "table_name": "<temporary>",
+      "access_type": "table"
+    }
+  ],
+  "operation": "Sort: revenue DESC",
+  "query_type": "select",
+  "access_type": "sort",
+  "sort_fields": [
+    "revenue DESC"
+  ]
+}

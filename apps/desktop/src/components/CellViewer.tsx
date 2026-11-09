@@ -38,7 +38,24 @@ function view(value: string | null, column: ColumnItem): View {
   return { kind: "text", text: value };
 }
 
-export type ViewerMode = "cell" | "row";
+export type ViewerMode = "cell" | "row" | "references" | "calc";
+
+const MODE_LABELS: Record<ViewerMode, string> = { cell: "viewer.cellMode", row: "viewer.rowMode", references: "viewer.referencesMode", calc: "viewer.calcMode" };
+
+/** The side panel's views: the cell, its row, in a table data tab the row's references, and the
+ *  numbers about the selection. */
+export function ViewerModes(props: { modes: ViewerMode[]; mode: ViewerMode; onMode(mode: ViewerMode): void }) {
+  const { t } = useTranslation("editor");
+  return (
+    <div className="viewer-modes" role="group" aria-label={t("viewer.mode")}>
+      {props.modes.map((m) => (
+        <button key={m} className="ghost small" aria-pressed={props.mode === m} onClick={() => props.onMode(m)}>
+          {t(MODE_LABELS[m])}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /** Longest value shown per field in the row view; the cell view shows it whole. */
 const ROW_VIEW_CHARS = 500;
@@ -50,6 +67,8 @@ export function CellViewer(props: {
   meta: ColumnItem;
   columns: ColumnItem[];
   mode: ViewerMode;
+  /** The views offered (the cell and the row unless said otherwise). */
+  modes?: ViewerMode[];
   edits?: Record<string, string | null>;
   editable?: boolean;
   onEdit?(row: number, column: number, value: string | null | undefined): void;
@@ -92,15 +111,7 @@ export function CellViewer(props: {
         ? t("viewer.characters", { count: [...value.text].length, formattedCount: [...value.text].length.toLocaleString(i18n.language) })
         : "";
 
-  const modes = (
-    <div className="viewer-modes" role="group" aria-label={t("viewer.mode")}>
-      {(["cell", "row"] as const).map((m) => (
-        <button key={m} className="ghost small" aria-pressed={mode === m} onClick={() => props.onMode(m)}>
-          {t(m === "cell" ? "viewer.cellMode" : "viewer.rowMode")}
-        </button>
-      ))}
-    </div>
-  );
+  const modes = <ViewerModes modes={props.modes ?? ["cell", "row"]} mode={mode} onMode={props.onMode} />;
 
   if (mode === "row") {
     return (

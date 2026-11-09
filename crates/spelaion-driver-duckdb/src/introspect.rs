@@ -6,7 +6,7 @@ use duckdb::types::Value;
 use duckdb::{Connection, params, params_from_iter};
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
-    ObjectInfo, ObjectKind, Result, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, TableInfo,
 };
 
 use crate::exec::map_error;
@@ -273,4 +273,54 @@ pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<Tab
         foreign_keys,
         constraints,
     })
+}
+
+/// The foreign keys pointing to `schema.name`. DuckDB keeps a key and the table it references
+/// in one schema, so they come from that schema (`referenced_table` is written as the key's
+/// DDL wrote it: compared ignoring case, as DuckDB resolves names).
+pub fn list_referencing_keys(
+    conn: &Connection,
+    schema: &str,
+    name: &str,
+) -> Result<Vec<ReferencingKey>> {
+    let (database, schema_name) = locate(conn, schema)?;
+    let label = schema_label(conn, &database, &schema_name)?;
+    let mut statement = conn
+        .prepare(
+            "select table_name, coalesce(constraint_name, ''), \
+                    array_to_string(constraint_column_names, chr(1)), \
+                    array_to_string(referenced_column_names, chr(1)) \
+             from duckdb_constraints() \
+             where database_name = ? and schema_name = ? and constraint_type = 'FOREIGN KEY' \
+               and lower(referenced_table) = lower(?) \
+             order by table_name, constraint_name, constraint_index",
+        )
+        .map_err(map_error)?;
+    let split = |s: Option<String>| -> Vec<String> {
+        s.filter(|s| !s.is_empty())
+            .map(|s| s.split('\u{1}').map(String::from).collect())
+            .unwrap_or_default()
+    };
+    let rows = statement
+        .query_map(params![database, schema_name, name], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(map_error)?;
+    let mut keys = Vec::new();
+    for row in rows {
+        let (table, key, columns, referenced) = row.map_err(map_error)?;
+        keys.push(ReferencingKey {
+            schema: label.clone(),
+            table,
+            name: key,
+            columns: split(columns),
+            referenced_columns: split(referenced),
+        });
+    }
+    Ok(keys)
 }

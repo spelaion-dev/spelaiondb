@@ -150,6 +150,15 @@ pub struct Session {
     cancels: Arc<AtomicU64>,
 }
 
+/// All paths share session serialization and state observation. Only editor SQL manages
+/// transactions; core metadata is not work the user ran in their open transaction.
+#[derive(Clone, Copy)]
+enum RunKind {
+    User,
+    Generated,
+    Metadata,
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.pause.resume(Resume::Closed);
@@ -391,7 +400,7 @@ impl Session {
     /// statement that runs while none is open, smart commit switches to manual before the
     /// first write, and the state is read after every statement.
     pub fn run_script(&self, script: &str) -> BoxStream<'static, CoreEvent> {
-        self.run(script, true, ScriptOptions::default())
+        self.run(script, RunKind::User, ScriptOptions::default())
     }
 
     /// [`Session::run_script`] with its error mode and statement timeout (ADR-035). Whatever
@@ -403,22 +412,63 @@ impl Session {
         script: &str,
         options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
-        self.run(script, true, options)
+        self.run(script, RunKind::User, options)
     }
 
     /// Runs statements the core wrote itself (table edits, object actions, pages, the process
     /// list) as written: never preceded by the manual-commit `BEGIN`, never switching smart
     /// commit. The transaction state is still read afterwards.
     pub(crate) fn run_generated(&self, script: &str) -> BoxStream<'static, CoreEvent> {
-        self.run(script, false, ScriptOptions::default())
+        self.run(script, RunKind::Generated, ScriptOptions::default())
+    }
+
+    /// Reads internal session metadata without opening a managed transaction or counting it
+    /// as a user statement. Still serialized, tracked, cancellable, and observed afterwards.
+    /// Callers supply only fixed metadata SQL written by the core.
+    pub(crate) fn run_metadata(&self, script: &str) -> BoxStream<'static, CoreEvent> {
+        self.run(script, RunKind::Metadata, ScriptOptions::default())
     }
 
     fn run(
         &self,
         script: &str,
-        managed: bool,
+        kind: RunKind,
         run_options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
+        self.run_with_intent(script, kind, run_options, None, None)
+    }
+
+    /// Only the core's opaque, parsed plan request can pair EXPLAIN SQL with its intent.
+    pub(crate) fn run_plan(
+        &self,
+        plan: &crate::plan::PreparedPlan,
+        options: ScriptOptions,
+    ) -> BoxStream<'static, CoreEvent> {
+        self.run_with_intent(
+            plan.sql(),
+            RunKind::User,
+            options,
+            Some(plan.intent().to_owned()),
+            plan.driver_mode(),
+        )
+    }
+
+    fn run_with_intent(
+        &self,
+        script: &str,
+        kind: RunKind,
+        run_options: ScriptOptions,
+        intent: Option<String>,
+        plan_mode: Option<spelaion_driver_api::PlanMode>,
+    ) -> BoxStream<'static, CoreEvent> {
+        // This run is requested now, even if history or another run delays its first poll.
+        // A cancel during those waits stops it; a later, newly requested run gets a new epoch.
+        let cancels_at_start = self.cancels.load(Ordering::SeqCst);
+        let (managed, count_statement) = match kind {
+            RunKind::User => (true, true),
+            RunKind::Generated => (false, true),
+            RunKind::Metadata => (false, false),
+        };
         let script = script.to_string();
         let spans = self.dialect.split_statements(&script);
         let engine = self.dialect.name();
@@ -434,7 +484,6 @@ impl Session {
         Box::pin(async_stream::stream! {
             // One script at a time; Commit, Rollback and the toggle wait for none.
             let _running = control.lock_owned().await;
-            let cancels_at_start = cancels.load(Ordering::SeqCst);
             let cancelled = || cancels.load(Ordering::SeqCst) != cancels_at_start;
             let follow = transaction.borrow().supported;
             let mut on_error = run_options.on_error;
@@ -446,10 +495,17 @@ impl Session {
                     break;
                 }
                 yield CoreEvent::StatementStarted { index, span };
+                // A stream consumer may await history/context work after this yield. A cancel
+                // during that pause must stop before BEGIN or the user's SQL reaches a driver.
+                if cancelled() {
+                    summary.stop = Some(ScriptStop::Cancelled { index });
+                    break;
+                }
                 let started = Instant::now();
                 summary.executed += 1;
                 let text = span.text(&script);
-                let kind = transaction::statement_kind(engine, text);
+                let policy_text = intent.as_deref().unwrap_or(text);
+                let kind = transaction::statement_kind(engine, policy_text);
 
                 // Before: smart commit, then the manual-commit BEGIN.
                 let mut before = None;
@@ -459,7 +515,7 @@ impl Session {
                         && status.auto_commit
                         && status.smart_commit
                         && kind == StatementKind::Other
-                        && transaction::is_write(engine, text)
+                        && transaction::is_write(engine, policy_text)
                     {
                         status.auto_commit = false;
                         status.smart_switched = true;
@@ -499,7 +555,12 @@ impl Session {
                 let mut failure = None;
                 let mut rows_affected = None;
                 let mut notices = Vec::new();
-                let execute = connection.execute(text, &options);
+                let execute = async {
+                    match plan_mode {
+                        Some(mode) => connection.execute_plan(text, mode).await,
+                        None => connection.execute(text, &options).await,
+                    }
+                };
                 tokio::pin!(execute);
                 let opened = loop {
                     match until(&mut execute, deadline, timed_out).await {
@@ -609,7 +670,7 @@ impl Session {
                             if restarted {
                                 status.statements = 0;
                             }
-                            if !kind.is_control() {
+                            if count_statement && !kind.is_control() {
                                 status.statements += 1;
                             }
                         }

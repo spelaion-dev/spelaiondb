@@ -1,0 +1,97 @@
+{
+    "Servers": {
+        "1": {
+            "Name": "Local PG",
+            "Group": "Servers",
+            "Host": "127.0.0.1",
+            "Port": 15432,
+            "MaintenanceDB": "spelaion",
+            "Username": "spelaion",
+            "DBRestrictionType": "databases",
+            "UseSSHTunnel": 0,
+            "TunnelPort": "22",
+            "TunnelAuthentication": 0,
+            "TunnelPromptPassword": 0,
+            "TunnelKeepAlive": 0,
+            "KerberosAuthentication": false,
+            "ConnectionParameters": {
+                "sslmode": "prefer",
+                "connect_timeout": 10
+            },
+            "Tags": []
+        },
+        "2": {
+            "Name": "Orders TLS",
+            "Group": "Production",
+            "Host": "127.0.0.1",
+            "Port": 15432,
+            "MaintenanceDB": "spelaion",
+            "Username": "spelaion",
+            "Role": "reporting",
+            "Comment": "Orders of the EU shop",
+            "DBRestrictionType": "databases",
+            "UseSSHTunnel": 0,
+            "TunnelPort": "22",
+            "TunnelAuthentication": 0,
+            "TunnelPromptPassword": 0,
+            "TunnelKeepAlive": 0,
+            "KerberosAuthentication": false,
+            "ConnectionParameters": {
+                "connect_timeout": 10,
+                "sslrootcert": "C:\\Users\\tester\\spelaiondb\\testing\\docker\\keys\\ca.crt",
+                "sslcert": "C:\\Users\\tester\\spelaiondb\\testing\\docker\\keys\\client.crt",
+                "sslkey": "C:\\Users\\tester\\spelaiondb\\testing\\docker\\keys\\client.key",
+                "sslmode": "verify-ca"
+            },
+            "Tags": [
+                {
+                    "color": "#3BAA6C",
+                    "text": "eu"
+                }
+            ]
+        },
+        "3": {
+            "Name": "PG via bastion",
+            "Group": "Production",
+            "Host": "postgres",
+            "Port": 5432,
+            "MaintenanceDB": "spelaion",
+            "Username": "spelaion",
+            "DBRestrictionType": "databases",
+            "UseSSHTunnel": 1,
+            "TunnelHost": "127.0.0.1",
+            "TunnelPort": "2221",
+            "TunnelUsername": "spelaion",
+            "TunnelAuthentication": 1,
+            "TunnelIdentityFile": "C:\\Users\\tester\\spelaiondb\\testing\\docker\\keys\\id_ed25519",
+            "TunnelPromptPassword": 0,
+            "TunnelKeepAlive": 30,
+            "KerberosAuthentication": false,
+            "ConnectionParameters": {
+                "sslmode": "prefer",
+                "connect_timeout": 10
+            },
+            "Tags": []
+        },
+        "4": {
+            "Name": "Analytics service",
+            "Group": "Servers",
+            "Port": 5432,
+            "MaintenanceDB": "postgres",
+            "Username": "postgres",
+            "DBRestrictionType": "databases",
+            "Service": "analytics",
+            "UseSSHTunnel": 0,
+            "TunnelPort": "22",
+            "TunnelAuthentication": 0,
+            "TunnelPromptPassword": 0,
+            "TunnelKeepAlive": 0,
+            "KerberosAuthentication": false,
+            "ConnectionParameters": {
+                "sslmode": "prefer",
+                "connect_timeout": 10
+            },
+            "Tags": []
+        }
+    }
+}

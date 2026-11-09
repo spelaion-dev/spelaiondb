@@ -6,6 +6,7 @@
 pub mod audit;
 mod catalog;
 mod classify;
+mod column_stats;
 mod conn_test;
 mod cursor;
 mod edit;
@@ -17,17 +18,22 @@ mod generate;
 mod guard;
 mod health;
 mod history;
+mod import;
 pub mod kube;
 mod objects;
 mod open;
 mod open_tabs;
 mod params;
+pub mod plan;
 mod processes;
 mod query_page;
 mod readonly;
+mod references;
 mod results;
 mod script;
+mod selection_stats;
 mod session;
+mod session_setup;
 mod sort;
 mod sql_file;
 mod table_data;
@@ -35,7 +41,11 @@ mod transaction;
 mod write;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
-pub use classify::{ReadKind, classify_read_only};
+pub use classify::{ReadKind, classify_read_only, classify_session_setup};
+pub use column_stats::{
+    ColumnStats, ColumnStatsError, ColumnStatsRequest, ColumnStatsSql, STATS_SAMPLE_ROWS,
+    STATS_TEXT_CHARS, Stat, TOP_VALUES, TopValue, column_stats, column_stats_sql,
+};
 pub use conn_test::{
     FailureKind, REDACTED, Redactor, StepFailure, StepKind, StepObserver, StepStatus, TestOptions,
     TestReport, TestScope, TestStep, classify_driver, classify_ssh, test_connection,
@@ -61,7 +71,15 @@ pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
 pub use guard::{NeedsConfirmation, Risk, RiskyStatement, check_script, script_risks};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
-pub use history::{HistoryError, QueryHistory};
+pub use history::{HistoryError, HistoryScope, QueryHistory};
+pub use import::{
+    ColumnKind, ColumnMapping, DEFAULT_COMMIT_EVERY, DEFAULT_SAMPLE_ROWS, IMPORT_BATCH_ROWS,
+    IMPORT_PREVIEW_CHARS, IMPORT_PREVIEW_ROWS, IfExists, ImportCancel, ImportError, ImportFormat,
+    ImportPlan, ImportPreview, ImportProgress, ImportRequest, ImportSource, ImportSummary,
+    ImportTarget, MAX_COLUMNS, MAX_RECORD_BYTES, MAX_SAMPLE_ROWS, MAX_WHOLE_FILE, ParseOptions,
+    PreviewColumn, SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import,
+    preview, run_import, suggested_table, text_format,
+};
 pub use objects::{
     CreateKind, FoundObject, NewIndexKind, NewTableElement, ObjectActions, ObjectChange,
     ObjectError, ObjectTarget, SEARCH_LIMIT, active_schema, apply_change, can_cascade,
@@ -76,19 +94,31 @@ pub use params::{ParamError, bind_params, script_params};
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
+pub use references::{
+    FollowError, KeyDirection, KeyRef, KeyRows, KeyTarget, MAX_PREVIEW_ROWS, PREVIEW_CHARS,
+    ReferenceOutcome, RowReference, TableKey, find_key, follow, key_rows, read_references,
+    reference_targets, table_keys,
+};
 pub use results::{ResultId, ResultStore, StoredResult};
+pub use selection_stats::{
+    CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
+};
 pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
     ScriptSummary, Session, StatementError,
 };
+pub use session_setup::{
+    SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
+    isolation_statement, setup_is_restricted,
+};
 pub use sort::{SortKey, ViewError};
 pub use spelaion_store::{
-    AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, Snippet,
-    ToolOutput,
+    AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
+    HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
 };
 pub use spelaion_store::{
-    Bookmark, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences, RecentFile,
-    SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
+    Bookmark, EditorPreferences, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences,
+    RecentFile, SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
@@ -96,7 +126,7 @@ pub use sql_file::{
 };
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
-    table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
+    key_filter, table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
 };
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use write::{

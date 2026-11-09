@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="dataSourceStorageLocal" created-in="DB-263.7307.216">
+    <data-source name="Orders PG" uuid="e2d2bd51-007a-4680-865b-0a13f2bdddc8">
+      <database-info product="" version="" jdbc-version="" driver-name="" driver-version="" dbms="POSTGRES" />
+      <secret-storage>master_key</secret-storage>
+      <user-name>spelaion</user-name>
+      <schema-mapping />
+      <ssl-config use-ide-store="true" use-java-store="true" use-system-store="true">
+        <ca-cert>C:\Users\tester\spelaiondb\testing\docker\keys\ca.crt</ca-cert>
+        <client-cert>C:\Users\tester\spelaiondb\testing\docker\keys\client.crt</client-cert>
+        <client-key>C:\Users\tester\spelaiondb\testing\docker\keys\client.key</client-key>
+        <enabled>true</enabled>
+        <mode>REQUIRE</mode>
+      </ssl-config>
+    </data-source>
+    <data-source name="Shop MySQL" uuid="8191eb77-9d20-4a91-807b-817ec0fb1558">
+      <database-info product="" version="" jdbc-version="" driver-name="" driver-version="" dbms="MYSQL" />
+      <secret-storage>master_key</secret-storage>
+      <user-name>spelaion</user-name>
+      <schema-mapping />
+    </data-source>
+    <data-source name="Shop MariaDB" uuid="3c641023-ec8d-40e2-a590-0abe7623d0fb">
+      <database-info product="" version="" jdbc-version="" driver-name="" driver-version="" dbms="MARIADB" />
+      <secret-storage>master_key</secret-storage>
+      <user-name>root</user-name>
+      <schema-mapping />
+    </data-source>
+    <data-source name="Reports MSSQL" uuid="a31c3a62-13e5-4f67-8e3e-9aded8e79e5c">
+      <database-info product="" version="" jdbc-version="" driver-name="" driver-version="" dbms="MSSQL" />
+      <user-name>sa</user-name>
+      <schema-mapping />
+    </data-source>
+    <data-source name="Local file" uuid="1fb5e3ab-c546-4763-b1e3-eb88ab886815">
+      <database-info product="" version="" jdbc-version="" driver-name="" driver-version="" dbms="SQLITE" />
+      <secret-storage>master_key</secret-storage>
+      <auth-provider>no-auth</auth-provider>
+      <schema-mapping />
+    </data-source>
+    <data-source name="Analytics" uuid="4de7dfe5-8024-458b-9103-e8b9e821b2fc">
+      <database-info product="" version="" jdbc-version="" driver-name="" driver-version="" dbms="DUCK" />
+      <secret-storage>master_key</secret-storage>
+      <auth-provider>no-auth</auth-provider>
+      <schema-mapping />
+    </data-source>
+    <data-source name="PG via bastion" uuid="e0a0fe5d-f2c2-42b5-a1d4-d318d751c15b">
+      <database-info product="" version="" jdbc-version="" driver-name="" driver-version="" dbms="POSTGRES" />
+      <secret-storage>master_key</secret-storage>
+      <user-name>spelaion</user-name>
+      <schema-mapping />
+      <ssh-properties>
+        <enabled>true</enabled>
+        <ssh-config-id>bcfb66d2-2a55-4e7e-ad91-4b6afc707c8c</ssh-config-id>
+      </ssh-properties>
+    </data-source>
+  </component>
+</project>

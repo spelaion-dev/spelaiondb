@@ -1,0 +1,96 @@
+<?xml version="1.0"?>
+<data grt_format="2.0">
+  <value _ptr_="000001F5F413FB60" type="list" content-type="object" content-struct-name="db.mgmt.Connection">
+    <value type="object" struct-name="db.mgmt.Connection" id="{5315ECE4-5584-4E05-8C44-27C41DB40C54}" struct-checksum="0x96ba47d8">
+      <link type="object" struct-name="db.mgmt.Driver" key="driver">com.mysql.rdbms.mysql.driver.native</link>
+      <value type="string" key="hostIdentifier">Mysql@127.0.0.1:13306</value>
+      <value type="int" key="isDefault">1</value>
+      <value _ptr_="000001F5F03D43E0" type="dict" key="modules"/>
+      <value _ptr_="000001F5F03D4080" type="dict" key="parameterValues">
+        <value type="string" key="SQL_MODE"></value>
+        <value type="string" key="hostName">127.0.0.1</value>
+        <value type="string" key="password"></value>
+        <value type="int" key="port">13306</value>
+        <value type="string" key="schema">spelaion</value>
+        <value type="string" key="sslCA"></value>
+        <value type="string" key="sslCert"></value>
+        <value type="string" key="sslCipher"></value>
+        <value type="string" key="sslKey"></value>
+        <value type="int" key="useSSL">1</value>
+        <value type="string" key="userName">spelaion</value>
+      </value>
+      <value type="string" key="name">Shop MySQL</value>
+      <link type="object" struct-name="GrtObject" key="owner">{2B8E4A3C-0AAE-420C-92E9-31D2E17C64B2}</link>
+    </value>
+    <value type="object" struct-name="db.mgmt.Connection" id="{4B31FDBE-ADAE-4A7C-98D2-B78A1DBE308F}" struct-checksum="0x96ba47d8">
+      <link type="object" struct-name="db.mgmt.Driver" key="driver">com.mysql.rdbms.mysql.driver.native</link>
+      <value type="string" key="hostIdentifier">Mysql@127.0.0.1:13307</value>
+      <value type="int" key="isDefault">0</value>
+      <value _ptr_="000001F5F03D45C0" type="dict" key="modules"/>
+      <value _ptr_="000001F5F03D4AA0" type="dict" key="parameterValues">
+        <value type="int" key="OPT_LOCAL_INFILE">1</value>
+        <value type="string" key="SQL_MODE">ANSI_QUOTES</value>
+        <value type="string" key="hostName">127.0.0.1</value>
+        <value type="string" key="password"></value>
+        <value type="int" key="port">13307</value>
+        <value type="string" key="schema">spelaion</value>
+        <value type="string" key="sslCA">C:\Users\tester\spelaiondb\testing\docker\keys\ca.crt</value>
+        <value type="string" key="sslCert">C:\Users\tester\spelaiondb\testing\docker\keys\client.crt</value>
+        <value type="string" key="sslCipher"></value>
+        <value type="string" key="sslKey">C:\Users\tester\spelaiondb\testing\docker\keys\client.key</value>
+        <value type="int" key="timeout">20</value>
+        <value type="int" key="useSSL">3</value>
+        <value type="string" key="userName">root</value>
+      </value>
+      <value type="string" key="name">Prod/Shop MariaDB TLS</value>
+      <link type="object" struct-name="GrtObject" key="owner">{2B8E4A3C-0AAE-420C-92E9-31D2E17C64B2}</link>
+    </value>
+    <value type="object" struct-name="db.mgmt.Connection" id="{7466410B-A947-40C6-BAC1-7B10A0E1A34E}" struct-checksum="0x96ba47d8">
+      <link type="object" struct-name="db.mgmt.Driver" key="driver">com.mysql.rdbms.mysql.driver.native_sshtun</link>
+      <value type="string" key="hostIdentifier">Mysql@mysql:3306@127.0.0.1:2221</value>
+      <value type="int" key="isDefault">0</value>
+      <value _ptr_="000001F5F03D46E0" type="dict" key="modules"/>
+      <value _ptr_="000001F5F03D5DC0" type="dict" key="parameterValues">
+        <value type="string" key="SQL_MODE"></value>
+        <value type="string" key="hostName">mysql</value>
+        <value type="string" key="password"></value>
+        <value type="int" key="port">3306</value>
+        <value type="string" key="schema">spelaion</value>
+        <value type="int" key="sshCompressionLevel">0</value>
+        <value type="string" key="sshHost">127.0.0.1:2221</value>
+        <value type="string" key="sshKeyFile">C:\Users\tester\spelaiondb\testing\docker\keys\id_ed25519</value>
+        <value type="string" key="sshPassword"></value>
+        <value type="string" key="sshUserName">spelaion</value>
+        <value type="string" key="sslCA"></value>
+        <value type="string" key="sslCert"></value>
+        <value type="string" key="sslCipher"></value>
+        <value type="string" key="sslKey"></value>
+        <value type="int" key="useSSL">1</value>
+        <value type="string" key="userName">spelaion</value>
+      </value>
+      <value type="string" key="name">Prod/Orders via bastion</value>
+      <link type="object" struct-name="GrtObject" key="owner">{2B8E4A3C-0AAE-420C-92E9-31D2E17C64B2}</link>
+    </value>
+    <value type="object" struct-name="db.mgmt.Connection" id="{D785997B-95B0-4D6B-A772-BD62EB0342FB}" struct-checksum="0x96ba47d8">
+      <link type="object" struct-name="db.mgmt.Driver" key="driver">com.mysql.rdbms.mysql.driver.native_socket</link>
+      <value type="string" key="hostIdentifier">Mysql@local:MySQL</value>
+      <value type="int" key="isDefault">0</value>
+      <value _ptr_="000001F5F03D59A0" type="dict" key="modules"/>
+      <value _ptr_="000001F5F03D5E20" type="dict" key="parameterValues">
+        <value type="string" key="SQL_MODE"></value>
+        <value type="string" key="hostName">127.0.0.1</value>
+        <value type="string" key="password"></value>
+        <value type="string" key="schema"></value>
+        <value type="string" key="socket">MySQL</value>
+        <value type="string" key="sslCA"></value>
+        <value type="string" key="sslCert"></value>
+        <value type="string" key="sslCipher"></value>
+        <value type="string" key="sslKey"></value>
+        <value type="int" key="useSSL">1</value>
+        <value type="string" key="userName">root</value>
+      </value>
+      <value type="string" key="name">Local pipe</value>
+      <link type="object" struct-name="GrtObject" key="owner">{2B8E4A3C-0AAE-420C-92E9-31D2E17C64B2}</link>
+    </value>
+  </value>
+</data>

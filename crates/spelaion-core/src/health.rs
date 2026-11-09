@@ -15,9 +15,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, KeepAlive,
-    NameFilter, ObjectInfo, Result, SchemaInfo, SchemaObject, ServerObject, TableInfo,
-    TransactionState,
+    CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, InsertTarget,
+    KeepAlive, NameFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject,
+    ServerObject, TableInfo, TransactionState,
 };
 use spelaion_ssh::TunnelState;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, watch};
@@ -377,6 +377,22 @@ impl Connection for Tracked {
         })))
     }
 
+    async fn execute_plan(
+        &self,
+        sql: &str,
+        mode: spelaion_driver_api::PlanMode,
+    ) -> Result<EventStream> {
+        let busy = self.activity.begin().await;
+        let events = self.observe(self.inner.execute_plan(sql, mode).await)?;
+        let inner = self.inner.clone();
+        let health = self.health.clone();
+        Ok(Box::pin(events.map(move |event| {
+            let _busy = &busy;
+            observe(&*inner, &health, &event);
+            event
+        })))
+    }
+
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
         self.inner.cancel_handle()
     }
@@ -404,6 +420,10 @@ impl Connection for Tracked {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.current_database().await)
     }
+    async fn database_context(&self) -> Result<Option<String>> {
+        // A local actor snapshot is not server activity and must not extend an idle session.
+        self.inner.database_context().await
+    }
 
     async fn select_database(&self, database: &str) -> Result<()> {
         let _busy = self.activity.begin().await;
@@ -428,6 +448,11 @@ impl Connection for Tracked {
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.describe_table(schema, name).await)
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        let _busy = self.activity.begin().await;
+        self.observe(self.inner.list_referencing_keys(schema, name).await)
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
@@ -480,6 +505,15 @@ impl Connection for Tracked {
     async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.procedure_call(object).await)
+    }
+
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        let _busy = self.activity.begin().await;
+        self.observe(self.inner.insert_rows(target, rows).await)
     }
 }
 
@@ -559,6 +593,7 @@ mod tests {
                 explain: false,
                 editable_results: false,
                 schemas: false,
+                insert_rows: false,
             },
             release: tokio::sync::Notify::new(),
             in_transaction: Default::default(),

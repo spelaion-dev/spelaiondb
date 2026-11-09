@@ -65,6 +65,8 @@ struct State {
     /// One session per connection and use, opened on first use. The Mutex serializes the
     /// statements of one session (each opens and closes its own transaction).
     sessions: tokio::sync::Mutex<HashMap<(String, Use), Shared>>,
+    plans: spelaion_core::plan::PlanStore,
+    plan_connections: Mutex<HashMap<u32, String>>,
 }
 
 /// An open connection, shared by the calls that use it one at a time.
@@ -177,6 +179,27 @@ pub struct QueryArgs {
     pub output_format: Option<OutputFormat>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainArgs {
+    pub connection: String,
+    /// One read query for a new plan; omit when paging a cached plan_id.
+    pub sql: Option<String>,
+    /// Opt in to the normalized plan tree (PostgreSQL, MySQL, MariaDB, SQL Server); omitted keeps the
+    /// user's JSON/TOON output.
+    pub structured: Option<bool>,
+    /// Legacy output only; omitted keeps the user's configured JSON/TOON format.
+    pub output_format: Option<OutputFormat>,
+    /// Returned summary.id, valid only in this server process and for this connection.
+    pub plan_id: Option<u32>,
+    /// Node offset; use the returned page.nextOffset without re-executing the query.
+    pub offset: Option<u32>,
+    /// At most 100 nodes, automatically reduced to fit the complete JSON response budget.
+    pub limit: Option<u32>,
+    /// Release a cached plan instead of reading it.
+    pub release: Option<bool>,
+}
+
 /// The formats of a query's rows (ADR-033).
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -219,6 +242,8 @@ impl SpelaionMcp {
                 store: Mutex::new(Some(store)),
                 audit_session: audit_session_id(),
                 sessions: tokio::sync::Mutex::new(HashMap::new()),
+                plans: spelaion_core::plan::PlanStore::new(),
+                plan_connections: Mutex::new(HashMap::new()),
             }),
             tool_router: Self::tool_router(),
         })
@@ -327,6 +352,8 @@ impl SpelaionMcp {
             known_hosts: KnownHosts::for_user(&self.state.options.user_dir),
             interaction: Arc::new(NonInteractive),
             password: None,
+            // Agents' reads set up their sessions through the read-only barrier (ADR-037).
+            read_only_session: purpose == Use::Read,
         };
         let open = open_connection(resolved, &self.state.engines, options, Arc::new(ResultStore::new()))
             .await
@@ -475,6 +502,172 @@ impl SpelaionMcp {
                     e.detail = Some(message.clone())
                 });
                 tool_error(message)
+            }
+        }
+    }
+
+    async fn explain(&self, client: &Call, args: ExplainArgs) -> Result<CallToolResult, ErrorData> {
+        use spelaion_core::plan::{self, ExplainOptions, ExplainPolicy};
+        let statement = args.sql.as_deref().unwrap_or("cached execution plan");
+        let reject = |reason: &str| {
+            self.audit(
+                client,
+                &args.connection,
+                statement,
+                Decision::Rejected,
+                |e| e.detail = Some(reason.into()),
+            );
+            tool_error(reason)
+        };
+        if let Err(reason) = self.entry(&args.connection) {
+            return reject(&reason);
+        }
+        if let Some(id) = args.plan_id {
+            if args.sql.is_some() {
+                return reject(
+                    "supply sql for a new plan or plan_id for a cached page, never both",
+                );
+            }
+            let allowed = self
+                .state
+                .plan_connections
+                .lock()
+                .expect("plan owner lock poisoned")
+                .get(&id)
+                == Some(&args.connection);
+            if !allowed {
+                return reject("no cached plan for this connection");
+            }
+            if args.release.unwrap_or(false) {
+                self.state.plans.release(id);
+                self.state
+                    .plan_connections
+                    .lock()
+                    .expect("plan owner lock poisoned")
+                    .remove(&id);
+                self.audit(
+                    client,
+                    &args.connection,
+                    statement,
+                    Decision::Executed,
+                    |e| {
+                        e.detail =
+                            Some("Released cached plan; no database statement executed".into())
+                    },
+                );
+                return text("Execution plan released");
+            }
+            return match self.state.plans.tool_json(
+                id,
+                args.offset.unwrap_or(0) as usize,
+                args.limit.unwrap_or(50) as usize,
+                format::MAX_RESPONSE,
+            ) {
+                Ok(json) => {
+                    self.audit(
+                        client,
+                        &args.connection,
+                        statement,
+                        Decision::Executed,
+                        |e| {
+                            e.detail =
+                                Some("Read cached plan page; no database statement executed".into())
+                        },
+                    );
+                    text(json)
+                }
+                Err(error) => reject(&error.to_string()),
+            };
+        }
+        if args.release.unwrap_or(false) {
+            return reject("release requires plan_id");
+        }
+        let Some(sql) = args.sql.as_deref().filter(|sql| !sql.trim().is_empty()) else {
+            return reject("supply one read query in sql");
+        };
+        let structured = args.structured.unwrap_or(false);
+        if !structured {
+            return self
+                .read(
+                    client,
+                    &args.connection,
+                    &format!("explain {}", sql.trim()),
+                    args.output_format,
+                )
+                .await;
+        }
+        let (open, max_rows) = match self.session(&args.connection).await {
+            Ok(value) => value,
+            Err(reason) => {
+                self.audit(client, &args.connection, sql, Decision::Rejected, |e| {
+                    e.detail = Some(reason.clone())
+                });
+                return tool_error(reason);
+            }
+        };
+        let open = open.lock().await;
+        if let Err(error) = plan::explain_preflight(
+            &open.session,
+            sql,
+            ExplainOptions::default(),
+            &ExplainPolicy::for_connection(&open),
+        ) {
+            let reason = error.to_string();
+            self.audit(client, &args.connection, sql, Decision::Rejected, |e| {
+                e.detail = Some(reason.clone())
+            });
+            return tool_error(reason);
+        }
+        let started = std::time::Instant::now();
+        let document = plan::explain_read_only(
+            &open,
+            sql,
+            &ReadLimits {
+                max_rows: max_rows.min(1),
+                timeout: self.state.options.timeout,
+            },
+        )
+        .await;
+        drop(open);
+        match document {
+            Ok(document) => {
+                self.audit(client, &args.connection, sql, Decision::Executed, |e| {
+                    e.rows = Some(1);
+                    e.duration_ms = Some(started.elapsed().as_millis() as i64);
+                });
+                let summary = match self.state.plans.insert(document) {
+                    Ok(summary) => summary,
+                    Err(error) => return tool_error(error.to_string()),
+                };
+                self.state
+                    .plan_connections
+                    .lock()
+                    .expect("plan owner lock poisoned")
+                    .insert(summary.id, args.connection);
+                match self.state.plans.tool_json(
+                    summary.id,
+                    args.offset.unwrap_or(0) as usize,
+                    args.limit.unwrap_or(50) as usize,
+                    format::MAX_RESPONSE,
+                ) {
+                    Ok(json) => text(json),
+                    Err(error) => {
+                        self.state.plans.release(summary.id);
+                        self.state
+                            .plan_connections
+                            .lock()
+                            .expect("plan owner lock poisoned")
+                            .remove(&summary.id);
+                        tool_error(error.to_string())
+                    }
+                }
+            }
+            Err(error) => {
+                self.audit(client, &args.connection, sql, Decision::Failed, |e| {
+                    e.duration_ms = Some(started.elapsed().as_millis() as i64);
+                    e.detail = Some(error.to_string());
+                });
+                tool_error(error.to_string())
             }
         }
     }
@@ -783,22 +976,15 @@ impl SpelaionMcp {
     }
 
     #[tool(
-        description = "Shows the execution plan (EXPLAIN, without running the query) of a read query.",
+        description = "Shows an estimated read-query plan, never ANALYZE. Set structured=true on PostgreSQL, MySQL, MariaDB or SQL Server for the same normalized core tree, metrics and findings as the desktop. Responses are complete JSON pages within 60 KB: continue with connection, plan_id=summary.id and offset=page.nextOffset, omitting sql (no re-execution). Release with release=true. By default, preserve the user's JSON/TOON output_format on every engine.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn explain_query(
         &self,
         peer: Peer<RoleServer>,
-        Parameters(args): Parameters<QueryArgs>,
+        Parameters(args): Parameters<ExplainArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let sql = format!("explain {}", args.sql.trim());
-        self.read(
-            &Call::new(&peer, "explain_query"),
-            &args.connection,
-            &sql,
-            args.output_format,
-        )
-        .await
+        self.explain(&Call::new(&peer, "explain_query"), args).await
     }
 }
 

@@ -26,8 +26,9 @@ import { chooseSavePath, openFilters } from "../dialogs";
 import { confirmOpenTransactions, reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
+import { saveHistoryPreference } from "../historyPreference";
 import { fieldList } from "../fieldNames";
-import { DbeaverImport } from "./DbeaverImport";
+import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
@@ -50,7 +51,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const [engines, setEngines] = useState<EngineItem[]>([]);
   const [engine, setEngine] = useState<EngineItem | null>(null);
   const [prefill, setPrefill] = useState<UrlFields | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [importing, setImporting] = useState<ImportClientId | null>(null);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -103,7 +104,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
             {editing
               ? t("editTitle", { name: initial?.name ?? editing })
               : importing
-                ? t("dbeaver.title")
+                ? t("importer.title", { client: IMPORT_CLIENTS.find((c) => c.id === importing)?.label })
                 : engine
                   ? t("formTitle", { engine: engine.name })
                   : t("title")}
@@ -142,7 +143,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
             </>
           )
         ) : importing ? (
-          <DbeaverImport onBack={() => setImporting(false)} onDone={close} />
+          <ConnectionImport client={importing} onBack={() => setImporting(null)} onDone={close} />
         ) : engine ? (
           <ConnectionForm
             engine={engine}
@@ -157,7 +158,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         ) : (
           <EnginePicker
             engines={engines}
-            onImport={() => setImporting(true)}
+            onImport={(client) => setImporting(client)}
             onPick={(picked, fields) => {
               setPrefill(fields ?? null);
               setEngine(picked);
@@ -182,7 +183,7 @@ function EnginePicker({
 }: {
   engines: EngineItem[];
   onPick(engine: EngineItem, fields?: UrlFields): void;
-  onImport(): void;
+  onImport(client: ImportClientId): void;
 }) {
   const { t } = useTranslation("connections");
   const [search, setSearch] = useState("");
@@ -241,8 +242,12 @@ function EnginePicker({
         </p>
       )}
       <div className="import-row">
-        <span className="muted small">{t("dbeaver.or")}</span>
-        <button onClick={onImport}>{t("dbeaver.button")}</button>
+        <span className="muted small">{t("importer.or")}</span>
+        {IMPORT_CLIENTS.map((client) => (
+          <button key={client.id} onClick={() => onImport(client.id)}>
+            {t("importer.button", { client: client.label })}
+          </button>
+        ))}
       </div>
       <div className="engine-groups">
         {CATEGORIES.map((category) => {
@@ -282,10 +287,22 @@ type CloudToken = "awsRds" | "azureAd" | "googleCloudSql";
 const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
 /** Engines that log in with a client certificate or a cloud token. */
 const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
-type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "options";
+type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "session" | "options";
 
 /** The core's limit (`ConnectionFile::MAX_DESCRIPTION`); the core checks it again. */
 const DESCRIPTION_MAX = 2000;
+/** The core's limits (`SessionConfig::MAX_SETUP`, `MAX_SCHEMA`); the core checks them again. */
+const SETUP_MAX = 20000;
+const SCHEMA_MAX = 128;
+/** An example of each engine's session setup, shown while the field is empty (SQL, not prose). */
+const SETUP_EXAMPLES: Record<string, string> = {
+  postgres: "SET search_path TO app, public;\nSET TIME ZONE 'UTC';",
+  mysql: "SET time_zone = '+00:00';",
+  mariadb: "SET time_zone = '+00:00';",
+  sqlserver: "SET DATEFORMAT ymd;\nSET LOCK_TIMEOUT 5000;",
+  duckdb: "SET TimeZone = 'UTC';",
+  sqlite: "PRAGMA foreign_keys = ON;",
+};
 
 function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
@@ -423,12 +440,19 @@ function ConnectionForm(props: {
     keepalive: network ? 300 : null,
     connectTimeout: null,
     statementTimeout: null,
+    sessionSetup: "",
+    ignoreSetupErrors: false,
+    defaultSchema: "",
+    isolation: null,
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
   // Types and what they do come from the core (ADR-029).
   const connectionTypes = useConnectionTypes();
   const editedConnection = useApp((s) => s.connections.find((c) => c.id === editing));
   const savedType = editing && initial ? { env: initial.env, kind: editedConnection?.kind ?? null } : null;
+  // Personal, in the local store and never in the file: saved with the form, apart from it.
+  const savedHistory = editedConnection?.historyEnabled ?? true;
+  const [historyEnabled, setHistoryEnabled] = useState(savedHistory);
 
   const [tunnelEditor, setTunnelEditor] = useState<TunnelEditorMode | null>(null);
   async function loadTunnels(select?: string) {
@@ -594,7 +618,25 @@ function ConnectionForm(props: {
         const sessions = useApp.getState().tabs.filter((tab) => tab.connectionId === editing).map((tab) => tab.id);
         if (!(await confirmOpenTransactions(sessions, "disconnect"))) return;
       }
-      await call(editing ? commands.updateConnection(editing, request, stored, props.revision ?? "") : commands.addConnection(request, stored));
+      if (editing) {
+        // The local setting first: if it cannot change, nothing was written yet.
+        if (historyEnabled !== savedHistory) await saveHistoryPreference(editing, historyEnabled);
+        await call(commands.updateConnection(editing, request, stored, props.revision ?? ""));
+      } else {
+        const id = await call(commands.addConnection(request, stored));
+        await refreshConnections();
+        // The store remembers it per connection identifier (enabled unless set otherwise).
+        const added = useApp.getState().connections.find((c) => c.id === id);
+        if (added && added.historyEnabled !== historyEnabled) {
+          try {
+            await saveHistoryPreference(id, historyEnabled);
+          } catch (e) {
+            // The connection exists: saving this form again would add a second one.
+            useApp.getState().setConnectionDialog({ kind: "edit", id, notice: t("fields.historyNotSaved", { error: errorText(e) }) });
+            return;
+          }
+        }
+      }
       if (editing && props.savedEngine && props.savedEngine !== engine.id) {
         // Its open sessions belong to the old engine: closed; tabs connect again when run.
         const app = useApp.getState();
@@ -615,10 +657,14 @@ function ConnectionForm(props: {
 
   const onServer = remoteFile && useTunnel;
   const tabs: FormTab[] = network
-    ? ["main", "ssl", "ssh", "kubernetes", "options"]
+    ? ["main", "ssl", "ssh", "kubernetes", "session", "options"]
     : remoteFile
-      ? ["main", "ssh", "options"]
-      : ["main", "options"];
+      ? ["main", "ssh", "session", "options"]
+      : ["main", "session", "options"];
+  // Where the session setup may only read and change settings (ADR-037), as the core decides
+  // when the session opens: a read-only connection or a type that confirms data changes.
+  const setupRestricted = draft.readOnly || Boolean(selectedType?.safeguards.confirmDataChanges);
+  const databaseIsSchema = engine.id === "mysql" || engine.id === "mariadb";
   return (
     <>
     <form
@@ -944,6 +990,71 @@ function ConnectionForm(props: {
           </div>
         )}
 
+        <div id="connection-tab-session" role="tabpanel" hidden={tab !== "session"}>
+          {(engine.sessionSchema || engine.isolationLevels.length > 0) && (
+            <fieldset>
+              <legend>{t("sections.session")}</legend>
+              {engine.sessionSchema && (
+                <>
+                  <Field label={databaseIsSchema ? t("fields.defaultDatabase") : t("fields.defaultSchema")}>
+                    <input
+                      type="text"
+                      name="defaultSchema"
+                      maxLength={SCHEMA_MAX}
+                      value={draft.defaultSchema}
+                      placeholder={t("fields.defaultSchemaPlaceholder")}
+                      onChange={(e) => update({ defaultSchema: e.target.value })}
+                    />
+                  </Field>
+                  <p className="muted small">{databaseIsSchema ? t("fields.defaultDatabaseHint") : t("fields.defaultSchemaHint")}</p>
+                </>
+              )}
+              {engine.isolationLevels.length > 0 && (
+                <>
+                  <Field label={t("fields.isolation")}>
+                    <select aria-label={t("fields.isolation")} name="isolation" value={draft.isolation ?? ""} onChange={(e) => update({ isolation: e.target.value || null })}>
+                      <option value="">{t("isolation.default")}</option>
+                      {engine.isolationLevels.map((level) => (
+                        <option key={level} value={level}>
+                          {t(`isolation.${level}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <p className="muted small">{t("fields.isolationHint")}</p>
+                </>
+              )}
+            </fieldset>
+          )}
+          <fieldset>
+            <legend>{t("sections.setup")}</legend>
+            <Field label={t("fields.sessionSetup")}>
+              <textarea
+                className="session-setup"
+                name="sessionSetup"
+                rows={6}
+                spellCheck={false}
+                maxLength={SETUP_MAX}
+                value={draft.sessionSetup}
+                placeholder={SETUP_EXAMPLES[engine.id] ?? ""}
+                onChange={(e) => update({ sessionSetup: e.target.value })}
+              />
+            </Field>
+            <label className="check">
+              <input
+                type="checkbox"
+                name="ignoreSetupErrors"
+                checked={draft.ignoreSetupErrors && draft.sessionSetup.trim() !== ""}
+                disabled={draft.sessionSetup.trim() === ""}
+                onChange={(e) => update({ ignoreSetupErrors: e.target.checked })}
+              />
+              {t("fields.ignoreSetupErrors")}
+            </label>
+            <p className="muted small">{t("fields.sessionSetupHint")}</p>
+            {setupRestricted && <p className="muted small">{t("fields.sessionSetupRestricted")}</p>}
+          </fieldset>
+        </div>
+
         <div id="connection-tab-options" role="tabpanel" hidden={tab !== "options"}>
           <fieldset>
             <legend>{t("sections.about")}</legend>
@@ -1065,6 +1176,14 @@ function ConnectionForm(props: {
               <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
             )}
             <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
+          </fieldset>
+          <fieldset>
+            <legend>{t("sections.onThisComputer")}</legend>
+            <label className="check">
+              <input type="checkbox" name="historyEnabled" checked={historyEnabled} onChange={(e) => { setHistoryEnabled(e.target.checked); setSaveError(null); }} />
+              {t("fields.history")}
+            </label>
+            <p className="muted small">{t("fields.historyHint")}</p>
           </fieldset>
         </div>
       </div>

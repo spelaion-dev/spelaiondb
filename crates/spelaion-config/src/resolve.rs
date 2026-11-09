@@ -10,7 +10,9 @@ use crate::accounts::{connection_account, proxy_account, tunnel_account};
 use crate::draft::ConnectionDraft;
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, ConnectionEntry, ConnectionId, Source};
-use crate::model::{Engine, McpConfig, ProxyType, SecretSpec, SshAuth, TlsModeConfig, TunnelFile};
+use crate::model::{
+    Engine, IsolationLevel, McpConfig, ProxyType, SecretSpec, SshAuth, TlsModeConfig, TunnelFile,
+};
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::trust::TrustStore;
 use crate::tunnel_draft::TunnelDraft;
@@ -53,7 +55,20 @@ pub struct ResolvedConnection {
     pub keepalive: Option<Duration>,
     /// Statements run from the editor are cancelled after this long (ADR-035); `None`: never.
     pub statement_timeout: Option<Duration>,
+    /// How every new session starts (ADR-037); the core applies it when a session opens.
+    pub session: ResolvedSession,
     pub mcp: McpConfig,
+}
+
+/// A connection's `[session]` table, ready to apply (ADR-037).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedSession {
+    /// The setup script, as written (never expanded).
+    pub setup: Option<String>,
+    pub ignore_setup_errors: bool,
+    /// The default schema, with `${…}` variables expanded.
+    pub schema: Option<String>,
+    pub isolation: Option<IsolationLevel>,
 }
 
 /// The local port of a tunnel's forward, on 127.0.0.1.
@@ -385,6 +400,12 @@ impl<'a> Resolver<'a> {
                 .statement_timeout
                 .filter(|s| *s > 0)
                 .map(|s| Duration::from_secs(s.into())),
+            session: ResolvedSession {
+                setup: file.session.setup.clone(),
+                ignore_setup_errors: file.session.ignore_setup_errors,
+                schema: text(&file.session.schema)?,
+                isolation: file.session.isolation,
+            },
             mcp: file.mcp.clone(),
         })
     }
@@ -403,7 +424,10 @@ impl<'a> Resolver<'a> {
     /// missing ones are reported together, for the app to ask for them at once (ADR-022).
     fn check_variables(&self, entry: &ConnectionEntry) -> Result<(), ResolveError> {
         let vars = &self.config.user.vars;
-        let mut texts = crate::vars::text_values(&entry.file);
+        // The setup is SQL sent as written (ADR-037): a `${…}` in it is not a variable.
+        let mut file = entry.file.clone();
+        file.session.setup = None;
+        let mut texts = crate::vars::text_values(&file);
         if let Some(name) = &entry.file.tunnel
             && let Some(tunnel) = self.config.tunnel_for(entry.id.source, name)
         {

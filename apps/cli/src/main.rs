@@ -29,6 +29,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Opens a saved PostgreSQL, MySQL, MariaDB, SQL Server, SQLite or DuckDB execution plan
+    /// locally, without connecting or executing SQL.
+    Plan {
+        path: PathBuf,
+        /// Export the complete normalized table as formula-safe CSV instead of JSON.
+        #[arg(long)]
+        csv: Option<PathBuf>,
+        /// Node offset of the bounded JSON page.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
     /// Read-only MCP server over stdio, for AI agents.
     Mcp {
         /// Directory from which to search for `.spelaion/` (defaults to the current one).
@@ -140,12 +153,29 @@ fn workspace_or_cwd(path: Option<PathBuf>) -> Result<PathBuf> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Command::Plan {
+        path,
+        csv,
+        offset,
+        limit,
+    } = &cli.command
+    {
+        let plans = spelaion_core::plan::PlanStore::new();
+        let summary = plans.insert(spelaion_core::plan::read_plan(path)?)?;
+        if let Some(csv) = csv {
+            plans.export_csv(summary.id, &Default::default(), csv, &Default::default())?;
+        } else {
+            println!("{}", plans.tool_json(summary.id, *offset, *limit, 60_000)?);
+        }
+        return Ok(());
+    }
     // Checking a repository needs no personal directory (it runs in CI).
     if let Command::Check { path, strict } = cli.command {
         return check(path, strict);
     }
     let user_dir = user_dir(&cli)?;
     match cli.command {
+        Command::Plan { .. } => unreachable!("handled above"),
         Command::Check { .. } => unreachable!("handled above"),
         Command::Mcp {
             workspace,

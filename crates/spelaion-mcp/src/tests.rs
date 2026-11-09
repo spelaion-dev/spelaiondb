@@ -111,6 +111,287 @@ fn personal(read_only_flag: bool) -> Personal {
 const INSERT: &str = "insert into notes (body) values ('from an agent')";
 
 #[tokio::test]
+async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning() {
+    let Ok(address) = std::env::var("SPELAION_TEST_PG") else {
+        eprintln!("SPELAION_TEST_PG not set: MCP plans not tested");
+        return;
+    };
+    let (host, port) = address.rsplit_once(':').unwrap();
+    let dir = temp("plans");
+    std::fs::create_dir_all(dir.join("connections")).unwrap();
+    let config = format!(
+        "schema_version=1\nname='Plans'\nengine='postgres'\nhost='{host}'\nport={port}\nuser='spelaion'\ndatabase='spelaion'\n[mcp]\nexposed=true\n"
+    );
+    std::fs::write(dir.join("connections/plans.toml"), config).unwrap();
+    let other = std::fs::read_to_string(dir.join("connections/plans.toml"))
+        .unwrap()
+        .replace("name='Plans'", "name='Other'");
+    std::fs::write(dir.join("connections/other.toml"), other).unwrap();
+    let server = server(None, &dir, true);
+    // Keep the test password in the owned resolved session, without mutating process env.
+    let entry = server.entry("~/plans").unwrap();
+    let mut resolved = Resolver::new(&server.state.config, &server.state.trust, &SystemBackend)
+        .resolve(&entry.id)
+        .unwrap();
+    resolved.password =
+        spelaion_config::Password::Value(spelaion_driver_api::Secret::new("spelaion"));
+    resolved.params.read_only = true;
+    let open = open_connection(
+        resolved,
+        &server.state.engines,
+        OpenOptions {
+            tunnels: server.state.tunnels.clone(),
+            known_hosts: KnownHosts {
+                team_file: None,
+                user_file: None,
+                app_file: dir.join("known_hosts"),
+            },
+            interaction: Arc::new(NonInteractive),
+            password: None,
+            read_only_session: true,
+        },
+        Arc::new(ResultStore::new()),
+    )
+    .await
+    .unwrap();
+    // Subsequent pages read PlanStore and create no second execution/audit record.
+    let session = Arc::new(tokio::sync::Mutex::new(open));
+    server
+        .state
+        .sessions
+        .lock()
+        .await
+        .insert(("~/plans".into(), Use::Read), session);
+    let arguments = |sql: Option<&str>, id| ExplainArgs {
+        connection: "~/plans".into(),
+        sql: sql.map(str::to_owned),
+        structured: Some(true),
+        output_format: None,
+        plan_id: id,
+        offset: None,
+        limit: Some(1),
+        release: None,
+    };
+    let result = server
+        .explain(
+            &call("explain_query"),
+            arguments(Some("SELECT 1 UNION ALL SELECT 2"), None),
+        )
+        .await
+        .unwrap();
+    assert!(!refused(&result), "{}", body(&result));
+    let json: serde_json::Value = serde_json::from_str(&body(&result)).unwrap();
+    let id = json["summary"]["id"].as_u64().unwrap() as u32;
+    let mut wrong_owner = arguments(None, Some(id));
+    wrong_owner.connection = "~/other".into();
+    assert!(refused(
+        &server
+            .explain(&call("explain_query"), wrong_owner)
+            .await
+            .unwrap()
+    ));
+    assert_eq!(json["summary"]["engine"], "postgres");
+    assert_eq!(json["summary"]["analyzed"], false);
+    assert_eq!(json["page"]["nodes"].as_array().unwrap().len(), 1);
+    let expected = server
+        .state
+        .plans
+        .tool_json(id, 0, 1, format::MAX_RESPONSE)
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&expected).unwrap(),
+        json
+    );
+    let next = json["page"]["nextOffset"].as_u64().unwrap() as u32;
+    let mut page = arguments(None, Some(id));
+    page.offset = Some(next);
+    let page = server.explain(&call("explain_query"), page).await.unwrap();
+    assert!(!refused(&page));
+    assert!(body(&page).len() <= format::MAX_RESPONSE);
+    let audit = app_store(&dir).recent(20).unwrap();
+    assert_eq!(
+        audit
+            .iter()
+            .filter(|e| e.statement.starts_with("SELECT 1 UNION"))
+            .count(),
+        1
+    );
+    assert!(audit.iter().any(|e| {
+        e.detail
+            .as_deref()
+            .is_some_and(|d| d.contains("no database statement executed"))
+    }));
+    for sql in [
+        "EXPLAIN ANALYZE SELECT 1",
+        "SELECT 1; DELETE FROM t",
+        "UPDATE t SET v=1",
+        "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d",
+    ] {
+        assert!(
+            refused(
+                &server
+                    .explain(&call("explain_query"), arguments(Some(sql), None))
+                    .await
+                    .unwrap()
+            ),
+            "{sql}"
+        );
+    }
+    assert!(
+        serde_json::from_value::<ExplainArgs>(
+            serde_json::json!({"connection":"~/plans","sql":"SELECT 1","analyze":true})
+        )
+        .is_err()
+    );
+    let mut release = arguments(None, Some(id));
+    release.release = Some(true);
+    assert!(!refused(
+        &server
+            .explain(&call("explain_query"), release)
+            .await
+            .unwrap()
+    ));
+    assert!(refused(
+        &server
+            .explain(&call("explain_query"), arguments(None, Some(id)))
+            .await
+            .unwrap()
+    ));
+    let mut cached = Vec::new();
+    for _ in 0..32 {
+        let result = server
+            .explain(&call("explain_query"), arguments(Some("SELECT 1"), None))
+            .await
+            .unwrap();
+        assert!(!refused(&result), "{}", body(&result));
+        cached.push(
+            serde_json::from_str::<serde_json::Value>(&body(&result)).unwrap()["summary"]["id"]
+                .as_u64()
+                .unwrap() as u32,
+        );
+    }
+    assert!(refused(
+        &server
+            .explain(&call("explain_query"), arguments(Some("SELECT 1"), None))
+            .await
+            .unwrap()
+    ));
+    assert_eq!(server.state.plan_connections.lock().unwrap().len(), 32);
+    let mut release = arguments(None, Some(cached[0]));
+    release.release = Some(true);
+    server
+        .explain(&call("explain_query"), release)
+        .await
+        .unwrap();
+    assert_eq!(server.state.plan_connections.lock().unwrap().len(), 31);
+    assert!(!refused(
+        &server
+            .explain(&call("explain_query"), arguments(Some("SELECT 1"), None))
+            .await
+            .unwrap()
+    ));
+    assert_eq!(server.state.plan_connections.lock().unwrap().len(), 32);
+}
+
+#[tokio::test]
+async fn server_plans_return_the_core_tree_and_never_analyze() {
+    for (variable, engine) in [
+        ("SPELAION_TEST_MYSQL", "mysql"),
+        ("SPELAION_TEST_MARIADB", "mariadb"),
+        ("SPELAION_TEST_MSSQL", "sqlserver"),
+    ] {
+        let Ok(address) = std::env::var(variable) else {
+            eprintln!("{variable} not set: MCP {engine} plans not tested");
+            continue;
+        };
+        let (host, port) = address.rsplit_once(':').unwrap();
+        let (user, database, password) = if engine == "sqlserver" {
+            ("sa", "master", "Spelaion-test-1")
+        } else {
+            ("spelaion", "spelaion", "spelaion")
+        };
+        let dir = temp(&format!("plans-{engine}"));
+        std::fs::create_dir_all(dir.join("connections")).unwrap();
+        std::fs::write(
+            dir.join("connections/plans.toml"),
+            format!(
+                "schema_version=1\nname='Plans'\nengine='{engine}'\nhost='{host}'\nport={port}\nuser='{user}'\ndatabase='{database}'\n[tls]\nmode='require'\n[mcp]\nexposed=true\n"
+            ),
+        )
+        .unwrap();
+        let server = server(None, &dir, true);
+        let entry = server.entry("~/plans").unwrap();
+        let mut resolved = Resolver::new(&server.state.config, &server.state.trust, &SystemBackend)
+            .resolve(&entry.id)
+            .unwrap();
+        resolved.password =
+            spelaion_config::Password::Value(spelaion_driver_api::Secret::new(password));
+        resolved.params.read_only = true;
+        let open = open_connection(
+            resolved,
+            &server.state.engines,
+            OpenOptions {
+                tunnels: server.state.tunnels.clone(),
+                known_hosts: KnownHosts {
+                    team_file: None,
+                    user_file: None,
+                    app_file: dir.join("known_hosts"),
+                },
+                interaction: Arc::new(NonInteractive),
+                password: None,
+                read_only_session: true,
+            },
+            Arc::new(ResultStore::new()),
+        )
+        .await
+        .unwrap();
+        server.state.sessions.lock().await.insert(
+            ("~/plans".into(), Use::Read),
+            Arc::new(tokio::sync::Mutex::new(open)),
+        );
+        let arguments = |sql: &str| ExplainArgs {
+            connection: "~/plans".into(),
+            sql: Some(sql.into()),
+            structured: Some(true),
+            output_format: None,
+            plan_id: None,
+            offset: None,
+            limit: Some(50),
+            release: None,
+        };
+        let result = server
+            .explain(
+                &call("explain_query"),
+                arguments("SELECT 1 AS a UNION ALL SELECT 2"),
+            )
+            .await
+            .unwrap();
+        assert!(!refused(&result), "{engine}: {}", body(&result));
+        let json: serde_json::Value = serde_json::from_str(&body(&result)).unwrap();
+        assert_eq!(json["summary"]["engine"], engine);
+        assert_eq!(json["summary"]["analyzed"], false);
+        assert!(!json["page"]["nodes"].as_array().unwrap().is_empty());
+        for sql in [
+            "EXPLAIN ANALYZE SELECT 1",
+            "ANALYZE FORMAT=JSON SELECT 1",
+            "SELECT 1; DELETE FROM t",
+            "UPDATE t SET v=1",
+            "DELETE FROM t",
+        ] {
+            assert!(
+                refused(
+                    &server
+                        .explain(&call("explain_query"), arguments(sql))
+                        .await
+                        .unwrap()
+                ),
+                "{engine}: {sql}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn the_switch_takes_writes_away_from_a_running_server() {
     let p = personal(false);
     // As before ADR-033: the connection lets agents write.
@@ -393,4 +674,52 @@ async fn every_call_is_recorded_with_its_tool_and_session() {
         .unwrap();
     let latest = &app_store(&p.user_dir).recent(1).unwrap()[0];
     assert_ne!(latest.session.as_deref(), Some(session.as_str()));
+}
+
+#[tokio::test]
+async fn an_agents_read_session_refuses_a_setup_that_writes() {
+    let user_dir = temp("setup");
+    let db = database(&user_dir);
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    // The user's own setup writes: their editor runs it, an agent's read session must not.
+    std::fs::write(
+        user_dir.join("connections/notes.toml"),
+        writable_connection(
+            &db,
+            "\n[session]\nsetup = \"insert into notes (body) values ('setup')\"\nignore_setup_errors = true\n",
+        ),
+    )
+    .unwrap();
+    let mcp = server(None, &user_dir, false);
+    let result = mcp
+        .read(
+            &call("run_query"),
+            "~/notes",
+            "select count(*) from notes",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(refused(&result), "{}", body(&result));
+    assert!(body(&result).contains("session setup"), "{}", body(&result));
+    assert_eq!(rows(&db), 1);
+
+    // A setup that only reads or sets the session is fine for agents.
+    std::fs::write(
+        user_dir.join("connections/notes.toml"),
+        writable_connection(&db, "\n[session]\nsetup = \"select count(*) from notes\"\n"),
+    )
+    .unwrap();
+    let mcp = server(None, &user_dir, false);
+    let result = mcp
+        .read(
+            &call("run_query"),
+            "~/notes",
+            "select count(*) from notes",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!refused(&result), "{}", body(&result));
+    assert_eq!(rows(&db), 1);
 }

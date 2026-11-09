@@ -1,0 +1,8 @@
+-> Limit: 20 row(s)  (actual time=25.3..25.3 rows=20 loops=1)
+    -> Sort: o.total DESC, limit input to 20 row(s) per chunk  (actual time=25.3..25.3 rows=20 loops=1)
+        -> Stream results  (cost=3.63e+6 rows=3.61e+6) (actual time=22.8..24.2 rows=10800 loops=1)
+            -> Inner hash join (c.`name` = concat('customer ',o.customer_id))  (cost=3.63e+6 rows=3.61e+6) (actual time=22.3..22.8 rows=10800 loops=1)
+                -> Table scan on c  (cost=388e-6 rows=1000) (actual time=0.0285..0.132 rows=1000 loops=1)
+                -> Hash
+                    -> Filter: (o.created >= DATE'2026-10-01')  (cost=11157 rows=36145) (actual time=0.325..19.8 rows=10800 loops=1)
+                        -> Table scan on o  (cost=11157 rows=108446) (actual time=0.295..15 rows=120000 loops=1)

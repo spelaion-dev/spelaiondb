@@ -6,20 +6,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { closeQueryTab, defaultTabLabel, tabLabel } from "../connect";
 import { topDialog } from "../modalFocus";
-import { isModified, reloadTab, saveTab, saveTabAs } from "../sqlFiles";
+import { isModified } from "../sqlFiles";
+import { startRename } from "../tabActions";
 import { type Tab, useApp } from "../store";
 import { FileMenuButton } from "./FileMenu";
 import { Icon } from "./Icons";
-import {
-  TAB_SHORTCUTS,
-  closable,
-  closeAllTabs,
-  closeOtherTabs,
-  closeTabsToTheRight,
-  duplicateTab,
-  startRename,
-  togglePinned,
-} from "../tabActions";
+import { commandSpec, type CommandId } from "../commandRegistry";
+import { CommandMenuItem } from "./CommandMenuItem";
 
 /** Distinguishes SQL, table data and table metadata without adding labels to the tab bar. */
 function TabIcon({ kind }: { kind: "query" | "file" | "table" | "details" }) {
@@ -225,7 +218,7 @@ export function TabBar({ hidden }: { hidden: boolean }) {
                 <button
                   className="close tab-unpin"
                   aria-label={t("tabs.unpinButton", { name: label })}
-                  title={`${t("tabs.unpin")} (${TAB_SHORTCUTS.pin})`}
+                  title={`${t("tabs.unpin")} (${commandSpec("tab.pin").shortcut})`}
                   onClick={(e) => {
                     e.stopPropagation();
                     useApp.getState().setPinned(tab.id, false);
@@ -303,7 +296,6 @@ function RenameInput({ tab, onDone }: { tab: Tab; onDone(): void }) {
 function TabMenu({ id, x, y, onClose }: { id: string; x: number; y: number; onClose(): void }) {
   const { t } = useTranslation("app");
   const tab = useApp((s) => s.tabs.find((item) => item.id === id));
-  const canReopen = useApp((s) => s.closedTabs.length > 0);
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
 
@@ -330,20 +322,8 @@ function TabMenu({ id, x, y, onClose }: { id: string; x: number; y: number; onCl
   }, [onClose]);
 
   if (!tab) return null;
-  const can = closable(id);
-  const item = (label: string, shortcut: string, action: () => void, disabled = false) => (
-    <button
-      role="menuitem"
-      disabled={disabled}
-      onClick={() => {
-        onClose();
-        action();
-      }}
-    >
-      <span>{label}</span>
-      <span className="menu-shortcut">{shortcut}</span>
-    </button>
-  );
+  // Every item is a command of the registry (commandRegistry.ts), as in the command palette.
+  const item = (command: CommandId) => <CommandMenuItem id={command} tab={id} onClose={onClose} />;
   return (
     <div
       ref={ref}
@@ -370,24 +350,24 @@ function TabMenu({ id, x, y, onClose }: { id: string; x: number; y: number; onCl
         items[next]?.focus();
       }}
     >
-      {item(t("tabs.rename"), TAB_SHORTCUTS.rename, () => startRename(id))}
-      {item(t("tabs.duplicate"), TAB_SHORTCUTS.duplicate, () => duplicateTab(id), Boolean(tab.tableDetails))}
-      {item(tab.pinned ? t("tabs.unpin") : t("tabs.pin"), TAB_SHORTCUTS.pin, () => togglePinned(id))}
-      {!tab.table && !tab.tableDetails && (
+      {item("tab.rename")}
+      {item("tab.duplicate")}
+      {item("tab.pin")}
+      {!tab.table && !tab.tableDetails && !tab.plan && (
         <>
           <hr />
-          {tab.file && item(t("tabs.saveFile"), "Ctrl+S", () => void saveTab(id))}
-          {item(t("tabs.saveFileAs"), "Ctrl+Shift+S", () => void saveTabAs(id))}
-          {tab.file && item(t("tabs.reloadFile"), "", () => void reloadTab(id))}
+          {tab.file && item("file.save")}
+          {item("file.saveAs")}
+          {tab.file && item("file.reload")}
         </>
       )}
       <hr />
-      {item(t("tabs.close"), TAB_SHORTCUTS.close, () => void closeQueryTab(id))}
-      {item(t("tabs.closeOthers"), TAB_SHORTCUTS.closeOthers, () => void closeOtherTabs(id), !can.others)}
-      {item(t("tabs.closeRight"), TAB_SHORTCUTS.closeRight, () => void closeTabsToTheRight(id), !can.right)}
-      {item(t("tabs.closeAll"), TAB_SHORTCUTS.closeAll, () => void closeAllTabs(), !can.all)}
+      {item("tab.close")}
+      {item("tab.closeOthers")}
+      {item("tab.closeRight")}
+      {item("tab.closeAll")}
       <hr />
-      {item(t("tabs.reopen"), TAB_SHORTCUTS.reopen, () => useApp.getState().reopenTab(), !canReopen)}
+      {item("tab.reopen")}
     </div>
   );
 }

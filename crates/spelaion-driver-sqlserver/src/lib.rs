@@ -10,6 +10,7 @@ mod decode;
 mod dialect;
 mod introspect;
 mod objects;
+mod plan;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,10 +19,10 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, NameFilter, Notice, ObjectInfo,
-    Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
-    TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
+    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive,
+    LikeFilter, NameFilter, Notice, ObjectInfo, PlanMode, ReferencingKey, Result, ResultSchema,
+    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -133,16 +134,22 @@ impl Driver for SqlServerDriver {
         let client = open(params).await?;
         let (cancels, cancelled) = watch::channel(0u64);
         let (requests, receiver) = mpsc::channel(8);
-        tokio::spawn(actor(client, receiver, cancelled));
+        tokio::spawn(actor(
+            client,
+            receiver,
+            cancelled,
+            Some(params.database.clone()),
+        ));
         Ok(Box::new(SqlServerConnection {
             requests,
             cancel: Arc::new(SqlServerCancel(cancels)),
             capabilities: Capabilities {
                 transactions: true,
                 cancel: true,
-                explain: false,
+                explain: true,
                 editable_results: false,
                 schemas: true,
+                insert_rows: true,
             },
         }))
     }
@@ -151,9 +158,22 @@ impl Driver for SqlServerDriver {
 pub(crate) type Rows = Vec<Vec<Option<String>>>;
 
 enum Request {
+    DatabaseContext {
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
+    CurrentDatabase {
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
     Execute {
         sql: String,
         batch_size: usize,
+        events: mpsc::Sender<Result<ExecEvent>>,
+    },
+    /// The server settings, query and restoration belong to one actor request.
+    Plan {
+        sql: String,
+        mode: PlanMode,
+        cancel_epoch: u64,
         events: mpsc::Sender<Result<ExecEvent>>,
     },
     /// Small catalog queries: every value as text, parameters as `@P1`, `@P2`…
@@ -169,6 +189,13 @@ enum Request {
     TransactionState {
         reply: oneshot::Sender<Result<TransactionState>>,
     },
+    /// Rows of an import (ADR-038): a TDS bulk load into a staging table, then one
+    /// `INSERT … SELECT`.
+    Insert {
+        target: InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+        reply: oneshot::Sender<Result<u64>>,
+    },
 }
 
 /// Owns the connection until every handle is dropped.
@@ -176,12 +203,31 @@ async fn actor(
     mut client: SqlClient,
     mut requests: mpsc::Receiver<Request>,
     mut cancels: watch::Receiver<u64>,
+    database: Option<String>,
 ) {
+    let mut context = DatabaseContext::new(ContextDialect::SqlServer, database);
     // An interrupted or failed response may have hidden transaction ENVCHANGE tokens.
     // Stay conservative until a later user operation completes cleanly.
     let mut transaction_state_unknown = false;
     while let Some(request) = requests.recv().await {
         match request {
+            Request::Plan {
+                sql,
+                mode,
+                cancel_epoch,
+                events,
+            } => {
+                let (healthy, attempted) =
+                    plan::execute(&mut client, &sql, mode, &events, &mut cancels, cancel_epoch)
+                        .await;
+                // A failed or interrupted batch can have hidden transaction ENVCHANGE tokens.
+                transaction_state_unknown |= attempted;
+                if !healthy {
+                    // Do not let a queued request run on a session whose SET state is unknown.
+                    requests.close();
+                    return;
+                }
+            }
             Request::Execute {
                 sql,
                 batch_size,
@@ -202,6 +248,15 @@ async fn actor(
                     () = cancelled => ExecutionOutcome::Cancelled,
                 };
                 transaction_state_unknown = !matches!(finished, ExecutionOutcome::Complete);
+                context.observe(&sql, matches!(finished, ExecutionOutcome::Complete));
+                if matches!(
+                    finished,
+                    ExecutionOutcome::Cancelled
+                        | ExecutionOutcome::Abandoned
+                        | ExecutionOutcome::Failed { definitive: false }
+                ) {
+                    context.refresh(None);
+                }
                 if matches!(
                     finished,
                     ExecutionOutcome::Cancelled | ExecutionOutcome::Abandoned
@@ -219,6 +274,45 @@ async fn actor(
             }
             Request::Rows { sql, params, reply } => {
                 let result = rows(&mut client, &sql, &params).await;
+                context.observe(&sql, result.is_ok());
+                if result.is_err() && !matches!(&result, Err(DriverError::Database { .. })) {
+                    context.refresh(None);
+                }
+                transaction_state_unknown = result.is_err();
+                let _ = reply.send(result);
+            }
+            Request::DatabaseContext { reply } => {
+                let _ = reply.send(Ok(context.snapshot()));
+            }
+            Request::Insert {
+                target,
+                rows,
+                reply,
+            } => {
+                let result = bulk_insert(&mut client, &target, rows).await;
+                transaction_state_unknown = result.is_err();
+                let _ = reply.send(result);
+            }
+            Request::CurrentDatabase { reply } => {
+                // SHOWPLAN can return text/XML instead of executing a SELECT. Only the
+                // actual two-column row with this literal is an authoritative observation.
+                let result = rows(
+                    &mut client,
+                    "select db_name(), N'spelaion-context-executed'",
+                    &[],
+                )
+                .await
+                .map(|rows| {
+                    if rows.len() == 1
+                        && rows[0].len() == 2
+                        && rows[0][1].as_deref() == Some("spelaion-context-executed")
+                    {
+                        rows[0][0].clone()
+                    } else {
+                        None
+                    }
+                });
+                context.refresh(result.as_ref().ok().cloned().flatten());
                 transaction_state_unknown = result.is_err();
                 let _ = reply.send(result);
             }
@@ -273,6 +367,71 @@ async fn actor(
     let _ = client.close().await;
 }
 
+/// An import's rows (ADR-038): a TDS bulk load (the protocol's own bulk path) into a temporary
+/// table of `nvarchar(max)` columns, whose names are ours, then one `INSERT … SELECT` that lets
+/// the server convert each value to its column's type, in the order the rows came. The values
+/// are the bulk load's data: they are never SQL text. The staging table lives in the session (and
+/// in its transaction: a rollback drops it, and the next batch creates it again).
+async fn bulk_insert(
+    client: &mut SqlClient,
+    target: &InsertTarget,
+    rows: Vec<Vec<Option<String>>>,
+) -> Result<u64> {
+    let width = target.columns.len();
+    let staging = format!("#spelaion_import_{width}");
+    let names: Vec<String> = (1..=width).map(|i| format!("c{i}")).collect();
+    let create = format!(
+        "if object_id('tempdb..{staging}') is null create table {staging}          (spelaion_row bigint identity(1, 1), {})",
+        names
+            .iter()
+            .map(|n| format!("{n} nvarchar(max) null"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    run_batch(client, &create).await?;
+    {
+        let columns: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut load = client
+            .bulk_insert_columns(&staging, &columns)
+            .await
+            .map_err(|e| map_error(e, None))?;
+        for row in rows {
+            let mut token = tiberius::TokenRow::new();
+            for value in row {
+                token.push(tiberius::ColumnData::String(
+                    value.map(std::borrow::Cow::Owned),
+                ));
+            }
+            load.send(token).await.map_err(|e| map_error(e, None))?;
+        }
+        load.finalize().await.map_err(|e| map_error(e, None))?;
+    }
+    let insert = format!(
+        "INSERT INTO {} {} SELECT {} FROM {staging} ORDER BY spelaion_row",
+        target.qualified(&SqlServerDialect),
+        target.column_list(&SqlServerDialect),
+        names.join(", ")
+    );
+    let inserted = client
+        .execute(insert.as_str(), &[])
+        .await
+        .map_err(|e| map_error(e, None))?
+        .total();
+    run_batch(client, &format!("truncate table {staging}")).await?;
+    Ok(inserted)
+}
+
+async fn run_batch(client: &mut SqlClient, sql: &str) -> Result<()> {
+    client
+        .simple_query(sql)
+        .await
+        .map_err(|e| map_error(e, Some(sql)))?
+        .into_results()
+        .await
+        .map_err(|e| map_error(e, Some(sql)))?;
+    Ok(())
+}
+
 async fn rows(client: &mut SqlClient, sql: &str, params: &[String]) -> Result<Rows> {
     // Without parameters, a plain batch: through `sp_executesql` a `USE` would only last for
     // that call.
@@ -319,7 +478,7 @@ impl Current {
 
 enum ExecutionOutcome {
     Complete,
-    Failed,
+    Failed { definitive: bool },
     Abandoned,
     Cancelled,
 }
@@ -351,8 +510,9 @@ async fn execute(
             ExecutionOutcome::Complete
         }
         Streamed::Failed(error) => {
+            let definitive = matches!(&error, DriverError::Database { .. });
             let _ = events.send(Err(error)).await;
-            ExecutionOutcome::Failed
+            ExecutionOutcome::Failed { definitive }
         }
         Streamed::Gone => ExecutionOutcome::Complete,
         Streamed::Abandoned => ExecutionOutcome::Abandoned,
@@ -560,6 +720,23 @@ impl Connection for SqlServerConnection {
         })))
     }
 
+    async fn execute_plan(&self, sql: &str, mode: PlanMode) -> Result<EventStream> {
+        let (events, mut receiver) = mpsc::channel(4);
+        let cancel_epoch = *self.cancel.0.borrow();
+        self.requests
+            .send(Request::Plan {
+                sql: sql.to_owned(),
+                mode,
+                cancel_epoch,
+                events,
+            })
+            .await
+            .map_err(|_| closed())?;
+        Ok(Box::pin(futures_util::stream::poll_fn(move |cx| {
+            receiver.poll_recv(cx)
+        })))
+    }
+
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
         self.cancel.clone()
     }
@@ -601,12 +778,44 @@ impl Connection for SqlServerConnection {
             .unwrap_or_default())
     }
 
+    /// A TDS bulk load into a staging table, then `INSERT … SELECT` (see `bulk_insert`).
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        target.check_rows(&rows)?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::Insert {
+                target: target.clone(),
+                rows,
+                reply,
+            })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
+    }
+
     async fn current_database(&self) -> Result<Option<String>> {
-        let rows = self.rows("select db_name()", vec![]).await?;
-        Ok(rows
-            .into_iter()
-            .next()
-            .and_then(|row| row.into_iter().next().flatten()))
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::CurrentDatabase { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
+    }
+
+    async fn database_context(&self) -> Result<Option<String>> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::DatabaseContext { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
     }
 
     /// The online databases this login can enter; the system ones last.
@@ -668,6 +877,10 @@ impl Connection for SqlServerConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, schema, name).await
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        introspect::list_referencing_keys(self, schema, name).await
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {

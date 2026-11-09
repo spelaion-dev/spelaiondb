@@ -3,13 +3,18 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type NameStyleItem, type TextFormat } from "../api";
+import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
+import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta, SortState } from "../store";
 import { useExport } from "./ExportDialog";
-import { CellViewer, type ViewerMode } from "./CellViewer";
+import { CellViewer, ViewerModes, type ViewerMode } from "./CellViewer";
+import { Icon, PATHS } from "./Icons";
+import { ReferencesPanel } from "./ReferencesPanel";
+import { CalcPanel } from "./CalcPanel";
+import { ColumnStatsPopover } from "./ColumnStatsPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
 
@@ -33,6 +38,26 @@ const NUMERIC = new Set(["int", "float", "decimal"]);
 const BOOL_TRUE = new Set(["t", "true", "1"]);
 const BOOL_FALSE = new Set(["f", "false", "0"]);
 const CHECK = 12;
+/** The link drawn at the right of a foreign key cell: a click on it opens the referenced row. */
+const KEY_ICON = 12;
+const KEY_GAP = 4;
+/** The grid's own key for following a foreign key (Ctrl+click does it too). */
+const FOLLOW_SHORTCUT = "Ctrl+Enter";
+let keyIconPaths: Path2D[] | null = null;
+
+/** Lucide's arrow-up-right at `KEY_ICON` pixels, its top-left corner at (x, y). */
+function drawKeyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  keyIconPaths ??= PATHS.arrowUpRight.map((d) => new Path2D(d));
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(KEY_ICON / 24, KEY_ICON / 24);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const path of keyIconPaths) ctx.stroke(path);
+  ctx.restore();
+}
 const MENU_MARGIN = 8;
 
 /** Keep a measured popup inside the window, including when the window is resized. */
@@ -210,8 +235,9 @@ export function ResultGrid({
   /** The columns hidden in this grid changed (for the export dialog). */
   onHiddenColumns?(hidden: number[]): void;
   /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
-   *  core writes the condition; the page's SELECT is checked when it loads). */
-  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void };
+   *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
+   *  can be followed to new table data tabs of `connectionId`. */
+  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
 }) {
   const sortShown = serverSort ? serverSort.sort : result.sort;
   const { t, i18n } = useTranslation("editor");
@@ -237,6 +263,8 @@ export function ResultGrid({
   const [frozen, setFrozen] = useState(false);
   /** The column chooser, where it was opened. */
   const [chooser, setChooser] = useState<{ x: number; y: number } | null>(null);
+  /** A table data tab column's statistics popover, where it was opened. */
+  const [columnStats, setColumnStats] = useState<{ x: number; y: number; column: number } | null>(null);
   const gridLook = usePreferences((s) => s.grid);
   /** The find bar (Ctrl+F): what is searched, and what the core found. */
   const [find, setFind] = useState<{ text: string; matchCase: boolean } | null>(null);
@@ -254,6 +282,45 @@ export function ResultGrid({
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const dragging = useRef(false);
   const [viewerMode, setViewerMode] = useState<ViewerMode>("cell");
+  /** A table data tab's foreign keys: its own and those of other tables that point to it. */
+  const [keys, setKeys] = useState<TableKeyItem[]>([]);
+  const keySchema = tableData?.schema;
+  const keyTable = tableData?.name;
+  useEffect(() => {
+    if (keySchema === undefined || keyTable === undefined) {
+      setKeys((current) => (current.length === 0 ? current : []));
+      return;
+    }
+    let active = true;
+    call(commands.tableKeys(session, keySchema, keyTable))
+      .then((found) => active && setKeys(found))
+      .catch(() => active && setKeys([]));
+    return () => {
+      active = false;
+    };
+  }, [session, keySchema, keyTable]);
+  /** The result's columns that are part of a key of the table, with those keys. */
+  const keyColumns = useMemo(() => {
+    const byColumn = new Map<number, TableKeyItem[]>();
+    const position = (name: string) => {
+      const exact = result.columns.findIndex((c) => c.name === name);
+      if (exact >= 0) return exact;
+      const loose = result.columns.flatMap((c, i) => (c.name.toLowerCase() === name.toLowerCase() ? [i] : []));
+      return loose.length === 1 ? (loose[0] ?? -1) : -1;
+    };
+    for (const key of keys) {
+      if (key.direction !== "outgoing") continue;
+      for (const column of key.columns) {
+        const at = position(column);
+        if (at >= 0) byColumn.set(at, [...(byColumn.get(at) ?? []), key]);
+      }
+    }
+    return byColumn;
+  }, [keys, result.columns]);
+  const viewerModes: ViewerMode[] = tableData && keys.length > 0 ? ["cell", "row", "references", "calc"] : ["cell", "row", "calc"];
+  const shownMode: ViewerMode = viewerModes.includes(viewerMode) ? viewerMode : "cell";
+  const referencesShown = viewer && shownMode === "references";
+  const calcShown = viewer && shownMode === "calc";
   const [sorting, setSorting] = useState(false);
   const sortsPending = useRef(0);
   const [inserting, setInserting] = useState<{ values: CellEditItem[]; index?: number } | null>(null);
@@ -386,7 +453,8 @@ export function ResultGrid({
     const describe = (value: string | null) => {
       if (!current) return;
       const text = value === null ? "NULL" : value.length > 500 ? t("results.accessibleTruncated", { value: value.slice(0, 500) }) : value;
-      target.textContent = t("results.accessibleCell", { row: numbers.format(activeRow + 1), column: column.name, type: column.nativeType, value: text });
+      target.textContent = t("results.accessibleCell", { row: numbers.format(activeRow + 1), column: column.name, type: column.nativeType, value: text }) +
+        (value !== null && keyColumns.has(activeColumn) ? ` ${t("references.accessibleKey", { shortcut: FOLLOW_SHORTCUT })}` : "");
     };
     target.textContent = t("results.accessibleCellLoading", { row: numbers.format(activeRow + 1), column: column.name });
     const key = `${activeRow}:${activeColumn}`;
@@ -395,17 +463,17 @@ export function ResultGrid({
       if (current) target.textContent = t("results.accessibleCellError", { row: numbers.format(activeRow + 1), column: column.name });
     });
     return () => { current = false; };
-  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers]);
+  }, [activeRow, activeColumn, activeEdits, activeDeleted, result.id, result.rows, result.columns, view, t, numbers, keyColumns]);
 
   // What `draw` needs, always up to date (draw is called outside the React cycle).
-  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent });
-  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent };
+  const live = useRef({ result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns });
+  live.current = { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns };
 
   function draw() {
     const canvas = canvasRef.current;
     const scroller = scrollerRef.current;
     if (!canvas || !scroller) return;
-    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent } = live.current;
+    const { result, cache, widths, offsets, rowNumW, selection, size, numbers, sortShown, editing, gridLook, frozenCol, findCache, findCurrent, keyColumns } = live.current;
     const deletedRows = new Set(editing?.deleted ?? []);
     const range = selection ? bounds(selection) : null;
     const dpr = window.devicePixelRatio || 1;
@@ -499,11 +567,20 @@ export function ResultGrid({
         ctx.fillStyle = c.text;
         text = value.replace(/[\r\n\t]+/g, " ");
       }
+      // A foreign key value: a link at the right, which opens the referenced row.
+      const linked = value !== null && value !== undefined && keyColumns.has(col) && !edited;
+      const linkW = linked ? KEY_ICON + KEY_GAP : 0;
+      if (linked) {
+        const focused = selection !== null && selection.focus.row === row && selection.focus.col === col;
+        const fill = ctx.fillStyle;
+        drawKeyIcon(ctx, x + w - PAD - KEY_ICON, y + (ROW_H - KEY_ICON) / 2, focused ? c.accent : c.muted);
+        ctx.fillStyle = fill;
+      }
       if (!text) return;
-      const shown = fit(ctx, text, w - PAD * 2);
+      const shown = fit(ctx, text, w - PAD * 2 - linkW);
       if (numeric && value !== null && value !== undefined) {
         ctx.textAlign = "right";
-        ctx.fillText(shown, x + w - PAD, y + ROW_H / 2);
+        ctx.fillText(shown, x + w - PAD - linkW, y + ROW_H / 2);
         ctx.textAlign = "left";
       } else {
         ctx.fillText(shown, x + PAD, y + ROW_H / 2);
@@ -724,6 +801,63 @@ export function ResultGrid({
     return offsets.findIndex((o, i) => i < widths.length && (widths[i] ?? 0) > 0 && dataX >= o && dataX < (offsets[i + 1] ?? 0));
   }
 
+  /** The foreign key cell whose link is under the pointer (or, with `anywhere`, the foreign key
+   *  cell under it), if it holds a value: what a click on it follows. */
+  function keyCellAt(clientX: number, clientY: number, anywhere: boolean): Cell | null {
+    const scroller = scrollerRef.current;
+    const cell = cellAt(clientX, clientY);
+    if (!scroller || !cell || cell.gutter || !keyColumns.has(cell.col)) return null;
+    const key = `${cell.row}:${cell.col}`;
+    if (editing && key in editing.cells) return null;
+    const value = cache.get(cell.row, cell.col);
+    if (value === null || value === undefined) return null;
+    if (anywhere) return { row: cell.row, col: cell.col };
+    const left = scroller.getBoundingClientRect().left + (cell.col === frozenCol ? rowNumW : rowNumW + (offsets[cell.col] ?? 0) - scroller.scrollLeft);
+    const right = left + (widths[cell.col] ?? 0) - PAD;
+    return clientX >= right - KEY_ICON - KEY_GAP && clientX <= right + KEY_GAP ? { row: cell.row, col: cell.col } : null;
+  }
+
+  /** Follows a foreign key of the table from a row: the core finds the key in the catalog,
+   *  reads the row's values and writes the filter of the table data tab it opens. */
+  async function followKey(cell: Cell, key: TableKeyItem | undefined = keyColumns.get(cell.col)?.[0]) {
+    setMenu(null);
+    if (!tableData?.connectionId || !key) return;
+    try {
+      const target = await call(commands.followKey(session, result.id, cell.row, tableData.schema, tableData.name, {
+        direction: key.direction,
+        schema: key.schema,
+        table: key.table,
+        name: key.name,
+      }));
+      openTableData(tableData.connectionId, session, target.schema, target.table, target.filter);
+    } catch (e) {
+      setNotice({ text: t("references.followFailed", { detail: e instanceof Error ? e.message : String(e) }), error: true });
+    }
+  }
+
+  /** Shows the value of the active cell (Enter, double-click, "View value"), even when the
+   *  side panel last showed the row's references. */
+  function openCellViewer() {
+    if (viewerMode === "references" || viewerMode === "calc") setViewerMode("cell");
+    setViewer(true);
+  }
+
+  /** Shows the numbers about the selection in the side panel (the core computes them). */
+  function openCalc() {
+    setViewerMode("calc");
+    setViewer(true);
+  }
+
+  const closeColumnStats = useCallback(() => {
+    setColumnStats(null);
+    scrollerRef.current?.focus();
+  }, []);
+
+  /** Opens a table data tab where a key of the references panel leads (its filter is the core's). */
+  function openTarget(target: KeyTargetItem) {
+    if (tableData?.connectionId) openTableData(tableData.connectionId, session, target.schema, target.table, target.filter);
+  }
+
   /** The next shown column `delta` steps away (stopping at the first and the last). */
   function stepCol(col: number, delta: number): number {
     const at = visibleCols.indexOf(col);
@@ -733,6 +867,20 @@ export function ResultGrid({
 
   /** Shown columns inside a selection, in order (hidden ones are left out of copies). */
   const shownIn = (b: Bounds) => visibleCols.filter((c) => c >= b.c0 && c <= b.c1);
+  const calcBounds = selection && result.complete && result.rows > 0 ? bounds(selection) : null;
+  const calcColumns = calcBounds ? shownIn(calcBounds).join(",") : "";
+  const calcRange = useMemo<CellRange | null>(
+    () =>
+      calcBounds
+        ? {
+            firstRow: Math.min(calcBounds.r0, result.rows - 1),
+            rows: Math.max(0, Math.min(calcBounds.r1, result.rows - 1) - Math.min(calcBounds.r0, result.rows - 1) + 1),
+            columns: calcColumns ? calcColumns.split(",").map(Number) : [],
+          }
+        : null,
+    // Rebuilt only when the bounds change, not on every render.
+    [calcBounds?.r0, calcBounds?.r1, calcColumns, result.rows],
+  );
 
   function hideColumn(col: number) {
     setMenu(null);
@@ -1151,9 +1299,14 @@ export function ResultGrid({
       setViewer(false);
       return;
     }
+    if (mod && !e.shiftKey && !e.altKey && e.key === "Enter" && selection && keyColumns.has(selection.focus.col)) {
+      e.preventDefault();
+      void followKey(selection.focus);
+      return;
+    }
     if (e.key === "Enter" && selection) {
       e.preventDefault();
-      setViewer(true);
+      openCellViewer();
       return;
     }
     if (editing && e.key === "F2" && selection) {
@@ -1420,6 +1573,14 @@ export function ResultGrid({
             else cycleSort(header);
             return;
           }
+          // The link of a foreign key cell, or Ctrl+click anywhere on one, follows the key.
+          const link = keyCellAt(e.clientX, e.clientY, (e.ctrlKey || e.metaKey) && !e.shiftKey);
+          if (link) {
+            e.preventDefault();
+            setSelection({ anchor: link, focus: link });
+            void followKey(link);
+            return;
+          }
           dragging.current = true;
           selectAt(e, e.shiftKey);
         }}
@@ -1440,9 +1601,9 @@ export function ResultGrid({
           e.currentTarget.style.cursor =
             resizing.current || edgeAt(e.clientX, e.clientY) !== null
               ? "col-resize"
-              : headerAt(e.clientX, e.clientY) === null
-                ? ""
-                : "pointer";
+              : headerAt(e.clientX, e.clientY) !== null || keyCellAt(e.clientX, e.clientY, e.ctrlKey || e.metaKey)
+                ? "pointer"
+                : "";
         }}
         onDoubleClick={(e) => {
           const edge = edgeAt(e.clientX, e.clientY);
@@ -1458,7 +1619,7 @@ export function ResultGrid({
               return;
             }
             setSelection({ anchor: cell, focus: cell });
-            setViewer(true);
+            openCellViewer();
           }
         }}
         onKeyDown={onKeyDown}
@@ -1518,6 +1679,18 @@ export function ResultGrid({
             <button role="menuitem" onClick={() => void copyColumnInList(menu.header ?? 0)}>
               {t("results.copyColumnInList")}
             </button>
+            {tableData && (
+              <button
+                role="menuitem"
+                title={t("columnStats.hint")}
+                onClick={() => {
+                  setMenu(null);
+                  setColumnStats({ x: menu.x, y: menu.y, column: menu.header ?? 0 });
+                }}
+              >
+                {t("columnStats.open")}
+              </button>
+            )}
           </HeaderMenuItems>
         </div>
       )}
@@ -1570,11 +1743,40 @@ export function ResultGrid({
             role="menuitem"
             onClick={() => {
               setMenu(null);
-              setViewer(true);
+              openCellViewer();
             }}
           >
             {t("viewer.open")}
           </button>
+          {selection && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                openCalc();
+              }}
+            >
+              {t("calc.open")}
+            </button>
+          )}
+          {menu.cell && (keyColumns.get(menu.cell.col) ?? []).map((key) => (
+            <button key={`key:${key.schema}.${key.table}:${key.name}`} role="menuitem" onClick={() => menu.cell && void followKey(menu.cell, key)}>
+              {t("references.openReferenced", { table: key.table })}
+              <span className="menu-shortcut">{FOLLOW_SHORTCUT}</span>
+            </button>
+          ))}
+          {tableData && keys.length > 0 && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                setViewerMode("references");
+                setViewer(true);
+              }}
+            >
+              {t("references.show")}
+            </button>
+          )}
           <hr />
           <GridSubmenu label={t("results.copyMenu")}>
             {COPY_ITEMS.map((item) => (
@@ -1697,6 +1899,23 @@ export function ResultGrid({
           onNext={() => void goToMatch("next")}
           onPrevious={() => void goToMatch("previous")}
           onClose={closeFind}
+        />
+      )}
+      {columnStats && tableData && (
+        <ColumnStatsPopover
+          x={columnStats.x}
+          y={columnStats.y}
+          session={session}
+          resultId={result.id}
+          column={columnStats.column}
+          name={result.columns[columnStats.column]?.name ?? ""}
+          table={{ schema: tableData.schema, name: tableData.name, filter: tableData.filter }}
+          onFilter={(filter) => {
+            setColumnStats(null);
+            tableData.onFilter(filter);
+            scrollerRef.current?.focus();
+          }}
+          onClose={closeColumnStats}
         />
       )}
       {chooser && (
@@ -1825,7 +2044,33 @@ export function ResultGrid({
       }}
     />
     <div className="viewer-panel" id={viewerId} style={{ width: shownViewerWidth }}>
-    {selection && focusMeta ? (
+    {calcShown ? (
+      <CalcPanel
+        resultId={result.id}
+        range={calcRange}
+        waiting={!!selection && !result.complete}
+        view={`${view}|${result.rows}`}
+        modes={<ViewerModes modes={viewerModes} mode={shownMode} onMode={(mode) => { setViewerMode(mode); scrollerRef.current?.focus(); }} />}
+        onClose={() => {
+          setViewer(false);
+          scrollerRef.current?.focus();
+        }}
+      />
+    ) : referencesShown && tableData && result.rows > 0 ? (
+      <ReferencesPanel
+        session={session}
+        resultId={result.id}
+        row={Math.min(selection?.focus.row ?? 0, result.rows - 1)}
+        schema={tableData.schema}
+        table={tableData.name}
+        modes={<ViewerModes modes={viewerModes} mode={shownMode} onMode={(mode) => { setViewerMode(mode); scrollerRef.current?.focus(); }} />}
+        onOpen={openTarget}
+        onClose={() => {
+          setViewer(false);
+          scrollerRef.current?.focus();
+        }}
+      />
+    ) : selection && focusMeta ? (
       <CellViewer
         key={view}
         resultId={result.id}
@@ -1833,7 +2078,8 @@ export function ResultGrid({
         column={selection.focus.col}
         meta={focusMeta}
         columns={result.columns}
-        mode={viewerMode}
+        mode={shownMode}
+        modes={viewerModes}
         edits={editing?.cells}
         editable={!!editing && !editing.busy && !sorting && !editing.deleted.includes(selection.focus.row)}
         onEdit={editing?.onEdit}
@@ -1869,16 +2115,52 @@ export function ResultGrid({
     <div className="result-side-actions" role="toolbar" aria-label={t("viewer.toolbar")}>
       <button
         type="button"
-        className={`result-side-action ${viewer ? "active" : ""}`}
+        className={`result-side-action ${viewer && !referencesShown && !calcShown ? "active" : ""}`}
         aria-label={t("viewer.toggle")}
-        aria-pressed={viewer}
+        aria-pressed={viewer && !referencesShown && !calcShown}
         aria-controls={viewer ? viewerId : undefined}
-        title={t(viewer ? "viewer.hide" : "viewer.show")}
-        onClick={() => setViewer(!viewer)}
+        title={t(viewer && !referencesShown && !calcShown ? "viewer.hide" : "viewer.show")}
+        onClick={() => {
+          if (referencesShown || calcShown) setViewerMode("cell");
+          else setViewer(!viewer);
+        }}
       >
         <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <rect x="3" y="3.5" width="14" height="13" rx="1.5" /><path d="M11.5 4v12M5.5 7h3.5M5.5 10h3.5M5.5 13h2" />
         </svg>
+      </button>
+      {tableData && keys.length > 0 && (
+        <button
+          type="button"
+          className={`result-side-action ${referencesShown ? "active" : ""}`}
+          aria-label={t("references.toggle")}
+          aria-pressed={referencesShown}
+          aria-controls={referencesShown ? viewerId : undefined}
+          title={t(referencesShown ? "references.hide" : "references.showPanel")}
+          onClick={() => {
+            if (referencesShown) setViewer(false);
+            else {
+              setViewerMode("references");
+              setViewer(true);
+            }
+          }}
+        >
+          <Icon name="link" size={18} />
+        </button>
+      )}
+      <button
+        type="button"
+        className={`result-side-action ${calcShown ? "active" : ""}`}
+        aria-label={t("calc.toggle")}
+        aria-pressed={calcShown}
+        aria-controls={calcShown ? viewerId : undefined}
+        title={t(calcShown ? "calc.hide" : "calc.show")}
+        onClick={() => {
+          if (calcShown) setViewer(false);
+          else openCalc();
+        }}
+      >
+        <Icon name="sigma" size={18} />
       </button>
     </div>
     </div>

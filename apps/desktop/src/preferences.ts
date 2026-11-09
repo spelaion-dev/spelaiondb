@@ -3,6 +3,7 @@
 
 import { create } from "zustand";
 import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
+import type { EditorPreferencesItem } from "./bindings";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -44,6 +45,9 @@ interface PreferencesStore {
   grid: GridPreferences;
   /** How scripts run: the default error mode and the opt-in notification (ADR-035). */
   script: ScriptPreferencesItem;
+  /** Display and formatting preferences applied to every mounted editor. */
+  editor: EditorPreferencesItem;
+  setEditor(next: EditorPreferencesItem): Promise<boolean>;
   /** Connect the restored tabs at startup (ADR-036): connect only, never run. Off by default. */
   reconnectOnStart: boolean;
   loading: boolean;
@@ -64,21 +68,25 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
   theme: "system",
   explorer: { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false },
   grid: { zebra: true, nullText: true, boolCheckboxes: false },
-  script: { onError: "stop", notify: false, notifyAfterSeconds: 30 },
+  script: { onError: "stop", notify: false, notifyAfterSeconds: 30, confirmDelaySeconds: 0 },
+  editor: { font: "system", fontSize: 13, lineHeight: 18, tabSize: 2, lineNumbers: true, wordWrap: false, keywordCase: "preserve", indent: 2, commaPosition: "trailing" },
   reconnectOnStart: false,
   loading: true,
   saving: null,
   error: null,
   async load() {
-    const [language, theme, explorer, grid, script, reconnect] = await Promise.allSettled([
+    const [language, theme, explorer, grid, script, reconnect, editor] = await Promise.allSettled([
       call(commands.getLanguage()),
       call(commands.getTheme()),
       call(commands.getExplorerPreferences()),
       call(commands.getGridPreferences()),
       call(commands.getScriptPreferences()),
       call(commands.getReconnectOnStart()),
+      call(commands.getEditorPreferences()),
     ]);
     let error: PreferenceError | null = null;
+    if (editor.status === "fulfilled") set({ editor: editor.value });
+    else error = { setting: "editor", phase: "load", detail: errorText(editor.reason) };
     if (reconnect.status === "fulfilled") set({ reconnectOnStart: reconnect.value });
     else error = { setting: "editor", phase: "load", detail: errorText(reconnect.reason) };
     if (script.status === "fulfilled") set({ script: script.value });
@@ -153,6 +161,14 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
     } finally {
       set({ saving: null });
     }
+  },
+  async setEditor(next) {
+    if (get().saving) return false;
+    const previous = get().editor;
+    set({ editor: next, saving: "editor", error: null });
+    try { await call(commands.setEditorPreferences(next)); return true; }
+    catch (e) { set({ editor: previous, error: { setting: "editor", phase: "save", detail: errorText(e) } }); return false; }
+    finally { set({ saving: null }); }
   },
   async setReconnectOnStart(next) {
     if (get().saving) return;

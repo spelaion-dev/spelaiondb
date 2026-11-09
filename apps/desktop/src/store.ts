@@ -1,9 +1,10 @@
+import type { EditorActionId } from "./editorActions";
 // UI state. Result data does NOT live here (AGENTS.md): only its metadata; rows are
 // requested from the core in windows.
 
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
-import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, ErrorAnswerItem, FieldChangeItem, FileFormatItem, InteractionKind, OnErrorItem, RestoreNoteItem, RiskKind, ScriptSummaryItem, TransactionStatusItem, WorkspaceInfo } from "./api";
+import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, ErrorAnswerItem, FieldChangeItem, FileFormatItem, InteractionKind, OnErrorItem, RestoreNoteItem, RiskKind, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
 import type { RestoredTabItem } from "./bindings";
 
 export interface ResultMeta {
@@ -66,7 +67,7 @@ export interface RunState {
 }
 
 export type TabStatus = "disconnected" | "connecting" | "connected";
-export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "indexes" | "triggers";
+export type TableDetailKind = "columns" | "constraints" | "foreignKeys" | "references" | "indexes" | "triggers";
 
 /**
  * A tab, in the order the tab bar shows it (pinned tabs first). The fields kept when a tab is
@@ -100,6 +101,8 @@ export interface Tab {
   /** A table data tab (pages of one table) instead of an SQL editor. */
   table?: TableView;
   tableDetails?: { schema: string; name: string; kind: TableDetailKind };
+  /** A local saved plan, opened without executing SQL. */
+  plan?: { path: string };
   /** Pending row changes are kept in the mounted editor until saved or discarded. */
   pendingEdits?: boolean;
   savingEdits?: boolean;
@@ -111,6 +114,9 @@ export interface Tab {
   file?: TabFile;
   /** What changed while the app was closed (a connection or file gone), shown until dismissed. */
   restoreNotes?: RestoreNoteItem[];
+  /** Session setup statements that failed and were skipped when the session opened (ADR-037),
+   *  shown until dismissed or the next connection. */
+  setupSkipped?: SkippedSetupItem[];
 }
 
 /** The `.sql` file behind a file tab. The core reads and writes it (ADR-036). */
@@ -171,7 +177,7 @@ export interface ClosedTab {
 /** The durable part of a tab. Only SQL editor tabs have one: table data and metadata tabs
  *  are reopened from the explorer. */
 export function snapshotOf(tab: Tab): TabSnapshot | null {
-  if (tab.table || tab.tableDetails) return null;
+  if (tab.table || tab.tableDetails || tab.plan) return null;
   return {
     connectionId: tab.connectionId,
     sql: tab.sql,
@@ -216,6 +222,15 @@ export interface ExplorerReveal {
 /** Window event asking the editor tab whose id is in `detail` to save its query (Ctrl+S). */
 export const SAVE_QUERY_EVENT = "spelaion:save-query";
 
+/** What the command palette asks of an editor tab: the same as its action column's buttons. */
+export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | "cancel" | EditorActionId;
+
+/** Window event asking the editor tab `detail.tab` to do `detail.command` (SDB-18). */
+export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";
+
+/** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
+export type SidebarSection = "connections" | "processes" | "mcp" | null;
+
 /** How many closed tabs Ctrl+Shift+T can bring back. */
 const MAX_CLOSED_TABS = 20;
 
@@ -234,6 +249,8 @@ interface AppStore {
   connectionDialog: ConnectionDialog | null;
   /** Connection waiting for the user to confirm its deletion. */
   deletingConnection: ConnectionItem | null;
+  /** The connection whose "Move to folder…" dialog is open. */
+  movingConnection: ConnectionItem | null;
   historyRevision: number;
   historySaving: string[];
   workspaceChanging: boolean;
@@ -253,11 +270,15 @@ interface AppStore {
   bookmarks: BookmarkItem[];
   /** "Open object by name" is open, on this connection first (or the active tab's). */
   openObject: { connectionId: string | null } | null;
+  /** The command palette (Ctrl+Shift+P) is open. */
+  paletteOpen: boolean;
+  sidebarSection: SidebarSection;
   setWorkspace(info: WorkspaceInfo): void;
   setConnections(list: ConnectionItem[]): void;
   addTab(connectionId: string | null, sql?: string): string;
-  /** Opens a table data tab on a table (its first page loads when it appears). */
-  addTableTab(connectionId: string, schema: string, name: string): string;
+  /** Opens a table data tab on a table (its first page loads when it appears), filtered by
+   *  `filter` when given (a followed foreign key's, written by the core). */
+  addTableTab(connectionId: string, schema: string, name: string, filter?: string): string;
   addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
   /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
   closeTabs(ids: string[]): void;
@@ -291,6 +312,7 @@ interface AppStore {
   closeSettings(): void;
   setConnectionDialog(dialog: ConnectionDialog | null): void;
   setDeletingConnection(connection: ConnectionItem | null): void;
+  setMovingConnection(connection: ConnectionItem | null): void;
   refreshHistory(): void;
   setHistorySaving(connection: string, saving: boolean): void;
   setWorkspaceChanging(changing: boolean): void;
@@ -308,6 +330,8 @@ interface AppStore {
   /** The explorer showed it (or cannot): later renders do not scroll to it again. */
   revealDone(nonce: number): void;
   setOpenObject(open: { connectionId: string | null } | null): void;
+  setPaletteOpen(open: boolean): void;
+  setSidebarSection(section: SidebarSection | ((current: SidebarSection) => SidebarSection)): void;
   setBookmarks(bookmarks: BookmarkItem[]): void;
 }
 
@@ -322,6 +346,7 @@ export const useApp = create<AppStore>((set) => ({
   settingsOpen: false,
   connectionDialog: null,
   deletingConnection: null,
+  movingConnection: null,
   historyRevision: 0,
   historySaving: [],
   workspaceChanging: false,
@@ -332,6 +357,8 @@ export const useApp = create<AppStore>((set) => ({
   explorerSelection: [],
   explorerReveal: null,
   openObject: null,
+  paletteOpen: false,
+  sidebarSection: "connections",
   bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
   setConnections: (connections) => set({ connections }),
@@ -350,10 +377,10 @@ export const useApp = create<AppStore>((set) => ({
     set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, recentTabs: [id, ...s.recentTabs] }));
     return id;
   },
-  addTableTab: (connectionId, schema, name): string => {
+  addTableTab: (connectionId, schema, name, filter = ""): string => {
     const app: AppStore = useApp.getState();
     const id: string = app.addTab(connectionId);
-    app.updateTab(id, { table: { schema, name, filter: "", orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
+    app.updateTab(id, { table: { schema, name, filter, orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
     return id;
   },
   addTableDetailsTab: (connectionId, schema, name, kind): string => {
@@ -485,6 +512,7 @@ export const useApp = create<AppStore>((set) => ({
   refreshSnippets: () => set((s) => ({ snippetsRevision: s.snippetsRevision + 1 })),
   setConnectionDialog: (connectionDialog) => set({ connectionDialog }),
   setDeletingConnection: (deletingConnection) => set({ deletingConnection }),
+  setMovingConnection: (movingConnection) => set({ movingConnection }),
   openSettings: () => set({ settingsOpen: true }),
   closeSettings: () => set({ settingsOpen: false }),
   refreshHistory: () => set((s) => ({ historyRevision: s.historyRevision + 1 })),
@@ -510,6 +538,9 @@ export const useApp = create<AppStore>((set) => ({
   revealInExplorer: (target) => set((s) => ({ explorerReveal: { ...target, nonce: (s.explorerReveal?.nonce ?? 0) + 1 } })),
   revealDone: (nonce) => set((s) => (s.explorerReveal?.nonce === nonce ? { explorerReveal: null } : s)),
   setOpenObject: (openObject) => set({ openObject }),
+  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  setSidebarSection: (section) =>
+    set((s) => ({ sidebarSection: typeof section === "function" ? section(s.sidebarSection) : section })),
   setBookmarks: (bookmarks) => set({ bookmarks }),
   setExplorerConnected: (connection, connected) => set((s) => ({
     explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),

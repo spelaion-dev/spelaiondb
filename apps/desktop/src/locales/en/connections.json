@@ -25,7 +25,10 @@
     "statements": "Statements",
     "general": "General",
     "kubernetes": "Kubernetes port-forward",
-    "about": "About this connection"
+    "about": "About this connection",
+    "session": "Defaults",
+    "setup": "Setup statements",
+    "onThisComputer": "On this computer"
   },
   "fields": {
     "name": "Name",
@@ -67,6 +70,10 @@
     "tunnelHint": "The database is reached from the profile’s last SSH hop, or through its proxy when it has no hops. Profiles are shared: Settings → Network lists them all.",
     "passwordOther": "Password reference",
     "fixedLocationHint": "When editing, the connection stays in the same file and folder.",
+    "history": "Save query history",
+    "historyHint": "Keeps the SQL you run on this connection in your local history. Turn it off before running SQL with passwords or other secrets; earlier history is kept. Only you see this setting: it is saved on this computer, never in the connection's file.",
+    "historyBusy": "The query history setting is still changing. Try again in a moment.",
+    "historyNotSaved": "The connection was saved, but its query history setting could not be changed: {{error}}",
     "serverFile": "File on the server",
     "serverFileHint": "Its path on the tunnel's last hop. SpelaionDB runs that server's sqlite3 (3.37 or later, in its safe mode): the file is never copied.",
     "useTunnelForFile": "The file is on a server: open it there through an SSH tunnel",
@@ -105,7 +112,18 @@
     "tagsPlaceholder": "billing, eu, reporting…",
     "tagsHint": "Short labels to find the connection: press Enter or type a comma after each one. Click a tag in the explorer to show only the connections that have it.",
     "tagsFull": "At most {{count}} tags",
-    "removeTag": "Remove tag {{tag}}"
+    "removeTag": "Remove tag {{tag}}",
+    "defaultSchema": "Default schema",
+    "defaultDatabase": "Default database",
+    "defaultSchemaPlaceholder": "The server's default",
+    "defaultSchemaHint": "New sessions find unqualified names in this schema first (then in public). Each tab can switch to another one.",
+    "defaultDatabaseHint": "New sessions start in this database, as with USE. Each tab can switch to another one.",
+    "isolation": "Isolation level",
+    "isolationHint": "The isolation level of every transaction in new sessions. Auto-commit and manual commit come from the connection type.",
+    "sessionSetup": "Run when a session opens",
+    "ignoreSetupErrors": "Ignore errors in these statements",
+    "sessionSetupHint": "Run on every new session, before anything else, including after a reconnect. They are not your queries: they are not in the history and nothing you ran is run again.",
+    "sessionSetupRestricted": "On this connection they may only read and change session settings (search path, time zone, role…): a statement that writes stops the session from opening."
   },
   "tls": {
     "disable": "Disabled",
@@ -192,7 +210,8 @@
     "ssl": "SSL",
     "ssh": "SSH",
     "kubernetes": "Kubernetes",
-    "options": "Options"
+    "options": "Options",
+    "session": "Session"
   },
   "auth": {
     "password": "User and password",
@@ -303,25 +322,52 @@
     "use": "Use URL",
     "unsupported": "This app has no driver for that database yet."
   },
-  "dbeaver": {
+  "importer": {
     "or": "Or bring your connections from another client:",
-    "button": "Import from DBeaver…",
-    "title": "Import from DBeaver",
+    "button": "Import from {{client}}…",
+    "title": "Import from {{client}}",
     "from": "From",
-    "defaultFolder": "DBeaver's workspace",
+    "defaultFolder": "{{client}}'s folders",
     "chooseFolder": "Choose folder…",
-    "reading": "Reading DBeaver connections…",
+    "registrySource": "Windows registry",
+    "windowsRegistry": "Use Windows registry",
+    "chooseFile": "Choose export file…",
+    "exportFiles": "{{client}} exports",
+    "allFiles": "All files",
+    "encrypted": "This file is encrypted. Type the password it was exported with in {{client}}.",
+    "filePassword": "Export password",
+    "wrongPassword": "That password does not open this file. Check it and try again.",
+    "openFile": "Open",
+    "reading": "Reading {{client}} connections…",
     "none": "No connections found there.",
-    "list": "DBeaver connections",
+    "list": "{{client}} connections",
     "passwordSaved": "password saved",
-    "savePasswords": "Store the passwords DBeaver saved in the system keychain",
+    "readOnly": "read-only",
+    "exists": "Already in SpelaionDB as {{name}}",
+    "duplicateAction": "What to do with {{name}}",
+    "skip": "Skip it",
+    "importCopy": "Import it as a copy",
+    "replace": "Replace {{name}}",
+    "unmapped_one": "{{count}} setting is not imported",
+    "unmapped_other": "{{count}} settings are not imported",
+    "folder": "Folder",
+    "folderField": "Put them in",
+    "topLevel": "The top level",
+    "keepFolders": "Keep {{client}}'s folders inside it",
+    "passwords": "Passwords",
+    "savePasswords": "Store the passwords {{client}} saved in the system keychain",
     "passwordsHint": "Otherwise SpelaionDB asks for them when connecting. Passwords are never written to the connection files. SSH tunnels and SOCKS proxies are imported too, as network profiles.",
     "import_one": "Import {{count}} connection",
     "import_other": "Import {{count}} connections",
+    "importing": "Importing…",
     "imported_one": "Imported {{count}} connection.",
     "imported_other": "Imported {{count}} connections.",
+    "replacedCount_one": "Replaced {{count}} connection.",
+    "replacedCount_other": "Replaced {{count}} connections.",
+    "replacedTag": "replaced",
     "tunnels_one": "Created {{count}} network profile.",
     "tunnels_other": "Created {{count}} network profiles.",
+    "passwordErrors": "Imported without their saved password (asked when connecting):",
     "skipped": "Not imported:",
     "close": "Done"
   },
@@ -394,6 +440,17 @@
     "pastedWithout": "“{{name}}” was pasted as a personal connection, already saved. Its password is asked when connecting. Not taken from the clipboard: {{fields}}. Check it, or close.",
     "clipboardUnavailable": "The clipboard could not be read: select a connection and press Ctrl+V."
   },
+  "move": {
+    "menu": "Move to folder…",
+    "title": "Move {{name}} to a folder",
+    "personalHint": "Its file moves inside your personal connections. Its stored password, filters and bookmarks go with it.",
+    "projectHint": "Its file moves inside the repository's .spelaion/connections/: your team sees the move when you commit it. Its stored password, filters and bookmarks go with it.",
+    "noFolder": "No folder",
+    "folderHint": "Nested folders with /, such as prod/eu. Empty for no folder.",
+    "confirm": "Move",
+    "moving": "Moving…",
+    "inUse": "Disconnect the tabs that use {{name}} before moving it."
+  },
   "engineChange": {
     "title": "Engine change",
     "summary": "Engine: {{from}} → {{to}}. Nothing is saved until you save.",
@@ -403,5 +460,13 @@
     "required": "To fill in: {{fields}}.",
     "none": "(none)",
     "hint": "The connection keeps its file, filters, bookmarks and history. Saving closes its open sessions: they belong to the old engine, and its tabs connect again when run."
+  },
+  "isolation": {
+    "default": "The server's default",
+    "read-uncommitted": "Read uncommitted",
+    "read-committed": "Read committed",
+    "repeatable-read": "Repeatable read",
+    "serializable": "Serializable",
+    "snapshot": "Snapshot"
   }
 }

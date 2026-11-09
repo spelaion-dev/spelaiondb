@@ -1,0 +1,7 @@
+<application>
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig connectionConfig="{}" host="127.0.0.1" id="bcfb66d2-2a55-4e7e-ad91-4b6afc707c8c" keyPath="C:\Users\tester\spelaiondb\testing\docker\keys\id_ed25519" port="2221" nameFormat="DESCRIPTIVE" sshBackendLibrary="SSHJ" username="spelaion" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</application>

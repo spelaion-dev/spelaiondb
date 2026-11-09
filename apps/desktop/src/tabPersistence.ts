@@ -20,7 +20,7 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 /** Only editor tabs are kept: table data and metadata tabs are views opened again from the
  *  explorer. Never results, transaction or session state. */
 function kept(tab: Tab): boolean {
-  return !tab.table && !tab.tableDetails;
+  return !tab.table && !tab.tableDetails && !tab.plan;
 }
 
 function snapshot(tabs: Tab[], activeTab: string | null): { tabs: OpenTabItem[]; active: number | null } {

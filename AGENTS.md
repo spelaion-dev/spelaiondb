@@ -20,6 +20,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
   (SQLite's in `catalog.rs`); each driver's test file checks them against its engine.
+  `list_referencing_keys` is `describe_table`'s foreign keys seen from the other side: the keys
+  of every table that point to one (in each driver's `introspect.rs`).
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
@@ -55,9 +57,32 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   explorer filters connections by (`normalize_tags` in `draft.rs`): both bounded and without
   hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
-  password is forgotten when that hop points to another server). `dbeaver.rs` reads DBeaver's
-  connections and saved credentials for the import (passwords only as `Secret`, to the
-  keychain; its connection types map to the closest built-in type).
+  password is forgotten when that hop points to another server).
+  Importing connections from other clients (ADR-039): `import.rs` is the flow every client
+  shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
+  they reach, replace in place, target folder, what was not mapped, passwords read from another
+  app's keychain only on import); a client is a reader that returns `ImportedConnection`s.
+  `dbeaver.rs` reads DBeaver's connections and saved credentials (passwords only as `Secret`,
+  to the keychain; its connection types map to the closest built-in type); `datagrip.rs` reads
+  DataGrip's (and other JetBrains IDEs') XML data sources and SSH configurations, tested against
+  files a real DataGrip wrote (`tests/fixtures/datagrip`); `tableplus.rs` reads TablePlus's own
+  `Connections.plist` (never its encrypted `.tpmaster` store) and its exported file, encrypted in
+  RNCryptor's format with the password the user typed (the export's passwords only as `Secret`;
+  the SSH key it carries is never kept), tested against files a real TablePlus wrote
+  (`tests/fixtures/tableplus`).
+  `workbench.rs` reads MySQL Workbench 8.0's `connections.xml` (groups from `Group/Name`, SSH
+  as a one-hop tunnel; passwords only from the macOS keychain on import, never its Windows DPAPI
+  vault: the workspace forbids `unsafe`), tested against a file a real Workbench wrote
+  (`tests/fixtures/workbench`).
+  `pgadmin.rs` reads pgAdmin 4's exported servers JSON (no passwords in it: the preview says they
+  are asked) or its own `pgadmin4.db`, opened read-only and never selecting its encrypted password
+  columns; a database row is turned into the export's shape so one mapping serves both. Tested
+  against files a real pgAdmin wrote (`tests/fixtures/pgadmin`).
+  `beekeeper.rs` reads Beekeeper Studio's `app.db` read-only (connections, nested folders);
+  its database and SSH passwords are decrypted the way Beekeeper does, with the install's
+  `.key` (opened with the key built into Beekeeper), and only ever held as `Secret`s; other
+  saved secrets are listed, never decrypted. Tested against tables a real Beekeeper wrote
+  (`tests/fixtures/beekeeper`).
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no
@@ -65,6 +90,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   engine (kept, changed, dropped, to fill in); `name_pattern.rs` renders the name of new
   connections from the personal pattern. Any change to `copy.rs` needs tests that try to get
   around it.
+  `relocate.rs` moves a connection to another folder (its file, its keychain password, and the
+  trust pin as it was, so a move never makes a changed or new repository connection usable);
+  any change there needs tests that try to get around it (`tests/moves.rs`).
   `types.rs` resolves a connection's type (ADR-029): `env` names one by id (built-in `dev`,
   `test`, `prod`/`production`, or one in `.spelaion/connection-types.toml`, honoured only as
   trusted, or in the user's `connection-types.toml`); looks come from the user first, and
@@ -103,10 +131,20 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   closing a tab, disconnecting or quitting; core-written statements use `run_generated`, never
   the manual-commit `BEGIN`; `tests/transactions.rs` runs it on every engine. `sort.rs` orders stored results
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
-  one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows)
+  one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
+  `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
+  only, stopped by a newer one or a cancel)
   and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it), and
   writes "filter by this value" conditions into its WHERE from the typed cell.
+  `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
+  read from the catalog again each time (the UI only names one), the values come from the
+  stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
+  composite, multi-level and self-referencing keys on every engine.
+  `column_stats.rs` counts a table data tab column's statistics on the server: statements
+  written from the catalog's names, the tab's filter checked like a page, each one a read in
+  the engine's read-only transaction (the export barrier) in a session of its own, sampled past
+  100,000 rows; `tests/column_stats.rs` runs it on every engine.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
   `export.rs` also holds the CSV options and formula escaping of files;
@@ -116,6 +154,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   tests that try to get around it (`tests/export_stream.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
+  `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
+  arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
+  `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
+  the DDL, checks read-only and the guard, and loads the rows in transactions through
+  `Connection::insert_rows`, which binds every value (`COPY` on PostgreSQL, prepared inserts on
+  MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
+  `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
+  to get around it.
   `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
   create, new index…); `tests/object_actions.rs` runs each engine's statements on that engine.
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
@@ -130,6 +176,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
   writes them at most a second after a change) and checks them before they come back
   (`restore_tabs`): never results, secrets or session state, and nothing is run.
+  `session_setup.rs` (ADR-037) applies a connection's `[session]` table every time a session
+  opens (isolation level, default schema, setup statements), from `open_connection`; on a
+  read-only connection, a Production type and sessions that only read
+  (`OpenOptions::read_only_session`), every setup statement must first pass
+  `classify_session_setup` in `classify.rs`: like `classify.rs`, any change there needs tests
+  that try to get around it (`tests/session_setup.rs`).
   `write.rs` holds the barriers and the transaction of agents' writes (ADR-019, ADR-020: one
   statement, never destructive, only the kinds on its allow list). Each engine's read barrier
   is in `readonly.rs` (ADR-020) and is tested in `tests/agents_engines.rs`; like
@@ -159,7 +211,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
-  text). Our own canvas grid (`ResultGrid.tsx`). Smoke test against the real app:
+  text). Our own canvas grid (`ResultGrid.tsx`). App commands (name, shortcut, menus) are
+  registered once in `src/commandRegistry.ts` and run through `src/commands.ts`: the tab and
+  file menus, the activity bar, the global shortcuts and the command palette
+  (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
+  menus against it. The palette's objects are only what the explorer already read (`catalog.ts`). Smoke test against the real app:
   `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;
@@ -224,7 +280,9 @@ outside the team.
 - All security lives in the core: statement splitting and classification, permissions,
   audit and secrets. Never in React or in a Tauri command.
 - Secrets are never written to logs, config files, history or MCP responses.
-- After reconnecting a tunnel or a connection, nothing is ever re-run automatically.
+- After reconnecting a tunnel or a connection, nothing the user ran is ever re-run
+  automatically. Only the connection's session setup runs, as part of opening every new session
+  (ADR-037).
 - A changed SSH fingerprint is a blocking error, never a warning accepted with one click.
 
 ## Rust style
@@ -239,7 +297,8 @@ outside the team.
 - React + strict TypeScript. Types that cross from Rust are generated, not handwritten.
 - Result data never goes into React state: it lives in the core and is requested in windows.
 - Read `docs/ui-guidelines.md` before any UI change: use its tokens (never literal colors,
-  sizes, radii or shadows), its components and its verification steps.
+  sizes, radii or shadows), its components, its places for actions and its shortcut map (a new
+  shortcut goes into it), its wording for dialogs and errors, and its verification steps.
 
 ## Before calling something done
 - `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`.

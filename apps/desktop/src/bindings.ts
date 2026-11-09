@@ -7,6 +7,16 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	explainPreflight: (session: string, sql: string, options: ExplainOptions_Deserialize) => typedError<ExplainCheck, string>(__TAURI_INVOKE("explain_preflight", { session, sql, options })),
+	planCapabilities: (session: string) => typedError<PlanCapabilities_Serialize, string>(__TAURI_INVOKE("plan_capabilities", { session })),
+	explainQuery: (session: string, sql: string, options: ExplainOptions_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("explain_query", { session, sql, options, onEvent })),
+	openPlanFile: (path: string) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("open_plan_file", { path })),
+	startupPlanPath: () => __TAURI_INVOKE<string | null>("startup_plan_path"),
+	planPage: (plan: number, view: PlanView, offset: number, limit: number) => typedError<PlanPage_Serialize, string>(__TAURI_INVOKE("plan_page", { plan, view, offset, limit })),
+	planStatistics: (plan: number, kind: PlanStatKind, offset: number, limit: number) => typedError<PlanStatsPage_Serialize, string>(__TAURI_INVOKE("plan_statistics", { plan, kind, offset, limit })),
+	planRawWindow: (plan: number, offset: number) => typedError<RawWindow_Serialize, string>(__TAURI_INVOKE("plan_raw_window", { plan, offset })),
+	releasePlan: (plan: number) => __TAURI_INVOKE<void>("release_plan", { plan }),
+	exportPlan: (exportId: number, plan: number, view: PlanView, path: string, csv: boolean) => typedError<number, string>(__TAURI_INVOKE("export_plan", { exportId, plan, view, path, csv })),
 	workspaceInfo: () => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("workspace_info")),
 	/**  Every AI client: its file, whether our server is there, and its manual configuration. */
 	mcpClients: () => typedError<McpClientsItem_Serialize, string>(__TAURI_INVOKE("mcp_clients")),
@@ -32,6 +42,24 @@ export const commands = {
 	exportAudit: (filter: AuditFilterItem_Deserialize, format: AuditFormatItem, path: string) => typedError<number, string>(__TAURI_INVOKE("export_audit", { filter, format, path })),
 	/**  Empties the MCP activity log, leaving a record that it was cleared (done by the core). */
 	clearAudit: () => typedError<number, string>(__TAURI_INVOKE("clear_audit")),
+	/**
+	 *  Reads the start of the source and detects its columns' types for the engine of `session`.
+	 *  `options: None` guesses them from the source.
+	 */
+	importPreview: (session: string, source: ImportSourceItem, options: ImportOptionsItem | null) => typedError<ImportPreviewItem, string>(__TAURI_INVOKE("import_preview", { session, source, options })),
+	/**
+	 *  The statements an import will run, written by the core and checked against the table (read
+	 *  on `session`, the explorer's), and what the guard asks to confirm.
+	 */
+	importPlan: (session: string, request: ImportRequestItem) => typedError<ImportPlanItem, string>(__TAURI_INVOKE("import_plan", { session, request })),
+	/**
+	 *  Runs an import in a session of its own: the core writes the plan again, refuses a
+	 *  read-only connection and an unconfirmed plan that needs a confirmation, and loads the rows
+	 *  in transactions, reporting progress on `on_progress`.
+	 */
+	runImport: (source: string, importId: number, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<ImportOutcome, string>(__TAURI_INVOKE("run_import", { source, importId, request, confirmed, onProgress })),
+	/**  Stops a running import: the batch it is in is rolled back; committed batches stay. */
+	cancelImport: (importId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_import", { importId })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -40,6 +68,8 @@ export const commands = {
 	setUpdateCheck: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_update_check", { enabled })),
 	getExplorerPreferences: () => typedError<ExplorerPreferencesItem, string>(__TAURI_INVOKE("get_explorer_preferences")),
 	setExplorerPreferences: (preferences: ExplorerPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_preferences", { preferences })),
+	getEditorPreferences: () => typedError<EditorPreferencesItem, string>(__TAURI_INVOKE("get_editor_preferences")),
+	setEditorPreferences: (preferences: EditorPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_editor_preferences", { preferences })),
 	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
 	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
 	/**
@@ -136,6 +166,13 @@ export const commands = {
 	 *  copy's own keychain entry by the core; a repository connection must be as trusted.
 	 */
 	duplicateConnection: (connection: string) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
+	/**
+	 *  Moves a connection to another folder (`""` for none) in its layer. The core moves its
+	 *  file, its keychain password and, for a repository connection, what trust pinned for it,
+	 *  without adding any (ADR-022); its explorer filter, bookmarks, history setting and saved
+	 *  tabs follow. A connection in use is not moved: the UI disconnects it first.
+	 */
+	moveConnection: (connection: string, folder: string) => typedError<MovedItem, string>(__TAURI_INVOKE("move_connection", { connection, folder })),
 	/**  The text Ctrl+C puts on the clipboard for a connection: without secrets or programs. */
 	copyConnection: (connection: string) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
 	/**  A personal connection from clipboard text, checked by the core as untrusted input. */
@@ -199,11 +236,57 @@ export const commands = {
 	/**  Forgets a result's search (the find bar closed). */
 	clearFind: (result: number) => typedError<null, string>(__TAURI_INVOKE("clear_find", { result })),
 	/**
+	 *  The numbers about a selection of a result (the calc panel): the UI sends the selection's
+	 *  bounds (rows of the current view and the columns it shows), never cell values, and the
+	 *  core computes over the stored result. A newer calculation on the same result, or
+	 *  `cancel_selection_stats`, stops this one (`None`).
+	 */
+	selectionStats: (result: number, range: CellRange) => typedError<SelectionStatsItem_Serialize | null, string>(__TAURI_INVOKE("selection_stats", { result, range })),
+	/**  Stops the selection calculation running on a result (the calc panel's Cancel). */
+	cancelSelectionStats: (result: number) => typedError<null, string>(__TAURI_INVOKE("cancel_selection_stats", { result })),
+	/**
+	 *  A table data tab column's statistics (the column header's "Column statistics"): counted by
+	 *  the server in a new session of the tab's connection, every statement a read inside the
+	 *  engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
+	 *  type come from the tab's page (`result`, `column`). `cancel_column_stats` with the same
+	 *  `stats_id` stops it.
+	 */
+	columnStats: (source: string, statsId: number, table: ColumnStatsTarget, result: number, column: number) => typedError<ColumnStatsOutcome_Serialize, string>(__TAURI_INVOKE("column_stats", { source, statsId, table, result, column })),
+	/**  Stops a column's statistics while they are counted: the running statement and the rest. */
+	cancelColumnStats: (statsId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_column_stats", { statsId })),
+	/**
+	 *  A table data tab's filter with a condition the core wrote (one of the column statistics'
+	 *  most frequent values) added with AND. The page's SELECT is checked when it loads.
+	 */
+	addTableCondition: (session: string, filter: string, condition: string) => typedError<string, string>(__TAURI_INVOKE("add_table_condition", { session, filter, condition })),
+	/**
 	 *  "Filter by this value" in a table data tab: the core writes the condition from the typed
 	 *  value (the cell at `row` of the page, or `value` typed for the column) and returns the
 	 *  tab's filter with it added. The page's SELECT is checked when it loads.
 	 */
 	tableFilterCondition: (session: string, result: number, column: number, op: FilterOpItem, row: number | null, value: string, filter: string) => typedError<string, string>(__TAURI_INVOKE("table_filter_condition", { session, result, column, op, row, value, filter })),
+	/**
+	 *  The foreign keys a table data tab can follow: the table's own, then those of other tables
+	 *  that point to it, from the catalog.
+	 */
+	tableKeys: (session: string, schema: string, table: string) => typedError<TableKeyItem[], string>(__TAURI_INVOKE("table_keys", { session, schema, table })),
+	/**
+	 *  The foreign keys of other tables that point to `schema.table` (the explorer's and the table
+	 *  details' "References"), from the catalog.
+	 */
+	referencingKeys: (session: string, schema: string, table: string) => typedError<TableKeyItem[], string>(__TAURI_INVOKE("referencing_keys", { session, schema, table })),
+	/**
+	 *  Follows a foreign key from the row at `row` of a table data tab's page (`result`, a page
+	 *  of `schema.table`): the core finds the key in the catalog again, reads the row's typed
+	 *  values and writes the filter of the table data tab it leads to.
+	 */
+	followKey: (session: string, result: number, row: number, schema: string, table: string, key: KeyRefItem) => typedError<KeyTargetItem, string>(__TAURI_INVOKE("follow_key", { session, result, row, schema, table, key })),
+	/**
+	 *  The references panel of a table data tab: every foreign key of the row at `row` (the
+	 *  table's own and those that point to it), each with up to `limit` of the rows it leads to,
+	 *  read in turn on the tab's session.
+	 */
+	rowReferences: (session: string, result: number, row: number, schema: string, table: string, limit: number) => typedError<RowReferenceItem_Serialize[], string>(__TAURI_INVOKE("row_references", { session, result, row, schema, table, limit })),
 	/**
 	 *  Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
 	 *  rows): all of it, or the rows of `range` (a selection). `options.columns` (or the range's)
@@ -329,7 +412,7 @@ export const commands = {
 	 */
 	saveSnippet: (name: string, sql: string, connection: string | null) => typedError<number, string>(__TAURI_INVOKE("save_snippet", { name, sql, connection })),
 	/**  Saved queries of the open workspace and the personal ones, by name. */
-	listSnippets: (search: string) => typedError<SnippetItem[], string>(__TAURI_INVOKE("list_snippets", { search })),
+	listSnippets: (search: string) => typedError<SnippetItem_Serialize[], string>(__TAURI_INVOKE("list_snippets", { search })),
 	deleteSnippet: (id: number) => typedError<boolean, string>(__TAURI_INVOKE("delete_snippet", { id })),
 	/**
 	 *  The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the
@@ -355,8 +438,13 @@ export const commands = {
 	bindParams: (session: string, sql: string, values: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("bind_params", { session, sql, values })),
 	/**  Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form. */
 	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
-	/**  The DBeaver connections under a folder (DBeaver's workspace if none), without secrets. */
-	scanDbeaver: (path: string | null) => typedError<DbeaverScan_Serialize, string>(__TAURI_INVOKE("scan_dbeaver", { path })),
+	/**
+	 *  The connections of a client under a folder or in a file (where the client keeps them if
+	 *  none), with the connections each would duplicate; without secrets. An encrypted export
+	 *  (TablePlus's) is opened with `file_password`; without it, or with a wrong one, the scan
+	 *  says so instead of failing.
+	 */
+	scanConnections: (client: string, path: string | null, filePassword: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword })),
 	/**  The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015). */
 	kubeContexts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form, personal, editing })),
 	/**  The namespaces of the chosen context. */
@@ -366,11 +454,12 @@ export const commands = {
 	/**  The ports of the chosen resource: a service's ports or its containers' ports. */
 	kubePorts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form, personal, editing })),
 	/**
-	 *  Imports the chosen DBeaver connections (and their SSH tunnels) as SpelaionDB files. The
-	 *  folder is read again here, so passwords never leave Rust: with `save_passwords` the ones
-	 *  DBeaver saved go to the keychain, otherwise they are asked when connecting.
+	 *  Imports the chosen connections (and their SSH tunnels) as SpelaionDB files. The client's
+	 *  files are read again here, so passwords never leave Rust: with `save_passwords` the ones
+	 *  the client saved go to the keychain (those it keeps in the system keychain are only read
+	 *  now), otherwise they are asked when connecting.
 	 */
-	importDbeaver: (path: string | null, ids: string[], personal: boolean, savePasswords: boolean) => typedError<ImportReport, string>(__TAURI_INVOKE("import_dbeaver", { path, ids, personal, savePasswords })),
+	importConnections: (client: string, path: string | null, filePassword: string | null, choices: ImportChoice[], target: ImportTarget) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, filePassword, choices, target })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: (root: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace", { root })),
@@ -411,6 +500,14 @@ export const commands = {
 	setTunnelPorts: (range: TunnelPortsItem | null) => typedError<null, string>(__TAURI_INVOKE("set_tunnel_ports", { range })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
+	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
+	historyDatabases: () => typedError<string[], string>(__TAURI_INVOKE("history_databases")),
+	pinHistory: (id: number, pinned: boolean) => typedError<boolean, string>(__TAURI_INVOKE("pin_history", { id, pinned })),
+	exportHistory: (exportId: number, filter: HistoryFilterItem_Deserialize, path: string) => typedError<number, string>(__TAURI_INVOKE("export_history", { exportId, filter, path })),
+	snippetPage: (search: string, folder: number | null, unfiled: boolean, limit: number, offset: number) => typedError<SnippetItem_Serialize[], string>(__TAURI_INVOKE("snippet_page", { search, folder, unfiled, limit, offset })),
+	snippetFolders: () => typedError<SnippetFolderItem[], string>(__TAURI_INVOKE("snippet_folders")),
+	createSnippetFolder: (name: string) => typedError<number, string>(__TAURI_INVOKE("create_snippet_folder", { name })),
+	moveSnippet: (id: number, folder: number | null) => typedError<null, string>(__TAURI_INVOKE("move_snippet", { id, folder })),
 	setHistoryEnabled: (connection: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
 	/**
 	 *  Opens a session (`session` is chosen by the UI). If a password is needed, it says so
@@ -521,6 +618,13 @@ export const events = {
 };
 
 /* Types */
+/**  Why the ANALYZE toggle is off, so the view can say so. */
+export type AnalyzeUnavailable = 
+/**  The connection is read-only, and ANALYZE executes the query. */
+"readOnly" | 
+/**  The engine has no ANALYZE that executes the query (SQLite). */
+"engine";
+
 /**  One MCP call, with its secrets already masked by the core. */
 export type AuditEventItem = AuditEventItem_Serialize | AuditEventItem_Deserialize;
 
@@ -674,9 +778,75 @@ export type ColumnItem = {
 	nativeType: string,
 };
 
+/**  What a column's sampled values look like. */
+export type ColumnKindItem = "integer" | "decimal" | "float" | "boolean" | "date" | "timestamp" | "timestampTz" | "text";
+
+/**  Where one column of the source goes. */
+export type ColumnMappingItem = { kind: "skip" } | { kind: "existing"; column: string } | { kind: "new"; name: string; sqlType: string };
+
+/**  A table column's statistics, counted by the server with read-only queries. */
+export type ColumnStatsItem = ColumnStatsItem_Serialize | ColumnStatsItem_Deserialize;
+
+/**  A table column's statistics, counted by the server with read-only queries. */
+export type ColumnStatsItem_Deserialize = {
+	/**  Rows the numbers describe (`sampleRows` when sampled). */
+	rows: number | null,
+	sampled: boolean,
+	sampleRows: number | null,
+	nulls: number | null,
+	distinct?: number | null,
+	distinctState: StatStateItem,
+	min?: string | null,
+	max?: string | null,
+	rangeState: StatStateItem,
+	top: TopValueItem_Deserialize[],
+	topState: StatStateItem,
+	/**  The statements that ran, every one a read. */
+	statements: string[],
+};
+
+/**  A table column's statistics, counted by the server with read-only queries. */
+export type ColumnStatsItem_Serialize = {
+	/**  Rows the numbers describe (`sampleRows` when sampled). */
+	rows: number | null,
+	sampled: boolean,
+	sampleRows: number | null,
+	nulls: number | null,
+	distinct: number | null,
+	distinctState: StatStateItem,
+	min: string | null,
+	max: string | null,
+	rangeState: StatStateItem,
+	top: TopValueItem_Serialize[],
+	topState: StatStateItem,
+	/**  The statements that ran, every one a read. */
+	statements: string[],
+};
+
+/**  How asking for a column's statistics ended. */
+export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize | ColumnStatsOutcome_Deserialize;
+
+/**  How asking for a column's statistics ended. */
+export type ColumnStatsOutcome_Deserialize = { kind: "done"; stats: ColumnStatsItem_Deserialize } | { kind: "cancelled" };
+
+/**  How asking for a column's statistics ended. */
+export type ColumnStatsOutcome_Serialize = { kind: "done"; stats: ColumnStatsItem_Serialize } | { kind: "cancelled" };
+
+/**  A column of a table data tab, for its statistics: the tab's table and filter. */
+export type ColumnStatsTarget = {
+	schema: string,
+	name: string,
+	filter: string,
+};
+
 export type ConnectOutcome = ConnectOutcome_Serialize | ConnectOutcome_Deserialize;
 
-export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string } | 
+export type ConnectOutcome_Deserialize = { kind: "connected"; serverVersion: string; 
+/**
+ *  Session setup statements that failed and were skipped (ADR-037): the connection
+ *  ignores setup errors, and the tab says which.
+ */
+setupSkipped: SkippedSetupItem[] } | 
 /**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
@@ -696,7 +866,12 @@ item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string 
  */
 { kind: "missingVariables"; names: string[] };
 
-export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string } | 
+export type ConnectOutcome_Serialize = { kind: "connected"; serverVersion: string; 
+/**
+ *  Session setup statements that failed and were skipped (ADR-037): the connection
+ *  ignores setup errors, and the tab says which.
+ */
+setupSkipped: SkippedSetupItem[] } | 
 /**  The password must be asked for. `can_remember`: it can be stored in the keychain. */
 { kind: "passwordRequired"; canRemember: boolean } | 
 /**  The server rejected the password (or the user): it must be asked for again. */
@@ -766,6 +941,14 @@ export type ConnectionDraftItem_Deserialize = {
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
+	/**  SQL run on every new session (ADR-037); empty for none. */
+	sessionSetup: string,
+	/**  A setup statement the database rejects is skipped. */
+	ignoreSetupErrors: boolean,
+	/**  Where unqualified names are found when a session opens; empty for the server's. */
+	defaultSchema: string,
+	/**  `read-committed`…; null for the server's default. */
+	isolation?: string | null,
 };
 
 /**
@@ -812,6 +995,14 @@ export type ConnectionDraftItem_Serialize = {
 	mcpExposed: boolean,
 	/**  Agents may write (`[mcp] writes = "allow"`, ADR-019). */
 	mcpWrites: boolean,
+	/**  SQL run on every new session (ADR-037); empty for none. */
+	sessionSetup: string,
+	/**  A setup statement the database rejects is skipped. */
+	ignoreSetupErrors: boolean,
+	/**  Where unqualified names are found when a session opens; empty for the server's. */
+	defaultSchema: string,
+	/**  `read-committed`…; null for the server's default. */
+	isolation: string | null,
 };
 
 export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deserialize;
@@ -830,6 +1021,8 @@ export type ConnectionItem_Deserialize = {
 	kind?: ConnectionTypeItem_Deserialize | null,
 	folders: string[],
 	personal: boolean,
+	/**  The server's host name, for the explorer's search; `None` for a file database. */
+	host?: string | null,
 	tunnel?: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
@@ -850,6 +1043,8 @@ export type ConnectionItem_Serialize = {
 	kind: ConnectionTypeItem_Serialize | null,
 	folders: string[],
 	personal: boolean,
+	/**  The server's host name, for the explorer's search; `None` for a file database. */
+	host: string | null,
 	tunnel: string | null,
 	mcpExposed: boolean,
 	historyEnabled: boolean,
@@ -993,73 +1188,6 @@ export type ConstraintKindItem = "primary_key" | "unique" | "check";
 /**  What "Create" in the explorer can start (see `spelaion_core::CreateKind`). */
 export type CreateKindItem = "table" | "view" | "materializedView" | "sequence" | "schema";
 
-/**
- *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
- *  a password.
- */
-export type DbeaverItem = DbeaverItem_Serialize | DbeaverItem_Deserialize;
-
-/**
- *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
- *  a password.
- */
-export type DbeaverItem_Deserialize = {
-	id: string,
-	name: string,
-	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it. */
-	engine?: string | null,
-	/**  Why it cannot be imported, if it cannot. */
-	unsupported?: string | null,
-	/**  `host:port/database`, or the file for SQLite and DuckDB. */
-	target: string,
-	user: string,
-	env: string,
-	hasPassword: boolean,
-	/**  `user@host:port` of its SSH tunnel. */
-	ssh?: string | null,
-	/**  `host:port` of its SOCKS proxy. */
-	proxy?: string | null,
-};
-
-/**
- *  A DBeaver connection found by `scan_dbeaver`. No secret travels: only whether DBeaver saved
- *  a password.
- */
-export type DbeaverItem_Serialize = {
-	id: string,
-	name: string,
-	folder: string,
-	/**  `postgres`, `mysql`, `mariadb`, `sqlite`, `duckdb`; `None` when SpelaionDB cannot open it. */
-	engine: string | null,
-	/**  Why it cannot be imported, if it cannot. */
-	unsupported: string | null,
-	/**  `host:port/database`, or the file for SQLite and DuckDB. */
-	target: string,
-	user: string,
-	env: string,
-	hasPassword: boolean,
-	/**  `user@host:port` of its SSH tunnel. */
-	ssh: string | null,
-	/**  `host:port` of its SOCKS proxy. */
-	proxy: string | null,
-};
-
-/**  What `scan_dbeaver` found, and where. */
-export type DbeaverScan = DbeaverScan_Serialize | DbeaverScan_Deserialize;
-
-/**  What `scan_dbeaver` found, and where. */
-export type DbeaverScan_Deserialize = {
-	dir: string,
-	connections: DbeaverItem_Deserialize[],
-};
-
-/**  What `scan_dbeaver` found, and where. */
-export type DbeaverScan_Serialize = {
-	dir: string,
-	connections: DbeaverItem_Serialize[],
-};
-
 /**  A connection made by "Duplicate" (ADR-030). */
 export type DuplicatedItem = {
 	id: string,
@@ -1086,6 +1214,19 @@ item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string 
 export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string };
+
+/**  Personal editor preferences; all fields checked by the core store. */
+export type EditorPreferencesItem = {
+	font: string,
+	fontSize: number,
+	lineHeight: number,
+	tabSize: number,
+	lineNumbers: boolean,
+	wordWrap: boolean,
+	keywordCase: string,
+	indent: number,
+	commaPosition: string,
+};
 
 /**
  *  What changing a connection's engine does to its settings (ADR-030), by the file's field
@@ -1132,6 +1273,10 @@ export type EngineItem_Deserialize = {
 	access: string,
 	defaultPort?: number | null,
 	available: boolean,
+	/**  A session has a schema of its own the connection can choose (ADR-037). */
+	sessionSchema: boolean,
+	/**  Isolation levels a session can be set to (`read-committed`…); empty for one level. */
+	isolationLevels: string[],
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
@@ -1144,10 +1289,50 @@ export type EngineItem_Serialize = {
 	access: string,
 	defaultPort: number | null,
 	available: boolean,
+	/**  A session has a schema of its own the connection can choose (ADR-037). */
+	sessionSchema: boolean,
+	/**  Isolation levels a session can be set to (`read-committed`…); empty for one level. */
+	isolationLevels: string[],
 };
 
 /**  The answer to a paused run. */
 export type ErrorAnswerItem = "stop" | "skip" | "skipAll";
+
+/**  A connection that already exists, by name. */
+export type ExistingItem = {
+	id: string,
+	name: string,
+};
+
+export type ExplainCheck = {
+	sql: string,
+	risks: RiskyItem[],
+	executesQuery: boolean,
+};
+
+export type ExplainOptions = ExplainOptions_Serialize | ExplainOptions_Deserialize;
+
+export type ExplainOptions_Deserialize = {
+	analyze: boolean,
+	buffers: boolean,
+	/**  The separate warning that ANALYZE executes the query was accepted. */
+	analyzeConfirmed: boolean,
+	/**  The existing statement/type guard was accepted. */
+	confirmed: boolean,
+	/**  This tab's override, as for ordinary scripts: None uses the connection, zero disables. */
+	timeoutSeconds?: number | null,
+};
+
+export type ExplainOptions_Serialize = {
+	analyze: boolean,
+	buffers: boolean,
+	/**  The separate warning that ANALYZE executes the query was accepted. */
+	analyzeConfirmed: boolean,
+	/**  The existing statement/type guard was accepted. */
+	confirmed: boolean,
+	/**  This tab's override, as for ordinary scripts: None uses the connection, zero disables. */
+	timeoutSeconds: number | null,
+};
 
 /**  A connection's explorer filter: personal, per workspace and connection (ADR-025). */
 export type ExplorerFilterItem = {
@@ -1341,6 +1526,8 @@ export type FindStepItem = {
 	column: number,
 };
 
+export type FindingKind = "hotspot" | "underestimatedRows" | "overestimatedRows" | "sortSpill" | "filteredRows" | "largeSequentialScan" | "heapFetches" | "missingWorkers" | "highLoops" | "diskReads" | "neverExecuted";
+
 export type ForeignKeyDetails = {
 	name: string,
 	columns: string[],
@@ -1365,6 +1552,28 @@ export type GridPreferencesItem = {
 	boolCheckboxes: boolean,
 };
 
+export type HistoryFilterItem = HistoryFilterItem_Serialize | HistoryFilterItem_Deserialize;
+
+export type HistoryFilterItem_Deserialize = {
+	search: string,
+	status?: HistoryStatusItem | null,
+	database?: string | null,
+	fromMs?: number | null,
+	untilMs?: number | null,
+	pinned: boolean,
+	throughId?: number | null,
+};
+
+export type HistoryFilterItem_Serialize = {
+	search: string,
+	status: HistoryStatusItem | null,
+	database: string | null,
+	fromMs: number | null,
+	untilMs: number | null,
+	pinned: boolean,
+	throughId: number | null,
+};
+
 export type HistoryItem = HistoryItem_Serialize | HistoryItem_Deserialize;
 
 export type HistoryItem_Deserialize = {
@@ -1376,6 +1585,8 @@ export type HistoryItem_Deserialize = {
 	rows: number,
 	error?: string | null,
 	cancelled: boolean,
+	database?: string | null,
+	pinned: boolean,
 };
 
 export type HistoryItem_Serialize = {
@@ -1387,7 +1598,25 @@ export type HistoryItem_Serialize = {
 	rows: number,
 	error: string | null,
 	cancelled: boolean,
+	database: string | null,
+	pinned: boolean,
 };
+
+export type HistoryPageItem = HistoryPageItem_Serialize | HistoryPageItem_Deserialize;
+
+export type HistoryPageItem_Deserialize = {
+	entries: HistoryItem_Deserialize[],
+	hasMore: boolean,
+	throughId: number,
+};
+
+export type HistoryPageItem_Serialize = {
+	entries: HistoryItem_Serialize[],
+	hasMore: boolean,
+	throughId: number,
+};
+
+export type HistoryStatusItem = "success" | "error" | "cancelled";
 
 /**  One hop of the tunnel editor. The password travels apart and never reaches the file. */
 export type HopDraftItem = HopDraftItem_Serialize | HopDraftItem_Deserialize;
@@ -1418,14 +1647,210 @@ export type HopDraftItem_Serialize = {
 	passwordOther: string,
 };
 
+export type IfExistsItem = "fail" | "append" | "replace";
+
+/**  One connection to import, and what to do if it already exists. */
+export type ImportChoice = {
+	id: string,
+	/**  `import` (as a copy when the name is taken), `replace` or `skip`. */
+	action: string,
+};
+
+export type ImportFormatItem = "csv" | "tsv" | "json" | "markdown";
+
 /**
- *  The outcome of an import: the names given to the new connections (`(DBeaver)` is added
- *  when the name was taken) and those left out.
+ *  A connection found in another client's files. No secret travels: only whether a password
+ *  comes with it.
+ */
+export type ImportItem = ImportItem_Serialize | ImportItem_Deserialize;
+
+/**
+ *  A connection found in another client's files. No secret travels: only whether a password
+ *  comes with it.
+ */
+export type ImportItem_Deserialize = {
+	id: string,
+	name: string,
+	folder: string,
+	/**
+	 *  `postgres`, `mysql`, `mariadb`, `sqlserver`, `sqlite`, `duckdb`; `None` when SpelaionDB
+	 *  cannot open it.
+	 */
+	engine?: string | null,
+	/**  Why it cannot be imported, if it cannot. */
+	unsupported?: string | null,
+	/**  `host:port/database`, or the file for SQLite and DuckDB. */
+	target: string,
+	user: string,
+	env: string,
+	hasPassword: boolean,
+	/**  `user@host:port` of its SSH tunnel. */
+	ssh?: string | null,
+	/**  `host:port` of its SOCKS proxy. */
+	proxy?: string | null,
+	/**  Its TLS mode, when it sets one. */
+	tls?: TlsModeItem | null,
+	readOnly: boolean,
+	/**
+	 *  The connection it would duplicate among the personal connections, and among the
+	 *  project's.
+	 */
+	existingPersonal?: ExistingItem | null,
+	existingProject?: ExistingItem | null,
+	/**  What the client has that SpelaionDB does not import. */
+	unmapped: string[],
+};
+
+/**
+ *  A connection found in another client's files. No secret travels: only whether a password
+ *  comes with it.
+ */
+export type ImportItem_Serialize = {
+	id: string,
+	name: string,
+	folder: string,
+	/**
+	 *  `postgres`, `mysql`, `mariadb`, `sqlserver`, `sqlite`, `duckdb`; `None` when SpelaionDB
+	 *  cannot open it.
+	 */
+	engine: string | null,
+	/**  Why it cannot be imported, if it cannot. */
+	unsupported: string | null,
+	/**  `host:port/database`, or the file for SQLite and DuckDB. */
+	target: string,
+	user: string,
+	env: string,
+	hasPassword: boolean,
+	/**  `user@host:port` of its SSH tunnel. */
+	ssh: string | null,
+	/**  `host:port` of its SOCKS proxy. */
+	proxy: string | null,
+	/**  Its TLS mode, when it sets one. */
+	tls: TlsModeItem | null,
+	readOnly: boolean,
+	/**
+	 *  The connection it would duplicate among the personal connections, and among the
+	 *  project's.
+	 */
+	existingPersonal: ExistingItem | null,
+	existingProject: ExistingItem | null,
+	/**  What the client has that SpelaionDB does not import. */
+	unmapped: string[],
+};
+
+/**
+ *  How the source is read. Characters travel as strings: the delimiter is one character, the
+ *  quote and the escape one or none.
+ */
+export type ImportOptionsItem = {
+	format: ImportFormatItem,
+	encoding: SourceEncodingItem,
+	delimiter: string,
+	/**  Empty: values are never quoted. */
+	quote: string,
+	/**  Empty: a quote inside a quoted value is written twice. */
+	escape: string,
+	header: boolean,
+	/**  Empty: no text is NULL. */
+	nullText: string,
+	emptyAsNull: boolean,
+	trim: boolean,
+	/**  `strftime` patterns; empty: ISO. */
+	dateFormat: string,
+	timestampFormat: string,
+	/**  `UTC` or an offset (`+02:00`); empty: none. */
+	timeZone: string,
+};
+
+/**  How an import ended. */
+export type ImportOutcome = { kind: "done"; schema: string; table: string; rows: number | null; createdTable: boolean; millis: number | null } | 
+/**  The plan needs a confirmation: ask, then run again with `confirmed`. */
+{ kind: "needsConfirmation" } | { kind: "cancelled"; committed: number | null } | { kind: "failed"; message: string; 
+/**  Rows committed before the failure (they stay). */
+committed: number | null };
+
+/**  What will run, written by the core, to show before it does. */
+export type ImportPlanItem = {
+	statements: string[],
+	insert: string,
+	schema: string,
+	table: string,
+	columns: string[],
+	createsTable: boolean,
+	risks: ImportRiskItem[],
+};
+
+/**  The start of the source: its columns, their types and the first rows (values cut short). */
+export type ImportPreviewItem = {
+	options: ImportOptionsItem,
+	/**  The encoding the source was read in. */
+	encoding: SourceEncodingItem,
+	columns: PreviewColumnItem[],
+	rows: ((string | null)[])[],
+	sampled: number,
+	more: boolean,
+	suggestedTable: string,
+};
+
+export type ImportProgressItem = {
+	read: number | null,
+	committed: number | null,
+};
+
+/**
+ *  The outcome of an import: the names given to the new connections (`(DataGrip)` is added
+ *  when the name was taken), the ones replaced, and those left out.
  */
 export type ImportReport = {
 	imported: string[],
+	replaced: string[],
 	tunnels: string[],
 	skipped: ImportSkip[],
+	/**  Connections imported without the password the client kept in the keychain, and why. */
+	passwordErrors: ImportSkip[],
+};
+
+/**  The user's choices; the core writes every statement from them. */
+export type ImportRequestItem = {
+	source: ImportSourceItem,
+	options: ImportOptionsItem,
+	target: ImportTargetItem,
+	/**  One per column of the source, in its order. */
+	columns: ColumnMappingItem[],
+	/**  Rows per transaction; 0: one transaction. */
+	commitEvery: number,
+};
+
+/**
+ *  A statement of the plan the guard asks to confirm (`statement` = the number of statements is
+ *  the rows' statement).
+ */
+export type ImportRiskItem = {
+	statement: number,
+	risk: RiskKind,
+};
+
+/**  What a scan found, and where. */
+export type ImportScan = ImportScan_Serialize | ImportScan_Deserialize;
+
+/**  What a scan found, and where. */
+export type ImportScan_Deserialize = {
+	dir: string,
+	connections: ImportItem_Deserialize[],
+	/**  The file is an encrypted export: its password is needed to read it. */
+	needsPassword: boolean,
+	/**  The password given does not open it. */
+	wrongPassword: boolean,
+};
+
+/**  What a scan found, and where. */
+export type ImportScan_Serialize = {
+	dir: string,
+	connections: ImportItem_Serialize[],
+	/**  The file is an encrypted export: its password is needed to read it. */
+	needsPassword: boolean,
+	/**  The password given does not open it. */
+	wrongPassword: boolean,
 };
 
 /**  One connection that could not be imported, and why. */
@@ -1433,6 +1858,23 @@ export type ImportSkip = {
 	name: string,
 	reason: string,
 };
+
+/**  Where the rows come from. */
+export type ImportSourceItem = { kind: "file"; path: string } | 
+/**  Pasted or clipboard text. */
+{ kind: "text"; text: string };
+
+/**  Where the connections go. */
+export type ImportTarget = {
+	personal: boolean,
+	savePasswords: boolean,
+	/**  A folder to put them in; empty for the top level. */
+	folder: string,
+	/**  Keep the client's folders under it. */
+	keepClientFolders: boolean,
+};
+
+export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
 
 export type IndexDetails = {
 	name: string,
@@ -1456,6 +1898,24 @@ export type InteractionKind = { kind: "unknownHost"; hop: number; host: string; 
 export type InteractionRequest = {
 	id: number,
 	request: InteractionKind,
+};
+
+/**  Which way a foreign key goes from a table (see `spelaion_core::KeyDirection`). */
+export type KeyDirectionItem = "outgoing" | "incoming";
+
+/**  The key the UI wants to follow, by name: the core looks its columns up in the catalog. */
+export type KeyRefItem = {
+	direction: KeyDirectionItem,
+	schema: string,
+	table: string,
+	name: string,
+};
+
+/**  Where a followed key leads: a table data tab of `schema.table` with the core's `filter`. */
+export type KeyTargetItem = {
+	schema: string,
+	table: string,
+	filter: string,
 };
 
 /**  A port of a Kubernetes resource, for the port picker. */
@@ -1632,6 +2092,14 @@ export type McpSettingsItem = {
 };
 
 export type McpVisibilityItem = "visible" | "notExposed" | "untrusted";
+
+/**  A connection moved to another folder. */
+export type MovedItem = {
+	/**  Its identifier now. */
+	id: string,
+	/**  Its keychain password moved to the new identifier's entry. */
+	passwordMoved: boolean,
+};
 
 /**  Include and exclude patterns for one kind of name (ADR-025). */
 export type NameFilterItem = {
@@ -1865,6 +2333,263 @@ export type PastedItem = {
 	leftOut: string[],
 };
 
+export type PlanCapabilities = PlanCapabilities_Serialize | PlanCapabilities_Deserialize;
+
+export type PlanCapabilities_Deserialize = {
+	estimated: boolean,
+	analyze: boolean,
+	buffers: boolean,
+	/**  Set when plans are supported but ANALYZE is not available. */
+	analyzeUnavailable?: AnalyzeUnavailable | null,
+	note: string,
+};
+
+export type PlanCapabilities_Serialize = {
+	estimated: boolean,
+	analyze: boolean,
+	buffers: boolean,
+	/**  Set when plans are supported but ANALYZE is not available. */
+	analyzeUnavailable: AnalyzeUnavailable | null,
+	note: string,
+};
+
+/**  Findings use the normalized metrics only. Engines do not supply their own heuristics. */
+export type PlanFinding = {
+	kind: FindingKind,
+	explanation: string,
+};
+
+export type PlanMetrics = PlanMetrics_Serialize | PlanMetrics_Deserialize;
+
+export type PlanMetrics_Deserialize = {
+	cost?: number | null,
+	selfCost?: number | null,
+	estimatedRows?: number | null,
+	actualRowsPerLoop?: number | null,
+	actualRows?: number | null,
+	timeMs?: number | null,
+	selfTimeMs?: number | null,
+	timePerLoopMs?: number | null,
+	loops?: number | null,
+	buffersHit?: number | null,
+	buffersRead?: number | null,
+	rowsRemoved?: number | null,
+	heapFetches?: number | null,
+	workersPlanned?: number | null,
+	workersLaunched?: number | null,
+	temporaryRead?: number | null,
+	temporaryWritten?: number | null,
+	sortSpaceKb?: number | null,
+};
+
+export type PlanMetrics_Serialize = {
+	cost: number | null,
+	selfCost: number | null,
+	estimatedRows: number | null,
+	actualRowsPerLoop: number | null,
+	actualRows: number | null,
+	timeMs: number | null,
+	selfTimeMs: number | null,
+	timePerLoopMs: number | null,
+	loops: number | null,
+	buffersHit: number | null,
+	buffersRead: number | null,
+	rowsRemoved: number | null,
+	heapFetches: number | null,
+	workersPlanned: number | null,
+	workersLaunched: number | null,
+	temporaryRead: number | null,
+	temporaryWritten: number | null,
+	sortSpaceKb: number | null,
+};
+
+export type PlanNode = PlanNode_Serialize | PlanNode_Deserialize;
+
+export type PlanNode_Deserialize = {
+	id: number,
+	parent?: number | null,
+	depth: number,
+	children: number[],
+	nodeType: string,
+	operation: PlanOperation,
+	relation?: string | null,
+	index?: string | null,
+	joinType?: string | null,
+	filter?: string | null,
+	indexCondition?: string | null,
+	hashCondition?: string | null,
+	sortMethod?: string | null,
+	/**
+	 *  The engine's own text for this step, when it says more than the node type
+	 *  (MySQL's `Index lookup on c using PRIMARY (id=o.customer_id)`).
+	 */
+	detail?: string | null,
+	sortSpilled: boolean,
+	sequentialScan: boolean,
+	parallel: boolean,
+	metrics: PlanMetrics_Deserialize,
+	findings: PlanFinding[],
+};
+
+export type PlanNode_Serialize = {
+	id: number,
+	parent: number | null,
+	depth: number,
+	children: number[],
+	nodeType: string,
+	operation: PlanOperation,
+	relation: string | null,
+	index: string | null,
+	joinType: string | null,
+	filter: string | null,
+	indexCondition: string | null,
+	hashCondition: string | null,
+	sortMethod: string | null,
+	/**
+	 *  The engine's own text for this step, when it says more than the node type
+	 *  (MySQL's `Index lookup on c using PRIMARY (id=o.customer_id)`).
+	 */
+	detail: string | null,
+	sortSpilled: boolean,
+	sequentialScan: boolean,
+	parallel: boolean,
+	metrics: PlanMetrics_Serialize,
+	findings: PlanFinding[],
+};
+
+export type PlanOperation = "scan" | "join" | "sort" | "aggregate" | "temporary" | "other";
+
+export type PlanPage = PlanPage_Serialize | PlanPage_Deserialize;
+
+export type PlanPage_Deserialize = {
+	nodes: PlanNode_Deserialize[],
+	offset: number,
+	total: number,
+	nextOffset?: number | null,
+};
+
+export type PlanPage_Serialize = {
+	nodes: PlanNode_Serialize[],
+	offset: number,
+	total: number,
+	nextOffset: number | null,
+};
+
+/**  How the engine wrote the original plan, so a saved copy keeps a fitting extension. */
+export type PlanRawFormat = "json" | 
+/**  MySQL's EXPLAIN ANALYZE tree, or the `sqlite3` shell's `QUERY PLAN` tree. */
+"text" | "xml";
+
+export type PlanSort = "tree" | "nodeType" | "relation" | "index" | "cost" | "selfCost" | "estimatedRows" | "actualRowsPerLoop" | "actualRows" | "time" | "selfTime" | "timePerLoop" | "loops" | "buffersHit" | "buffersRead" | "rowsRemoved" | "heapFetches" | "workersPlanned" | "workersLaunched" | "temporaryRead" | "temporaryWritten" | "sortSpace" | "findings";
+
+export type PlanStat = PlanStat_Serialize | PlanStat_Deserialize;
+
+export type PlanStatKind = "operations" | "relations" | "indexes";
+
+export type PlanStat_Deserialize = {
+	name: string,
+	nodes: number,
+	cumulativeTimeMs?: number | null,
+};
+
+export type PlanStat_Serialize = {
+	name: string,
+	nodes: number,
+	cumulativeTimeMs: number | null,
+};
+
+export type PlanStatsPage = PlanStatsPage_Serialize | PlanStatsPage_Deserialize;
+
+export type PlanStatsPage_Deserialize = {
+	items: PlanStat_Deserialize[],
+	offset: number,
+	total: number,
+	nextOffset?: number | null,
+};
+
+export type PlanStatsPage_Serialize = {
+	items: PlanStat_Serialize[],
+	offset: number,
+	total: number,
+	nextOffset: number | null,
+};
+
+export type PlanStep = {
+	node: number,
+	label: string,
+	value: number | null,
+};
+
+export type PlanSummary = PlanSummary_Serialize | PlanSummary_Deserialize;
+
+export type PlanSummary_Deserialize = {
+	id: number,
+	engine: string,
+	name: string,
+	rawFormat: PlanRawFormat,
+	analyzed: boolean,
+	buffers: boolean,
+	totalCost?: number | null,
+	planningMs?: number | null,
+	executionMs?: number | null,
+	highestCost?: PlanStep | null,
+	slowest?: PlanStep | null,
+	estimateGap?: PlanStep | null,
+	sequentialScans: number,
+	sorts: number,
+	temporaryOperations: number,
+	nodeCount: number,
+	depth: number,
+	findingCount: number,
+	operationTypes: number,
+	relationCount: number,
+	indexCount: number,
+	/**  A capability note provided by the core, not guessed from the engine in React. */
+	note: string,
+};
+
+export type PlanSummary_Serialize = {
+	id: number,
+	engine: string,
+	name: string,
+	rawFormat: PlanRawFormat,
+	analyzed: boolean,
+	buffers: boolean,
+	totalCost: number | null,
+	planningMs: number | null,
+	executionMs: number | null,
+	highestCost: PlanStep | null,
+	slowest: PlanStep | null,
+	estimateGap: PlanStep | null,
+	sequentialScans: number,
+	sorts: number,
+	temporaryOperations: number,
+	nodeCount: number,
+	depth: number,
+	findingCount: number,
+	operationTypes: number,
+	relationCount: number,
+	indexCount: number,
+	/**  A capability note provided by the core, not guessed from the engine in React. */
+	note: string,
+};
+
+export type PlanView = {
+	sort: PlanSort,
+	descending: boolean,
+	collapsed: number[],
+	findingsOnly: boolean,
+};
+
+export type PreviewColumnItem = {
+	name: string,
+	kind: ColumnKindItem,
+	/**  The type a new column gets on this connection's engine. */
+	sqlType: string,
+	samples: string[],
+	nulls: number,
+};
+
 export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;
 
 export type ProcessItem_Deserialize = {
@@ -1962,6 +2687,25 @@ export type QuitBlocked = {
 	sessions: string[],
 };
 
+/**  A bounded raw-text window. Offsets are UTF-8 bytes and always returned on boundaries. */
+export type RawWindow = RawWindow_Serialize | RawWindow_Deserialize;
+
+/**  A bounded raw-text window. Offsets are UTF-8 bytes and always returned on boundaries. */
+export type RawWindow_Deserialize = {
+	text: string,
+	offset: number,
+	nextOffset?: number | null,
+	total: number,
+};
+
+/**  A bounded raw-text window. Offsets are UTF-8 bytes and always returned on boundaries. */
+export type RawWindow_Serialize = {
+	text: string,
+	offset: number,
+	nextOffset: number | null,
+	total: number,
+};
+
 export type RecentFileItem = {
 	path: string,
 	name: string,
@@ -2047,6 +2791,43 @@ export type RowChangeItem_Deserialize = { kind: "update"; row: number; values: C
 
 /**  A pending change of a table data tab (ADR-014), by position in the page shown. */
 export type RowChangeItem_Serialize = { kind: "update"; row: number; values: CellEditItem_Serialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Serialize[] };
+
+/**
+ *  One key of a row in the references panel: where it leads and its first rows (as text,
+ *  `None` for NULL); or the column that is NULL in this row (it references nothing through
+ *  this key); or why it could not be read.
+ */
+export type RowReferenceItem = RowReferenceItem_Serialize | RowReferenceItem_Deserialize;
+
+/**
+ *  One key of a row in the references panel: where it leads and its first rows (as text,
+ *  `None` for NULL); or the column that is NULL in this row (it references nothing through
+ *  this key); or why it could not be read.
+ */
+export type RowReferenceItem_Deserialize = {
+	key: TableKeyItem,
+	target?: KeyTargetItem | null,
+	columns: string[],
+	rows: ((string | null)[])[],
+	more: boolean,
+	nullColumn?: string | null,
+	error?: string | null,
+};
+
+/**
+ *  One key of a row in the references panel: where it leads and its first rows (as text,
+ *  `None` for NULL); or the column that is NULL in this row (it references nothing through
+ *  this key); or why it could not be read.
+ */
+export type RowReferenceItem_Serialize = {
+	key: TableKeyItem,
+	target: KeyTargetItem | null,
+	columns: string[],
+	rows: ((string | null)[])[],
+	more: boolean,
+	nullColumn: string | null,
+	error: string | null,
+};
 
 /**  How one run goes: its error mode and, if set, its own statement timeout. */
 export type RunOptionsItem = RunOptionsItem_Serialize | RunOptionsItem_Deserialize;
@@ -2176,6 +2957,8 @@ export type ScriptPreferencesItem = {
 	onError: OnErrorItem,
 	notify: boolean,
 	notifyAfterSeconds: number,
+	/**  Seconds before "Run anyway" is enabled in a risky statement's confirmation. */
+	confirmDelaySeconds: number,
 };
 
 /**  Why a run stopped with statements left. */
@@ -2216,6 +2999,66 @@ export type ScriptSummaryItem_Serialize = {
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
 export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
+
+/**
+ *  The numbers about a grid selection (the calc panel), computed by the core over the stored
+ *  result. Values are text as the grid shows them; counts are exact up to 2^53.
+ */
+export type SelectionStatsItem = SelectionStatsItem_Serialize | SelectionStatsItem_Deserialize;
+
+/**
+ *  The numbers about a grid selection (the calc panel), computed by the core over the stored
+ *  result. Values are text as the grid shows them; counts are exact up to 2^53.
+ */
+export type SelectionStatsItem_Deserialize = {
+	cells: number | null,
+	nulls: number | null,
+	/**  Cells that are not NULL. */
+	values: number | null,
+	distinct: number | null,
+	/**  More different values than the core counts: `distinct` reads "N+". */
+	distinctCapped: boolean,
+	/**  Numeric values: what sum, average and median take. */
+	numbers: number | null,
+	sum?: string | null,
+	avg?: string | null,
+	median?: string | null,
+	/**  Too many numbers for a median. */
+	medianCapped: boolean,
+	/**  `None` when the selection mixes values that do not compare (numbers and text). */
+	min?: string | null,
+	max?: string | null,
+	/**  The most frequent value, when one repeats. */
+	mode?: string | null,
+	modeCount: number | null,
+};
+
+/**
+ *  The numbers about a grid selection (the calc panel), computed by the core over the stored
+ *  result. Values are text as the grid shows them; counts are exact up to 2^53.
+ */
+export type SelectionStatsItem_Serialize = {
+	cells: number | null,
+	nulls: number | null,
+	/**  Cells that are not NULL. */
+	values: number | null,
+	distinct: number | null,
+	/**  More different values than the core counts: `distinct` reads "N+". */
+	distinctCapped: boolean,
+	/**  Numeric values: what sum, average and median take. */
+	numbers: number | null,
+	sum: string | null,
+	avg: string | null,
+	median: string | null,
+	/**  Too many numbers for a median. */
+	medianCapped: boolean,
+	/**  `None` when the selection mixes values that do not compare (numbers and text). */
+	min: string | null,
+	max: string | null,
+	/**  The most frequent value, when one repeats. */
+	mode: string | null,
+	modeCount: number | null,
+};
 
 /**  A role, login, tablespace or extension: outside every schema (ADR-024). */
 export type ServerObjectItem = ServerObjectItem_Serialize | ServerObjectItem_Deserialize;
@@ -2278,8 +3121,26 @@ export type SessionLost_Serialize = {
 	openTransaction: boolean,
 };
 
+/**  A session setup statement that failed and was skipped (ADR-037). */
+export type SkippedSetupItem = {
+	/**  1-based. */
+	index: number,
+	/**  The start of the statement. */
+	statement: string,
+	message: string,
+};
+
+export type SnippetFolderItem = {
+	id: number,
+	name: string,
+	personal: boolean,
+};
+
 /**  A saved query; `connection` is empty when it was saved without one. */
-export type SnippetItem = {
+export type SnippetItem = SnippetItem_Serialize | SnippetItem_Deserialize;
+
+/**  A saved query; `connection` is empty when it was saved without one. */
+export type SnippetItem_Deserialize = {
 	id: number,
 	name: string,
 	statement: string,
@@ -2287,7 +3148,22 @@ export type SnippetItem = {
 	updatedMs: number,
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
+	folderId?: number | null,
 };
+
+/**  A saved query; `connection` is empty when it was saved without one. */
+export type SnippetItem_Serialize = {
+	id: number,
+	name: string,
+	statement: string,
+	connection: string,
+	updatedMs: number,
+	/**  Saved outside any repository: visible from every workspace. */
+	personal: boolean,
+	folderId: number | null,
+};
+
+export type SourceEncodingItem = "auto" | "utf8" | "utf16Le" | "utf16Be" | "windows1252";
 
 /**  A `.sql` file read by the core: its text with `\n` line breaks. */
 export type SqlFileItem = {
@@ -2304,6 +3180,13 @@ export type SqlFileItem = {
 export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" | "insert" | "upsert" | "merge" | "update" | "updateFrom" | "delete" | "deleteUsing";
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
+
+/**  Whether a statistic could be computed. */
+export type StatStateItem = { kind: "done" } | 
+/**  The column's type has no such number (booleans have no minimum). */
+{ kind: "notForType" } | 
+/**  The engine refused it: its message. */
+{ kind: "failed"; message: string };
 
 export type TableDetails = TableDetails_Serialize | TableDetails_Deserialize;
 
@@ -2329,6 +3212,21 @@ export type TableExportItem = {
 	name: string,
 	filter: string,
 	orderBy: string,
+};
+
+/**
+ *  A foreign key seen from a table: its own (outgoing) or another table's that points to it
+ *  (incoming). `schema` and `table` are the other table.
+ */
+export type TableKeyItem = {
+	direction: KeyDirectionItem,
+	name: string,
+	schema: string,
+	table: string,
+	/**  This table's columns, in the key's order. */
+	columns: string[],
+	/**  The other table's columns, in the same order. */
+	otherColumns: string[],
 };
 
 /**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */
@@ -2430,6 +3328,33 @@ export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "veri
 export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";
 
 export type ToolOutputItem = "json" | "toon";
+
+/**  One of a column's most frequent values. */
+export type TopValueItem = TopValueItem_Serialize | TopValueItem_Deserialize;
+
+/**  One of a column's most frequent values. */
+export type TopValueItem_Deserialize = {
+	/**  `None` for NULL. */
+	text?: string | null,
+	count: number | null,
+	/**
+	 *  The condition the core wrote to keep these rows (added to the tab's filter with
+	 *  `add_table_condition`); `None` when the value is too long to filter by.
+	 */
+	condition?: string | null,
+};
+
+/**  One of a column's most frequent values. */
+export type TopValueItem_Serialize = {
+	/**  `None` for NULL. */
+	text: string | null,
+	count: number | null,
+	/**
+	 *  The condition the core wrote to keep these rows (added to the tab's filter with
+	 *  `add_table_condition`); `None` when the value is too long to filter by.
+	 */
+	condition: string | null,
+};
 
 /**
  *  An editor tab's transaction changed: after a statement, a Commit, a Rollback or the

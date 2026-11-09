@@ -14,8 +14,8 @@ use crate::load::{
     Config, ConnectionEntry, ConnectionId, Source, validate_connection, workspace_dir,
 };
 use crate::model::{
-    ConnectionFile, Engine, KubernetesConfig, McpConfig, SCHEMA_VERSION, SecretSpec, TlsConfig,
-    TlsModeConfig, WritePolicy,
+    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, McpConfig, SCHEMA_VERSION,
+    SecretSpec, SessionConfig, TlsConfig, TlsModeConfig, WritePolicy,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::vars::home_dir;
@@ -141,6 +141,43 @@ pub struct ConnectionDraft {
     pub mcp_exposed: bool,
     /// Agents may write through `execute_write` (ADR-019); otherwise they only read.
     pub mcp_writes: bool,
+    /// How every new session starts (ADR-037).
+    pub session: SessionDraft,
+}
+
+/// The Session tab of the connection form (ADR-037); empty fields mean "not set".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionDraft {
+    /// SQL run on every new session.
+    pub setup: String,
+    pub ignore_setup_errors: bool,
+    pub schema: String,
+    pub isolation: Option<IsolationLevel>,
+}
+
+impl SessionDraft {
+    /// The `[session]` table: the setup with `\n` line breaks and without blank lines around
+    /// it, the schema trimmed, and "ignore errors" only with a setup.
+    fn to_config(&self) -> SessionConfig {
+        let setup = self.setup.replace("\r\n", "\n").replace('\r', "\n");
+        let setup = setup.trim();
+        let setup = (!setup.is_empty()).then(|| setup.to_string());
+        SessionConfig {
+            ignore_setup_errors: self.ignore_setup_errors && setup.is_some(),
+            setup,
+            schema: non_empty(&self.schema),
+            isolation: self.isolation,
+        }
+    }
+
+    fn from_config(session: &SessionConfig) -> Self {
+        Self {
+            setup: session.setup.clone().unwrap_or_default(),
+            ignore_setup_errors: session.ignore_setup_errors,
+            schema: session.schema.clone().unwrap_or_default(),
+            isolation: session.isolation,
+        }
+    }
 }
 
 /// The Kubernetes tab of the connection form; empty fields mean the defaults.
@@ -256,6 +293,24 @@ pub(crate) fn portable_path(path: &str, root: Option<&Path>) -> String {
     path.to_string()
 }
 
+/// The folders of a typed folder path (`Prod / EU` → `["prod", "eu"]`): each part made a slug,
+/// empty parts dropped (`""` is no folder). A part with nothing left of it is an error.
+pub(crate) fn folder_parts(folder: &str) -> Result<Vec<String>, ConfigError> {
+    let normalized = folder.trim().trim_matches('/').replace('\\', "/");
+    let mut parts = Vec::new();
+    for part in normalized.split('/').filter(|p| !p.is_empty()) {
+        let part = slug(part);
+        if part.is_empty() {
+            return Err(ConfigError::new(
+                Path::new(folder),
+                format!("invalid folder: {folder:?}"),
+            ));
+        }
+        parts.push(part);
+    }
+    Ok(parts)
+}
+
 impl ConnectionDraft {
     /// Identifier (and file path without `.toml`): `folder/slug(name)`.
     pub fn id(&self) -> Result<ConnectionId, ConfigError> {
@@ -266,18 +321,7 @@ impl ConnectionDraft {
                 "the name needs at least one letter or digit",
             ));
         }
-        let folder = self.folder.trim().trim_matches('/').replace('\\', "/");
-        let mut parts = Vec::new();
-        for part in folder.split('/').filter(|p| !p.is_empty()) {
-            let part = slug(part);
-            if part.is_empty() {
-                return Err(ConfigError::new(
-                    Path::new(&self.folder),
-                    format!("invalid folder: {:?}", self.folder),
-                ));
-            }
-            parts.push(part);
-        }
+        let mut parts = folder_parts(&self.folder)?;
         parts.push(file);
         Ok(ConnectionId {
             source: self.source,
@@ -421,6 +465,7 @@ impl ConnectionDraft {
             } else {
                 TlsConfig::default()
             },
+            session: self.session.to_config(),
             mcp: McpConfig {
                 exposed: self.mcp_exposed,
                 writes: if self.mcp_writes {
@@ -532,6 +577,7 @@ impl ConnectionDraft {
             read_only: file.read_only,
             mcp_exposed: file.mcp.exposed,
             mcp_writes: file.mcp.writes == WritePolicy::Allow,
+            session: SessionDraft::from_config(&file.session),
         }
     }
 }
@@ -794,6 +840,28 @@ pub fn update_connection(
             new.read_only.then(|| Value::from(true)),
         );
     }
+    if old.session.setup != new.session.setup {
+        put(&mut doc, &["session", "setup"], text(&new.session.setup));
+    }
+    if old.session.ignore_setup_errors != new.session.ignore_setup_errors {
+        put(
+            &mut doc,
+            &["session", "ignore_setup_errors"],
+            new.session.ignore_setup_errors.then(|| Value::from(true)),
+        );
+    }
+    if old.session.schema != new.session.schema {
+        put(&mut doc, &["session", "schema"], text(&new.session.schema));
+    }
+    if old.session.isolation != new.session.isolation {
+        put(
+            &mut doc,
+            &["session", "isolation"],
+            new.session
+                .isolation
+                .map(|level| Value::from(level.as_str())),
+        );
+    }
     if old.tls.mode != new.tls.mode {
         let mode = (new.tls.mode != TlsModeConfig::default()).then(|| {
             Value::from(match new.tls.mode {
@@ -860,6 +928,19 @@ pub fn update_connection(
     Ok(parsed)
 }
 
+/// Removes the folders a deleted or moved file at `file_path` left empty, up to (never
+/// including) `root`.
+pub(crate) fn remove_empty_folders(root: &Path, file_path: &Path) {
+    let mut dir = file_path.parent();
+    while let Some(current) = dir {
+        // `remove_dir` only removes empty directories: it stops at the first one in use.
+        if current == root || !current.starts_with(root) || std::fs::remove_dir(current).is_err() {
+            break;
+        }
+        dir = current.parent();
+    }
+}
+
 /// Deletes a connection file, its default keychain entry and the folders it leaves empty.
 pub fn delete_connection(
     config: &Config,
@@ -871,15 +952,7 @@ pub fn delete_connection(
     })?;
     std::fs::remove_file(&entry.file_path)
         .map_err(|e| ConfigError::new(&entry.file_path, format!("could not delete: {e}")))?;
-    let root = connections_dir(config, id.source)?;
-    let mut dir = entry.file_path.parent();
-    while let Some(current) = dir {
-        // `remove_dir` only removes empty directories: it stops at the first one in use.
-        if current == root || !current.starts_with(&root) || std::fs::remove_dir(current).is_err() {
-            break;
-        }
-        dir = current.parent();
-    }
+    remove_empty_folders(&connections_dir(config, id.source)?, &entry.file_path);
     if uses_default_keychain(&entry.file) {
         let account = connection_account(config, &entry.id);
         crate::secrets::forget(backend, &account).map_err(|message| ResolveError::Secret {

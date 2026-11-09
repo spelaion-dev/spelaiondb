@@ -533,6 +533,7 @@ fn creates_new_connection_files() {
         connect_timeout: None,
         statement_timeout: None,
         tls: Default::default(),
+        session: Default::default(),
         mcp: Default::default(),
     };
     let path = create_connection(&dir, "team/analytics", &file).unwrap();
@@ -641,6 +642,7 @@ fn postgres_draft() -> ConnectionDraft {
         statement_timeout: None,
         mcp_exposed: true,
         mcp_writes: false,
+        session: Default::default(),
     }
 }
 
@@ -1465,6 +1467,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         statement_timeout: None,
         mcp_exposed: false,
         mcp_writes: false,
+        session: Default::default(),
     }
 }
 

@@ -20,10 +20,11 @@ use futures_util::StreamExt;
 use mysql_async::prelude::Queryable;
 use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, KeepAlive, LikeFilter, LogicalType,
-    NameFilter, Notice, ObjectInfo, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject,
-    TableInfo, TlsMode, TransactionState,
+    CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, ContextDialect,
+    DatabaseContext, Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
+    InsertTarget, KeepAlive, LikeFilter, LogicalType, NameFilter, Notice, ObjectInfo,
+    ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
+    TlsMode, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -162,7 +163,7 @@ impl Driver for MysqlDriver {
             id: conn.id(),
         });
         let (requests, receiver) = mpsc::channel(8);
-        tokio::spawn(actor(conn, receiver));
+        tokio::spawn(actor(conn, receiver, Some(params.database.clone())));
         Ok(Box::new(MysqlConnection {
             requests,
             cancel,
@@ -173,6 +174,7 @@ impl Driver for MysqlDriver {
                 explain: true,
                 editable_results: false,
                 schemas: true,
+                insert_rows: true,
             },
         }))
     }
@@ -181,6 +183,12 @@ impl Driver for MysqlDriver {
 type Rows = Vec<Vec<Option<String>>>;
 
 enum Request {
+    DatabaseContext {
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
+    CurrentDatabase {
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
     Execute {
         sql: String,
         batch_size: usize,
@@ -200,10 +208,17 @@ enum Request {
     TransactionState {
         reply: oneshot::Sender<Result<TransactionState>>,
     },
+    /// A multi-row INSERT of an import (ADR-038): `?` placeholders, values bound.
+    Insert {
+        sql: String,
+        values: Vec<Option<String>>,
+        reply: oneshot::Sender<Result<u64>>,
+    },
 }
 
 /// Owns the connection until every handle is dropped.
-async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>) {
+async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>, database: Option<String>) {
+    let mut context = DatabaseContext::new(ContextDialect::Mysql, database);
     // An error is an ERR packet, which carries no status: the last OK packet may be older than
     // a deadlock that rolled the transaction back.
     let mut status_stale = false;
@@ -213,14 +228,54 @@ async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>) {
                 sql,
                 batch_size,
                 events,
-            } => status_stale = !execute(&mut conn, &sql, batch_size, &events).await,
+            } => {
+                let outcome = execute(&mut conn, &sql, batch_size, &events).await;
+                let complete = matches!(outcome, ExecutionOutcome::Complete);
+                context.observe(&sql, complete);
+                if matches!(outcome, ExecutionOutcome::Uncertain) {
+                    context.refresh(None);
+                }
+                status_stale = !complete;
+            }
             Request::Rows { sql, params, reply } => {
                 let result = rows(&mut conn, &sql, params).await;
+                context.observe(&sql, result.is_ok());
+                if result.is_err() && !matches!(&result, Err(DriverError::Database { .. })) {
+                    context.refresh(None);
+                }
+                status_stale = result.is_err();
+                let _ = reply.send(result);
+            }
+            Request::DatabaseContext { reply } => {
+                let _ = reply.send(Ok(context.snapshot()));
+            }
+            Request::CurrentDatabase { reply } => {
+                let result = rows(&mut conn, "SELECT DATABASE()", vec![])
+                    .await
+                    .map(|rows| {
+                        rows.into_iter()
+                            .next()
+                            .and_then(|row| row.into_iter().next().flatten())
+                    });
+                context.refresh(result.as_ref().ok().cloned().flatten());
                 status_stale = result.is_err();
                 let _ = reply.send(result);
             }
             Request::KeepAlive { reply } => {
                 let _ = reply.send(keep_alive(&mut conn).await);
+            }
+            Request::Insert { sql, values, reply } => {
+                let params: Vec<mysql_async::Value> = values
+                    .into_iter()
+                    .map(|v| v.map_or(mysql_async::Value::NULL, |t| t.into_bytes().into()))
+                    .collect();
+                let result = conn
+                    .exec_drop(sql.as_str(), mysql_async::Params::Positional(params))
+                    .await
+                    .map(|()| conn.affected_rows())
+                    .map_err(map_error);
+                status_stale = result.is_err();
+                let _ = reply.send(result);
             }
             Request::TransactionState { reply } => {
                 // `DO 0` touches no table, so it opens nothing, and its OK packet is fresh.
@@ -283,19 +338,30 @@ async fn rows(conn: &mut Conn, sql: &str, params: Vec<String>) -> Result<Rows> {
 
 /// Runs one statement and streams its first result set. If the receiver goes away (tab
 /// closed), reading stops; the connection discards the rest before the next statement.
-/// Returns whether it ran to its end: an error leaves no fresh OK packet behind.
+/// An interrupted response may have changed context before the client lost its result.
+enum ExecutionOutcome {
+    Complete,
+    Failed,
+    Uncertain,
+}
+
 async fn execute(
     conn: &mut Conn,
     sql: &str,
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
-) -> bool {
+) -> ExecutionOutcome {
     let send = |event| async move { events.send(event).await.is_ok() };
     let mut result = match conn.query_iter(sql).await {
         Ok(result) => result,
         Err(e) => {
+            let definite = matches!(&e,mysql_async::Error::Server(server) if server.code!=ER_QUERY_INTERRUPTED);
             send(Err(map_error_in(e, sql))).await;
-            return false;
+            return if definite {
+                ExecutionOutcome::Failed
+            } else {
+                ExecutionOutcome::Uncertain
+            };
         }
     };
     let columns = result.columns().unwrap_or_else(|| Arc::from(Vec::new()));
@@ -312,7 +378,7 @@ async fn execute(
                 }
                 Err(e) => {
                     send(Err(map_error_in(e, sql))).await;
-                    return false;
+                    return ExecutionOutcome::Uncertain;
                 }
             }
         }
@@ -331,7 +397,7 @@ async fn execute(
             .collect();
         let schema = Arc::new(ResultSchema::new(metas));
         if !send(Ok(ExecEvent::Columns(schema.clone()))).await {
-            return false;
+            return ExecutionOutcome::Uncertain;
         }
         let new_builders = || {
             schema
@@ -353,7 +419,7 @@ async fn execute(
                     Ok(None) => break,
                     Err(e) => {
                         send(Err(map_error_in(e, sql))).await;
-                        return false;
+                        return ExecutionOutcome::Uncertain;
                     }
                 },
             };
@@ -366,27 +432,27 @@ async fn execute(
                         mismatch,
                     )))
                     .await;
-                    return false;
+                    return ExecutionOutcome::Uncertain;
                 }
             }
             pending += 1;
             if pending == batch_size {
                 let batch = finish(&schema, &mut builders);
                 if !send(batch.map(ExecEvent::Batch)).await {
-                    return false;
+                    return ExecutionOutcome::Uncertain;
                 }
                 pending = 0;
             }
         }
         if pending > 0 && !send(finish(&schema, &mut builders).map(ExecEvent::Batch)).await {
-            return false;
+            return ExecutionOutcome::Uncertain;
         }
     }
     let affected = result.affected_rows();
     // Only the first result set is shown; the rest (from procedures) is discarded.
     if let Err(e) = result.drop_result().await {
         send(Err(map_error_in(e, sql))).await;
-        return false;
+        return ExecutionOutcome::Uncertain;
     }
     let rows_affected = (columns.is_empty() && reports_row_count(sql)).then_some(affected);
     // The server counts the statement's warnings and notes in its last OK packet: only when
@@ -394,12 +460,12 @@ async fn execute(
     if conn.get_warnings() > 0 && dialect::first_word(sql) != "show" {
         for notice in warnings(conn).await {
             if !send(Ok(ExecEvent::Notice(notice))).await {
-                return true;
+                return ExecutionOutcome::Complete;
             }
         }
     }
     send(Ok(ExecEvent::Done { rows_affected })).await;
-    true
+    ExecutionOutcome::Complete
 }
 
 /// Most warnings read after one statement.
@@ -450,6 +516,13 @@ fn reports_row_count(sql: &str) -> bool {
     let first = dialect::first_word(sql);
     COUNTED.iter().any(|k| first.eq_ignore_ascii_case(k))
 }
+
+/// A prepared statement takes at most 65,535 placeholders.
+const MAX_PLACEHOLDERS: usize = 65_535;
+/// Rows per INSERT of an import.
+const MAX_INSERT_ROWS: usize = 1_000;
+/// About this much data per INSERT, well under the default `max_allowed_packet` (64 MiB).
+const MAX_INSERT_BYTES: usize = 4 * 1024 * 1024;
 
 struct MysqlConnection {
     requests: mpsc::Sender<Request>,
@@ -544,14 +617,51 @@ impl Connection for MysqlConnection {
     }
 
     async fn current_database(&self) -> Result<Option<String>> {
-        let rows = self.rows("SELECT DATABASE()", vec![]).await?;
-        Ok(rows
-            .into_iter()
-            .next()
-            .and_then(|row| row.into_iter().next().flatten()))
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::CurrentDatabase { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
+    }
+
+    async fn database_context(&self) -> Result<Option<String>> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(Request::DatabaseContext { reply })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
     }
 
     /// MySQL calls its databases schemas: the same list as the explorer.
+    /// Prepared multi-row INSERTs with `?` placeholders. `LOAD DATA LOCAL INFILE` is not used:
+    /// it needs `local_infile` on the server and the client, off by default (ADR-038).
+    async fn insert_rows(
+        &self,
+        target: &InsertTarget,
+        rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        target.check_rows(&rows)?;
+        let mut inserted = 0;
+        for chunk in
+            target.statement_chunks(rows, MAX_PLACEHOLDERS, MAX_INSERT_ROWS, MAX_INSERT_BYTES)
+        {
+            let sql = target.insert_sql(&dialect::MysqlDialect, chunk.len(), |_| "?".into());
+            let (reply, response) = oneshot::channel();
+            self.requests
+                .send(Request::Insert {
+                    sql,
+                    values: chunk.into_iter().flatten().collect(),
+                    reply,
+                })
+                .await
+                .map_err(|_| closed())?;
+            inserted += response.await.map_err(|_| closed())??;
+        }
+        Ok(inserted)
+    }
+
     async fn list_databases(&self) -> Result<Vec<String>> {
         Ok(introspect::list_schemas(self, &LikeFilter::default())
             .await?
@@ -603,6 +713,10 @@ impl Connection for MysqlConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, self.flavor, schema, name).await
+    }
+
+    async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
+        introspect::list_referencing_keys(self, schema, name).await
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {

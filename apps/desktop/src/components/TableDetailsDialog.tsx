@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type NewIndexKindItem, type ObjectActionsItem, type ObjectTargetItem, type SchemaObjectItem, type TableDetails } from "../api";
-import { connectTabFromExplorer, explorerDatabase, EXPLORER_REFRESH_EVENT, openSession } from "../connect";
+import { call, commands, type NewIndexKindItem, type ObjectActionsItem, type ObjectTargetItem, type SchemaObjectItem, type TableDetails, type TableKeyItem } from "../api";
+import { connectTabFromExplorer, explorerDatabase, EXPLORER_REFRESH_EVENT, openSession, openTableData } from "../connect";
 import { useApp, type Tab } from "../store";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { NewTableElementDialog } from "./NewTableElementDialog";
 
-type Row = { cells: string[]; target?: ObjectTargetItem; definition?: string; trigger?: SchemaObjectItem; column?: string };
+type Row = { cells: string[]; target?: ObjectTargetItem; definition?: string; trigger?: SchemaObjectItem; column?: string; data?: { schema: string; table: string } };
 
 /** Catalog data is loaded on this tab's own session, independently of the explorer. */
 export function TableDetailsView({ tab }: { tab: Tab }) {
@@ -15,6 +15,8 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
   const { schema, name: table, kind } = view;
   const [details, setDetails] = useState<TableDetails | null>(null);
   const [triggers, setTriggers] = useState<SchemaObjectItem[]>([]);
+  /** The foreign keys of other tables that point to this one (the "References" tab). */
+  const [references, setReferences] = useState<TableKeyItem[]>([]);
   const [actions, setActions] = useState<ObjectActionsItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -35,11 +37,13 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       call(commands.describeTable(tab.id, schema, table, null)),
       call(commands.objectActions(tab.id)),
       kind === "triggers" ? call(commands.listSchemaObjects(tab.id, schema, null, false)) : Promise.resolve([]),
-    ]).then(([result, capabilities, objects]) => {
+      kind === "references" ? call(commands.referencingKeys(tab.id, schema, table)) : Promise.resolve([]),
+    ]).then(([result, capabilities, objects, referencing]) => {
       if (!current) return;
       setDetails(result);
       setActions(capabilities);
       setTriggers(objects.filter((object) => object.kind === "trigger" && object.detail === table));
+      setReferences(referencing);
       setSelected([]);
     }).catch((e: unknown) => { if (current) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (current) setLoading(false); });
@@ -99,6 +103,10 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       headers = [t("tableDetails.name"), t("tableDetails.columns"), t("tableDetails.referencedTable"), t("tableDetails.referencedColumns")];
       rows = details.foreignKeys.map((fk) => ({ cells: [text(fk.name), text(fk.columns.join(", ")), `${fk.referencedSchema}.${fk.referencedTable}`, text(fk.referencedColumns.join(", "))], target: actions?.dropConstraints ? { kind: "foreignKey", schema, table, name: fk.name } : undefined }));
       break;
+    case "references":
+      headers = [t("tableDetails.name"), t("tableDetails.referencingTable"), t("tableDetails.columns"), t("tableDetails.referencedColumns")];
+      rows = references.map((key) => ({ cells: [text(key.name), `${key.schema}.${key.table}`, text(key.otherColumns.join(", ")), text(key.columns.join(", "))], data: { schema: key.schema, table: key.table } }));
+      break;
     case "indexes":
       headers = [t("tableDetails.name"), t("tableDetails.primaryKey"), t("tableDetails.unique"), t("tableDetails.definition")];
       rows = details.indexes.map((index) => ({ cells: [index.name, yesNo(index.primary), yesNo(index.unique), text(index.definition)], definition: index.definition, target: { kind: "index", schema, table, name: index.name, primary: index.primary } }));
@@ -109,19 +117,22 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       break;
   }
   const title = t(`folders.${kind}`);
-  const canCreate = actions !== null && (kind === "constraints" || kind === "foreignKeys" ? actions.addConstraints : kind === "triggers" ? actions.addTriggers : true);
+  // References are created as a foreign key of the other table, from its own details.
+  const creates = kind !== "references";
+  const canCreate = actions !== null && creates && (kind === "constraints" || kind === "foreignKeys" ? actions.addConstraints : kind === "triggers" ? actions.addTriggers : true);
   return (
     <section className="table-details-view" aria-label={t("tableDetails.title", { section: title, table })}>
       <div className="table-details-heading">
         <div><p className="table-details-path">{schema} / {table}</p><h2>{title}</h2></div>
         <div className="table-details-actions">
           <span className="table-details-count">{t("tableDetails.count", { count: rows.length })}</span>
-          <button type="button" className="primary" disabled={tab.status !== "connected" || loading || !details || !canCreate}
-            title={!canCreate ? t("newTableElement.unsupported") : undefined} onClick={() => setCreating(true)}>{t("newTableElement.add")}</button>
+          {creates && <button type="button" className="primary" disabled={tab.status !== "connected" || loading || !details || !canCreate}
+            title={!canCreate ? t("newTableElement.unsupported") : undefined} onClick={() => setCreating(true)}>{t("newTableElement.add")}</button>}
           <button type="button" disabled={tab.status !== "connected" || loading} onClick={refresh}>{t("refresh")}</button>
         </div>
       </div>
-      {actions && !canCreate && <p className="muted">{t("newTableElement.unsupported")}</p>}
+      {actions && creates && !canCreate && <p className="muted">{t("newTableElement.unsupported")}</p>}
+      {kind === "references" && <p className="muted">{t("tableDetails.referencesHint", { table })}</p>}
       {(error || (tab.status === "disconnected" && (tab.lost || tab.run?.error?.message))) && <p className="error" role="alert">{error ?? tab.lost ?? tab.run?.error?.message}</p>}
       {tab.status === "disconnected" && <button type="button" onClick={() => void reconnect()} disabled={!tab.connectionId}>{t("tableDetails.reconnect")}</button>}
       {tab.status === "connected" && needsRefresh && <p className="muted">{t("tableDetails.refreshAfterReconnect")}</p>}
@@ -143,6 +154,7 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
                   {row.cells.map((cell, column) => <td key={column} title={cell}>{cell}</td>)}
                   <td><div className="table-details-actions table-row-actions">
                     {(row.definition || row.trigger) && <button type="button" className="ghost" onClick={() => void openDefinition(row)}>{t("openDefinition")}</button>}
+                    {row.data && tab.connectionId && <button type="button" className="ghost" onClick={() => tab.connectionId && row.data && openTableData(tab.connectionId, tab.id, row.data.schema, row.data.table)}>{t("tableDetails.openData")}</button>}
                     {row.column && row.target && <button type="button" className="ghost" onClick={() => setChange({ target: row.target!, name: row.column!, rename: true })}>{t("objectChange.renameMenu")}</button>}
                     {row.target && <button type="button" className="ghost table-action-drop" onClick={() => setChange({ target: row.target!, name: row.cells[0] ?? "", rename: false })}>{t("objectChange.dropMenu")}</button>}
                   </div></td>

@@ -6,6 +6,7 @@
 //! sorting, the native part is never lost.
 
 mod column;
+mod database_context;
 mod dialect;
 mod error;
 mod filter;
@@ -23,13 +24,14 @@ use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 
 pub use column::{ColumnMeta, ResultSchema};
+pub use database_context::{ContextDialect, DatabaseContext};
 pub use dialect::{Dialect, StatementSpan};
 pub use error::DriverError;
 pub use filter::{LikeFilter, NameFilter, literal_pattern, pattern_matches};
 pub use introspect::{
     ColumnInfo, ConstraintInfo, ConstraintKind, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind,
-    SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind, TableInfo,
-    check_definition, terminated,
+    ReferencingKey, SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind,
+    TableInfo, check_definition, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use secret::Secret;
@@ -49,6 +51,8 @@ pub struct Capabilities {
     pub editable_results: bool,
     /// Several databases/schemas can be browsed within one connection.
     pub schemas: bool,
+    /// [`Connection::insert_rows`] works: data can be imported (ADR-038).
+    pub insert_rows: bool,
 }
 
 /// Fully resolved connection parameters (variables and secrets already substituted).
@@ -116,6 +120,20 @@ pub struct ExecOptions {
     pub batch_size: usize,
 }
 
+/// How an engine-specific plan request treats the original statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanMode {
+    /// Compile only; the original statement must not run.
+    Estimated,
+    /// Execute the statement and return its measured plan.
+    Analyze {
+        /// The statement produces a user result set before its actual plan (for example,
+        /// SELECT without INTO or DML with OUTPUT). This prevents treating that user result
+        /// as the appended plan when its column happens to use the engine's plan name.
+        query_result: bool,
+    },
+}
+
 impl Default for ExecOptions {
     fn default() -> Self {
         Self { batch_size: 10_000 }
@@ -159,6 +177,15 @@ pub trait Connection: Send + Sync {
     /// using the engine's [`Dialect`].
     async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream>;
 
+    /// Executes an engine's multi-batch plan protocol as one indivisible request. The core
+    /// must validate the statement, read-only policy and confirmations before calling this.
+    /// Drivers must restore temporary session settings even on error, cancellation or drop.
+    async fn execute_plan(&self, _sql: &str, _mode: PlanMode) -> Result<EventStream> {
+        Err(DriverError::Other(
+            "this engine has no multi-batch plan protocol".into(),
+        ))
+    }
+
     /// Handle to cancel the running statement from another task.
     fn cancel_handle(&self) -> Arc<dyn CancelHandle>;
 
@@ -188,6 +215,11 @@ pub trait Connection: Send + Sync {
             "changing database is not supported".into(),
         ))
     }
+    /// A local snapshot for history observers: never executes SQL or changes ROW_COUNT,
+    /// diagnostics, transaction state or query results. `None` means unknown/unset.
+    async fn database_context(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
     /// Change this session's database without changing the saved connection.
     async fn select_database(&self, _database: &str) -> Result<()> {
         Err(DriverError::Other(
@@ -203,6 +235,18 @@ pub trait Connection: Send + Sync {
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>>;
     async fn list_objects(&self, schema: &str) -> Result<Vec<ObjectInfo>>;
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo>;
+    /// The foreign keys of every table (in any schema) that point to `schema.name`, ordered by
+    /// referencing schema, table and key name: [`TableInfo::foreign_keys`] seen from the other
+    /// side. Read from the catalog, like `describe_table`.
+    async fn list_referencing_keys(
+        &self,
+        _schema: &str,
+        _name: &str,
+    ) -> Result<Vec<ReferencingKey>> {
+        Err(DriverError::Other(
+            "this engine cannot list the keys that point to a table".into(),
+        ))
+    }
     /// Functions, sequences, triggers, types… of a schema (ADR-024), ordered by name. Engines
     /// without any return none.
     async fn list_schema_objects(&self, _schema: &str) -> Result<Vec<SchemaObject>> {
@@ -257,6 +301,130 @@ pub trait Connection: Send + Sync {
     /// parameters as `:name` placeholders, its output ones collected and shown.
     async fn procedure_call(&self, _object: &SchemaObject) -> Result<String> {
         Err(DriverError::Other("this engine has no procedures".into()))
+    }
+    /// Inserts `rows` into a table (data imports, ADR-038). Every value travels as a bound
+    /// parameter or as the data of the engine's bulk path (PostgreSQL's `COPY … FROM STDIN`),
+    /// never written into SQL text: only the quoted table and column names are. Values are
+    /// text, or `None` for NULL, and the server converts them to each column's type. It runs
+    /// inside whatever transaction the session has open and opens none itself. Returns the
+    /// rows inserted.
+    async fn insert_rows(
+        &self,
+        _target: &InsertTarget,
+        _rows: Vec<Vec<Option<String>>>,
+    ) -> Result<u64> {
+        Err(DriverError::Other(
+            "this connection cannot import rows".into(),
+        ))
+    }
+}
+
+/// The table and columns [`Connection::insert_rows`] writes to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsertTarget {
+    /// Empty for the session's default schema.
+    pub schema: String,
+    pub table: String,
+    /// Every row has one value per column, in this order.
+    pub columns: Vec<String>,
+}
+
+impl InsertTarget {
+    /// `schema.table` quoted for `dialect` (no schema when it is empty, or `main` on SQLite and
+    /// DuckDB).
+    pub fn qualified(&self, dialect: &dyn Dialect) -> String {
+        let main = matches!(dialect.name(), "sqlite" | "duckdb") && self.schema == "main";
+        if self.schema.is_empty() || main {
+            dialect.quote_identifier(&self.table)
+        } else {
+            format!(
+                "{}.{}",
+                dialect.quote_identifier(&self.schema),
+                dialect.quote_identifier(&self.table)
+            )
+        }
+    }
+
+    /// `(a, b, c)` quoted for `dialect`.
+    pub fn column_list(&self, dialect: &dyn Dialect) -> String {
+        let names: Vec<String> = self
+            .columns
+            .iter()
+            .map(|c| dialect.quote_identifier(c))
+            .collect();
+        format!("({})", names.join(", "))
+    }
+
+    /// Every row has one value per column.
+    pub fn check_rows(&self, rows: &[Vec<Option<String>>]) -> Result<()> {
+        match rows.iter().find(|row| row.len() != self.columns.len()) {
+            Some(row) => Err(DriverError::Other(format!(
+                "a row has {} values for {} columns",
+                row.len(),
+                self.columns.len()
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// `rows` cut into the multi-row statements an engine accepts: at most `max_values` bound
+    /// values (its parameter limit), `max_rows` rows (its `VALUES` limit) and about
+    /// `max_bytes` of data each (its packet size), and always at least one row.
+    pub fn statement_chunks(
+        &self,
+        rows: Vec<Vec<Option<String>>>,
+        max_values: usize,
+        max_rows: usize,
+        max_bytes: usize,
+    ) -> Vec<Vec<Vec<Option<String>>>> {
+        let width = self.columns.len().max(1);
+        let per_statement = (max_values / width).clamp(1, max_rows.max(1));
+        let mut chunks = Vec::new();
+        let mut current = Vec::new();
+        let mut bytes = 0usize;
+        for row in rows {
+            let size: usize = row.iter().map(|v| v.as_ref().map_or(1, String::len)).sum();
+            if !current.is_empty() && (current.len() >= per_statement || bytes + size > max_bytes) {
+                chunks.push(std::mem::take(&mut current));
+                bytes = 0;
+            }
+            bytes += size;
+            current.push(row);
+        }
+        if !current.is_empty() {
+            chunks.push(current);
+        }
+        chunks
+    }
+
+    /// `INSERT INTO t (a, b) VALUES (…), (…)` for `rows` rows, with `placeholder(n)` (from 1)
+    /// for each value: the multi-row statements of the engines that bind parameters.
+    pub fn insert_sql(
+        &self,
+        dialect: &dyn Dialect,
+        rows: usize,
+        placeholder: impl Fn(usize) -> String,
+    ) -> String {
+        let width = self.columns.len();
+        let mut sql = format!(
+            "INSERT INTO {} {} VALUES ",
+            self.qualified(dialect),
+            self.column_list(dialect)
+        );
+        for row in 0..rows {
+            if row > 0 {
+                sql.push_str(", ");
+            }
+            sql.push('(');
+            for column in 0..width {
+                if column > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str(&placeholder(row * width + column + 1));
+            }
+            sql.push(')');
+        }
+        sql
     }
 }
 

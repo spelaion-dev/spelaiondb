@@ -5,9 +5,10 @@ import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
-import type { EditableTableItem } from "../bindings";
+import type { EditableTableItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities } from "../bindings";
+import { PlanViewer } from "./PlanViewer";
 import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
-import { DEFAULT_PAGE_SIZE, SAVE_QUERY_EVENT, useApp, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
+import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { connectionTooltip } from "../connectionInfo";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
@@ -17,12 +18,16 @@ import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { summaryMessages, summaryShort } from "../scriptRun";
 import { saveTab, saveTabAs } from "../sqlFiles";
 import { notifyFinished } from "../notify";
+import { EditorActionsButton } from "./EditorMenu";
 import { SqlEditor, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
 import { toggleResultsMaximized } from "../tabActions";
 import { Icon } from "./Icons";
+import { useCompletionCatalog } from "../useCompletionCatalog";
+import { mayChangeCompletionCatalog } from "../sqlCompletion";
+import { useEngineInfo } from "../engines";
 
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 function databaseSwitching(engine: string | undefined): boolean {
@@ -75,13 +80,22 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const workspaceChanging = useApp((s) => s.workspaceChanging);
   const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
   const supportsDatabase = !tab.table && databaseSwitching(connection?.engine);
+  // A schema picker where the session has a schema of its own and no database picker does it
+  // (PostgreSQL, DuckDB): it shows, and changes, where unqualified names are found (ADR-037).
+  const engineInfo = useEngineInfo(connection?.engine);
+  const supportsSchema = !tab.table && !supportsDatabase && Boolean(engineInfo?.sessionSchema);
+  const [schemas, setSchemas] = useState<string[]>([]);
+  const [schema, setSchema] = useState<string | null>(null);
+  const [schemaBusy, setSchemaBusy] = useState(false);
+  const [schemaRefresh, setSchemaRefresh] = useState(0);
   const [databases, setDatabases] = useState<string[]>([]);
   const [database, setDatabase] = useState<string | null>(null);
   const [databaseBusy, setDatabaseBusy] = useState(false);
   const [databaseError, setDatabaseError] = useState(false);
   const [databaseRefresh, setDatabaseRefresh] = useState(0);
   const databaseBusyRef = useRef(false);
-  const [tables, setTables] = useState<Record<string, string[]>>({});
+  const workspace = useApp((s) => s.workspace?.workspace ?? null);
+  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tab.status === "connected" && !tab.table && (!supportsDatabase || database !== null));
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   const lastRequest = useRef<RunRequest | null>(null);
@@ -92,6 +106,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   /** Values given to `:name` placeholders in this tab, offered again next time. */
   const paramValues = useRef<Record<string, string>>({});
   const editor = useRef<SqlEditorHandle>(null);
+  const [plan, setPlan] = useState<PlanSummary | null>(null);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [analyzePlan, setAnalyzePlan] = useState(false);
+  const [planBuffers, setPlanBuffers] = useState(true);
+  const [capabilities, setCapabilities] = useState<PlanCapabilities | null>(null);
+  const explainAction = useRef<() => Promise<void>>(async () => undefined);
   // A short message in the toolbar: a formatting error or "saved as …".
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   useEffect(() => {
@@ -412,36 +432,52 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => window.removeEventListener(SAVE_QUERY_EVENT, onSave);
   }, [tab.id]);
 
-  // "Refresh all schemas" in the explorer reloads the names below.
-  const [schemasRefreshed, setSchemasRefreshed] = useState(0);
+  // The command palette's editor commands (SDB-18): what the action column's buttons do, and
+  // nothing while those buttons are disabled.
+  const actionState = useRef({ running: false, runBlocked: false });
   useEffect(() => {
-    const onRefresh = (e: Event) => {
-      if ((e as CustomEvent<string>).detail === tab.connectionId) setSchemasRefreshed((n) => n + 1);
-    };
-    window.addEventListener(SCHEMAS_REFRESHED_EVENT, onRefresh);
-    return () => window.removeEventListener(SCHEMAS_REFRESHED_EVENT, onRefresh);
-  }, [tab.connectionId]);
-
-  // Autocompletion: tables and views of the user schemas.
-  useEffect(() => {
-    if (tab.status !== "connected") return;
-    let cancelled = false;
-    (async () => {
-      // Autocompletion sees every name: the explorer's filters (ADR-025) do not apply here.
-      const schemas = (await call(commands.listSchemas(tab.id, null, false))).filter((s) => !s.system).slice(0, 20);
-      const out: Record<string, string[]> = {};
-      for (const schema of schemas) {
-        for (const o of await call(commands.listObjects(tab.id, schema.name, null, false))) {
-          out[`${o.schema}.${o.name}`] = [];
-          if (o.schema === "public" || o.schema === "main" || o.schema === database) out[o.name] = [];
-        }
+    const onCommand = (e: Event) => {
+      const { tab: target, command } = (e as CustomEvent<{ tab: string; command: EditorCommand }>).detail;
+      if (target !== tab.id) return;
+      const { running, runBlocked } = actionState.current;
+      switch (command) {
+        case "runCurrent":
+          if (!running && !runBlocked) editor.current?.runCurrent();
+          break;
+        case "runScript":
+          if (!running && !runBlocked) editor.current?.runScript();
+          break;
+        case "explain":
+          if (!running && !runBlocked) void explainAction.current();
+          break;
+        case "format":
+          editor.current?.format();
+          break;
+        case "lineComment":
+        case "blockComment":
+        case "wordWrap":
+        case "fold":
+        case "unfold":
+        case "matchingBracket":
+        case "upperCase":
+        case "lowerCase":
+        case "quotedList":
+        case "selectStatement":
+        case "copyStatement":
+        case "selectOccurrences":
+        case "insertSelect":
+        case "insertInsert":
+        case "insertUpdate":
+          editor.current?.action(command);
+          break;
+        case "cancel":
+          if (running) void call(commands.cancel(tab.id)).catch(() => undefined);
+          break;
       }
-      if (!cancelled) setTables(out);
-    })().catch(() => undefined);
-    return () => {
-      cancelled = true;
     };
-  }, [tab.status, tab.id, database, schemasRefreshed]);
+    window.addEventListener(EDITOR_COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(EDITOR_COMMAND_EVENT, onCommand);
+  }, [tab.id]);
 
   // Read the server state after connecting and after each script, including failed scripts:
   // a USE earlier in a script can succeed even when a later statement fails.
@@ -482,6 +518,45 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => { cancelled = true; };
   }, [supportsDatabase, tab.id, tab.status, tab.connectionId, tab.run?.running, databaseRefresh]);
 
+  // The session's schema, read after connecting and after each script (a SET search_path in
+  // it changes it), as the database is.
+  useEffect(() => {
+    if (!supportsSchema || tab.status !== "connected") {
+      setSchema(null);
+      setSchemas([]);
+      return;
+    }
+    if (tab.run?.running) return;
+    let cancelled = false;
+    Promise.all([call(commands.listSchemas(tab.id, null, false)), call(commands.activeSchema(tab.id))])
+      .then(([list, current]) => {
+        if (cancelled) return;
+        setSchemas(list.filter((item) => !item.system || item.name === current).map((item) => item.name));
+        setSchema(current);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSchemas([]);
+          setSchema(null);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [supportsSchema, tab.id, tab.status, tab.connectionId, tab.run?.running, schemaRefresh]);
+
+  async function changeSchema(next: string) {
+    if (!next || schemaBusy) return;
+    setSchemaBusy(true);
+    try {
+      await call(commands.setActiveSchema(tab.id, next));
+      setSchema(next);
+    } catch (e) {
+      setNotice({ text: message(e), error: true });
+    } finally {
+      setSchemaBusy(false);
+      setSchemaRefresh((n) => n + 1);
+    }
+  }
+
   async function changeDatabase(next: string) {
     if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!next || databaseBusyRef.current) return;
@@ -518,7 +593,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
     call(commands.setActiveSchema(tab.id, schemaRequest.schema))
       .then(() => setNotice({ text: t("activeSchemaSet", { schema: schemaRequest.schema }), error: false }))
-      .catch((e: unknown) => setNotice({ text: message(e), error: true }));
+      .catch((e: unknown) => setNotice({ text: message(e), error: true }))
+      .finally(() => setSchemaRefresh((n) => n + 1));
     // Once per request.
   }, [schemaRequest]);
 
@@ -569,7 +645,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (pendingCount > 0 || savingEditsRef.current || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
-    setTables({});
+    setPlan(null); setPlanOpen(false); setCapabilities(null); setAnalyzePlan(false);
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
     updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
   }
@@ -582,6 +658,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     startingRun.current = true;
     try {
     if (!(await ensureConnected())) return;
+    setPlan(null); setPlanOpen(false);
     // `:name` placeholders: the core lists them and writes the values in as literals.
     let text = request.text;
     const names = await call(commands.scriptParams(tab.id, text)).catch(() => [] as string[]);
@@ -638,6 +715,60 @@ export function EditorTab({ tab }: { tab: Tab }) {
       startingRun.current = false;
     }
   }
+
+  async function explainCurrent() {
+    if (startingRun.current || queryPageBusy.current || actionState.current.running || actionState.current.runBlocked) return;
+    if (pendingCount > 0 || savingEditsRef.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    startingRun.current = true;
+    let runStarted = false;
+    try {
+      if (!(await ensureConnected())) return;
+      const support = await call(commands.planCapabilities(tab.id));
+      setCapabilities(support); setPlanOpen(true);
+      if (!support.analyze) setAnalyzePlan(false);
+      if (!support.estimated) { setNotice({ text: t("plan.unsupported", { engine: connection?.engine }), error: true }); return; }
+      const request = await editor.current?.currentRequest();
+      if (!request?.text.trim()) return;
+      let text = request.text;
+      const names = await call(commands.scriptParams(tab.id, text));
+      if (names.length) {
+        const values = await useDialogs.getState().askParams(names, paramValues.current);
+        if (!values) return;
+        paramValues.current = { ...paramValues.current, ...values };
+        text = await call(commands.bindParams(tab.id, text, values));
+      }
+      const analyze = analyzePlan && support.analyze;
+      let options = { analyze, buffers: analyze && planBuffers && support.buffers, analyzeConfirmed: false, confirmed: false, timeoutSeconds: runOptionsOf(tab).timeoutSeconds };
+      const check = await call(commands.explainPreflight(tab.id, text, options));
+      if (check.executesQuery) {
+        const answer = await useDialogs.getState().askChoice({ title: t("plan.analyzeTitle"), message: t("plan.analyzeWarning"), choices: [{ id: "execute", label: t("plan.analyzeExecute"), danger: true }, { id: "cancel", label: t("cancel") }] });
+        if (answer !== "execute") return;
+        options = { ...options, analyzeConfirmed: true };
+      }
+      if (check.risks.length) {
+        if (!(await useDialogs.getState().askRisks(connection?.name ?? "", check.risks.map(item => ({ sql: text, risk: item.risk }))))) return;
+        options = { ...options, confirmed: true };
+      }
+      // Acceptance transfers result ownership just like an ordinary Run. Refusals and
+      // dismissed warnings above leave the previous result and its handles intact.
+      await Promise.all((tab.run?.results ?? []).map(result => call(commands.releaseResult(result.id)).catch(() => undefined)));
+      setQueryTable(null); setQueryChecked(null); setPlan(null);
+      runStarted = true;
+      const startedAt = performance.now();
+      updateTab(tab.id, { run: { running: true, results: [], activeResult: null, messages: [], error: null, startedAt, elapsedMs: null } });
+      const channel = new Channel<ScriptEvent>(), failures = new Map<number, string>();
+      // PostgreSQL diagnostics refer to the generated EXPLAIN, so never underline source offsets.
+      channel.onmessage = event => handle(event, { ...request, text, bound: true }, startedAt, null, failures);
+      const result = await call(commands.explainQuery(tab.id, text, options, channel));
+      if (useApp.getState().tabs.some(item => item.id === tab.id)) setPlan(result);
+      else await commands.releasePlan(result.id);
+    } catch (e) {
+      const detail = message(e);
+      if (runStarted) updateRun(tab.id, current => ({ ...current, running: false, error: { message: detail, offset: null, translation: { key: "messages.runFailed", values: { detail } } } }));
+      setNotice({ text: t("plan.runFailed", { reason: message(e) }), error: true });
+    } finally { startingRun.current = false; }
+  }
+  explainAction.current = explainCurrent;
 
   function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number } | null, failures: Map<number, string>) {
     switch (event.kind) {
@@ -712,6 +843,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
           messages: summary.statements > 1 || summary.stop ? [...r.messages, ...summaryMessages(summary)] : r.messages,
         }));
         useApp.getState().refreshHistory();
+        if (mayChangeCompletionCatalog(request.text, connection?.engine ?? null)) {
+          window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: tab.connectionId }));
+        }
         notifyFinished(tab, summary, elapsedMs);
         break;
       }
@@ -739,8 +873,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
 
   const running = tab.run?.running ?? false;
+  actionState.current = { running, runBlocked: historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging };
   const maximized = !tab.table && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
+  const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults")} title={t(maximized ? "restoreResults" : "maximizeResults")} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
       <div className="toolbar">
@@ -771,6 +907,20 @@ export function EditorTab({ tab }: { tab: Tab }) {
         ) : (
           <button className="ghost" disabled={tab.status === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
         ))}
+        {supportsSchema && tab.status === "connected" && (
+          <select
+            aria-label={t("schema")}
+            title={t("schemaHint")}
+            name="schema"
+            value={schema ?? ""}
+            onChange={(e) => void changeSchema(e.target.value)}
+            disabled={running || schemaBusy || historySaving || workspaceChanging || activeResult?.paging?.loading}
+          >
+            <option value="" disabled>{t("noSchema")}</option>
+            {schema && !schemas.includes(schema) && <option value={schema}>{schema}</option>}
+            {schemas.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        )}
         {tab.lost ? (
           <span className="status status-lost" role="alert" title={tab.lostTransaction ? `${tab.lost}
 ${t("transaction.lostWithTransaction")}` : tab.lost}>
@@ -811,6 +961,21 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           </button>
         ))}
       </div>
+      {tab.setupSkipped && tab.setupSkipped.length > 0 && (
+        <div className="banner restore-notes setup-skipped" role="status" aria-label={t("setupSkipped.title")}>
+          <div>
+            <strong>{t("setupSkipped.title")}</strong>
+            <ul>
+              {tab.setupSkipped.map((skipped) => (
+                <li key={skipped.index}>
+                  {t("setupSkipped.item", { index: skipped.index, statement: skipped.statement, message: skipped.message })}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <button className="ghost small" onClick={() => updateTab(tab.id, { setupSkipped: undefined })}>{t("restore.dismiss")}</button>
+        </div>
+      )}
       {tab.restoreNotes && tab.restoreNotes.length > 0 && (
         <div className="banner restore-notes" role="status">
           <ul>
@@ -859,6 +1024,8 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
               <EditorActionIcon name="script" />
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
+            <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tab.status === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
+            <EditorActionsButton />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint")} onClick={() => editor.current?.format()}>
               <EditorActionIcon name="format" />
@@ -878,6 +1045,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
           </div>
           <SqlEditor
             handle={editor}
+            onActionError={(reason) => setNotice({ text: t("actions.failed", { reason }), error: true })}
             onFormatError={(reason) => setNotice({ text: t("formatFailed", { reason }), error: true })}
             value={tab.sql}
             revision={tab.textRevision}
@@ -886,11 +1054,12 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
               updateTab(tab.id, { sql });
             }}
             engine={connection?.engine ?? null}
-            tables={tables}
+            catalog={completion.catalog}
             onRun={(r) => void run(r)}
             error={editorError}
           />
         </div>
+        {!tab.table && completion.error && <div className="notice error" role="status">{t("completion.loadFailed", { reason: completion.error })}</div>}
         <div
           className="divider"
           hidden={maximized}
@@ -916,14 +1085,14 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
         </>
         )}
         <div style={{ flex: tab.table || maximized ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
-          <Results
+          {planOpen && plan ? <PlanViewer key={plan.id} summary={plan} controls={planControls} onBack={() => { setPlan(null); setPlanOpen(false); }} /> : <>{planOpen && planControls}<Results
             maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
             run={tab.run}
             session={tab.id}
             connectionId={tab.connectionId}
             table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
             serverSort={tab.table ? { sort: tab.table.sort, onSort: (sort) => void sortTable(sort) } : undefined}
-            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0 }) } : undefined}
+            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0 }), connectionId: tab.connectionId } : undefined}
             editing={editing}
             readOnlyHint={!tab.table && queryChecked === activeResult?.id && !queryTable}
             pendingEdits={pendingCount > 0}
@@ -946,7 +1115,7 @@ ${t("transaction.lostWithTransaction")}` : tab.lost}>
                 results: r.results.map((x) => (x.id === result ? { ...x, filter, rows, total } : x)),
               }))
             }
-          />
+          /></>}
         </div>
       </div>
     </div>
@@ -995,7 +1164,7 @@ function Results({
   onFiltered(result: number, filter: string | undefined, rows: number, total: number): void;
   onColumnFiltered(result: number, columnFilters: ColumnFilterItem[], rows: number, total: number): void;
   serverSort?: { sort: SortState | undefined; onSort(sort: SortState | undefined): void };
-  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void };
+  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
   editing?: GridEditing;
   readOnlyHint?: boolean;
   pendingEdits: boolean;

@@ -71,6 +71,7 @@ impl Workspace {
             },
             interaction: ui,
             password,
+            read_only_session: false,
         };
         open_connection(
             resolved,
@@ -776,6 +777,31 @@ async fn sqlite_on_a_server_through_two_hops() {
         .find(|o| o.name == "remote_t_note")
         .unwrap_or_else(|| panic!("{triggers:?}"));
     assert_eq!(trigger.detail.as_deref(), Some("remote_t"));
+    // The keys that point to a table, from the server's catalog: written without its column,
+    // a key points to the primary key.
+    let (_, error) = script(
+        &conn,
+        "create table if not exists child_of_remote (id integer primary key, \
+         parent integer references remote_t)",
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    let referencing = conn
+        .session
+        .connection()
+        .list_referencing_keys("main", "remote_t")
+        .await
+        .unwrap();
+    assert_eq!(
+        referencing,
+        [spelaion_driver_api::ReferencingKey {
+            schema: "main".into(),
+            table: "child_of_remote".into(),
+            name: "fk_0".into(),
+            columns: vec!["parent".into()],
+            referenced_columns: vec!["id".into()],
+        }]
+    );
     // The explorer's filter goes into the server's catalog query too (ADR-025).
     let only_remote = spelaion_driver_api::NameFilter {
         include: vec!["REMOTE_*".into()],
