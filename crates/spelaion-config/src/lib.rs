@@ -35,6 +35,7 @@ mod tunnel_draft;
 mod types;
 mod types_edit;
 mod vars;
+mod workbench;
 
 pub use accounts::{connection_account, proxy_account, tunnel_account};
 pub use check::{Finding, Severity, check_workspace};
@@ -97,6 +98,7 @@ pub use tunnel_draft::{
 };
 pub use types::{ConnectionType, ConnectionTypes, PRODUCTION, Safeguards, type_id};
 pub use types_edit::{remove_personal_type, set_personal_type};
+pub use workbench::{WorkbenchError, WorkbenchPasswords, read_workbench, workbench_dir};
 
 /// JSON Schema of each file type, for validation and autocompletion in the editor.
 /// They are stored in `schema/` and a test checks they are up to date.

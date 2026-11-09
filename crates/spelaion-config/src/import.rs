@@ -1,8 +1,8 @@
 //! What every connection import has in common, whichever client the connections come from
-//! (DBeaver, DataGrip, TablePlus, …): one model of an imported connection, the drafts SpelaionDB creates
+//! (DBeaver, DataGrip, TablePlus, MySQL Workbench, …): one model of an imported connection, the drafts SpelaionDB creates
 //! for it, the target folder, and how a connection that already exists is found and replaced.
 //!
-//! A client's reader (`dbeaver.rs`, `datagrip.rs`, `tableplus.rs`) only turns that client's files into
+//! A client's reader (`dbeaver.rs`, `datagrip.rs`, `tableplus.rs`, `workbench.rs`) only turns that client's files into
 //! [`ImportedConnection`]s; everything after that is here, so a new client plugs in by writing
 //! a reader. Passwords only live as [`Secret`]s on their way to the keychain: they are never
 //! shown, logged or written to a file.
@@ -23,6 +23,7 @@ pub enum ImportClient {
     Datagrip,
     Tableplus,
     Heidisql,
+    Workbench,
 }
 
 impl ImportClient {
@@ -33,6 +34,7 @@ impl ImportClient {
             ImportClient::Datagrip => "datagrip",
             ImportClient::Tableplus => "tableplus",
             ImportClient::Heidisql => "heidisql",
+            ImportClient::Workbench => "workbench",
         }
     }
 
@@ -43,6 +45,7 @@ impl ImportClient {
             ImportClient::Datagrip => "DataGrip",
             ImportClient::Tableplus => "TablePlus",
             ImportClient::Heidisql => "HeidiSQL",
+            ImportClient::Workbench => "MySQL Workbench",
         }
     }
 }

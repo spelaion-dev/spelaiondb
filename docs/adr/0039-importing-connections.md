@@ -67,6 +67,12 @@ own KeePass database.
   and hand it to the reader with each read, as a `Secret`; it is never stored. A wrong password
   is refused before anything is decrypted. This is the one secret that travels from the UI, never
   to it.
+- MySQL Workbench 8.0 (`workbench.rs`) keeps passwords in the macOS keychain under the
+  connection's host identifier, read like DataGrip's (point 5); on Windows in its own vault
+  (`workbench_user_data.dat`) protected with DPAPI, which is not read: calling DPAPI needs
+  `unsafe` FFI or a new crate, and the workspace forbids `unsafe`. Reading DPAPI-protected stores
+  (Workbench's vault, DataGrip's KeePass master key, TablePlus's `.tpmaster`) is one decision for
+  all of them, left for later; until then the preview says the password will be asked.
 - DBeaver's import changes behaviour: a clash is no longer renamed silently but left out until
   the user picks what to do with it.
 

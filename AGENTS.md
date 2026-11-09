@@ -70,6 +70,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   RNCryptor's format with the password the user typed (the export's passwords only as `Secret`;
   the SSH key it carries is never kept), tested against files a real TablePlus wrote
   (`tests/fixtures/tableplus`).
+  `workbench.rs` reads MySQL Workbench 8.0's `connections.xml` (groups from `Group/Name`, SSH
+  as a one-hop tunnel; passwords only from the macOS keychain on import, never its Windows DPAPI
+  vault: the workspace forbids `unsafe`), tested against a file a real Workbench wrote
+  (`tests/fixtures/workbench`).
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no
