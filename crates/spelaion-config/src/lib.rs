@@ -10,6 +10,7 @@
 //! anything is resolved ([`TrustStore`]).
 
 mod accounts;
+mod beekeeper;
 mod check;
 mod conn_url;
 mod copy;
@@ -39,6 +40,7 @@ mod vars;
 mod workbench;
 
 pub use accounts::{connection_account, proxy_account, tunnel_account};
+pub use beekeeper::{BeekeeperError, beekeeper_dir, read_beekeeper};
 pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
 pub use copy::{

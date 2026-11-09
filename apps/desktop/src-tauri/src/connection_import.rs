@@ -1,4 +1,4 @@
-//! Importing connections from other clients (DBeaver, DataGrip, TablePlus, MySQL Workbench, pgAdmin…): a thin adapter.
+//! Importing connections from other clients (DBeaver, DataGrip, TablePlus, MySQL Workbench, pgAdmin, Beekeeper Studio…): a thin adapter.
 //! The core (`spelaion-config`'s `import.rs` and each client's reader) reads the client's files,
 //! finds the connections that already exist and writes the drafts; these commands carry the
 //! user's choices to it and its answers back. No secret ever travels to the UI: the files are
@@ -28,6 +28,7 @@ fn client_named(name: &str) -> CmdResult<ImportClient> {
         "heidisql" => Ok(ImportClient::Heidisql),
         "workbench" => Ok(ImportClient::Workbench),
         "pgadmin" => Ok(ImportClient::Pgadmin),
+        "beekeeper" => Ok(ImportClient::Beekeeper),
         other => Err(format!("unknown client: {other}")),
     }
 }
@@ -62,6 +63,15 @@ fn pgadmin_dir() -> Option<PathBuf> {
     std::env::var_os("SPELAION_PGADMIN_DIR")
         .map(PathBuf::from)
         .or_else(spelaion_config::pgadmin_dir)
+}
+
+/// Where Beekeeper Studio keeps its connections (`app.db` and `.key`): `SPELAION_BEEKEEPER_DIR`
+/// when set (the smoke test points it at a copy of the repository's fixture, never the user's),
+/// otherwise the system's.
+fn beekeeper_dir() -> Option<PathBuf> {
+    std::env::var_os("SPELAION_BEEKEEPER_DIR")
+        .map(PathBuf::from)
+        .or_else(spelaion_config::beekeeper_dir)
 }
 
 /// Why a client's files could not be read.
@@ -169,6 +179,16 @@ fn read(
                 None => pgadmin_dir().ok_or("pgAdmin's folder is unknown on this system")?,
             };
             let found = spelaion_config::read_pgadmin(&path).map_err(other)?;
+            Ok((path, found))
+        }
+        ImportClient::Beekeeper => {
+            let path = match chosen {
+                Some(path) => path,
+                None => {
+                    beekeeper_dir().ok_or("Beekeeper Studio's folder is unknown on this system")?
+                }
+            };
+            let found = spelaion_config::read_beekeeper(&path).map_err(other)?;
             Ok((path, found))
         }
     }

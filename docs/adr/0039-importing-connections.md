@@ -78,6 +78,13 @@ own KeePass database.
   SQLite database, `pgadmin4.db`, opened read-only. Passwords saved there are encrypted with
   pgAdmin's master password or a key of its own: their columns are never selected, only whether
   one was saved, so the preview can say it is not read.
+- Beekeeper Studio (`beekeeper.rs`) is read from its own SQLite database, `app.db`, opened
+  read-only. Like DBeaver's, its passwords are obscured rather than protected: each install
+  encrypts them with a random key kept in `.key` next to `app.db`, and that file is encrypted
+  with a key built into Beekeeper's open source code. The reader takes Beekeeper's own steps to
+  read the database and SSH passwords (the only ones an import can use) and holds them as
+  `Secret`s; a key passphrase, a jump host's secrets or an encrypted URL are listed, never
+  decrypted. Without a readable `.key` the preview says each password will be asked.
 - DBeaver's import changes behaviour: a clash is no longer renamed silently but left out until
   the user picks what to do with it.
 

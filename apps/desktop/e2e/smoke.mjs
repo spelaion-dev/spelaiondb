@@ -78,6 +78,8 @@ function startApp() {
       SPELAION_WORKBENCH_DIR: workbenchHome,
       // The pgAdmin import never opens the user's pgadmin4.db: this folder has none.
       SPELAION_PGADMIN_DIR: join(userDir, "no-pgadmin"),
+      // The Beekeeper Studio import never opens the user's app.db: this folder has none.
+      SPELAION_BEEKEEPER_DIR: join(userDir, "no-beekeeper"),
     },
     windowsHide: true,
     stdio: "inherit",
@@ -5075,6 +5077,77 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.ok(bastion, files.join(", "));
     assert.match(readFileSync(join(base, bastion), "utf8"), /tunnel = "spelaion-127-0-0-1"/);
     assert.ok(files.some((f) => f.startsWith("servers")), files.join(", "));
+    await page.evaluate(() => delete window.__spelaionImportDirs);
+  }
+
+  step("import from Beekeeper Studio: the connections a real Beekeeper saved, its folder, SSH tunnel, TLS, colour and a saved password");
+  {
+    // Beekeeper's data folder, from what a real Beekeeper Studio wrote
+    // (crates/spelaion-config/tests/fixtures/beekeeper/README.md): app.db and its .key, with one
+    // password encrypted by Beekeeper's own encryptor.
+    const fixtures = join(root, "crates/spelaion-config/tests/fixtures/beekeeper");
+    const dataDir = join(userDir, "beekeeper-studio");
+    mkdirSync(dataDir, { recursive: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(dataDir, "app.db"));
+    db.exec(readFileSync(join(fixtures, "beekeeper-6.2.2.sql"), "utf8"));
+    const saved = JSON.parse(readFileSync(join(fixtures, "passwords.json"), "utf8"));
+    db.prepare("UPDATE saved_connection SET password = ? WHERE name = 'Orders TLS'").run(saved.password);
+    db.close();
+    copyFileSync(join(fixtures, ".key"), join(dataDir, ".key"));
+    await page.evaluate((dir) => (window.__spelaionImportDirs = { beekeeper: dir }), dataDir);
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    await page.getByRole("button", { name: "Import from Beekeeper Studio…" }).click();
+    const importer = page.locator(".modal.wizard");
+    await importer.getByRole("heading", { name: "Import from Beekeeper Studio" }).waitFor();
+    const list = importer.getByRole("list", { name: "Beekeeper Studio connections" });
+    const item = (name) => list.getByRole("listitem").filter({ has: page.getByRole("checkbox", { name, exact: true }) });
+    await importer.getByRole("radio", { name: "Personal", exact: true }).check();
+    await item("PG via bastion").getByText("SSH spelaion@127.0.0.1:2221").waitFor();
+    await item("Orders TLS").locator(".conn-import-detail").filter({ hasText: "TLS verify-full" }).waitFor();
+    // Its folder, and the password Beekeeper saved (decrypted as Beekeeper does, never shown).
+    await item("Orders TLS").getByText("· Production").waitFor();
+    await item("Orders TLS").getByText("password saved", { exact: false }).waitFor();
+    // An engine SpelaionDB cannot open: listed, never chosen.
+    assert.ok(await list.getByRole("checkbox", { name: "Warehouse", exact: true }).isDisabled());
+    await item("Warehouse").getByText("Amazon Redshift is not supported yet", { exact: false }).waitFor();
+    // Its colour is listed, not imported (ADR-029).
+    await item("Shop MySQL").getByText("setting is not imported", { exact: false }).click();
+    await item("Shop MySQL").getByText("Colour: red", { exact: false }).waitFor();
+    for (const name of ["Orders TLS", "PG via bastion", "Shop MySQL"]) {
+      const duplicate = importer.getByRole("combobox", { name: `What to do with ${name}` });
+      if (await duplicate.count()) await duplicate.selectOption({ label: "Import it as a copy" });
+      else await list.getByRole("checkbox", { name, exact: true }).check();
+    }
+    // New connections start ticked: leave Beekeeper's own demo database and the file out.
+    for (const name of ["Demo Database", "Shop file"]) {
+      const box = list.getByRole("checkbox", { name, exact: true });
+      if (await box.isChecked()) await box.uncheck();
+    }
+    await importer.getByRole("textbox", { name: "Put them in" }).fill("Beekeeper");
+    // Never the user's real keychain from the smoke test: the password is asked instead.
+    await importer.getByRole("checkbox", { name: "Store the passwords Beekeeper Studio saved in the system keychain" }).uncheck();
+    await shot("sdb-55-import-beekeeper");
+    await importer.getByRole("button", { name: "Import 3 connections" }).click();
+    await importer.getByRole("status").filter({ hasText: "Imported 3 connections." }).waitFor();
+    await shot("sdb-55-import-beekeeper-done");
+    await importer.getByRole("button", { name: "Done", exact: true }).click();
+    await importer.waitFor({ state: "detached" });
+    const base = join(userDir, "connections", "beekeeper");
+    const files = readdirSync(base, { recursive: true }).map(String).filter((f) => f.endsWith(".toml"));
+    assert.equal(files.length, 3, files.join(", "));
+    const orders = files.find((f) => f.startsWith("production") && f.includes("orders-tls"));
+    assert.ok(orders, files.join(", "));
+    assert.match(readFileSync(join(base, orders), "utf8"), /verify-full/);
+    const bastion = files.find((f) => f.startsWith("production") && f.includes("pg-via-bastion"));
+    assert.ok(bastion, files.join(", "));
+    assert.match(readFileSync(join(base, bastion), "utf8"), /tunnel = "spelaion-127-0-0-1"/);
+    const mysql = files.find((f) => f.includes("shop-mysql"));
+    assert.ok(mysql, files.join(", "));
+    assert.match(readFileSync(join(base, mysql), "utf8"), /read_only = true/);
+    for (const file of files) {
+      assert.doesNotMatch(readFileSync(join(base, file), "utf8"), /fake-password-123/);
+    }
     await page.evaluate(() => delete window.__spelaionImportDirs);
   }
 
