@@ -15,7 +15,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   commit messages.
 
 ## Workspace map
-- `crates/spelaion-driver-api`: driver contract (ADR-005). Results in Arrow with
+- `crates/spelaion-driver-api`: driver contract (ADR-005). Engines are becoming plugins in
+  their own processes (ADR-041, after v0.9): anything added to this contract must be able to
+  travel as a message (owned data; no closures, trait objects or streams in parameters), and
+  new core code does not name a driver crate. Results in Arrow with
   `spelaion.logical` / `spelaion.native_type` metadata per column; `Value` for single cells.
   The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`

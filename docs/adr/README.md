@@ -13,7 +13,7 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [002](0002-core-boundary.md) | Core as a library independent of Tauri; security lives in the core | Accepted |
 | [003](0003-tauri-shell.md) | Desktop shell: Tauri 2 | Conditional (phase 0) |
 | [004](0004-no-daemon.md) | No daemon: app + standalone `spelunk mcp` | Accepted |
-| [005](0005-driver-model.md) | Driver model: common contract + capabilities + `Native` values | Accepted |
+| [005](0005-driver-model.md) | Driver model: common contract + capabilities + `Native` values (its extensibility part superseded by ADR-041) | Accepted |
 | [006](0006-low-level-drivers.md) | Low-level drivers, not `sqlx` | Accepted |
 | [007](0007-in-process-ssh.md) | In-process SSH with `russh` + hops through an external command | Conditional (phase 0) |
 | [008](0008-mcp.md) | MCP over stdio, profiles, defense in layers, read-only in v0.1 | Accepted |
@@ -49,3 +49,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [038](0038-importing-data.md) | Importing data into a table: values bound, statements shown first, whole batches | Accepted |
 | [039](0039-importing-connections.md) | Importing connections from other clients: one flow, a reader per client | Accepted |
 | [040](0040-charts-from-a-result.md) | Charts from a result: points prepared in the core, drawn as plain SVG | Accepted |
+| [041](0041-engines-as-plugins.md) | Engines as plugins: every driver in its own process behind the same contract, migrated one at a time; dialects and barriers stay in the core | Accepted (not implemented) |
