@@ -161,7 +161,8 @@ try {
   const step = (text) => console.log(`· ${text}`);
 
   async function newQuery(connection, sql) {
-    await page.locator(`.connection-row:has-text("${connection}") button[title="New query"]`).click();
+    // Double-clicking a connection opens a new query on it (its row has no buttons, SDB-102).
+    await page.locator(`.connection-row:has-text("${connection}") > .label`).dblclick();
     const panel = page.locator(".tab-panel:not([hidden])");
     await panel.locator(".status-connecting").waitFor({ state: "detached" });
     await panel.locator(".cm-content").click();
@@ -181,29 +182,32 @@ try {
   async function waitForHistoryCount(count) {
     await page.waitForFunction((expected) => document.querySelectorAll(".history-entry").length === expected && document.querySelector(".history-entries")?.getAttribute("aria-busy") === "false", count);
   }
-  // The history preference lives in the connection's "⋯" menu in the sidebar.
+  // A connection's actions are all in its row's context menu (SDB-102).
   async function connectionMenu(connection) {
-    await page.locator(`.connection-row:has-text("${connection}") .connection-menu > button`).click();
-    return page.locator(".connection-menu-popup");
+    await page.locator(`.connection-row:has-text("${connection}")`).click({ button: "right" });
+    const menu = page.locator(".connection-menu");
+    await menu.waitFor();
+    return menu;
   }
+  // Whether a connection's queries are recorded, as the local store says (never its file).
   async function historySaving(connection) {
-    const menu = await connectionMenu(connection);
-    const checked = await menu.getByRole("checkbox", { name: `Save query history for ${connection}`, exact: true }).isChecked();
-    await page.keyboard.press("Escape");
-    await menu.waitFor({ state: "detached" });
-    return checked;
+    return page.evaluate(async (name) => {
+      const connections = await window.__TAURI_INTERNALS__.invoke("list_connections");
+      return connections.find((item) => item.name === name).historyEnabled;
+    }, connection);
   }
+  // The history preference is one of the connection's options, in its form (SDB-102).
   async function setHistorySaving(connection, enabled, screenshot) {
-    const menu = await connectionMenu(connection);
-    const checkbox = menu.getByRole("checkbox", { name: `Save query history for ${connection}`, exact: true });
+    await (await connectionMenu(connection)).getByRole("menuitem", { name: "Edit…" }).click();
+    const form = page.locator(".modal.wizard");
+    await form.getByRole("tab", { name: "Options" }).click();
+    const checkbox = form.getByRole("checkbox", { name: "Save query history", exact: true });
+    await checkbox.scrollIntoViewIfNeeded();
     if (await checkbox.isChecked() !== enabled) await checkbox.click();
-    await page.waitForFunction((expected) => {
-      const input = document.querySelector('.connection-menu-popup input[type="checkbox"]');
-      return input?.checked === expected && !input.disabled;
-    }, enabled);
     if (screenshot) await shot(screenshot);
-    await page.keyboard.press("Escape");
-    await menu.waitFor({ state: "detached" });
+    await form.getByRole("button", { name: "Save changes" }).click();
+    await form.waitFor({ state: "detached" });
+    assert.equal(await historySaving(connection), enabled);
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
@@ -270,7 +274,7 @@ try {
   await shot("01-start");
 
   step("Kubernetes editor requires repository trust before listing");
-  await (await connectionMenu("Shop (SQLite)")).getByRole("button", { name: "Edit…" }).click();
+  await (await connectionMenu("Shop (SQLite)")).getByRole("menuitem", { name: "Edit…" }).click();
   let trustDialog = page.getByRole("dialog", { name: "Trust this repository?" });
   await trustDialog.waitFor();
   await trustDialog.getByRole("button", { name: "Don't trust" }).click();
@@ -419,7 +423,7 @@ try {
   await page.getByRole("button", { name: "Expand or collapse schema main", exact: true }).waitFor();
   assert.equal(await page.getByRole("dialog", { name: "This changed since you trusted the repository" }).count(), 0);
   // Into a new nested folder from the dialog; the explorer's own session closes for the move.
-  await (await connectionMenu("Shop (SQLite)")).getByRole("button", { name: "Move to folder…" }).click();
+  await (await connectionMenu("Shop (SQLite)")).getByRole("menuitem", { name: "Move to folder…" }).click();
   const moveDialog = page.getByRole("dialog", { name: "Move Shop (SQLite) to a folder" });
   await moveDialog.getByLabel("Folder", { exact: true }).fill("docker/eu");
   await shot("sdb-13-move-dialog");
@@ -1175,7 +1179,7 @@ try {
   await page.getByRole("button", { name: "Close query history" }).click();
 
   step("history disabled: successful and failed SQL leave no entries");
-  await setHistorySaving("Shop (SQLite)", false, "05b0-connection-menu");
+  await setHistorySaving("Shop (SQLite)", false, "sdb-102-history-option");
   assert.equal(await panel.getByRole("checkbox").count(), 0, "the editor toolbar no longer has the history checkbox");
   await replaceQuery(panel, "select 'private_history_marker' as secret;");
   await run(panel);
@@ -1794,6 +1798,44 @@ try {
   const mainSchemaNode = page.getByRole("button", { name: "Expand or collapse schema main" });
   assert.equal(await mainSchemaNode.evaluate((el) => getComputedStyle(el).cursor), "pointer");
   await mainSchemaNode.click();
+
+  step("connection menu: every action once, from a right click or the keyboard, and no row buttons");
+  {
+    const shopRow = page.locator('.connection-row:has-text("Shop (SQLite)")');
+    assert.equal(await shopRow.locator("button:not(.twisty):not(.connection-tag)").count(), 0, "a connection row has no ⋯ or + button");
+    const menu = await connectionMenu("Shop (SQLite)");
+    const labels = () => menu.getByRole("menuitem").evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")));
+    assert.deepEqual(await labels(), [
+      "New query", "Open object by name…", "Refresh all schemas",
+      "Edit…", "Configure filters…",
+      "Duplicate", "Copy", "Paste connection", "Move to folder…",
+      "Delete…",
+    ]);
+    await shot("sdb-102-connection-menu");
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+    // From the keyboard: Shift+F10 on the focused row opens it on its first action, the arrows
+    // move, and Escape closes it and gives the focus back to the row.
+    const focused = () => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? null);
+    await shopRow.locator(".twisty").focus();
+    await page.keyboard.press("Shift+F10");
+    await menu.waitFor();
+    assert.equal(await focused(), "New query");
+    await page.keyboard.press("End");
+    assert.equal(await focused(), "Delete…");
+    await page.keyboard.press("ArrowDown");
+    assert.equal(await focused(), "New query");
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "detached" });
+    assert.ok(await shopRow.locator(".twisty").evaluate((el) => el === document.activeElement), "the focus is back on the row");
+    // New query from the menu, as a double click on the name, opens a tab on this connection.
+    const tabsBefore = await page.locator('.tabbar [role="tab"]').count();
+    await (await connectionMenu("Shop (SQLite)")).getByRole("menuitem", { name: "New query" }).click();
+    await menu.waitFor({ state: "detached" });
+    await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count + 1, tabsBefore);
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count, tabsBefore);
+  }
   // Objects are in folders by type (ADR-024), with how many each holds.
   const tablesFolder = page.getByRole("button", { name: "Expand or collapse Tables", exact: true });
   assert.equal(await tablesFolder.evaluate((el) => getComputedStyle(el).cursor), "pointer");
@@ -2988,7 +3030,7 @@ try {
     await page.waitForFunction(() => document.querySelector('.tab-panel:not([hidden]) select[name="schema"]')?.value === "smoke_setup");
 
     // A setup statement that writes is refused on a read-only connection, before anything is saved.
-    await (await connectionMenu("PG session setup")).getByRole("button", { name: "Edit…" }).click();
+    await (await connectionMenu("PG session setup")).getByRole("menuitem", { name: "Edit…" }).click();
     wizard = page.locator(".modal.wizard");
     await wizard.getByRole("heading", { name: "Edit PG session setup" }).waitFor();
     await wizard.getByRole("tab", { name: "Options" }).click();
@@ -3017,7 +3059,7 @@ try {
     await setupPanel.getByText("Statement 1: OK", { exact: false }).first().waitFor();
     await page.locator(".tabbar .tab.active .close").click();
     await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor();
-    await (await connectionMenu("PG session setup")).getByRole("button", { name: "Delete…" }).click();
+    await (await connectionMenu("PG session setup")).getByRole("menuitem", { name: "Delete…" }).click();
     const deleteSetup = page.getByRole("dialog", { name: "Delete connection?" });
     await deleteSetup.getByRole("button", { name: "Delete", exact: true }).click();
     await deleteSetup.waitFor({ state: "detached" });
@@ -3983,7 +4025,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.ok(!existsSync(join(demo, ".spelaion", "connections", "shop-copy.toml")), "personal connections stay out of the repository");
 
   step("edit a connection: same file, comments of the form kept, location fixed");
-  await (await connectionMenu("Docker PG (wizard)")).getByRole("button", { name: "Edit…" }).click();
+  await (await connectionMenu("Docker PG (wizard)")).getByRole("menuitem", { name: "Edit…" }).click();
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("heading", { name: "Edit Docker PG (wizard)" }).waitFor();
   assert.equal(await wizard.getByLabel("Host", { exact: true }).inputValue(), "127.0.0.1");
@@ -4055,7 +4097,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   step("duplicate a repository connection: next to the original, every setting kept, opened to edit");
   const mysqlFile = join(demo, ".spelaion", "connections", "docker", "mysql.toml");
   const mysqlCopyFile = join(demo, ".spelaion", "connections", "docker", "mysql-copy.toml");
-  await (await connectionMenu("MySQL (Docker)")).getByRole("button", { name: "Duplicate" }).click();
+  await (await connectionMenu("MySQL (Docker)")).getByRole("menuitem", { name: "Duplicate" }).click();
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("heading", { name: "Edit MySQL (Docker) (copy)" }).waitFor();
   await wizard.getByRole("status").filter({ hasText: "is a copy of “MySQL (Docker)”, already saved" }).waitFor();
@@ -4076,7 +4118,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   assert.match(await panel.locator(".status-connected").innerText(), /8\.4\./);
-  await (await connectionMenu("MySQL (Docker) (copy)")).getByRole("button", { name: "Edit…" }).click();
+  await (await connectionMenu("MySQL (Docker) (copy)")).getByRole("menuitem", { name: "Edit…" }).click();
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("heading", { name: "Edit MySQL (Docker) (copy)" }).waitFor();
   assert.equal(await wizard.getByLabel("Engine", { exact: true }).inputValue(), "mysql");
@@ -4120,7 +4162,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.doesNotMatch(connectionText, /keychain|spelaion"\s*\n\s*password = "/);
   await page.locator(".row-note", { hasText: "“MariaDB (copy)” copied, without its password." }).waitFor();
   // Delete the repository copy (the clipboard keeps its text), then paste it back.
-  await (await connectionMenu("MariaDB (copy)")).getByRole("button", { name: "Delete…" }).click();
+  await (await connectionMenu("MariaDB (copy)")).getByRole("menuitem", { name: "Delete…" }).click();
   const deleteCopy = page.getByRole("dialog", { name: "Delete connection?" });
   await deleteCopy.getByRole("button", { name: "Delete", exact: true }).click();
   await deleteCopy.waitFor({ state: "detached" });
@@ -4169,7 +4211,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   assert.match(await panel.locator(".status-connected").innerText(), /MariaDB/);
   for (const name of ["MariaDB (copy) (copy)", "MariaDB (copy)"]) {
-    await (await connectionMenu(name)).getByRole("button", { name: "Delete…" }).click();
+    await (await connectionMenu(name)).getByRole("menuitem", { name: "Delete…" }).click();
     const confirmDelete = page.getByRole("dialog", { name: "Delete connection?" });
     await confirmDelete.getByRole("button", { name: "Delete", exact: true }).click();
     await confirmDelete.waitFor({ state: "detached" });
@@ -4204,7 +4246,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await prodEditor.waitFor({ state: "detached" });
   });
   assert.match(readFileSync(join(userDir, "connection-types.toml"), "utf8"), /\[types\.careful\][^[]*confirm_execution = true/);
-  await (await connectionMenu("Shop copy")).getByRole("button", { name: "Edit…" }).click();
+  await (await connectionMenu("Shop copy")).getByRole("menuitem", { name: "Edit…" }).click();
   wizard = page.locator(".modal.wizard");
   await wizard.getByRole("tab", { name: "Options" }).click();
   await wizard.getByLabel("Connection type", { exact: true }).selectOption("careful");
@@ -4412,7 +4454,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.doesNotMatch(readFileSync(join(userDir, "user.toml"), "utf8"), /tunnels/);
 
   // While a connection uses it, the tunnel cannot be deleted.
-  await (await connectionMenu("PG through wizard tunnel")).getByRole("button", { name: "Edit…" }).click();
+  await (await connectionMenu("PG through wizard tunnel")).getByRole("menuitem", { name: "Edit…" }).click();
   wizard = page.locator(".modal.wizard").first();
   await wizard.getByRole("tab", { name: "SSH" }).click();
   await wizard.getByRole("button", { name: "Edit profile…" }).click();
@@ -4619,7 +4661,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.doesNotMatch(kubeFile, /^tunnel/m);
 
     // Editing shows the saved choice.
-    await (await connectionMenu("PG in Kubernetes")).getByRole("button", { name: "Edit…" }).click();
+    await (await connectionMenu("PG in Kubernetes")).getByRole("menuitem", { name: "Edit…" }).click();
     wizard = page.locator(".modal.wizard").first();
     await wizard.getByRole("tab", { name: "Kubernetes" }).click();
     const editKube = wizard.locator("#connection-tab-kubernetes");
@@ -4638,7 +4680,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   }
 
   step("delete a connection: confirmation, its tab is left without a connection");
-  await (await connectionMenu("Shop copy")).getByRole("button", { name: "Delete…" }).click();
+  await (await connectionMenu("Shop copy")).getByRole("menuitem", { name: "Delete…" }).click();
   const confirm = page.getByRole("dialog", { name: "Delete connection?" });
   await confirm.getByText("only this computer is affected").waitFor();
   await shot("13b-delete-connection");

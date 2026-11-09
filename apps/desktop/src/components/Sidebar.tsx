@@ -1649,6 +1649,11 @@ function ConnectionNode({
           if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
             e.preventDefault();
             copy();
+          } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey)) {
+            // The menu from the keyboard opens under the row, as a right click would at the pointer.
+            e.preventDefault();
+            const rect = e.currentTarget.getBoundingClientRect();
+            setRowMenu({ x: rect.left + 24, y: rect.bottom });
           }
         }}
       >
@@ -1708,19 +1713,6 @@ function ConnectionNode({
             {t("filtered")}
           </span>
         )}
-        <button
-          className="ghost small"
-          onClick={newQuery}
-          title={t("newQuery")}
-        >
-          +
-        </button>
-        <ConnectionMenu
-          connection={connection}
-          onRefresh={schemas ? () => void refreshAll() : undefined}
-          onConfigureFilters={() => configureFilter()}
-          onError={(message) => setRowNote({ error: true, text: message })}
-        />
       </div>
       {rowNote && (
         <div className={`${rowNote.error ? "error" : "muted"} small row-note`} role={rowNote.error ? "alert" : "status"}>
@@ -1728,89 +1720,30 @@ function ConnectionNode({
         </div>
       )}
       {rowMenu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: rowMenu.x, top: rowMenu.y }}>
-          {schemas && (
-            <button
-              role="menuitem"
-              title="Ctrl+Shift+D"
-              onClick={() => {
-                setRowMenu(null);
-                useApp.getState().setOpenObject({ connectionId: connection.id });
-              }}
-            >
-              {t("openByName.menu")}
-            </button>
-          )}
-          <button role="menuitem" onClick={() => configureFilter("schemas")}>
-            {t("configureSchemaFilter")}
-          </button>
-          <hr />
-          <button
-            role="menuitem"
-            onClick={() => {
-              setRowMenu(null);
-              duplicate();
-            }}
-          >
-            {t("connections:copies.duplicate")}
-          </button>
-          <button
-            role="menuitem"
-            onClick={() => {
-              setRowMenu(null);
-              useApp.getState().setMovingConnection(connection);
-            }}
-          >
-            {t("connections:move.menu")}
-          </button>
-          <button
-            role="menuitem"
-            title="Ctrl+C"
-            onClick={() => {
-              setRowMenu(null);
-              copy();
-            }}
-          >
-            {t("connections:copies.copy")}
-          </button>
-          <button
-            role="menuitem"
-            title="Ctrl+V"
-            onClick={() => {
-              setRowMenu(null);
+        <ConnectionMenu
+          connection={connection}
+          x={rowMenu.x}
+          y={rowMenu.y}
+          connected={schemas !== null}
+          actions={{
+            newQuery,
+            refresh: () => void refreshAll(),
+            configureFilters: () => configureFilter(),
+            createSchema: actions?.create.includes("schema")
+              ? () => openCreate(connection.id, session, "schema", "").catch((e: unknown) => setError(errorText(e)))
+              : undefined,
+            duplicate,
+            copy,
+            paste: () => {
               onPasteError(null);
               pasteFromClipboard().catch((e: unknown) => onPasteError(errorText(e)));
-            }}
-          >
-            {t("connections:copies.paste")}
-          </button>
-          <hr />
-          {schemas && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                setRowMenu(null);
-                void refreshAll();
-              }}
-            >
-              {t("refreshAllSchemas")}
-            </button>
-          )}
-          {schemas && actions?.create.includes("schema") && (
-            <>
-              <hr />
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setRowMenu(null);
-                  openCreate(connection.id, session, "schema", "").catch((e: unknown) => setError(errorText(e)));
-                }}
-              >
-                {t("create.schema")}
-              </button>
-            </>
-          )}
-        </div>
+            },
+          }}
+          onClose={(restoreFocus) => {
+            setRowMenu(null);
+            if (restoreFocus) connectionRow.current?.querySelector<HTMLButtonElement>(".twisty")?.focus();
+          }}
+        />
       )}
       {open && (
         <div className="children">

@@ -196,7 +196,7 @@ to an action that is also in a context menu, never its only way in.
 | Results toolbar and grid | the active result and its selection | result tabs, filter, Export…, maximize; row edits with Save changes / Discard above the grid; copy, sort and filters in the grid's menus; in a table data tab, a foreign key cell's link and Open referenced row, and the side panel's references of the active row; the side panel's selection numbers (also in the cell menu); in a table data tab, Column statistics in the header menu |
 | Tab strip | tabs and files | new tab, the file menu (Open…, recent files: the app has no menu bar), each tab's context menu |
 | Explorer header | the explorer itself | link with editor, connected only, quick filter (finds connections by name, tag, type or host, forgiving a typo), add connection |
-| Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create, Import data… (a table, or a new table from a schema),  Move to folder… (also by dragging the connection onto a folder title), Rename…, Drop… (last, red) |
+| Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create, Import data… (a table, or a new table from a schema),  Move to folder… (also by dragging the connection onto a folder title), Rename…, Drop… (last, red); a connection's: New query, Open object by name…, Refresh all schemas, Edit…, Configure filters…, New schema, Duplicate, Copy, Paste connection, Move to folder…, Delete… (last, red) |
 | Activity bar | panels and pages | explorer, processes; history, saved queries, MCP and Settings at the bottom |
 | Settings | preferences for every workspace | applied and saved as they change, with no Save button |
 | Command palette | every app command, and the actions of connections and loaded objects | Ctrl+Shift+P: commands with their shortcuts, connections, the explorer's loaded objects (open data, open structure, new console, copy names, show in explorer) and recent files |
@@ -212,9 +212,10 @@ to an action that is also in a context menu, never its only way in.
 
 - An option of one connection belongs in its form (Edit connection…), one of one tab in that tab
   (Run options), one of the whole app in Settings.
-- A connection row's context menu and its "⋯" button show the same actions.
-- A row shows at most two action buttons of its own (a connection's new query and "⋯"); the
-  rest is in its menu.
+- A connection row has no action buttons of its own: its context menu (right click, the Menu
+  key or Shift+F10) holds every action on it, each once, and double-click opens a new query.
+  Its personal options, such as saving its query history, are in its form.
+- A row shows at most two action buttons of its own; the rest is in its menu.
 - An action's label says whether it runs SQL ("Drop…", which shows the SQL first), opens SQL
   for review ("Generate SELECT", "Open in editor"), changes a personal preference or writes to
   the shared project.
@@ -245,7 +246,7 @@ to an action that is also in a context menu, never its only way in.
 | SQL editor | Ctrl+Enter run selection or statement · Ctrl+Shift+Enter run script · Shift+Alt+F format · Ctrl+click / Alt+click add a cursor · Ctrl+/ line comment · Shift+Alt+A block comment · Alt+Z word wrap · Ctrl+Shift+[ fold selection · Ctrl+Shift+] unfold selection · Ctrl+Shift+\ matching bracket · Ctrl+Shift+Alt+U upper case · Ctrl+Shift+Alt+L lower case · Ctrl+Alt+Q lines to quoted list · Ctrl+Alt+S select statement · Ctrl+Alt+C copy statement · Ctrl+Shift+L select all occurrences · Ctrl+Alt+1 SELECT snippet · Ctrl+Alt+2 INSERT snippet · Ctrl+Alt+3 UPDATE snippet · Tab expand sel / ins / upd or next snippet field · Shift+Tab previous snippet field · Menu key / Shift+F10 editor actions · CodeMirror's defaults otherwise |
 | Result grid | arrows, Home, End, PageUp, PageDown (Ctrl: to the edge; Shift: extend) · Ctrl+A all · Shift+Space rows · Ctrl+Space columns · Ctrl+C copy · Ctrl+Shift+C copy with headers · Enter cell viewer, Escape closes it · Ctrl+Enter or Ctrl+click open the row a foreign key cell references (table data tabs) · Ctrl+F find, F3 / Shift+F3 next / previous, Alt+C match case · Ctrl+Shift+J jump to column |
 | Table data edits | F2 edit cell · Alt+Insert add row · Ctrl+Alt+Insert duplicate row · Delete or Alt+Delete delete rows · Ctrl+Z undo the selected rows' edits · Ctrl+Alt+N set NULL · Ctrl+S save changes · Ctrl+R discard all |
-| Explorer row | Enter / Space expand · Ctrl+Enter or double-click open the overview · F5 refresh · F2 rename · Delete Drop… · Ctrl+C copy names (a connection row copies the connection) · Ctrl+Shift+C qualified names · Ctrl+V paste a connection |
+| Explorer row | Enter / Space expand · Ctrl+Enter or double-click open the overview (a connection: a new query) · Menu key / Shift+F10 a connection's menu · F5 refresh · F2 rename · Delete Drop… · Ctrl+C copy names (a connection row copies the connection) · Ctrl+Shift+C qualified names · Ctrl+V paste a connection |
 | Tab strip | arrows, Home, End move between tabs · F2 rename · Menu key or Shift+F10 tab menu |
 | Command palette | Up / Down, PageUp / PageDown move · Enter runs a command, or lists an object's actions · Escape or Backspace (empty box) goes back from an object's actions, Escape closes |
 | Dialogs, menus, separators | Escape cancels the topmost · Enter submits a one-field dialog · Tab stays inside a modal · arrows resize a separator (Shift: bigger steps), Home / End to its limits |

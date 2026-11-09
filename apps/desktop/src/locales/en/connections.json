@@ -27,7 +27,8 @@
     "kubernetes": "Kubernetes port-forward",
     "about": "About this connection",
     "session": "Defaults",
-    "setup": "Setup statements"
+    "setup": "Setup statements",
+    "onThisComputer": "On this computer"
   },
   "fields": {
     "name": "Name",
@@ -69,6 +70,10 @@
     "tunnelHint": "The database is reached from the profile’s last SSH hop, or through its proxy when it has no hops. Profiles are shared: Settings → Network lists them all.",
     "passwordOther": "Password reference",
     "fixedLocationHint": "When editing, the connection stays in the same file and folder.",
+    "history": "Save query history",
+    "historyHint": "Keeps the SQL you run on this connection in your local history. Turn it off before running SQL with passwords or other secrets; earlier history is kept. Only you see this setting: it is saved on this computer, never in the connection's file.",
+    "historyBusy": "The query history setting is still changing. Try again in a moment.",
+    "historyNotSaved": "The connection was saved, but its query history setting could not be changed: {{error}}",
     "serverFile": "File on the server",
     "serverFileHint": "Its path on the tunnel's last hop. SpelaionDB runs that server's sqlite3 (3.37 or later, in its safe mode): the file is never copied.",
     "useTunnelForFile": "The file is on a server: open it there through an SSH tunnel",
