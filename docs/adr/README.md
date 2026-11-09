@@ -21,7 +21,7 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [010](0010-frontend-and-results.md) | React + CodeMirror 6 + canvas grid; results in the core (Arrow) | Conditional (phase 0) |
 | [011](0011-local-storage.md) | Local SQLite in WAL mode | Accepted |
 | [012](0012-ci-as-reviewer.md) | CI is the code reviewer | Accepted |
-| [013](0013-license-and-repo.md) | Apache-2.0 + DCO + trademark policy; monorepo | Accepted |
+| [013](0013-license-and-repo.md) | Apache-2.0 + DCO + trademark policy; monorepo (plugins have their own repositories: ADR-042) | Accepted |
 | [014](0014-editing-table-data.md) | Editing in table data tabs, by primary key, in one transaction | Accepted |
 | [015](0015-kubernetes-tunnels.md) | Kubernetes connections through `kubectl port-forward` | Accepted |
 | [016](0016-duckdb.md) | DuckDB driver: bundled, one open per file (its MCP part superseded by ADR-020) | Accepted |
@@ -49,4 +49,5 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [038](0038-importing-data.md) | Importing data into a table: values bound, statements shown first, whole batches | Accepted |
 | [039](0039-importing-connections.md) | Importing connections from other clients: one flow, a reader per client | Accepted |
 | [040](0040-charts-from-a-result.md) | Charts from a result: points prepared in the core, drawn as plain SVG | Accepted |
-| [041](0041-engines-as-plugins.md) | Engines as plugins: every driver in its own process behind the same contract, migrated one at a time; dialects and barriers stay in the core | Accepted (not implemented) |
+| [041](0041-engines-as-plugins.md) | Engines as plugins: every driver in its own process behind the same contract, migrated one at a time; dialects and barriers stay in the core (where ours are built and checked: superseded by ADR-042) | Accepted (not implemented) |
+| [042](0042-plugin-repositories.md) | Our plugins live in their own repositories; this one keeps the contract and pins, by hash, the builds it ships and tests | Accepted (not implemented) |
