@@ -14,7 +14,8 @@
 - **Known legal risk:** the code is written entirely by an AI; in the EU and the US,
   copyright generally requires human authorship. Consult a lawyer if monetization becomes
   serious.
-- **Monorepo:** a Cargo workspace + a JS package workspace.
+- **Monorepo:** a Cargo workspace + a JS package workspace. (Superseded by ADR-042 for engine
+  plugins: each has its own repository.)
 
 ```
 crates/   spelunk-core, spelunk-config, spelunk-ssh, spelunk-driver-api,

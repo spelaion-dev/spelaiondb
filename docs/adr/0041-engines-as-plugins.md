@@ -1,6 +1,7 @@
 # ADR-041: Engines as plugins: every driver in its own process, behind the same contract
 
-- **Status:** Accepted (not implemented: the stages below are the plan)
+- **Status:** Accepted (not implemented: the stages below are the plan; where our plugins
+  are built and how they are checked is superseded by ADR-042)
 - **Date:** 2026-11-10
 - **Supersedes:** the "Extensibility" part of ADR-005 (the rest of ADR-005 stands)
 - **Builds on:** ADR-002 (security lives in the core), ADR-004 (no daemon), ADR-005 (driver
@@ -79,6 +80,10 @@ do today. New engines are only written as plugins.**
      (ADR-021) and refused if the signature does not match. An engine of ours has its dialect
      and barriers in the core and its tests in CI, so read-only mode and agents work on it as
      ADR-019 and ADR-020 say.
+     (Superseded by ADR-042 in where they are built and how they are checked: each plugin of
+     ours has its own repository, a protocol version replaces "the same build", and what the
+     app ships or downloads is pinned by hash in this repository, not checked against the
+     update key.)
    - **Someone else's:** installed only by the user, from a file, after a dialog that says
      what it is (a program that runs with the user's permissions and receives the passwords of
      its connections), and pinned by its hash: a changed file is refused until trusted again
