@@ -294,22 +294,28 @@ async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning()
 }
 
 #[tokio::test]
-async fn mysql_and_mariadb_plans_return_the_core_tree_and_never_analyze() {
+async fn server_plans_return_the_core_tree_and_never_analyze() {
     for (variable, engine) in [
         ("SPELAION_TEST_MYSQL", "mysql"),
         ("SPELAION_TEST_MARIADB", "mariadb"),
+        ("SPELAION_TEST_MSSQL", "sqlserver"),
     ] {
         let Ok(address) = std::env::var(variable) else {
             eprintln!("{variable} not set: MCP {engine} plans not tested");
             continue;
         };
         let (host, port) = address.rsplit_once(':').unwrap();
+        let (user, database, password) = if engine == "sqlserver" {
+            ("sa", "master", "Spelaion-test-1")
+        } else {
+            ("spelaion", "spelaion", "spelaion")
+        };
         let dir = temp(&format!("plans-{engine}"));
         std::fs::create_dir_all(dir.join("connections")).unwrap();
         std::fs::write(
             dir.join("connections/plans.toml"),
             format!(
-                "schema_version=1\nname='Plans'\nengine='{engine}'\nhost='{host}'\nport={port}\nuser='spelaion'\ndatabase='spelaion'\n[mcp]\nexposed=true\n"
+                "schema_version=1\nname='Plans'\nengine='{engine}'\nhost='{host}'\nport={port}\nuser='{user}'\ndatabase='{database}'\n[tls]\nmode='require'\n[mcp]\nexposed=true\n"
             ),
         )
         .unwrap();
@@ -319,7 +325,7 @@ async fn mysql_and_mariadb_plans_return_the_core_tree_and_never_analyze() {
             .resolve(&entry.id)
             .unwrap();
         resolved.password =
-            spelaion_config::Password::Value(spelaion_driver_api::Secret::new("spelaion"));
+            spelaion_config::Password::Value(spelaion_driver_api::Secret::new(password));
         resolved.params.read_only = true;
         let open = open_connection(
             resolved,

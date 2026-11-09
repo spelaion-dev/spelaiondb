@@ -4372,7 +4372,7 @@ pub fn run() {
                     Path::new(path).is_file()
                         && matches!(
                             Path::new(path).extension().and_then(|s| s.to_str()),
-                            Some("json" | "plan" | "sqlplan")
+                            Some("json" | "plan" | "sqlplan" | "xml")
                         )
                 })
                 .cloned()

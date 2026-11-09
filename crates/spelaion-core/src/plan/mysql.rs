@@ -207,6 +207,7 @@ fn document(
         .any(|n| n.metrics.buffers_hit.is_some() || n.metrics.buffers_read.is_some());
     let mut doc = PlanDocument {
         raw: raw.to_owned(),
+        raw_utf16: None,
         summary: PlanSummary {
             id: 0,
             engine: flavor.engine().into(),

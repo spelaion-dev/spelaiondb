@@ -6,6 +6,9 @@ mod mysql;
 mod mysql_tests;
 mod postgres;
 mod run;
+mod sqlserver;
+#[cfg(test)]
+mod sqlserver_tests;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -184,6 +187,7 @@ pub enum PlanRawFormat {
     Json,
     /// MySQL's EXPLAIN ANALYZE tree.
     Text,
+    Xml,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,9 +275,10 @@ pub struct PlanDocument {
     pub(crate) raw: String,
     pub(crate) nodes: Vec<PlanNode>,
     pub(crate) summary: PlanSummary,
+    pub(crate) raw_utf16: Option<bool>,
 }
 
-/// Reads a PostgreSQL, MySQL or MariaDB plan, recognized by its shape.
+/// Reads a PostgreSQL, MySQL, MariaDB or SQL Server plan, recognized by its shape.
 pub fn parse_plan(raw: &str, name: &str) -> Result<PlanDocument, PlanError> {
     parse_plan_from(raw, name, None)
 }
@@ -289,6 +294,9 @@ pub(crate) fn parse_plan_from(
         return Err(PlanError::Limit("raw output is larger than 8 MiB".into()));
     }
     let text = raw.trim_start_matches('\u{feff}');
+    if text.trim_start().starts_with('<') {
+        return sqlserver::parse(raw, name);
+    }
     if mysql::is_tree(text) {
         return mysql::parse_tree(raw, name);
     }
@@ -310,9 +318,32 @@ pub fn read_plan(path: &std::path::Path) -> Result<PlanDocument, PlanError> {
     if bytes.len() > MAX_PLAN_BYTES {
         return Err(PlanError::Limit("file is larger than 8 MiB".into()));
     }
-    let raw = std::str::from_utf8(&bytes)
-        .map_err(|_| PlanError::Invalid("plan files must be UTF-8 text".into()))?;
-    parse_plan(raw, &path.file_name().unwrap_or_default().to_string_lossy())
+    let (raw, utf16) = if let Some(rest) = bytes.strip_prefix(b"\xFF\xFE") {
+        (
+            crate::sql_file::decode_utf16(rest, u16::from_le_bytes)
+                .map_err(|_| PlanError::Invalid("invalid UTF-16 plan file".into()))?,
+            Some(true),
+        )
+    } else if let Some(rest) = bytes.strip_prefix(b"\xFE\xFF") {
+        (
+            crate::sql_file::decode_utf16(rest, u16::from_be_bytes)
+                .map_err(|_| PlanError::Invalid("invalid UTF-16 plan file".into()))?,
+            Some(false),
+        )
+    } else {
+        (
+            std::str::from_utf8(&bytes)
+                .map_err(|_| PlanError::Invalid("plan files must be UTF-8 or UTF-16 text".into()))?
+                .to_owned(),
+            None,
+        )
+    };
+    let mut plan = parse_plan(
+        &raw,
+        &path.file_name().unwrap_or_default().to_string_lossy(),
+    )?;
+    plan.raw_utf16 = utf16;
+    Ok(plan)
 }
 
 impl PlanDocument {

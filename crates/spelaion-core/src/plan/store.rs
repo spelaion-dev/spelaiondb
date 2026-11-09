@@ -113,13 +113,39 @@ impl PlanStore {
     ) -> Result<u32, PlanError> {
         let plan = self.get(id)?;
         atomic(path, cancel, |out| {
-            for chunk in plan.raw.as_bytes().chunks(32_768) {
+            if let Some(little_endian) = plan.raw_utf16 {
+                out.write_all(if little_endian {
+                    b"\xFF\xFE"
+                } else {
+                    b"\xFE\xFF"
+                })?;
+                let mut bytes = Vec::with_capacity(32_768);
+                for unit in plan.raw.encode_utf16() {
+                    let word = if little_endian {
+                        unit.to_le_bytes()
+                    } else {
+                        unit.to_be_bytes()
+                    };
+                    bytes.extend_from_slice(&word);
+                    if bytes.len() >= 32_768 {
+                        check_cancel(cancel)?;
+                        out.write_all(&bytes)?;
+                        bytes.clear();
+                    }
+                }
                 check_cancel(cancel)?;
-                out.write_all(chunk)?;
+                out.write_all(&bytes)?;
+            } else {
+                for chunk in plan.raw.as_bytes().chunks(32_768) {
+                    check_cancel(cancel)?;
+                    out.write_all(chunk)?;
+                }
             }
             Ok(())
         })?;
-        Ok(plan.raw.len() as u32)
+        Ok(plan
+            .raw_utf16
+            .map_or(plan.raw.len(), |_| plan.raw.encode_utf16().count() * 2 + 2) as u32)
     }
     pub fn export_csv(
         &self,

@@ -120,6 +120,20 @@ pub struct ExecOptions {
     pub batch_size: usize,
 }
 
+/// How an engine-specific plan request treats the original statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanMode {
+    /// Compile only; the original statement must not run.
+    Estimated,
+    /// Execute the statement and return its measured plan.
+    Analyze {
+        /// The statement produces a user result set before its actual plan (for example,
+        /// SELECT without INTO or DML with OUTPUT). This prevents treating that user result
+        /// as the appended plan when its column happens to use the engine's plan name.
+        query_result: bool,
+    },
+}
+
 impl Default for ExecOptions {
     fn default() -> Self {
         Self { batch_size: 10_000 }
@@ -162,6 +176,15 @@ pub trait Connection: Send + Sync {
     /// Executes **one** statement. Splitting a script into statements is the core's job,
     /// using the engine's [`Dialect`].
     async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream>;
+
+    /// Executes an engine's multi-batch plan protocol as one indivisible request. The core
+    /// must validate the statement, read-only policy and confirmations before calling this.
+    /// Drivers must restore temporary session settings even on error, cancellation or drop.
+    async fn execute_plan(&self, _sql: &str, _mode: PlanMode) -> Result<EventStream> {
+        Err(DriverError::Other(
+            "this engine has no multi-batch plan protocol".into(),
+        ))
+    }
 
     /// Handle to cancel the running statement from another task.
     fn cancel_handle(&self) -> Arc<dyn CancelHandle>;

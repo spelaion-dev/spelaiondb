@@ -44,10 +44,10 @@ pub struct PlanCapabilities {
 
 pub fn plan_capabilities(session: &Session, policy: &ExplainPolicy) -> PlanCapabilities {
     let engine = session.dialect().name();
-    let supported = matches!(engine, "postgres" | "mysql");
+    let supported = matches!(engine, "postgres" | "mysql" | "sqlserver");
     // MySQL and MariaDB share a dialect but not the ANALYZE syntax: it needs the flavor of
     // the connection that was actually opened.
-    let analyzable = engine == "postgres" || policy.flavor.is_some();
+    let analyzable = matches!(engine, "postgres" | "sqlserver") || policy.flavor.is_some();
     PlanCapabilities {
         estimated: supported,
         analyze: supported && analyzable && !policy.read_only,
@@ -113,6 +113,7 @@ pub struct PlanPreflight {
 pub(crate) struct PreparedPlan {
     sql: String,
     intent: String,
+    driver_mode: Option<spelaion_driver_api::PlanMode>,
 }
 impl PreparedPlan {
     pub(crate) fn sql(&self) -> &str {
@@ -120,6 +121,9 @@ impl PreparedPlan {
     }
     pub(crate) fn intent(&self) -> &str {
         &self.intent
+    }
+    pub(crate) fn driver_mode(&self) -> Option<spelaion_driver_api::PlanMode> {
+        self.driver_mode
     }
 }
 
@@ -130,7 +134,7 @@ fn prepare(
     policy: &ExplainPolicy,
 ) -> Result<PreparedPlan, PlanError> {
     let engine = session.dialect().name();
-    if !matches!(engine, "postgres" | "mysql") {
+    if !matches!(engine, "postgres" | "mysql" | "sqlserver") {
         return Err(PlanError::Unsupported(engine.into()));
     }
     if sql.len() > 1024 * 1024 {
@@ -179,16 +183,20 @@ fn prepare(
             options.buffers,
             sql.trim()
         ),
-        (_, false, _) => format!("EXPLAIN FORMAT=JSON\n{}", sql.trim()),
+        ("mysql", false, _) => format!("EXPLAIN FORMAT=JSON\n{}", sql.trim()),
         // Each flavor's ANALYZE is a syntax error on the other one, so a connection opened
         // as the wrong engine is refused by the server before the statement runs.
-        (_, true, Some(Flavor::Mysql)) => format!("EXPLAIN ANALYZE FORMAT=TREE\n{}", sql.trim()),
-        (_, true, Some(Flavor::Mariadb)) => format!("ANALYZE FORMAT=JSON\n{}", sql.trim()),
-        (_, true, None) => {
+        ("mysql", true, Some(Flavor::Mysql)) => {
+            format!("EXPLAIN ANALYZE FORMAT=TREE\n{}", sql.trim())
+        }
+        ("mysql", true, Some(Flavor::Mariadb)) => format!("ANALYZE FORMAT=JSON\n{}", sql.trim()),
+        ("mysql", true, None) => {
             return Err(PlanError::Invalid(
                 "ANALYZE needs the connection's engine (MySQL or MariaDB)".into(),
             ));
         }
+        ("sqlserver", _, _) => sql.trim().to_owned(),
+        _ => return Err(PlanError::Unsupported(engine.into())),
     };
     if policy.read_only {
         // The PostgreSQL driver's read_only flag does not establish a server barrier.
@@ -196,7 +204,32 @@ fn prepare(
         crate::classify_read_only(engine, &sql)
             .map_err(|e| PlanError::Execution(format!("this connection is read-only: {e}")))?;
     }
-    Ok(PreparedPlan { sql, intent })
+    let output_result = |output: &Option<sqlparser::ast::OutputClause>| match output {
+        None => false,
+        Some(sqlparser::ast::OutputClause::Output { into_table, .. }) => into_table.is_none(),
+        Some(sqlparser::ast::OutputClause::Returning { .. }) => true,
+    };
+    let query_result = match parsed.as_slice() {
+        [Statement::Query(query)] => match query.body.as_ref() {
+            sqlparser::ast::SetExpr::Select(select) => select.into.is_none(),
+            _ => true,
+        },
+        [Statement::Insert(insert)] => output_result(&insert.output) || insert.returning.is_some(),
+        [Statement::Update(update)] => output_result(&update.output) || update.returning.is_some(),
+        [Statement::Delete(delete)] => output_result(&delete.output) || delete.returning.is_some(),
+        [Statement::Merge(merge)] => output_result(&merge.output),
+        _ => false,
+    };
+    let driver_mode = (engine == "sqlserver").then_some(if options.analyze {
+        spelaion_driver_api::PlanMode::Analyze { query_result }
+    } else {
+        spelaion_driver_api::PlanMode::Estimated
+    });
+    Ok(PreparedPlan {
+        sql,
+        intent,
+        driver_mode,
+    })
 }
 
 pub fn explain_preflight(
@@ -240,13 +273,18 @@ pub async fn explain_read_only(
         ExplainOptions::default(),
         &ExplainPolicy::new(true, Safeguards::default()),
     )?;
+    let read = if session.dialect().name() == "sqlserver" {
+        format!("EXPLAIN {}", prepared.sql())
+    } else {
+        prepared.sql().to_owned()
+    };
     let result = session
-        .run_read_only(prepared.sql(), limits)
+        .run_read_only(&read, limits)
         .await
         .map_err(|e| PlanError::Execution(e.to_string()))?;
     if result.truncated || result.rows.len() != 1 || result.columns.len() != 1 {
         return Err(PlanError::Invalid(
-            "EXPLAIN did not return one complete JSON cell".into(),
+            "EXPLAIN did not return one complete plan cell".into(),
         ));
     }
     let raw = result.rows[0][0].to_string();
@@ -344,13 +382,22 @@ pub async fn explain(
         let result = result.read().expect("result lock poisoned");
         if result.rows() != 1 || result.schema().columns.len() != 1 {
             return Err(PlanError::Invalid(
-                "EXPLAIN did not return one JSON cell".into(),
+                "EXPLAIN did not return one plan cell".into(),
             ));
         }
         let raw = result
             .value_at(0, 0)
-            .ok_or_else(|| PlanError::Invalid("missing EXPLAIN JSON".into()))?
+            .ok_or_else(|| PlanError::Invalid("missing EXPLAIN plan".into()))?
             .to_string();
         parse_plan_from(&raw, "Execution plan", policy.flavor)
     })()
+    .map_err(|error| {
+        if options.analyze && !error.to_string().starts_with("ANALYZE ") {
+            PlanError::Execution(format!(
+                "ANALYZE may have executed the statement; check the transaction before retrying: {error}"
+            ))
+        } else {
+            error
+        }
+    })
 }

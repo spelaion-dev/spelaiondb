@@ -435,7 +435,7 @@ impl Session {
         kind: RunKind,
         run_options: ScriptOptions,
     ) -> BoxStream<'static, CoreEvent> {
-        self.run_with_intent(script, kind, run_options, None)
+        self.run_with_intent(script, kind, run_options, None, None)
     }
 
     /// Only the core's opaque, parsed plan request can pair EXPLAIN SQL with its intent.
@@ -449,6 +449,7 @@ impl Session {
             RunKind::User,
             options,
             Some(plan.intent().to_owned()),
+            plan.driver_mode(),
         )
     }
 
@@ -458,6 +459,7 @@ impl Session {
         kind: RunKind,
         run_options: ScriptOptions,
         intent: Option<String>,
+        plan_mode: Option<spelaion_driver_api::PlanMode>,
     ) -> BoxStream<'static, CoreEvent> {
         // This run is requested now, even if history or another run delays its first poll.
         // A cancel during those waits stops it; a later, newly requested run gets a new epoch.
@@ -553,7 +555,12 @@ impl Session {
                 let mut failure = None;
                 let mut rows_affected = None;
                 let mut notices = Vec::new();
-                let execute = connection.execute(text, &options);
+                let execute = async {
+                    match plan_mode {
+                        Some(mode) => connection.execute_plan(text, mode).await,
+                        None => connection.execute(text, &options).await,
+                    }
+                };
                 tokio::pin!(execute);
                 let opened = loop {
                     match until(&mut execute, deadline, timed_out).await {

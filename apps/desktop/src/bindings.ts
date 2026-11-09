@@ -2448,7 +2448,7 @@ export type PlanPage_Serialize = {
 /**  How the engine wrote the original plan, so a saved copy keeps a fitting extension. */
 export type PlanRawFormat = "json" | 
 /**  MySQL's EXPLAIN ANALYZE tree. */
-"text";
+"text" | "xml";
 
 export type PlanSort = "tree" | "nodeType" | "relation" | "index" | "cost" | "selfCost" | "estimatedRows" | "actualRowsPerLoop" | "actualRows" | "time" | "selfTime" | "timePerLoop" | "loops" | "buffersHit" | "buffersRead" | "rowsRemoved" | "heapFetches" | "workersPlanned" | "workersLaunched" | "temporaryRead" | "temporaryWritten" | "sortSpace" | "findings";
 

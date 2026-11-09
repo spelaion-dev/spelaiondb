@@ -71,7 +71,7 @@ pub(super) fn parse(raw: &str, json: &Value, name: &str) -> Result<PlanDocument,
             highest_cost:None,slowest:None,estimate_gap:None,sequential_scans:0,sorts:0,temporary_operations:0,
             node_count:0,depth:0,finding_count:0,operation_types:0,relation_count:0,index_count:0,
             note:"PostgreSQL JSON plans provide estimates; actual rows and timing require ANALYZE, block counters require BUFFERS. Parent cost, time and buffers include their children: they are not summed as query totals. Rows and timing per loop are multiplied by loops for totals. Self metrics subtract comparable serial children only; they are unavailable for parallel, partial or repeated inputs. Parallel time totals represent cumulative worker work, not wall time. Buffer hits/reads include shared and local blocks; temporary I/O stays separate. Names are schema-qualified when VERBOSE supplies their namespace; saved non-verbose plans can merge homonyms in name counts. Missing metrics stay unavailable. Findings are heuristics, not automatic tuning advice.".into(),
-        },nodes,
+        },nodes,raw_utf16:None,
     };
     doc.analyze();
     Ok(doc)

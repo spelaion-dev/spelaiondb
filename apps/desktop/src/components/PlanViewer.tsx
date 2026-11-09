@@ -109,7 +109,7 @@ export function PlanViewer({ summary, controls, onBack }: { summary: PlanSummary
     setError(null); setNotice(null);
     try {
       // The raw plan keeps the engine's own format: JSON, or MySQL's EXPLAIN ANALYZE text.
-      const raw = summary.rawFormat === "text" ? { file: "execution-plan.txt", name: "plan.textFiles", extension: "txt" } : { file: "execution-plan.json", name: "plan.jsonFiles", extension: "json" };
+      const raw = summary.rawFormat === "text" ? { file: "execution-plan.txt", name: "plan.textFiles", extension: "txt" } : summary.rawFormat === "xml" ? { file: "execution-plan.sqlplan", name: "plan.xmlFiles", extension: "sqlplan" } : { file: "execution-plan.json", name: "plan.jsonFiles", extension: "json" };
       const path = await chooseSavePath({ title: t(csv ? "plan.exportCsv" : "plan.saveRaw"), defaultPath: csv ? "execution-plan.csv" : raw.file, filters: [{ name: t(csv ? "plan.csvFiles" : raw.name), extensions: [csv ? "csv" : raw.extension] }] });
       if (!path) return;
       const id = ++exportSequence; exportRef.current = id; setExportId(id);
