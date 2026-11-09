@@ -3,10 +3,17 @@
 # public, so Actions minutes are free), and it can be started by hand on any branch. A push that
 # only touches documentation does not run it; a pull request always does, because its four jobs
 # are required to merge (branch protection) and a pull request without them would wait forever.
+# The job names are those required checks: renaming one means changing the branch protection.
 #
 # Speed: the Rust caches are saved only by pushes to `dev` and `main` (pull requests read
 # them): GitHub keeps 10 GB per repository, and one copy per pull request and release pushed
-# the useful ones out, so runs started from scratch (30 minutes instead of 12).
+# the useful ones out, so runs started from scratch (30 minutes instead of 12). On Linux,
+# what does not need the compiler (freeing disk, the Docker services, the Kubernetes cluster)
+# runs in the background while Rust compiles, and the tests wait for it.
+#
+# Versions: actions are pinned to a commit (the comment names the release), and Rust to a
+# version, so a run only changes when this file does. `release.yml` pins the same ones: bump
+# both together.
 name: CI
 
 on:
@@ -20,12 +27,17 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # A newer push to the same branch or pull request replaces a run still going; on `main`
 # every run finishes.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Careful with new variables here: rust-cache makes every one that starts with CARGO, RUST
+# or CC part of its key, so adding one starts the caches from scratch.
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -38,6 +50,9 @@ jobs:
   linux:
     name: Linux · fmt, clippy, tests with PostgreSQL (TLS), MySQL, SQL Server, SQLite, DuckDB, SSH tunnels and Kubernetes
     runs-on: ubuntu-latest
+    # A run from scratch takes about 30 minutes; a hung test must not hold the runner for
+    # GitHub's default of six hours.
+    timeout-minutes: 60
     env:
       SPELAION_TEST_PG: 127.0.0.1:15432
       SPELAION_TEST_MYSQL: 127.0.0.1:13306
@@ -52,51 +67,83 @@ jobs:
       SPELAION_TEST_K8S: /home/runner/.kube/config
     steps:
       # The runner ships tools this build never uses; their space is needed (Docker images,
-      # a Rust target directory with Tauri and every driver).
-      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # a Rust target directory with Tauri and every driver). Deleting them takes a minute and
+      # a half and nothing waits for it: the disk only fills up later, as the build goes.
+      - name: Free disk space in the background
+        run: sudo nohup rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL > /dev/null 2>&1 &
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Only installs kind and kubectl: the cluster is created below, in the background. Its
+      # name is given so the action deletes it when the job ends.
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
+          cluster_name: spelaion-test
+          install_only: true
+      # The same environment as locally: PostgreSQL with TLS and test certificates, behind the
+      # bastions; then a Kubernetes cluster in Docker (kind) with a PostgreSQL inside. Pulling
+      # the images and waiting for the servers takes a minute and a half that Rust needs anyway
+      # to compile, so it happens in the background: "Wait for the test services" below shows
+      # its output and fails the job if anything here did.
+      - name: Start the test services in the background
+        run: |
+          bash testing/docker/gen-keys.sh
+          (
+            status=failed
+            if docker compose -f testing/docker/compose.yaml up -d --build --wait \
+              && kind create cluster --name spelaion-test --wait 60s \
+              && kubectl apply -f testing/k8s/postgres.yaml \
+              && kubectl -n spelaion-test rollout status deployment/postgres --timeout=180s
+            then
+              status=ready
+            fi
+            echo "$status" > "$RUNNER_TEMP/services.status"
+          ) > "$RUNNER_TEMP/services.log" 2>&1 &
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: 1.99.1
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      # The vendored mysql_async is a workspace of its own (its regression test below), with
+      # its own target directory.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'push' }}
+          workspaces: |
+            .
+            vendor/mysql_async
       # libdbus: Linux keychain (Secret Service). WebKitGTK and friends: the Tauri app.
       - run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      # The same environment as locally: PostgreSQL with TLS and test certificates.
-      - run: bash testing/docker/gen-keys.sh
-      - run: docker compose -f testing/docker/compose.yaml up -d --build --wait
-      # A Kubernetes cluster in Docker (kind) with a PostgreSQL inside.
-      - uses: helm/kind-action@v1
-        with:
-          cluster_name: spelaion-test
-      - run: kubectl apply -f testing/k8s/postgres.yaml
-      - run: kubectl -n spelaion-test rollout status deployment/postgres --timeout=180s
       # A real SSH agent with the test key, for the agent authentication test.
       - run: |
           ssh-agent -a /tmp/ssh-agent.sock > /dev/null
           echo "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" >> "$GITHUB_ENV"
           SSH_AUTH_SOCK=/tmp/ssh-agent.sock ssh-add testing/docker/keys/id_ed25519
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Build the tests first: the services are only needed to run them.
+      - run: cargo test --workspace --locked --no-run
+      - name: Wait for the test services
+        run: |
+          timeout 600 bash -c 'until [ -f "$RUNNER_TEMP/services.status" ]; do sleep 1; done' || true
+          cat "$RUNNER_TEMP/services.log"
+          test "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" = ready
+      - run: cargo test --workspace --locked
       # The vendored crate is excluded from the workspace; run its protocol regression test.
       - run: cargo test --manifest-path vendor/mysql_async/Cargo.toml --lib result_count_tests
       # The app's TS types are generated from Rust: the file in the repo must be up to date.
-      - run: cargo run -q -p spelaion-desktop --features bindings --bin export-bindings
+      - run: cargo run -q --locked -p spelaion-desktop --features bindings --bin export-bindings
       - run: git diff --exit-code apps/desktop/src/bindings.ts
 
   frontend:
     name: App · strict TypeScript and build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/desktop
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -109,20 +156,23 @@ jobs:
     # tests are skipped (ADR-012). The SQLite and DuckDB ones do run.
     name: Windows · clippy and tests (SQLite, DuckDB)
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
+          toolchain: 1.99.1
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'push' }}
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
 
   deny:
     name: Licenses and vulnerabilities
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
