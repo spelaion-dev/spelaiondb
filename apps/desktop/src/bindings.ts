@@ -322,6 +322,27 @@ export const commands = {
 	 */
 	cellValue: (result: number, row: number, column: number) => typedError<string | null, string>(__TAURI_INVOKE("cell_value", { result, row, column })),
 	/**
+	 *  The cell viewer's value, read from the stored result when the viewer opens: whole up to
+	 *  the core's limit, past it only with `load_anyway`. Images are recognised by their bytes.
+	 */
+	viewCell: (result: number, row: number, column: number, loadAnyway: boolean) => typedError<CellViewItem_Serialize, string>(__TAURI_INVOKE("view_cell", { result, row, column, loadAnyway })),
+	/**
+	 *  Saves a cell's value to `path` (bytes as stored, other values as UTF-8 text); returns the
+	 *  bytes written.
+	 */
+	saveCellValue: (result: number, row: number, column: number, path: string) => typedError<number | null, string>(__TAURI_INVOKE("save_cell_value", { result, row, column, path })),
+	/**
+	 *  The statement that loading the file at `path` into one cell of a table data page would
+	 *  run, shortened for the confirmation dialog (production asks before data changes).
+	 */
+	previewLoadValueFile: (session: string, result: number, schema: string, name: string, row: number, column: number, path: string) => typedError<string[], string>(__TAURI_INVOKE("preview_load_value_file", { session, result, schema, name, row, column, path })),
+	/**
+	 *  Loads the file at `path` into one cell of a table data page: one UPDATE by primary key,
+	 *  applied like any edit (ADR-014): refused on read-only connections, and on production
+	 *  unless the user confirmed it.
+	 */
+	loadValueFile: (session: string, result: number, schema: string, name: string, row: number, column: number, path: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("load_value_file", { session, result, schema, name, row, column, path, confirmed })),
+	/**
 	 *  Sorts a result by one column in the core (`None` restores the server's order). The
 	 *  grid then asks for its windows again.
 	 */
@@ -738,6 +759,59 @@ export type CellRange = {
 	rows: number,
 	columns: number[],
 };
+
+/**
+ *  A cell for the cell viewer: whole up to the core's limit, or withheld until the user asks
+ *  ("load anyway"); an image only as a `data:` URL of a type the core recognised by its bytes.
+ */
+export type CellViewItem = CellViewItem_Serialize | CellViewItem_Deserialize;
+
+/**
+ *  A cell for the cell viewer: whole up to the core's limit, or withheld until the user asks
+ *  ("load anyway"); an image only as a `data:` URL of a type the core recognised by its bytes.
+ */
+export type CellViewItem_Deserialize = {
+	kind: CellViewKind,
+	/**  Bytes of the value, or of its text in UTF-8. */
+	size: number | null,
+	binary: boolean,
+	/**  `png`, `jpeg`, `gif` or `webp`, also when withheld. */
+	image?: string | null,
+	/**  The extension a file of this value takes. */
+	extension: string,
+	/**  The text as the grid writes it (`\x…` for bytes). */
+	text?: string | null,
+	/**  Pretty-printed when the text is one well-formed XML document. */
+	xml?: string | null,
+	imageUrl?: string | null,
+	/**  The size past which a value waits for "load anyway". */
+	limit: number | null,
+};
+
+/**
+ *  A cell for the cell viewer: whole up to the core's limit, or withheld until the user asks
+ *  ("load anyway"); an image only as a `data:` URL of a type the core recognised by its bytes.
+ */
+export type CellViewItem_Serialize = {
+	kind: CellViewKind,
+	/**  Bytes of the value, or of its text in UTF-8. */
+	size: number | null,
+	binary: boolean,
+	/**  `png`, `jpeg`, `gif` or `webp`, also when withheld. */
+	image: string | null,
+	/**  The extension a file of this value takes. */
+	extension: string,
+	/**  The text as the grid writes it (`\x…` for bytes). */
+	text: string | null,
+	/**  Pretty-printed when the text is one well-formed XML document. */
+	xml: string | null,
+	imageUrl: string | null,
+	/**  The size past which a value waits for "load anyway". */
+	limit: number | null,
+};
+
+/**  `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file. */
+export type CellViewKind = "null" | "text" | "bytes" | "withheld" | "tooBig";
 
 /**  The clipboard form of a connection: no secrets, nothing that runs a program. */
 export type ClipboardConnectionItem = {

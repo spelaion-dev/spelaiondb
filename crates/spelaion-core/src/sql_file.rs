@@ -161,7 +161,7 @@ fn follow_link(path: &Path) -> Result<PathBuf, FileError> {
 
 /// Writes `bytes` to a temporary file next to `target`, flushes it to disk and renames it
 /// over `target`: a crash leaves the old file or the new one, never part of one.
-fn replace_atomically(target: &Path, bytes: &[u8]) -> Result<(), FileError> {
+pub(crate) fn replace_atomically(target: &Path, bytes: &[u8]) -> Result<(), FileError> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let name = target
         .file_name()

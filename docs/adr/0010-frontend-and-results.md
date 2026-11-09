@@ -81,6 +81,23 @@
   (PostgreSQL's `json`) leaves the others. A most frequent value carries the core's
   "filter by this value" condition, which the popover adds to the tab's filter.
 
+## Value viewers (2026-11-09, SDB-57)
+- **The cell viewer asks the core for one cell when it opens** (`value_view.rs`): values up to
+  2 MB come whole, bigger ones only after "Load anyway" (up to 64 MB; past that they can only be
+  saved to a file). Only that cell crosses to React, as the grid's text already did.
+- **Images are recognised by their first bytes**, never by the column's name: PNG, JPEG, GIF and
+  WebP, and nothing else. The core hands them over as a `data:` URL with the type it detected,
+  shown in an `<img>`; SVG and HTML are never rendered, so nothing in a value can run. Any other
+  binary value stays a hex dump.
+- **XML is pretty-printed in the core** (quick-xml, already used for SQL Server plans) when the
+  text is one well-formed document; entities are not expanded and the result is shown as text.
+- **Save to file** writes the stored value byte for byte (bytes as stored, other values as their
+  text in UTF-8), replacing the file whole. **Load from file** is an edit (ADR-014): the core reads
+  the file (at most 16 MB: the statement carries it as a literal, and servers bound packet sizes),
+  writes one UPDATE by primary key through `edit.rs` and applies it at once, refused on read-only
+  connections and confirmed first on Production like any edit. It waits until the tab has no
+  pending changes, since applying it reloads the page.
+
 ## Alternatives
 Monaco (heavier), AG Grid (DOM, more editing features, heavier).
 
