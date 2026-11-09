@@ -6,9 +6,11 @@
 //! (`1`, `1.5`, `'text'`, `X'00ff'`, `NULL`), which keeps SQLite's storage classes; columns
 //! get their types as in the local driver, from the first batch (ADR-006). `.changes on`
 //! gives the rows affected, and `.timeout 5000` waits for another writer's lock like the
-//! local driver. Only statements from the core's splitter are sent: one that
-//! starts with `.` (a command of the `sqlite3` shell) or is not complete is refused, so user
-//! text never reaches the shell as a command.
+//! local driver. `.explain off` keeps `EXPLAIN` and `EXPLAIN QUERY PLAN` in quote mode too:
+//! otherwise the shell draws them as a table or a tree, which are not values. Only
+//! statements from the core's splitter are sent: one that starts with `.` (a command of the
+//! `sqlite3` shell) or is not complete is refused, so user text never reaches the shell as a
+//! command.
 
 use std::sync::Arc;
 
@@ -47,8 +49,8 @@ pub(crate) fn command_line(program: &str, path: &str, read_only: bool) -> Result
     let path = shell_word(path);
     Ok(format!(
         "[ -f {path} ] || {{ echo 'spelaion: no such file on the server'; exit 1; }}; \
-         exec {} -safe -batch -header {}-cmd '.mode quote' -cmd '.changes on' \
-         -cmd '.timeout 5000' {path} 2>&1",
+         exec {} -safe -batch -header {}-cmd '.mode quote' -cmd '.explain off' \
+         -cmd '.changes on' -cmd '.timeout 5000' {path} 2>&1",
         shell_word(program),
         if read_only { "-readonly " } else { "" },
     ))
@@ -909,7 +911,7 @@ mod tests {
     fn the_command_line_quotes_what_it_is_given() {
         assert_eq!(
             command_line("sqlite3", "/data/it's.db", true).unwrap(),
-            r"[ -f '/data/it'\''s.db' ] || { echo 'spelaion: no such file on the server'; exit 1; }; exec 'sqlite3' -safe -batch -header -readonly -cmd '.mode quote' -cmd '.changes on' -cmd '.timeout 5000' '/data/it'\''s.db' 2>&1"
+            r"[ -f '/data/it'\''s.db' ] || { echo 'spelaion: no such file on the server'; exit 1; }; exec 'sqlite3' -safe -batch -header -readonly -cmd '.mode quote' -cmd '.explain off' -cmd '.changes on' -cmd '.timeout 5000' '/data/it'\''s.db' 2>&1"
         );
         assert!(command_line("sqlite3", "-x.db", false).is_err());
         assert!(command_line("sqlite3", "", false).is_err());
