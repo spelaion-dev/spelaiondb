@@ -248,6 +248,10 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   and never rewrite `dev` or `main`.
 - Still run the local checks below before each commit: CI confirms them, it does not replace
   them.
+- On a pull request that changes nothing Rust reads (only documentation, or only the frontend
+  outside `src-tauri` and `bindings.ts`), CI's two Rust jobs pass without running; the push to
+  `dev` after the merge runs them. `.github/workflows/needs-rust.sh` has the list: if Rust
+  starts reading a new place outside its crates, name it there in the same pull request.
 - **Pull requests target `dev`** (see `CONTRIBUTING.md`). Merge one when CI is green and it
   follows these rules, with "Rebase and merge" (one commit per change, as written), and delete
   its branch. GitHub's auto-merge can merge it as soon as CI passes.
