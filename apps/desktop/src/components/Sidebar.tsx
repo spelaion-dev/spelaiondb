@@ -133,6 +133,19 @@ function connectionFound(connection: ConnectionItem, filter: string): boolean {
   return connectionMatch(filter, { ...connection, typeName: connection.kind?.name }) !== null;
 }
 
+interface ConnectionFolder {
+  name: string;
+  path: string;
+  personal: boolean;
+  items: ConnectionItem[];
+  children: Map<string, ConnectionFolder>;
+}
+
+/** A personal folder and a repository folder with the same name are different folders. */
+function connectionFolderKey(personal: boolean, path: string): string {
+  return JSON.stringify([personal, path]);
+}
+
 /** How far the pointer moves before pressing a connection becomes dragging it. */
 const DRAG_THRESHOLD = 5;
 
@@ -1017,7 +1030,29 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const filterTags = tagsInUse(connections);
   for (const tag of activeTags) if (!filterTags.some((other) => sameTag(other, tag))) filterTags.push(tag);
   const filtering = filterText !== "" || activeTags.length > 0;
+  const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
+  const [closedFilteredFolders, setClosedFilteredFolders] = useState<Set<string>>(() => new Set());
+  useEffect(() => setClosedFolders(new Set()), [workspace?.workspace]);
+  /** Show a moved or revealed connection even when one of its parents was folded. */
+  function showConnectionFolder(personal: boolean, path: string) {
+    const parts = path ? path.split("/") : [];
+    const openParents = (previous: Set<string>) => {
+      const next = new Set(previous);
+      if (personal) next.delete(connectionFolderKey(true, ""));
+      for (let i = 1; i <= parts.length; i++) next.delete(connectionFolderKey(personal, parts.slice(0, i).join("/")));
+      return next;
+    };
+    setClosedFolders(openParents);
+    setClosedFilteredFolders(openParents);
+  }
+  const revealConnection = useApp((s) => s.explorerReveal);
+  useEffect(() => {
+    if (!revealConnection) return;
+    const connection = connections.find((c) => c.id === revealConnection.connectionId);
+    if (connection) showConnectionFolder(connection.personal, folderOf(connection));
+  }, [revealConnection?.nonce, connections]);
   const explorer = usePreferences((s) => s.explorer);
+  useEffect(() => setClosedFilteredFolders(new Set()), [filterText, activeTags.join("\u0000"), explorer.connectedOnly]);
   // A preference being saved takes no other change until it is done (setExplorer ignores it).
   const savingPreference = usePreferences((s) => s.saving !== null);
   const explorerConnected = useApp((s) => s.explorerConnected);
@@ -1109,7 +1144,10 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         }, 0);
         if (current.target === null || current.target === current.from) return;
         setMoveError(null);
-        moveConnection(c, current.target).catch((err: unknown) => setMoveError(t("moveFailed", { name: c.name, detail: errorText(err) })));
+        const target = current.target;
+        moveConnection(c, target)
+          .then(() => showConnectionFolder(c.personal, target))
+          .catch((err: unknown) => setMoveError(t("moveFailed", { name: c.name, detail: errorText(err) })));
       },
       onPointerCancel: () => setDrag(null),
       onClickCapture: (e) => {
@@ -1177,15 +1215,66 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     }
   }
 
-  // Group by folder (the id path without its last segment). Connections not in any folder
-  // come first, without a title, so they do not look like part of the previous folder.
-  const groups = new Map<string, ConnectionItem[]>([
-    [JSON.stringify([false]), []],
-  ]);
+  // Keep the folder hierarchy instead of flattening it into headings: folding a parent also
+  // hides its descendants. Rows stay mounted while folded, keeping explorer sessions alive.
+  const repository: ConnectionFolder = { name: "", path: "", personal: false, items: [], children: new Map() };
+  const personal: ConnectionFolder = { name: t("personal"), path: "", personal: true, items: [], children: new Map() };
   for (const c of connections.filter(shown)) {
-    const key = JSON.stringify([c.personal, ...c.folders]);
-    groups.set(key, [...(groups.get(key) ?? []), c]);
+    let folder = c.personal ? personal : repository;
+    for (const name of c.folders) {
+      let child = folder.children.get(name);
+      if (!child) {
+        child = { name, path: folder.path ? `${folder.path}/${name}` : name, personal: c.personal, items: [], children: new Map() };
+        folder.children.set(name, child);
+      }
+      folder = child;
+    }
+    folder.items.push(c);
   }
+
+  const connectionRows = (items: ConnectionItem[]) => items.map((c) => (
+    <ConnectionNode
+      key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
+      connection={c}
+      filter={filterText}
+      onPasteError={setPasteError}
+      dragSupport={dragSupport}
+      dropClass={dropClass(c.personal, folderOf(c))}
+    />
+  ));
+  const renderFolder = (folder: ConnectionFolder): ReactNode => {
+    const key = connectionFolderKey(folder.personal, folder.path);
+    // Filtering reveals matches temporarily without changing the user's folded state.
+    const filtered = filtering || explorer.connectedOnly;
+    const expanded = !(filtered ? closedFilteredFolders : closedFolders).has(key);
+    return (
+      <div key={key} className="connection-folder">
+        <div className="group-title">
+          <button
+            type="button"
+            className="connection-folder-toggle"
+            aria-label={t("toggleFolder", { name: folder.name })}
+            aria-expanded={expanded}
+            onClick={() => (filtered ? setClosedFilteredFolders : setClosedFolders)((previous) => {
+              const next = new Set(previous);
+              if (next.has(key)) next.delete(key); else next.add(key);
+              return next;
+            })}
+          >
+            <span
+              className={`group-segment${dropClass(folder.personal, folder.path)}`}
+              data-drop-folder={folder.path}
+              data-drop-personal={String(folder.personal)}
+            >{folder.name}</span>
+          </button>
+        </div>
+        <div className="connection-folder-children" hidden={!expanded}>
+          {connectionRows(folder.items)}
+          {[...folder.children.values()].map(renderFolder)}
+        </div>
+      </div>
+    );
+  };
 
   useEffect(() => {
     void reloadBookmarks().catch(() => undefined);
@@ -1377,47 +1466,9 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
             {t("moveToNoFolder")}
           </div>
         )}
-        {[...groups.entries()].map(([group, items]) => {
-          const first = items[0];
-          // Each part of the title is a folder to drop a dragged connection on.
-          const segments = first
-            ? [
-                ...(first.personal ? [{ label: t("personal"), folder: "" }] : []),
-                ...first.folders.map((label, i) => ({ label, folder: first.folders.slice(0, i + 1).join("/") })),
-              ]
-            : [];
-          return (
-            <div key={group}>
-              {first && segments.length > 0 && (
-                <div className="group-title">
-                  {segments.map((segment, i) => (
-                    <span key={segment.folder + i}>
-                      {i > 0 && " / "}
-                      <span
-                        className={`group-segment${dropClass(first.personal, segment.folder)}`}
-                        data-drop-folder={segment.folder}
-                        data-drop-personal={String(first.personal)}
-                      >
-                        {segment.label}
-                      </span>
-                    </span>
-                  ))}
-                </div>
-              )}
-              {items.map((c) => (
-                <ConnectionNode
-                  // A new engine starts the node again: what it showed belongs to the old one.
-                  key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
-                  connection={c}
-                  filter={filterText}
-                  onPasteError={setPasteError}
-                  dragSupport={dragSupport}
-                  dropClass={dropClass(c.personal, folderOf(c))}
-                />
-              ))}
-            </div>
-          );
-        })}
+        {connectionRows(repository.items)}
+        {[...repository.children.values()].map(renderFolder)}
+        {(personal.items.length > 0 || personal.children.size > 0) && renderFolder(personal)}
       </div>
     </aside>
   );
@@ -1644,6 +1695,10 @@ function ConnectionNode({
           e.preventDefault();
           setRowMenu({ x: e.clientX, y: e.clientY });
         }}
+        onDoubleClick={(e) => {
+          // Buttons (the expander and filter tags) keep their own actions.
+          if (!(e.target as Element).closest("button")) newQuery();
+        }}
         onKeyDown={(e) => {
           // Ctrl+C copies the connection (objects keep copying their names, ADR-026).
           if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
@@ -1668,7 +1723,6 @@ function ConnectionNode({
         <EngineIcon engine={connection.engine} />
         <span
           className="label"
-          onDoubleClick={newQuery}
           // The description, then the marks after the name, which may not fit.
           title={connectionTooltip(connection, [
             kind ? t("typeTooltip", { name: kind.name }) : null,
