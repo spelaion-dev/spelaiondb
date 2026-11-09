@@ -29,7 +29,8 @@ Each engine is a Rust crate that implements a common contract, organized in laye
    functions) shared by the core and the UI.
 7. **Result transport:** Arrow (see ADR-010).
 
-Extensibility:
+Extensibility (superseded by ADR-041: every engine becomes a plugin in its own process, with
+results still in Arrow and the dialects and barriers kept in the core):
 - Now: Rust crates compiled in, with a contract designed so it can travel as messages.
 - Later: drivers in external processes with an LSP-like protocol (JSON-RPC over stdio),
   including a JDBC bridge for Oracle, DB2, Snowflake…
