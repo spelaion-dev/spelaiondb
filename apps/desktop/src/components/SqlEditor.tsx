@@ -162,9 +162,13 @@ function selectAllOccurrences(view: EditorView) {
   return true;
 }
 
-// Keep CodeMirror's existing colors and attach a stable class to keywords so the dark
-// theme can override just their color, including when the theme changes at runtime.
-const sqlKeywords = HighlightStyle.define([{ tag: tags.keyword, class: "sql-keyword" }]);
+// Keep CodeMirror's light colors and add stable classes for the dark theme. CSS switches
+// them when the theme changes, without rebuilding the editor or its selection.
+const sqlColors = HighlightStyle.define([
+  { tag: tags.keyword, class: "sql-keyword" },
+  { tag: tags.string, class: "sql-string" },
+  { tag: [tags.literal, tags.typeName, tags.namespace], class: "sql-literal" },
+]);
 
 /** Marks the text that was just sent to run, for a moment. */
 const flashRun = StateEffect.define<{ from: number; to: number } | null>();
@@ -378,7 +382,7 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
           ranField,
           editorSetup,
           syntaxHighlighting(defaultHighlightStyle),
-          syntaxHighlighting(sqlKeywords),
+          syntaxHighlighting(sqlColors),
           lang.current.of(language(engine, catalog, preferences.keywordCase as KeywordCase)),
           locale.current.of([
             EditorState.phrases.of(t("codeMirror", { returnObjects: true }) as Record<string, string>),

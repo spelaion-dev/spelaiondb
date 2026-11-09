@@ -22,7 +22,7 @@ const exe = process.env.SPELAION_E2E_EXE ?? join(root, "target/release/spelaion-
 const demo = join(root, "examples/demo");
 const shots = resolve(process.argv[2] ?? join(import.meta.dirname, "screenshots"));
 const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
-const port = 9333;
+const port = await freePort();
 // The MCP page's AI clients: their files under this folder, and a stand-in for the CLI.
 const clientsHome = join(userDir, "ai-clients");
 // Files a real DataGrip wrote (crates/spelaion-config/tests/fixtures/datagrip/README.md).
@@ -64,6 +64,7 @@ function startApp() {
       // The DataGrip import reads the repository's fixtures, never the user's JetBrains files.
       SPELAION_JETBRAINS_DIR: datagripJetbrains,
     },
+    windowsHide: true,
     stdio: "inherit",
   });
 }
@@ -422,6 +423,23 @@ try {
   await page.getByRole("button", { name: "Expand or collapse Shop (SQLite)", exact: true }).click();
   await page.getByRole("button", { name: "Expand or collapse schema main", exact: true }).waitFor();
   assert.equal(await page.getByRole("dialog", { name: "This changed since you trusted the repository" }).count(), 0);
+  // Folding keeps the explorer session and its loaded schemas mounted. Searching temporarily
+  // reveals matches and closing the search restores the folded state.
+  const dockerFolder = page.getByRole("button", { name: "Expand or collapse docker", exact: true });
+  await dockerFolder.focus();
+  await page.keyboard.press("Space");
+  assert.equal(await dockerFolder.getAttribute("aria-expanded"), "false");
+  await page.locator('.connection-row:has-text("Shop (SQLite)")').waitFor({ state: "hidden" });
+  await page.keyboard.press("Control+Shift+F");
+  const foldedFilter = page.getByRole("searchbox", { name: "Filter the explorer" });
+  await foldedFilter.fill("Shop (SQLite)");
+  await page.locator('.connection-row:has-text("Shop (SQLite)")').waitFor({ state: "visible" });
+  await foldedFilter.fill("");
+  await page.keyboard.press("Escape");
+  await page.locator('.connection-row:has-text("Shop (SQLite)")').waitFor({ state: "hidden" });
+  await dockerFolder.focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Expand or collapse schema main", exact: true }).waitFor({ state: "visible" });
   // Into a new nested folder from the dialog; the explorer's own session closes for the move.
   await (await connectionMenu("Shop (SQLite)")).getByRole("menuitem", { name: "Move to folder…" }).click();
   const moveDialog = page.getByRole("dialog", { name: "Move Shop (SQLite) to a folder" });
@@ -431,6 +449,14 @@ try {
   await moveDialog.waitFor({ state: "detached" });
   await page.locator('.group-segment[data-drop-folder="docker/eu"]').waitFor();
   assert.ok(existsSync(nestedShop) && !existsSync(movedShop));
+  const euFolder = page.getByRole("button", { name: "Expand or collapse eu", exact: true });
+  await euFolder.click();
+  await page.locator('.connection-row:has-text("Shop (SQLite)")').waitFor({ state: "hidden" });
+  await dockerFolder.click();
+  await euFolder.waitFor({ state: "hidden" });
+  await dockerFolder.click();
+  assert.equal(await euFolder.getAttribute("aria-expanded"), "false", "the child keeps its own folded state");
+  await euFolder.click();
   // Back to no folder by dragging it onto "No folder"; the empty folders go.
   await dragConnection("Shop (SQLite)", () => page.locator('.drop-zone[data-drop-folder=""]'));
   await page.mouse.up();
@@ -456,16 +482,29 @@ try {
   assert.equal(await editorDivider.getAttribute("aria-valuenow"), "42");
   await run(panel);
   await panel.locator(".statusline", { hasText: "6 rows" }).waitFor();
-  step("SQL keywords remain legible when switching themes");
+  step("SQL syntax remains legible when switching themes");
+  const originalSql = await panel.locator(".cm-content").innerText();
+  await replaceQuery(panel, "SELECT 'soft red', 42 AS n;");
   const keywords = panel.locator(".cm-content .sql-keyword");
+  const strings = panel.locator(".cm-content .sql-string");
+  const numbers = panel.locator(".cm-content .sql-literal");
   await keywords.first().waitFor();
+  await strings.first().waitFor();
+  await numbers.first().waitFor();
   const lightKeywordColor = await keywords.first().evaluate((el) => getComputedStyle(el).color);
+  const lightStringColor = await strings.first().evaluate((el) => getComputedStyle(el).color);
+  const lightNumberColor = await numbers.first().evaluate((el) => getComputedStyle(el).color);
   assert.equal(lightKeywordColor, "rgb(119, 0, 136)");
   await setTheme("dark", "dark");
   assert.equal(await keywords.first().evaluate((el) => getComputedStyle(el).color), "rgb(199, 146, 234)");
+  assert.equal(await strings.first().evaluate((el) => getComputedStyle(el).color), "rgb(230, 161, 155)");
+  assert.equal(await numbers.first().evaluate((el) => getComputedStyle(el).color), "rgb(131, 201, 149)");
   await shot("03-grid-dark");
   await setTheme("light", "light");
   assert.equal(await keywords.first().evaluate((el) => getComputedStyle(el).color), lightKeywordColor);
+  assert.equal(await strings.first().evaluate((el) => getComputedStyle(el).color), lightStringColor);
+  assert.equal(await numbers.first().evaluate((el) => getComputedStyle(el).color), lightNumberColor);
+  await replaceQuery(panel, originalSql);
   await panel.locator(".cm-content").click();
   await page.keyboard.press("Control+f");
   const searchInput = panel.locator('.cm-search input[name="search"]');
@@ -1832,6 +1871,11 @@ try {
     const tabsBefore = await page.locator('.tabbar [role="tab"]').count();
     await (await connectionMenu("Shop (SQLite)")).getByRole("menuitem", { name: "New query" }).click();
     await menu.waitFor({ state: "detached" });
+    await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count + 1, tabsBefore);
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count, tabsBefore);
+    // The whole row, not only the name, supports the same gesture.
+    await shopRow.locator(".engine-icon").dblclick();
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count + 1, tabsBefore);
     await page.keyboard.press("Control+w");
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count, tabsBefore);
@@ -3533,7 +3577,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
     await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     assert.equal(await page.getByRole("dialog", { name: "Save query" }).count(), 0);
-    const after = await panel.locator(".grid-scroller").boundingBox();
+    let after = null;
+    for (let i = 0; i < 40 && !(after = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
+    assert.ok(after, "the grid is visible after saving");
     const before = await page.evaluate(() => window.__copied.length);
     await page.mouse.click(after.x + 52 + 110 + 20, after.y + 36 + 13);
     await page.keyboard.press("Control+c");
@@ -3557,10 +3603,17 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.press("Control+r");
     await panel.getByText("No pending changes").waitFor();
   }
+  // Wait for the table tab to finish closing before opening the next query: closing is
+  // asynchronous and its completion can otherwise overtake the following double click.
+  const editedTableTab = page.locator(".tabbar .tab.active");
+  const editedTableHandle = await editedTableTab.elementHandle();
   await page.keyboard.press("Control+w");
+  await page.waitForFunction((tab) => !tab.isConnected, editedTableHandle);
 
   step("editing a simple query result, while joins stay read-only");
-  await mysqlSchema.dblclick();
+  // The real double-click gesture was checked above. Trigger it directly here: the first
+  // click can collapse a long tree and move the row before the second mouse event arrives.
+  await mysqlSchema.dispatchEvent("dblclick");
   panel = page.locator(".tab-panel:not([hidden])");
   await panel.locator(".status-connected").waitFor();
   const queryDatabase = panel.getByLabel("Database", { exact: true });
@@ -4258,6 +4311,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const carefulBadge = page.locator(".connection-row", { hasText: "Shop copy" }).locator('.type-badge[data-connection-type="careful"]');
   assert.equal(await carefulBadge.innerText(), "Careful");
   assert.ok(await carefulBadge.evaluate((el) => el.classList.contains("tone-amber")));
+  assert.equal(await carefulBadge.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
+  assert.equal(await carefulBadge.evaluate((el) => getComputedStyle(el, "::before").width), "6px");
+  const lightDot = await carefulBadge.evaluate((el) => getComputedStyle(el, "::before").backgroundColor);
   assert.match(await page.locator(".connection-row", { hasText: "Shop copy" }).locator(".label").getAttribute("title"), /Type: Careful/);
   // Marks never squeeze a name and are never cut: a badge, SSH or tag mark is shown whole, and only
   // next to a name shown whole; the others are on a line that is never shown.
@@ -4285,6 +4341,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const lightBackground = await badgeBackground();
   await setTheme("dark", "dark");
   assert.notEqual(await badgeBackground(), lightBackground);
+  assert.equal(await carefulBadge.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
+  assert.notEqual(await carefulBadge.evaluate((el) => getComputedStyle(el, "::before").backgroundColor), lightDot);
   await setTheme("light", "light");
   // No stripes: the type is only the badge.
   assert.equal(await page.locator(".tabbar .tab.active").evaluate((el) => getComputedStyle(el).boxShadow.includes("inset")), false);

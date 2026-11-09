@@ -53,6 +53,7 @@
   --tone-amber-fg: #8f4207;
   --tone-red-soft: #fce9e8;
   --tone-red-fg: #a8231d;
+  --connection-type-label: #535e67;
   --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.18);
   --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.25);
   --shadow-plan-selected-row: inset 3px 0 var(--accent);
@@ -160,6 +161,7 @@
   --tone-amber-fg: #f0b860;
   --tone-red-soft: #3f2020;
   --tone-red-fg: #ff928a;
+  --connection-type-label: #b9c2c5;
   --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.45);
   --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.55);
   --shadow-plan-selected-row: inset 3px 0 var(--accent);
@@ -500,6 +502,29 @@ select {
   letter-spacing: 0.04em;
   color: var(--muted);
 }
+.connection-folder-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.connection-folder-toggle::before {
+  content: "▸";
+  width: 10px;
+  text-align: center;
+}
+.connection-folder-toggle[aria-expanded="true"]::before { content: "▾"; }
+.connection-folder-toggle:hover { color: var(--fg); }
+.connection-folder-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.connection-folder-children { padding-left: 10px; }
 /* Dragging a connection to another folder: each part of a folder title, the "No folder" zone
    and the rows of a folder are drop targets; the one under the pointer is marked. */
 .group-segment {
@@ -1235,6 +1260,31 @@ select {
   flex: none;
   white-space: nowrap;
 }
+/* A quiet label with a colored dot keeps the environment visible without filling the tree
+   with badges. The editor's more prominent production badge stays as it was. */
+.connection-marks .type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  background: transparent;
+  color: var(--connection-type-label);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.connection-marks .type-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--badge-dot);
+}
+.connection-marks .tone-neutral { --badge-dot: var(--tone-neutral-fg); }
+.connection-marks .tone-green { --badge-dot: var(--tone-green-fg); }
+.connection-marks .tone-blue { --badge-dot: var(--tone-blue-fg); }
+.connection-marks .tone-amber { --badge-dot: var(--tone-amber-fg); }
+.connection-marks .tone-red { --badge-dot: var(--tone-red-fg); }
 /* An empty first item: a mark wider than the space left then has something to wrap after,
    so it goes to the hidden line instead of showing cut. It also pushes the marks to the end. */
 .connection-marks::before {
@@ -1333,6 +1383,12 @@ select {
 }
 :root[data-theme="dark"] .sql-editor .sql-keyword {
   color: #c792ea;
+}
+:root[data-theme="dark"] .sql-editor .sql-string {
+  color: #e6a19b;
+}
+:root[data-theme="dark"] .sql-editor .sql-literal {
+  color: #83c995;
 }
 .divider {
   height: 5px;
