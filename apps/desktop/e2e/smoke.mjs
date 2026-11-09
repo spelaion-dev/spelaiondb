@@ -4941,6 +4941,37 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate(() => delete window.__spelaionImportDirs);
   }
 
+  step("import from HeidiSQL: real portable settings, folders and SSH");
+  {
+    const exportFile = join(root, "crates/spelaion-config/tests/fixtures/heidisql/heidisql-12.22.txt");
+    await page.evaluate((file) => (window.__spelaionImportDirs = { heidisql: file }), exportFile);
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    await page.getByRole("button", { name: "Import from HeidiSQL…" }).click();
+    const importer = page.locator(".modal.wizard");
+    await importer.getByRole("heading", { name: "Import from HeidiSQL" }).waitFor();
+    const list = importer.getByRole("list", { name: "HeidiSQL connections" });
+    const item = (name) => list.getByRole("listitem").filter({ has: page.getByRole("checkbox", { name, exact: true }) });
+    await item("Local").getByText("Examples").waitFor();
+    await item("SSH").getByText("SSH tunnel-user@bastion.example.test:2222", { exact: false }).waitFor();
+    await importer.getByRole("radio", { name: "Personal", exact: true }).check();
+    for (const name of ["Local", "SSH"]) {
+      const duplicate = importer.getByRole("combobox", { name: `What to do with ${name}` });
+      if (await duplicate.count()) await duplicate.selectOption({ label: "Import it as a copy" });
+      else await list.getByRole("checkbox", { name, exact: true }).check();
+    }
+    await importer.getByRole("textbox", { name: "Put them in" }).fill("HeidiSQL");
+    await importer.getByRole("checkbox", { name: "Store the passwords HeidiSQL saved in the system keychain" }).uncheck();
+    await shot("sdb-52-import-heidisql");
+    await importer.getByRole("button", { name: "Import 2 connections" }).click();
+    await importer.getByRole("status").filter({ hasText: "Imported 2 connections." }).waitFor();
+    await importer.getByRole("button", { name: "Done", exact: true }).click();
+    await importer.waitFor({ state: "detached" });
+    const files = readdirSync(join(userDir, "connections", "heidisql"), { recursive: true }).filter((f) => String(f).endsWith(".toml"));
+    assert.equal(files.length, 2, files.join(", "));
+    assert.ok(files.every((file) => String(file).startsWith("examples")), files.join(", "));
+    await page.evaluate(() => delete window.__spelaionImportDirs);
+  }
+
   step("open tabs survive a restart (ADR-036): a file and two consoles come back with their text, disconnected, and nothing runs");
   const restartFile = join(userDir, "sql files", "restart.sql");
   writeFileSync(restartFile, "select 'restart_file_marker';\n");

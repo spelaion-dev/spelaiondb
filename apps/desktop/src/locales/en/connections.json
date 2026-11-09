@@ -329,6 +329,8 @@
     "from": "From",
     "defaultFolder": "{{client}}'s folders",
     "chooseFolder": "Choose folder…",
+    "registrySource": "Windows registry",
+    "windowsRegistry": "Use Windows registry",
     "chooseFile": "Choose export file…",
     "exportFiles": "{{client}} exports",
     "allFiles": "All files",

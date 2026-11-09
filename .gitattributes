@@ -4,3 +4,6 @@
 *.png binary
 *.icns binary
 *.tableplusconnection binary
+
+# Preserve the real HeidiSQL export byte for byte.
+crates/spelaion-config/tests/fixtures/heidisql/heidisql-12.22.txt binary

@@ -22,6 +22,7 @@ pub enum ImportClient {
     Dbeaver,
     Datagrip,
     Tableplus,
+    Heidisql,
 }
 
 impl ImportClient {
@@ -31,6 +32,7 @@ impl ImportClient {
             ImportClient::Dbeaver => "dbeaver",
             ImportClient::Datagrip => "datagrip",
             ImportClient::Tableplus => "tableplus",
+            ImportClient::Heidisql => "heidisql",
         }
     }
 
@@ -40,6 +42,7 @@ impl ImportClient {
             ImportClient::Dbeaver => "DBeaver",
             ImportClient::Datagrip => "DataGrip",
             ImportClient::Tableplus => "TablePlus",
+            ImportClient::Heidisql => "HeidiSQL",
         }
     }
 }

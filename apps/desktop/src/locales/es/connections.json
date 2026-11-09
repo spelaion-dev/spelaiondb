@@ -329,6 +329,8 @@
     "from": "Desde",
     "defaultFolder": "Las carpetas de {{client}}",
     "chooseFolder": "Elegir carpeta…",
+    "registrySource": "Registro de Windows",
+    "windowsRegistry": "Usar el registro de Windows",
     "chooseFile": "Elegir fichero exportado…",
     "exportFiles": "Exportaciones de {{client}}",
     "allFiles": "Todos los ficheros",
