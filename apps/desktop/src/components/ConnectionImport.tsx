@@ -1,4 +1,4 @@
-// Import connections from another client (DBeaver, DataGrip, TablePlus…): the connections in its files
+// Import connections from another client (DBeaver, DataGrip, TablePlus, MySQL Workbench…): the connections in its files
 // (or a folder the user picks, or a client's export file), chosen one by one, with what each one
 // would duplicate and what would not be imported. The core reads the client's files and decides
 // what is a duplicate; passwords never come to the UI, and only go to the keychain when the user
@@ -14,7 +14,7 @@ import { useApp } from "../store";
 import { refreshConnections } from "./Sidebar";
 
 /** The clients connections can be imported from (the core's `ImportClient`). */
-export type ImportClientId = "dbeaver" | "datagrip" | "tableplus" | "heidisql";
+export type ImportClientId = "dbeaver" | "datagrip" | "tableplus" | "heidisql" | "workbench";
 
 export const IMPORT_CLIENTS: { id: ImportClientId; label: string; exportExtensions?: string[] }[] = [
   { id: "dbeaver", label: "DBeaver" },
@@ -22,6 +22,7 @@ export const IMPORT_CLIENTS: { id: ImportClientId; label: string; exportExtensio
   // TablePlus also exports its connections to a file (encrypted with a password).
   { id: "tableplus", label: "TablePlus", exportExtensions: ["tableplusconnection"] },
   { id: "heidisql", label: "HeidiSQL", exportExtensions: ["txt"] },
+  { id: "workbench", label: "MySQL Workbench" },
 ];
 
 declare global {

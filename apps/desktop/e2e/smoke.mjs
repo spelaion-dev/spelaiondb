@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { createCipheriv } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -31,6 +31,13 @@ const datagripJetbrains = join(datagripFixtures, "JetBrains");
 const datagripProject = join(datagripFixtures, "DataGripProjects", "default");
 // Files a real TablePlus wrote (crates/spelaion-config/tests/fixtures/tableplus/README.md).
 const tableplusFixtures = join(root, "crates/spelaion-config/tests/fixtures/tableplus");
+// The connections.xml a real MySQL Workbench wrote (crates/spelaion-config/tests/fixtures/workbench/README.md),
+// copied into a Workbench folder of the test's own with a stand-in vault file, as Workbench for
+// Windows leaves one once a password is stored: it is noticed, never opened.
+const workbenchHome = join(userDir, "mysql-workbench");
+mkdirSync(workbenchHome, { recursive: true });
+copyFileSync(join(root, "crates/spelaion-config/tests/fixtures/workbench/Workbench/connections.xml"), join(workbenchHome, "connections.xml"));
+writeFileSync(join(workbenchHome, "workbench_user_data.dat"), "not a vault");
 const fakeCli = join(userDir, process.platform === "win32" ? "spelaiondb.exe" : "spelaiondb");
 writeFileSync(fakeCli, "");
 const editSmokeComplete = Symbol("edit smoke complete");
@@ -67,6 +74,8 @@ function startApp() {
       SPELAION_JETBRAINS_DIR: datagripJetbrains,
       // The TablePlus import reads the repository's fixtures, never the user's TablePlus folder.
       SPELAION_TABLEPLUS_DIR: join(tableplusFixtures, "com.tinyapp.TablePlus"),
+      // The MySQL Workbench import reads the repository's fixture, never the user's Workbench folder.
+      SPELAION_WORKBENCH_DIR: workbenchHome,
     },
     windowsHide: true,
     stdio: "inherit",
@@ -4970,6 +4979,46 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.equal(files.length, 2, files.join(", "));
     assert.ok(files.every((file) => String(file).startsWith("examples")), files.join(", "));
     await page.evaluate(() => delete window.__spelaionImportDirs);
+  }
+
+  step("import from MySQL Workbench: the connections.xml a real Workbench wrote, its group, SSH tunnel, TLS and what is not imported");
+  {
+    // SPELAION_WORKBENCH_DIR is Workbench's folder here: nothing to pick.
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    await page.getByRole("button", { name: "Import from MySQL Workbench…" }).click();
+    const importer = page.locator(".modal.wizard");
+    await importer.getByRole("heading", { name: "Import from MySQL Workbench" }).waitFor();
+    const list = importer.getByRole("list", { name: "MySQL Workbench connections" });
+    const item = (name) => list.getByRole("listitem").filter({ has: page.getByRole("checkbox", { name, exact: true }) });
+    await importer.getByRole("radio", { name: "Personal", exact: true }).check();
+    await item("Orders via bastion").getByText("SSH spelaion@127.0.0.1:2221").waitFor();
+    await item("Shop MariaDB TLS").locator(".conn-import-detail").filter({ hasText: "TLS verify-ca" }).waitFor();
+    // Workbench's "Prod/…" names are a group: a folder here.
+    await item("Shop MariaDB TLS").getByText("· Prod").waitFor();
+    // A named pipe cannot be opened: listed, never chosen.
+    assert.ok(await list.getByRole("checkbox", { name: "Local pipe", exact: true }).isDisabled());
+    await item("Local pipe").getByText("named pipe", { exact: false }).waitFor();
+    // The DataGrip import above made "Shop MySQL" (127.0.0.1:13306/spelaion as spelaion).
+    await item("Shop MySQL").getByText("Already in SpelaionDB as Shop MySQL").waitFor();
+    assert.ok(!(await list.getByRole("checkbox", { name: "Shop MySQL", exact: true }).isChecked()));
+    // Nothing is dropped silently: the SQL mode, and the password kept in Workbench's vault.
+    await item("Shop MariaDB TLS").getByText("4 settings are not imported").click();
+    await item("Shop MariaDB TLS").getByText("SQL mode: ANSI_QUOTES", { exact: false }).waitFor();
+    await item("Shop MariaDB TLS").getByText("it is in its vault", { exact: false }).waitFor();
+    await importer.getByRole("textbox", { name: "Put them in" }).fill("Workbench");
+    await shot("sdb-53-import-workbench");
+    await importer.getByRole("button", { name: "Import 2 connections" }).click();
+    await importer.getByRole("status").filter({ hasText: "Imported 2 connections." }).waitFor();
+    await shot("sdb-53-import-workbench-done");
+    await importer.getByRole("button", { name: "Done", exact: true }).click();
+    await importer.waitFor({ state: "detached" });
+    const prod = join(userDir, "connections", "workbench", "prod");
+    const tls = readFileSync(join(prod, "shop-mariadb-tls.toml"), "utf8");
+    assert.match(tls, /verify-ca/);
+    assert.match(tls, /ca\.crt/);
+    const bastion = readFileSync(join(prod, "orders-via-bastion.toml"), "utf8");
+    assert.match(bastion, /tunnel = "spelaion-127-0-0-1"/);
+    assert.ok(!existsSync(join(userDir, "connections", "workbench", "shop-mysql.toml")));
   }
 
   step("open tabs survive a restart (ADR-036): a file and two consoles come back with their text, disconnected, and nothing runs");

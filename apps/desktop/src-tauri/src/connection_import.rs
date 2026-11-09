@@ -1,4 +1,4 @@
-//! Importing connections from other clients (DBeaver, DataGrip, TablePlus…): a thin adapter.
+//! Importing connections from other clients (DBeaver, DataGrip, TablePlus, MySQL Workbench…): a thin adapter.
 //! The core (`spelaion-config`'s `import.rs` and each client's reader) reads the client's files,
 //! finds the connections that already exist and writes the drafts; these commands carry the
 //! user's choices to it and its answers back. No secret ever travels to the UI: the files are
@@ -26,6 +26,7 @@ fn client_named(name: &str) -> CmdResult<ImportClient> {
         "datagrip" => Ok(ImportClient::Datagrip),
         "tableplus" => Ok(ImportClient::Tableplus),
         "heidisql" => Ok(ImportClient::Heidisql),
+        "workbench" => Ok(ImportClient::Workbench),
         other => Err(format!("unknown client: {other}")),
     }
 }
@@ -44,6 +45,14 @@ fn tableplus_dir() -> Option<PathBuf> {
     std::env::var_os("SPELAION_TABLEPLUS_DIR")
         .map(PathBuf::from)
         .or_else(spelaion_config::tableplus_dir)
+}
+
+/// Where MySQL Workbench keeps its connections: `SPELAION_WORKBENCH_DIR` when set (the smoke
+/// test points it at the repository's fixtures, never the user's), otherwise the system's.
+fn workbench_dir() -> Option<PathBuf> {
+    std::env::var_os("SPELAION_WORKBENCH_DIR")
+        .map(PathBuf::from)
+        .or_else(spelaion_config::workbench_dir)
 }
 
 /// Why a client's files could not be read.
@@ -129,6 +138,20 @@ fn read(
                     TableplusError::WrongPassword(_) => ReadError::Password { wrong: true },
                     TableplusError::NotFound(_) | TableplusError::Unreadable { .. } => other(e),
                 })?;
+            Ok((dir, found))
+        }
+        ImportClient::Workbench => {
+            let dir = match chosen {
+                Some(dir) => dir,
+                None => {
+                    workbench_dir().ok_or("MySQL Workbench's folder is unknown on this system")?
+                }
+            };
+            let found = spelaion_config::read_workbench(
+                &dir,
+                spelaion_config::WorkbenchPasswords::this_system(),
+            )
+            .map_err(other)?;
             Ok((dir, found))
         }
     }

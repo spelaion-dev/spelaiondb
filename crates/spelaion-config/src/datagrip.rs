@@ -99,17 +99,17 @@ pub fn datagrip_dirs(jetbrains: &Path) -> Vec<PathBuf> {
     found.into_iter().map(|(_, _, path)| path).collect()
 }
 
-/// A tiny XML tree: enough to read JetBrains' files.
+/// A tiny XML tree: enough to read JetBrains' files (and MySQL Workbench's, `workbench.rs`).
 #[derive(Debug, Default)]
-struct Node {
-    name: String,
+pub(crate) struct Node {
+    pub(crate) name: String,
     attrs: Vec<(String, String)>,
-    children: Vec<Node>,
-    text: String,
+    pub(crate) children: Vec<Node>,
+    pub(crate) text: String,
 }
 
 impl Node {
-    fn attr(&self, name: &str) -> Option<&str> {
+    pub(crate) fn attr(&self, name: &str) -> Option<&str> {
         self.attrs
             .iter()
             .find(|(k, _)| k == name)
@@ -157,7 +157,7 @@ fn parse_xml(path: &Path) -> Result<Option<Node>, DatagripError> {
         .map_err(|e| unreadable(path, e))
 }
 
-fn parse_text(content: &str) -> Result<Node, String> {
+pub(crate) fn parse_text(content: &str) -> Result<Node, String> {
     let mut reader = Reader::from_str(content);
     let mut stack = vec![Node::default()];
     let open = |e: &quick_xml::events::BytesStart<'_>| -> Result<Node, String> {
@@ -507,7 +507,7 @@ fn engine_of(driver: &str, url: &str) -> Result<Engine, String> {
 
 /// A setting's value as the preview may show it: a key that may hold a secret shows its
 /// name only.
-fn shown(name: &str, value: &str) -> String {
+pub(crate) fn shown(name: &str, value: &str) -> String {
     let lower = name.to_lowercase();
     if ["password", "secret", "token", "key", "credential"]
         .iter()
