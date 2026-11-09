@@ -4633,3 +4633,221 @@ impl From<ChartImageFormatItem> for spelaion_core::ChartImageFormat {
         }
     }
 }
+
+/// A column of a schema's relation: the catalog metadata search keeps (ADR-043).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaColumnItem {
+    pub table: String,
+    pub name: String,
+    pub native_type: String,
+}
+
+impl From<spelaion_driver_api::SchemaColumn> for SchemaColumnItem {
+    fn from(c: spelaion_driver_api::SchemaColumn) -> Self {
+        Self {
+            table: c.table,
+            name: c.name,
+            native_type: c.native_type,
+        }
+    }
+}
+
+/// A table or view a data search reads.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchTableItem {
+    pub schema: String,
+    pub table: String,
+}
+
+/// What to search for and where (ADR-043): the value is bound as a parameter by the core.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSearchRequestItem {
+    pub value: String,
+    pub tables: Vec<SearchTableItem>,
+    pub case_sensitive: bool,
+    pub numbers: bool,
+    pub large: bool,
+    pub rows_per_table: u32,
+}
+
+impl From<DataSearchRequestItem> for spelaion_core::DataSearchRequest {
+    fn from(r: DataSearchRequestItem) -> Self {
+        Self {
+            value: r.value,
+            tables: r
+                .tables
+                .into_iter()
+                .map(|t| spelaion_core::SearchTable {
+                    schema: t.schema,
+                    table: t.table,
+                })
+                .collect(),
+            options: spelaion_core::DataSearchOptions {
+                case_sensitive: r.case_sensitive,
+                numbers: r.numbers,
+                large: r.large,
+                rows_per_table: r.rows_per_table,
+            },
+        }
+    }
+}
+
+/// The data search's limits, for the form.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSearchLimitsItem {
+    pub max_tables: u32,
+    pub max_rows_per_table: u32,
+    pub default_rows_per_table: u32,
+    pub max_hits: u32,
+    pub max_value_chars: u32,
+}
+
+/// One searched column of a hit that matched.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnMatchItem {
+    pub column: String,
+    /// Its text around the match; `None` for binary columns.
+    pub text: Option<String>,
+}
+
+/// A primary key column of a hit and its value as text.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyPartItem {
+    pub column: String,
+    pub value: String,
+}
+
+/// A row that contains the value.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHitItem {
+    pub key: Vec<KeyPartItem>,
+    pub matches: Vec<ColumnMatchItem>,
+    /// The filter of the table data tab that shows this row, written by the core.
+    pub filter: Option<String>,
+}
+
+/// How searching one table ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TableStatusItem {
+    Searched {
+        columns: u32,
+        hits: Vec<SearchHitItem>,
+        more: bool,
+    },
+    NoColumns,
+    Failed {
+        message: String,
+    },
+    Cancelled,
+}
+
+/// What a data search tells while it runs.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DataSearchEventItem {
+    Started {
+        index: u32,
+        total: u32,
+        schema: String,
+        table: String,
+    },
+    Finished {
+        schema: String,
+        table: String,
+        status: TableStatusItem,
+    },
+}
+
+impl From<spelaion_core::DataSearchEvent> for DataSearchEventItem {
+    fn from(event: spelaion_core::DataSearchEvent) -> Self {
+        match event {
+            spelaion_core::DataSearchEvent::Started {
+                index,
+                total,
+                schema,
+                table,
+            } => Self::Started {
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                total: u32::try_from(total).unwrap_or(u32::MAX),
+                schema,
+                table,
+            },
+            spelaion_core::DataSearchEvent::Finished(outcome) => Self::Finished {
+                schema: outcome.schema,
+                table: outcome.table,
+                status: match outcome.status {
+                    spelaion_core::TableStatus::Searched {
+                        columns,
+                        hits,
+                        more,
+                    } => TableStatusItem::Searched {
+                        columns,
+                        more,
+                        hits: hits
+                            .into_iter()
+                            .map(|h| SearchHitItem {
+                                key: h
+                                    .key
+                                    .into_iter()
+                                    .map(|(column, value)| KeyPartItem { column, value })
+                                    .collect(),
+                                matches: h
+                                    .matches
+                                    .into_iter()
+                                    .map(|m| ColumnMatchItem {
+                                        column: m.column,
+                                        text: m.text,
+                                    })
+                                    .collect(),
+                                filter: h.filter,
+                            })
+                            .collect(),
+                    },
+                    spelaion_core::TableStatus::NoColumns => TableStatusItem::NoColumns,
+                    spelaion_core::TableStatus::Failed(message) => {
+                        TableStatusItem::Failed { message }
+                    }
+                    spelaion_core::TableStatus::Cancelled => TableStatusItem::Cancelled,
+                },
+            },
+        }
+    }
+}
+
+/// How a data search ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSearchSummaryItem {
+    pub tables: u32,
+    pub hits: u32,
+    pub cancelled: bool,
+    /// It stopped at the most hits a search returns.
+    pub stopped: bool,
+}
+
+impl From<spelaion_core::DataSearchSummary> for DataSearchSummaryItem {
+    fn from(s: spelaion_core::DataSearchSummary) -> Self {
+        Self {
+            tables: u32::try_from(s.tables).unwrap_or(u32::MAX),
+            hits: u32::try_from(s.hits).unwrap_or(u32::MAX),
+            cancelled: s.cancelled,
+            stopped: s.stopped,
+        }
+    }
+}

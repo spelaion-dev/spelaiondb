@@ -26,8 +26,8 @@ use duckdb::{AccessMode, Config, InterruptHandle};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
     Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter,
-    NameFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject, TableInfo,
-    TransactionState,
+    NameFilter, ObjectInfo, ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject,
+    TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -236,6 +236,7 @@ impl Driver for DuckdbDriver {
                 editable_results: false,
                 schemas: true, // main and attached databases (ATTACH)
                 insert_rows: true,
+                bound_params: true,
             },
         }))
     }
@@ -246,9 +247,12 @@ type Reply<T> = oneshot::Sender<Result<T>>;
 enum Command {
     Execute {
         sql: String,
+        /// Bound to `$1`, `$2`… (ADR-043).
+        params: Vec<String>,
         batch_size: usize,
         events: mpsc::Sender<Result<ExecEvent>>,
     },
+    Columns(String, Reply<Vec<SchemaColumn>>),
     Version(Reply<String>),
     CurrentDatabase(Reply<String>),
     DatabaseContext(Reply<Option<String>>),
@@ -276,10 +280,11 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
         match command {
             Command::Execute {
                 sql,
+                params,
                 batch_size,
                 events,
             } => {
-                let result = exec::execute(conn, &sql, batch_size, &events);
+                let result = exec::execute(conn, &sql, &params, batch_size, &events);
                 context.observe(&sql, result.is_ok());
                 if result.is_err() && !matches!(&result, Err(DriverError::Database { .. })) {
                     context.refresh(None);
@@ -310,6 +315,9 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             }
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(conn, &schema, &name));
+            }
+            Command::Columns(schema, reply) => {
+                let _ = reply.send(introspect::list_columns(conn, &schema));
             }
             Command::Referencing(schema, name, reply) => {
                 let _ = reply.send(introspect::list_referencing_keys(conn, &schema, &name));
@@ -414,6 +422,28 @@ impl Connection for DuckdbConnection {
         self.commands
             .send(Command::Execute {
                 sql: sql.to_string(),
+                params: Vec::new(),
+                batch_size: opts.batch_size.max(1),
+                events,
+            })
+            .map_err(|_| closed())?;
+        Ok(Box::pin(futures_util::stream::unfold(
+            rx,
+            |mut rx| async move { rx.recv().await.map(|event| (event, rx)) },
+        )))
+    }
+
+    async fn execute_bound(
+        &self,
+        sql: &str,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        let (events, rx) = mpsc::channel(4);
+        self.commands
+            .send(Command::Execute {
+                sql: sql.to_string(),
+                params,
                 batch_size: opts.batch_size.max(1),
                 events,
             })
@@ -506,6 +536,11 @@ impl Connection for DuckdbConnection {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Describe(schema, name, reply))
             .await
+    }
+
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        let schema = schema.to_string();
+        self.ask(|reply| Command::Columns(schema, reply)).await
     }
 
     async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {

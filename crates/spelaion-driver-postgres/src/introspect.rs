@@ -2,7 +2,7 @@
 
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
-    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaColumn, SchemaInfo, TableInfo,
 };
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, Row};
@@ -100,6 +100,31 @@ pub async fn list_objects(
         .await
         .map_err(map_error)?;
     rows.iter().map(object_from_row).collect()
+}
+
+/// Every column of the schema's relations (partitions left out, as in `list_objects`).
+pub async fn list_columns(client: &Client, schema: &str) -> Result<Vec<SchemaColumn>> {
+    let rows = client
+        .query(
+            "select c.relname::text, a.attname::text, format_type(a.atttypid, a.atttypmod)
+             from pg_attribute a
+             join pg_class c on c.oid = a.attrelid
+             join pg_namespace n on n.oid = c.relnamespace
+             where n.nspname = $1 and c.relkind in ('r', 'p', 'v', 'm', 'f')
+               and not c.relispartition and a.attnum > 0 and not a.attisdropped
+             order by c.relname, a.attnum",
+            &[&schema],
+        )
+        .await
+        .map_err(map_error)?;
+    Ok(rows
+        .iter()
+        .map(|r| SchemaColumn {
+            table: r.get(0),
+            name: r.get(1),
+            native_type: r.get(2),
+        })
+        .collect())
 }
 
 pub async fn describe_table(client: &Client, schema: &str, name: &str) -> Result<TableInfo> {

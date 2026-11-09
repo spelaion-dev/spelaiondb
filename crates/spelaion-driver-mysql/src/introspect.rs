@@ -3,7 +3,7 @@
 
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
-    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaColumn, SchemaInfo, TableInfo,
 };
 
 use crate::{Flavor, MysqlConnection};
@@ -106,6 +106,30 @@ pub(crate) async fn list_objects(
         )
         .await?;
     Ok(rows.iter().map(|row| object(row)).collect())
+}
+
+/// Every column of the schema's tables and views.
+pub(crate) async fn list_columns(
+    conn: &MysqlConnection,
+    schema: &str,
+) -> Result<Vec<SchemaColumn>> {
+    let rows = conn
+        .rows(
+            "select table_name, column_name, column_type
+             from information_schema.columns
+             where table_schema = ?
+             order by table_name, ordinal_position",
+            vec![schema.to_string()],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| SchemaColumn {
+            table: text(row, 0),
+            name: text(row, 1),
+            native_type: text(row, 2),
+        })
+        .collect())
 }
 
 pub(crate) async fn describe_table(

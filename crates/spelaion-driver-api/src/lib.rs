@@ -30,8 +30,8 @@ pub use error::DriverError;
 pub use filter::{LikeFilter, NameFilter, literal_pattern, pattern_matches};
 pub use introspect::{
     ColumnInfo, ConstraintInfo, ConstraintKind, ForeignKeyInfo, IndexInfo, ObjectInfo, ObjectKind,
-    ReferencingKey, SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject, ServerObjectKind,
-    TableInfo, check_definition, terminated,
+    ReferencingKey, SchemaColumn, SchemaInfo, SchemaObject, SchemaObjectKind, ServerObject,
+    ServerObjectKind, TableInfo, check_definition, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
 pub use secret::Secret;
@@ -53,6 +53,9 @@ pub struct Capabilities {
     pub schemas: bool,
     /// [`Connection::insert_rows`] works: data can be imported (ADR-038).
     pub insert_rows: bool,
+    /// [`Connection::execute_bound`] works: a read can take values bound as parameters (the
+    /// data search of ADR-043).
+    pub bound_params: bool,
 }
 
 /// Fully resolved connection parameters (variables and secrets already substituted).
@@ -186,6 +189,22 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Executes **one** read with `params` bound to its placeholders, never written into the
+    /// SQL text (ADR-043). Every value is text, and the SQL converts it where it needs another
+    /// type. The placeholders are [`bound_placeholder`]'s; a placeholder may appear more than
+    /// once. Results and errors are those of [`Connection::execute`]. Engines that cannot bind
+    /// parameters say so in [`Capabilities::bound_params`].
+    async fn execute_bound(
+        &self,
+        _sql: &str,
+        _params: Vec<String>,
+        _opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        Err(DriverError::Other(
+            "this connection cannot bind parameters".into(),
+        ))
+    }
+
     /// Handle to cancel the running statement from another task.
     fn cancel_handle(&self) -> Arc<dyn CancelHandle>;
 
@@ -246,6 +265,21 @@ pub trait Connection: Send + Sync {
         Err(DriverError::Other(
             "this engine cannot list the keys that point to a table".into(),
         ))
+    }
+    /// Every column of every relation of [`Connection::list_objects`] in `schema`, ordered by
+    /// table and then by position: the catalog the metadata search keeps (ADR-043). Drivers
+    /// read it with one catalog query; this default describes each relation.
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        let mut columns = Vec::new();
+        for object in self.list_objects(schema).await? {
+            let table = self.describe_table(schema, &object.name).await?;
+            columns.extend(table.columns.into_iter().map(|c| SchemaColumn {
+                table: object.name.clone(),
+                name: c.name,
+                native_type: c.native_type,
+            }));
+        }
+        Ok(columns)
     }
     /// Functions, sequences, triggers, types… of a schema (ADR-024), ordered by name. Engines
     /// without any return none.
@@ -425,6 +459,19 @@ impl InsertTarget {
             sql.push(')');
         }
         sql
+    }
+}
+
+/// The `n`th (from 1) placeholder of [`Connection::execute_bound`] for an engine: `$1`
+/// (PostgreSQL, DuckDB), `@P1` (SQL Server), `?1` (SQLite) and `@spelaion_p1` for MySQL and
+/// MariaDB, whose driver binds the value to that user variable with a prepared `SET` and then
+/// runs the read with the text protocol, so its values decode as every other result's.
+pub fn bound_placeholder(engine: &str, n: usize) -> String {
+    match engine {
+        "sqlserver" => format!("@P{n}"),
+        "sqlite" => format!("?{n}"),
+        "mysql" | "mariadb" => format!("@spelaion_p{n}"),
+        _ => format!("${n}"),
     }
 }
 

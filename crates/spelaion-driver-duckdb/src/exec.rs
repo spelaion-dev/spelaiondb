@@ -241,11 +241,15 @@ fn send(events: &Events, event: ExecEvent) -> bool {
 pub fn execute(
     conn: &duckdb::Connection,
     sql: &str,
+    params: &[String],
     batch_size: usize,
     events: &Events,
 ) -> Result<()> {
     let mut statement = conn.prepare(sql).map_err(map_error)?;
-    let mut stream = statement.stream_arrow([]).map_err(map_error)?;
+    // `$1`, `$2`…: every value bound as text, never written into the SQL (ADR-043).
+    let mut stream = statement
+        .stream_arrow(duckdb::params_from_iter(params.iter().map(String::as_str)))
+        .map_err(map_error)?;
     let schema = stream.get_schema();
 
     if let Some(status) = status(sql, &schema) {

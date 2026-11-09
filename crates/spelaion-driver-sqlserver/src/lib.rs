@@ -22,7 +22,7 @@ use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
     Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive,
     LikeFilter, NameFilter, Notice, ObjectInfo, PlanMode, ReferencingKey, Result, ResultSchema,
-    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
+    SchemaColumn, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -150,6 +150,7 @@ impl Driver for SqlServerDriver {
                 editable_results: false,
                 schemas: true,
                 insert_rows: true,
+                bound_params: true,
             },
         }))
     }
@@ -166,6 +167,8 @@ enum Request {
     },
     Execute {
         sql: String,
+        /// Bound as `@P1`, `@P2`… through `sp_executesql` (ADR-043); none for a plain batch.
+        params: Vec<String>,
         batch_size: usize,
         events: mpsc::Sender<Result<ExecEvent>>,
     },
@@ -230,6 +233,7 @@ async fn actor(
             }
             Request::Execute {
                 sql,
+                params,
                 batch_size,
                 events,
             } => {
@@ -244,7 +248,7 @@ async fn actor(
                     std::future::pending::<()>().await;
                 };
                 let finished = tokio::select! {
-                    outcome = execute(&mut client, &sql, batch_size, &events) => outcome,
+                    outcome = execute(&mut client, &sql, &params, batch_size, &events) => outcome,
                     () = cancelled => ExecutionOutcome::Cancelled,
                 };
                 transaction_state_unknown = !matches!(finished, ExecutionOutcome::Complete);
@@ -490,12 +494,13 @@ enum ExecutionOutcome {
 async fn execute(
     client: &mut SqlClient,
     sql: &str,
+    params: &[String],
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
 ) -> ExecutionOutcome {
     // Messages of the driver's own queries and of the login are not this batch's.
     let _ = client.take_info_messages();
-    let streamed = stream_batch(client, sql, batch_size, events).await;
+    let streamed = stream_batch(client, sql, params, batch_size, events).await;
     if matches!(streamed, Streamed::Abandoned) {
         return ExecutionOutcome::Abandoned;
     }
@@ -556,11 +561,23 @@ fn info_notices(client: &mut SqlClient) -> Vec<Notice> {
 async fn stream_batch(
     client: &mut SqlClient,
     sql: &str,
+    params: &[String],
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
 ) -> Streamed {
     let send = |event| async move { events.send(event).await.is_ok() };
-    let mut stream = match client.simple_query(sql).await {
+    let started = async {
+        if params.is_empty() {
+            return client.simple_query(sql).await;
+        }
+        // Owned text, so the stream borrows only the client.
+        let mut query = tiberius::Query::new(sql.to_string());
+        for param in params {
+            query.bind(param.clone());
+        }
+        query.query(client).await
+    };
+    let mut stream = match started.await {
         Ok(stream) => stream,
         Err(e) => return Streamed::Failed(map_error(e, Some(sql))),
     };
@@ -710,6 +727,28 @@ impl Connection for SqlServerConnection {
         self.requests
             .send(Request::Execute {
                 sql: sql.to_string(),
+                params: Vec::new(),
+                batch_size: opts.batch_size.max(1),
+                events,
+            })
+            .await
+            .map_err(|_| closed())?;
+        Ok(Box::pin(futures_util::stream::poll_fn(move |cx| {
+            receiver.poll_recv(cx)
+        })))
+    }
+
+    async fn execute_bound(
+        &self,
+        sql: &str,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        let (events, mut receiver) = mpsc::channel(4);
+        self.requests
+            .send(Request::Execute {
+                sql: sql.to_string(),
+                params,
                 batch_size: opts.batch_size.max(1),
                 events,
             })
@@ -877,6 +916,10 @@ impl Connection for SqlServerConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, schema, name).await
+    }
+
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        introspect::list_columns(self, schema).await
     }
 
     async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {

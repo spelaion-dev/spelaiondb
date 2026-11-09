@@ -58,6 +58,14 @@ import {
   type ChartLabelItem,
   type ChartPointsItem_Serialize,
   type ColumnStatsItem_Serialize,
+  type DataSearchEventItem_Deserialize,
+  type DataSearchLimitsItem,
+  type DataSearchRequestItem,
+  type DataSearchSummaryItem,
+  type SchemaColumnItem,
+  type SearchHitItem_Deserialize,
+  type SearchTableItem,
+  type TableStatusItem_Deserialize,
   type ColumnStatsOutcome_Serialize,
   type ColumnStatsTarget,
   type TopValueItem_Serialize,
@@ -110,6 +118,11 @@ import {
 } from "./bindings";
 
 export { commands, events };
+// Data search (ADR-043): its events arrive through a channel (the deserialization variant).
+export type DataSearchEventItem = DataSearchEventItem_Deserialize;
+export type SearchHitItem = SearchHitItem_Deserialize;
+export type TableStatusItem = TableStatusItem_Deserialize;
+export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, SchemaColumnItem, SearchTableItem };
 export type { ImportReport, KubernetesDraftItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;

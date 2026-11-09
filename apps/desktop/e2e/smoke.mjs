@@ -313,7 +313,7 @@ try {
   step("connections sidebar: drag, keyboard resizing, limits and reset");
   const sidebar = page.locator(".sidebar");
   const activities = page.getByRole("navigation", { name: "Activity bar" });
-  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Query history", "Saved queries", "MCP server", "Settings"]);
+  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Search", "Query history", "Saved queries", "MCP server", "Settings"]);
   for (const button of await activities.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   const connectionsActivity = activities.getByRole("button", { name: "Connections" });
   assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "true");
@@ -2459,6 +2459,80 @@ try {
   await spanishCount.waitFor();
   assert.equal(await spanishCount.innerText(), new Intl.NumberFormat("es", { notation: "compact", maximumFractionDigits: 1 }).format(50_000));
   await setLanguage("en");
+
+  step("search: names from the explorer's catalog, and a value found in the chosen tables");
+  {
+    // Ctrl+H shows the search panel with its box focused.
+    await page.keyboard.press("Control+h");
+    const search = page.getByRole("complementary", { name: "Search", exact: true });
+    await search.waitFor();
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Table, view, routine or column name…");
+    // Names: what the explorer read, and each schema's columns read once from the catalog.
+    await page.keyboard.insertText("customer");
+    const columnHit = search.locator(".search-hit").filter({ has: page.locator(".search-hit-name", { hasText: /^orders\.customer_id$/ }) });
+    await columnHit.waitFor();
+    const firstHit = search.locator(".search-hit").first();
+    assert.equal(await firstHit.locator(".search-hit-name").innerText(), "customer");
+    assert.equal(await firstHit.locator(".search-hit-meta").innerText(), "main · Table");
+    await search.locator(".search-status", { hasText: /^\d+ matches$/ }).waitFor();
+    await shot("sdb-26-names");
+    // Columns can be left out.
+    await search.getByLabel("Include columns").uncheck();
+    await columnHit.waitFor({ state: "detached" });
+    await search.getByLabel("Include columns").check();
+    await columnHit.waitFor();
+    // A column opens its table's data.
+    const tabsBefore = await page.locator(".tabbar .tab").count();
+    await columnHit.click();
+    await page.locator(".tabbar .tab.active", { hasText: "orders" }).waitFor();
+    // Closed once its first page is in: a tab still connecting is not the one to test here.
+    await panel.locator(".table-range").filter({ hasText: "rows 1–500" }).waitFor();
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, tabsBefore);
+    // Data: one SELECT per chosen table, the value bound by the core, reads only.
+    await search.getByRole("radio", { name: "Data" }).click();
+    const valueBox = search.getByRole("searchbox", { name: "Value to find in the tables…" });
+    await valueBox.fill("CUSTOMER42@");
+    const searchData = search.getByRole("button", { name: "Search data" });
+    assert.equal(await searchData.isDisabled(), true);
+    await search.getByText("Choose at least one table.", { exact: true }).waitFor();
+    await search.getByRole("button", { name: "Select shown" }).click();
+    await search.getByText("4 of 4 tables chosen", { exact: true }).waitFor();
+    await searchData.click();
+    await search.locator(".search-status", { hasText: "1 hit in 4 tables." }).waitFor();
+    const dataHit = search.locator(".search-hit", { hasText: "id = 42" });
+    assert.equal(await dataHit.locator(".search-hit-column").innerText(), "email");
+    assert.equal(await dataHit.locator(".search-hit-match code").innerText(), "customer42@example.com");
+    await shot("sdb-26-data");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("sdb-26-data-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    // Match case finds nothing with the value in capitals.
+    await search.getByText("Options", { exact: true }).click();
+    await search.getByLabel("Match case").check();
+    await searchData.click();
+    await search.locator(".search-status", { hasText: "0 hits in 4 tables." }).waitFor();
+    await search.getByLabel("Match case").uncheck();
+    await searchData.click();
+    await dataHit.waitFor();
+    // A hit opens the table data tab filtered to its row by the core's filter.
+    await dataHit.click();
+    await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor();
+    await panel.locator(".table-range").filter({ hasText: "rows 1–1" }).waitFor();
+    assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), "id = 42");
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n, tabsBefore);
+    // Cancel: a search over every table stops when asked, or ends first; either way it says so.
+    await valueBox.fill("zzz-not-there");
+    await searchData.click();
+    const cancelSearch = search.getByRole("button", { name: "Cancel search" });
+    if (await cancelSearch.isVisible().catch(() => false)) await cancelSearch.click().catch(() => undefined);
+    await search.locator(".search-status", { hasText: /Search cancelled after|0 hits in 4 tables\./ }).waitFor();
+    await searchData.waitFor();
+    // Back to the explorer.
+    await page.locator('[data-command="view.explorer"]').click();
+    await search.waitFor({ state: "hidden" });
+  }
 
   step("table data: pages, WHERE and ORDER BY written and checked by the core");
   await ordersNode.locator(".label").dblclick();

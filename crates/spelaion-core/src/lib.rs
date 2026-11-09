@@ -10,6 +10,7 @@ mod classify;
 mod column_stats;
 mod conn_test;
 mod cursor;
+mod data_search;
 mod edit;
 mod export;
 mod export_stream;
@@ -60,6 +61,13 @@ pub use conn_test::{
     test_network_profile,
 };
 pub use cursor::statement_at;
+pub use data_search::{
+    ColumnMatch, DEFAULT_ROWS_PER_TABLE, DataSearchError, DataSearchEvent, DataSearchOptions,
+    DataSearchRequest, DataSearchSummary, MAX_ROWS_PER_TABLE, MAX_SEARCH_HITS, MAX_SEARCH_TABLES,
+    MAX_SEARCH_VALUE_CHARS, SNIPPET_CHARS, SearchColumn, SearchColumnKind, SearchHit, SearchTable,
+    TableOutcome, TableSearchSql, TableStatus, column_kind, data_search, is_search_number,
+    probe_sql, table_search_sql,
+};
 pub use edit::{
     CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements,
     editable_query_source, editable_query_table,

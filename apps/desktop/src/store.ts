@@ -229,7 +229,7 @@ export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | 
 export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";
 
 /** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
-export type SidebarSection = "connections" | "processes" | "mcp" | null;
+export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;
 
 /** How many closed tabs Ctrl+Shift+T can bring back. */
 const MAX_CLOSED_TABS = 20;

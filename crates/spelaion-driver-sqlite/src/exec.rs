@@ -301,12 +301,18 @@ fn send(events: &mpsc::Sender<Result<ExecEvent>>, event: ExecEvent) -> Result<()
 pub fn execute(
     conn: &rusqlite::Connection,
     sql: &str,
+    params: &[String],
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
 ) -> Result<()> {
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| locate_name(map_error(e), sql))?;
+    // `?1`, `?2`…: every value bound as text, never written into the SQL (ADR-043).
+    for (i, param) in params.iter().enumerate() {
+        stmt.raw_bind_parameter(i + 1, param.as_str())
+            .map_err(map_error)?;
+    }
     if stmt.column_count() == 0 {
         let readonly = stmt.readonly();
         stmt.raw_execute().map_err(map_error)?;

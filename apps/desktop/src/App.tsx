@@ -14,6 +14,7 @@ import { openSavedPlan } from "./planFiles";
 import { TabBar } from "./components/TabBar";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
+import { SearchPanel } from "./components/SearchPanel";
 import { SettingsDialog } from "./components/Settings";
 import { SnippetsPanel } from "./components/SnippetsPanel";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
@@ -153,6 +154,8 @@ export default function App() {
       <ActivityBar />
       <Sidebar hidden={sidebarSection !== "connections"} />
       {sidebarSection === "processes" && <ProcessSidebar selected={processConnection} onSelect={setProcessConnection} />}
+      {/* Always mounted: a data search goes on while another panel is shown. */}
+      <SearchPanel hidden={sidebarSection !== "search"} />
       <div
         className="sidebar-resizer"
         hidden={!sidebarOpen}
@@ -160,7 +163,7 @@ export default function App() {
         tabIndex={0}
         aria-label={t("resizeSidebar")}
         title={t("resizeSidebarHint")}
-        aria-controls={sidebarSection === "processes" ? "processes-sidebar" : "connections-sidebar"}
+        aria-controls={sidebarSection === "processes" ? "processes-sidebar" : sidebarSection === "search" ? "search-sidebar" : "connections-sidebar"}
         aria-orientation="vertical"
         aria-valuemin={SIDEBAR_MIN}
         aria-valuemax={maxSidebarWidth}

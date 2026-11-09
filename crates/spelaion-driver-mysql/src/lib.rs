@@ -23,8 +23,8 @@ use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, ContextDialect,
     DatabaseContext, Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
     InsertTarget, KeepAlive, LikeFilter, LogicalType, NameFilter, Notice, ObjectInfo,
-    ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject, ServerObject, TableInfo,
-    TlsMode, TransactionState,
+    ReferencingKey, Result, ResultSchema, SchemaColumn, SchemaInfo, SchemaObject, ServerObject,
+    TableInfo, TlsMode, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -175,6 +175,7 @@ impl Driver for MysqlDriver {
                 editable_results: false,
                 schemas: true,
                 insert_rows: true,
+                bound_params: true,
             },
         }))
     }
@@ -191,6 +192,8 @@ enum Request {
     },
     Execute {
         sql: String,
+        /// Bound to `@spelaion_p1`, `@spelaion_p2`… before the statement runs (ADR-043).
+        params: Vec<String>,
         batch_size: usize,
         events: mpsc::Sender<Result<ExecEvent>>,
     },
@@ -226,10 +229,15 @@ async fn actor(mut conn: Conn, mut requests: mpsc::Receiver<Request>, database: 
         match request {
             Request::Execute {
                 sql,
+                params,
                 batch_size,
                 events,
             } => {
-                let outcome = execute(&mut conn, &sql, batch_size, &events).await;
+                let outcome = if params.is_empty() {
+                    execute(&mut conn, &sql, batch_size, &events).await
+                } else {
+                    execute_bound(&mut conn, &sql, params, batch_size, &events).await
+                };
                 let complete = matches!(outcome, ExecutionOutcome::Complete);
                 context.observe(&sql, complete);
                 if matches!(outcome, ExecutionOutcome::Uncertain) {
@@ -468,6 +476,50 @@ async fn execute(
     ExecutionOutcome::Complete
 }
 
+/// Binds `params` to the user variables `@spelaion_p1`, `@spelaion_p2`… with a prepared `SET`
+/// (the values travel as parameters, never as SQL), runs `sql` with the text protocol so its
+/// values decode as every other result's, and clears the variables again.
+async fn execute_bound(
+    conn: &mut Conn,
+    sql: &str,
+    params: Vec<String>,
+    batch_size: usize,
+    events: &mpsc::Sender<Result<ExecEvent>>,
+) -> ExecutionOutcome {
+    let names: Vec<String> = (1..=params.len())
+        .map(|n| spelaion_driver_api::bound_placeholder("mysql", n))
+        .collect();
+    let set = names
+        .iter()
+        .map(|name| format!("{name} = ?"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values: Vec<mysql_async::Value> = params
+        .into_iter()
+        .map(|v| mysql_async::Value::Bytes(v.into_bytes()))
+        .collect();
+    if let Err(e) = conn
+        .exec_drop(
+            format!("SET {set}"),
+            mysql_async::Params::Positional(values),
+        )
+        .await
+    {
+        let _ = events.send(Err(map_error(e))).await;
+        return ExecutionOutcome::Failed;
+    }
+    let outcome = execute(conn, sql, batch_size, events).await;
+    let clear = names
+        .iter()
+        .map(|name| format!("{name} = NULL"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if conn.query_drop(format!("SET {clear}")).await.is_err() {
+        return ExecutionOutcome::Uncertain;
+    }
+    outcome
+}
+
 /// Most warnings read after one statement.
 const MAX_WARNINGS: usize = 100;
 
@@ -524,6 +576,19 @@ const MAX_INSERT_ROWS: usize = 1_000;
 /// About this much data per INSERT, well under the default `max_allowed_packet` (64 MiB).
 const MAX_INSERT_BYTES: usize = 4 * 1024 * 1024;
 
+/// An error before any result (syntax, permissions…) is returned directly.
+async fn first_event(
+    mut stream: futures_util::stream::BoxStream<'static, Result<ExecEvent>>,
+) -> Result<EventStream> {
+    match stream.next().await {
+        Some(Err(e)) => Err(e),
+        Some(Ok(first)) => Ok(Box::pin(
+            futures_util::stream::once(async { Ok(first) }).chain(stream),
+        )),
+        None => Err(closed()),
+    }
+}
+
 struct MysqlConnection {
     requests: mpsc::Sender<Request>,
     cancel: Arc<MysqlCancel>,
@@ -561,20 +626,32 @@ impl Connection for MysqlConnection {
         self.requests
             .send(Request::Execute {
                 sql: sql.to_string(),
+                params: Vec::new(),
                 batch_size: opts.batch_size.max(1),
                 events,
             })
             .await
             .map_err(|_| closed())?;
-        let mut stream = tokio_stream_from(receiver);
-        // An error before any result (syntax, permissions…) is returned directly.
-        match stream.next().await {
-            Some(Err(e)) => Err(e),
-            Some(Ok(first)) => Ok(Box::pin(
-                futures_util::stream::once(async { Ok(first) }).chain(stream),
-            )),
-            None => Err(closed()),
-        }
+        first_event(tokio_stream_from(receiver)).await
+    }
+
+    async fn execute_bound(
+        &self,
+        sql: &str,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        let (events, receiver) = mpsc::channel(4);
+        self.requests
+            .send(Request::Execute {
+                sql: sql.to_string(),
+                params,
+                batch_size: opts.batch_size.max(1),
+                events,
+            })
+            .await
+            .map_err(|_| closed())?;
+        first_event(tokio_stream_from(receiver)).await
     }
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
@@ -713,6 +790,10 @@ impl Connection for MysqlConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(self, self.flavor, schema, name).await
+    }
+
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        introspect::list_columns(self, schema).await
     }
 
     async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
