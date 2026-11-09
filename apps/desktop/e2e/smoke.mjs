@@ -76,6 +76,8 @@ function startApp() {
       SPELAION_TABLEPLUS_DIR: join(tableplusFixtures, "com.tinyapp.TablePlus"),
       // The MySQL Workbench import reads the repository's fixture, never the user's Workbench folder.
       SPELAION_WORKBENCH_DIR: workbenchHome,
+      // The pgAdmin import never opens the user's pgadmin4.db: this folder has none.
+      SPELAION_PGADMIN_DIR: join(userDir, "no-pgadmin"),
     },
     windowsHide: true,
     stdio: "inherit",
@@ -5019,6 +5021,61 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const bastion = readFileSync(join(prod, "orders-via-bastion.toml"), "utf8");
     assert.match(bastion, /tunnel = "spelaion-127-0-0-1"/);
     assert.ok(!existsSync(join(userDir, "connections", "workbench", "shop-mysql.toml")));
+  }
+
+  step("import from pgAdmin: the servers file a real pgAdmin exported, its groups, SSH tunnel, TLS and the passwords it never exports");
+  {
+    // The export a real pgAdmin 4 wrote (crates/spelaion-config/tests/fixtures/pgadmin/README.md).
+    const exportFile = join(root, "crates/spelaion-config/tests/fixtures/pgadmin/pgadmin-9.19-servers.json");
+    await page.evaluate((file) => (window.__spelaionImportDirs = { pgadmin: file }), exportFile);
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    await page.getByRole("button", { name: "Import from pgAdmin…" }).click();
+    const importer = page.locator(".modal.wizard");
+    await importer.getByRole("heading", { name: "Import from pgAdmin" }).waitFor();
+    // An export file can be picked instead of pgAdmin's own database.
+    await importer.getByRole("button", { name: "Choose export file…" }).waitFor();
+    const list = importer.getByRole("list", { name: "pgAdmin connections" });
+    const item = (name) => list.getByRole("listitem").filter({ has: page.getByRole("checkbox", { name, exact: true }) });
+    await importer.getByRole("radio", { name: "Personal", exact: true }).check();
+    await item("PG via bastion").getByText("SSH spelaion@127.0.0.1:2221").waitFor();
+    await item("Orders TLS").locator(".conn-import-detail").filter({ hasText: "TLS verify-ca" }).waitFor();
+    // Server groups are folders.
+    await item("Orders TLS").getByText("· Production").waitFor();
+    await item("Local PG").getByText("· Servers").waitFor();
+    // A pg_service.conf server cannot be opened: listed, never chosen.
+    assert.ok(await list.getByRole("checkbox", { name: "Analytics service", exact: true }).isDisabled());
+    await item("Analytics service").getByText("pg_service.conf", { exact: false }).waitFor();
+    // The DBeaver import above made a connection to the same database as these.
+    await item("Local PG").getByText("Already in SpelaionDB as", { exact: false }).waitFor();
+    // pgAdmin exports no passwords: the preview says each one is asked when connecting.
+    await item("Orders TLS").getByText("3 settings are not imported").click();
+    await item("Orders TLS").getByText("pgAdmin does not export passwords; it is asked when connecting", { exact: false }).waitFor();
+    await item("Orders TLS").getByText("Role: reporting", { exact: false }).waitFor();
+    for (const name of ["Local PG", "Orders TLS", "PG via bastion"]) {
+      const duplicate = importer.getByRole("combobox", { name: `What to do with ${name}` });
+      if (await duplicate.count()) await duplicate.selectOption({ label: "Import it as a copy" });
+      else await list.getByRole("checkbox", { name, exact: true }).check();
+    }
+    await importer.getByRole("textbox", { name: "Put them in" }).fill("pgAdmin");
+    await shot("sdb-54-import-pgadmin");
+    await importer.getByRole("button", { name: "Import 3 connections" }).click();
+    await importer.getByRole("status").filter({ hasText: "Imported 3 connections." }).waitFor();
+    await shot("sdb-54-import-pgadmin-done");
+    await importer.getByRole("button", { name: "Done", exact: true }).click();
+    await importer.waitFor({ state: "detached" });
+    const base = join(userDir, "connections", "pgadmin");
+    const files = readdirSync(base, { recursive: true }).map(String).filter((f) => f.endsWith(".toml"));
+    assert.equal(files.length, 3, files.join(", "));
+    const orders = files.find((f) => f.startsWith("production") && f.includes("orders-tls"));
+    assert.ok(orders, files.join(", "));
+    const text = readFileSync(join(base, orders), "utf8");
+    assert.match(text, /verify-ca/);
+    assert.match(text, /Orders of the EU shop/);
+    const bastion = files.find((f) => f.startsWith("production") && f.includes("pg-via-bastion"));
+    assert.ok(bastion, files.join(", "));
+    assert.match(readFileSync(join(base, bastion), "utf8"), /tunnel = "spelaion-127-0-0-1"/);
+    assert.ok(files.some((f) => f.startsWith("servers")), files.join(", "));
+    await page.evaluate(() => delete window.__spelaionImportDirs);
   }
 
   step("open tabs survive a restart (ADR-036): a file and two consoles come back with their text, disconnected, and nothing runs");

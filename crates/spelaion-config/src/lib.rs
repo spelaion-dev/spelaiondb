@@ -26,6 +26,7 @@ pub mod mcp_clients;
 mod migrate;
 mod model;
 mod name_pattern;
+mod pgadmin;
 mod relocate;
 mod resolve;
 mod secrets;
@@ -78,6 +79,7 @@ pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
     NameValues,
 };
+pub use pgadmin::{PgadminError, pgadmin_dir, read_pgadmin};
 pub use relocate::{Moved, move_connection};
 pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,

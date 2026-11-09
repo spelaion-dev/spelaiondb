@@ -5807,6 +5807,7 @@ dependencies = [
  "pbkdf2",
  "plist",
  "quick-xml",
+ "rusqlite",
  "schemars 1.2.3",
  "serde",
  "serde_json",

@@ -73,6 +73,11 @@ own KeePass database.
   `unsafe` FFI or a new crate, and the workspace forbids `unsafe`. Reading DPAPI-protected stores
   (Workbench's vault, DataGrip's KeePass master key, TablePlus's `.tpmaster`) is one decision for
   all of them, left for later; until then the preview says the password will be asked.
+- pgAdmin 4 (`pgadmin.rs`) is read from the JSON its Import/Export Servers tool writes, which
+  never carries passwords (the preview says each one is asked when connecting), or from its own
+  SQLite database, `pgadmin4.db`, opened read-only. Passwords saved there are encrypted with
+  pgAdmin's master password or a key of its own: their columns are never selected, only whether
+  one was saved, so the preview can say it is not read.
 - DBeaver's import changes behaviour: a clash is no longer renamed silently but left out until
   the user picks what to do with it.
 
