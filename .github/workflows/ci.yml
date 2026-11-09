@@ -101,14 +101,12 @@ jobs:
         with:
           toolchain: 1.99.1
           components: rustfmt, clippy
-      # The vendored mysql_async is a workspace of its own (its regression test below), with
-      # its own target directory.
+      # Careful with `workspaces` and other inputs that change which directories are cached:
+      # a cache only matches a run that asks for the same directories, so every run starts
+      # from scratch until a push to `dev` saves a new one.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'push' }}
-          workspaces: |
-            .
-            vendor/mysql_async
       # libdbus: Linux keychain (Secret Service). WebKitGTK and friends: the Tauri app.
       - run: |
           sudo apt-get update
