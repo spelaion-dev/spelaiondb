@@ -5823,6 +5823,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
+ "quick-xml",
  "serde",
  "serde_json",
  "sha2 0.10.9",

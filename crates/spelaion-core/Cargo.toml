@@ -25,6 +25,7 @@ sqlparser = { version = "0.63", features = ["visitor"] }
 thiserror.workspace = true
 # Port lists from `kubectl get … -o json` (kube.rs), and JSON imports (import/source.rs).
 serde_json = "1"
+quick-xml = "0.42"
 serde = { version = "1", features = ["derive"] }
 # Dates and timestamps of imports, in the formats the user chooses (ADR-038).
 chrono = { version = "0.4", default-features = false, features = ["std"] }

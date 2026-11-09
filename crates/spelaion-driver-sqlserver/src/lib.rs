@@ -10,6 +10,7 @@ mod decode;
 mod dialect;
 mod introspect;
 mod objects;
+mod plan;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,8 +21,8 @@ use futures_util::TryStreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
     Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive,
-    LikeFilter, NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo,
-    SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
+    LikeFilter, NameFilter, Notice, ObjectInfo, PlanMode, ReferencingKey, Result, ResultSchema,
+    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -145,7 +146,7 @@ impl Driver for SqlServerDriver {
             capabilities: Capabilities {
                 transactions: true,
                 cancel: true,
-                explain: false,
+                explain: true,
                 editable_results: false,
                 schemas: true,
                 insert_rows: true,
@@ -166,6 +167,13 @@ enum Request {
     Execute {
         sql: String,
         batch_size: usize,
+        events: mpsc::Sender<Result<ExecEvent>>,
+    },
+    /// The server settings, query and restoration belong to one actor request.
+    Plan {
+        sql: String,
+        mode: PlanMode,
+        cancel_epoch: u64,
         events: mpsc::Sender<Result<ExecEvent>>,
     },
     /// Small catalog queries: every value as text, parameters as `@P1`, `@P2`…
@@ -203,6 +211,23 @@ async fn actor(
     let mut transaction_state_unknown = false;
     while let Some(request) = requests.recv().await {
         match request {
+            Request::Plan {
+                sql,
+                mode,
+                cancel_epoch,
+                events,
+            } => {
+                let (healthy, attempted) =
+                    plan::execute(&mut client, &sql, mode, &events, &mut cancels, cancel_epoch)
+                        .await;
+                // A failed or interrupted batch can have hidden transaction ENVCHANGE tokens.
+                transaction_state_unknown |= attempted;
+                if !healthy {
+                    // Do not let a queued request run on a session whose SET state is unknown.
+                    requests.close();
+                    return;
+                }
+            }
             Request::Execute {
                 sql,
                 batch_size,
@@ -686,6 +711,23 @@ impl Connection for SqlServerConnection {
             .send(Request::Execute {
                 sql: sql.to_string(),
                 batch_size: opts.batch_size.max(1),
+                events,
+            })
+            .await
+            .map_err(|_| closed())?;
+        Ok(Box::pin(futures_util::stream::poll_fn(move |cx| {
+            receiver.poll_recv(cx)
+        })))
+    }
+
+    async fn execute_plan(&self, sql: &str, mode: PlanMode) -> Result<EventStream> {
+        let (events, mut receiver) = mpsc::channel(4);
+        let cancel_epoch = *self.cancel.0.borrow();
+        self.requests
+            .send(Request::Plan {
+                sql: sql.to_owned(),
+                mode,
+                cancel_epoch,
                 events,
             })
             .await

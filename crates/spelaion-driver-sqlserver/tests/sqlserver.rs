@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
+use spelaion_driver_api::PlanMode;
 use spelaion_driver_api::{
     ConnectParams, Connection, ConstraintKind, Driver, DriverError, ExecEvent, ExecOptions,
     LogicalType, ObjectKind, SchemaObjectKind, Secret, ServerObjectKind, TlsMode, Value,
@@ -12,6 +13,194 @@ use spelaion_driver_api::{
 use spelaion_driver_sqlserver::SqlServerDriver;
 
 const PASSWORD: &str = "Spelaion-test-1";
+
+#[tokio::test]
+async fn sqlserver_plan_cancellation_abandonment_and_preexisting_options() {
+    let Some(params) = params("master") else {
+        return;
+    };
+    let conn = SqlServerDriver.connect(&params).await.unwrap();
+    let observer = SqlServerDriver.connect(&params).await.unwrap();
+    let spid: u32 = tables(&*conn, "SELECT @@SPID").await[0].1[0][0]
+        .parse()
+        .unwrap();
+    // Each test uses this private session; no test database or prior fixtures are assumed.
+    run(&*conn, "set showplan_xml on").await.unwrap();
+    let result = conn
+        .execute_plan("SELECT 1", PlanMode::Estimated)
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await;
+    assert!(result.unwrap_err().to_string().contains("SHOWPLAN"));
+    assert!(
+        tables(&*conn, "SELECT 1").await[0].0[0]
+            .0
+            .contains("Showplan")
+    );
+    run(&*conn, "set showplan_xml off").await.unwrap();
+    run(&*conn, "set statistics xml on").await.unwrap();
+    let result = conn
+        .execute_plan("SELECT 1", PlanMode::Estimated)
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await;
+    assert!(result.unwrap_err().to_string().contains("STATISTICS XML"));
+    run(&*conn, "set statistics xml off").await.unwrap();
+
+    // Cancel while a plan is queued behind a real, observed WAITFOR: that plan has not
+    // started, and must not send an Attention for a nonexistent plan request.
+    let running = conn
+        .execute("WAITFOR DELAY '00:00:30'", &ExecOptions::default())
+        .await
+        .unwrap();
+    wait_for_waitfor(&*observer, spid).await;
+    let queued = conn
+        .execute_plan("SELECT name FROM sys.objects", PlanMode::Estimated)
+        .await
+        .unwrap();
+    conn.cancel_handle().cancel().await.unwrap();
+    assert!(matches!(
+        running.try_collect::<Vec<_>>().await.unwrap_err(),
+        DriverError::Cancelled
+    ));
+    assert!(matches!(
+        queued.try_collect::<Vec<_>>().await.unwrap_err(),
+        DriverError::Cancelled
+    ));
+    assert_eq!(tables(&*conn, "SELECT 42").await[0].1[0][0], "42");
+
+    for abandon in [false, true] {
+        let stream = conn
+            .execute_plan(
+                "WAITFOR DELAY '00:00:30'; SELECT name FROM sys.objects",
+                PlanMode::Analyze { query_result: true },
+            )
+            .await
+            .unwrap();
+        wait_for_waitfor(&*observer, spid).await;
+        if abandon {
+            drop(stream);
+        } else {
+            conn.cancel_handle().cancel().await.unwrap();
+            let error =
+                tokio::time::timeout(Duration::from_secs(5), stream.try_collect::<Vec<_>>())
+                    .await
+                    .unwrap()
+                    .unwrap_err();
+            assert!(matches!(error, DriverError::Cancelled), "{error:?}");
+        }
+        let result = tokio::time::timeout(Duration::from_secs(5), tables(&*conn, "SELECT 42"))
+            .await
+            .unwrap();
+        assert_eq!(result[0].1[0][0], "42");
+    }
+}
+
+#[tokio::test]
+async fn sqlserver_plan_failed_cleanup_closes_the_dedicated_session() {
+    let Some(params) = params("master") else {
+        return;
+    };
+    let victim = SqlServerDriver.connect(&params).await.unwrap();
+    let killer = SqlServerDriver.connect(&params).await.unwrap();
+    let spid: u32 = tables(&*victim, "SELECT @@SPID").await[0].1[0][0]
+        .parse()
+        .unwrap();
+    let stream = victim
+        .execute_plan(
+            "WAITFOR DELAY '00:00:30'; SELECT name FROM sys.objects",
+            PlanMode::Analyze { query_result: true },
+        )
+        .await
+        .unwrap();
+    wait_for_waitfor(&*killer, spid).await;
+    // Only the SPID just obtained from this test's dedicated connection can be terminated.
+    run(&*killer, &format!("KILL {spid}")).await.unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(5), stream.try_collect::<Vec<_>>())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(error, DriverError::Connection(_)), "{error:?}");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !victim.is_closed() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(run(&*victim, "SELECT 42").await.is_err());
+}
+
+#[tokio::test]
+async fn sqlserver_plan_rejects_trigger_results_that_impersonate_showplan() {
+    let Some(params) = params("master") else {
+        return;
+    };
+    let conn = SqlServerDriver.connect(&params).await.unwrap();
+    run(&*conn, "USE tempdb").await.unwrap();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let table = format!("spelaion_plan48_{}_{}", std::process::id(), nonce);
+    let trigger = format!("{table}_trigger");
+    run(
+        &*conn,
+        &format!("CREATE TABLE dbo.[{table}] (id int PRIMARY KEY)"),
+    )
+    .await
+    .unwrap();
+    let create = format!(
+        "CREATE TRIGGER dbo.[{trigger}] ON dbo.[{table}] AFTER INSERT AS SELECT CAST('<ShowPlanXML xmlns=\"http://schemas.microsoft.com/sqlserver/2004/07/showplan\"><StmtSimple StatementType=\"FAKE\"/></ShowPlanXML>' AS xml) AS [Microsoft SQL Server 2005 XML Showplan]"
+    );
+    run(&*conn, &create).await.unwrap();
+    let outcome = conn
+        .execute_plan(
+            &format!("INSERT dbo.[{table}] VALUES (1)"),
+            PlanMode::Analyze {
+                query_result: false,
+            },
+        )
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await;
+    let normal = run(&*conn, "SELECT 42").await;
+    let cleanup = run(&*conn, &format!("DROP TABLE dbo.[{table}]")).await;
+    cleanup.unwrap();
+    let error = outcome.unwrap_err().to_string();
+    assert!(
+        error.contains("unexpected number of result sets")
+            && error.contains("ANALYZE may have executed"),
+        "{error}"
+    );
+    let events = normal.unwrap();
+    let batch = events
+        .iter()
+        .find_map(|event| match event {
+            ExecEvent::Batch(batch) => Some(batch),
+            ExecEvent::Columns(_) | ExecEvent::Notice(_) | ExecEvent::Done { .. } => None,
+        })
+        .unwrap();
+    assert_eq!(
+        Value::from_array(batch.column(0).as_ref(), 0, LogicalType::Int)
+            .unwrap()
+            .to_string(),
+        "42"
+    );
+}
+
+async fn wait_for_waitfor(observer: &dyn Connection, spid: u32) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let rows = tables(observer, &format!("SELECT COUNT(*) FROM sys.dm_exec_requests WHERE session_id = {spid} AND command = 'WAITFOR'")).await;
+            if rows[0].1[0][0] == "1" { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.expect("the dedicated session never entered WAITFOR");
+}
 
 fn params(database: &str) -> Option<ConnectParams> {
     let Ok(addr) = std::env::var("SPELAION_TEST_MSSQL") else {

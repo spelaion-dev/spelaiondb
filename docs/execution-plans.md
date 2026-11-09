@@ -1,6 +1,6 @@
 # Execution plans
 
-In a PostgreSQL, MySQL or MariaDB query tab, choose **Explain query** in the action column, editor menu or
+In a PostgreSQL, MySQL, MariaDB or SQL Server query tab, choose **Explain query** in the action column, editor menu or
 command palette. The selected text, or the statement under the cursor, is planned on that
 tab's existing session. Temporary tables, search paths and the current transaction are
 preserved. Parameters use the same value dialog as an ordinary query.
@@ -23,6 +23,7 @@ What runs on each engine:
 | PostgreSQL | `EXPLAIN (FORMAT JSON, VERBOSE TRUE)` | adds `ANALYZE TRUE`, and `BUFFERS` when ticked |
 | MySQL | `EXPLAIN FORMAT=JSON` | `EXPLAIN ANALYZE FORMAT=TREE` (an operator tree as text) |
 | MariaDB | `EXPLAIN FORMAT=JSON` | `ANALYZE FORMAT=JSON` |
+| SQL Server | `SET SHOWPLAN_XML ON` | `SET STATISTICS XML ON` |
 
 BUFFERS exists only on PostgreSQL. MySQL and MariaDB share a dialect, so the ANALYZE syntax
 comes from the engine the connection was opened as. Each flavor's ANALYZE is a syntax error on
@@ -34,6 +35,24 @@ Read-only connections permit estimated read plans only. ANALYZE is refused in th
 including when a caller bypasses the disabled UI control. The policy comes from the actual
 resolved open connection. PostgreSQL's driver `read_only` flag alone is insufficient.
 
+SQL Server sends each plan SET in a separate batch on the same session as the query. The
+driver serializes the entire operation and restores the setting after errors, cancellation,
+or an abandoned request. If it cannot restore the setting, it closes that session. An already
+active SHOWPLAN or STATISTICS XML mode is left untouched and the plan request is refused.
+ANALYZE discards ordinary query results while streaming; it does not run the statement again.
+Errors after an analyzed execution may mean its effects remain in the current transaction.
+SQL Server requires SHOWPLAN and statement permissions. Some statements do not produce an
+actual XML plan, and documents containing multiple statements are currently unsupported.
+ANALYZE also refuses unexpected extra result sets (for example, a trigger returning rows),
+because their XML could impersonate a plan. The statement may already have run when refused.
+
+SQL Server's runtime rows, executions and physical reads are summed over reported threads.
+Elapsed thread times overlap in parallel, so they are shown only when a step reports a single
+serial thread; inclusive times include children, and serial self time is shown only for a
+leaf. Operators can omit runtime information; absent values remain unavailable. Sort spill
+warnings come directly from the server. Saved Showplan XML supports UTF-8 and BOM-marked
+UTF-16; saving an imported UTF-16 plan preserves its original encoding and byte order.
+
 ## Reading a plan
 
 - **Overview** shows cost, planning/execution time, comparable self work, row estimate gaps,
@@ -44,7 +63,7 @@ resolved open connection. PostgreSQL's driver `read_only` flag alone is insuffic
   headers by default.
 - **Graph** presents the same bounded node page and selectable inspector. Edges connect
   visible parents and children; a parent outside the page has a navigation link.
-- **Raw output** displays the original JSON in UTF-8 windows. **Save raw plan** writes the
+- **Raw output** displays the original plan in UTF-8 windows. **Save raw plan** writes the
   original document. Opening a saved plan creates a local viewer, never an executable SQL tab.
 
 Use the existing **Maximize results** command (`Ctrl+Alt+M`) for a larger debugger workspace.
@@ -106,24 +125,25 @@ single-table UPDATE or DELETE reports no loops; its rows and times still mark it
 ## Files and CLI
 
 The file menu and palette expose **Open saved plan**. The desktop also accepts
-`spelaion-desktop --plan path/to/plan.json` or a plan file as its first path argument.
+`spelaion-desktop --plan path/to/plan.json` (or `plan.sqlplan`) or a plan file as its first path argument.
 The CLI reads and analyzes a saved file locally, without configuration, database access or
 execution:
 
 ```sh
 spelaiondb plan path/to/plan.json --offset 0 --limit 100
 spelaiondb plan path/to/plan.json --csv path/to/plan.csv
+spelaiondb plan path/to/plan.sqlplan --offset 0 --limit 100
 ```
 
 JSON pages include `summary`, `page.nodes` and `page.nextOffset`; continue with the returned
 offset. CSV exports the full tree from the local file. Plans are recognized by their shape:
-PostgreSQL or MySQL/MariaDB JSON, or MySQL's text tree. Saving a raw MySQL ANALYZE plan writes
-a `.txt` file; every other plan is JSON.
+PostgreSQL or MySQL/MariaDB JSON, MySQL's text tree, or SQL Server Showplan XML. Saving a raw
+MySQL ANALYZE plan writes a `.txt` file, and SQL Server writes `.sqlplan`; other plans use JSON.
 
 ## MCP
 
 Existing `explain_query` JSON/TOON output and the user's format preference are preserved.
-Set `structured: true` for PostgreSQL, MySQL or MariaDB to receive the same core tree, metrics and findings:
+Set `structured: true` for PostgreSQL, MySQL, MariaDB or SQL Server to receive the same core tree, metrics and findings:
 
 ```json
 {"connection":"~/reporting","sql":"SELECT * FROM orders WHERE id=1","structured":true,"limit":50}
@@ -144,7 +164,7 @@ text windows, never database result sets. Crossing Rust types are generated from
 Internal Arrow handles from execution are released after parsing or failure. Open documents
 are retained until explicitly released; capacity errors never silently evict an active view.
 
-Limits: 8 MiB UTF-8 input, 10,000 nodes, depth 60, 100 nodes/stat groups per page, 32 KiB raw
+Limits: 8 MiB input (before and after decoding), 10,000 nodes, depth 60, 100 nodes/stat groups per page, 32 KiB raw
 windows, and 32 retained documents with a conservative 64 MiB accounting budget per store.
 MCP lowers a page's node count to fit complete JSON within 60 KB. A single oversized node
 produces a clear error; JSON is never sliced or reparsed by an adapter. File writes use a
@@ -158,7 +178,8 @@ guessing, and relation/index counts can combine homonyms whose namespaces are un
 
 Real fixtures, exact SQL and provenance are in
 [`postgres`](../crates/spelaion-core/tests/fixtures/plans/postgres/README.md),
-[`mysql`](../crates/spelaion-core/tests/fixtures/plans/mysql/README.md) and
-[`mariadb`](../crates/spelaion-core/tests/fixtures/plans/mariadb/README.md) under
-`crates/spelaion-core/tests/fixtures/plans`. SQLite, DuckDB and SQL Server can build on the
+[`mysql`](../crates/spelaion-core/tests/fixtures/plans/mysql/README.md),
+[`mariadb`](../crates/spelaion-core/tests/fixtures/plans/mariadb/README.md) and
+[`sqlserver`](../crates/spelaion-core/tests/fixtures/plans/sqlserver/README.md) under
+`crates/spelaion-core/tests/fixtures/plans`. SQLite and DuckDB can build on the
 common model in their own features. The view includes each engine's capability note.
