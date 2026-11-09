@@ -39,7 +39,7 @@ try {
   assert.match(await plan.locator(".plan-table").innerText(), /Sort/);
   await plan.locator(".plan-node-name").first().click();
   await page.screenshot({ path: join(shots, "sqlserver-spill.png") });
-  await page.locator(".connection-row").filter({ hasText: "Plan fixture (SQL Server)" }).getByTitle("New query", { exact: true }).click();
+  await page.locator(".connection-row").filter({ hasText: "Plan fixture (SQL Server)" }).locator(":scope > .label").dblclick();
   const panel = page.locator(".tab-panel:not([hidden])");
   await panel.locator(".status-connecting").waitFor({ state: "detached" });
   await panel.locator(".cm-content").click(); await page.keyboard.press("Control+A");
