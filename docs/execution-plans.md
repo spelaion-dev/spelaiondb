@@ -1,6 +1,6 @@
 # Execution plans
 
-In a PostgreSQL, MySQL, MariaDB or SQL Server query tab, choose **Explain query** in the action column, editor menu or
+In a PostgreSQL, MySQL, MariaDB, SQL Server, SQLite or DuckDB query tab, choose **Explain query** in the action column, editor menu or
 command palette. The selected text, or the statement under the cursor, is planned on that
 tab's existing session. Temporary tables, search paths and the current transaction are
 preserved. Parameters use the same value dialog as an ordinary query.
@@ -24,12 +24,17 @@ What runs on each engine:
 | MySQL | `EXPLAIN FORMAT=JSON` | `EXPLAIN ANALYZE FORMAT=TREE` (an operator tree as text) |
 | MariaDB | `EXPLAIN FORMAT=JSON` | `ANALYZE FORMAT=JSON` |
 | SQL Server | `SET SHOWPLAN_XML ON` | `SET STATISTICS XML ON` |
+| SQLite (local or on a server) | `EXPLAIN QUERY PLAN` (one row per step) | none: the toggle is disabled and the core refuses it |
+| DuckDB | `EXPLAIN (FORMAT JSON)` | `EXPLAIN (ANALYZE, FORMAT JSON)` |
 
 BUFFERS exists only on PostgreSQL. MySQL and MariaDB share a dialect, so the ANALYZE syntax
 comes from the engine the connection was opened as. Each flavor's ANALYZE is a syntax error on
 the other one: a connection that names the wrong engine is refused by the server before the
 statement runs. MySQL does not analyze every statement (a single-table UPDATE, for one); its
 `<not executable by iterator executor>` answer is reported as such, and nothing ran.
+
+SQLite has no ANALYZE that executes the query: the view says so beside the disabled toggle,
+and a request that asks for it anyway is refused before anything runs.
 
 Read-only connections permit estimated read plans only. ANALYZE is refused in the core,
 including when a caller bypasses the disabled UI control. The policy comes from the actual
@@ -122,6 +127,40 @@ unpacking and condition time, are their own. A table has no inclusive time, so o
 materialized child shows only its self time. Optimization time is the planning time. A
 single-table UPDATE or DELETE reports no loops; its rows and times still mark it as measured.
 
+## SQLite
+
+`EXPLAIN QUERY PLAN` answers with one row per step (`id`, `parent`, `detail`). The core keeps
+the rows as a JSON array, the one `sqlite3 -json` prints, and builds the tree under one
+**Query plan** root, in preorder, refusing a row whose parent does not come before it. Steps
+are in nested-loop order: each SCAN or SEARCH visits one table inside the steps before it, so
+joins are not steps of their own. The step's text is kept whole as its engine detail; from it
+come the step type (scan, rowid search, index or covering index search, automatic index,
+temporary B-tree, subquery, materialization, compound query…), the table (named by its alias,
+as SQLite writes it; the `SCAN TABLE t AS a` form of SQLite before 3.36 too), the index and the
+condition it is searched by. A SCAN without an index is a sequential scan; a temporary B-tree
+for ORDER BY counts as a sort. Text this model does not know becomes the step type as written.
+SQLite reports no costs, row estimates or timings, so every metric is unavailable and there are
+no findings.
+
+SQLite on a server (ADR-018) gets the same plan: its `sqlite3` shell starts with
+`.explain off`, so `EXPLAIN QUERY PLAN` comes back as rows in quote mode, not as the shell's
+drawing. A saved copy of that drawing (`QUERY PLAN` / `|--SCAN o`) opens as the same tree.
+
+## DuckDB
+
+`EXPLAIN (FORMAT JSON)` is an operator tree: each operator's name (`HASH_JOIN`, `SEQ_SCAN`…),
+its estimated cardinality, its table (`catalog.schema.table`), filters, join type, the
+conditions of a hash join, and its other details (projections, aggregates, groups, order…) as
+the engine detail. DuckDB reports no costs. `EXPLAIN (ANALYZE, FORMAT JSON)` executes the
+statement (with the same warning and confirmations as on the other engines) and returns the
+profiler's tree: the core drops the operators DuckDB wraps around the explained query
+(`RESULT_COLLECTOR`, `EXPLAIN_ANALYZE`) and adds each operator's output rows and its own time.
+Operators run once per query in parallel pipelines, so loops are 1, rows per loop are the
+operator's rows, and an operator's time is CPU time summed over threads; a step's cumulative
+time is its own time plus its children's. A scan's rows filtered are the rows it read minus
+the rows it kept. Execution is DuckDB's total query time. The profiler output of older DuckDB
+versions (`operator_type`, `operator_timing`, `operator_cardinality`, `latency`) opens too.
+
 ## Files and CLI
 
 The file menu and palette expose **Open saved plan**. The desktop also accepts
@@ -137,13 +176,14 @@ spelaiondb plan path/to/plan.sqlplan --offset 0 --limit 100
 
 JSON pages include `summary`, `page.nodes` and `page.nextOffset`; continue with the returned
 offset. CSV exports the full tree from the local file. Plans are recognized by their shape:
-PostgreSQL or MySQL/MariaDB JSON, MySQL's text tree, or SQL Server Showplan XML. Saving a raw
-MySQL ANALYZE plan writes a `.txt` file, and SQL Server writes `.sqlplan`; other plans use JSON.
+PostgreSQL, MySQL/MariaDB, SQLite or DuckDB JSON, MySQL's text tree, the `sqlite3` shell's
+`QUERY PLAN` tree, or SQL Server Showplan XML. Saving a raw MySQL ANALYZE plan or an opened
+`QUERY PLAN` tree writes a `.txt` file, and SQL Server writes `.sqlplan`; other plans use JSON.
 
 ## MCP
 
 Existing `explain_query` JSON/TOON output and the user's format preference are preserved.
-Set `structured: true` for PostgreSQL, MySQL, MariaDB or SQL Server to receive the same core tree, metrics and findings:
+Set `structured: true` for PostgreSQL, MySQL, MariaDB, SQL Server, SQLite or DuckDB to receive the same core tree, metrics and findings:
 
 ```json
 {"connection":"~/reporting","sql":"SELECT * FROM orders WHERE id=1","structured":true,"limit":50}
@@ -155,6 +195,8 @@ Continue with `connection`, `plan_id: summary.id`, and `offset: page.nextOffset`
 is checked on every call. Queries and cache reads/releases are audited, with cache accesses
 explicitly identified as executing no database statement. MCP ANALYZE remains unavailable;
 the existing classifier, native read-only transaction, timeout and row limits still apply.
+A SQLite plan has a row per step: the agent's row limit bounds query results, not those rows,
+which are read whole up to the 10,000-node bound.
 
 ## Ownership and bounds
 
@@ -181,5 +223,6 @@ Real fixtures, exact SQL and provenance are in
 [`mysql`](../crates/spelaion-core/tests/fixtures/plans/mysql/README.md),
 [`mariadb`](../crates/spelaion-core/tests/fixtures/plans/mariadb/README.md) and
 [`sqlserver`](../crates/spelaion-core/tests/fixtures/plans/sqlserver/README.md) under
-`crates/spelaion-core/tests/fixtures/plans`. SQLite and DuckDB can build on the
-common model in their own features. The view includes each engine's capability note.
+`crates/spelaion-core/tests/fixtures/plans`. SQLite and DuckDB are tested against the real
+engines (`crates/spelaion-core/tests/plans_sqlite_duckdb.rs`; SQLite on a server with
+`SPELAION_TEST_SSH`). The view includes each engine's capability note.

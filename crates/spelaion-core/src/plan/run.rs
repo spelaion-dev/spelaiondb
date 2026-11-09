@@ -32,6 +32,17 @@ pub struct ExplainOptions {
     pub timeout_seconds: Option<u32>,
 }
 
+/// Why the ANALYZE toggle is off, so the view can say so.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum AnalyzeUnavailable {
+    /// The connection is read-only, and ANALYZE executes the query.
+    ReadOnly,
+    /// The engine has no ANALYZE that executes the query (SQLite).
+    Engine,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
@@ -39,24 +50,50 @@ pub struct PlanCapabilities {
     pub estimated: bool,
     pub analyze: bool,
     pub buffers: bool,
+    /// Set when plans are supported but ANALYZE is not available.
+    pub analyze_unavailable: Option<AnalyzeUnavailable>,
     pub note: String,
+}
+
+/// Engines whose plans the core reads, by dialect (MySQL and MariaDB share one).
+fn supported(engine: &str) -> bool {
+    matches!(
+        engine,
+        "postgres" | "mysql" | "sqlserver" | "sqlite" | "duckdb"
+    )
 }
 
 pub fn plan_capabilities(session: &Session, policy: &ExplainPolicy) -> PlanCapabilities {
     let engine = session.dialect().name();
-    let supported = matches!(engine, "postgres" | "mysql" | "sqlserver");
+    let supported = supported(engine);
     // MySQL and MariaDB share a dialect but not the ANALYZE syntax: it needs the flavor of
-    // the connection that was actually opened.
-    let analyzable = matches!(engine, "postgres" | "sqlserver") || policy.flavor.is_some();
+    // the connection that was actually opened. SQLite has no ANALYZE that runs the query.
+    let analyzable = match engine {
+        "postgres" | "duckdb" | "sqlserver" => true,
+        "mysql" => policy.flavor.is_some(),
+        _ => false,
+    };
+    let analyze_unavailable = if !supported {
+        None
+    } else if !analyzable {
+        Some(AnalyzeUnavailable::Engine)
+    } else if policy.read_only {
+        Some(AnalyzeUnavailable::ReadOnly)
+    } else {
+        None
+    };
     PlanCapabilities {
         estimated: supported,
         analyze: supported && analyzable && !policy.read_only,
         buffers: engine == "postgres" && !policy.read_only,
+        analyze_unavailable,
         note: if !supported {
             format!(
                 "Normalized execution plans are not available for {} yet.",
                 session.dialect().name()
             )
+        } else if engine == "sqlite" {
+            "SQLite plans are estimated only: EXPLAIN QUERY PLAN lists the steps without costs, row counts or timings, and SQLite has no ANALYZE that executes the query.".into()
         } else if policy.read_only {
             "Read-only mode permits estimated read plans only. ANALYZE executes the query and is refused by the read-only barrier.".into()
         } else {
@@ -134,7 +171,7 @@ fn prepare(
     policy: &ExplainPolicy,
 ) -> Result<PreparedPlan, PlanError> {
     let engine = session.dialect().name();
-    if !matches!(engine, "postgres" | "mysql" | "sqlserver") {
+    if !supported(engine) {
         return Err(PlanError::Unsupported(engine.into()));
     }
     if sql.len() > 1024 * 1024 {
@@ -167,6 +204,11 @@ fn prepare(
             "enable ANALYZE before requesting execution buffers".into(),
         ));
     }
+    if options.analyze && engine == "sqlite" {
+        return Err(PlanError::Invalid(
+            "SQLite has no ANALYZE that executes the query: its plans are estimated only".into(),
+        ));
+    }
     if options.analyze && policy.read_only {
         return Err(PlanError::Execution(
             "this connection is read-only: ANALYZE executes the query".into(),
@@ -183,6 +225,10 @@ fn prepare(
             options.buffers,
             sql.trim()
         ),
+        // SQLite answers with one row per step; its ANALYZE was refused above.
+        ("sqlite", _, _) => format!("EXPLAIN QUERY PLAN\n{}", sql.trim()),
+        ("duckdb", false, _) => format!("EXPLAIN (FORMAT JSON)\n{}", sql.trim()),
+        ("duckdb", true, _) => format!("EXPLAIN (ANALYZE, FORMAT JSON)\n{}", sql.trim()),
         ("mysql", false, _) => format!("EXPLAIN FORMAT=JSON\n{}", sql.trim()),
         // Each flavor's ANALYZE is a syntax error on the other one, so a connection opened
         // as the wrong engine is refused by the server before the statement runs.
@@ -273,22 +319,111 @@ pub async fn explain_read_only(
         ExplainOptions::default(),
         &ExplainPolicy::new(true, Safeguards::default()),
     )?;
-    let read = if session.dialect().name() == "sqlserver" {
+    let engine = session.dialect().name();
+    // SQL Server's read barrier turns EXPLAIN into SHOWPLAN_XML, under which nothing runs.
+    let read = if engine == "sqlserver" {
         format!("EXPLAIN {}", prepared.sql())
     } else {
         prepared.sql().to_owned()
     };
+    // The caller's row limit is for query results; a plan is read whole, within the
+    // plan's own bounds. Its time limit applies as given.
+    let limits = crate::ReadLimits {
+        max_rows: max_result_rows(engine),
+        timeout: limits.timeout,
+    };
     let result = session
-        .run_read_only(&read, limits)
+        .run_read_only(&read, &limits)
         .await
         .map_err(|e| PlanError::Execution(e.to_string()))?;
-    if result.truncated || result.rows.len() != 1 || result.columns.len() != 1 {
-        return Err(PlanError::Invalid(
-            "EXPLAIN did not return one complete plan cell".into(),
-        ));
+    if result.truncated {
+        return Err(match engine {
+            "sqlite" => PlanError::Limit("tree has more than 10,000 nodes".into()),
+            _ => PlanError::Invalid("EXPLAIN did not return one complete plan cell".into()),
+        });
     }
-    let raw = result.rows[0][0].to_string();
+    let raw = raw_plan(
+        engine,
+        result.columns.len(),
+        result.rows.len(),
+        |row, column| result.rows.get(row)?.get(column).cloned(),
+    )?;
     parse_plan_from(&raw, "Execution plan", flavor)
+}
+
+/// The most rows an engine's EXPLAIN answers with: SQLite writes one row per step.
+fn max_result_rows(engine: &str) -> usize {
+    match engine {
+        "sqlite" => MAX_PLAN_NODES - 1,
+        _ => 1,
+    }
+}
+
+/// The engine's plan document from the EXPLAIN result: one JSON cell (PostgreSQL, MySQL,
+/// MariaDB), DuckDB's `explain_key`/`explain_value` row, or SQLite's rows as JSON.
+fn raw_plan(
+    engine: &str,
+    columns: usize,
+    rows: usize,
+    cell: impl Fn(usize, usize) -> Option<spelaion_driver_api::Value>,
+) -> Result<String, PlanError> {
+    use spelaion_driver_api::Value;
+    let text = |row, column| {
+        cell(row, column)
+            .map(|v| v.to_string())
+            .ok_or_else(|| PlanError::Invalid("missing EXPLAIN output".into()))
+    };
+    match engine {
+        "sqlite" => {
+            if columns != 4 {
+                return Err(PlanError::Invalid(
+                    "EXPLAIN QUERY PLAN did not return id, parent, notused and detail".into(),
+                ));
+            }
+            if rows > max_result_rows(engine) {
+                return Err(PlanError::Limit("tree has more than 10,000 nodes".into()));
+            }
+            let integer = |row, column| match cell(row, column) {
+                Some(Value::Int(n)) => Ok(n),
+                Some(other) => other.to_string().trim().parse::<i64>().map_err(|_| {
+                    PlanError::Invalid("EXPLAIN QUERY PLAN ids must be integers".into())
+                }),
+                None => Err(PlanError::Invalid("missing EXPLAIN output".into())),
+            };
+            let rows = (0..rows)
+                .map(|row| {
+                    Ok(super::sqlite::Row {
+                        id: integer(row, 0)?,
+                        parent: integer(row, 1)?,
+                        detail: text(row, 3)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, PlanError>>()?;
+            Ok(super::sqlite::raw_json(&rows))
+        }
+        "duckdb" => {
+            if rows != 1 || columns != 2 {
+                return Err(PlanError::Invalid(
+                    "EXPLAIN did not return one DuckDB plan".into(),
+                ));
+            }
+            let key = text(0, 0)?;
+            if !matches!(key.as_str(), "physical_plan" | "analyzed_plan") {
+                return Err(PlanError::Invalid(format!(
+                    "EXPLAIN returned {key}, not DuckDB's physical plan"
+                )));
+            }
+            text(0, 1)
+        }
+        _ => {
+            if rows != 1 || columns != 1 {
+                return Err(PlanError::Invalid(
+                    "EXPLAIN did not return one complete JSON cell".into(),
+                ));
+            }
+            text(0, 0)
+        }
+    }
 }
 
 /// An explicit user run on the source session: serialized, cancellable, transactional and
@@ -333,14 +468,21 @@ pub async fn explain(
         store: session.results().clone(),
         ids: Vec::new(),
     };
+    let engine = session.dialect().name();
+    let max_rows = max_result_rows(engine);
     let mut error = None;
     let mut cancelled = false;
     while let Some(event) = events.next().await {
         match &event {
             CoreEvent::ResultStarted { result, .. } => results.ids.push(*result),
-            CoreEvent::Rows { total_rows, .. } if *total_rows > 1 => {
-                error = Some("EXPLAIN returned more than one JSON row".into());
-                let _ = session.cancel().await;
+            CoreEvent::Rows { total_rows, .. } if *total_rows > max_rows => {
+                if error.is_none() {
+                    error = Some(match engine {
+                        "sqlite" => "EXPLAIN QUERY PLAN returned more than 10,000 steps".into(),
+                        _ => "EXPLAIN returned more than one row".into(),
+                    });
+                    let _ = session.cancel().await;
+                }
             }
             CoreEvent::StatementFailed { error: failure, .. } => {
                 error = Some(failure.message.clone())
@@ -380,15 +522,12 @@ pub async fn explain(
             .get(results.ids[0])
             .ok_or_else(|| PlanError::Invalid("EXPLAIN result was released".into()))?;
         let result = result.read().expect("result lock poisoned");
-        if result.rows() != 1 || result.schema().columns.len() != 1 {
-            return Err(PlanError::Invalid(
-                "EXPLAIN did not return one plan cell".into(),
-            ));
-        }
-        let raw = result
-            .value_at(0, 0)
-            .ok_or_else(|| PlanError::Invalid("missing EXPLAIN plan".into()))?
-            .to_string();
+        let raw = raw_plan(
+            engine,
+            result.schema().columns.len(),
+            result.rows(),
+            |row, column| result.value_at(row, column),
+        )?;
         parse_plan_from(&raw, "Execution plan", policy.flavor)
     })()
     .map_err(|error| {
