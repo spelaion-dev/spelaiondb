@@ -163,7 +163,7 @@ fn seconds(value: Option<&Json>) -> Option<u32> {
 /// `test` and `prod` are ours; a custom one that asks before running or changing anything is
 /// Production (never looser than it was), otherwise its id or name decides, and Development
 /// when nothing does. DBeaver's colors are not imported.
-fn closest_type(dbeaver: &str, definition: Option<&Json>) -> String {
+pub(crate) fn closest_type(dbeaver: &str, definition: Option<&Json>) -> String {
     let id = crate::types::type_id(dbeaver);
     if id.is_empty() {
         return String::new();

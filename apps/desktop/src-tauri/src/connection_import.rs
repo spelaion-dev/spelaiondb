@@ -1,17 +1,20 @@
-//! Importing connections from other clients (DBeaver, DataGrip…): a thin adapter. The core
-//! (`spelaion-config`'s `import.rs` and each client's reader) reads the client's files, finds
-//! the connections that already exist and writes the drafts; these commands carry the user's
-//! choices to it and its answers back. No secret ever travels to the UI: the files are read
-//! again on import, so passwords stay in Rust on their way to the keychain.
+//! Importing connections from other clients (DBeaver, DataGrip, TablePlus…): a thin adapter.
+//! The core (`spelaion-config`'s `import.rs` and each client's reader) reads the client's files,
+//! finds the connections that already exist and writes the drafts; these commands carry the
+//! user's choices to it and its answers back. No secret ever travels to the UI: the files are
+//! read again on import, so passwords stay in Rust on their way to the keychain. The one secret
+//! that comes from the UI is the password of an encrypted export (TablePlus's), typed by the
+//! user and passed on to the core with each read.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_config::{
-    Config, DuplicateAction, ImportClient, ImportedConnection, Source, SystemBackend, TargetFolder,
-    TrustStore,
+    Config, DuplicateAction, ImportClient, ImportedConnection, Source, SystemBackend,
+    TableplusError, TargetFolder, TrustStore,
 };
+use spelaion_driver_api::Secret;
 use tauri::State;
 
 use crate::dto::TlsModeItem;
@@ -21,6 +24,7 @@ fn client_named(name: &str) -> CmdResult<ImportClient> {
     match name {
         "dbeaver" => Ok(ImportClient::Dbeaver),
         "datagrip" => Ok(ImportClient::Datagrip),
+        "tableplus" => Ok(ImportClient::Tableplus),
         other => Err(format!("unknown client: {other}")),
     }
 }
@@ -33,12 +37,52 @@ fn jetbrains_dir() -> Option<PathBuf> {
         .or_else(spelaion_config::jetbrains_dir)
 }
 
-/// Reads a client's connections from the folder chosen, or from where the client keeps them
-/// on this system.
+/// Where TablePlus keeps its connections: `SPELAION_TABLEPLUS_DIR` when set (the smoke test
+/// points it at the repository's fixtures, never the user's), otherwise the system's.
+fn tableplus_dir() -> Option<PathBuf> {
+    std::env::var_os("SPELAION_TABLEPLUS_DIR")
+        .map(PathBuf::from)
+        .or_else(spelaion_config::tableplus_dir)
+}
+
+/// Why a client's files could not be read.
+enum ReadError {
+    /// An encrypted export without its password (`wrong`: the one given does not open it).
+    Password {
+        wrong: bool,
+    },
+    Other(String),
+}
+
+impl From<&str> for ReadError {
+    fn from(message: &str) -> Self {
+        ReadError::Other(message.to_string())
+    }
+}
+
+impl From<ReadError> for String {
+    fn from(error: ReadError) -> Self {
+        match error {
+            ReadError::Password { wrong: false } => "the file needs its export password".into(),
+            ReadError::Password { wrong: true } => {
+                "the password does not open the export file".into()
+            }
+            ReadError::Other(message) => message,
+        }
+    }
+}
+
+fn other(e: impl std::fmt::Display) -> ReadError {
+    ReadError::Other(e.to_string())
+}
+
+/// Reads a client's connections from the folder or file chosen, or from where the client keeps
+/// them on this system. `password` opens an encrypted export.
 fn read(
     client: ImportClient,
     path: Option<String>,
-) -> CmdResult<(PathBuf, Vec<ImportedConnection>)> {
+    password: Option<Secret>,
+) -> Result<(PathBuf, Vec<ImportedConnection>), ReadError> {
     let chosen = path.filter(|p| !p.trim().is_empty()).map(PathBuf::from);
     match client {
         ImportClient::Dbeaver => {
@@ -47,7 +91,7 @@ fn read(
                 None => spelaion_config::dbeaver_workspace()
                     .ok_or("DBeaver's folder is unknown on this system")?,
             };
-            let found = spelaion_config::read_dbeaver(&dir).map_err(|e| e.to_string())?;
+            let found = spelaion_config::read_dbeaver(&dir).map_err(other)?;
             Ok((dir, found))
         }
         ImportClient::Datagrip => {
@@ -60,8 +104,20 @@ fn read(
                 Some(dir) => dir,
                 None => jetbrains.ok_or("JetBrains' folder is unknown on this system")?,
             };
+            let found = spelaion_config::read_datagrip(&dir, &config_dirs).map_err(other)?;
+            Ok((dir, found))
+        }
+        ImportClient::Tableplus => {
+            let dir = match chosen {
+                Some(dir) => dir,
+                None => tableplus_dir().ok_or("TablePlus's folder is unknown on this system")?,
+            };
             let found =
-                spelaion_config::read_datagrip(&dir, &config_dirs).map_err(|e| e.to_string())?;
+                spelaion_config::read_tableplus(&dir, password.as_ref()).map_err(|e| match e {
+                    TableplusError::NeedsPassword(_) => ReadError::Password { wrong: false },
+                    TableplusError::WrongPassword(_) => ReadError::Password { wrong: true },
+                    TableplusError::NotFound(_) | TableplusError::Unreadable { .. } => other(e),
+                })?;
             Ok((dir, found))
         }
     }
@@ -70,10 +126,12 @@ fn read(
 async fn read_blocking(
     client: ImportClient,
     path: Option<String>,
-) -> CmdResult<(PathBuf, Vec<ImportedConnection>)> {
-    tokio::task::spawn_blocking(move || read(client, path))
+    password: Option<String>,
+) -> Result<(PathBuf, Vec<ImportedConnection>), ReadError> {
+    let password = password.filter(|p| !p.is_empty()).map(Secret::new);
+    tokio::task::spawn_blocking(move || read(client, path, password))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(other)?
 }
 
 /// A connection that already exists, by name.
@@ -163,26 +221,48 @@ fn item(config: &Config, c: &ImportedConnection) -> ImportItem {
 
 /// What a scan found, and where.
 #[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportScan {
     pub dir: String,
     pub connections: Vec<ImportItem>,
+    /// The file is an encrypted export: its password is needed to read it.
+    pub needs_password: bool,
+    /// The password given does not open it.
+    pub wrong_password: bool,
 }
 
-/// The connections of a client under a folder (where the client keeps them if none), with the
-/// connections each would duplicate; without secrets.
+/// The connections of a client under a folder or in a file (where the client keeps them if
+/// none), with the connections each would duplicate; without secrets. An encrypted export
+/// (TablePlus's) is opened with `file_password`; without it, or with a wrong one, the scan
+/// says so instead of failing.
 #[tauri::command]
 #[specta::specta]
 pub async fn scan_connections(
     client: String,
     path: Option<String>,
+    file_password: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<ImportScan> {
     let client = client_named(&client)?;
-    let (dir, found) = read_blocking(client, path).await?;
+    let shown = path.clone().unwrap_or_default();
+    let (dir, found) = match read_blocking(client, path, file_password).await {
+        Ok(read) => read,
+        Err(ReadError::Password { wrong }) => {
+            return Ok(ImportScan {
+                dir: shown,
+                connections: Vec::new(),
+                needs_password: true,
+                wrong_password: wrong,
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
     let config = state.config.read().await;
     Ok(ImportScan {
         dir: dir.display().to_string(),
         connections: found.iter().map(|c| item(&config, c)).collect(),
+        needs_password: false,
+        wrong_password: false,
     })
 }
 
@@ -236,6 +316,7 @@ pub struct ImportReport {
 pub async fn import_connections(
     client: String,
     path: Option<String>,
+    file_password: Option<String>,
     choices: Vec<ImportChoice>,
     target: ImportTarget,
     state: State<'_, AppState>,
@@ -257,7 +338,7 @@ pub async fn import_connections(
             })
     };
     let save_passwords = target.save_passwords;
-    let (_, found) = read_blocking(client, path).await?;
+    let (_, found) = read_blocking(client, path, file_password).await?;
     let mut chosen: Vec<ImportedConnection> = found
         .into_iter()
         .filter(|c| action_of(&c.id).is_some_and(|a| a != DuplicateAction::Skip))
