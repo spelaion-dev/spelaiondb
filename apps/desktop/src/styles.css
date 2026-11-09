@@ -3095,6 +3095,14 @@ select {
   font-weight: 600;
 }
 .conn-import-options p { flex-basis: 100%; margin: 0; }
+.conn-import-unlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.conn-import-unlock p {
+  margin: 0;
+}
 .conn-import-folder {
   display: flex;
   align-items: center;

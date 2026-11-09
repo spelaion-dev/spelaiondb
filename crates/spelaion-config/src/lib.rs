@@ -28,6 +28,7 @@ mod name_pattern;
 mod relocate;
 mod resolve;
 mod secrets;
+mod tableplus;
 mod trust;
 mod tunnel_draft;
 mod types;
@@ -82,6 +83,7 @@ pub use resolve::{
 pub use secrets::{
     KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef, SystemBackend,
 };
+pub use tableplus::{TableplusError, read_tableplus, tableplus_dir};
 pub use trust::{
     CONNECTION_TYPES_ITEM, FieldChange, ItemChange, KNOWN_HOSTS_ITEM, TrustStore, connection_item,
     team_known_hosts, tunnel_item,

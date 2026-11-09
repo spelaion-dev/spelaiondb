@@ -65,7 +65,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `dbeaver.rs` reads DBeaver's connections and saved credentials (passwords only as `Secret`,
   to the keychain; its connection types map to the closest built-in type); `datagrip.rs` reads
   DataGrip's (and other JetBrains IDEs') XML data sources and SSH configurations, tested against
-  files a real DataGrip wrote (`tests/fixtures/datagrip`).
+  files a real DataGrip wrote (`tests/fixtures/datagrip`); `tableplus.rs` reads TablePlus's own
+  `Connections.plist` (never its encrypted `.tpmaster` store) and its exported file, encrypted in
+  RNCryptor's format with the password the user typed (the export's passwords only as `Secret`;
+  the SSH key it carries is never kept), tested against files a real TablePlus wrote
+  (`tests/fixtures/tableplus`).
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no

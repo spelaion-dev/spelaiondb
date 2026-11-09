@@ -1,0 +1,710 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <array>
+    <dict>
+      <key>ID</key>
+      <string>CD5FB5DF-E0B5-406B-8688-62EB3F62E0B1</string>
+      <key>GroupID</key>
+      <string>CF32AB78-98C9-4E65-9803-C4668AB2120D</string>
+      <key>ConnectionName</key>
+      <string>Orders PG</string>
+      <key>Enviroment</key>
+      <string>production</string>
+      <key>Driver</key>
+      <string>PostgreSQL</string>
+      <key>DriverVersion</key>
+      <integer>0</integer>
+      <key>DatabaseHost</key>
+      <string>127.0.0.1</string>
+      <key>DatabasePort</key>
+      <string>15432</string>
+      <key>DatabaseUser</key>
+      <string>spelaion</string>
+      <key>DatabaseName</key>
+      <string>spelaion</string>
+      <key>tLSMode</key>
+      <integer>4</integer>
+      <key>tLSNegotiation</key>
+      <integer>0</integer>
+      <key>TlsKeyPaths</key>
+      <array>
+        <string>C:\Users\tester\spelaiondb\testing\docker\keys\client.key</string>
+        <string>C:\Users\tester\spelaiondb\testing\docker\keys\client.crt</string>
+        <string>C:\Users\tester\spelaiondb\testing\docker\keys\ca.crt</string>
+      </array>
+      <key>isOverSSH</key>
+      <integer>0</integer>
+      <key>ServerAddress</key>
+      <string />
+      <key>ServerPort</key>
+      <string />
+      <key>ServerUser</key>
+      <string />
+      <key>LimitRowsReturned</key>
+      <integer>0</integer>
+      <key>LimitQueryRowsReturned</key>
+      <integer>0</integer>
+      <key>QuerySyntax</key>
+      <integer>0</integer>
+      <key>isUsePrivateKey</key>
+      <integer>0</integer>
+      <key>ServerPrivateKeyName</key>
+      <string />
+      <key>DatabaseUserRole</key>
+      <string />
+      <key>Authenticator</key>
+      <string />
+      <key>DatabaseWarehouse</key>
+      <string />
+      <key>RecentlySchema</key>
+      <array />
+      <key>HideFunctionSection</key>
+      <integer>0</integer>
+      <key>ShowSequenceSection</key>
+      <integer>0</integer>
+      <key>LazyLoadSchemaItems</key>
+      <integer>0</integer>
+      <key>UseSock</key>
+      <integer>0</integer>
+      <key>DatabaseEncoding</key>
+      <string />
+      <key>ServerNameIndication</key>
+      <string />
+      <key>Favorites</key>
+      <dict />
+      <key>RecentUsedBackupGzip</key>
+      <integer>0</integer>
+      <key>RecentUsedBackupDriverName</key>
+      <string />
+      <key>RecentUsedBackupOptions</key>
+      <array />
+      <key>RecentUsedRestoreOptions</key>
+      <array />
+      <key>statusColor</key>
+      <string>#6D0000</string>
+      <key>statusColorIndex</key>
+      <integer>4</integer>
+      <key>StartupCommands</key>
+      <string>SET search_path TO app, public;</string>
+      <key>StartupBashScript</key>
+      <string />
+      <key>RecentAIChatHistory</key>
+      <string />
+      <key>ShowSystemSchemas</key>
+      <integer>0</integer>
+      <key>OtherOptions</key>
+      <array />
+      <key>ItemGroups</key>
+      <array />
+      <key>SectionStates</key>
+      <dict />
+      <key>DatabaseType</key>
+      <string />
+      <key>DatabasePasswordMode</key>
+      <integer>0</integer>
+      <key>ServerPasswordMode</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>ID</key>
+      <string>6311A784-6127-4401-B6BE-27F49F011786</string>
+      <key>GroupID</key>
+      <string />
+      <key>ConnectionName</key>
+      <string>Shop MySQL</string>
+      <key>Enviroment</key>
+      <string>development</string>
+      <key>Driver</key>
+      <string>MySQL</string>
+      <key>DriverVersion</key>
+      <integer>0</integer>
+      <key>DatabaseHost</key>
+      <string>127.0.0.1</string>
+      <key>DatabasePort</key>
+      <string>13306</string>
+      <key>DatabaseUser</key>
+      <string>spelaion</string>
+      <key>DatabaseName</key>
+      <string>spelaion</string>
+      <key>tLSMode</key>
+      <integer>2</integer>
+      <key>tLSNegotiation</key>
+      <integer>0</integer>
+      <key>TlsKeyPaths</key>
+      <array />
+      <key>isOverSSH</key>
+      <integer>0</integer>
+      <key>ServerAddress</key>
+      <string />
+      <key>ServerPort</key>
+      <string />
+      <key>ServerUser</key>
+      <string />
+      <key>LimitRowsReturned</key>
+      <integer>0</integer>
+      <key>LimitQueryRowsReturned</key>
+      <integer>0</integer>
+      <key>QuerySyntax</key>
+      <integer>0</integer>
+      <key>isUsePrivateKey</key>
+      <integer>0</integer>
+      <key>ServerPrivateKeyName</key>
+      <string />
+      <key>DatabaseUserRole</key>
+      <string />
+      <key>Authenticator</key>
+      <string />
+      <key>DatabaseWarehouse</key>
+      <string />
+      <key>RecentlySchema</key>
+      <array />
+      <key>HideFunctionSection</key>
+      <integer>0</integer>
+      <key>ShowSequenceSection</key>
+      <integer>0</integer>
+      <key>LazyLoadSchemaItems</key>
+      <integer>0</integer>
+      <key>UseSock</key>
+      <integer>0</integer>
+      <key>DatabaseEncoding</key>
+      <string />
+      <key>ServerNameIndication</key>
+      <string />
+      <key>Favorites</key>
+      <dict />
+      <key>RecentUsedBackupGzip</key>
+      <integer>0</integer>
+      <key>RecentUsedBackupDriverName</key>
+      <string />
+      <key>RecentUsedBackupOptions</key>
+      <array />
+      <key>RecentUsedRestoreOptions</key>
+      <array />
+      <key>statusColor</key>
+      <string>#007F3D</string>
+      <key>statusColorIndex</key>
+      <integer>0</integer>
+      <key>StartupCommands</key>
+      <string />
+      <key>StartupBashScript</key>
+      <string />
+      <key>RecentAIChatHistory</key>
+      <string />
+      <key>ShowSystemSchemas</key>
+      <integer>0</integer>
+      <key>OtherOptions</key>
+      <array />
+      <key>ItemGroups</key>
+      <array />
+      <key>SectionStates</key>
+      <dict />
+      <key>DatabaseType</key>
+      <string />
+      <key>DatabasePasswordMode</key>
+      <integer>0</integer>
+      <key>ServerPasswordMode</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>ID</key>
+      <string>F84022C4-055C-46F9-8F6A-BFE759792628</string>
+      <key>GroupID</key>
+      <string />
+      <key>ConnectionName</key>
+      <string>Shop MariaDB</string>
+      <key>Enviroment</key>
+      <string>staging</string>
+      <key>Driver</key>
+      <string>MariaDB</string>
+      <key>DriverVersion</key>
+      <integer>0</integer>
+      <key>DatabaseHost</key>
+      <string>127.0.0.1</string>
+      <key>DatabasePort</key>
+      <string>13307</string>
+      <key>DatabaseUser</key>
+      <string>root</string>
+      <key>DatabaseName</key>
+      <string>spelaion</string>
+      <key>tLSMode</key>
+      <integer>2</integer>
+      <key>tLSNegotiation</key>
+      <integer>0</integer>
+      <key>TlsKeyPaths</key>
+      <array />
+      <key>isOverSSH</key>
+      <integer>0</integer>
+      <key>ServerAddress</key>
+      <string />
+      <key>ServerPort</key>
+      <string />
+      <key>ServerUser</key>
+      <string />
+      <key>LimitRowsReturned</key>
+      <integer>0</integer>
+      <key>LimitQueryRowsReturned</key>
+      <integer>0</integer>
+      <key>QuerySyntax</key>
+      <integer>0</integer>
+      <key>isUsePrivateKey</key>
+      <integer>0</integer>
+      <key>ServerPrivateKeyName</key>
+      <string />
+      <key>DatabaseUserRole</key>
+      <string />
+      <key>Authenticator</key>
+      <string />
+      <key>DatabaseWarehouse</key>
+      <string />
+      <key>RecentlySchema</key>
+      <array />
+      <key>HideFunctionSection</key>
+      <integer>0</integer>
+      <key>ShowSequenceSection</key>
+      <integer>0</integer>
+      <key>LazyLoadSchemaItems</key>
+      <integer>0</integer>
+      <key>UseSock</key>
+      <integer>0</integer>
+      <key>DatabaseEncoding</key>
+      <string />
+      <key>ServerNameIndication</key>
+      <string />
+      <key>Favorites</key>
+      <dict />
+      <key>RecentUsedBackupGzip</key>
+      <integer>0</integer>
+      <key>RecentUsedBackupDriverName</key>
+      <string />
+      <key>RecentUsedBackupOptions</key>
+      <array />
+      <key>RecentUsedRestoreOptions</key>
+      <array />
+      <key>statusColor</key>
+      <string>#007F3D</string>
+      <key>statusColorIndex</key>
+      <integer>0</integer>
+      <key>StartupCommands</key>
+      <string />
+      <key>StartupBashScript</key>
+      <string />
+      <key>RecentAIChatHistory</key>
+      <string />
+      <key>ShowSystemSchemas</key>
+      <integer>0</integer>
+      <key>OtherOptions</key>
+      <array />
+      <key>ItemGroups</key>
+      <array />
+      <key>SectionStates</key>
+      <dict />
+      <key>DatabaseType</key>
+      <string />
+      <key>DatabasePasswordMode</key>
+      <integer>0</integer>
+      <key>ServerPasswordMode</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>ID</key>
+      <string>1FFD90A8-A3A6-43C8-AC6A-B4C1A09CB2B6</string>
+      <key>GroupID</key>
+      <string />
+      <key>ConnectionName</key>
+      <string>Reports MSSQL</string>
+      <key>Enviroment</key>
+      <string>testing</string>
+      <key>Driver</key>
+      <string>MicrosoftSQLServer</string>
+      <key>DriverVersion</key>
+      <integer>0</integer>
+      <key>DatabaseHost</key>
+      <string>127.0.0.1</string>
+      <key>DatabasePort</key>
+      <string>11433</string>
+      <key>DatabaseUser</key>
+      <string>sa</string>
+      <key>DatabaseName</key>
+      <string>master</string>
+      <key>tLSMode</key>
+      <integer>0</integer>
+      <key>tLSNegotiation</key>
+      <integer>0</integer>
+      <key>TlsKeyPaths</key>
+      <array />
+      <key>isOverSSH</key>
+      <integer>0</integer>
+      <key>ServerAddress</key>
+      <string />
+      <key>ServerPort</key>
+      <string />
+      <key>ServerUser</key>
+      <string />
+      <key>LimitRowsReturned</key>
+      <integer>0</integer>
+      <key>LimitQueryRowsReturned</key>
+      <integer>0</integer>
+      <key>QuerySyntax</key>
+      <integer>0</integer>
+      <key>isUsePrivateKey</key>
+      <integer>0</integer>
+      <key>ServerPrivateKeyName</key>
+      <string />
+      <key>DatabaseUserRole</key>
+      <string>Default</string>
+      <key>Authenticator</key>
+      <string />
+      <key>DatabaseWarehouse</key>
+      <string />
+      <key>RecentlySchema</key>
+      <array />
+      <key>HideFunctionSection</key>
+      <integer>0</integer>
+      <key>ShowSequenceSection</key>
+      <integer>0</integer>
+      <key>LazyLoadSchemaItems</key>
+      <integer>0</integer>
+      <key>UseSock</key>
+      <integer>0</integer>
+      <key>DatabaseEncoding</key>
+      <string />
+      <key>ServerNameIndication</key>
+      <string />
+      <key>Favorites</key>
+      <dict />
+      <key>RecentUsedBackupGzip</key>
+      <integer>0</integer>
+      <key>RecentUsedBackupDriverName</key>
+      <string />
+      <key>RecentUsedBackupOptions</key>
+      <array />
+      <key>RecentUsedRestoreOptions</key>
+      <array />
+      <key>statusColor</key>
+      <string>#007F3D</string>
+      <key>statusColorIndex</key>
+      <integer>0</integer>
+      <key>StartupCommands</key>
+      <string />
+      <key>StartupBashScript</key>
+      <string />
+      <key>RecentAIChatHistory</key>
+      <string />
+      <key>ShowSystemSchemas</key>
+      <integer>0</integer>
+      <key>OtherOptions</key>
+      <array />
+      <key>ItemGroups</key>
+      <array />
+      <key>SectionStates</key>
+      <dict />
+      <key>DatabaseType</key>
+      <string />
+      <key>DatabasePasswordMode</key>
+      <integer>0</integer>
+      <key>ServerPasswordMode</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>ID</key>
+      <string>C03F70DF-9835-47A1-87C9-8983C23ADC03</string>
+      <key>GroupID</key>
+      <string />
+      <key>ConnectionName</key>
+      <string>Local file</string>
+      <key>Enviroment</key>
+      <string>local</string>
+      <key>Driver</key>
+      <string>SQLite</string>
+      <key>DriverVersion</key>
+      <integer>0</integer>
+      <key>DatabaseHost</key>
+      <string>C:\data\local.db</string>
+      <key>DatabasePort</key>
+      <string>5432</string>
+      <key>DatabaseUser</key>
+      <string />
+      <key>DatabaseName</key>
+      <string>local.db</string>
+      <key>tLSMode</key>
+      <integer>0</integer>
+      <key>tLSNegotiation</key>
+      <integer>0</integer>
+      <key>TlsKeyPaths</key>
+      <array />
+      <key>isOverSSH</key>
+      <integer>0</integer>
+      <key>ServerAddress</key>
+      <string />
+      <key>ServerPort</key>
+      <string />
+      <key>ServerUser</key>
+      <string />
+      <key>LimitRowsReturned</key>
+      <integer>0</integer>
+      <key>LimitQueryRowsReturned</key>
+      <integer>0</integer>
+      <key>QuerySyntax</key>
+      <integer>0</integer>
+      <key>isUsePrivateKey</key>
+      <integer>0</integer>
+      <key>ServerPrivateKeyName</key>
+      <string />
+      <key>DatabaseUserRole</key>
+      <string />
+      <key>Authenticator</key>
+      <string />
+      <key>DatabaseWarehouse</key>
+      <string />
+      <key>RecentlySchema</key>
+      <array />
+      <key>HideFunctionSection</key>
+      <integer>0</integer>
+      <key>ShowSequenceSection</key>
+      <integer>0</integer>
+      <key>LazyLoadSchemaItems</key>
+      <integer>0</integer>
+      <key>UseSock</key>
+      <integer>0</integer>
+      <key>DatabaseEncoding</key>
+      <string />
+      <key>ServerNameIndication</key>
+      <string />
+      <key>Favorites</key>
+      <dict />
+      <key>RecentUsedBackupGzip</key>
+      <integer>0</integer>
+      <key>RecentUsedBackupDriverName</key>
+      <string />
+      <key>RecentUsedBackupOptions</key>
+      <array />
+      <key>RecentUsedRestoreOptions</key>
+      <array />
+      <key>statusColor</key>
+      <string>#007F3D</string>
+      <key>statusColorIndex</key>
+      <integer>0</integer>
+      <key>StartupCommands</key>
+      <string />
+      <key>StartupBashScript</key>
+      <string />
+      <key>RecentAIChatHistory</key>
+      <string />
+      <key>ShowSystemSchemas</key>
+      <integer>0</integer>
+      <key>OtherOptions</key>
+      <array />
+      <key>ItemGroups</key>
+      <array />
+      <key>SectionStates</key>
+      <dict />
+      <key>DatabaseType</key>
+      <string />
+      <key>DatabasePasswordMode</key>
+      <integer>0</integer>
+      <key>ServerPasswordMode</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>ID</key>
+      <string>3CA1AD92-3401-4C82-885D-898111C303BB</string>
+      <key>GroupID</key>
+      <string />
+      <key>ConnectionName</key>
+      <string>Analytics</string>
+      <key>Enviroment</key>
+      <string>local</string>
+      <key>Driver</key>
+      <string>DuckDB</string>
+      <key>DriverVersion</key>
+      <integer>0</integer>
+      <key>DatabaseHost</key>
+      <string>C:\data\sales.duckdb</string>
+      <key>DatabasePort</key>
+      <string>5432</string>
+      <key>DatabaseUser</key>
+      <string />
+      <key>DatabaseName</key>
+      <string>sales.duckdb</string>
+      <key>tLSMode</key>
+      <integer>0</integer>
+      <key>tLSNegotiation</key>
+      <integer>0</integer>
+      <key>TlsKeyPaths</key>
+      <array />
+      <key>isOverSSH</key>
+      <integer>0</integer>
+      <key>ServerAddress</key>
+      <string />
+      <key>ServerPort</key>
+      <string />
+      <key>ServerUser</key>
+      <string />
+      <key>LimitRowsReturned</key>
+      <integer>0</integer>
+      <key>LimitQueryRowsReturned</key>
+      <integer>0</integer>
+      <key>QuerySyntax</key>
+      <integer>0</integer>
+      <key>isUsePrivateKey</key>
+      <integer>0</integer>
+      <key>ServerPrivateKeyName</key>
+      <string />
+      <key>DatabaseUserRole</key>
+      <string />
+      <key>Authenticator</key>
+      <string />
+      <key>DatabaseWarehouse</key>
+      <string />
+      <key>RecentlySchema</key>
+      <array />
+      <key>HideFunctionSection</key>
+      <integer>0</integer>
+      <key>ShowSequenceSection</key>
+      <integer>0</integer>
+      <key>LazyLoadSchemaItems</key>
+      <integer>0</integer>
+      <key>UseSock</key>
+      <integer>0</integer>
+      <key>DatabaseEncoding</key>
+      <string />
+      <key>ServerNameIndication</key>
+      <string />
+      <key>Favorites</key>
+      <dict />
+      <key>RecentUsedBackupGzip</key>
+      <integer>0</integer>
+      <key>RecentUsedBackupDriverName</key>
+      <string />
+      <key>RecentUsedBackupOptions</key>
+      <array />
+      <key>RecentUsedRestoreOptions</key>
+      <array />
+      <key>statusColor</key>
+      <string>#007F3D</string>
+      <key>statusColorIndex</key>
+      <integer>0</integer>
+      <key>StartupCommands</key>
+      <string />
+      <key>StartupBashScript</key>
+      <string />
+      <key>RecentAIChatHistory</key>
+      <string />
+      <key>ShowSystemSchemas</key>
+      <integer>0</integer>
+      <key>OtherOptions</key>
+      <array />
+      <key>ItemGroups</key>
+      <array />
+      <key>SectionStates</key>
+      <dict />
+      <key>DatabaseType</key>
+      <string>read_only</string>
+      <key>DatabasePasswordMode</key>
+      <integer>0</integer>
+      <key>ServerPasswordMode</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>ID</key>
+      <string>43A37E76-8D12-4A57-B47E-0EA4AE6B3305</string>
+      <key>GroupID</key>
+      <string />
+      <key>ConnectionName</key>
+      <string>PG via bastion</string>
+      <key>Enviroment</key>
+      <string>local</string>
+      <key>Driver</key>
+      <string>PostgreSQL</string>
+      <key>DriverVersion</key>
+      <integer>0</integer>
+      <key>DatabaseHost</key>
+      <string>postgres</string>
+      <key>DatabasePort</key>
+      <string>5432</string>
+      <key>DatabaseUser</key>
+      <string>spelaion</string>
+      <key>DatabaseName</key>
+      <string>spelaion</string>
+      <key>tLSMode</key>
+      <integer>0</integer>
+      <key>tLSNegotiation</key>
+      <integer>0</integer>
+      <key>TlsKeyPaths</key>
+      <array />
+      <key>isOverSSH</key>
+      <integer>1</integer>
+      <key>ServerAddress</key>
+      <string>127.0.0.1</string>
+      <key>ServerPort</key>
+      <string>2221</string>
+      <key>ServerUser</key>
+      <string>spelaion</string>
+      <key>LimitRowsReturned</key>
+      <integer>0</integer>
+      <key>LimitQueryRowsReturned</key>
+      <integer>0</integer>
+      <key>QuerySyntax</key>
+      <integer>0</integer>
+      <key>isUsePrivateKey</key>
+      <integer>1</integer>
+      <key>ServerPrivateKeyName</key>
+      <string>id_ed25519</string>
+      <key>DatabaseUserRole</key>
+      <string />
+      <key>Authenticator</key>
+      <string />
+      <key>DatabaseWarehouse</key>
+      <string />
+      <key>RecentlySchema</key>
+      <array />
+      <key>HideFunctionSection</key>
+      <integer>0</integer>
+      <key>ShowSequenceSection</key>
+      <integer>0</integer>
+      <key>LazyLoadSchemaItems</key>
+      <integer>0</integer>
+      <key>UseSock</key>
+      <integer>0</integer>
+      <key>DatabaseEncoding</key>
+      <string />
+      <key>ServerNameIndication</key>
+      <string />
+      <key>Favorites</key>
+      <dict />
+      <key>RecentUsedBackupGzip</key>
+      <integer>0</integer>
+      <key>RecentUsedBackupDriverName</key>
+      <string />
+      <key>RecentUsedBackupOptions</key>
+      <array />
+      <key>RecentUsedRestoreOptions</key>
+      <array />
+      <key>statusColor</key>
+      <string>#007F3D</string>
+      <key>statusColorIndex</key>
+      <integer>0</integer>
+      <key>StartupCommands</key>
+      <string />
+      <key>StartupBashScript</key>
+      <string />
+      <key>RecentAIChatHistory</key>
+      <string />
+      <key>ShowSystemSchemas</key>
+      <integer>0</integer>
+      <key>OtherOptions</key>
+      <array />
+      <key>ItemGroups</key>
+      <array />
+      <key>SectionStates</key>
+      <dict />
+      <key>DatabaseType</key>
+      <string />
+      <key>DatabasePasswordMode</key>
+      <integer>0</integer>
+      <key>ServerPasswordMode</key>
+      <integer>0</integer>
+    </dict>
+  </array>
+</plist>

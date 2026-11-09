@@ -439,10 +439,12 @@ export const commands = {
 	/**  Reads a connection URL (`postgres://…`, `mysql://…`, `jdbc:…`, `sqlite:…`) for the form. */
 	parseConnectionUrl: (url: string) => typedError<UrlFields_Serialize, string>(__TAURI_INVOKE("parse_connection_url", { url })),
 	/**
-	 *  The connections of a client under a folder (where the client keeps them if none), with the
-	 *  connections each would duplicate; without secrets.
+	 *  The connections of a client under a folder or in a file (where the client keeps them if
+	 *  none), with the connections each would duplicate; without secrets. An encrypted export
+	 *  (TablePlus's) is opened with `file_password`; without it, or with a wrong one, the scan
+	 *  says so instead of failing.
 	 */
-	scanConnections: (client: string, path: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path })),
+	scanConnections: (client: string, path: string | null, filePassword: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword })),
 	/**  The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015). */
 	kubeContexts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form, personal, editing })),
 	/**  The namespaces of the chosen context. */
@@ -457,7 +459,7 @@ export const commands = {
 	 *  the client saved go to the keychain (those it keeps in the system keychain are only read
 	 *  now), otherwise they are asked when connecting.
 	 */
-	importConnections: (client: string, path: string | null, choices: ImportChoice[], target: ImportTarget) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, choices, target })),
+	importConnections: (client: string, path: string | null, filePassword: string | null, choices: ImportChoice[], target: ImportTarget) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, filePassword, choices, target })),
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
 	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
 	trustWorkspace: (root: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace", { root })),
@@ -1835,12 +1837,20 @@ export type ImportScan = ImportScan_Serialize | ImportScan_Deserialize;
 export type ImportScan_Deserialize = {
 	dir: string,
 	connections: ImportItem_Deserialize[],
+	/**  The file is an encrypted export: its password is needed to read it. */
+	needsPassword: boolean,
+	/**  The password given does not open it. */
+	wrongPassword: boolean,
 };
 
 /**  What a scan found, and where. */
 export type ImportScan_Serialize = {
 	dir: string,
 	connections: ImportItem_Serialize[],
+	/**  The file is an encrypted export: its password is needed to read it. */
+	needsPassword: boolean,
+	/**  The password given does not open it. */
+	wrongPassword: boolean,
 };
 
 /**  One connection that could not be imported, and why. */

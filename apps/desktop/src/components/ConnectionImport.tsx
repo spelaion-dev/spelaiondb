@@ -1,22 +1,26 @@
-// Import connections from another client (DBeaver, DataGrip…): the connections in its files
-// (or a folder the user picks), chosen one by one, with what each one would duplicate and what
-// would not be imported. The core reads the client's files and decides what is a duplicate;
-// passwords never come to the UI, and only go to the keychain when the user asks for it.
+// Import connections from another client (DBeaver, DataGrip, TablePlus…): the connections in its files
+// (or a folder the user picks, or a client's export file), chosen one by one, with what each one
+// would duplicate and what would not be imported. The core reads the client's files and decides
+// what is a duplicate; passwords never come to the UI, and only go to the keychain when the user
+// asks for it. The one secret typed here is an encrypted export's password (TablePlus's), which
+// goes to the core with each read and is never stored.
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ImportItem, type ImportReport } from "../api";
-import { chooseFolder } from "../dialogs";
+import { chooseFolder, chooseOpenFile } from "../dialogs";
 import { EngineIcon } from "./EngineIcon";
 import { useApp } from "../store";
 import { refreshConnections } from "./Sidebar";
 
 /** The clients connections can be imported from (the core's `ImportClient`). */
-export type ImportClientId = "dbeaver" | "datagrip";
+export type ImportClientId = "dbeaver" | "datagrip" | "tableplus";
 
-export const IMPORT_CLIENTS: { id: ImportClientId; label: string }[] = [
+export const IMPORT_CLIENTS: { id: ImportClientId; label: string; exportExtensions?: string[] }[] = [
   { id: "dbeaver", label: "DBeaver" },
   { id: "datagrip", label: "DataGrip" },
+  // TablePlus also exports its connections to a file (encrypted with a password).
+  { id: "tableplus", label: "TablePlus", exportExtensions: ["tableplusconnection"] },
 ];
 
 declare global {
@@ -31,10 +35,15 @@ type DuplicateChoice = "import" | "replace";
 
 export function ConnectionImport(props: { client: ImportClientId; onBack(): void; onDone(): void }) {
   const { t } = useTranslation("connections");
-  const client = IMPORT_CLIENTS.find((c) => c.id === props.client)?.label ?? props.client;
+  const clientInfo = IMPORT_CLIENTS.find((c) => c.id === props.client);
+  const client = clientInfo?.label ?? props.client;
   const hasWorkspace = useApp((s) => Boolean(s.workspace?.workspace));
   const [dir, setDir] = useState<string | null>(window.__spelaionImportDirs?.[props.client] ?? null);
   const [found, setFound] = useState<{ dir: string; items: ImportItem[] } | null>(null);
+  // An encrypted export: the password typed, the one the last read used, and whether it failed.
+  const [typedPassword, setTypedPassword] = useState("");
+  const [filePassword, setFilePassword] = useState("");
+  const [locked, setLocked] = useState<{ dir: string; wrong: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [duplicates, setDuplicates] = useState<Record<string, DuplicateChoice>>({});
@@ -51,16 +60,28 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
     let active = true;
     setError(null);
     setFound(null);
-    call(commands.scanConnections(props.client, dir))
+    call(commands.scanConnections(props.client, dir, filePassword || null))
       .then((scan) => {
         if (!active) return;
+        if (scan.needsPassword) {
+          setLocked({ dir: scan.dir, wrong: scan.wrongPassword });
+          return;
+        }
+        setLocked(null);
         setFound({ dir: scan.dir, items: scan.connections });
       })
       .catch((e: unknown) => active && setError(e instanceof Error ? e.message : String(e)));
     return () => {
       active = false;
     };
-  }, [dir, props.client]);
+  }, [dir, props.client, filePassword]);
+
+  function choose(picked: string) {
+    setTypedPassword("");
+    setFilePassword("");
+    setLocked(null);
+    setDir(picked);
+  }
 
   // What is chosen at first: every connection that can be imported and does not exist yet
   // where the connections go. Duplicates start left out, so nothing is replaced unasked.
@@ -71,7 +92,15 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
 
   async function pickFolder() {
     const picked = await chooseFolder(t("importer.chooseFolder"));
-    if (picked) setDir(picked);
+    if (picked) choose(picked);
+  }
+
+  async function pickExport() {
+    const picked = await chooseOpenFile(t("importer.chooseFile"), [
+      { name: t("importer.exportFiles", { client }), extensions: clientInfo?.exportExtensions ?? [] },
+      { name: t("importer.allFiles"), extensions: ["*"] },
+    ]);
+    if (picked) choose(picked);
   }
 
   async function runImport() {
@@ -83,7 +112,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
         .filter((c) => chosen.has(c.id))
         .map((c) => ({ id: c.id, action: existingOf(c) ? (duplicates[c.id] ?? "import") : "import" }));
       const outcome = await call(
-        commands.importConnections(props.client, dir, choices, {
+        commands.importConnections(props.client, dir, filePassword || null, choices, {
           personal,
           savePasswords,
           folder,
@@ -163,13 +192,46 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
           {found?.dir ?? dir ?? t("importer.defaultFolder", { client })}
         </code>
         <button onClick={() => void pickFolder()}>{t("importer.chooseFolder")}</button>
+        {clientInfo?.exportExtensions && <button onClick={() => void pickExport()}>{t("importer.chooseFile")}</button>}
       </div>
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
-      {!found && !error && <p className="muted">{t("importer.reading", { client })}</p>}
+      {locked && (
+        <form
+          className="conn-import-unlock"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setFilePassword(typedPassword);
+          }}
+        >
+          <p className="small">{t("importer.encrypted", { client })}</p>
+          <label className="modal-field">
+            <span>{t("importer.filePassword")}</span>
+            <input
+              type="password"
+              value={typedPassword}
+              onChange={(e) => setTypedPassword(e.target.value)}
+              autoComplete="off"
+              autoFocus
+              aria-invalid={locked.wrong}
+            />
+          </label>
+          {locked.wrong && (
+            <p className="error small" role="alert">
+              {t("importer.wrongPassword")}
+            </p>
+          )}
+          <div>
+            <button type="submit" className="primary" disabled={typedPassword.length === 0}>
+              {t("importer.openFile")}
+            </button>
+          </div>
+        </form>
+      )}
+      {!found && !error && !locked && <p className="muted">{t("importer.reading", { client })}</p>}
       {found && found.items.length === 0 && <p className="muted">{t("importer.none")}</p>}
       {found && found.items.length > 0 && (
         <>

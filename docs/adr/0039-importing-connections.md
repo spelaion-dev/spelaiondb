@@ -62,6 +62,11 @@ own KeePass database.
   read-only, keyed by what the other client wrote, only called from an import the user started,
   and it reads only on macOS (other applications' Secret Service items carry their own
   attributes, which the store does not search by; on Windows no JetBrains IDE writes there).
+- A client's export file may be encrypted with a password the user chose (TablePlus's,
+  `tableplus.rs`): the dialog asks for it, and the desktop commands take it as `file_password`
+  and hand it to the reader with each read, as a `Secret`; it is never stored. A wrong password
+  is refused before anything is decrypted. This is the one secret that travels from the UI, never
+  to it.
 - DBeaver's import changes behaviour: a clash is no longer renamed silently but left out until
   the user picks what to do with it.
 

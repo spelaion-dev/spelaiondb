@@ -29,6 +29,8 @@ const clientsHome = join(userDir, "ai-clients");
 const datagripFixtures = join(root, "crates/spelaion-config/tests/fixtures/datagrip");
 const datagripJetbrains = join(datagripFixtures, "JetBrains");
 const datagripProject = join(datagripFixtures, "DataGripProjects", "default");
+// Files a real TablePlus wrote (crates/spelaion-config/tests/fixtures/tableplus/README.md).
+const tableplusFixtures = join(root, "crates/spelaion-config/tests/fixtures/tableplus");
 const fakeCli = join(userDir, process.platform === "win32" ? "spelaiondb.exe" : "spelaiondb");
 writeFileSync(fakeCli, "");
 const editSmokeComplete = Symbol("edit smoke complete");
@@ -63,6 +65,8 @@ function startApp() {
       SPELAION_CLI: fakeCli,
       // The DataGrip import reads the repository's fixtures, never the user's JetBrains files.
       SPELAION_JETBRAINS_DIR: datagripJetbrains,
+      // The TablePlus import reads the repository's fixtures, never the user's TablePlus folder.
+      SPELAION_TABLEPLUS_DIR: join(tableplusFixtures, "com.tinyapp.TablePlus"),
     },
     windowsHide: true,
     stdio: "inherit",
@@ -4880,6 +4884,60 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const replaced = readFileSync(join(userDir, "connections", "docker-pg-via-dbeaver.toml"), "utf8");
     assert.match(replaced, /name = "Docker PG via DBeaver"/);
     assert.match(replaced, /ca\.crt/);
+    await page.evaluate(() => delete window.__spelaionImportDirs);
+  }
+
+  step("import from TablePlus: its encrypted export (a real one, the repository's fixture), opened with its password");
+  {
+    const exportFile = join(tableplusFixtures, "export.tableplusconnection");
+    await page.evaluate((file) => (window.__spelaionImportDirs = { tableplus: file }), exportFile);
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    await page.getByRole("button", { name: "Import from TablePlus…" }).click();
+    const importer = page.locator(".modal.wizard");
+    await importer.getByRole("heading", { name: "Import from TablePlus" }).waitFor();
+    // The export is encrypted: nothing is listed until its password opens it.
+    await importer.getByText("This file is encrypted.", { exact: false }).waitFor();
+    const password = importer.getByLabel("Export password");
+    await password.fill("not-the-password");
+    await importer.getByRole("button", { name: "Open", exact: true }).click();
+    await importer.getByRole("alert").filter({ hasText: "That password does not open this file." }).waitFor();
+    await shot("sdb-51-import-tableplus-password");
+    await password.fill("fixture-export-pw");
+    await importer.getByRole("button", { name: "Open", exact: true }).click();
+    const list = importer.getByRole("list", { name: "TablePlus connections" });
+    const item = (name) => list.getByRole("listitem").filter({ has: page.getByRole("checkbox", { name, exact: true }) });
+    await importer.getByRole("radio", { name: "Personal", exact: true }).check();
+    // Its production tag is our Production type; the password it exported comes along.
+    await item("Orders PG").locator(".conn-import-detail").filter({ hasText: "TLS verify-ca · prod · password saved" }).waitFor();
+    await item("PG via bastion").getByText("SSH spelaion@127.0.0.1:2221").waitFor();
+    // The SSH key's contents are never kept: the preview says what to do instead.
+    await item("PG via bastion").getByText("setting is not imported", { exact: false }).click();
+    await item("PG via bastion").getByText("carries the private key itself", { exact: false }).waitFor();
+    const names = ["Orders PG", "Shop MySQL", "Shop MariaDB", "Reports MSSQL", "Local file", "Analytics", "PG via bastion"];
+    // The DataGrip import above made connections with these names: import them as copies.
+    for (const name of names) {
+      const duplicate = importer.getByRole("combobox", { name: `What to do with ${name}` });
+      if (await duplicate.count()) await duplicate.selectOption({ label: "Import it as a copy" });
+      else await list.getByRole("checkbox", { name, exact: true }).check();
+    }
+    await importer.getByRole("textbox", { name: "Put them in" }).fill("TablePlus");
+    await importer.getByRole("checkbox", { name: "Store the passwords TablePlus saved in the system keychain" }).uncheck();
+    await shot("sdb-51-import-tableplus");
+    await importer.getByRole("button", { name: "Import 7 connections" }).click();
+    await importer.getByRole("status").filter({ hasText: "Imported 7 connections." }).waitFor();
+    await shot("sdb-51-import-tableplus-done");
+    await importer.getByRole("button", { name: "Done", exact: true }).click();
+    await importer.waitFor({ state: "detached" });
+    // Its "Prod" group is a folder inside the one chosen.
+    const files = readdirSync(join(userDir, "connections", "tableplus"), { recursive: true }).filter((f) => String(f).endsWith(".toml"));
+    assert.equal(files.length, 7, files.join(", "));
+    const orders = files.find((f) => String(f).startsWith("prod"));
+    assert.ok(orders, files.join(", "));
+    const text = readFileSync(join(userDir, "connections", "tableplus", String(orders)), "utf8");
+    assert.match(text, /env = "prod"/);
+    for (const file of files) {
+      assert.doesNotMatch(readFileSync(join(userDir, "connections", "tableplus", String(file)), "utf8"), /fake-password-123/);
+    }
     await page.evaluate(() => delete window.__spelaionImportDirs);
   }
 

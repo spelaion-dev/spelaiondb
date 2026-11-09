@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <array>
+    <dict>
+      <key>ID</key>
+      <string>CF32AB78-98C9-4E65-9803-C4668AB2120D</string>
+      <key>GroupID</key>
+      <string />
+      <key>Name</key>
+      <string>Prod</string>
+      <key>IsExpanded</key>
+      <integer>1</integer>
+    </dict>
+  </array>
+</plist>
