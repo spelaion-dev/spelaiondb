@@ -1,4 +1,4 @@
-// Import connections from another client (DBeaver, DataGrip, TablePlus, MySQL Workbench, pgAdmin…): the connections in its files
+// Import connections from another client (DBeaver, DataGrip, TablePlus, MySQL Workbench, pgAdmin, Beekeeper Studio…): the connections in its files
 // (or a folder the user picks, or a client's export file), chosen one by one, with what each one
 // would duplicate and what would not be imported. The core reads the client's files and decides
 // what is a duplicate; passwords never come to the UI, and only go to the keychain when the user
@@ -14,7 +14,7 @@ import { useApp } from "../store";
 import { refreshConnections } from "./Sidebar";
 
 /** The clients connections can be imported from (the core's `ImportClient`). */
-export type ImportClientId = "dbeaver" | "datagrip" | "tableplus" | "heidisql" | "workbench" | "pgadmin";
+export type ImportClientId = "dbeaver" | "datagrip" | "tableplus" | "heidisql" | "workbench" | "pgadmin" | "beekeeper";
 
 export const IMPORT_CLIENTS: { id: ImportClientId; label: string; exportExtensions?: string[] }[] = [
   { id: "dbeaver", label: "DBeaver" },
@@ -25,6 +25,8 @@ export const IMPORT_CLIENTS: { id: ImportClientId; label: string; exportExtensio
   { id: "workbench", label: "MySQL Workbench" },
   // pgAdmin's own database (pgadmin4.db), or the file its Import/Export Servers tool writes.
   { id: "pgadmin", label: "pgAdmin", exportExtensions: ["json"] },
+  // Beekeeper Studio's own database (app.db, with its .key), in its data folder.
+  { id: "beekeeper", label: "Beekeeper Studio" },
 ];
 
 declare global {

@@ -78,6 +78,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   are asked) or its own `pgadmin4.db`, opened read-only and never selecting its encrypted password
   columns; a database row is turned into the export's shape so one mapping serves both. Tested
   against files a real pgAdmin wrote (`tests/fixtures/pgadmin`).
+  `beekeeper.rs` reads Beekeeper Studio's `app.db` read-only (connections, nested folders);
+  its database and SSH passwords are decrypted the way Beekeeper does, with the install's
+  `.key` (opened with the key built into Beekeeper), and only ever held as `Secret`s; other
+  saved secrets are listed, never decrypted. Tested against tables a real Beekeeper wrote
+  (`tests/fixtures/beekeeper`).
   ADR-030: `copy.rs` duplicates a connection next to the original (its keychain password copied
   inside the core, a team copy only from a trusted original) and reads pasted clipboard text as
   untrusted input (a personal connection through the form's checks, password always asked, no
