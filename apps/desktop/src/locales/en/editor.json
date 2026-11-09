@@ -873,6 +873,7 @@
     "executesHelp": "Runs the query on the current session.",
     "estimatedHelp": "Plans the query without executing it.",
     "readOnlyHelp": "Read-only mode permits estimated read plans only.",
+    "noAnalyzeHelp": "This engine has no ANALYZE: its plans list the steps without running the query.",
     "stats": {
       "operations": "Operations",
       "relations": "Relations",

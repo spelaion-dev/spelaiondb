@@ -873,6 +873,7 @@
     "executesHelp": "Ejecuta la consulta en la sesión actual.",
     "estimatedHelp": "Planifica la consulta sin ejecutarla.",
     "readOnlyHelp": "Solo lectura permite planes estimados de consultas de lectura.",
+    "noAnalyzeHelp": "Este motor no tiene ANALYZE: sus planes muestran los pasos sin ejecutar la consulta.",
     "stats": {
       "operations": "Operaciones",
       "relations": "Relaciones",

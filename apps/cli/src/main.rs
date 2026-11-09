@@ -29,7 +29,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Opens a saved PostgreSQL, MySQL, MariaDB or SQL Server execution plan
+    /// Opens a saved PostgreSQL, MySQL, MariaDB, SQL Server, SQLite or DuckDB execution plan
     /// locally, without connecting or executing SQL.
     Plan {
         path: PathBuf,

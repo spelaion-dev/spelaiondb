@@ -1,5 +1,5 @@
-// Real native visual-plan regression, synthetic PG, MySQL and MariaDB databases, private
-// profile/CDP and captures.
+// Real native visual-plan regression, synthetic PG, MySQL and MariaDB databases, SQLite and
+// DuckDB files created in the private profile, private profile/CDP and captures.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -55,6 +55,12 @@ function sql(text, db = database) {
 mkdirSync(shots, { recursive: true }); mkdirSync(join(profile, "connections"));
 for (const [id, readOnly] of [["plan-fixture", false], ["readonly-plan", true]]) writeFileSync(join(profile, "connections", `${id}.toml`), `schema_version=1\nname="${readOnly ? "Read-only plan" : "Plan fixture (PostgreSQL)"}"\nengine="postgres"\nenv="dev"\nhost="127.0.0.1"\nport=15432\ndatabase="${database}"\nuser="spelaion"\npassword={secret="env:SPELAION_PLAN_PASSWORD"}\nread_only=${readOnly}\n[session]\nschema="plan_fixture"\nsetup="SET search_path TO plan_fixture, public; SELECT * FROM plan_fixture.missing_setup_relation;"\nignore_setup_errors=true\n[tls]\nmode="require"\n`);
 for (const server of mysqlServers) writeFileSync(join(profile, "connections", `plan-${server.engine}.toml`), `schema_version=1\nname="${server.name}"\nengine="${server.engine}"\nenv="dev"\nhost="127.0.0.1"\nport=${server.port}\ndatabase="${mysqlDatabase}"\nuser="spelaion"\npassword={secret="env:SPELAION_PLAN_PASSWORD"}\n[tls]\nmode="require"\n`);
+// SQLite and DuckDB files live in the profile; the app's own command creates them empty.
+const fileEngines = [
+  { engine: "sqlite", name: "Plan fixture (SQLite)", path: join(profile, "plan49.db") },
+  { engine: "duckdb", name: "Plan fixture (DuckDB)", path: join(profile, "plan49.duckdb") },
+];
+for (const file of fileEngines) writeFileSync(join(profile, "connections", `plan-${file.engine}.toml`), `schema_version=1\nname="${file.name}"\nengine="${file.engine}"\nenv="dev"\ndatabase='${file.path}'\n`);
 const portServer = createServer(); portServer.listen(0, "127.0.0.1"); await once(portServer, "listening");
 const port = portServer.address().port; await new Promise(done => portServer.close(done));
 const query = "SELECT c.region, count(*) AS orders,\n       sum(o.amount) AS revenue\nFROM plan_fixture.orders AS o\nJOIN plan_fixture.customers AS c\n  ON c.id = o.customer_id\nWHERE o.amount > 900\nGROUP BY c.region;";
@@ -288,12 +294,69 @@ try {
     }
   }
   assert.ok(mysqlText, "a MySQL ANALYZE plan was saved as text");
+  // SQLite and DuckDB: a join and two subqueries, through the same viewer and core tree.
+  const fileSetup = "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT);\nCREATE INDEX customers_email ON customers (email);\nCREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, total REAL NOT NULL);\nINSERT INTO customers VALUES (1, 'Ana', 'ana@example.com'), (2, 'Luis', 'luis@example.com'), (3, 'Eva', NULL);\nINSERT INTO orders VALUES (1, 1, 10), (2, 1, 250), (3, 2, 40), (4, 3, 300);\nSELECT count(*) FROM orders;";
+  const fileQuery = "SELECT c.name, o.total,\n       (SELECT count(*) FROM orders x WHERE x.customer_id = c.id) AS orders\nFROM customers c JOIN orders o ON o.customer_id = c.id\nWHERE c.id IN (SELECT customer_id FROM orders WHERE total > 100)\nORDER BY o.total DESC;";
+  for (const file of fileEngines) {
+    await page.evaluate(([engine, path]) => window.__TAURI_INTERNALS__.invoke("create_database", { engine, path }), [file.engine, file.path]);
+    await page.locator(".connection-row").filter({ hasText: file.name }).locator(":scope > .label").dblclick();
+    panel = page.locator(".tab-panel:not([hidden])"); await panel.locator(".status-connecting").waitFor({ state: "detached" });
+    await replace(panel, fileSetup); await page.keyboard.press("Control+Shift+Enter");
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await replace(panel, fileQuery);
+    await panel.locator(".editor-actions").getByRole("button", { name: "Explain query", exact: true }).click();
+    plan = panel.getByRole("region", { name: "Execution plan", exact: true });
+    await plan.getByText("Estimates only", { exact: false }).waitFor();
+    assert.equal(await plan.getByLabel("BUFFERS", { exact: true }).isDisabled(), true, `${file.engine} has no BUFFERS`);
+    await plan.getByRole("button", { name: "Tree & table", exact: true }).click();
+    await plan.locator(".plan-table tbody tr").first().waitFor();
+    const inspector = plan.locator(".plan-inspector");
+    if (file.engine === "sqlite") {
+      // SQLite has no ANALYZE: the toggle is off, and the reason is shown beside it.
+      assert.equal(await plan.getByLabel("ANALYZE", { exact: true }).isDisabled(), true);
+      await plan.getByText("This engine has no ANALYZE", { exact: false }).waitFor();
+      const table = await plan.locator(".plan-table").innerText();
+      for (const step of ["Query plan", "List subquery", "Correlated scalar subquery", "Temp B-tree"]) assert.ok(table.includes(step), `${step} in ${table}`);
+      await plan.locator(".plan-node-name").filter({ hasText: "Rowid search" }).first().click();
+      await inspector.getByRole("heading", { name: "Engine detail", exact: true }).waitFor();
+      assert.match(await inspector.innerText(), /SEARCH c USING INTEGER PRIMARY KEY/);
+      await capture("sdb-49-sqlite-tree-dark-1400.png", "dark", 1400, 900);
+      await plan.getByRole("button", { name: "Overview", exact: true }).click();
+      await plan.locator(".plan-capabilities summary").click();
+      assert.match(await plan.locator(".plan-capabilities").innerText(), /EXPLAIN QUERY PLAN/);
+      const sqliteFile = join(profile, "saved-sqlite-plan.json");
+      await page.evaluate(path => { window.__spelaionSavePath = path; }, sqliteFile);
+      await plan.getByRole("button", { name: "Save raw plan…", exact: true }).click();
+      await plan.getByRole("status").filter({ hasText: "Saved to" }).waitFor();
+      const rows = JSON.parse(readFileSync(sqliteFile, "utf8"));
+      assert.ok(rows.some(row => row.detail.startsWith("SCAN ") && Number.isInteger(row.parent)), "raw SQLite plans are EXPLAIN QUERY PLAN rows");
+      const cliSqlite = spawnSync(cli, ["plan", sqliteFile, "--limit", "100"], { encoding: "utf8", windowsHide: true });
+      assert.equal(cliSqlite.status, 0, cliSqlite.stderr); const parsed = JSON.parse(cliSqlite.stdout);
+      assert.equal(parsed.summary.engine, "sqlite"); assert.equal(parsed.summary.analyzed, false);
+    } else {
+      assert.match(await plan.locator(".plan-table").innerText(), /HASH_JOIN/);
+      await capture("sdb-49-duckdb-estimated-tree-dark-1400.png", "dark", 1400, 900);
+      await plan.getByLabel("ANALYZE", { exact: true }).check();
+      await panel.locator(".editor-actions").getByRole("button", { name: "Explain query", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Execute and analyze", exact: true }).click();
+      await plan.getByText("Actual execution", { exact: false }).waitFor();
+      await plan.getByRole("button", { name: "Tree & table", exact: true }).click();
+      await plan.locator(".plan-table tbody tr").first().waitFor();
+      await plan.locator(".plan-node-name").filter({ hasText: "HASH_JOIN" }).first().click();
+      await inspector.getByRole("heading", { name: "Hash condition", exact: true }).waitFor();
+      await capture("sdb-49-duckdb-analyze-tree-dark-1400.png", "dark", 1400, 900);
+      await plan.getByRole("button", { name: "Overview", exact: true }).click();
+      await plan.locator(".plan-capabilities summary").click();
+      assert.match(await plan.locator(".plan-capabilities").innerText(), /DuckDB/);
+      await capture("sdb-49-duckdb-analyze-overview-dark-1400.png", "dark", 1400, 900);
+    }
+  }
   await stop();
   await start(["--plan", rawFile]);
   await page.getByRole("region", { name:"Execution plan", exact:true }).getByText("Actual execution", { exact:false }).waitFor();
   assert.equal(sql("SELECT count(*) FROM plan_fixture.customers"), "1000");
   provenance.success = true;
-  console.log("Plans passed: selected-session PG, warning, tree/table, graph, raw, save/open, CSV, CLI path, readonly guard, MySQL and MariaDB estimated/ANALYZE plans and native screenshots.");
+  console.log("Plans passed: selected-session PG, warning, tree/table, graph, raw, save/open, CSV, CLI path, readonly guard, MySQL and MariaDB estimated/ANALYZE plans, SQLite and DuckDB plans and native screenshots.");
 } catch (error) { await page?.screenshot({ path: join(shots, "failure.png") }).catch(() => undefined); throw error; }
 finally {
   await stop();

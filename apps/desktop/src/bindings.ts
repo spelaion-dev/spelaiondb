@@ -8,7 +8,7 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	explainPreflight: (session: string, sql: string, options: ExplainOptions_Deserialize) => typedError<ExplainCheck, string>(__TAURI_INVOKE("explain_preflight", { session, sql, options })),
-	planCapabilities: (session: string) => typedError<PlanCapabilities, string>(__TAURI_INVOKE("plan_capabilities", { session })),
+	planCapabilities: (session: string) => typedError<PlanCapabilities_Serialize, string>(__TAURI_INVOKE("plan_capabilities", { session })),
 	explainQuery: (session: string, sql: string, options: ExplainOptions_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("explain_query", { session, sql, options, onEvent })),
 	openPlanFile: (path: string) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("open_plan_file", { path })),
 	startupPlanPath: () => __TAURI_INVOKE<string | null>("startup_plan_path"),
@@ -616,6 +616,13 @@ export const events = {
 };
 
 /* Types */
+/**  Why the ANALYZE toggle is off, so the view can say so. */
+export type AnalyzeUnavailable = 
+/**  The connection is read-only, and ANALYZE executes the query. */
+"readOnly" | 
+/**  The engine has no ANALYZE that executes the query (SQLite). */
+"engine";
+
 /**  One MCP call, with its secrets already masked by the core. */
 export type AuditEventItem = AuditEventItem_Serialize | AuditEventItem_Deserialize;
 
@@ -2316,10 +2323,23 @@ export type PastedItem = {
 	leftOut: string[],
 };
 
-export type PlanCapabilities = {
+export type PlanCapabilities = PlanCapabilities_Serialize | PlanCapabilities_Deserialize;
+
+export type PlanCapabilities_Deserialize = {
 	estimated: boolean,
 	analyze: boolean,
 	buffers: boolean,
+	/**  Set when plans are supported but ANALYZE is not available. */
+	analyzeUnavailable?: AnalyzeUnavailable | null,
+	note: string,
+};
+
+export type PlanCapabilities_Serialize = {
+	estimated: boolean,
+	analyze: boolean,
+	buffers: boolean,
+	/**  Set when plans are supported but ANALYZE is not available. */
+	analyzeUnavailable: AnalyzeUnavailable | null,
 	note: string,
 };
 
@@ -2447,7 +2467,7 @@ export type PlanPage_Serialize = {
 
 /**  How the engine wrote the original plan, so a saved copy keeps a fitting extension. */
 export type PlanRawFormat = "json" | 
-/**  MySQL's EXPLAIN ANALYZE tree. */
+/**  MySQL's EXPLAIN ANALYZE tree, or the `sqlite3` shell's `QUERY PLAN` tree. */
 "text" | "xml";
 
 export type PlanSort = "tree" | "nodeType" | "relation" | "index" | "cost" | "selfCost" | "estimatedRows" | "actualRowsPerLoop" | "actualRows" | "time" | "selfTime" | "timePerLoop" | "loops" | "buffersHit" | "buffersRead" | "rowsRemoved" | "heapFetches" | "workersPlanned" | "workersLaunched" | "temporaryRead" | "temporaryWritten" | "sortSpace" | "findings";

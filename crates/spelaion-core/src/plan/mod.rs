@@ -1,11 +1,15 @@
 //! Execution plans: bounded source documents and engine-independent analysis.
 //! Raw database rows stay in the core. Adapters receive a summary or a bounded projection.
 
+mod duckdb;
 mod mysql;
 #[cfg(test)]
 mod mysql_tests;
 mod postgres;
 mod run;
+mod sqlite;
+#[cfg(test)]
+mod sqlite_duckdb_tests;
 mod sqlserver;
 #[cfg(test)]
 mod sqlserver_tests;
@@ -16,8 +20,8 @@ mod tests;
 pub(crate) use mysql::Flavor;
 pub(crate) use run::PreparedPlan;
 pub use run::{
-    ExplainOptions, ExplainPolicy, PlanCapabilities, PlanPreflight, explain, explain_preflight,
-    explain_read_only, plan_capabilities,
+    AnalyzeUnavailable, ExplainOptions, ExplainPolicy, PlanCapabilities, PlanPreflight, explain,
+    explain_preflight, explain_read_only, plan_capabilities,
 };
 pub use store::{PlanStore, RawWindow};
 
@@ -185,7 +189,7 @@ pub struct PlanStatsPage {
 #[serde(rename_all = "camelCase")]
 pub enum PlanRawFormat {
     Json,
-    /// MySQL's EXPLAIN ANALYZE tree.
+    /// MySQL's EXPLAIN ANALYZE tree, or the `sqlite3` shell's `QUERY PLAN` tree.
     Text,
     Xml,
 }
@@ -278,7 +282,8 @@ pub struct PlanDocument {
     pub(crate) raw_utf16: Option<bool>,
 }
 
-/// Reads a PostgreSQL, MySQL, MariaDB or SQL Server plan, recognized by its shape.
+/// Reads a PostgreSQL, MySQL, MariaDB, SQL Server, SQLite or DuckDB plan, recognized by its
+/// shape.
 pub fn parse_plan(raw: &str, name: &str) -> Result<PlanDocument, PlanError> {
     parse_plan_from(raw, name, None)
 }
@@ -300,10 +305,17 @@ pub(crate) fn parse_plan_from(
     if mysql::is_tree(text) {
         return mysql::parse_tree(raw, name);
     }
+    if sqlite::is_tree(text) {
+        return sqlite::parse_tree(raw, name);
+    }
     let json: serde_json::Value =
         serde_json::from_str(text).map_err(|e| PlanError::Invalid(e.to_string()))?;
     if mysql::is_json(&json) {
         mysql::parse_json(raw, &json, name, hint)
+    } else if sqlite::is_json(&json) {
+        sqlite::parse_json(raw, &json, name)
+    } else if duckdb::is_json(&json) {
+        duckdb::parse(raw, &json, name)
     } else {
         postgres::parse(raw, &json, name)
     }
@@ -413,6 +425,86 @@ impl PlanDocument {
             .collect::<std::collections::BTreeSet<_>>()
             .len() as u32;
     }
+}
+
+impl PlanNode {
+    /// A step with only its place in the tree and its type; engines fill in the rest.
+    pub(super) fn blank(
+        id: u32,
+        parent: Option<u32>,
+        depth: u32,
+        node_type: String,
+        operation: PlanOperation,
+    ) -> Self {
+        Self {
+            id,
+            parent,
+            depth,
+            children: vec![],
+            node_type,
+            operation,
+            relation: None,
+            index: None,
+            join_type: None,
+            filter: None,
+            index_condition: None,
+            hash_condition: None,
+            sort_method: None,
+            detail: None,
+            sort_spilled: false,
+            sequential_scan: false,
+            parallel: false,
+            metrics: PlanMetrics::default(),
+            findings: vec![],
+        }
+    }
+}
+
+/// A document over `nodes` (preorder, root first) with the shared overview and findings.
+pub(super) fn document(
+    raw: &str,
+    name: &str,
+    engine: &str,
+    raw_format: PlanRawFormat,
+    nodes: Vec<PlanNode>,
+    execution_ms: Option<f64>,
+    note: &str,
+) -> PlanDocument {
+    let analyzed = execution_ms.is_some()
+        || nodes
+            .iter()
+            .any(|n| n.metrics.actual_rows.is_some() || n.metrics.self_time_ms.is_some());
+    let mut doc = PlanDocument {
+        raw: raw.to_owned(),
+        summary: PlanSummary {
+            id: 0,
+            engine: engine.into(),
+            name: name.into(),
+            raw_format,
+            analyzed,
+            buffers: false,
+            total_cost: nodes.first().and_then(|n| n.metrics.cost),
+            planning_ms: None,
+            execution_ms,
+            highest_cost: None,
+            slowest: None,
+            estimate_gap: None,
+            sequential_scans: 0,
+            sorts: 0,
+            temporary_operations: 0,
+            node_count: 0,
+            depth: 0,
+            finding_count: 0,
+            operation_types: 0,
+            relation_count: 0,
+            index_count: 0,
+            note: note.into(),
+        },
+        nodes,
+        raw_utf16: None,
+    };
+    doc.analyze();
+    doc
 }
 
 fn finite(n: f64) -> Option<f64> {
