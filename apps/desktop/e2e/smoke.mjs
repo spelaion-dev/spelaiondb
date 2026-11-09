@@ -5364,6 +5364,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   panel = await newQuery("Shop (SQLite)", "with recursive cancel_history_marker(x) as (select 1 union all select x + 1 from cancel_history_marker where x < 100000000) select x from cancel_history_marker;");
   await run(panel);
   await panel.locator(".grid-host").waitFor();
+  // Rows keep streaming in while Cancel is clicked: redrawing on every batch used to keep the
+  // window too busy to take the click (the core now thins the row counts to a few a second).
   await panel.getByRole("button", { name: "Cancel", exact: true }).click();
   await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();

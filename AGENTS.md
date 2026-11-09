@@ -134,7 +134,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
   `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
   only, stopped by a newer one or a cancel)
-  and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
+  and `cursor.rs` finds the statement under the editor's cursor. `progress.rs` thins a run's row
+  counts to a few a second for the app (a big result streams hundreds of batches a second;
+  every other event and the final count go through as they come). `table_data.rs` writes and checks
   the paged SELECT of the table data tab (the filter typed by the user cannot change it), and
   writes "filter by this value" conditions into its WHERE from the typed cell.
   `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are

@@ -939,6 +939,9 @@ export function ResultGrid({
   // ---- Find (Ctrl+F): the core searches the whole result; the grid asks for the matches of
   // the rows it shows and steps from one to the next.
   const findRun = useRef(0);
+  // The result the core holds a search for, so closing the search clears it once: this
+  // effect also runs on every row count of a streaming result, with no search open.
+  const searched = useRef<number | null>(null);
   const shownKey = visibleCols.join(",");
   useEffect(() => {
     const text = find?.text ?? "";
@@ -949,7 +952,10 @@ export function ResultGrid({
     setFindCache(null);
     if (!find || !text) {
       setFound(null);
-      void call(commands.clearFind(result.id)).catch(() => undefined);
+      if (searched.current !== null) {
+        void call(commands.clearFind(searched.current)).catch(() => undefined);
+        searched.current = null;
+      }
       return;
     }
     if (!result.complete) {
@@ -959,6 +965,7 @@ export function ResultGrid({
     setFound((current) => ({ count: current?.count ?? 0, truncated: current?.truncated ?? false, busy: true }));
     // Typing fast searches once, for the last text.
     const timer = setTimeout(() => {
+      searched.current = result.id;
       call(commands.findInResult(result.id, text, find.matchCase, visibleCols))
         .then(async (outcome) => {
           if (run !== findRun.current || !outcome) return;
