@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, InsertTarget,
-    KeepAlive, NameFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject,
-    ServerObject, TableInfo, TransactionState,
+    KeepAlive, NameFilter, ObjectInfo, ReferencingKey, Result, SchemaColumn, SchemaInfo,
+    SchemaObject, ServerObject, TableInfo, TransactionState,
 };
 use spelaion_ssh::TunnelState;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, watch};
@@ -393,6 +393,23 @@ impl Connection for Tracked {
         })))
     }
 
+    async fn execute_bound(
+        &self,
+        sql: &str,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        let busy = self.activity.begin().await;
+        let events = self.observe(self.inner.execute_bound(sql, params, opts).await)?;
+        let inner = self.inner.clone();
+        let health = self.health.clone();
+        Ok(Box::pin(events.map(move |event| {
+            let _busy = &busy;
+            observe(&*inner, &health, &event);
+            event
+        })))
+    }
+
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
         self.inner.cancel_handle()
     }
@@ -507,6 +524,11 @@ impl Connection for Tracked {
         self.observe(self.inner.procedure_call(object).await)
     }
 
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        let _busy = self.activity.begin().await;
+        self.observe(self.inner.list_columns(schema).await)
+    }
+
     async fn insert_rows(
         &self,
         target: &InsertTarget,
@@ -594,6 +616,7 @@ mod tests {
                 editable_results: false,
                 schemas: false,
                 insert_rows: false,
+                bound_params: false,
             },
             release: tokio::sync::Notify::new(),
             in_transaction: Default::default(),

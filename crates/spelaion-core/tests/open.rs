@@ -722,6 +722,22 @@ async fn sqlite_on_a_server_through_two_hops() {
         "it's\nmultiline"
     );
 
+    // The column catalog of metadata search, through the server's sqlite3 (ADR-043), and no
+    // data search there: nothing but SQL text reaches that shell, so no value can be bound.
+    let columns = conn
+        .session
+        .connection()
+        .list_columns("main")
+        .await
+        .unwrap();
+    let remote_columns: Vec<&str> = columns
+        .iter()
+        .filter(|c| c.table == "remote_t")
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(remote_columns, ["id", "note"]);
+    assert!(!conn.session.connection().capabilities().bound_params);
+
     // Editing a page of the table, in one transaction.
     let table = conn
         .session

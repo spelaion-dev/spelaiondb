@@ -24,7 +24,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
   (SQLite's in `catalog.rs`); each driver's test file checks them against its engine.
   `list_referencing_keys` is `describe_table`'s foreign keys seen from the other side: the keys
-  of every table that point to one (in each driver's `introspect.rs`).
+  of every table that point to one (in each driver's `introspect.rs`). `list_columns` is every
+  column of a schema in one catalog query (metadata search, ADR-043), and `execute_bound` runs
+  one read with text values bound to `bound_placeholder`'s placeholders (MySQL binds them to
+  user variables with a prepared `SET`, then reads with the text protocol;
+  `Capabilities::bound_params` is false for SQLite over SSH).
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
@@ -147,6 +151,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   read from the catalog again each time (the UI only names one), the values come from the
   stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
   composite, multi-level and self-referencing keys on every engine.
+  `data_search.rs` (ADR-043) searches a value in the tables the user chose: one `SELECT` per
+  table written from the catalog and the columns' types, the value always bound as a parameter
+  (`Connection::execute_bound`), each a read in the engine's read-only transaction in a session
+  of its own, bounded (rows per table, total hits) and cancellable; `tests/data_search.rs` runs
+  it on every engine, 50 tables cancelled mid-way included. Metadata search is the app's
+  (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
   the engine's read-only transaction (the export barrier) in a session of its own, sampled past

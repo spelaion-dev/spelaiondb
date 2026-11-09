@@ -23,6 +23,7 @@ import {
   togglePinned,
 } from "./tabActions";
 import { FOCUS_EXPLORER_FILTER_EVENT } from "./components/Sidebar";
+import { FOCUS_SEARCH_EVENT } from "./components/SearchPanel";
 import { openFound } from "./components/OpenObjectDialog";
 import { useImport } from "./components/ImportDialog";
 
@@ -59,7 +60,7 @@ function editorCommand(command: EditorCommand): CommandBinding["run"] {
   };
 }
 
-function toggleSection(section: "connections" | "processes") {
+function toggleSection(section: "connections" | "processes" | "search") {
   useApp.getState().setSidebarSection((current) => (current === section ? null : section));
 }
 
@@ -215,6 +216,16 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     },
   },
   "view.processes": { run: () => toggleSection("processes") },
+  // The shortcut always shows the search and focuses its box; the activity button toggles it.
+  "view.search": {
+    run: (c) => {
+      const app = useApp.getState();
+      if (c.source !== "menu" || app.sidebarSection !== "search") {
+        app.setSidebarSection("search");
+        window.dispatchEvent(new Event(FOCUS_SEARCH_EVENT));
+      } else app.setSidebarSection(null);
+    },
+  },
   "view.history": { run: () => useApp.getState().setHistoryOpen(!useApp.getState().historyOpen) },
   "view.savedQueries": { run: () => useApp.getState().setSnippetsOpen(!useApp.getState().snippetsOpen) },
   // The MCP page fills the window: leaving it shows the explorer again.

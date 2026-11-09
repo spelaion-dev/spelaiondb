@@ -179,6 +179,15 @@ pub struct ColumnInfo {
     pub comment: Option<String>,
 }
 
+/// A column of a schema's relation, as [`crate::Connection::list_columns`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaColumn {
+    pub table: String,
+    pub name: String,
+    /// Type as the engine would write it, like [`ColumnInfo::native_type`].
+    pub native_type: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexInfo {
     pub name: String,

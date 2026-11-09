@@ -20,8 +20,8 @@ use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
-    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject,
-    ServerObject, TableInfo, TransactionState,
+    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaColumn, SchemaInfo,
+    SchemaObject, ServerObject, TableInfo, TransactionState,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -110,6 +110,7 @@ impl Driver for PostgresDriver {
                 editable_results: false, // comes in v0.2
                 schemas: true,
                 insert_rows: true,
+                bound_params: true,
             },
         }))
     }
@@ -139,14 +140,15 @@ impl<'a> FromSql<'a> for Raw<'a> {
     }
 }
 
-#[async_trait]
-impl Connection for PgConnection {
-    fn capabilities(&self) -> &Capabilities {
-        &self.capabilities
-    }
-
-    async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
-        let statement = self.client.prepare(sql).await.map_err(map_error)?;
+impl PgConnection {
+    /// Streams the rows of a prepared statement, with `params` bound to it.
+    async fn stream(
+        &self,
+        sql: &str,
+        statement: tokio_postgres::Statement,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
         let types: Vec<Type> = statement
             .columns()
             .iter()
@@ -166,7 +168,7 @@ impl Connection for PgConnection {
         ));
         let rows = self
             .client
-            .query_raw(&statement, std::iter::empty::<i32>())
+            .query_raw(&statement, params.iter().map(String::as_str))
             .await
             .map_err(map_error)?;
         let batch_size = opts.batch_size.max(1);
@@ -203,6 +205,34 @@ impl Connection for PgConnection {
             yield ExecEvent::Done { rows_affected: rows.rows_affected().filter(|_| counts_rows) };
         };
         Ok(Box::pin(stream))
+    }
+}
+
+#[async_trait]
+impl Connection for PgConnection {
+    fn capabilities(&self) -> &Capabilities {
+        &self.capabilities
+    }
+
+    async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
+        let statement = self.client.prepare(sql).await.map_err(map_error)?;
+        self.stream(sql, statement, Vec::new(), opts).await
+    }
+
+    /// Every parameter is declared `text`: the SQL casts it where it needs another type.
+    async fn execute_bound(
+        &self,
+        sql: &str,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        let types = vec![Type::TEXT; params.len()];
+        let statement = self
+            .client
+            .prepare_typed(sql, &types)
+            .await
+            .map_err(map_error)?;
+        self.stream(sql, statement, params, opts).await
     }
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
@@ -292,6 +322,10 @@ impl Connection for PgConnection {
 
     async fn describe_table(&self, schema: &str, name: &str) -> Result<TableInfo> {
         introspect::describe_table(&self.client, schema, name).await
+    }
+
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        introspect::list_columns(&self.client, schema).await
     }
 
     async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {

@@ -52,3 +52,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [040](0040-charts-from-a-result.md) | Charts from a result: points prepared in the core, drawn as plain SVG | Accepted |
 | [041](0041-engines-as-plugins.md) | Engines as plugins: every driver in its own process behind the same contract, migrated one at a time; dialects and barriers stay in the core (where ours are built and checked: superseded by ADR-042) | Accepted (not implemented) |
 | [042](0042-plugin-repositories.md) | Our plugins live in their own repositories; this one keeps the contract and pins, by hash, the builds it ships and tests | Accepted (not implemented) |
+| [043](0043-searching-the-database.md) | Searching the database: names from the explorer's catalog, values bound in a read-only session | Accepted |

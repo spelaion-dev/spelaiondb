@@ -83,6 +83,7 @@ export const COMMANDS = [
   { id: "view.explorer", category: "view", label: "shell:connections", menus: ["activity"] },
   { id: "view.explorerFilter", category: "view", label: "app:commands.explorerFilter", shortcut: "Ctrl+Shift+F", scope: "global" },
   { id: "view.processes", category: "view", label: "shell:processMonitor.title", menus: ["activity"] },
+  { id: "view.search", category: "view", label: "shell:search.title", shortcut: "Ctrl+H", scope: "global", menus: ["activity"] },
   { id: "view.history", category: "view", label: "shell:queryHistory", menus: ["activity"] },
   { id: "view.savedQueries", category: "view", label: "shell:savedQueries", menus: ["activity"] },
   { id: "view.mcp", category: "view", label: "shell:mcpServer", menus: ["activity"] },

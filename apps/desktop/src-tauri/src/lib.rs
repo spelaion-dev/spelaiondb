@@ -3112,6 +3112,95 @@ async fn column_stats(
     outcome
 }
 
+/// Every column of a schema's relations, read with one catalog query on the explorer's
+/// session: metadata search keeps them with the schema (ADR-043).
+#[tauri::command]
+#[specta::specta]
+async fn list_columns(
+    session: String,
+    schema: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<SchemaColumnItem>> {
+    let open = state.session(&session).await?;
+    let columns = open
+        .session
+        .connection()
+        .list_columns(&schema)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(columns.into_iter().map(SchemaColumnItem::from).collect())
+}
+
+/// The data search's limits, for its form.
+#[tauri::command]
+#[specta::specta]
+fn data_search_limits() -> DataSearchLimitsItem {
+    let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    DataSearchLimitsItem {
+        max_tables: n(spelaion_core::MAX_SEARCH_TABLES),
+        max_rows_per_table: spelaion_core::MAX_ROWS_PER_TABLE,
+        default_rows_per_table: spelaion_core::DEFAULT_ROWS_PER_TABLE,
+        max_hits: n(spelaion_core::MAX_SEARCH_HITS),
+        max_value_chars: n(spelaion_core::MAX_SEARCH_VALUE_CHARS),
+    }
+}
+
+/// Searches a value in the chosen tables of `source`'s connection (ADR-043): the core writes
+/// one read per table with the value bound as a parameter, in a new session opened for reads
+/// only, each table inside the engine's read-only transaction. Each table's start and end go to
+/// `on_event`; `cancel_data_search` with the same `search_id` stops it.
+#[tauri::command]
+#[specta::specta]
+async fn data_search(
+    source: String,
+    search_id: u32,
+    request: DataSearchRequestItem,
+    on_event: Channel<DataSearchEventItem>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<DataSearchSummaryItem> {
+    let request = spelaion_core::DataSearchRequest::from(request);
+    // Checked before connecting: a request out of bounds never opens a session.
+    request.check().map_err(|e| e.to_string())?;
+    {
+        let tab = state.session(&source).await?;
+        if !tab.session.connection().capabilities().bound_params {
+            return Err(spelaion_core::DataSearchError::Unsupported.to_string());
+        }
+    }
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, search_id).await?;
+    let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
+    drop(tab);
+    let progress = move |event: spelaion_core::DataSearchEvent| {
+        let _ = on_event.send(DataSearchEventItem::from(event));
+    };
+    let outcome = match context {
+        Err(message) => Err(message),
+        Ok(()) => spelaion_core::data_search(&open.session, &request, &cancel, &progress)
+            .await
+            .map(DataSearchSummaryItem::from)
+            .map_err(|e| e.to_string()),
+    };
+    close_export_session(&state, search_id, open).await;
+    outcome
+}
+
+/// Stops a data search: the running statement and every table after it.
+#[tauri::command]
+#[specta::specta]
+async fn cancel_data_search(search_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    let cancel = state
+        .exports
+        .lock()
+        .expect("lock poisoned")
+        .get(&search_id)
+        .cloned();
+    if let Some(cancel) = cancel {
+        cancel.cancel().await;
+    }
+    Ok(())
+}
+
 /// Stops a column's statistics while they are counted: the running statement and the rest.
 #[tauri::command]
 #[specta::specta]
@@ -4409,6 +4498,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             save_chart_image,
             column_stats,
             cancel_column_stats,
+            list_columns,
+            data_search_limits,
+            data_search,
+            cancel_data_search,
             add_table_condition,
             table_filter_condition,
             table_keys,

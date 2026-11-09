@@ -20,7 +20,8 @@ use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, Connection, Dialect, DriverError, EventStream,
     ExecEvent, ExecOptions, LikeFilter, NameFilter, ObjectInfo, ReferencingKey, Remote,
-    RemoteControl, RemoteProcess, Result, ResultSchema, SchemaInfo, SchemaObject, TableInfo,
+    RemoteControl, RemoteProcess, Result, ResultSchema, SchemaColumn, SchemaInfo, SchemaObject,
+    TableInfo,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -658,6 +659,7 @@ pub async fn connect(remote: &Remote, path: &str, read_only: bool) -> Result<Box
             schemas: true,
             // Values cannot be bound through the server's sqlite3 shell (ADR-038).
             insert_rows: false,
+            bound_params: false,
         },
     }))
 }
@@ -744,6 +746,12 @@ impl Connection for RemoteConnection {
             &self
                 .rows(catalog::objects_sql(schema, &LikeFilter::default()))
                 .await?,
+        ))
+    }
+
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        Ok(catalog::schema_columns(
+            &self.rows(catalog::schema_columns_sql(schema)).await?,
         ))
     }
 

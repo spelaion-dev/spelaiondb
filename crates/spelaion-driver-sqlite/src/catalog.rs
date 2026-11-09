@@ -6,8 +6,8 @@
 use rusqlite::types::Value as SqlValue;
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, Dialect, DriverError, ForeignKeyInfo, IndexInfo,
-    LikeFilter, ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, SchemaObject,
-    SchemaObjectKind, TableInfo, terminated,
+    LikeFilter, ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaColumn, SchemaInfo,
+    SchemaObject, SchemaObjectKind, TableInfo, terminated,
 };
 
 use crate::dialect::SqliteDialect;
@@ -169,6 +169,26 @@ pub(crate) fn definition(object: &SchemaObject, rows: &[Row]) -> Result<String> 
         .ok_or_else(|| {
             DriverError::Other(format!("{}.{} does not exist", object.schema, object.name))
         })
+}
+
+/// Every column of the schema's tables and views (those of `objects_sql`), with the same
+/// columns as `columns_sql` shows.
+pub(crate) fn schema_columns_sql(schema: &str) -> String {
+    format!(
+        r"select m.name, c.name, c.type from {} m join pragma_table_xinfo(m.name, {}) c where m.type in ('table', 'view') and m.name not like 'sqlite\_%' escape '\' and c.hidden <> 1 order by m.name, c.cid",
+        schema_table(schema),
+        literal(schema)
+    )
+}
+
+pub(crate) fn schema_columns(rows: &[Row]) -> Vec<SchemaColumn> {
+    rows.iter()
+        .map(|row| SchemaColumn {
+            table: text(row, 0),
+            name: text(row, 1),
+            native_type: text(row, 2),
+        })
+        .collect()
 }
 
 /// hidden = 1: hidden columns of virtual tables; 2 and 3: generated (shown).

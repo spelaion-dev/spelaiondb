@@ -268,6 +268,22 @@ export const commands = {
 	/**  Stops a column's statistics while they are counted: the running statement and the rest. */
 	cancelColumnStats: (statsId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_column_stats", { statsId })),
 	/**
+	 *  Every column of a schema's relations, read with one catalog query on the explorer's
+	 *  session: metadata search keeps them with the schema (ADR-043).
+	 */
+	listColumns: (session: string, schema: string) => typedError<SchemaColumnItem[], string>(__TAURI_INVOKE("list_columns", { session, schema })),
+	/**  The data search's limits, for its form. */
+	dataSearchLimits: () => __TAURI_INVOKE<DataSearchLimitsItem>("data_search_limits"),
+	/**
+	 *  Searches a value in the chosen tables of `source`'s connection (ADR-043): the core writes
+	 *  one read per table with the value bound as a parameter, in a new session opened for reads
+	 *  only, each table inside the engine's read-only transaction. Each table's start and end go to
+	 *  `on_event`; `cancel_data_search` with the same `search_id` stops it.
+	 */
+	dataSearch: (source: string, searchId: number, request: DataSearchRequestItem, onEvent: Channel<DataSearchEventItem_Deserialize>) => typedError<DataSearchSummaryItem, string>(__TAURI_INVOKE("data_search", { source, searchId, request, onEvent })),
+	/**  Stops a data search: the running statement and every table after it. */
+	cancelDataSearch: (searchId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_data_search", { searchId })),
+	/**
 	 *  A table data tab's filter with a condition the core wrote (one of the column statistics'
 	 *  most frequent values) added with AND. The page's SELECT is checked when it loads.
 	 */
@@ -953,6 +969,23 @@ export type ColumnKindItem = "integer" | "decimal" | "float" | "boolean" | "date
 /**  Where one column of the source goes. */
 export type ColumnMappingItem = { kind: "skip" } | { kind: "existing"; column: string } | { kind: "new"; name: string; sqlType: string };
 
+/**  One searched column of a hit that matched. */
+export type ColumnMatchItem = ColumnMatchItem_Serialize | ColumnMatchItem_Deserialize;
+
+/**  One searched column of a hit that matched. */
+export type ColumnMatchItem_Deserialize = {
+	column: string,
+	/**  Its text around the match; `None` for binary columns. */
+	text?: string | null,
+};
+
+/**  One searched column of a hit that matched. */
+export type ColumnMatchItem_Serialize = {
+	column: string,
+	/**  Its text around the match; `None` for binary columns. */
+	text: string | null,
+};
+
 /**  A table column's statistics, counted by the server with read-only queries. */
 export type ColumnStatsItem = ColumnStatsItem_Serialize | ColumnStatsItem_Deserialize;
 
@@ -1356,6 +1389,43 @@ export type ConstraintKindItem = "primary_key" | "unique" | "check";
 
 /**  What "Create" in the explorer can start (see `spelaion_core::CreateKind`). */
 export type CreateKindItem = "table" | "view" | "materializedView" | "sequence" | "schema";
+
+/**  What a data search tells while it runs. */
+export type DataSearchEventItem = DataSearchEventItem_Serialize | DataSearchEventItem_Deserialize;
+
+/**  What a data search tells while it runs. */
+export type DataSearchEventItem_Deserialize = { kind: "started"; index: number; total: number; schema: string; table: string } | { kind: "finished"; schema: string; table: string; status: TableStatusItem_Deserialize };
+
+/**  What a data search tells while it runs. */
+export type DataSearchEventItem_Serialize = { kind: "started"; index: number; total: number; schema: string; table: string } | { kind: "finished"; schema: string; table: string; status: TableStatusItem_Serialize };
+
+/**  The data search's limits, for the form. */
+export type DataSearchLimitsItem = {
+	maxTables: number,
+	maxRowsPerTable: number,
+	defaultRowsPerTable: number,
+	maxHits: number,
+	maxValueChars: number,
+};
+
+/**  What to search for and where (ADR-043): the value is bound as a parameter by the core. */
+export type DataSearchRequestItem = {
+	value: string,
+	tables: SearchTableItem[],
+	caseSensitive: boolean,
+	numbers: boolean,
+	large: boolean,
+	rowsPerTable: number,
+};
+
+/**  How a data search ended. */
+export type DataSearchSummaryItem = {
+	tables: number,
+	hits: number,
+	cancelled: boolean,
+	/**  It stopped at the most hits a search returns. */
+	stopped: boolean,
+};
 
 /**  A connection made by "Duplicate" (ADR-030). */
 export type DuplicatedItem = {
@@ -2071,6 +2141,12 @@ export type InteractionRequest = {
 
 /**  Which way a foreign key goes from a table (see `spelaion_core::KeyDirection`). */
 export type KeyDirectionItem = "outgoing" | "incoming";
+
+/**  A primary key column of a hit and its value as text. */
+export type KeyPartItem = {
+	column: string,
+	value: string,
+};
 
 /**  The key the UI wants to follow, by name: the core looks its columns up in the catalog. */
 export type KeyRefItem = {
@@ -3051,6 +3127,13 @@ export type SaveFileOutcome = { kind: "saved"; path: string; name: string; hash:
 /**  The file's encoding cannot hold this character: save as UTF-8 instead? */
 { kind: "unrepresentable"; character: string; encoding: string };
 
+/**  A column of a schema's relation: the catalog metadata search keeps (ADR-043). */
+export type SchemaColumnItem = {
+	table: string,
+	name: string,
+	nativeType: string,
+};
+
 export type SchemaItem = {
 	name: string,
 	system: boolean,
@@ -3164,6 +3247,31 @@ export type ScriptSummaryItem_Serialize = {
 	stop: ScriptStopItem | null,
 	executionMs: number | null,
 	fetchMs: number | null,
+};
+
+/**  A row that contains the value. */
+export type SearchHitItem = SearchHitItem_Serialize | SearchHitItem_Deserialize;
+
+/**  A row that contains the value. */
+export type SearchHitItem_Deserialize = {
+	key: KeyPartItem[],
+	matches: ColumnMatchItem_Deserialize[],
+	/**  The filter of the table data tab that shows this row, written by the core. */
+	filter?: string | null,
+};
+
+/**  A row that contains the value. */
+export type SearchHitItem_Serialize = {
+	key: KeyPartItem[],
+	matches: ColumnMatchItem_Serialize[],
+	/**  The filter of the table data tab that shows this row, written by the core. */
+	filter: string | null,
+};
+
+/**  A table or view a data search reads. */
+export type SearchTableItem = {
+	schema: string,
+	table: string,
 };
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
@@ -3413,6 +3521,15 @@ export type TableRefItem = {
 	schema: string,
 	name: string,
 };
+
+/**  How searching one table ended. */
+export type TableStatusItem = TableStatusItem_Serialize | TableStatusItem_Deserialize;
+
+/**  How searching one table ended. */
+export type TableStatusItem_Deserialize = { kind: "searched"; columns: number; hits: SearchHitItem_Deserialize[]; more: boolean } | { kind: "noColumns" } | { kind: "failed"; message: string } | { kind: "cancelled" };
+
+/**  How searching one table ended. */
+export type TableStatusItem_Serialize = { kind: "searched"; columns: number; hits: SearchHitItem_Serialize[]; more: boolean } | { kind: "noColumns" } | { kind: "failed"; message: string } | { kind: "cancelled" };
 
 export type TestFailureItem = {
 	kind: FailureKindItem,

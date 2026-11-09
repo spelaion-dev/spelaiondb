@@ -847,6 +847,128 @@ select {
 .process-connection.active { box-shadow: inset 2px 0 var(--accent); }
 .process-connection:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .process-connection-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Search across the database (ADR-043): names from the explorer's catalog, values in chosen
+   tables. One scrolling body under a fixed box; hits are rows like the explorer's. */
+.search-sidebar {
+  grid-column: 2;
+  background: var(--sidebar);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.search-sidebar .sidebar-header { min-height: 45px; }
+.search-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+.search-box input { width: 100%; box-sizing: border-box; }
+.search-box .segmented { align-self: flex-start; }
+.search-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-md) 0 var(--space-xl);
+}
+.search-body > .check,
+.search-body > .search-field,
+.search-body > .search-tables,
+.search-body > .search-options,
+.search-body > .search-actions,
+.search-body > .search-note,
+.search-body > .search-status { margin: 0 var(--space-lg); }
+.search-status { font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.search-field select,
+.search-field input { width: 100%; box-sizing: border-box; }
+.search-tables {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.search-tables legend {
+  padding: 0;
+  margin-bottom: var(--space-xs);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.search-tables-tools { display: flex; align-items: center; gap: var(--space-xs); }
+.search-tables-tools input { flex: 1; min-width: 0; }
+.search-tables-tools button { flex: none; white-space: nowrap; }
+.search-table-list {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2xs) 0;
+}
+.search-table {
+  min-height: var(--row-h);
+  padding: 0 var(--space-md);
+  font-size: var(--text-md);
+}
+.search-table:hover { background: var(--hover); }
+.search-table-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-table .muted { margin-left: auto; font-size: var(--text-xs); }
+.search-options summary { cursor: pointer; color: var(--muted); font-size: var(--text-sm); }
+.search-options fieldset {
+  border: 0;
+  margin: var(--space-xs) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.search-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-md); }
+.search-results { display: flex; flex-direction: column; }
+.search-results .group-title { overflow-wrap: anywhere; }
+/* A table's name keeps its case: it is an identifier, not a section label. */
+.search-results .search-table-title { text-transform: none; letter-spacing: 0; font-size: var(--text-sm); }
+.search-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2xs);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--row-h);
+  padding: var(--space-xs) var(--space-lg);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+.search-hit:hover { background: var(--hover); }
+.search-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.search-hit-name {
+  display: flex;
+  gap: var(--space-xs);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+}
+.search-hit-meta { color: var(--muted); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-hit-match { display: flex; gap: var(--space-xs); min-width: 0; font-size: var(--text-sm); }
+.search-hit-column { flex: none; color: var(--muted); }
+.search-hit-match code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-code);
+}
+.search-body > .row-note { padding: 0 var(--space-lg); color: var(--danger); font-size: var(--text-sm); }
 .process-welcome { margin: auto; padding: 24px; color: var(--muted); text-align: center; }
 .process-welcome h2 { color: var(--fg); font-size: 18px; font-weight: 600; }
 .process-monitor { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: var(--panel); }
