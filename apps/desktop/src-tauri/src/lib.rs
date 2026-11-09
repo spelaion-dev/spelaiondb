@@ -3273,6 +3273,60 @@ async fn cell_value(
     )
 }
 
+/// The cell viewer's value, read from the stored result when the viewer opens: whole up to
+/// the core's limit, past it only with `load_anyway`. Images are recognised by their bytes.
+#[tauri::command]
+#[specta::specta]
+async fn view_cell(
+    result: u32,
+    row: u32,
+    column: u32,
+    load_anyway: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<CellViewItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        spelaion_core::view_cell(&stored, row as usize, column as usize, load_anyway)
+            .map(CellViewItem::from)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Saves a cell's value to `path` (bytes as stored, other values as UTF-8 text); returns the
+/// bytes written.
+#[tauri::command]
+#[specta::specta]
+async fn save_cell_value(
+    result: u32,
+    row: u32,
+    column: u32,
+    path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<f64> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        spelaion_core::save_cell(&stored, row as usize, column as usize, Path::new(&path))
+            .map(|written| written as f64)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Frees a result the UI no longer shows.
 #[tauri::command]
 #[specta::specta]
@@ -4035,6 +4089,99 @@ async fn table_edit_statements(
         .map_err(|e| e.to_string())
 }
 
+/// The statement that loading the file at `path` into one cell of a table data page would
+/// run, shortened for the confirmation dialog (production asks before data changes).
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn preview_load_value_file(
+    session: String,
+    result: u32,
+    schema: String,
+    name: String,
+    row: u32,
+    column: u32,
+    path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let open = state.session(&session).await?;
+    let statements =
+        load_file_statements(&state, &open, result, &schema, &name, row, column, path).await?;
+    Ok(statements
+        .iter()
+        .map(|sql| spelaion_core::statement_for_display(sql))
+        .collect())
+}
+
+/// Loads the file at `path` into one cell of a table data page: one UPDATE by primary key,
+/// applied like any edit (ADR-014): refused on read-only connections, and on production
+/// unless the user confirmed it.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn load_value_file(
+    session: String,
+    result: u32,
+    schema: String,
+    name: String,
+    row: u32,
+    column: u32,
+    path: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    spelaion_core::check_edit_policy(
+        open.resolved.params.read_only,
+        open.resolved.safeguards().confirm_data_changes,
+        confirmed,
+    )
+    .map_err(|e| e.to_string())?;
+    let statements =
+        load_file_statements(&state, &open, result, &schema, &name, row, column, path).await?;
+    let applied = spelaion_core::apply_edits(&open.session, &statements)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(applied).unwrap_or(u32::MAX))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_file_statements(
+    state: &AppState,
+    open: &OpenConnection,
+    result: u32,
+    schema: &str,
+    name: &str,
+    row: u32,
+    column: u32,
+    path: String,
+) -> CmdResult<Vec<String>> {
+    // The primary key comes from the database, never from the UI.
+    let table = open
+        .session
+        .connection()
+        .describe_table(schema, name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let dialect = open.session.dialect().clone();
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let change =
+            spelaion_core::file_change(&stored, row as usize, column as usize, Path::new(&path))
+                .map_err(|e| e.to_string())?;
+        spelaion_core::edit_statements(dialect.as_ref(), &table, &stored, &[change])
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The UI's answer to a tunnel dialog (unknown host, passphrase…).
 #[tauri::command]
 #[specta::specta]
@@ -4211,6 +4358,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             export_tables,
             cancel_export,
             cell_value,
+            view_cell,
+            save_cell_value,
+            preview_load_value_file,
+            load_value_file,
             sort_result,
             filter_result,
             filter_columns,

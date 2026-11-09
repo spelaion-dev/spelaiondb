@@ -2483,6 +2483,32 @@ select {
   padding: 10px 12px;
   margin: 0;
 }
+.cell-viewer-actions {
+  display: flex;
+  gap: var(--space-xs);
+  margin-left: auto;
+}
+/* An image the core recognised by its bytes (PNG, JPEG, GIF, WebP), as a data: URL. */
+.cell-viewer-image {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-md) var(--space-lg);
+}
+.cell-viewer-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+}
+.cell-viewer-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+}
+.cell-viewer-notice p { margin: 0; }
 .viewer-value-heading {
   padding: 10px 12px 6px;
   color: var(--muted);

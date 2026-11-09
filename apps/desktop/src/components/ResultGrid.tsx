@@ -10,7 +10,7 @@ import { FindCache } from "../grid/findCache";
 import { RowCache } from "../grid/rowCache";
 import type { ResultMeta, SortState } from "../store";
 import { useExport } from "./ExportDialog";
-import { CellViewer, ViewerModes, type ViewerMode } from "./CellViewer";
+import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
 import { Icon, PATHS } from "./Icons";
 import { ReferencesPanel } from "./ReferencesPanel";
 import { CalcPanel } from "./CalcPanel";
@@ -139,6 +139,8 @@ export interface GridEditing {
   onRemoveInsert(index: number): void;
   onApply(): void;
   onApplyCell(row: number, col: number, value: string | undefined, dirty: boolean): void;
+  /** Loads a file into one cell now: one UPDATE by primary key, written by the core. */
+  onLoadFile(row: number, col: number, path: string): Promise<void>;
   onDiscard(): void;
   /** `undefined` takes the cell back to its value in the database. */
   onEdit(row: number, col: number, value: string | null | undefined): void;
@@ -837,6 +839,30 @@ export function ResultGrid({
 
   /** Shows the value of the active cell (Enter, double-click, "View value"), even when the
    *  side panel last showed the row's references. */
+  /** The cell menu's Save to file…: the extension comes from the core, which recognises images. */
+  async function saveCellFromMenu(row: number, col: number) {
+    const meta = result.columns[col];
+    if (!meta) return;
+    try {
+      const item = await call(commands.viewCell(result.id, row, col, false));
+      if (item.kind === "null") {
+        setNotice({ text: t("viewer.saveError", { detail: t("viewer.nullValue") }), error: true });
+        return;
+      }
+      const saved = await saveValueToFile(result.id, row, col, meta.name, item.extension, t, i18n.language);
+      if (saved) setNotice(saved);
+    } catch (e) {
+      setNotice({ text: t("viewer.saveError", { detail: e instanceof Error ? e.message : String(e) }), error: true });
+    }
+  }
+
+  /** The cell menu's Load from file…: one UPDATE by primary key, applied at once. */
+  async function loadCellFromMenu(row: number, col: number) {
+    if (!editing) return;
+    const path = await chooseValueFile(t);
+    if (path) await editing.onLoadFile(row, col, path);
+  }
+
   function openCellViewer() {
     if (viewerMode === "references" || viewerMode === "calc") setViewerMode("cell");
     setViewer(true);
@@ -1748,6 +1774,32 @@ export function ResultGrid({
           >
             {t("viewer.open")}
           </button>
+          {menu.cell && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                const cell = menu.cell;
+                setMenu(null);
+                if (cell) void saveCellFromMenu(cell.row, cell.col);
+              }}
+            >
+              {t("viewer.save")}
+            </button>
+          )}
+          {menu.cell && editing && (
+            <button
+              role="menuitem"
+              title={hasPendingEdits ? t("edit.applyFirst") : t("viewer.loadHint")}
+              disabled={editing.busy || sorting || hasPendingEdits || editing.deleted.includes(menu.cell.row)}
+              onClick={() => {
+                const cell = menu.cell;
+                setMenu(null);
+                if (cell) void loadCellFromMenu(cell.row, cell.col);
+              }}
+            >
+              {t("viewer.load")}
+            </button>
+          )}
           {selection && (
             <button
               role="menuitem"
@@ -2083,6 +2135,8 @@ export function ResultGrid({
         edits={editing?.cells}
         editable={!!editing && !editing.busy && !sorting && !editing.deleted.includes(selection.focus.row)}
         onEdit={editing?.onEdit}
+        pendingChanges={hasPendingEdits}
+        onLoadFile={editing?.onLoadFile}
         onMode={(mode) => {
           setViewerMode(mode);
           // Arrow keys keep moving through the grid.

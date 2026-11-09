@@ -234,11 +234,13 @@ async fn unique_schema(session: &Session, name: &str) -> Result<Option<String>, 
     Ok(found)
 }
 
-/// A value typed in the grid (or NULL).
+/// A value typed in the grid (or NULL), or the bytes of a file loaded into a binary cell
+/// (`value_view::read_value_file`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CellInput {
     Null,
     Text(String),
+    Bytes(Vec<u8>),
 }
 
 /// One change, by position in the result shown (`row`) and result column (`column`).
@@ -502,8 +504,21 @@ fn literal(
     logical: LogicalType,
     input: &CellInput,
 ) -> Result<String, EditError> {
-    let CellInput::Text(text) = input else {
-        return Ok("NULL".into());
+    let text = match input {
+        CellInput::Null => return Ok("NULL".into()),
+        CellInput::Text(text) => text,
+        // Raw bytes only go to a binary column; anything else takes text.
+        CellInput::Bytes(bytes) => {
+            return if logical == LogicalType::Bytes {
+                Ok(sql_literal(&Value::Bytes(bytes.clone()), dialect))
+            } else {
+                Err(EditError::BadValue {
+                    column: column.to_string(),
+                    value: format!("{} bytes", bytes.len()),
+                    expected: "text",
+                })
+            };
+        }
     };
     let bad = |expected| EditError::BadValue {
         column: column.to_string(),
@@ -626,6 +641,21 @@ mod tests {
             literal("postgres", "c", LogicalType::Int, &CellInput::Null).unwrap(),
             "NULL"
         );
+        // A loaded file's bytes: the engine's binary literal, and only for a binary column.
+        let bytes = CellInput::Bytes(vec![0x89, b'P', 0]);
+        assert_eq!(
+            literal("postgres", "c", LogicalType::Bytes, &bytes).unwrap(),
+            "'\\x895000'"
+        );
+        assert_eq!(
+            literal("sqlserver", "c", LogicalType::Bytes, &bytes).unwrap(),
+            "0x895000"
+        );
+        assert_eq!(
+            literal("sqlite", "c", LogicalType::Bytes, &bytes).unwrap(),
+            "X'895000'"
+        );
+        assert!(literal("postgres", "c", LogicalType::Text, &bytes).is_err());
         assert_eq!(
             literal(
                 "mysql",

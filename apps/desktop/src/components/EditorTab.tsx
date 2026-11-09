@@ -182,6 +182,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
             void applyEdits(changes);
           },
           onDiscard: clearPending,
+          onLoadFile: (row, col, path) => loadValueFile(row, col, path),
           onEdit: (row, col, value) =>
             setPending((p) => {
               const cells = { ...p.cells };
@@ -234,6 +235,35 @@ export function EditorTab({ tab }: { tab: Tab }) {
       else if (executedRequest.current) void run(executedRequest.current, true);
     } catch (e) {
       setNotice({ text: message(e), error: true });
+    } finally {
+      savingEditsRef.current = false;
+      setSavingEdits(false);
+    }
+  }
+
+  /** Loads a file into one cell at once: the core reads it and writes one UPDATE by primary
+   *  key, applied like any edit (production asks first, read-only refuses). */
+  async function loadValueFile(row: number, column: number, path: string) {
+    const view = editTarget;
+    const result = activeResult;
+    if (!view || !result || savingEditsRef.current) return;
+    savingEditsRef.current = true;
+    setSavingEdits(true);
+    try {
+      let confirmed = false;
+      if (connection?.kind?.safeguards.confirmDataChanges) {
+        const statements = await call(commands.previewLoadValueFile(tab.id, result.id, view.schema, view.name, row, column, path));
+        const ok = await useDialogs.getState().askRisks(connection.name, statements.map((sql) => ({ sql, risk: "dataChange" as const })));
+        if (!ok) return;
+        confirmed = true;
+      }
+      await call(commands.loadValueFile(tab.id, result.id, view.schema, view.name, row, column, path, confirmed));
+      const file = path.split(/[\\/]/).pop() ?? path;
+      setNotice({ text: t("edit.fileLoaded", { file, column: result.columns[column]?.name ?? "" }), error: false });
+      if (tab.table) void loadPage(tab.table);
+      else if (executedRequest.current) void run(executedRequest.current, true);
+    } catch (e) {
+      setNotice({ text: t("edit.fileLoadFailed", { detail: message(e) }), error: true });
     } finally {
       savingEditsRef.current = false;
       setSavingEdits(false);

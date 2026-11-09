@@ -3672,6 +3672,93 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const joinPages = panel.getByRole("group", { name: "Query result pages" });
   await joinPages.getByRole("button", { name: "Count", exact: true }).click();
   await joinPages.getByText("rows 1–4 of 4").waitFor();
+
+  step("value viewers: an image BLOB previewed, saved to a file and loaded from one; XML pretty-printed");
+  {
+    // Real PNG files (the app's icons): the core recognises them by their bytes.
+    const iconPath = join(root, "apps/desktop/src-tauri/icons/128x128@2x.png");
+    const icon = readFileSync(iconPath);
+    const smallIcon = join(root, "apps/desktop/src-tauri/icons/32x32.png");
+    await replaceQuery(panel, [
+      // No DROP: the guard would ask first. The table stays in the test database.
+      "create table if not exists smoke_blob (id int primary key, img longblob, doc text);",
+      "delete from smoke_blob where id = 1;",
+      `insert into smoke_blob values (1, X'${icon.toString("hex")}', '<order id="7"><line>pen</line><line>ink</line></order>');`,
+    ].join("\n"));
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "3 OK, 0 failed, 0 not run" }).waitFor();
+    // A single plain SELECT of one table with its key: an editable result.
+    await replaceQuery(panel, "select id, img from smoke_blob order by id;");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    const openImage = async () => {
+      const box = await panel.locator(".grid-scroller").boundingBox();
+      await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Enter");
+    };
+    await openImage();
+    const viewer = panel.locator(".cell-viewer");
+    const image = viewer.getByRole("img", { name: "PNG image in img" });
+    await image.waitFor();
+    await viewer.getByText("PNG image · 256 × 256 px").waitFor();
+    assert.match(await image.getAttribute("src"), /^data:image\/png;base64,iVBORw0KGgo/);
+    await viewer.getByText(`${icon.length.toLocaleString("en")} bytes`).waitFor();
+    await shot("05h-value-image");
+    // The same bytes as a hex dump.
+    await viewer.getByRole("button", { name: "Hex", exact: true }).click();
+    await viewer.locator(".cell-viewer-hex", { hasText: "89 50 4e 47 0d 0a 1a 0a" }).waitFor();
+    await viewer.getByRole("button", { name: "Image", exact: true }).click();
+    await image.waitFor();
+    // Saved byte for byte.
+    const savedIcon = join(userDir, "saved-icon.png");
+    await page.evaluate((target) => (window.__spelaionSavePath = target), savedIcon);
+    await viewer.getByRole("button", { name: "Save to file…" }).click();
+    await viewer.getByText(/^Saved .* to .*saved-icon\.png$/).waitFor();
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    assert.ok(readFileSync(savedIcon).equals(icon), "the saved file has the value's bytes");
+    // A file loaded into the cell: one UPDATE by key, applied at once, then the query runs again.
+    const beforeLoad = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+    await page.evaluate((target) => (window.__spelaionOpenPath = target), smallIcon);
+    await viewer.getByRole("button", { name: "Load from file…" }).click();
+    await panel.getByRole("status").filter({ hasText: "Loaded 32x32.png into img" }).waitFor();
+    await page.evaluate(() => delete window.__spelaionOpenPath);
+    await page.waitForFunction((el) => !el.isConnected, beforeLoad);
+    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    await openImage();
+    await panel.locator(".cell-viewer").getByText("PNG image · 32 × 32 px").waitFor();
+    // The cell menu saves it too, named with the extension the core gives.
+    const menuSaved = join(userDir, "menu-icon.png");
+    await page.evaluate((target) => (window.__spelaionSavePath = target), menuSaved);
+    {
+      const box = await panel.locator(".grid-scroller").boundingBox();
+      await page.mouse.click(box.x + 52 + 110 + 20, box.y + 36 + 13, { button: "right" });
+    }
+    await panel.getByRole("menuitem", { name: "Save to file…" }).click();
+    await panel.locator(".grid-notice", { hasText: "menu-icon.png" }).waitFor();
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    assert.ok(readFileSync(menuSaved).equals(readFileSync(smallIcon)), "the cell menu saves the loaded file's bytes");
+    // XML in a read-only result is pretty-printed; a value past the limit waits for "Load anyway".
+    await replaceQuery(panel, "select concat(doc) as doc, repeat('a', 2200000) as big from smoke_blob;");
+    const beforeXml = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+    await run(panel);
+    await page.waitForFunction((el) => !el.isConnected, beforeXml);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    {
+      const box = await panel.locator(".grid-scroller").boundingBox();
+      await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+      await page.keyboard.press("Enter");
+    }
+    const xmlViewer = panel.locator(".cell-viewer");
+    await xmlViewer.locator(".cell-viewer-xml").waitFor();
+    assert.equal(await xmlViewer.locator(".cell-viewer-value").innerText(), '<order id="7">\n  <line>pen</line>\n  <line>ink</line>\n</order>');
+    await shot("05i-value-xml");
+    await page.keyboard.press("ArrowRight");
+    await xmlViewer.getByText("This value is 2.1 MB, more than the 2 MB shown at once.").waitFor();
+    await xmlViewer.getByRole("button", { name: "Load anyway" }).click();
+    await xmlViewer.getByText("2,200,000 characters").waitFor();
+  }
   await page.keyboard.press("Control+w");
   if (process.env.SPELAION_E2E_EDIT_ONLY === "1") throw editSmokeComplete;
 

@@ -154,6 +154,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   tests that try to get around it (`tests/export_stream.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
+  `value_view.rs` is the cell viewer's value, read from the stored result when the viewer opens
+  (past `VIEW_LIMIT` only with "load anyway"): images recognised by their bytes (PNG, JPEG, GIF,
+  WebP only, handed over as a `data:` URL; never SVG or HTML), XML pretty-printed as text, a value
+  saved to a file byte for byte, and a file loaded into a cell as one `edit.rs` UPDATE by primary
+  key; `tests/value_files.rs` runs it on every engine.
   `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
   `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes

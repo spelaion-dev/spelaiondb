@@ -38,6 +38,7 @@ mod sort;
 mod sql_file;
 mod table_data;
 mod transaction;
+mod value_view;
 mod write;
 
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
@@ -129,6 +130,11 @@ pub use table_data::{
     key_filter, table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
 };
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
+pub use value_view::{
+    CellContent, CellView, DISPLAY_STATEMENT_CHARS, ImageFormat, LOAD_FILE_MAX, VIEW_LIMIT,
+    VIEW_MAX, ValueError, file_change, pretty_xml, read_value_file, save_cell,
+    statement_for_display, view_cell,
+};
 pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
     agent_view, check_write,

@@ -3136,6 +3136,73 @@ impl From<RowChangeItem> for spelaion_core::RowChange {
     }
 }
 
+/// A cell for the cell viewer: whole up to the core's limit, or withheld until the user asks
+/// ("load anyway"); an image only as a `data:` URL of a type the core recognised by its bytes.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CellViewItem {
+    pub kind: CellViewKind,
+    /// Bytes of the value, or of its text in UTF-8.
+    pub size: f64,
+    pub binary: bool,
+    /// `png`, `jpeg`, `gif` or `webp`, also when withheld.
+    pub image: Option<String>,
+    /// The extension a file of this value takes.
+    pub extension: String,
+    /// The text as the grid writes it (`\x…` for bytes).
+    pub text: Option<String>,
+    /// Pretty-printed when the text is one well-formed XML document.
+    pub xml: Option<String>,
+    pub image_url: Option<String>,
+    /// The size past which a value waits for "load anyway".
+    pub limit: f64,
+}
+
+/// `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum CellViewKind {
+    Null,
+    Text,
+    Bytes,
+    Withheld,
+    TooBig,
+}
+
+impl From<spelaion_core::CellView> for CellViewItem {
+    fn from(view: spelaion_core::CellView) -> Self {
+        use spelaion_core::{CellContent, ImageFormat};
+        let (kind, text, xml, image_url) = match view.content {
+            CellContent::Null => (CellViewKind::Null, None, None, None),
+            CellContent::Text { text, xml } => (CellViewKind::Text, Some(text), xml, None),
+            CellContent::Bytes { text, image_url } => {
+                (CellViewKind::Bytes, Some(text), None, image_url)
+            }
+            CellContent::Withheld => (CellViewKind::Withheld, None, None, None),
+            CellContent::TooBig => (CellViewKind::TooBig, None, None, None),
+        };
+        Self {
+            kind,
+            size: view.size as f64,
+            binary: view.binary,
+            image: view.image.map(|format| {
+                match format {
+                    ImageFormat::Png => "png",
+                    ImageFormat::Jpeg => "jpeg",
+                    ImageFormat::Gif => "gif",
+                    ImageFormat::Webp => "webp",
+                }
+                .to_string()
+            }),
+            extension: view.extension.to_string(),
+            text,
+            xml,
+            image_url,
+            limit: spelaion_core::VIEW_LIMIT as f64,
+        }
+    }
+}
+
 /// Rows left after filtering a result, out of all it has.
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct FilterOutcome {
