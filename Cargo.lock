@@ -5860,6 +5860,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "futures-util",
+ "gtk",
  "serde",
  "serde_json",
  "specta",

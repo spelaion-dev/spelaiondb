@@ -206,6 +206,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
   `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
   `open.rs`); a tunnel file's is per SSH hop.
+  `save_name.rs` keeps a save dialog's file name in step with the chosen file type (Linux's
+  GTK dialogs, `apps/desktop/src-tauri/src/file_dialog.rs`).
   `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a
   BOM, UTF-16, Windows-1252, the file's line ending, temp file + rename through
   `spelaion-config::atomic_file`, which keeps the mode and follows links, a content hash that

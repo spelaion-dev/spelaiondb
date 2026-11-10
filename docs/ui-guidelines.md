@@ -270,7 +270,9 @@ to an action that is also in a context menu, never its only way in.
   production warning.
 - **A system notification** only tells that a long run finished while the app was in the
   background (opt-in, ADR-035), never with SQL, data or error text. Native dialogs only choose
-  files and folders (`dialogs.ts`).
+  files and folders, always through `dialogs.ts`: on Linux it opens GTK's chooser over the
+  window, starting in the file's folder or the workspace, with the saved name's extension
+  following the chosen type (`src-tauri/src/file_dialog.rs`).
 
 A confirmation reads:
 

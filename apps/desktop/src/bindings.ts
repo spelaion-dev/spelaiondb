@@ -79,6 +79,11 @@ export const commands = {
 	getScriptPreferences: () => typedError<ScriptPreferencesItem, string>(__TAURI_INVOKE("get_script_preferences")),
 	setScriptPreferences: (preferences: ScriptPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_script_preferences", { preferences })),
 	/**
+	 *  Shows a file dialog over the window that asked and answers the path picked, or `None` when
+	 *  the user cancelled. Only on Linux.
+	 */
+	choosePath: (request: PathDialogRequest_Deserialize) => typedError<string | null, string>(__TAURI_INVOKE("choose_path", { request })),
+	/**
 	 *  Reads a `.sql` file the user picked (or one from the recent files or a kept tab) and puts
 	 *  it first in the recent files.
 	 */
@@ -2712,6 +2717,54 @@ export type PastedItem = {
 	name: string,
 	/**  Settings of the text that were not taken, by the file's field names. */
 	leftOut: string[],
+};
+
+/**  A file type a dialog offers: `*` stands for every file. */
+export type PathDialogFilter = {
+	name: string,
+	extensions: string[],
+};
+
+/**  What a file dialog picks. */
+export type PathDialogKind = 
+/**  An existing file. */
+"open" | 
+/**  Where to save a file. */
+"save" | 
+/**  A folder. */
+"folder";
+
+/**  A file dialog the app asks for. */
+export type PathDialogRequest = PathDialogRequest_Serialize | PathDialogRequest_Deserialize;
+
+/**  A file dialog the app asks for. */
+export type PathDialogRequest_Deserialize = {
+	kind: PathDialogKind,
+	title?: string | null,
+	/**
+	 *  Folders the dialog may start in: the first that exists wins (without one, GTK's own
+	 *  choice: "Recent").
+	 */
+	folders: string[],
+	/**  The name a save dialog proposes. */
+	fileName?: string | null,
+	/**  The file types, the first one chosen unless `file_name` has another's extension. */
+	filters: PathDialogFilter[],
+};
+
+/**  A file dialog the app asks for. */
+export type PathDialogRequest_Serialize = {
+	kind: PathDialogKind,
+	title: string | null,
+	/**
+	 *  Folders the dialog may start in: the first that exists wins (without one, GTK's own
+	 *  choice: "Recent").
+	 */
+	folders: string[],
+	/**  The name a save dialog proposes. */
+	fileName: string | null,
+	/**  The file types, the first one chosen unless `file_name` has another's extension. */
+	filters: PathDialogFilter[],
 };
 
 /**  A cell's new value; `null` takes it back to its value in the database. */
