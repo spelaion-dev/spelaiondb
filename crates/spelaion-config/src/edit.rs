@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, Value};
 
+use crate::atomic_file::{self, NewFileMode};
 use crate::error::ConfigError;
+use crate::load::Source;
 use crate::model::ConnectionFile;
 
 pub(crate) fn revision(path: &Path, value: &impl serde::Serialize) -> Result<String, ConfigError> {
@@ -75,7 +77,7 @@ pub fn set_user_vars(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
     }
-    write_doc(&path, &doc)
+    write_doc(&path, &doc, NewFileMode::OwnerOnly)
 }
 
 /// Sets (or, with `None`, removes) the personal range of local ports for tunnels in
@@ -120,14 +122,29 @@ pub fn set_tunnel_ports(user_dir: &Path, range: Option<(u16, u16)>) -> Result<()
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
     }
-    write_doc(&path, &doc)
+    write_doc(&path, &doc, NewFileMode::OwnerOnly)
 }
 
-pub(crate) fn write_doc(path: &Path, doc: &DocumentMut) -> Result<(), ConfigError> {
-    // Write to a temporary file first and then rename: an interruption never leaves a broken file.
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, doc.to_string()).map_err(|e| ConfigError::new(&tmp, e.to_string()))?;
-    std::fs::rename(&tmp, path).map_err(|e| ConfigError::new(path, e.to_string()))
+/// Replaces `path` with `doc` through [`atomic_file::replace`]: an interruption never leaves a
+/// broken file, two writes never share a temporary file, the file keeps its mode and a
+/// symbolic link stays a link (its target gets the edit). A file that did not exist gets
+/// `new_file`'s mode.
+pub(crate) fn write_doc(
+    path: &Path,
+    doc: &DocumentMut,
+    new_file: NewFileMode,
+) -> Result<(), ConfigError> {
+    atomic_file::replace(path, doc.to_string().as_bytes(), new_file)
+        .map_err(|e| ConfigError::new(path, format!("could not write: {e}")))
+}
+
+/// The mode of a new file of `source`: the personal folder's are owner-only like the folder
+/// itself (`load::ensure_private_dir`); the repository's are ordinary files the team commits.
+pub(crate) fn new_file_mode(source: Source) -> NewFileMode {
+    match source {
+        Source::User => NewFileMode::OwnerOnly,
+        Source::Workspace => NewFileMode::Default,
+    }
 }
 
 /// Changes (or creates) a value, e.g. `set_value(f, &["tls", "mode"], "verify-full")`.
@@ -157,7 +174,7 @@ pub fn set_value(path: &Path, key: &[&str], value: impl Into<Value>) -> Result<(
             table.insert(last, Item::Value(value.into()));
         }
     }
-    write_doc(path, &doc)
+    write_doc(path, &doc, NewFileMode::Default)
 }
 
 /// Removes a value if it exists.
@@ -174,13 +191,15 @@ pub fn remove_value(path: &Path, key: &[&str]) -> Result<(), ConfigError> {
         }
     }
     table.remove(last);
-    write_doc(path, &doc)
+    write_doc(path, &doc, NewFileMode::Default)
 }
 
 /// Creates the file of a new connection at `connections_dir/<id>.toml` (with folders if the
-/// id has them). Fails if it already exists: it never overwrites a connection.
+/// id has them), the folder of `source`'s connections (which decides the new file's mode on
+/// Unix). Fails if it already exists: it never overwrites a connection.
 pub fn create_connection(
     connections_dir: &Path,
+    source: Source,
     id: &str,
     file: &ConnectionFile,
 ) -> Result<PathBuf, ConfigError> {
@@ -202,6 +221,14 @@ pub fn create_connection(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
     }
-    std::fs::write(&path, content).map_err(|e| ConfigError::new(&path, e.to_string()))?;
+    atomic_file::create_new(&path, content.as_bytes(), new_file_mode(source)).map_err(|e| {
+        let message = match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                "a connection with that identifier already exists".to_string()
+            }
+            _ => format!("could not write: {e}"),
+        };
+        ConfigError::new(&path, message)
+    })?;
     Ok(path)
 }
