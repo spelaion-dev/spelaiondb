@@ -23,6 +23,7 @@ mod engine_change;
 mod error;
 mod heidisql;
 mod import;
+mod linux_dirs;
 mod load;
 pub mod mcp_clients;
 mod migrate;
@@ -61,7 +62,7 @@ pub use edit::{
 };
 pub use engine_change::EngineChange;
 pub use error::{ConfigError, ResolveError};
-pub use heidisql::{HeidiSqlError, read_heidisql, read_heidisql_registry};
+pub use heidisql::{HeidiSqlError, heidisql_has_registry, read_heidisql, read_heidisql_registry};
 pub use import::{
     DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedProxy, ImportedSsh,
     ImportedTls, KeychainItem, TargetFolder, find_duplicate, import_names, import_plan,

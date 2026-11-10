@@ -15,6 +15,7 @@ use serde_json::Value as Json;
 use spelaion_driver_api::Secret;
 
 use crate::import::{ImportedConnection, ImportedProxy, ImportedSsh};
+use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TunnelFile};
 
 /// The key DBeaver ships with to obscure `credentials-config.json`.
@@ -30,20 +31,42 @@ pub enum DbeaverError {
     Unreadable { path: PathBuf, message: String },
 }
 
-/// Where DBeaver keeps its workspace on this system (it may not exist).
+/// Where DBeaver keeps its workspace on this system (it may not exist). On Linux, the first of
+/// [`dbeaver_linux_workspaces`] that exists.
 pub fn dbeaver_workspace() -> Option<PathBuf> {
-    let base = if cfg!(windows) {
-        std::env::var_os("APPDATA").map(PathBuf::from)
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|base| workspace_in(&PathBuf::from(base)))
     } else if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library"))
+        std::env::var_os("HOME").map(|home| workspace_in(&PathBuf::from(home).join("Library")))
     } else {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
-            })
-    };
-    base.map(|base| base.join("DBeaverData").join("workspace6"))
+        let home = LinuxHome::from_env()?;
+        first_found(dbeaver_linux_workspaces(&home), |dir| dir.is_dir())
+    }
+}
+
+/// DBeaver's workspace under the folder DBeaver keeps its data in.
+fn workspace_in(base: &Path) -> PathBuf {
+    base.join("DBeaverData").join("workspace6")
+}
+
+/// Where DBeaver's workspace may be on Linux, native install first.
+fn dbeaver_linux_workspaces(home: &LinuxHome) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        workspace_in(&home.data),
+        // DBeaver reads XDG_DATA_HOME as a Java property, not from the environment, so without
+        // one it uses `~/.local/share` (`RuntimeUtils.getWorkingDirectory`,
+        // <https://github.com/dbeaver/dbeaver/blob/devel/plugins/org.jkiss.dbeaver.model/src/org/jkiss/dbeaver/utils/RuntimeUtils.java>).
+        // Flatpak builds before 26.2.2 kept it there too.
+        workspace_in(&home.home.join(".local/share")),
+        // The Flatpak (io.dbeaver.DBeaverCommunity) passes its XDG_DATA_HOME on to DBeaver since
+        // 26.2.2 (its `run.sh` and README: <https://github.com/flathub/io.dbeaver.DBeaverCommunity>).
+        workspace_in(&home.flatpak("io.dbeaver.DBeaverCommunity").join("data")),
+        // The snap (dbeaver-ce) is classic, but sets `-Duser.home=$SNAP_USER_DATA`
+        // (<https://github.com/dbeaver/dbeaver/blob/devel/product/snap-build/snap/snapcraft.yaml>).
+        workspace_in(&home.snap("dbeaver-ce").join(".local/share")),
+    ];
+    dirs.dedup();
+    dirs
 }
 
 /// Every connection under `dir`: a DBeaver workspace (all its projects), one project, or a
@@ -470,6 +493,67 @@ mod tests {
         )
         .unwrap();
         root
+    }
+
+    /// Moves the workspace `workspace` wrote to `to`, where an install keeps it.
+    fn move_workspace(name: &str, to: &Path) {
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::rename(workspace(name), to).unwrap();
+    }
+
+    fn found_on_linux(home: &Path) -> PathBuf {
+        let home = LinuxHome::at(home);
+        first_found(dbeaver_linux_workspaces(&home), |dir| dir.is_dir()).unwrap()
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        read_dbeaver(dir)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect()
+    }
+
+    #[test]
+    fn linux_search_finds_the_flatpak_workspace() {
+        let home = crate::linux_dirs::testing::fake_home("dbeaver-flatpak");
+        let flatpak = home.join(".var/app/io.dbeaver.DBeaverCommunity/data/DBeaverData/workspace6");
+        move_workspace("linux-flatpak", &flatpak);
+        assert_eq!(found_on_linux(&home), flatpak);
+        assert!(names(&flatpak).contains(&"Orders PG".to_string()));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_search_finds_the_snap_workspace() {
+        let home = crate::linux_dirs::testing::fake_home("dbeaver-snap");
+        let revision = crate::linux_dirs::testing::snap_revision(&home, "dbeaver-ce", "412");
+        move_workspace(
+            "linux-snap",
+            &revision.join(".local/share/DBeaverData/workspace6"),
+        );
+        let found = found_on_linux(&home);
+        assert_eq!(
+            found,
+            home.join("snap/dbeaver-ce/current/.local/share/DBeaverData/workspace6")
+        );
+        assert!(names(&found).contains(&"Orders PG".to_string()));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn linux_search_prefers_the_native_workspace_and_names_it_when_none_exists() {
+        let home = crate::linux_dirs::testing::fake_home("dbeaver-native");
+        let native = home.join(".local/share/DBeaverData/workspace6");
+        assert_eq!(found_on_linux(&home), native);
+        move_workspace(
+            "linux-native-flatpak",
+            &home.join(".var/app/io.dbeaver.DBeaverCommunity/data/DBeaverData/workspace6"),
+        );
+        move_workspace("linux-native", &native);
+        assert_eq!(found_on_linux(&home), native);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
