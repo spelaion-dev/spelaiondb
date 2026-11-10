@@ -16,6 +16,7 @@ import { HistoryPanel } from "./components/HistoryPanel";
 import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
 import { SearchPanel } from "./components/SearchPanel";
 import { SettingsDialog } from "./components/Settings";
+import { ReleaseNotesDialog } from "./components/ReleaseNotesDialog";
 import { SnippetsPanel } from "./components/SnippetsPanel";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
@@ -198,6 +199,7 @@ export default function App() {
         {loadError && <div className="banner" role="alert">{loadError}<button onClick={() => void loadConnections()}>{t("retryConnections")}</button></div>}
         {preferenceError && <div className="banner" role="alert">{t("preferenceLoadError")} {preferenceError.detail}</div>}
         <UpdateNotice />
+        <ReleaseNotesDialog />
         <TabBar hidden={sidebarSection === "processes" || sidebarSection === "mcp"} />
         <div className="workspace-content">
           <div className="editor-workspace" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
@@ -268,12 +270,14 @@ function UpdateNotice() {
   const error = useUpdate((s) => s.error);
   const install = useUpdate((s) => s.install);
   const dismiss = useUpdate((s) => s.dismiss);
+  const showNotes = useUpdate((s) => s.showNotes);
   if (status?.kind !== "available" || dismissed) return null;
   return (
     <div className="banner update-notice" role="status">
       <span>{t("update.available", { version: status.version, current: status.currentVersion })}</span>
       {error && <span className="error">{error}</span>}
       <div className="banner-actions">
+        <button disabled={installing} onClick={showNotes}>{t("update.notesAction")}</button>
         <button className="primary" disabled={installing} onClick={() => void install()}>
           {installing ? t("update.installing") : t("update.install")}
         </button>

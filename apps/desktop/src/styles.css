@@ -1990,6 +1990,27 @@ select {
   gap: 8px;
   margin-top: 6px;
 }
+.modal.release-notes-dialog {
+  width: min(560px, 90vw);
+  max-height: 85vh;
+}
+.release-notes-body {
+  min-height: 0;
+  max-height: 55vh;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.release-notes-body p,
+.release-notes-body ul { margin: 0 0 var(--space-lg); }
+.release-notes-body ul { padding-left: var(--space-xl); }
+.release-notes-body li + li { margin-top: var(--space-xs); }
+.release-notes-body h3 {
+  margin: var(--space-lg) 0 var(--space-xs);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.release-notes-body h3:first-child { margin-top: 0; }
 .check {
   display: flex;
   align-items: center;
