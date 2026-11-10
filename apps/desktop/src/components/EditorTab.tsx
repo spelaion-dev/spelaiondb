@@ -737,7 +737,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     channel.onmessage = (event) => handle(event, sent, startedAt, queryPage, failures);
     const options = runOptionsOf(tab);
     try {
-      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, options, channel));
+      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, confirmed, options, channel));
       else await call(commands.runScript(tab.id, sent.text, confirmed, options, channel));
     } catch (e) {
       const detail = message(e);
