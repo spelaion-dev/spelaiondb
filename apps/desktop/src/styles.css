@@ -1867,6 +1867,61 @@ select {
 .open-object-dialog {
   width: min(600px, 92vw);
 }
+/* Structure editing with forms (ADR-047). */
+.structure-dialog {
+  width: min(760px, 94vw);
+  max-height: 90vh;
+}
+.structure-hint {
+  margin: 0;
+  max-width: 72ch;
+}
+.structure-columns {
+  display: grid;
+  gap: var(--space-xs);
+  min-height: 0;
+}
+.structure-columns table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.structure-columns > table {
+  display: block;
+  max-height: 280px;
+  overflow: auto;
+}
+.structure-columns th,
+.structure-columns td {
+  padding: var(--space-2xs) var(--space-xs);
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--line);
+}
+.structure-columns thead th {
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--muted);
+}
+.structure-columns tbody th {
+  font-weight: 400;
+  white-space: nowrap;
+}
+.structure-columns input[type="text"] {
+  width: 100%;
+  min-width: 96px;
+}
+.structure-columns .structure-check {
+  text-align: center;
+}
+.structure-changed {
+  margin-left: var(--space-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--warning-fg);
+}
+.structure-sql {
+  min-height: 48px;
+}
 .open-object-search {
   display: flex;
   gap: 8px;
