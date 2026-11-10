@@ -330,12 +330,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   /** Changes what the table data tab shows and loads it again. */
   function changeView(patch: Partial<TableView>) {
-    if (!tab.table) return;
+    const current = useApp.getState().tabs.find((item) => item.id === tab.id)?.table;
+    if (!current) return;
     if (pendingCount > 0 || savingEditsRef.current) {
       setNotice({ text: t("edit.applyFirst"), error: true });
       return;
     }
-    const next = { ...tab.table, ...patch };
+    const next = { ...current, ...patch };
     updateTab(tab.id, { table: next });
     void loadPage(next);
   }
@@ -353,12 +354,24 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
   }
 
+  const countSequence = useRef(0);
   async function countTable() {
     const view = tab.table;
+    const connectionId = tab.connectionId;
+    const sequence = ++countSequence.current;
     if (!view || !(await ensureConnected())) return;
+    const matchingView = () => {
+      const current = useApp.getState().tabs.find((item) => item.id === tab.id);
+      if (sequence !== countSequence.current || !current || current.connectionId !== connectionId ||
+          !current.table || current.table.schema !== view.schema || current.table.name !== view.name ||
+          current.table.filter !== view.filter) return undefined;
+      return current.table;
+    };
+    if (!matchingView()) return;
     try {
       const total = await call(commands.countTableRows(tab.id, view.schema, view.name, view.filter));
-      updateTab(tab.id, { table: { ...view, total: total ?? 0 } });
+      const current = matchingView();
+      if (current) updateTab(tab.id, { table: { ...current, total: total ?? 0 } });
     } catch (e) {
       setNotice({ text: message(e), error: true });
     }
