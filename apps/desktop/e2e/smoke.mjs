@@ -7,6 +7,7 @@
 // -p spelaion-cli; examples/demo/make-shop-db.py run and, for the PostgreSQL steps,
 // testing/docker up.
 //   node e2e/smoke.mjs [screenshots-dir]
+// On Linux (WebKitGTK has no CDP port) run the Linux pass instead: node e2e/smoke-linux.mjs.
 
 import { execFileSync, spawn } from "node:child_process";
 import assert from "node:assert/strict";
@@ -19,6 +20,12 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
+import { commandLines, requestClose } from "./processes.mjs";
+
+if (process.platform === "linux") {
+  console.error("smoke.mjs drives WebView2 over CDP; on Linux run node e2e/smoke-linux.mjs (AGENTS.md)");
+  process.exit(2);
+}
 
 const root = resolve(import.meta.dirname, "../../..");
 const exe = process.env.SPELAION_E2E_EXE ?? join(root, "target/release/spelaion-desktop" + (process.platform === "win32" ? ".exe" : ""));
@@ -179,20 +186,15 @@ async function stopApp() {
 /** Closes the app like its window's close button (WM_CLOSE), so its exit code runs. */
 async function closeApp() {
   const exited = once(app, "exit");
-  execFileSync("taskkill", ["/PID", String(app.pid)], { stdio: "ignore" });
+  requestClose(app.pid);
   const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("the app did not close")), 15_000));
   await Promise.race([exited, timeout]);
 }
 
 /** `kubectl` processes started with the test cluster's kubeconfig. */
 function testKubectls() {
-  const out = execFileSync(
-    "powershell",
-    ["-NoProfile", "-Command", "Get-CimInstance Win32_Process -Filter \"Name='kubectl.exe'\" | ForEach-Object { $_.CommandLine }"],
-    { encoding: "utf8" },
-  );
   const kubeconfig = process.env.SPELAION_TEST_K8S.replaceAll("\\", "/").toLowerCase();
-  return out.split(/\r?\n/).filter((line) => line.replaceAll("\\", "/").toLowerCase().includes(kubeconfig));
+  return commandLines("kubectl").filter((line) => line.replaceAll("\\", "/").toLowerCase().includes(kubeconfig));
 }
 
 async function connect() {
@@ -6482,14 +6484,14 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await run(quitPanel);
   await quitPanel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
   // The window's close button (WM_CLOSE): the core holds the window and the UI asks.
-  execFileSync("taskkill", ["/PID", String(app.pid)], { stdio: "ignore" });
+  requestClose(app.pid);
   const quitOpen = page.getByRole("dialog", { name: "Quit with an open transaction?" });
   await quitOpen.waitFor();
   await shot("11b-quit-open-transaction");
   await quitOpen.getByRole("button", { name: "Cancel", exact: true }).click();
   await quitOpen.waitFor({ state: "detached" });
   assert.equal(app.exitCode, null, "Cancel keeps the app open");
-  execFileSync("taskkill", ["/PID", String(app.pid)], { stdio: "ignore" });
+  requestClose(app.pid);
   const exitedOnQuit = once(app, "exit");
   await page.getByRole("dialog", { name: "Quit with an open transaction?" }).getByRole("button", { name: "Quit and roll back" }).click();
   await Promise.race([exitedOnQuit, new Promise((_, reject) => setTimeout(() => reject(new Error("the app did not quit")), 15_000))]);

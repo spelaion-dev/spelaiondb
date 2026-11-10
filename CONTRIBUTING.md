@@ -47,8 +47,9 @@ SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TE
 
 - If dependencies change: `cargo deny check`.
 - If the desktop app changes: `npm run build` in `apps/desktop` with no type errors and, if the
-  UI changes, the smoke test (`node e2e/smoke.mjs`, after building the app and the CLI as
-  [below](#release-build-the-app-and-the-cli)).
+  UI changes, the smoke test (`node e2e/smoke.mjs` on Windows, `node e2e/smoke-linux.mjs` on
+  Linux, after building the app and the CLI as [below](#release-build-the-app-and-the-cli); see
+  [The smoke test](#the-smoke-test)).
 - If something could not be tested (an OS you do not have, Pageant…), say so in the pull
   request.
 
@@ -87,6 +88,33 @@ all the packages of the same command only, and the app's build dependencies (Tau
 more of them than the CLI's. Each set of packages therefore gets its own DuckDB, and so does
 `cargo build --release -p spelaion-driver-duckdb` alone. Build both again with the same command
 after a change and only what changed is rebuilt.
+
+### The smoke test
+Both drive the release build in `target/release` with `examples/demo` and a temporary personal
+folder, so they never touch your configuration, AI clients, kubeconfig or keychain. Both need
+`python examples/demo/make-shop-db.py` run once and the Docker services up
+(`docker compose -f testing/docker/compose.yaml up -d --wait`).
+
+- **Windows**: `node e2e/smoke.mjs` (from `apps/desktop`). The whole test: Playwright over
+  WebView2's debugging port.
+- **Linux**: `node e2e/smoke-linux.mjs` (from `apps/desktop`). WebKitGTK has no debugging port,
+  so this pass speaks WebDriver to `tauri-driver` (which it starts itself), in front of
+  WebKitWebDriver. It is shorter: start, repository trust, a query on SQLite, DuckDB, PostgreSQL,
+  MySQL, MariaDB and SQL Server, a grid copy read back from the system clipboard, the import
+  dialog taking the system clipboard's text, PostgreSQL behind the two SSH bastions, and quitting
+  with a transaction open. It needs:
+  - `tauri-driver` (`cargo install tauri-driver --locked`, or set `TAURI_DRIVER`) and
+    WebKitWebDriver (`webkitgtk-6.0` on Arch, `webkit2gtk-driver` on Debian and Ubuntu; set
+    `WEBKIT_WEBDRIVER` if it is not on the `PATH`);
+  - a desktop session: Wayland with `wl-clipboard`, or X11 with `xclip`;
+  - a way to ask the window to close like its close button: Hyprland (`hyprctl`), Sway
+    (`swaymsg`) or an X11 window manager with `wmctrl`.
+
+  It sets the app's environment itself (`SPELAION_USER_DIR`, `SPELAION_NO_UPDATES=1`,
+  `SPELAION_MCP_CLIENTS_HOME`, an empty `KUBECONFIG`, no SSH agent and no session bus, so the
+  Secret Service cannot be reached). It prints each step with its time; a failing step prints its
+  name and the path of a screenshot (`e2e/screenshots/linux/failure.png`, or the folder given as
+  its argument). It replaces your clipboard while it runs.
 
 ## Pull requests
 - Work on a branch of your own, from an up-to-date `dev`, and open the pull request against

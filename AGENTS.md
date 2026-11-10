@@ -278,6 +278,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
   bundled DuckDB is compiled once: `npx tauri build --no-bundle -- -p spelaion-desktop -p
   spelaion-cli`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`, see `CONTRIBUTING.md`).
+  It drives WebView2 over CDP, so the whole test runs on **Windows** only. On **Linux**,
+  `node apps/desktop/e2e/smoke-linux.mjs` drives the same release build through
+  `tauri-driver` and WebKitWebDriver (`e2e/webdriver.mjs`, no dependencies): a shorter pass
+  (start, trust, a query on every engine, the real clipboard both ways, an SSH tunnel, quitting
+  with a transaction open), with what it needs in `CONTRIBUTING.md`. macOS has neither (no
+  WebDriver for WKWebView). `e2e/processes.mjs` closes windows and lists processes for both.
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;
   `SPELAION_NO_UPDATES` switches them off, as the smoke test does). Update artifacts are signed only in the release workflow
@@ -376,7 +382,8 @@ outside the team.
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
-  the smoke test `node e2e/smoke.mjs` (drives the real app over WebView2 CDP).
+  the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),
+  `node e2e/smoke-linux.mjs` on Linux (a shorter pass through WebDriver, see `CONTRIBUTING.md`).
 - If something could not be tested (for example Pageant or WebKitGTK), say so explicitly.
 
 ## Development environment
