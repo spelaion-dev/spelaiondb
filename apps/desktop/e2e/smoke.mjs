@@ -2598,11 +2598,43 @@ try {
   await panel.getByRole("button", { name: "Apply", exact: true }).click();
   await range.filter({ hasText: "rows 1–500" }).waitFor();
   await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
+  // Hold count responses after the real command completes, so page and filter changes race
+  // with an outstanding count deterministically, without slowing the database.
+  await page.evaluate(() => {
+    const original = window.fetch;
+    const pending = [];
+    window.__sdb141 = { original, pending };
+    window.fetch = (url, ...args) => {
+      const result = original(url, ...args);
+      if (!String(url).endsWith("/count_table_rows")) return result;
+      return new Promise((resolve, reject) => pending.push(() => result.then(resolve, reject)));
+    };
+  });
+  await panel.getByRole("button", { name: "Count", exact: true }).click();
+  await page.waitForFunction(() => window.__sdb141.pending.length === 1);
   const firstPageResult = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
   await panel.getByRole("button", { name: "Next page" }).click();
   await range.filter({ hasText: "rows 501–1,000" }).waitFor();
   await page.waitForFunction((button) => !button.isConnected, firstPageResult);
   await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
+  await page.evaluate(() => window.__sdb141.pending.shift()());
+  await range.filter({ hasText: "rows 501–1,000 of 50,000" }).waitFor();
+  await panel.getByRole("button", { name: "Count", exact: true }).click();
+  await page.waitForFunction(() => window.__sdb141.pending.length === 1);
+  await panel.getByRole("textbox", { name: "WHERE" }).fill("id > 49998");
+  await panel.getByRole("button", { name: "Apply", exact: true }).click();
+  await range.filter({ hasText: "rows 1–2" }).waitFor();
+  await page.evaluate(() => window.__sdb141.pending.shift()());
+  await page.waitForTimeout(200);
+  assert.equal(await range.innerText(), "rows 1–2", "a count for the old filter is discarded");
+  assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), "id > 49998");
+  await page.evaluate(() => {
+    window.fetch = window.__sdb141.original;
+    delete window.__sdb141;
+  });
+  await panel.getByRole("textbox", { name: "WHERE" }).fill("");
+  await panel.getByRole("button", { name: "Apply", exact: true }).click();
+  await range.filter({ hasText: "rows 1–500" }).waitFor();
   // A header click sorts in the server: ORDER BY written with the engine's quoting.
   {
     // The new page mounts a new grid: wait until it is laid out.
