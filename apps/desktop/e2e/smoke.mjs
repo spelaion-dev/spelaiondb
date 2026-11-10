@@ -4866,20 +4866,25 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const lightDot = await carefulBadge.evaluate((el) => getComputedStyle(el, "::before").backgroundColor);
   assert.match(await page.locator(".connection-row", { hasText: "Shop copy" }).locator(".label").getAttribute("title"), /Type: Careful/);
   // Marks never squeeze a name and are never cut: a badge, SSH or tag mark is shown whole, and only
-  // next to a name shown whole; the others are on a line that is never shown.
+  // next to a name shown whole; the others are out of view (`.mark-out`). The type's dot always
+  // stays: next to a name too long for the row, it is the only mark, without its name.
   const badRows = await page.evaluate(() =>
     [...document.querySelectorAll(".connection-row")].flatMap((row) => {
       const label = row.querySelector(".label");
       const marks = row.querySelector(".connection-marks");
       if (!label || !marks) return [];
       const box = marks.getBoundingClientRect();
-      const visible = [...marks.children].filter((mark) => mark.getBoundingClientRect().top < box.bottom);
+      const visible = [...marks.children].filter((mark) => !mark.classList.contains("mark-out"));
       const cut = visible.some((mark) => {
         const r = mark.getBoundingClientRect();
         return r.left < box.left - 0.5 || r.right > box.right + 0.5;
       });
-      const squeezed = visible.length > 0 && label.scrollWidth > label.clientWidth;
-      return cut || squeezed ? [`${label.textContent}: ${cut ? "cut mark" : "squeezed name"}`] : [];
+      const dotOnly = (mark) =>
+        mark.classList.contains("type-badge") && mark.querySelector(".type-badge-text")?.classList.contains("mark-out");
+      const squeezed = label.scrollWidth > label.clientWidth && visible.some((mark) => !dotOnly(mark));
+      const unmarked = marks.querySelector(".type-badge") && !visible.some((mark) => mark.classList.contains("type-badge"));
+      const problem = cut ? "cut mark" : squeezed ? "squeezed name" : unmarked ? "no type dot" : null;
+      return problem ? [`${label.textContent}: ${problem}`] : [];
     }),
   );
   assert.deepEqual(badRows, []);

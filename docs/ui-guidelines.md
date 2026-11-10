@@ -141,9 +141,12 @@ animate data, the grid, layout changes or anything while the user types. Under
 - **Tabs.** One active indicator: the `--panel` surface and a 2px accent edge. The close button
   shows on the active tab and on hover or focus; `Ctrl+W` always closes the active tab.
 - **Explorer, lists and trees.** 26px rows, a 16px icon and the name in `--text-md`. The name
-  comes first: badges and metadata sit on the right, shrink first and collapse to a dot with a
-  tooltip when the sidebar is narrow. Row actions show on hover, focus and selection, and are
-  always in the context menu.
+  comes first: badges and metadata sit on the right and only take the room the name leaves, each
+  shown whole or not at all, in order of importance, skipping one that does not fit without
+  hiding a smaller one after it (never cut with an ellipsis). A type badge collapses to its dot
+  when its name does not fit, and the dot always stays (the name gives way to it): the type is
+  what tells environments apart. The row's tooltip says what every hidden mark says. Row actions
+  show on hover, focus and selection, and are always in the context menu.
 - **Badges.** Soft: the tone's `-soft` background and `-fg` text, `--text-xs` at 600,
   `--radius-sm`, 2px by 6px of padding, the type's name in sentence case. Production's badge
   is the only solid one. One type badge per row at most; other flags (SSH, read-only) are

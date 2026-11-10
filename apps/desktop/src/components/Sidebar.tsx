@@ -55,6 +55,7 @@ import { isTextField, useFocusedPaste } from "../focusedPaste";
 import { topDialog } from "../modalFocus";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
+import { useFittingMarks } from "../connectionMarks";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
@@ -1513,6 +1514,7 @@ function ConnectionNode({
   dropClass: string;
 }) {
   const { t } = useTranslation("shell");
+  const marksRef = useFittingMarks();
   /** The outcome of copying this connection, or of an action of its menus, under its row. */
   const [rowNote, setRowNote] = useState<{ error: boolean; text: string } | null>(null);
   useEffect(() => {
@@ -1756,9 +1758,10 @@ function ConnectionNode({
           {connection.name}
         </span>
         {(kind || connection.tunnel || connection.tags.length > 0) && (
-          // In order of importance, each shown whole or not at all: the type, SSH, then a few
-          // quiet tags (a click filters the explorer by one). The name's tooltip has them all.
-          <span className="connection-marks">
+          // In order of importance: the type (its dot always stays), SSH, then a few quiet tags (a
+          // click filters the explorer by one), each shown whole or not at all where it fits
+          // (connectionMarks.ts). The name's tooltip has them all.
+          <span ref={marksRef} className="connection-marks">
             {kind && <TypeBadge type={kind} small />}
             {connection.tunnel && (
               <span
