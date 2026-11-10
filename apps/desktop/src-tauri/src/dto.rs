@@ -286,6 +286,7 @@ pub struct ObjectActionsItem {
     pub rename_views: bool,
     pub drop_schemas: bool,
     pub drop_constraints: bool,
+    pub rebuild_drops: bool,
     pub create: Vec<CreateKindItem>,
     pub new_index: Vec<NewIndexKindItem>,
     pub active_schema: bool,
@@ -473,6 +474,7 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             rename_views,
             drop_schemas,
             drop_constraints,
+            rebuild_drops,
             create,
             new_index,
             active_schema,
@@ -486,6 +488,7 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             rename_views,
             drop_schemas,
             drop_constraints,
+            rebuild_drops,
             create: create.into_iter().map(CreateKindItem::from).collect(),
             new_index: new_index.into_iter().map(NewIndexKindItem::from).collect(),
             active_schema,
@@ -496,6 +499,135 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             add_check_constraints,
         }
     }
+}
+
+/// A column as a structure form shows it (ADR-047): every field is SQL as the engine writes it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditableColumnItem {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub comment: Option<String>,
+    pub generated: bool,
+}
+
+/// A table's columns for its structure form, and what the engine does with a change.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStructureItem {
+    pub columns: Vec<EditableColumnItem>,
+    pub comments: bool,
+    pub transactional: bool,
+    pub rebuilds: bool,
+}
+
+impl From<spelaion_core::TableStructure> for TableStructureItem {
+    fn from(structure: spelaion_core::TableStructure) -> Self {
+        Self {
+            columns: structure
+                .columns
+                .into_iter()
+                .map(|c| EditableColumnItem {
+                    name: c.name,
+                    data_type: c.data_type,
+                    nullable: c.nullable,
+                    default: c.default,
+                    comment: c.comment,
+                    generated: c.generated,
+                })
+                .collect(),
+            comments: structure.comments,
+            transactional: structure.transactional,
+            rebuilds: structure.rebuilds,
+        }
+    }
+}
+
+/// A column's new state in a structure form.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnEditItem {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// A constraint a structure form drops, by its name in the catalog.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DroppedConstraintItem {
+    Constraint { name: String },
+    ForeignKey { name: String },
+}
+
+/// What a structure form asks for on one table; the core writes the SQL.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableAlterationItem {
+    pub schema: String,
+    pub table: String,
+    pub columns: Vec<ColumnEditItem>,
+    pub drop: Vec<DroppedConstraintItem>,
+}
+
+impl From<TableAlterationItem> for spelaion_core::TableAlteration {
+    fn from(item: TableAlterationItem) -> Self {
+        Self {
+            schema: item.schema,
+            table: item.table,
+            columns: item
+                .columns
+                .into_iter()
+                .map(|c| spelaion_core::ColumnEdit {
+                    name: c.name,
+                    data_type: c.data_type,
+                    nullable: c.nullable,
+                    default: c.default,
+                    comment: c.comment,
+                })
+                .collect(),
+            drop: item
+                .drop
+                .into_iter()
+                .map(|d| match d {
+                    DroppedConstraintItem::Constraint { name } => {
+                        spelaion_core::DroppedConstraint::Constraint { name }
+                    }
+                    DroppedConstraintItem::ForeignKey { name } => {
+                        spelaion_core::DroppedConstraint::ForeignKey { name }
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A statement of a structure script that needs confirmation: its position in `statements`.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct PlanRiskItem {
+    pub statement: u32,
+    pub risk: RiskKind,
+}
+
+/// The script a structure form would run, written by the core, to show before it does.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AlterationPreviewItem {
+    /// The whole script, as shown and as sent back to apply it.
+    pub sql: String,
+    /// Each statement, in the order it runs.
+    pub statements: Vec<String>,
+    pub risks: Vec<PlanRiskItem>,
+    pub transactional: bool,
+    pub rebuilds: bool,
 }
 
 /// The SQL of a change to show, and whether its object can be dropped in cascade.

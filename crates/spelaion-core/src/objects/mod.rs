@@ -6,6 +6,15 @@
 //! here with each engine's syntax and quoting; the UI only says what to change, and a change
 //! runs only once the user has seen its SQL and confirmed it.
 
+mod alter;
+mod ddl;
+mod rebuild;
+
+pub use alter::{
+    AlterationPlan, ColumnEdit, DroppedConstraint, EditableColumn, PlanRisk, TableAlteration,
+    TableStructure, alteration_plan, apply_alteration, table_structure,
+};
+
 use spelaion_driver_api::{
     Connection, ConstraintKind, Dialect, DriverError, NameFilter, ObjectInfo, ObjectKind,
     SchemaObject, SchemaObjectKind, Value,
@@ -265,6 +274,10 @@ pub enum ObjectError {
     NeedsConfirmation,
     #[error("{0} is not in the catalog any more: refresh the explorer")]
     Gone(String),
+    #[error("the table changed since its SQL was shown: review the new SQL")]
+    Changed,
+    #[error("this session has a transaction open: commit or roll it back first")]
+    TransactionOpen,
     #[error("statement {index} of {total} failed: {message}")]
     Failed {
         index: usize,
@@ -549,6 +562,9 @@ pub struct ObjectActions {
     /// Constraints and foreign keys can be dropped from their table: not in SQLite or DuckDB,
     /// which must create the table again.
     pub drop_constraints: bool,
+    /// Unique constraints and foreign keys are dropped by creating the table again (SQLite,
+    /// ADR-047): through the structure form's script, not a lone `DROP`.
+    pub rebuild_drops: bool,
     /// What "Create" offers, in menu order.
     pub create: Vec<CreateKind>,
     /// What can be added on chosen columns: SQLite and DuckDB add constraints only when the
@@ -588,6 +604,7 @@ pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
         rename_views: engine != "sqlite",
         drop_schemas: engine != "sqlite",
         drop_constraints: !matches!(engine, "sqlite" | "duckdb"),
+        rebuild_drops: engine == "sqlite",
         create,
         active_schema: matches!(engine, "postgres" | "mysql" | "duckdb"),
         add_constraints: matches!(engine, "postgres" | "mysql" | "sqlserver"),

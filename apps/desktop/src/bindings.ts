@@ -472,6 +472,22 @@ export const commands = {
 	 */
 	applyObjectChange: (session: string, change: ObjectChangeItem_Deserialize, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_object_change", { session, change, confirmed })),
 	/**
+	 *  A table's columns for its structure form (ADR-047), read from the catalog on the tab's
+	 *  session: each field as SQL the engine writes.
+	 */
+	tableStructure: (session: string, schema: string, table: string) => typedError<TableStructureItem_Serialize, string>(__TAURI_INVOKE("table_structure", { session, schema, table })),
+	/**
+	 *  The script a structure form's changes would run, written by the core from the catalog as
+	 *  it is now, with the statements the connection's safeguards ask to confirm. Nothing runs.
+	 */
+	previewTableAlteration: (session: string, alteration: TableAlterationItem_Deserialize) => typedError<AlterationPreviewItem, string>(__TAURI_INVOKE("preview_table_alteration", { session, alteration })),
+	/**
+	 *  Runs a structure form's changes on the tab's session, only as the script `sql` the user was
+	 *  shown: the core writes it again and refuses a table that changed, a read-only connection,
+	 *  and risky statements the user did not confirm (ADR-047). Returns how many statements ran.
+	 */
+	applyTableAlteration: (session: string, alteration: TableAlterationItem_Deserialize, sql: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_table_alteration", { session, alteration, sql, confirmed })),
+	/**
 	 *  The statement that starts a new object (table, view, schema…), written by the core in the
 	 *  engine's types, to finish in a new tab: nothing runs (ADR-026).
 	 */
@@ -739,6 +755,17 @@ export const events = {
 };
 
 /* Types */
+/**  The script a structure form would run, written by the core, to show before it does. */
+export type AlterationPreviewItem = {
+	/**  The whole script, as shown and as sent back to apply it. */
+	sql: string,
+	/**  Each statement, in the order it runs. */
+	statements: string[],
+	risks: PlanRiskItem[],
+	transactional: boolean,
+	rebuilds: boolean,
+};
+
 /**  Why the ANALYZE toggle is off, so the view can say so. */
 export type AnalyzeUnavailable = 
 /**  The connection is read-only, and ANALYZE executes the query. */
@@ -1072,6 +1099,27 @@ export type ColumnDetails_Deserialize = {
 export type ColumnDetails_Serialize = {
 	name: string,
 	nativeType: string,
+	nullable: boolean,
+	default: string | null,
+	comment: string | null,
+};
+
+/**  A column's new state in a structure form. */
+export type ColumnEditItem = ColumnEditItem_Serialize | ColumnEditItem_Deserialize;
+
+/**  A column's new state in a structure form. */
+export type ColumnEditItem_Deserialize = {
+	name: string,
+	dataType: string,
+	nullable: boolean,
+	default?: string | null,
+	comment?: string | null,
+};
+
+/**  A column's new state in a structure form. */
+export type ColumnEditItem_Serialize = {
+	name: string,
+	dataType: string,
 	nullable: boolean,
 	default: string | null,
 	comment: string | null,
@@ -1780,12 +1828,38 @@ export type DiagramTextFormatItem = "mermaid" | "dbml";
 /**  The coordinates a value had before Z and M were left out. */
 export type Dimensions = "xy" | "xyz" | "xym" | "xyzm";
 
+/**  A constraint a structure form drops, by its name in the catalog. */
+export type DroppedConstraintItem = { kind: "constraint"; name: string } | { kind: "foreignKey"; name: string };
+
 /**  A connection made by "Duplicate" (ADR-030). */
 export type DuplicatedItem = {
 	id: string,
 	name: string,
 	/**  Its password was in the keychain and the copy has its own entry now. */
 	passwordCopied: boolean,
+};
+
+/**  A column as a structure form shows it (ADR-047): every field is SQL as the engine writes it. */
+export type EditableColumnItem = EditableColumnItem_Serialize | EditableColumnItem_Deserialize;
+
+/**  A column as a structure form shows it (ADR-047): every field is SQL as the engine writes it. */
+export type EditableColumnItem_Deserialize = {
+	name: string,
+	dataType: string,
+	nullable: boolean,
+	default?: string | null,
+	comment?: string | null,
+	generated: boolean,
+};
+
+/**  A column as a structure form shows it (ADR-047): every field is SQL as the engine writes it. */
+export type EditableColumnItem_Serialize = {
+	name: string,
+	dataType: string,
+	nullable: boolean,
+	default: string | null,
+	comment: string | null,
+	generated: boolean,
 };
 
 export type EditableTableItem = {
@@ -2949,6 +3023,7 @@ export type ObjectActionsItem = {
 	renameViews: boolean,
 	dropSchemas: boolean,
 	dropConstraints: boolean,
+	rebuildDrops: boolean,
 	create: CreateKindItem[],
 	newIndex: NewIndexKindItem[],
 	activeSchema: boolean,
@@ -3378,6 +3453,12 @@ export type PlanPage_Serialize = {
 export type PlanRawFormat = "json" | 
 /**  MySQL's EXPLAIN ANALYZE tree, or the `sqlite3` shell's `QUERY PLAN` tree. */
 "text" | "xml";
+
+/**  A statement of a structure script that needs confirmation: its position in `statements`. */
+export type PlanRiskItem = {
+	statement: number,
+	risk: RiskKind,
+};
 
 export type PlanSort = "tree" | "nodeType" | "relation" | "index" | "cost" | "selfCost" | "estimatedRows" | "actualRowsPerLoop" | "actualRows" | "time" | "selfTime" | "timePerLoop" | "loops" | "buffersHit" | "buffersRead" | "rowsRemoved" | "heapFetches" | "workersPlanned" | "workersLaunched" | "temporaryRead" | "temporaryWritten" | "sortSpace" | "findings";
 
@@ -4147,6 +4228,25 @@ export type StatStateItem = { kind: "done" } |
 /**  The engine refused it: its message. */
 { kind: "failed"; message: string };
 
+/**  What a structure form asks for on one table; the core writes the SQL. */
+export type TableAlterationItem = TableAlterationItem_Serialize | TableAlterationItem_Deserialize;
+
+/**  What a structure form asks for on one table; the core writes the SQL. */
+export type TableAlterationItem_Deserialize = {
+	schema: string,
+	table: string,
+	columns: ColumnEditItem_Deserialize[],
+	drop: DroppedConstraintItem[],
+};
+
+/**  What a structure form asks for on one table; the core writes the SQL. */
+export type TableAlterationItem_Serialize = {
+	schema: string,
+	table: string,
+	columns: ColumnEditItem_Serialize[],
+	drop: DroppedConstraintItem[],
+};
+
 export type TableDetails = TableDetails_Serialize | TableDetails_Deserialize;
 
 export type TableDetails_Deserialize = {
@@ -4236,6 +4336,25 @@ export type TableStatusItem_Deserialize = { kind: "searched"; columns: number; h
 
 /**  How searching one table ended. */
 export type TableStatusItem_Serialize = { kind: "searched"; columns: number; hits: SearchHitItem_Serialize[]; more: boolean } | { kind: "noColumns" } | { kind: "failed"; message: string } | { kind: "cancelled" };
+
+/**  A table's columns for its structure form, and what the engine does with a change. */
+export type TableStructureItem = TableStructureItem_Serialize | TableStructureItem_Deserialize;
+
+/**  A table's columns for its structure form, and what the engine does with a change. */
+export type TableStructureItem_Deserialize = {
+	columns: EditableColumnItem_Deserialize[],
+	comments: boolean,
+	transactional: boolean,
+	rebuilds: boolean,
+};
+
+/**  A table's columns for its structure form, and what the engine does with a change. */
+export type TableStructureItem_Serialize = {
+	columns: EditableColumnItem_Serialize[],
+	comments: boolean,
+	transactional: boolean,
+	rebuilds: boolean,
+};
 
 export type TemporalKindItem = "date" | "time" | "timestamp" | 
 /**  Written in UTC with `+00`, as the grid shows it. */

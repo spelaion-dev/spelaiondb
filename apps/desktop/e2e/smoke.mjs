@@ -2068,6 +2068,44 @@ try {
       await dropAdded.getByLabel("SQL that will run").filter({ hasText: "DROP COLUMN smoke_added" }).waitFor();
       await dropAdded.getByRole("button", { name: "Drop", exact: true }).click();
       await overview.getByText("smoke_added", { exact: true }).waitFor({ state: "detached" });
+      // Edit columns with the form (ADR-047): the core writes one script that follows the form;
+      // SQLite rebuilds the table, so the risk dialog asks before its DROP TABLE runs.
+      await overview.getByRole("button", { name: "Edit columns…" }).click();
+      const editColumns = page.getByRole("dialog", { name: "Edit columns of product" });
+      await editColumns.getByLabel("SQL that will run").filter({ hasText: "Nothing has changed yet." }).waitFor();
+      assert.ok(await editColumns.getByRole("button", { name: "Apply changes" }).isDisabled());
+      await editColumns.getByLabel("Default of stock").fill("5");
+      await editColumns.getByLabel("Type of price").fill("NUMERIC");
+      await editColumns.getByLabel("SQL that will run").filter({ hasText: "INSERT INTO _spelaion_rebuild_product" }).waitFor();
+      await editColumns.getByLabel("SQL that will run").filter({ hasText: "stock integer DEFAULT 5" }).waitFor();
+      assert.equal(await editColumns.getByText("Changed", { exact: true }).count(), 2);
+      await shot("sdb-21-edit-columns");
+      const themeBeforeEdit = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+      await shot("sdb-21-edit-columns-dark");
+      await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforeEdit);
+      await editColumns.getByRole("button", { name: "Apply changes" }).click();
+      const rebuildRisk = page.getByRole("dialog", { name: "Run these statements?" });
+      await rebuildRisk.getByText(/DROP TABLE product/).first().waitFor();
+      await shot("sdb-21-rebuild-confirmation");
+      await rebuildRisk.getByRole("button", { name: /^Run anyway/ }).click();
+      await editColumns.waitFor({ state: "detached" });
+      const stockRow = overview.getByRole("row").filter({ hasText: "stock" });
+      await stockRow.getByRole("cell", { name: "5", exact: true }).waitFor();
+      await overview.getByRole("row").filter({ hasText: "price" }).getByRole("cell", { name: "NUMERIC", exact: true }).waitFor();
+      // The same form on one column, from the explorer's column menu, can open its SQL instead.
+      const productColumns = productChildren.getByRole("button", { name: "Expand or collapse Columns", exact: true }).locator("xpath=..");
+      if (await productChildren.getByRole("button", { name: "Expand or collapse Columns", exact: true }).getAttribute("aria-expanded") !== "true") {
+        await productChildren.getByRole("button", { name: "Expand or collapse Columns", exact: true }).locator(".twisty").click();
+      }
+      await productColumns.locator(".leaf-row", { hasText: /^name/ }).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Edit column…" }).click();
+      const editName = page.getByRole("dialog", { name: "Edit column name of product" });
+      await editName.getByLabel("name is nullable").check();
+      await editName.getByLabel("SQL that will run").filter({ hasText: "name text," }).waitFor();
+      await editName.getByRole("button", { name: "Open in editor" }).click();
+      await panel.locator(".cm-content", { hasText: "INSERT INTO _spelaion_rebuild_product" }).waitFor();
+      await page.keyboard.press("Control+w");
+      await overview.waitFor();
       // A lost metadata session must not reconnect or repeat its catalog read by itself.
       const detailsSession = (await page.locator(".tabbar .tab.active").getAttribute("id")).replace("workspace-", "");
       await page.evaluate((session) => window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {

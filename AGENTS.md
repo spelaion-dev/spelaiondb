@@ -217,8 +217,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
   `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
   to get around it.
-  `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
-  create, new index…); `tests/object_actions.rs` runs each engine's statements on that engine.
+  `objects/` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
+  create, new index…) and the structure forms (ADR-047): `alter.rs` turns a form's columns into
+  one script from the catalog read again each time, applied only as it was shown; `rebuild.rs`
+  is SQLite's table rebuild; `ddl.rs` edits the `CREATE TABLE` text SQLite and MySQL keep.
+  `tests/object_actions.rs` runs each engine's statements on that engine.
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
   hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
   `Tunnel::probe`, login), its own tunnel, Stop that closes what it opened, failures classified

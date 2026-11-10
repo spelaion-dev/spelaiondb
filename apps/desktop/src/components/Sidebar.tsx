@@ -57,6 +57,7 @@ import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./Explorer
 import { EngineIcon } from "./EngineIcon";
 import { useFittingMarks } from "../connectionMarks";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
+import { StructureDialog } from "./StructureDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
@@ -2778,6 +2779,8 @@ function ColumnRow({
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
+  /** The structure form on this column, or on the chosen ones (ADR-047). */
+  const [editing, setEditing] = useState<string[] | null>(null);
   const actions = useObjectActions(session);
   const paths = [{ schema, names: [table, column.name] }];
   const chosen = chosenColumns.includes(column.name);
@@ -2832,6 +2835,15 @@ function ColumnRow({
           >
             {t("objectChange.renameMenu")}
           </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              setEditing(indexColumns);
+            }}
+          >
+            {t(indexColumns.length > 1 ? "structure.editSelected" : "structure.editColumn", { count: indexColumns.length })}
+          </button>
           <DropMenuItem
             onClick={() => {
               setMenu(null);
@@ -2848,6 +2860,20 @@ function ColumnRow({
               </button>
             ))}
         </div>
+      )}
+      {editing && (
+        <StructureDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          table={table}
+          columns={editing}
+          onClose={() => setEditing(null)}
+          onDone={() => {
+            setEditing(null);
+            onTableChanged();
+          }}
+        />
       )}
       {renaming && (
         <ObjectChangeDialog

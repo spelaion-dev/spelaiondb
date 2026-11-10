@@ -56,3 +56,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [044](0044-pending-edits-in-the-core.md) | Pending edits live in the core, with bulk edits of a selection and undo / redo (supersedes ADR-014's pending changes in the UI) | Accepted |
 | [045](0045-geometry-on-a-map.md) | Geometry values on a map: GeoJSON from the core, drawn as SVG, tiles only when the user names a server | Accepted |
 | [046](0046-er-diagrams.md) | ER diagrams: laid out in the core from the explorer's catalog, drawn as plain SVG | Accepted |
+| [047](0047-structure-editing-with-forms.md) | Structure editing with forms: one script from the core, applied only as it was shown; SQLite rebuilds the table | Accepted |

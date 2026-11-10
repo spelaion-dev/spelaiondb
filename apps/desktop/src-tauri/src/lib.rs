@@ -4380,6 +4380,80 @@ async fn apply_object_change(
     Ok(u32::try_from(ran).unwrap_or(u32::MAX))
 }
 
+/// A table's columns for its structure form (ADR-047), read from the catalog on the tab's
+/// session: each field as SQL the engine writes.
+#[tauri::command]
+#[specta::specta]
+async fn table_structure(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TableStructureItem> {
+    let open = state.session(&session).await?;
+    spelaion_core::table_structure(&open.session, &schema, &table)
+        .await
+        .map(TableStructureItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// The script a structure form's changes would run, written by the core from the catalog as
+/// it is now, with the statements the connection's safeguards ask to confirm. Nothing runs.
+#[tauri::command]
+#[specta::specta]
+async fn preview_table_alteration(
+    session: String,
+    alteration: TableAlterationItem,
+    state: State<'_, AppState>,
+) -> CmdResult<AlterationPreviewItem> {
+    let open = state.session(&session).await?;
+    let alteration = spelaion_core::TableAlteration::from(alteration);
+    let plan = spelaion_core::alteration_plan(&open.session, &alteration)
+        .await
+        .map_err(|e| e.to_string())?;
+    let risks = plan
+        .risks(open.session.dialect().as_ref(), &open.resolved.safeguards())
+        .into_iter()
+        .map(|risk| PlanRiskItem {
+            statement: u32::try_from(risk.statement.saturating_sub(1)).unwrap_or(u32::MAX),
+            risk: risk.risk.into(),
+        })
+        .collect();
+    Ok(AlterationPreviewItem {
+        sql: plan.script(),
+        statements: plan.statements().into_iter().map(String::from).collect(),
+        risks,
+        transactional: plan.transactional(),
+        rebuilds: plan.rebuilds(),
+    })
+}
+
+/// Runs a structure form's changes on the tab's session, only as the script `sql` the user was
+/// shown: the core writes it again and refuses a table that changed, a read-only connection,
+/// and risky statements the user did not confirm (ADR-047). Returns how many statements ran.
+#[tauri::command]
+#[specta::specta]
+async fn apply_table_alteration(
+    session: String,
+    alteration: TableAlterationItem,
+    sql: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    let ran = spelaion_core::apply_alteration(
+        &open.session,
+        &alteration.into(),
+        &sql,
+        open.resolved.params.read_only,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
 /// The pending edits of a table data page, as the core holds them (ADR-044).
 #[tauri::command]
 #[specta::specta]
@@ -4793,6 +4867,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             object_actions,
             preview_object_change,
             apply_object_change,
+            table_structure,
+            preview_table_alteration,
+            apply_table_alteration,
             create_sql,
             new_index_sql,
             new_table_element_sql,
