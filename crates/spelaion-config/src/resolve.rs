@@ -412,12 +412,12 @@ impl<'a> Resolver<'a> {
 
     /// Stores a password typed by the user in the keychain (`Password::Prompt::save_to`).
     pub fn remember_password(&self, account: &str, secret: &Secret) -> Result<(), ResolveError> {
-        self.backend
-            .keychain_set(account, secret.expose())
-            .map_err(|message| ResolveError::Secret {
+        crate::secrets::store(self.backend, account, secret.expose()).map_err(|message| {
+            ResolveError::Secret {
                 reference: format!("keychain:{account}"),
                 message,
-            })
+            }
+        })
     }
 
     /// Every `${user.…}` variable the connection and its tunnel use must be defined; the

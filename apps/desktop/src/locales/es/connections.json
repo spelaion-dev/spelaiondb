@@ -169,6 +169,7 @@
     "kinds": {
       "config": "Configuración",
       "passwordRequired": "Falta la contraseña",
+      "keychainEmpty": "No hay contraseña guardada",
       "cancelled": "Cancelado",
       "proxyAuth": "Autenticación del proxy",
       "sshAuth": "Autenticación SSH",
@@ -185,6 +186,7 @@
     "hints": {
       "config": "No se pudo leer la conexión o su perfil de red: corrige lo que indica el mensaje (una variable, una referencia a un secreto, la ruta de un archivo).",
       "passwordRequired": "Esta conexión pide su contraseña cada vez: escríbela en el formulario para probar el inicio de sesión.",
+      "keychainEmpty": "El llavero del sistema no tiene ninguna contraseña guardada para esta conexión. Escríbela para probar el inicio de sesión; al guardar la conexión se guarda.",
       "cancelled": "Se descartó una pregunta (una contraseña, una frase de paso o la huella de un servidor) y la prueba se paró ahí. Vuelve a probar y respóndela.",
       "proxyAuth": "El proxy rechazó el usuario o la contraseña. Revísalos en la sección del proxy del perfil de red.",
       "sshAuth": "Este servidor SSH rechazó todos los métodos probados: revisa el usuario, la clave (su clave pública debe estar en el authorized_keys del servidor), la contraseña o el agente. Algunos servidores no aceptan contraseñas en absoluto.",
@@ -224,6 +226,7 @@
     "other": "Definida en el fichero",
     "otherHint": "Esta contraseña viene de una referencia que el formulario no puede editar (1Password, una orden o una entrada con nombre del llavero). Se conserva tal cual; edita el fichero para cambiarla.",
     "keepPlaceholder": "Déjala vacía para conservar la contraseña guardada",
+    "notStoredPlaceholder": "No hay ninguna contraseña guardada: escríbela para guardarla",
     "token": "Token de la nube (IAM)"
   },
   "cancel": "Cancelar",

@@ -169,6 +169,7 @@
     "kinds": {
       "config": "Configuration",
       "passwordRequired": "Password required",
+      "keychainEmpty": "No password stored",
       "cancelled": "Cancelled",
       "proxyAuth": "Proxy authentication",
       "sshAuth": "SSH authentication",
@@ -185,6 +186,7 @@
     "hints": {
       "config": "The connection or its network profile could not be read: fix what the message names (a variable, a secret reference, a file path).",
       "passwordRequired": "This connection asks for its password every time: type it in the form to test the login.",
+      "keychainEmpty": "No password is stored in the system keychain for this connection. Type it to test the login; saving the connection stores it.",
       "cancelled": "A question (a password, a passphrase or a server fingerprint) was dismissed, so the test stopped there. Test again and answer it.",
       "proxyAuth": "The proxy refused the username or the password. Check them in the proxy section of the network profile.",
       "sshAuth": "This SSH server refused every method tried: check the user, the key (its public key must be in the server's authorized_keys), the password or the agent. Some servers refuse passwords altogether.",
@@ -224,6 +226,7 @@
     "other": "Defined in the file",
     "otherHint": "This password comes from a reference the form cannot edit (1Password, a command or a named keychain entry). It is kept as is; edit the file to change it.",
     "keepPlaceholder": "Leave empty to keep the saved password",
+    "notStoredPlaceholder": "No password is stored: type it to save it",
     "token": "Cloud token (IAM)"
   },
   "cancel": "Cancel",

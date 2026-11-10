@@ -443,6 +443,134 @@ async fn stop_during_the_login_closes_its_connection() {
     );
 }
 
+/// A system keychain for the resolver, without touching the real one: `entries` by account,
+/// or no keychain at all.
+struct FakeKeychain {
+    entries: Vec<(String, String)>,
+    available: bool,
+}
+
+impl spelaion_config::SecretBackend for FakeKeychain {
+    fn keychain_get(&self, account: &str) -> Result<Option<String>, String> {
+        if !self.available {
+            return Err(spelaion_config::KEYCHAIN_UNAVAILABLE.into());
+        }
+        Ok(self
+            .entries
+            .iter()
+            .find(|(a, _)| a == account)
+            .map(|(_, secret)| secret.clone()))
+    }
+    fn keychain_set(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("read-only in this test".into())
+    }
+    fn keychain_delete(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn env(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn run(&self, _: &str, _: &[&str]) -> Result<String, String> {
+        Err("nothing runs in this test".into())
+    }
+    fn run_shell(&self, _: &str) -> Result<String, String> {
+        Err("nothing runs in this test".into())
+    }
+    fn keychain_available(&self) -> bool {
+        self.available
+    }
+}
+
+impl Workspace {
+    fn resolve_with(
+        &self,
+        id: &str,
+        backend: &dyn spelaion_config::SecretBackend,
+    ) -> Result<ResolvedConnection, ResolveError> {
+        let config = load(Some(&self.base.join("repo")), &self.base.join("user"));
+        let mut trust = TrustStore::load(&self.base.join("user")).unwrap();
+        trust.trust(&config).unwrap();
+        let id = ConnectionId {
+            source: Source::Workspace,
+            path: id.into(),
+        };
+        Resolver::new(&config, &trust, backend).resolve(&id)
+    }
+}
+
+/// A `keychain` connection with nothing stored fails at logging in with its own kind and
+/// hint, not as a connection that asks every time; `prompt`, and `keychain` on a system
+/// without one, still ask every time. A password the keychain holds for another entry never
+/// reaches the log or the diagnostics.
+#[tokio::test]
+async fn a_keychain_connection_with_nothing_stored_says_so() {
+    let server = Silent::start().await;
+    let ws = Workspace::new("keychain-empty");
+    let connection = |secret: &str| {
+        format!(
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\ndatabase = \"spelaion\"\nuser = \"spelaion\"\npassword = {{ secret = \"{secret}\" }}\n",
+            server.port
+        )
+    };
+    ws.write(".spelaion/connections/db.toml", &connection("keychain"));
+    let planted = "planted-keychain-secret-4321";
+    let keychain = FakeKeychain {
+        entries: vec![("another/connection/password".into(), planted.into())],
+        available: true,
+    };
+    let seen = Seen::default();
+    let report = run(
+        ws.resolve_with("db", &keychain),
+        ws.options(TestScope::Full, TestUi::answering(&[planted])),
+        &seen,
+    )
+    .await;
+    assert_eq!(
+        failure(&report),
+        (2, FailureKind::KeychainEmpty),
+        "{}",
+        report.diagnostics
+    );
+    assert!(
+        report
+            .diagnostics
+            .contains(FailureKind::KeychainEmpty.hint()),
+        "{}",
+        report.diagnostics
+    );
+    assert!(
+        report.diagnostics.contains("no password stored")
+            && !report
+                .diagnostics
+                .contains(FailureKind::PasswordRequired.hint()),
+        "{}",
+        report.diagnostics
+    );
+    assert_no_leak(&report, &seen, &[planted]);
+
+    // No keychain on this system: the password is asked every time.
+    let none = FakeKeychain {
+        entries: vec![],
+        available: false,
+    };
+    let report = run(
+        ws.resolve_with("db", &none),
+        ws.options(TestScope::Full, TestUi::answering(&[])),
+        &Seen::default(),
+    )
+    .await;
+    assert_eq!(failure(&report), (2, FailureKind::PasswordRequired));
+
+    ws.write(".spelaion/connections/db.toml", &connection("prompt"));
+    let report = run(
+        ws.resolve_with("db", &keychain),
+        ws.options(TestScope::Full, TestUi::answering(&[])),
+        &Seen::default(),
+    )
+    .await;
+    assert_eq!(failure(&report), (2, FailureKind::PasswordRequired));
+}
+
 // --------------------------------------------------------------------------- redaction
 
 /// Everything that went out must be free of `secrets`.

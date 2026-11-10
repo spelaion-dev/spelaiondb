@@ -53,6 +53,8 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const [importing, setImporting] = useState<ImportClientId | null>(null);
   const [initial, setInitial] = useState<ConnectionDraft | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
+  /** Whether the keychain holds the edited connection's password (never its value). */
+  const [passwordStored, setPasswordStored] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   /** The engine the edited connection has on disk, and what switching it did (ADR-030). */
   const [savedEngine, setSavedEngine] = useState<string | null>(null);
@@ -75,9 +77,10 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
       try {
         if (!(await ensureEditorAccess(editing))) { close(); return; }
         // The "Serialize" variant only differs in optional markers: same fields.
-        const [saved, revision] = await call(commands.connectionDraft(editing));
-        const draft = saved as ConnectionDraft;
-        setRevision(revision);
+        const edited = await call(commands.connectionDraft(editing));
+        const draft = edited.draft as ConnectionDraft;
+        setRevision(edited.revision);
+        setPasswordStored(edited.passwordStored);
         setInitial(draft);
         setSavedEngine(draft.engine);
         setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
@@ -132,6 +135,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
                 initial={initial}
                 initialPassword={carriedPassword}
                 revision={revision}
+                passwordStored={passwordStored}
                 engines={engines.filter((e) => e.available)}
                 savedEngine={savedEngine ?? engine.id}
                 engineChange={engineChange}
@@ -359,6 +363,8 @@ function ConnectionForm(props: {
   editing?: string;
   initial?: ConnectionDraft;
   revision?: string;
+  /** Editing: whether the keychain holds its password, so leaving the field empty keeps one. */
+  passwordStored?: boolean;
   /** Values read from a pasted connection URL. */
   prefill?: UrlFields;
   /** A password typed before the engine was switched, kept in the new form. */
@@ -782,7 +788,9 @@ function ConnectionForm(props: {
                         type="password"
                         value={password}
                         autoComplete="off"
-                        placeholder={editing && initial?.passwordMode === "keychain" && savePassword ? t("auth.keepPlaceholder") : ""}
+                        placeholder={editing && initial?.passwordMode === "keychain" && savePassword
+                          ? props.passwordStored ? t("auth.keepPlaceholder") : keychain === false ? "" : t("auth.notStoredPlaceholder")
+                          : ""}
                         onChange={(e) => { setPassword(e.target.value); changed(); }}
                       />
                     </Field>

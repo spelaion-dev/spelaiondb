@@ -2908,6 +2908,30 @@ pub struct TunnelDraftItem {
     pub proxy: Option<ProxyDraftItem>,
 }
 
+/// A connection opened in the editor.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedConnectionItem {
+    pub draft: ConnectionDraftItem,
+    /// The file's revision, for a save to refuse a file changed on disk.
+    pub revision: String,
+    /// Whether the system keychain holds this connection's password (never its value): the
+    /// form offers to keep a saved password only then.
+    pub password_stored: bool,
+}
+
+/// A tunnel opened in the editor.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedTunnelItem {
+    pub draft: TunnelDraftItem,
+    pub revision: String,
+    /// Whether the system keychain holds each hop's password, in order (never the values).
+    pub hop_passwords_stored: Vec<bool>,
+    /// Whether it holds the proxy's password.
+    pub proxy_password_stored: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ProxyTypeItem {
@@ -4136,6 +4160,7 @@ pub struct TestFailureItem {
 pub enum FailureKindItem {
     Config,
     PasswordRequired,
+    KeychainEmpty,
     Cancelled,
     ProxyAuth,
     SshAuth,
@@ -4156,6 +4181,7 @@ impl From<spelaion_core::FailureKind> for FailureKindItem {
         match kind {
             FailureKind::Config => Self::Config,
             FailureKind::PasswordRequired => Self::PasswordRequired,
+            FailureKind::KeychainEmpty => Self::KeychainEmpty,
             FailureKind::Cancelled => Self::Cancelled,
             FailureKind::ProxyAuth => Self::ProxyAuth,
             FailureKind::SshAuth => Self::SshAuth,

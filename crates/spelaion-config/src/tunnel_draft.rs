@@ -159,6 +159,32 @@ fn uses_keychain(hop: &HopConfig) -> bool {
         .is_some_and(|p| p.secret == "keychain")
 }
 
+/// Which of a tunnel's `keychain` passwords the keychain holds, never their values: the
+/// editor offers to keep a saved password only when there is one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoredTunnelPasswords {
+    /// One per hop, in order.
+    pub hops: Vec<bool>,
+    pub proxy: bool,
+}
+
+pub fn tunnel_passwords_stored(
+    config: &Config,
+    entry: &TunnelEntry,
+    backend: &dyn SecretBackend,
+) -> StoredTunnelPasswords {
+    let stored = |account: String| crate::secrets::is_stored(backend, &account);
+    StoredTunnelPasswords {
+        hops: (entry.file.hops.iter().enumerate())
+            .map(|(i, hop)| {
+                uses_keychain(hop) && stored(tunnel_account(config, entry.source, &entry.name, i))
+            })
+            .collect(),
+        proxy: proxy_uses_keychain(&entry.file)
+            && stored(proxy_account(config, entry.source, &entry.name)),
+    }
+}
+
 impl TunnelDraft {
     /// Name used for the file and by connections: `slug(name)`.
     pub fn file_name(&self) -> Result<String, ConfigError> {
@@ -355,8 +381,7 @@ fn store_passwords(
     backend: &dyn SecretBackend,
 ) -> Result<Vec<String>, ResolveError> {
     let set = |account: String, secret: &Secret| {
-        backend
-            .keychain_set(&account, secret.expose())
+        crate::secrets::store(backend, &account, secret.expose())
             .map_err(|message| ResolveError::Secret {
                 reference: format!("keychain:{account}"),
                 message,

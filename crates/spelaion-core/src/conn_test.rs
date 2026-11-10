@@ -95,6 +95,9 @@ pub enum FailureKind {
     Config,
     /// The connection asks for its password and none was typed.
     PasswordRequired,
+    /// The password is read from the system keychain, which has none stored for this
+    /// connection, and none was typed.
+    KeychainEmpty,
     /// A question (password, passphrase, fingerprint) was dismissed.
     Cancelled,
     ProxyAuth,
@@ -118,6 +121,7 @@ impl FailureKind {
         match self {
             FailureKind::Config => "configuration",
             FailureKind::PasswordRequired => "password required",
+            FailureKind::KeychainEmpty => "no password stored",
             FailureKind::Cancelled => "cancelled",
             FailureKind::ProxyAuth => "proxy authentication",
             FailureKind::SshAuth => "SSH authentication",
@@ -141,6 +145,9 @@ impl FailureKind {
             }
             FailureKind::PasswordRequired => {
                 "This connection asks for its password every time: type it in the form to test the login."
+            }
+            FailureKind::KeychainEmpty => {
+                "No password is stored in the system keychain for this connection. Type it to test the login; saving the connection stores it."
             }
             FailureKind::Cancelled => {
                 "A question (a password, a passphrase or a server fingerprint) was dismissed, so the test stopped there. Test again and answer it."
@@ -596,13 +603,22 @@ async fn connection_steps(
         return Ok(None);
     };
     run.start(step);
-    if let Password::Prompt { .. } = resolved.password
+    if let Password::Prompt { save_to } = &resolved.password
         && options.password.is_none()
     {
-        return Err((
-            FailureKind::PasswordRequired,
-            "this connection asks for its password, and none was typed".into(),
-        ));
+        return Err(match save_to {
+            // `keychain`, and the keychain has nothing for it.
+            Some(_) => (
+                FailureKind::KeychainEmpty,
+                "the system keychain has no password stored for this connection, and none was typed"
+                    .into(),
+            ),
+            // `prompt`, or `keychain` with no keychain on this system.
+            None => (
+                FailureKind::PasswordRequired,
+                "this connection asks for its password, and none was typed".into(),
+            ),
+        });
     }
     if let Some(tunnel) = &tunnel {
         if resolved.engine == Engine::Sqlite {
@@ -812,7 +828,12 @@ fn open_failure(error: &OpenError) -> Failure {
         OpenError::Timeout { .. } => (FailureKind::Timeout, error.to_string()),
         OpenError::Tunnel(e) => ssh_failure(e),
         OpenError::Kube(e) => (classify_kube(e), error.to_string()),
-        OpenError::PasswordRequired { .. } => (FailureKind::PasswordRequired, error.to_string()),
+        OpenError::PasswordRequired { save_to: Some(_) } => {
+            (FailureKind::KeychainEmpty, error.to_string())
+        }
+        OpenError::PasswordRequired { save_to: None } => {
+            (FailureKind::PasswordRequired, error.to_string())
+        }
         OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
         // The test logs in without the session setup; only an opened session runs it.
         OpenError::Setup(_) => (FailureKind::Other, error.to_string()),
@@ -1388,6 +1409,7 @@ mod tests {
         let kinds = [
             FailureKind::Config,
             FailureKind::PasswordRequired,
+            FailureKind::KeychainEmpty,
             FailureKind::Cancelled,
             FailureKind::ProxyAuth,
             FailureKind::SshAuth,

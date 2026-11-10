@@ -507,7 +507,7 @@ pub fn add_connection(
         && let Some(secret) = password.filter(|s| !s.expose().is_empty())
     {
         let account = connection_account(config, &entry.id);
-        if let Err(message) = backend.keychain_set(&account, secret.expose()) {
+        if let Err(message) = crate::secrets::store(backend, &account, secret.expose()) {
             // Without its password the new file would ask for it on first use, which is
             // confusing right after typing it: undo the whole operation instead.
             let _ = std::fs::remove_file(&path);
@@ -606,6 +606,17 @@ pub(crate) fn uses_default_keychain(file: &ConnectionFile) -> bool {
     file.password
         .as_ref()
         .is_some_and(|p| p.secret == "keychain")
+}
+
+/// Whether the keychain holds the password of a connection whose password is `keychain`,
+/// never the value: the editor offers to keep a saved password only when there is one.
+pub fn connection_password_stored(
+    config: &Config,
+    entry: &ConnectionEntry,
+    backend: &dyn SecretBackend,
+) -> bool {
+    uses_default_keychain(&entry.file)
+        && crate::secrets::is_stored(backend, &connection_account(config, &entry.id))
 }
 
 /// Sets (or removes, with `None`) one key of the document, creating parent tables as needed
@@ -910,7 +921,7 @@ pub fn update_connection(
     let account = connection_account(config, &entry.id);
     let keychain = if uses_default_keychain(&new) {
         match password.filter(|s| !s.expose().is_empty()) {
-            Some(secret) => backend.keychain_set(&account, secret.expose()),
+            Some(secret) => crate::secrets::store(backend, &account, secret.expose()),
             None => Ok(()),
         }
     } else if uses_default_keychain(old) {

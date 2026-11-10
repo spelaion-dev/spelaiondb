@@ -154,7 +154,7 @@ pub fn duplicate_connection(
                 Ok(Some(secret)) => {
                     let secret = Secret::new(secret);
                     password_copied = true;
-                    backend.keychain_set(&to, secret.expose())
+                    crate::secrets::store(backend, &to, secret.expose())
                 }
                 // Nothing to copy: the copy asks. An entry left under the copy's name by an
                 // older connection must not be sent to this copy's server.

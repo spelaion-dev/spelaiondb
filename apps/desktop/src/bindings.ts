@@ -183,7 +183,7 @@ export const commands = {
 	/**  Checks whether an existing connection can be opened in the editor. */
 	connectionEditorAccess: (connection: string) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
 	/**  The form of an existing connection, to edit it. */
-	connectionDraft: (connection: string) => typedError<[ConnectionDraftItem_Serialize, string], string>(__TAURI_INVOKE("connection_draft", { connection })),
+	connectionDraft: (connection: string) => typedError<EditedConnectionItem_Serialize, string>(__TAURI_INVOKE("connection_draft", { connection })),
 	/**
 	 *  Saves an edited connection (same file; for `keychain`, a typed password replaces the
 	 *  stored one) and reloads the configuration.
@@ -224,7 +224,7 @@ export const commands = {
 	 */
 	suggestConnectionName: (draft: ConnectionDraftItem_Deserialize) => typedError<string | null, string>(__TAURI_INVOKE("suggest_connection_name", { draft })),
 	/**  The form of an existing tunnel, to edit it. */
-	tunnelDraft: (name: string, personal: boolean) => typedError<[TunnelDraftItem_Serialize, string], string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
+	tunnelDraft: (name: string, personal: boolean) => typedError<EditedTunnelItem_Serialize, string>(__TAURI_INVOKE("tunnel_draft", { name, personal })),
 	/**
 	 *  Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
 	 *  again. Nothing is written. `passwords[i]` is the password typed for hop `i`; stored ones
@@ -1880,6 +1880,56 @@ export type EditableTableItem = {
 	primaryKey: string[],
 };
 
+/**  A connection opened in the editor. */
+export type EditedConnectionItem = EditedConnectionItem_Serialize | EditedConnectionItem_Deserialize;
+
+/**  A connection opened in the editor. */
+export type EditedConnectionItem_Deserialize = {
+	draft: ConnectionDraftItem_Deserialize,
+	/**  The file's revision, for a save to refuse a file changed on disk. */
+	revision: string,
+	/**
+	 *  Whether the system keychain holds this connection's password (never its value): the
+	 *  form offers to keep a saved password only then.
+	 */
+	passwordStored: boolean,
+};
+
+/**  A connection opened in the editor. */
+export type EditedConnectionItem_Serialize = {
+	draft: ConnectionDraftItem_Serialize,
+	/**  The file's revision, for a save to refuse a file changed on disk. */
+	revision: string,
+	/**
+	 *  Whether the system keychain holds this connection's password (never its value): the
+	 *  form offers to keep a saved password only then.
+	 */
+	passwordStored: boolean,
+};
+
+/**  A tunnel opened in the editor. */
+export type EditedTunnelItem = EditedTunnelItem_Serialize | EditedTunnelItem_Deserialize;
+
+/**  A tunnel opened in the editor. */
+export type EditedTunnelItem_Deserialize = {
+	draft: TunnelDraftItem_Deserialize,
+	revision: string,
+	/**  Whether the system keychain holds each hop's password, in order (never the values). */
+	hopPasswordsStored: boolean[],
+	/**  Whether it holds the proxy's password. */
+	proxyPasswordStored: boolean,
+};
+
+/**  A tunnel opened in the editor. */
+export type EditedTunnelItem_Serialize = {
+	draft: TunnelDraftItem_Serialize,
+	revision: string,
+	/**  Whether the system keychain holds each hop's password, in order (never the values). */
+	hopPasswordsStored: boolean[],
+	/**  Whether it holds the proxy's password. */
+	proxyPasswordStored: boolean,
+};
+
 /**  Trust status of an existing connection before opening its editor. */
 export type EditorAccessOutcome = EditorAccessOutcome_Serialize | EditorAccessOutcome_Deserialize;
 
@@ -2131,7 +2181,7 @@ export type ExportedFileItem = {
 	summary: ExportSummaryItem,
 };
 
-export type FailureKindItem = "config" | "passwordRequired" | "cancelled" | "proxyAuth" | "sshAuth" | "hostUnreachable" | "hostKeyChanged" | "hostKeyRejected" | "dbAuth" | "dbNotFound" | "tls" | "timeout" | "kubernetes" | "other";
+export type FailureKindItem = "config" | "passwordRequired" | "keychainEmpty" | "cancelled" | "proxyAuth" | "sshAuth" | "hostUnreachable" | "hostKeyChanged" | "hostKeyRejected" | "dbAuth" | "dbNotFound" | "tls" | "timeout" | "kubernetes" | "other";
 
 /**
  *  One field of a changed repository item. Repository files hold secret references, never
