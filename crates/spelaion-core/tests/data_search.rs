@@ -610,3 +610,202 @@ async fn a_read_only_connection_can_search() {
     drop(reader);
     let _ = std::fs::remove_file(&path);
 }
+
+/// The statements each engine's dialect gets, without a server: the core's SQL, checked here
+/// rather than in `data_search.rs`, which names no driver crate (ADR-041).
+mod statements {
+    use spelaion_core::{
+        DataSearchOptions, ReadKind, SearchTable, classify_read_only, probe_sql, table_search_sql,
+    };
+    use spelaion_driver_api::{ColumnMeta, Dialect, LogicalType, bound_placeholder};
+
+    const ENGINES: [&str; 5] = ["postgres", "mysql", "sqlserver", "sqlite", "duckdb"];
+
+    fn d(engine: &str) -> Box<dyn Dialect> {
+        match engine {
+            "postgres" => Box::new(spelaion_driver_postgres::PostgresDialect),
+            "mysql" => Box::new(spelaion_driver_mysql::MysqlDialect),
+            "sqlserver" => Box::new(spelaion_driver_sqlserver::SqlServerDialect),
+            "duckdb" => Box::new(spelaion_driver_duckdb::DuckdbDialect),
+            _ => Box::new(spelaion_driver_sqlite::SqliteDialect),
+        }
+    }
+
+    fn meta(name: &str, logical: LogicalType, native: &str) -> ColumnMeta {
+        ColumnMeta {
+            name: name.into(),
+            logical,
+            native_type: native.into(),
+            native_id: None,
+        }
+    }
+
+    fn table() -> SearchTable {
+        SearchTable {
+            schema: "public".into(),
+            table: "orders".into(),
+        }
+    }
+
+    fn columns() -> Vec<ColumnMeta> {
+        vec![
+            meta("id", LogicalType::Int, "int4"),
+            meta("note", LogicalType::Text, "varchar"),
+            meta("payload", LogicalType::Json, "json"),
+            meta("photo", LogicalType::Bytes, "bytea"),
+            meta("placed", LogicalType::Date, "date"),
+            meta("total", LogicalType::Decimal, "numeric"),
+        ]
+    }
+
+    /// One statement that the read-only classifier accepts as a query.
+    fn is_one_read(dialect: &dyn Dialect, sql: &str) -> bool {
+        dialect.split_statements(sql).len() == 1
+            && classify_read_only(dialect.name(), sql) == Ok(ReadKind::Query)
+    }
+
+    #[test]
+    fn the_value_is_bound_never_written() {
+        let value = "x'); DROP TABLE orders; --";
+        let options = DataSearchOptions {
+            numbers: true,
+            large: true,
+            ..DataSearchOptions::default()
+        };
+        for engine in ENGINES {
+            let dialect = d(engine);
+            let search = table_search_sql(
+                dialect.as_ref(),
+                &table(),
+                &columns(),
+                &["id".into()],
+                value,
+                &options,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(!search.sql.contains("DROP"), "{engine}: {}", search.sql);
+            assert_eq!(search.params, vec![value.to_string()]);
+            assert!(
+                search.sql.contains(&bound_placeholder(engine, 1)),
+                "{engine}: {}",
+                search.sql
+            );
+            assert!(is_one_read(dialect.as_ref(), &search.sql), "{engine}");
+            assert!(
+                is_one_read(dialect.as_ref(), &probe_sql(dialect.as_ref(), &table())),
+                "{engine}"
+            );
+        }
+    }
+
+    #[test]
+    fn options_choose_the_columns() {
+        let pick = |options: &DataSearchOptions, value: &str| {
+            table_search_sql(
+                d("postgres").as_ref(),
+                &table(),
+                &columns(),
+                &["id".into()],
+                value,
+                options,
+            )
+            .unwrap()
+            .map(|s| s.columns.into_iter().map(|c| c.name).collect::<Vec<_>>())
+        };
+        let plain = DataSearchOptions::default();
+        assert_eq!(pick(&plain, "42"), Some(vec!["note".into()]));
+        let numbers = DataSearchOptions {
+            numbers: true,
+            ..plain.clone()
+        };
+        assert_eq!(
+            pick(&numbers, "42"),
+            Some(vec!["id".into(), "note".into(), "total".into()])
+        );
+        // Not a number: numeric columns are left out even when asked.
+        assert_eq!(pick(&numbers, "4x2"), Some(vec!["note".into()]));
+        let large = DataSearchOptions {
+            large: true,
+            ..plain.clone()
+        };
+        assert_eq!(
+            pick(&large, "abc"),
+            Some(vec!["note".into(), "payload".into(), "photo".into()])
+        );
+        // A table with only dates has nothing to search.
+        let dates = vec![meta("placed", LogicalType::Date, "date")];
+        assert_eq!(
+            table_search_sql(
+                d("postgres").as_ref(),
+                &table(),
+                &dates,
+                &[],
+                "2024",
+                &plain
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn sql_server_uses_top_and_the_rest_limit() {
+        let options = DataSearchOptions {
+            rows_per_table: 7,
+            ..DataSearchOptions::default()
+        };
+        for engine in ENGINES {
+            let sql = table_search_sql(
+                d(engine).as_ref(),
+                &table(),
+                &columns(),
+                &[],
+                "abc",
+                &options,
+            )
+            .unwrap()
+            .unwrap()
+            .sql;
+            if engine == "sqlserver" {
+                assert!(sql.starts_with("SELECT TOP (7) "), "{sql}");
+                assert!(!sql.contains("LIMIT"));
+            } else {
+                assert!(sql.ends_with("\nLIMIT 7"), "{engine}: {sql}");
+            }
+        }
+    }
+
+    #[test]
+    fn names_are_quoted() {
+        let mut odd = columns();
+        odd[1].name = "a\"b".into();
+        let sql = table_search_sql(
+            d("postgres").as_ref(),
+            &table(),
+            &odd,
+            &[],
+            "abc",
+            &DataSearchOptions::default(),
+        )
+        .unwrap()
+        .unwrap()
+        .sql;
+        assert!(sql.contains("CAST(\"a\"\"b\" AS text)"), "{sql}");
+        odd[1].name = "x] FROM t; --".into();
+        let sql = table_search_sql(
+            d("sqlserver").as_ref(),
+            &table(),
+            &odd,
+            &[],
+            "abc",
+            &DataSearchOptions::default(),
+        )
+        .unwrap()
+        .unwrap()
+        .sql;
+        assert!(
+            sql.contains("CAST([x]] FROM t; --] AS NVARCHAR(MAX))"),
+            "{sql}"
+        );
+    }
+}
