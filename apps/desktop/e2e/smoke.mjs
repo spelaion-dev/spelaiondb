@@ -4909,6 +4909,24 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("dialog", { name: "Run these statements?" }).getByRole("button", { name: "Run", exact: true }).click();
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
+  step("connection types: a paged query runs only after confirmation, and later pages need no new question");
+  panel = await newQuery("Shop copy", "select * from orders order by id;");
+  await run(panel);
+  const confirmPaged = page.getByRole("dialog", { name: "Run these statements?" });
+  await confirmPaged.getByRole("button", { name: "Cancel" }).click();
+  await confirmPaged.waitFor({ state: "detached" });
+  assert.equal(await panel.locator(".grid-scroller").count(), 0, "cancelling runs no query");
+  await run(panel);
+  await confirmPaged.getByRole("button", { name: "Run", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "500 rows" }).waitFor();
+  const confirmedPages = panel.getByRole("group", { name: "Query result pages" });
+  await confirmedPages.getByText("rows 1–500").waitFor();
+  await panel.locator(".grid-scroller").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await panel.locator(".statusline", { hasText: "1,000 rows" }).waitFor();
+  await confirmedPages.getByRole("button", { name: "Next page" }).click();
+  await confirmedPages.getByText("rows 501–1,000").waitFor();
+  assert.equal(await confirmPaged.count(), 0, "later pages do not ask again");
+
   step("SSH tunnel editor: two hops with keys, tested, used by a new connection");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
   wizard = page.locator(".modal.wizard").first();

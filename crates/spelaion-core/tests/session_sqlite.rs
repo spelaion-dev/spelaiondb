@@ -173,6 +173,22 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
     assert_eq!(session.results().len(), 1);
 }
 
+#[test]
+fn a_paged_query_still_requires_execution_confirmation() {
+    let dialect = SqliteDriver::default().dialect();
+    let sql = spelaion_core::query_page_sql(dialect.as_ref(), "select * from orders", 100, 0)
+        .expect("a pageable query");
+    let safeguards = spelaion_config::Safeguards {
+        confirm_execution: true,
+        ..Default::default()
+    };
+    let error = spelaion_core::check_script(dialect.as_ref(), &sql, &safeguards, false)
+        .expect_err("a paged query must not bypass the execution confirmation");
+    assert_eq!(error.risks.len(), 1);
+    assert_eq!(error.risks[0].risk, spelaion_core::Risk::Execution);
+    assert!(spelaion_core::check_script(dialect.as_ref(), &sql, &safeguards, true).is_ok());
+}
+
 async fn texts(session: &Session, sql: &str) -> Vec<String> {
     let id = first_result(session, sql).await;
     let stored = session.results().get(id).unwrap();

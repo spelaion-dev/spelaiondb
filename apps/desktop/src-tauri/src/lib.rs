@@ -2288,6 +2288,7 @@ async fn run_query_page(
     session: String,
     sql: String,
     limit: u32,
+    confirmed: bool,
     options: RunOptionsItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
@@ -2296,9 +2297,20 @@ async fn run_query_page(
     let paged =
         spelaion_core::query_page_sql(open.session.dialect().as_ref(), &sql, limit.into(), 0)
             .ok_or("this query cannot be paged")?;
-    start_script(&state, &session, paged, false, options, on_event, Some(sql)).await
+    start_script(
+        &state,
+        &session,
+        paged,
+        confirmed,
+        options,
+        on_event,
+        Some(sql),
+    )
+    .await
 }
 
+/// The UI requests subsequent pages of the read it already confirmed. The core only permits
+/// eligible read queries to be paged, and appends each page at the expected offset.
 #[tauri::command]
 #[specta::specta]
 async fn append_query_page(
