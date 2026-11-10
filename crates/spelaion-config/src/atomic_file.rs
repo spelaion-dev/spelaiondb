@@ -66,6 +66,8 @@ pub fn replace(path: &Path, bytes: &[u8], new_file: NewFileMode) -> io::Result<(
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let written = (|| -> io::Result<()> {
+        // Only Unix keeps the old mode; Windows has nothing to carry over.
+        #[cfg(unix)]
         let existing = fs::metadata(&target).ok();
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
