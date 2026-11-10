@@ -12,7 +12,14 @@ export function TypeBadge({ type, small = false }: { type: Pick<ConnectionTypeIt
       data-connection-type={type.id}
       title={type.description ?? type.name}
     >
-      {type.production && !small ? t("production") : type.name}
+      {small ? (
+        // Its own element so the explorer can keep the dot and drop the name (connectionMarks.ts).
+        <span className="type-badge-text">{type.name}</span>
+      ) : type.production ? (
+        t("production")
+      ) : (
+        type.name
+      )}
     </span>
   );
 }

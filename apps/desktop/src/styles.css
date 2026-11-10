@@ -704,7 +704,7 @@ select {
   color: var(--prod);
 }
 /* A connection's own tags: quiet text among its marks (`.connection-marks`, which keeps the
-   name whole and shows each mark whole or not at all). */
+   name whole and shows each mark whole or not at all where it fits). */
 .connection-tag,
 .connection-tag-more {
   font-size: 10px;
@@ -1419,23 +1419,32 @@ select {
   padding: 0 5px;
   letter-spacing: 0.02em;
 }
-/* What follows a connection's name in the explorer (its type badge, the SSH mark): the name
-   keeps its whole width and the marks only take what is left, each whole or not at all. Those
-   that do not fit wrap onto a second line that is never shown; the name's tooltip says what
-   they say. The same rule as the connection's tags. */
+/* What follows a connection's name in the explorer (its type badge, the SSH mark, its tags): the
+   name keeps its whole width and the marks only take what is left, pushed to the end of the row.
+   The type's dot always stays (the name gives way to it); its name and every other mark are shown
+   whole or not at all, in order, skipping one that does not fit (connectionMarks.ts measures
+   them). The name's tooltip says what they all say. The same rule as the connection's tags. */
 .connection-row:has(.connection-marks) .label {
   flex: 0 1 auto;
 }
+/* Only the name gives way in a row too narrow for it: the expander keeps its width. */
+.connection-row .twisty {
+  flex: none;
+}
 .connection-marks {
+  position: relative;
   display: flex;
   flex: 1 1 0;
-  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   column-gap: 4px;
-  row-gap: 8px;
   height: 16px;
   min-width: 0;
   overflow: hidden;
+}
+/* Room for the type's dot, whatever the name's length. */
+.connection-marks:has(.type-badge) {
+  min-width: 6px;
 }
 .connection-marks > * {
   flex: none;
@@ -1466,13 +1475,11 @@ select {
 .connection-marks .tone-blue { --badge-dot: var(--tone-blue-fg); }
 .connection-marks .tone-amber { --badge-dot: var(--tone-amber-fg); }
 .connection-marks .tone-red { --badge-dot: var(--tone-red-fg); }
-/* An empty first item: a mark wider than the space left then has something to wrap after,
-   so it goes to the hidden line instead of showing cut. It also pushes the marks to the end. */
-.connection-marks::before {
-  content: "";
-  flex: 1 0 0;
-  /* A whole line high, so the first line never collapses and the second stays out of view. */
-  height: 16px;
+/* A mark that does not fit: out of the layout and out of sight (and so out of the tab order and
+   the accessibility tree), but still measurable for when the row gets wider. */
+.connection-marks .mark-out {
+  position: absolute;
+  visibility: hidden;
 }
 .tone-neutral { --tone: var(--tone-neutral); }
 .tone-green { --tone: var(--tone-green); }
