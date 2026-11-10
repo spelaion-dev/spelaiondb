@@ -70,6 +70,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server).
+  Every file the configuration writes goes through `atomic_file` (temporary file + rename, the
+  old mode kept, a symbolic link stays a link; new files owner-only in the personal folder and
+  the umask's in the repository, `edit::new_file_mode`); never `std::fs::write` over a user's file.
   Importing connections from other clients (ADR-039): `import.rs` is the flow every client
   shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
   they reach, replace in place, target folder, what was not mapped, passwords read from another

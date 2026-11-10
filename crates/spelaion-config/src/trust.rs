@@ -636,7 +636,14 @@ impl TrustStore {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
         }
-        std::fs::write(&self.path, content).map_err(|e| ConfigError::new(&self.path, e.to_string()))
+        // Atomic, so an interruption never leaves a half-written store (which would fail to
+        // load); owner-only when new, and an existing store keeps its mode and its link.
+        crate::atomic_file::replace(
+            &self.path,
+            content.as_bytes(),
+            crate::atomic_file::NewFileMode::OwnerOnly,
+        )
+        .map_err(|e| ConfigError::new(&self.path, e.to_string()))
     }
 }
 

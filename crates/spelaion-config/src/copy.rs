@@ -12,7 +12,6 @@
 //!   checks as the connection form, whose password is always asked when connecting, which
 //!   runs no command and which agents cannot use until the user turns that on.
 
-use std::io::Write as _;
 use std::path::Path;
 
 use spelaion_driver_api::Secret;
@@ -87,15 +86,6 @@ fn split_id(path: &str) -> (&str, &str) {
     }
 }
 
-/// Writes a new file, failing if it exists: a copy never replaces a connection.
-fn create_new(path: &Path, content: &str) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    file.write_all(content.as_bytes())
-}
-
 /// Duplicates a connection next to the original: `<file>-copy` (then `-copy-2`…) named
 /// "<name> (copy)" (then "(copy 2)"…). See the module documentation for secrets and trust.
 pub fn duplicate_connection(
@@ -142,7 +132,9 @@ pub fn duplicate_connection(
         let parsed: ConnectionFile = toml::from_str(&text)
             .map_err(|e| ConfigError::new(&file_path, format!("the copy is not valid: {e}")))?;
         let file = validate_connection(&file_path, parsed)?;
-        match create_new(&file_path, &text) {
+        // A new file, never one over another (a copy never replaces a connection), with the
+        // original's mode.
+        match crate::atomic_file::create_like(&file_path, text.as_bytes(), &entry.file_path) {
             Ok(()) => {}
             // Someone else took this name in the meantime: the next one.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,

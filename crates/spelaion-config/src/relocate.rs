@@ -17,7 +17,6 @@
 //! A file changed on disk since it was loaded is not moved, and a move never replaces a file:
 //! anything that fails puts back what was done.
 
-use std::io::Write as _;
 use std::path::Path;
 
 use crate::accounts::connection_account;
@@ -90,7 +89,9 @@ pub fn move_connection(
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
     }
-    if let Err(e) = create_new(&target, &bytes) {
+    // A new file, never one over another (a move never replaces a connection), with the
+    // moved file's mode.
+    if let Err(e) = crate::atomic_file::create_like(&target, &bytes, source) {
         remove_empty_folders(&dir, &target);
         let message = match e.kind() {
             std::io::ErrorKind::AlreadyExists => {
@@ -163,13 +164,4 @@ pub fn move_connection(
         id: to,
         password_moved,
     })
-}
-
-/// Writes a new file, failing if it exists: a move never replaces a connection.
-fn create_new(path: &Path, content: &[u8]) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    file.write_all(content)
 }

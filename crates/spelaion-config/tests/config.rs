@@ -536,7 +536,7 @@ fn creates_new_connection_files() {
         session: Default::default(),
         mcp: Default::default(),
     };
-    let path = create_connection(&dir, "team/analytics", &file).unwrap();
+    let path = create_connection(&dir, Source::Workspace, "team/analytics", &file).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.starts_with("#:schema https://"), "{content}");
     assert!(
@@ -549,11 +549,11 @@ fn creates_new_connection_files() {
     assert_eq!(config.connections[0].file, file);
 
     assert!(
-        create_connection(&dir, "team/analytics", &file).is_err(),
+        create_connection(&dir, Source::Workspace, "team/analytics", &file).is_err(),
         "must not overwrite"
     );
     assert!(
-        create_connection(&dir, "../outside", &file).is_err(),
+        create_connection(&dir, Source::Workspace, "../outside", &file).is_err(),
         "must not escape the directory"
     );
 }

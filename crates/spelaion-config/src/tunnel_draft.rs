@@ -8,8 +8,9 @@ use spelaion_driver_api::Secret;
 use toml_edit::{Array, ArrayOfTables, InlineTable, Item, Table, Value};
 
 use crate::accounts::{proxy_account, tunnel_account};
+use crate::atomic_file;
 use crate::draft::{PasswordChoice, portable_path, slug};
-use crate::edit::{read_doc, write_doc};
+use crate::edit::{new_file_mode, read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, Source, TunnelEntry, validate_tunnel, workspace_dir};
 use crate::model::{
@@ -396,8 +397,18 @@ pub fn add_tunnel(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
     }
-    std::fs::write(&path, format!("#:schema {TUNNEL_SCHEMA_URL}\n\n{body}"))
-        .map_err(|e| ConfigError::new(&path, e.to_string()))?;
+    let content = format!("#:schema {TUNNEL_SCHEMA_URL}\n\n{body}");
+    atomic_file::create_new(&path, content.as_bytes(), new_file_mode(draft.source)).map_err(
+        |e| {
+            let message = match e.kind() {
+                std::io::ErrorKind::AlreadyExists => {
+                    "a tunnel with that name already exists".to_string()
+                }
+                _ => format!("could not write: {e}"),
+            };
+            ConfigError::new(&path, message)
+        },
+    )?;
     if let Err(e) = store_passwords(config, draft.source, &name, &file, passwords, backend) {
         let _ = std::fs::remove_file(&path);
         for i in 0..file.hops.len() {
@@ -590,7 +601,7 @@ pub fn update_tunnel(
     let parsed: TunnelFile = toml::from_str(&edited)
         .map_err(|e| ConfigError::new(path, format!("the edited file is not valid: {e}")))?;
     let parsed = validate_tunnel(path, parsed)?;
-    write_doc(path, &doc)?;
+    write_doc(path, &doc, new_file_mode(source))?;
 
     let mut result = store_passwords(config, source, name, &new, passwords, backend).map(|_| ());
     if result.is_ok() {
@@ -639,7 +650,8 @@ pub fn update_tunnel(
         }
     }
     if result.is_err() {
-        let _ = std::fs::write(path, original);
+        // Put the file back as it was, the same way it was written.
+        let _ = atomic_file::replace(path, original.as_bytes(), new_file_mode(source));
     }
     result.map(|()| parsed)
 }

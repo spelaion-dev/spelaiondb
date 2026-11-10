@@ -8,7 +8,7 @@ use spelaion_driver_api::Secret;
 
 use crate::accounts::connection_account;
 use crate::edit::create_connection;
-use crate::edit::{read_doc, write_doc};
+use crate::edit::{new_file_mode, read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{
     Config, ConnectionEntry, ConnectionId, Source, validate_connection, workspace_dir,
@@ -501,7 +501,7 @@ pub fn add_connection(
 ) -> Result<ConnectionId, ResolveError> {
     let entry = draft.entry(config)?;
     let dir = connections_dir(config, draft.source)?;
-    let path = create_connection(&dir, &entry.id.path, &entry.file)?;
+    let path = create_connection(&dir, draft.source, &entry.id.path, &entry.file)?;
     if draft.password == PasswordChoice::Keychain
         && !draft.engine.is_file()
         && let Some(secret) = password.filter(|s| !s.expose().is_empty())
@@ -905,7 +905,7 @@ pub fn update_connection(
     let parsed: ConnectionFile = toml::from_str(&edited)
         .map_err(|e| ConfigError::new(path, format!("the edited file is not valid: {e}")))?;
     let parsed = validate_connection(path, parsed)?;
-    write_doc(path, &doc)?;
+    write_doc(path, &doc, new_file_mode(id.source))?;
 
     let account = connection_account(config, &entry.id);
     let keychain = if uses_default_keychain(&new) {
@@ -919,7 +919,8 @@ pub fn update_connection(
         Ok(())
     };
     if let Err(message) = keychain {
-        let _ = std::fs::write(path, original);
+        // Put the file back as it was, the same way it was written.
+        let _ = crate::atomic_file::replace(path, original.as_bytes(), new_file_mode(id.source));
         return Err(ResolveError::Secret {
             reference: format!("keychain:{account}"),
             message,

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use toml_edit::{DocumentMut, Item, Table};
 
+use crate::atomic_file::NewFileMode;
 use crate::edit::{read_doc, write_doc};
 use crate::error::ConfigError;
 use crate::load::{CONNECTION_TYPES_FILE, validate_type, validate_types};
@@ -120,5 +121,5 @@ fn save(path: &Path, doc: &DocumentMut) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
     }
-    write_doc(path, doc)
+    write_doc(path, doc, NewFileMode::OwnerOnly)
 }

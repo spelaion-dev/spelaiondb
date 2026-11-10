@@ -1,5 +1,8 @@
 //! Replacing a file atomically, for every file the app rewrites in place: the editor's `.sql`
-//! files (ADR-036) and the AI clients' MCP files (ADR-033).
+//! files (ADR-036), the AI clients' MCP files (ADR-033), and the configuration it edits
+//! (connections, tunnels, connection types, `user.toml` and the trust store). New files that
+//! must never replace another one (a new connection or tunnel, a copy, a move, a backup) are
+//! created with [`create_new`] or [`create_like`].
 //!
 //! The new bytes go to a temporary file in the same folder, which is flushed and renamed over
 //! the old one, so a crash leaves the old file or the new one, never part of one. On Unix the
@@ -104,21 +107,41 @@ pub fn replace(path: &Path, bytes: &[u8], new_file: NewFileMode) -> io::Result<(
 }
 
 /// Writes `bytes` to `path`, which must not exist yet, with `like`'s mode on Unix (a backup of
-/// `like`): owner-only while it is written, then that mode.
+/// `like`, or a copy or move of it): owner-only while it is written, then that mode.
 pub fn create_like(path: &Path, bytes: &[u8], like: &Path) -> io::Result<()> {
+    create(path, bytes, Some(like), NewFileMode::OwnerOnly)
+}
+
+/// Writes `bytes` to `path`, which must not exist yet (it fails with
+/// [`io::ErrorKind::AlreadyExists`], also on a symbolic link): a new file is never put over
+/// another one, even one created a moment before. On Unix it gets `mode`'s mode (an
+/// owner-only file is never readable by anyone else, not even while it is written).
+pub fn create_new(path: &Path, bytes: &[u8], mode: NewFileMode) -> io::Result<()> {
+    create(path, bytes, None, mode)
+}
+
+fn create(path: &Path, bytes: &[u8], like: Option<&Path>, mode: NewFileMode) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
+        // A copy of another file is owner-only until it has that file's mode.
+        options.mode(match (like, mode) {
+            (Some(_), _) | (None, NewFileMode::OwnerOnly) => 0o600,
+            (None, NewFileMode::Default) => 0o666,
+        });
     }
+    #[cfg(not(unix))]
+    let _ = mode;
     let mut file = options.open(path)?;
     let written = (|| -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         #[cfg(unix)]
-        fs::set_permissions(path, fs::metadata(like)?.permissions())?;
+        if let Some(like) = like {
+            fs::set_permissions(path, fs::metadata(like)?.permissions())?;
+        }
         #[cfg(not(unix))]
         let _ = like;
         Ok(())
@@ -193,6 +216,46 @@ mod tests {
             io::ErrorKind::AlreadyExists
         );
         assert_eq!(fs::read(&backup).unwrap(), b"old");
+    }
+
+    #[test]
+    fn a_new_file_never_replaces_one() {
+        let dir = folder("create-new");
+        let path = dir.join("a.toml");
+        create_new(&path, b"one", NewFileMode::Default).unwrap();
+        assert_eq!(
+            create_new(&path, b"two", NewFileMode::Default)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"one");
+        assert_eq!(names(&dir), ["a.toml"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_gets_the_chosen_mode_and_never_goes_through_a_link() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        let dir = folder("create-new-modes");
+        let private = dir.join("private");
+        create_new(&private, b"x", NewFileMode::OwnerOnly).unwrap();
+        assert_eq!(mode(&private), 0o600);
+        let ordinary = dir.join("ordinary");
+        create_new(&ordinary, b"x", NewFileMode::Default).unwrap();
+        let probe = dir.join("probe");
+        fs::write(&probe, "").unwrap();
+        assert_eq!(mode(&ordinary), mode(&probe), "the umask decides");
+        // Not even a dangling link: the new file must not land somewhere else.
+        symlink(dir.join("elsewhere"), dir.join("link")).unwrap();
+        assert_eq!(
+            create_new(&dir.join("link"), b"x", NewFileMode::Default)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(!dir.join("elsewhere").exists());
     }
 
     #[cfg(unix)]
