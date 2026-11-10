@@ -22,6 +22,9 @@ Windows, so it is the least tested platform.
 - WebKitGTK 2.52 on WSLg **without graphics acceleration** (worst case): 50–55 fps, p95 of
   21 ms per frame, < 1 % slow frames. Provisionally approved.
 - Pending: confirm on real Linux with a GPU (including an NVIDIA card).
+- The full measurements (frame times, loading, memory) are in ADR-010's evidence.
+- Note (2026-11-10): the experiment's code and raw reports were removed from the repository
+  after v0.8.0. They can be read at tag `v0.8.0`, under `spikes/`.
 
 ## Alternatives
 - **Electron** (plan B): identical Chromium on all three platforms; the Rust core is reused

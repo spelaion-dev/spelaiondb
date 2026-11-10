@@ -26,6 +26,9 @@ testing/  docker compose: databases + bastions
 docs/     adr/, architecture.md
 ```
 
+Note (2026-11-10): `spikes/` was removed from the repository after v0.8.0. It can be read at
+tag `v0.8.0`.
+
 - **No web mode:** it is not designed for one.
 
 ## Revisit if

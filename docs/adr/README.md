@@ -2,7 +2,8 @@
 
 Each ADR records a decision, why it was made and what would make us revisit it. Decisions
 marked **Accepted** override any other note or conversation; those marked **Conditional**
-depend on the outcome of phase 0 (`spikes/`).
+depend on the outcome of phase 0: the risk experiments run before writing the product, whose
+results each of those ADRs records as its evidence.
 
 To change a decision the old ADR is not edited: a new one is written that supersedes it,
 and the old one is marked **Superseded by ADR-XXX**.
