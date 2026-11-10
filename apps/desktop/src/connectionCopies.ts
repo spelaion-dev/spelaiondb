@@ -78,12 +78,3 @@ export async function pasteFromClipboard(): Promise<void> {
   }
   await pasteConnection(text);
 }
-
-/** Whether a paste event is meant for a text field rather than the explorer. */
-export function pasteIsForText(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
-  );
-}
