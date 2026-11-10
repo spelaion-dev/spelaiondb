@@ -71,6 +71,65 @@ pub fn list_schema_objects(
     .collect()
 }
 
+/// `SELECT schema.macro(:x)`, or `SELECT * FROM` a table macro: each parameter a placeholder.
+/// DuckDB's functions are macros; it has no procedures.
+pub fn procedure_call(conn: &Connection, object: &SchemaObject) -> Result<String> {
+    if object.kind != SchemaObjectKind::Function {
+        return Err(DriverError::Other(format!(
+            "{} is not a function: DuckDB has no procedures",
+            object.name
+        )));
+    }
+    let (database, schema) = locate(conn, &object.schema)?;
+    let quote = |name: &str| DuckdbDialect.quote_identifier(name);
+    let qualified = if database == current_database(conn)? {
+        format!("{}.{}", quote(&schema), quote(&object.name))
+    } else {
+        format!(
+            "{}.{}.{}",
+            quote(&database),
+            quote(&schema),
+            quote(&object.name)
+        )
+    };
+    let mut statement = conn
+        .prepare(&format!(
+            "select function_type, {PARAMETERS} from duckdb_functions() \
+             where database_name = ?1 and schema_name = ?2 and function_name = ?3 \
+               and {PARAMETERS} = coalesce(?4, '') \
+               and function_type in ('macro', 'table_macro')"
+        ))
+        .map_err(map_error)?;
+    let mut rows = statement
+        .query(params![
+            database,
+            schema,
+            object.name,
+            object.detail.as_deref()
+        ])
+        .map_err(map_error)?;
+    let Some(row) = rows.next().map_err(map_error)? else {
+        return Err(DriverError::Other(format!(
+            "{}.{} does not exist",
+            object.schema, object.name
+        )));
+    };
+    let kind: String = row.get(0).map_err(map_error)?;
+    let parameters: String = row.get(1).map_err(map_error)?;
+    let arguments: Vec<String> = parameters
+        .split(", ")
+        .filter(|p| !p.is_empty())
+        .enumerate()
+        .map(|(i, name)| spelaion_driver_api::parameter_placeholder(name, i + 1))
+        .collect();
+    let call = format!("{qualified}({})", arguments.join(", "));
+    Ok(if kind == "table_macro" {
+        format!("SELECT * FROM {call};")
+    } else {
+        format!("SELECT {call};")
+    })
+}
+
 /// The `CREATE TABLE` or `CREATE VIEW` DuckDB keeps (`duckdb_tables().sql`), then the
 /// table's indexes.
 pub fn relation_definition(conn: &Connection, shown: &str, name: &str) -> Result<String> {

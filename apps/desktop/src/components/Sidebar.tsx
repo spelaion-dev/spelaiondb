@@ -362,8 +362,10 @@ function useObjectActions(session: string, enabled = true): ObjectActionsItem | 
 
 /** SQL written by the core, in a new tab of the connection (on the schema's database where the
  *  engine has one per schema): nothing runs. */
-function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string) {
+function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string, run = false) {
   const tab = useApp.getState().addTab(connectionId, sql);
+  // "Run…": the tab runs its script once connected, asking the call's parameters first.
+  if (run) useApp.getState().updateTab(tab, { runOnOpen: true });
   connectTabFromExplorer(tab, session, schema === undefined ? undefined : explorerDatabase(connectionId, schema));
 }
 
@@ -2368,6 +2370,16 @@ function ObjectNode({
       setError(errorText(e));
     }
   }
+  /** "Edit source": the core writes the view as the statement that replaces it (ADR-047). */
+  async function openSource() {
+    setMenu(null);
+    try {
+      setError(null);
+      openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "view", schema: object.schema, name: object.name })));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
   /** "Generate DDL": the driver writes the CREATE statement. */
   async function openDdl() {
     setMenu(null);
@@ -2547,6 +2559,11 @@ function ObjectNode({
               {chosen && selection.length > 1
                 ? t("diagram.menuTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
                 : t("diagram.menuFocus")}
+            </button>
+          )}
+          {object.kind === "view" && (
+            <button role="menuitem" onClick={() => void openSource()}>
+              {t("editSource")}
             </button>
           )}
           <button role="menuitem" onClick={refresh}>
@@ -3053,6 +3070,7 @@ function SchemaObjectNode({
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);
+  const actions = useObjectActions(session);
   const { row, revealed } = useRevealedRow(
     (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
   );
@@ -3075,13 +3093,23 @@ function SchemaObjectNode({
       setError(errorText(e));
     }
   }
-  /** "Generate CALL": the procedure's call, written by the driver, in a new tab. */
-  async function openCall() {
+  /** "Generate call": the routine's call, written by the driver, in a new tab; "Run…" also runs
+   *  it there, so the editor asks its parameters and its usual barriers apply (ADR-047). */
+  async function openCall(run = false) {
     setMenu(null);
     setError(null);
     try {
-      const tab = addTab(connectionId, await call(commands.procedureCall(session, object)));
-      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+      openSqlTab(connectionId, session, object.schema, await call(commands.procedureCall(session, object)), run);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  /** "Edit source": the core writes the routine as the statement that replaces it (ADR-047). */
+  async function openSource() {
+    setMenu(null);
+    setError(null);
+    try {
+      openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "routine", object })));
     } catch (e) {
       setError(errorText(e));
     }
@@ -3144,7 +3172,17 @@ function SchemaObjectNode({
           <button role="menuitem" onClick={() => void openDefinition()}>
             {t("openDefinition")}
           </button>
-          {object.kind === "procedure" && (
+          {(object.kind === "procedure" || object.kind === "function") && actions?.routineSource && (
+            <button role="menuitem" onClick={() => void openSource()}>
+              {t("editSource")}
+            </button>
+          )}
+          {(object.kind === "procedure" || object.kind === "function") && actions?.routineCalls && (
+            <button role="menuitem" onClick={() => void openCall(true)}>
+              {t("runRoutine")}
+            </button>
+          )}
+          {(object.kind === "procedure" || (object.kind === "function" && actions?.routineCalls)) && (
             <button role="menuitem" onClick={() => void openCall()}>
               {t("generateCall")}
             </button>

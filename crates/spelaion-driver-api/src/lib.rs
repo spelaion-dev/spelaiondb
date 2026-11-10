@@ -332,8 +332,10 @@ pub trait Connection: Send + Sync {
             "this engine has no table definitions".into(),
         ))
     }
-    /// The SQL that calls a procedure of [`Connection::list_schema_objects`]: its input
-    /// parameters as `:name` placeholders, its output ones collected and shown.
+    /// The SQL that calls a procedure or a function of [`Connection::list_schema_objects`]:
+    /// its input parameters as `:name` placeholders, a procedure's output ones collected and
+    /// shown, a function's result selected (`SELECT f(:a)`, or `SELECT * FROM` one that returns
+    /// a table).
     async fn procedure_call(&self, _object: &SchemaObject) -> Result<String> {
         Err(DriverError::Other("this engine has no procedures".into()))
     }

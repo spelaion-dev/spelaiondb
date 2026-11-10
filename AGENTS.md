@@ -223,7 +223,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `objects/` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
   create, new index…) and the structure forms (ADR-047): `alter.rs` turns a form's columns into
   one script from the catalog read again each time, applied only as it was shown; `rebuild.rs`
-  is SQLite's table rebuild; `create.rs` is the create table form; `ddl.rs` edits the `CREATE TABLE` text SQLite and MySQL keep.
+  is SQLite's table rebuild; `create.rs` is the create table form; `source.rs` writes a view's or routine's
+  definition as the statement that replaces it; `ddl.rs` edits the `CREATE TABLE` text SQLite and MySQL keep.
   `tests/object_actions.rs` runs each engine's statements on that engine.
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
   hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with

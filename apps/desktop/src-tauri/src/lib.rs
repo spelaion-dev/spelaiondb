@@ -4488,6 +4488,21 @@ async fn apply_create_table(
     Ok(u32::try_from(ran).unwrap_or(u32::MAX))
 }
 
+/// "Edit source": a view's, function's or procedure's definition written by the core as the
+/// statement that replaces it, to change and run in a new tab: nothing runs here (ADR-047).
+#[tauri::command]
+#[specta::specta]
+async fn editable_source(
+    session: String,
+    target: SourceTargetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    spelaion_core::editable_source(&open.session, &target.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// The pending edits of a table data page, as the core holds them (ADR-044).
 #[tauri::command]
 #[specta::specta]
@@ -4906,6 +4921,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             apply_table_alteration,
             preview_create_table,
             apply_create_table,
+            editable_source,
             create_sql,
             new_index_sql,
             new_table_element_sql,

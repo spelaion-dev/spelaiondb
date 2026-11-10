@@ -780,6 +780,18 @@ export function EditorTab({ tab }: { tab: Tab }) {
     updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
   }
 
+  // "Run…" on a routine (ADR-047): the whole script once, as soon as the tab is connected and
+  // idle (its database list read), like Run script: the parameters are asked, the guard
+  // confirms. The request is cleared first, so nothing runs again after a reconnect.
+  const runOnOpenReady = !!tab.runOnOpen && tab.status === "connected" && !(tab.run?.running ?? false)
+    && !databaseBusy && !historySaving && !workspaceChanging;
+  useEffect(() => {
+    // The database list may have started loading in this same commit: wait for it.
+    if (!runOnOpenReady || !editor.current || databaseBusyRef.current) return;
+    useApp.getState().updateTab(tab.id, { runOnOpen: undefined });
+    editor.current.runScript();
+  }, [tab.id, runOnOpenReady]);
+
   async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize) {
     if (!refreshingEdits && (pendingCount > 0 || savingEditsRef.current)) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (queryPageBusy.current || startingRun.current) return;

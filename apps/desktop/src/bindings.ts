@@ -495,6 +495,11 @@ export const commands = {
 	 */
 	applyCreateTable: (session: string, table: NewTableItem_Deserialize, sql: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_create_table", { session, table, sql, confirmed })),
 	/**
+	 *  "Edit source": a view's, function's or procedure's definition written by the core as the
+	 *  statement that replaces it, to change and run in a new tab: nothing runs here (ADR-047).
+	 */
+	editableSource: (session: string, target: SourceTargetItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("editable_source", { session, target })),
+	/**
 	 *  The statement that starts a new object (table, view, schema…), written by the core in the
 	 *  engine's types, to finish in a new tab: nothing runs (ADR-026).
 	 */
@@ -3091,6 +3096,8 @@ export type ObjectActionsItem = {
 	dropSchemas: boolean,
 	dropConstraints: boolean,
 	rebuildDrops: boolean,
+	routineSource: boolean,
+	routineCalls: boolean,
 	create: CreateKindItem[],
 	newIndex: NewIndexKindItem[],
 	activeSchema: boolean,
@@ -4271,6 +4278,15 @@ export type SnippetItem_Serialize = {
 };
 
 export type SourceEncodingItem = "auto" | "utf8" | "utf16Le" | "utf16Be" | "windows1252";
+
+/**  What "Edit source" opens (ADR-047): a view, or a function or procedure. */
+export type SourceTargetItem = SourceTargetItem_Serialize | SourceTargetItem_Deserialize;
+
+/**  What "Edit source" opens (ADR-047): a view, or a function or procedure. */
+export type SourceTargetItem_Deserialize = { kind: "view"; schema: string; name: string } | { kind: "routine"; object: SchemaObjectItem_Deserialize };
+
+/**  What "Edit source" opens (ADR-047): a view, or a function or procedure. */
+export type SourceTargetItem_Serialize = { kind: "view"; schema: string; name: string } | { kind: "routine"; object: SchemaObjectItem_Serialize };
 
 /**  A `.sql` file read by the core: its text with `\n` line breaks. */
 export type SqlFileItem = {
