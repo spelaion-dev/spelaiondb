@@ -66,6 +66,30 @@ Server) and shown after the call. The key is the primary key; without one, a uni
 them with the engine's quoting and `:name` placeholders for the values; nothing runs until
 you replace them and run it.
 
+## Searching names and data
+
+The magnifying glass in the activity bar (or **Ctrl+H**) opens **Search** (ADR-043).
+
+- **Names** finds tables, views, routines and other schema objects, and columns, whose name
+  contains the text (case ignored; `orders.cust` finds the column by table and name), in every
+  schema the explorer has read, on every connection at once. It answers from what the explorer
+  already read and never asks a database while you type; the first search with **Include
+  columns** reads each loaded schema's columns once, with one catalog query, and keeps them
+  until the explorer reads that schema again. Click a table, view or column to open its table
+  data tab, a routine to open its definition; **Enter** opens the first match.
+- **Data** looks for a value in the tables you choose on one connection (**Select shown**
+  takes every table the filter shows). Text and UUID columns match when they contain the
+  value; under **Options**, **Match case**, **Numeric columns** (equal to the value, when it is
+  a number), **Large text and binary columns** (JSON, XML, `TEXT`…, and the value's bytes in
+  binary ones) and the rows each table returns at most (100 by default, up to 1,000). Dates,
+  booleans and other types are not searched. The core writes one `SELECT` per table with the
+  value bound as a parameter, never written into the SQL, and runs each one as a read in a
+  session of its own, so it also works on read-only connections. The panel says which table it
+  is on and how many hits it has found; **Cancel search** stops the running statement and the
+  tables after it, and a search stops at 1,000 hits. Click a hit to open its table data tab
+  filtered to that row (by its primary key or, without one, by the matching value). SQLite
+  files on a server have no data search.
+
 ## Editing data
 
 In a table data tab of a table with a primary key, double-click a cell (or **F2**) to change
