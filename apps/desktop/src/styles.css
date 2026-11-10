@@ -3192,6 +3192,121 @@ select {
   background: var(--bg);
   color: var(--fg);
 }
+/* ---------------------------------------------------------------- value pickers (SDB-58) */
+.cell-viewer-editor.with-picker {
+  flex: none;
+  height: calc(var(--control-lg) * 2);
+}
+.value-picker {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* A short panel scrolls the picker instead of letting it slide under the value actions. */
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  padding-bottom: var(--space-md);
+}
+.value-picker-grow { flex: 1; }
+.value-picker .viewer-value-heading { padding-bottom: var(--space-xs); }
+.value-picker-note {
+  margin: 0;
+  padding: 0 var(--space-lg) var(--space-xs);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.value-picker-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-md);
+  padding: 0 var(--space-lg) var(--space-md);
+}
+.value-picker-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.value-picker-field input {
+  height: var(--control-md);
+  font-family: var(--font-code);
+  font-size: var(--text-md);
+}
+.value-picker-fraction input { width: 8ch; }
+.value-picker-offset input { width: 8ch; }
+.value-picker-search {
+  margin: 0 var(--space-lg) var(--space-md);
+  height: var(--control-md);
+}
+.value-picker-list,
+.value-picker-rows {
+  flex: 1;
+  min-height: calc(var(--row-h) * 4);
+  overflow: auto;
+  margin: 0 var(--space-md);
+}
+.value-picker-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-height: var(--row-h);
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.value-picker-option:hover { background: var(--hover); }
+.value-picker-option.checked { background: var(--accent-soft); }
+.value-picker-value {
+  font-family: var(--font-code);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+.value-picker-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--space-md);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 var(--space-xs);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font-family: var(--font-code);
+  font-size: var(--text-md);
+}
+.value-picker-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.value-picker-row .key { font-weight: 600; }
+button.value-picker-row:hover:not(:disabled) { background: var(--hover); }
+button.value-picker-row.selected { background: var(--accent-soft); }
+.value-picker-row-head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--panel);
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.value-picker-row-head .key { font-weight: 600; }
+.value-picker-pages {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-lg) 0;
+}
+.value-picker-pages > span {
+  margin-right: auto;
+  font-variant-numeric: tabular-nums;
+}
 .cell-editor {
   position: absolute;
   z-index: 4;

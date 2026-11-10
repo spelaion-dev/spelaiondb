@@ -3566,6 +3566,59 @@ async fn save_cell_value(
     .map_err(|e| e.to_string())?
 }
 
+/// The value picker the cell panel offers for `column` of `schema.table` in an editable result
+/// (a date and time, the allowed values, a foreign key's search), read from the catalog now.
+#[tauri::command]
+#[specta::specta]
+async fn value_picker(
+    session: String,
+    schema: String,
+    table: String,
+    column: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<ValuePickerItem>> {
+    let open = state.session(&session).await?;
+    spelaion_core::value_picker(&open.session, &schema, &table, &column)
+        .await
+        .map(|picker| picker.map(ValuePickerItem::from))
+        .map_err(|e| e.to_string())
+}
+
+/// The text a picked date and time is written as (and shown as once saved).
+#[tauri::command]
+#[specta::specta]
+fn pick_time(picker: TemporalPickerItem, picked: PickedTimeItem) -> CmdResult<String> {
+    spelaion_core::picked_time_text(&picker.into(), &picked.into()).map_err(|e| e.to_string())
+}
+
+/// The text of the values picked from a column's allowed values.
+#[tauri::command]
+#[specta::specta]
+fn pick_choices(picker: ChoicePickerItem, chosen: Vec<String>) -> CmdResult<String> {
+    spelaion_core::picked_choice_text(&picker.into(), &chosen).map_err(|e| e.to_string())
+}
+
+/// A page of the table `column`'s foreign key references, keeping the rows that contain
+/// `search`: the key is read from the catalog again and the core writes the page's filter.
+#[tauri::command]
+#[specta::specta]
+async fn search_referenced(
+    session: String,
+    schema: String,
+    table: String,
+    column: String,
+    search: String,
+    offset: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<ReferencedRowsItem> {
+    let open = state.session(&session).await?;
+    let offset = u64::from(offset);
+    spelaion_core::search_referenced(&open.session, &schema, &table, &column, &search, offset)
+        .await
+        .map(ReferencedRowsItem::from)
+        .map_err(|e| e.to_string())
+}
+
 /// Frees a result the UI no longer shows.
 #[tauri::command]
 #[specta::specta]
@@ -4606,6 +4659,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             cell_value,
             view_cell,
             save_cell_value,
+            value_picker,
+            pick_time,
+            pick_choices,
+            search_referenced,
             preview_load_value_file,
             load_value_file,
             sort_result,

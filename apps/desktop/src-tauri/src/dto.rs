@@ -4917,3 +4917,241 @@ impl From<spelaion_core::DataSearchSummary> for DataSearchSummaryItem {
         }
     }
 }
+
+/// What a cell panel's value picker writes (SDB-58): a date and time, one of the allowed values,
+/// or a row of the table a foreign key references. Exactly the field its `kind` names is set.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ValuePickerItem {
+    pub kind: ValuePickerKind,
+    pub temporal: Option<TemporalPickerItem>,
+    pub choice: Option<ChoicePickerItem>,
+    pub key: Option<KeyPickerItem>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ValuePickerKind {
+    Temporal,
+    Choice,
+    ForeignKey,
+}
+
+impl From<spelaion_core::ValuePicker> for ValuePickerItem {
+    fn from(picker: spelaion_core::ValuePicker) -> Self {
+        let empty = |kind| Self {
+            kind,
+            temporal: None,
+            choice: None,
+            key: None,
+        };
+        match picker {
+            spelaion_core::ValuePicker::Temporal(t) => Self {
+                temporal: Some(t.into()),
+                ..empty(ValuePickerKind::Temporal)
+            },
+            spelaion_core::ValuePicker::Choice(c) => Self {
+                choice: Some(c.into()),
+                ..empty(ValuePickerKind::Choice)
+            },
+            spelaion_core::ValuePicker::ForeignKey(k) => Self {
+                key: Some(KeyPickerItem {
+                    name: k.name,
+                    schema: k.schema,
+                    table: k.table,
+                    columns: k.columns,
+                    referenced_columns: k.referenced_columns,
+                }),
+                ..empty(ValuePickerKind::ForeignKey)
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TemporalKindItem {
+    Date,
+    Time,
+    Timestamp,
+    /// Written in UTC with `+00`, as the grid shows it.
+    TimestampTz,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TemporalStepItem {
+    Fraction,
+    /// SQL Server's `datetime`: thousandths ending in 0, 3 or 7.
+    SqlServerDatetime,
+    /// Whole minutes (SQL Server's `smalldatetime`).
+    Minutes,
+}
+
+/// A date and time picker: what it writes and how precisely.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TemporalPickerItem {
+    pub kind: TemporalKindItem,
+    /// Fractional digits of a second the column keeps (0 to 6).
+    pub digits: u8,
+    pub padded: bool,
+    pub step: TemporalStepItem,
+}
+
+impl From<spelaion_core::TemporalPicker> for TemporalPickerItem {
+    fn from(t: spelaion_core::TemporalPicker) -> Self {
+        use spelaion_core::{TemporalKind, TemporalStep};
+        Self {
+            kind: match t.kind {
+                TemporalKind::Date => TemporalKindItem::Date,
+                TemporalKind::Time => TemporalKindItem::Time,
+                TemporalKind::Timestamp => TemporalKindItem::Timestamp,
+                TemporalKind::TimestampTz => TemporalKindItem::TimestampTz,
+            },
+            digits: t.digits,
+            padded: t.padded,
+            step: match t.step {
+                TemporalStep::Fraction => TemporalStepItem::Fraction,
+                TemporalStep::SqlServerDatetime => TemporalStepItem::SqlServerDatetime,
+                TemporalStep::Minutes => TemporalStepItem::Minutes,
+            },
+        }
+    }
+}
+
+impl From<TemporalPickerItem> for spelaion_core::TemporalPicker {
+    fn from(t: TemporalPickerItem) -> Self {
+        use spelaion_core::{TemporalKind, TemporalStep};
+        Self {
+            kind: match t.kind {
+                TemporalKindItem::Date => TemporalKind::Date,
+                TemporalKindItem::Time => TemporalKind::Time,
+                TemporalKindItem::Timestamp => TemporalKind::Timestamp,
+                TemporalKindItem::TimestampTz => TemporalKind::TimestampTz,
+            },
+            digits: t.digits,
+            padded: t.padded,
+            step: match t.step {
+                TemporalStepItem::Fraction => TemporalStep::Fraction,
+                TemporalStepItem::SqlServerDatetime => TemporalStep::SqlServerDatetime,
+                TemporalStepItem::Minutes => TemporalStep::Minutes,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ChoiceSourceItem {
+    Enum,
+    Set,
+    Check,
+}
+
+/// A column's allowed values, in the catalog's order.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChoicePickerItem {
+    pub source: ChoiceSourceItem,
+    pub values: Vec<String>,
+}
+
+impl From<spelaion_core::ChoicePicker> for ChoicePickerItem {
+    fn from(c: spelaion_core::ChoicePicker) -> Self {
+        use spelaion_core::ChoiceSource;
+        Self {
+            source: match c.source {
+                ChoiceSource::Enum => ChoiceSourceItem::Enum,
+                ChoiceSource::Set => ChoiceSourceItem::Set,
+                ChoiceSource::Check => ChoiceSourceItem::Check,
+            },
+            values: c.values,
+        }
+    }
+}
+
+impl From<ChoicePickerItem> for spelaion_core::ChoicePicker {
+    fn from(c: ChoicePickerItem) -> Self {
+        use spelaion_core::ChoiceSource;
+        Self {
+            source: match c.source {
+                ChoiceSourceItem::Enum => ChoiceSource::Enum,
+                ChoiceSourceItem::Set => ChoiceSource::Set,
+                ChoiceSourceItem::Check => ChoiceSource::Check,
+            },
+            values: c.values,
+        }
+    }
+}
+
+/// The foreign key a column belongs to.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyPickerItem {
+    pub name: String,
+    pub schema: String,
+    pub table: String,
+    /// This table's columns, in the key's order.
+    pub columns: Vec<String>,
+    /// The referenced table's columns, in the same order.
+    pub referenced_columns: Vec<String>,
+}
+
+/// A date and time as picked in the date and time picker.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedTimeItem {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+    pub hour: u32,
+    pub minute: u32,
+    pub second: u32,
+    /// Fractional digits of the second, as typed.
+    pub fraction: String,
+    /// Minutes east of UTC the time was picked in.
+    pub offset_minutes: i32,
+}
+
+impl From<PickedTimeItem> for spelaion_core::PickedTime {
+    fn from(p: PickedTimeItem) -> Self {
+        Self {
+            year: p.year,
+            month: p.month,
+            day: p.day,
+            hour: p.hour,
+            minute: p.minute,
+            second: p.second,
+            fraction: p.fraction,
+            offset_minutes: p.offset_minutes,
+        }
+    }
+}
+
+/// A page of the foreign key picker's search of the referenced table.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferencedRowsItem {
+    /// The referenced key's columns first, then a few text columns.
+    pub columns: Vec<String>,
+    pub key_columns: u32,
+    pub rows: Vec<Vec<Option<String>>>,
+    pub offset: u32,
+    pub has_more: bool,
+    /// Rows a page holds.
+    pub page_rows: u32,
+}
+
+impl From<spelaion_core::ReferencedRows> for ReferencedRowsItem {
+    fn from(r: spelaion_core::ReferencedRows) -> Self {
+        Self {
+            columns: r.columns,
+            key_columns: u32::try_from(r.key_columns).unwrap_or(u32::MAX),
+            rows: r.rows,
+            offset: u32::try_from(r.offset).unwrap_or(u32::MAX),
+            has_more: r.has_more,
+            page_rows: u32::try_from(spelaion_core::KEY_PAGE_ROWS).unwrap_or(u32::MAX),
+        }
+    }
+}

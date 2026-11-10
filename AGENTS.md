@@ -181,6 +181,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   WebP only, handed over as a `data:` URL; never SVG or HTML), XML pretty-printed as text, a value
   saved to a file byte for byte, and a file loaded into a cell as one `edit.rs` UPDATE by primary
   key; `tests/value_files.rs` runs it on every engine.
+  `value_pick.rs` is the cell panel's value pickers (SDB-58): a date and time written with the
+  column's precision as the grid shows it (UTC `+00` for a time zone; SQL Server's `datetime`
+  and `smalldatetime` rounded as the server does), the allowed values of an enum, a `SET` or a
+  `CHECK (… IN (…))` read from the catalog (SQLite's from its `CREATE TABLE` text) only when
+  exactly one list can be read reliably, and a foreign key's search: a checked page of the
+  referenced table (never all of it), its filter written like "filter by this value". A pick is
+  only a cell edit's text, applied by `edit.rs`; `tests/value_pickers.rs` reads every pick back
+  on every engine, and searches a million-row table.
   `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
   `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes

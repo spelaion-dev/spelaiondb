@@ -103,3 +103,18 @@ and applies everything in one transaction: if a statement does not affect exactl
 (the row changed or vanished meanwhile), nothing is applied. Production connections show the
 statements for confirmation first, and read-only connections refuse. Tables without a primary
 key are read-only (ADR-014).
+
+The cell panel (**Enter**) helps pick a value instead of typing it, from what the database
+says the column allows:
+
+- **Dates and times:** a date, a time, the fraction of a second the column keeps and, for a
+  column with a time zone, the offset you picked it in (it is saved in UTC, as the grid shows
+  it). **Now** (or **Today**) fills in this moment.
+- **Allowed values:** the values of a PostgreSQL, MySQL, MariaDB or DuckDB enum, the values of
+  a MySQL or MariaDB `SET` (any of them at once), or the list of a `CHECK (column IN (…))`.
+- **Foreign keys:** a search of the referenced table, 50 rows at a time with **Next** and
+  **Previous**, matching its key and a few of its text columns; click a row to write its key.
+  It never loads the whole table.
+
+What is picked becomes the cell's pending change, written as the grid will show it once saved,
+and is applied with the others.

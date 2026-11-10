@@ -374,6 +374,18 @@ pub(crate) fn check(
     page: Option<(u64, u64)>,
     filtered: bool,
 ) -> Result<(), PageError> {
+    check_projection(dialect, sql, page, filtered, 1)
+}
+
+/// [`check`] for a SELECT of `columns` expressions instead of `*` (the foreign key picker's
+/// page names the columns it shows).
+pub(crate) fn check_projection(
+    dialect: &dyn Dialect,
+    sql: &str,
+    page: Option<(u64, u64)>,
+    filtered: bool,
+    columns: usize,
+) -> Result<(), PageError> {
     // The splitter that runs scripts must see one statement too.
     if dialect.split_statements(sql).len() != 1 {
         return Err(PageError::NotAPlainSelect);
@@ -397,7 +409,7 @@ pub(crate) fn check(
         && select.into.is_none()
         && select.distinct.is_none()
         && select.having.is_none()
-        && select.projection.len() == 1
+        && select.projection.len() == columns
         && select.selection.is_some() == filtered
         && matches!(&select.group_by, GroupByExpr::Expressions(e, _) if e.is_empty());
     let limit_kept = match (page, &query.limit_clause, &query.fetch) {
