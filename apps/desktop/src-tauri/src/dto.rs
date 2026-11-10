@@ -630,6 +630,114 @@ pub struct AlterationPreviewItem {
     pub rebuilds: bool,
 }
 
+/// A column of the create table form (ADR-047).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewColumnItem {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// A foreign key of the create table form; an empty name is written by the core.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewForeignKeyItem {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub referenced_schema: String,
+    pub referenced_table: String,
+    pub referenced_columns: Vec<String>,
+}
+
+/// An index of the create table form; an empty name is written by the core.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewIndexItem {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+}
+
+/// What the create table form asks for; the core writes the SQL.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewTableItem {
+    pub schema: String,
+    pub name: String,
+    pub columns: Vec<NewColumnItem>,
+    pub primary_key: Vec<String>,
+    pub foreign_keys: Vec<NewForeignKeyItem>,
+    pub indexes: Vec<NewIndexItem>,
+}
+
+impl From<NewTableItem> for spelaion_core::NewTable {
+    fn from(item: NewTableItem) -> Self {
+        Self {
+            schema: item.schema,
+            name: item.name,
+            columns: item
+                .columns
+                .into_iter()
+                .map(|c| spelaion_core::NewColumn {
+                    name: c.name,
+                    data_type: c.data_type,
+                    nullable: c.nullable,
+                    default: c.default,
+                    comment: c.comment,
+                })
+                .collect(),
+            primary_key: item.primary_key,
+            foreign_keys: item
+                .foreign_keys
+                .into_iter()
+                .map(|k| spelaion_core::NewForeignKey {
+                    name: k.name,
+                    columns: k.columns,
+                    referenced_schema: k.referenced_schema,
+                    referenced_table: k.referenced_table,
+                    referenced_columns: k.referenced_columns,
+                })
+                .collect(),
+            indexes: item
+                .indexes
+                .into_iter()
+                .map(|i| spelaion_core::NewIndex {
+                    name: i.name,
+                    columns: i.columns,
+                    unique: i.unique,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl AlterationPreviewItem {
+    /// A plan as the dialogs show it, with the risks the connection's safeguards see.
+    pub fn new(
+        plan: &spelaion_core::AlterationPlan,
+        dialect: &dyn spelaion_driver_api::Dialect,
+        safeguards: &spelaion_config::Safeguards,
+    ) -> Self {
+        Self {
+            sql: plan.script(),
+            statements: plan.statements().into_iter().map(String::from).collect(),
+            risks: plan
+                .risks(dialect, safeguards)
+                .into_iter()
+                .map(|risk| PlanRiskItem {
+                    statement: u32::try_from(risk.statement.saturating_sub(1)).unwrap_or(u32::MAX),
+                    risk: risk.risk.into(),
+                })
+                .collect(),
+            transactional: plan.transactional(),
+            rebuilds: plan.rebuilds(),
+        }
+    }
+}
+
 /// The SQL of a change to show, and whether its object can be dropped in cascade.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

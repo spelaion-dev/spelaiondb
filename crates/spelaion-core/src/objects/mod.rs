@@ -7,12 +7,16 @@
 //! runs only once the user has seen its SQL and confirmed it.
 
 mod alter;
+mod create;
 mod ddl;
 mod rebuild;
 
 pub use alter::{
     AlterationPlan, ColumnEdit, DroppedConstraint, EditableColumn, PlanRisk, TableAlteration,
     TableStructure, alteration_plan, apply_alteration, table_structure,
+};
+pub use create::{
+    NewColumn, NewForeignKey, NewIndex, NewTable, apply_create_table, create_table_plan,
 };
 
 use spelaion_driver_api::{

@@ -487,6 +487,13 @@ export const commands = {
 	 *  and risky statements the user did not confirm (ADR-047). Returns how many statements ran.
 	 */
 	applyTableAlteration: (session: string, alteration: TableAlterationItem_Deserialize, sql: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_table_alteration", { session, alteration, sql, confirmed })),
+	/**  The script the create table form would run, written by the core (ADR-047). Nothing runs. */
+	previewCreateTable: (session: string, table: NewTableItem_Deserialize) => typedError<AlterationPreviewItem, string>(__TAURI_INVOKE("preview_create_table", { session, table })),
+	/**
+	 *  Creates the table of the form, only as the script `sql` the user was shown: refused on a
+	 *  read-only connection, and risky statements run only confirmed (ADR-047).
+	 */
+	applyCreateTable: (session: string, table: NewTableItem_Deserialize, sql: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_create_table", { session, table, sql, confirmed })),
 	/**
 	 *  The statement that starts a new object (table, view, schema…), written by the core in the
 	 *  engine's types, to finish in a new tab: nothing runs (ADR-026).
@@ -3008,10 +3015,70 @@ export type NetworkProfileItem_Serialize = {
 	usedBy: string[],
 };
 
+/**  A column of the create table form (ADR-047). */
+export type NewColumnItem = NewColumnItem_Serialize | NewColumnItem_Deserialize;
+
+/**  A column of the create table form (ADR-047). */
+export type NewColumnItem_Deserialize = {
+	name: string,
+	dataType: string,
+	nullable: boolean,
+	default?: string | null,
+	comment?: string | null,
+};
+
+/**  A column of the create table form (ADR-047). */
+export type NewColumnItem_Serialize = {
+	name: string,
+	dataType: string,
+	nullable: boolean,
+	default: string | null,
+	comment: string | null,
+};
+
+/**  A foreign key of the create table form; an empty name is written by the core. */
+export type NewForeignKeyItem = {
+	name: string,
+	columns: string[],
+	referencedSchema: string,
+	referencedTable: string,
+	referencedColumns: string[],
+};
+
+/**  An index of the create table form; an empty name is written by the core. */
+export type NewIndexItem = {
+	name: string,
+	columns: string[],
+	unique: boolean,
+};
+
 /**  What can be added on the columns chosen in the explorer (see `spelaion_core::NewIndexKind`). */
 export type NewIndexKindItem = "index" | "uniqueIndex" | "uniqueConstraint" | "primaryKey";
 
 export type NewTableElementItem = { kind: "column"; name: string; dataType: string; nullable: boolean; default: string } | { kind: "constraint"; name: string; constraintKind: string; columns: string[]; expression: string } | { kind: "foreignKey"; name: string; columns: string[]; referencedSchema: string; referencedTable: string; referencedColumns: string[] } | { kind: "index"; name: string; columns: string[]; unique: boolean } | { kind: "trigger"; name: string; timing: string; event: string; body: string };
+
+/**  What the create table form asks for; the core writes the SQL. */
+export type NewTableItem = NewTableItem_Serialize | NewTableItem_Deserialize;
+
+/**  What the create table form asks for; the core writes the SQL. */
+export type NewTableItem_Deserialize = {
+	schema: string,
+	name: string,
+	columns: NewColumnItem_Deserialize[],
+	primaryKey: string[],
+	foreignKeys: NewForeignKeyItem[],
+	indexes: NewIndexItem[],
+};
+
+/**  What the create table form asks for; the core writes the SQL. */
+export type NewTableItem_Serialize = {
+	schema: string,
+	name: string,
+	columns: NewColumnItem_Serialize[],
+	primaryKey: string[],
+	foreignKeys: NewForeignKeyItem[],
+	indexes: NewIndexItem[],
+};
 
 export type NoticeItem = {
 	severity: string,

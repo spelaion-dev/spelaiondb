@@ -4411,21 +4411,11 @@ async fn preview_table_alteration(
     let plan = spelaion_core::alteration_plan(&open.session, &alteration)
         .await
         .map_err(|e| e.to_string())?;
-    let risks = plan
-        .risks(open.session.dialect().as_ref(), &open.resolved.safeguards())
-        .into_iter()
-        .map(|risk| PlanRiskItem {
-            statement: u32::try_from(risk.statement.saturating_sub(1)).unwrap_or(u32::MAX),
-            risk: risk.risk.into(),
-        })
-        .collect();
-    Ok(AlterationPreviewItem {
-        sql: plan.script(),
-        statements: plan.statements().into_iter().map(String::from).collect(),
-        risks,
-        transactional: plan.transactional(),
-        rebuilds: plan.rebuilds(),
-    })
+    Ok(AlterationPreviewItem::new(
+        &plan,
+        open.session.dialect().as_ref(),
+        &open.resolved.safeguards(),
+    ))
 }
 
 /// Runs a structure form's changes on the tab's session, only as the script `sql` the user was
@@ -4444,6 +4434,50 @@ async fn apply_table_alteration(
     let ran = spelaion_core::apply_alteration(
         &open.session,
         &alteration.into(),
+        &sql,
+        open.resolved.params.read_only,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
+/// The script the create table form would run, written by the core (ADR-047). Nothing runs.
+#[tauri::command]
+#[specta::specta]
+async fn preview_create_table(
+    session: String,
+    table: NewTableItem,
+    state: State<'_, AppState>,
+) -> CmdResult<AlterationPreviewItem> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    let plan = spelaion_core::create_table_plan(dialect.as_ref(), &table.into())
+        .map_err(|e| e.to_string())?;
+    Ok(AlterationPreviewItem::new(
+        &plan,
+        dialect.as_ref(),
+        &open.resolved.safeguards(),
+    ))
+}
+
+/// Creates the table of the form, only as the script `sql` the user was shown: refused on a
+/// read-only connection, and risky statements run only confirmed (ADR-047).
+#[tauri::command]
+#[specta::specta]
+async fn apply_create_table(
+    session: String,
+    table: NewTableItem,
+    sql: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    let ran = spelaion_core::apply_create_table(
+        &open.session,
+        &table.into(),
         &sql,
         open.resolved.params.read_only,
         &open.resolved.safeguards(),
@@ -4870,6 +4904,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             table_structure,
             preview_table_alteration,
             apply_table_alteration,
+            preview_create_table,
+            apply_create_table,
             create_sql,
             new_index_sql,
             new_table_element_sql,

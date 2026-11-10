@@ -7,11 +7,12 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
 use spelaion_core::{
-    ColumnEdit, CoreEvent, CreateKind, DroppedConstraint, EditableColumn, FoundObject,
-    NewIndexKind, NewTableElement, ObjectChange, ObjectError, ObjectTarget, ResultStore,
-    SEARCH_LIMIT, Session, TableAlteration, TableStructure, active_schema, alteration_plan,
-    apply_alteration, apply_change, create_sql, new_index_sql, new_table_element_sql,
-    object_actions, search_objects, set_active_schema, supports_added_checks, table_structure,
+    ColumnEdit, CoreEvent, CreateKind, DroppedConstraint, EditableColumn, FoundObject, NewColumn,
+    NewForeignKey, NewIndex, NewIndexKind, NewTable, NewTableElement, ObjectChange, ObjectError,
+    ObjectTarget, ResultStore, SEARCH_LIMIT, Session, TableAlteration, TableStructure,
+    active_schema, alteration_plan, apply_alteration, apply_change, apply_create_table, create_sql,
+    create_table_plan, new_index_sql, new_table_element_sql, object_actions, search_objects,
+    set_active_schema, supports_added_checks, table_structure,
 };
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, NameFilter, ObjectKind, SchemaObject, SchemaObjectKind,
@@ -1711,4 +1712,133 @@ async fn a_form_runs_only_the_script_it_showed() {
             .risks(session.dialect().as_ref(), &production)
             .is_empty()
     );
+}
+
+fn new_column(name: &str, ty: &str, nullable: bool) -> NewColumn {
+    NewColumn {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable,
+        default: None,
+        comment: None,
+    }
+}
+
+#[tokio::test]
+async fn the_create_table_form_runs_on_every_engine() {
+    for (label, session, schema) in engines().await {
+        let cleanup = ["DROP TABLE oa_new_line", "DROP TABLE oa_new_head"];
+        run(label, &session, &cleanup, true).await;
+        run(
+            label,
+            &session,
+            &["CREATE TABLE oa_new_head (id INT NOT NULL PRIMARY KEY)"],
+            false,
+        )
+        .await;
+        let comments = label != "sqlite";
+        let mut note = new_column("note", "VARCHAR(40)", true);
+        note.default = Some("'none'".into());
+        if comments {
+            note.comment = Some("what it's for".into());
+        }
+        let table = NewTable {
+            schema: schema.into(),
+            name: "oa_new_line".into(),
+            columns: vec![
+                new_column("head_id", "INT", false),
+                new_column("line", "INT", false),
+                note,
+            ],
+            primary_key: vec!["head_id".into(), "line".into()],
+            foreign_keys: vec![NewForeignKey {
+                name: String::new(),
+                columns: vec!["head_id".into()],
+                referenced_schema: schema.into(),
+                referenced_table: "oa_new_head".into(),
+                referenced_columns: vec!["id".into()],
+            }],
+            indexes: vec![NewIndex {
+                name: String::new(),
+                columns: vec!["note".into()],
+                unique: false,
+            }],
+        };
+        let plan = create_table_plan(session.dialect().as_ref(), &table)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let script = plan.script();
+        apply_create_table(
+            &session,
+            &table,
+            &script,
+            false,
+            &Safeguards::default(),
+            false,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}\n{script}"));
+        let info = session
+            .connection()
+            .describe_table(schema, "oa_new_line")
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}\n{script}"));
+        assert_eq!(
+            info.columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["head_id", "line", "note"],
+            "{label}"
+        );
+        assert_eq!(info.primary_key, ["head_id", "line"], "{label}\n{script}");
+        assert_eq!(info.foreign_keys.len(), 1, "{label}\n{script}");
+        assert_eq!(
+            info.foreign_keys[0].referenced_table, "oa_new_head",
+            "{label}"
+        );
+        assert!(
+            info.indexes
+                .iter()
+                .any(|i| i.name == "oa_new_line_note_idx"),
+            "{label}: {:?}\n{script}",
+            info.indexes
+        );
+        let note = info.columns.iter().find(|c| c.name == "note").unwrap();
+        assert!(
+            note.default.as_deref().is_some_and(|d| d.contains("none")),
+            "{label}: {note:?}"
+        );
+        if comments {
+            assert_eq!(note.comment.as_deref(), Some("what it's for"), "{label}");
+        }
+        // Only the script it showed: a different one is refused, and so is a read-only
+        // connection.
+        assert_eq!(
+            apply_create_table(
+                &session,
+                &table,
+                "CREATE TABLE other (x INT);\n",
+                false,
+                &Safeguards::default(),
+                true
+            )
+            .await,
+            Err(ObjectError::Changed),
+            "{label}"
+        );
+        assert_eq!(
+            apply_create_table(
+                &session,
+                &table,
+                &script,
+                true,
+                &Safeguards::default(),
+                true
+            )
+            .await,
+            Err(ObjectError::ReadOnly),
+            "{label}"
+        );
+        run(label, &session, &cleanup, true).await;
+    }
 }

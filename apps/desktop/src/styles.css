@@ -1883,12 +1883,22 @@ select {
 }
 .structure-columns table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
 }
-.structure-columns > table {
-  display: block;
+.structure-scroll {
   max-height: 280px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.structure-columns .icon-button {
+  padding: 0;
+}
+.structure-columns .structure-narrow {
+  width: 76px;
+}
+.structure-columns .structure-icon {
+  width: 36px;
 }
 .structure-columns th,
 .structure-columns td {
@@ -1904,11 +1914,11 @@ select {
 }
 .structure-columns tbody th {
   font-weight: 400;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .structure-columns input[type="text"] {
   width: 100%;
-  min-width: 96px;
+  min-width: 0;
 }
 .structure-columns .structure-check {
   text-align: center;
@@ -1921,6 +1931,39 @@ select {
 }
 .structure-sql {
   min-height: 48px;
+}
+.structure-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+.structure-add .icon,
+.structure-columns .icon-button .icon {
+  vertical-align: middle;
+}
+.structure-section {
+  display: grid;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.structure-section legend {
+  padding: 0;
+  margin-bottom: var(--space-xs);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.structure-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: var(--space-xs);
+  align-items: center;
+}
+.structure-row input[type="text"] {
+  width: 100%;
+  min-width: 0;
 }
 .open-object-search {
   display: flex;

@@ -58,6 +58,7 @@ import { EngineIcon } from "./EngineIcon";
 import { useFittingMarks } from "../connectionMarks";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { StructureDialog } from "./StructureDialog";
+import { CreateTableDialog } from "./CreateTableDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
@@ -1904,6 +1905,12 @@ function SchemaNode({
   const sort = useSortByName();
   const actions = useObjectActions(session);
   const [dropping, setDropping] = useState(false);
+  /** The create table form (ADR-047); other kinds open their statement in a tab. */
+  const [creatingTable, setCreatingTable] = useState(false);
+  const create = (kind: CreateKindItem) => {
+    if (kind === "table") setCreatingTable(true);
+    else openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
+  };
   /** The editor tab "Set as the editor's schema" applies to: the active query tab, connected to
    *  this connection and idle. */
   const editorTab = useApp((s) => {
@@ -2121,7 +2128,7 @@ function SchemaNode({
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
-                  openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
+                  create(kind);
                 }}
               >
                 {t(`create.${kind}`)}
@@ -2139,6 +2146,18 @@ function SchemaNode({
             </>
           )}
         </div>
+      )}
+      {creatingTable && (
+        <CreateTableDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          onClose={() => setCreatingTable(false)}
+          onDone={() => {
+            setCreatingTable(false);
+            refresh();
+          }}
+        />
       )}
       {dropping && (
         <DropDialog
@@ -2183,9 +2202,7 @@ function SchemaNode({
                       return kind && actions?.create.includes(kind)
                         ? {
                             label: t(`create.${kind}`),
-                            run: () => {
-                              openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
-                            },
+                            run: () => create(kind),
                           }
                         : undefined;
                     })()}

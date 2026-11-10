@@ -147,12 +147,13 @@ export function StructureDialog({
         {loadError && <p className="error small" role="alert">{t("structure.loadFailed", { detail: loadError })}</p>}
         {!drop && structure && (
           <div className="structure-columns" role="group" aria-label={t("structure.columns")}>
+            <div className="structure-scroll">
             <table>
               <thead>
                 <tr>
                   <th scope="col">{t("structure.name")}</th>
                   <th scope="col">{t("structure.type")}</th>
-                  <th scope="col">{t("structure.nullable")}</th>
+                  <th scope="col" className="structure-narrow">{t("structure.nullable")}</th>
                   <th scope="col">{t("structure.default")}</th>
                   {structure.comments && <th scope="col">{t("structure.comment")}</th>}
                 </tr>
@@ -197,6 +198,7 @@ export function StructureDialog({
                 })}
               </tbody>
             </table>
+            </div>
             <p className="muted small">{t("structure.sqlHint")}</p>
           </div>
         )}
