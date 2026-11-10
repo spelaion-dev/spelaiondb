@@ -8,7 +8,7 @@ import type { LanguagePreference } from "../i18n";
 import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
-import { useUpdate } from "../update";
+import { manualUpdateKey, useUpdate } from "../update";
 import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
@@ -715,6 +715,7 @@ function UpdateSettings() {
   const check = useUpdate((s) => s.check);
   const setCheckAtStartup = useUpdate((s) => s.setCheckAtStartup);
   const showNotes = useUpdate((s) => s.showNotes);
+  const openReleasesPage = useUpdate((s) => s.openReleasesPage);
   useEffect(() => {
     void getVersion().then(setVersion);
   }, []);
@@ -723,6 +724,7 @@ function UpdateSettings() {
     if (useUpdate.getState().status === null) void useUpdate.getState().check();
   }, []);
   const unavailable = status?.kind === "unavailable";
+  const manual = status?.kind === "available" ? manualUpdateKey(status.method) : null;
   return (
     <>
       <p>{t("updates.version", { version })}</p>
@@ -743,16 +745,21 @@ function UpdateSettings() {
             {status?.kind === "upToDate" && t("updates.upToDate")}
             {status?.kind === "available" && t("updates.available", { version: status.version })}
           </p>
+          {manual && <p className="small">{t(`updates.${manual}`)}</p>}
           {/* Installed from here too, without closing the dialog for the notice behind it. */}
           {status?.kind === "available" && (
             <div>
               <button disabled={installing} onClick={showNotes}>{t("updates.notesAction")}</button>{" "}
-              <button className="primary" disabled={installing} onClick={() => void install()}>
-                {installing ? t("updates.installing") : t("updates.install")}
-              </button>
+              {manual ? (
+                <button className="primary" onClick={() => void openReleasesPage()}>{t("updates.openReleases")}</button>
+              ) : (
+                <button className="primary" disabled={installing} onClick={() => void install()}>
+                  {installing ? t("updates.installing") : t("updates.install")}
+                </button>
+              )}
             </div>
           )}
-          <p className="muted small">{t("updates.hint")}</p>
+          {!manual && <p className="muted small">{t("updates.hint")}</p>}
         </>
       )}
       {error && (

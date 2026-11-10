@@ -1,8 +1,20 @@
 // Automatic updates (ADR-021): the core side checks, downloads and verifies; this module keeps
-// what the UI shows. Nothing is installed until the user clicks "Install and restart".
+// what the UI shows. Nothing is installed until the user clicks "Install and restart", which is
+// offered only where the core says this copy can replace itself (on Linux, an AppImage).
 
 import { create } from "zustand";
-import { call, commands, type UpdateStatus } from "./api";
+import { call, commands, type UpdateMethod, type UpdateStatus } from "./api";
+
+/** The text that says how an update the app does not install is installed, or `null` when the
+ * app installs it itself. Keys exist in both the `app` and the `settings` namespaces. */
+export function manualUpdateKey(method: UpdateMethod): "manualDeb" | "manualRpm" | "manualDownload" | null {
+  switch (method) {
+    case "inApp": return null;
+    case "deb": return "manualDeb";
+    case "rpm": return "manualRpm";
+    case "releasesPage": return "manualDownload";
+  }
+}
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -20,6 +32,8 @@ interface UpdateStore {
   start(): Promise<void>;
   check(): Promise<void>;
   install(): Promise<void>;
+  /** Open the latest release's page (a fixed address chosen by the core). */
+  openReleasesPage(): Promise<void>;
   setCheckAtStartup(enabled: boolean): Promise<void>;
   dismiss(): void;
   showNotes(): void;
@@ -64,6 +78,14 @@ export const useUpdate = create<UpdateStore>((set, get) => ({
       await call(commands.updateInstall());
     } catch (e) {
       set({ error: errorText(e), installing: false });
+    }
+  },
+  async openReleasesPage() {
+    try {
+      await call(commands.updateOpenReleasesPage());
+      set({ error: null });
+    } catch (e) {
+      set({ error: errorText(e) });
     }
   },
   async setCheckAtStartup(enabled) {

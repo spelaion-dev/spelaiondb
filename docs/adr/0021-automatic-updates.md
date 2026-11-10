@@ -40,6 +40,17 @@ public, or a public repository that only holds releases.
   first version that updates itself; earlier ones are installed by hand once.
 - **What the updater can replace:** Windows (NSIS, run passively), macOS (`.app.tar.gz`) and
   Linux AppImage. `.deb`/`.rpm` installs are updated by their package manager, not by the app.
+- **Linux decides by how the app was installed (2026-11-10):** the plugin writes an AppImage
+  over the running binary for any bundle type it does not know, and runs `pkexec dpkg -i` /
+  `rpm -U` for packages. So `update.rs` reads the bundle type Tauri's bundler patches into the
+  binary (`tauri::utils::platform::bundle_type`) and whether the AppImage runtime started it
+  (`APPIMAGE`, an existing file): only an AppImage running as one offers "Install and restart".
+  A `.deb`/`.rpm` install is told to install the new package with its package manager, and any
+  other binary (built with `--no-bundle`, a tarball, a distribution's own package) to download
+  the new version; both get a button that opens the latest release's page (a fixed address in
+  the core). `update_check` still finds the version through the signed `latest.json`, and
+  `update_install` refuses those installs whatever the web view asks. Windows and macOS are
+  unchanged.
 
 ## Alternatives
 - **A token in the app to read the private releases:** a published secret. Refused.

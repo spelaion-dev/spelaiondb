@@ -144,6 +144,10 @@
     "notesAction": "Notas de la versión…",
     "install": "Instalar y reiniciar",
     "installing": "Instalando…",
+    "manualDeb": "Esta copia se instaló desde un paquete .deb: descarga el nuevo .deb de la página de releases e instálalo con tu gestor de paquetes.",
+    "manualRpm": "Esta copia se instaló desde un paquete .rpm: descarga el nuevo .rpm de la página de releases e instálalo con tu gestor de paquetes.",
+    "manualDownload": "Esta copia no puede actualizarse sola: descarga la nueva versión de la página de releases.",
+    "openReleases": "Abrir la página de releases",
     "hint": "Las actualizaciones van firmadas y solo se instalan cuando pulsas «Instalar y reiniciar». Las pestañas abiertas vuelven con su SQL, sin ejecutarlo.",
     "error": "No se pudo buscar actualizaciones:"
   },

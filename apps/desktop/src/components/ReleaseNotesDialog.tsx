@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { useUpdate } from "../update";
+import { manualUpdateKey, useUpdate } from "../update";
 
 /** Render the small Markdown subset used in release notes as React text, never HTML.
  * Links are shown as text: release metadata cannot navigate the app or launch a URL. */
@@ -55,7 +55,9 @@ export function ReleaseNotesDialog() {
   const install = useUpdate((s) => s.install);
   const dismiss = useUpdate((s) => s.dismiss);
   const hide = useUpdate((s) => s.hideNotes);
+  const openReleasesPage = useUpdate((s) => s.openReleasesPage);
   if (!open || status?.kind !== "available") return null;
+  const manual = manualUpdateKey(status.method);
   const blocks = status.notes?.trim() ? notesBlocks(status.notes) : null;
   return createPortal(
     <div className="modal-backdrop" onKeyDown={(event) => {
@@ -73,12 +75,17 @@ export function ReleaseNotesDialog() {
             return <ul key={index}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{inlineNotes(item)}</li>)}</ul>;
           }) : <p className="muted">{t("update.notesUnavailable")}</p>}
         </div>
+        {manual && <p className="muted">{t(`update.${manual}`)}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <div className="modal-actions">
           <button disabled={installing} onClick={() => { dismiss(); hide(); }}>{t("update.later")}</button>
-          <button className="primary" disabled={installing} onClick={() => void install()}>
-            {installing ? t("update.installing") : t("update.install")}
-          </button>
+          {manual ? (
+            <button className="primary" onClick={() => void openReleasesPage()}>{t("update.openReleases")}</button>
+          ) : (
+            <button className="primary" disabled={installing} onClick={() => void install()}>
+              {installing ? t("update.installing") : t("update.install")}
+            </button>
+          )}
         </div>
       </section>
     </div>,

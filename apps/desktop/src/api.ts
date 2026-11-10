@@ -81,6 +81,7 @@ import {
   type BlockItem,
   type BulkActionItem,
   type CellInputItem,
+  type UpdateMethod,
   type UpdateStatus_Serialize,
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
@@ -181,6 +182,8 @@ export type { McpInstallPlanItem, McpSettingsItem, ToolOutputItem };
 export type AuditEventItem = AuditEventItem_Serialize;
 export type { AuditSessionItem, AuditStatusItem };
 export type UpdateStatus = UpdateStatus_Serialize;
+/** How this copy of the app gets a new version: only `inApp` may offer "Install and restart". */
+export type { UpdateMethod };
 /** What `connect` returns. */
 export type ConnectResult = ConnectOutcome_Serialize;
 /** What `testConnection` returns; its steps arrive through a channel (ADR-032). */

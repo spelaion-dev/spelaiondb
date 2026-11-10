@@ -144,6 +144,10 @@
     "notesAction": "Release notes…",
     "install": "Install and restart",
     "installing": "Installing…",
+    "manualDeb": "This copy was installed from a .deb package: download the new .deb from the releases page and install it with your package manager.",
+    "manualRpm": "This copy was installed from an .rpm package: download the new .rpm from the releases page and install it with your package manager.",
+    "manualDownload": "This copy cannot update itself: download the new version from the releases page.",
+    "openReleases": "Open releases page",
     "hint": "Updates are signed and installed only when you click “Install and restart”. Open tabs come back with their SQL, not run.",
     "error": "Could not check for updates:"
   },
