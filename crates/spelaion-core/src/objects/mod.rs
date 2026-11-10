@@ -10,6 +10,7 @@ mod alter;
 mod create;
 mod ddl;
 mod rebuild;
+mod source;
 
 pub use alter::{
     AlterationPlan, ColumnEdit, DroppedConstraint, EditableColumn, PlanRisk, TableAlteration,
@@ -18,6 +19,7 @@ pub use alter::{
 pub use create::{
     NewColumn, NewForeignKey, NewIndex, NewTable, apply_create_table, create_table_plan,
 };
+pub use source::{SourceTarget, editable_source};
 
 use spelaion_driver_api::{
     Connection, ConstraintKind, Dialect, DriverError, NameFilter, ObjectInfo, ObjectKind,
@@ -569,6 +571,10 @@ pub struct ObjectActions {
     /// Unique constraints and foreign keys are dropped by creating the table again (SQLite,
     /// ADR-047): through the structure form's script, not a lone `DROP`.
     pub rebuild_drops: bool,
+    /// Functions and procedures have a source to edit (ADR-047): not SQLite, which has none.
+    pub routine_source: bool,
+    /// Functions can be called with their parameters (procedures always): not SQLite.
+    pub routine_calls: bool,
     /// What "Create" offers, in menu order.
     pub create: Vec<CreateKind>,
     /// What can be added on chosen columns: SQLite and DuckDB add constraints only when the
@@ -609,6 +615,8 @@ pub fn object_actions(dialect: &dyn Dialect) -> ObjectActions {
         drop_schemas: engine != "sqlite",
         drop_constraints: !matches!(engine, "sqlite" | "duckdb"),
         rebuild_drops: engine == "sqlite",
+        routine_source: engine != "sqlite",
+        routine_calls: engine != "sqlite",
         create,
         active_schema: matches!(engine, "postgres" | "mysql" | "duckdb"),
         add_constraints: matches!(engine, "postgres" | "mysql" | "sqlserver"),

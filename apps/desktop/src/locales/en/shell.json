@@ -112,6 +112,8 @@
   "generateSql": "Generate SQL",
   "generateDdl": "Generate DDL",
   "generateCall": "Generate CALL",
+  "editSource": "Edit source",
+  "runRoutine": "Run…",
   "definitionHint": "Double-click: open its definition",
   "onTable": "on {{table}}",
   "kinds": {

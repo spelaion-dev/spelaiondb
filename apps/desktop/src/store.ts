@@ -111,6 +111,9 @@ export interface Tab {
   savingEdits?: boolean;
   /** This tab's own run options (ADR-035); `null` fields take the defaults. */
   runOptions?: { onError: OnErrorItem | null; timeoutSeconds: number | null };
+  /** Run the whole script once, as soon as the tab is connected ("Run…" on a routine, ADR-047):
+   *  cleared before it runs, never saved, so a restored or reconnected tab runs nothing. */
+  runOnOpen?: boolean;
   /** Bumped when `sql` is replaced from outside the editor (a file reloaded from disk). */
   textRevision?: number;
   /** The `.sql` file this tab shows (ADR-036); a console has none. */

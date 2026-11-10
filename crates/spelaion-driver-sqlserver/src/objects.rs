@@ -178,10 +178,53 @@ const SYNONYM_SQL: &str = "select 'CREATE SYNONYM ' + quotename(s.name) + '.' + 
 
 /// `EXEC schema.proc @a = :a, @b = @b OUTPUT`, with the output parameters declared first and
 /// shown after. No semicolons: the variables live in one batch, which the editor sends whole.
+/// `SELECT schema.f(:a) AS result`, or `SELECT * FROM schema.f(:a)` for a function that
+/// returns a table: its parameters as placeholders, in order (T-SQL takes them by position).
+async fn function_call(conn: &SqlServerConnection, object: &SchemaObject) -> Result<String> {
+    let rows = conn
+        .rows(
+            "select p.name, o.type \
+             from sys.objects o join sys.schemas s on s.schema_id = o.schema_id \
+             left join sys.parameters p on p.object_id = o.object_id and p.parameter_id > 0 \
+             where s.name = @P1 and o.name = @P2 and o.type in ('FN', 'FS', 'IF', 'TF', 'FT') \
+             order by p.parameter_id",
+            vec![object.schema.clone(), object.name.clone()],
+        )
+        .await?;
+    let Some(first) = rows.first() else {
+        return Err(DriverError::Other(format!(
+            "{}.{} does not exist",
+            object.schema, object.name
+        )));
+    };
+    let table = matches!(text(first, 1).trim(), "IF" | "TF" | "FT");
+    let arguments: Vec<String> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| {
+            opt(row, 0).map(|name| spelaion_driver_api::parameter_placeholder(&name, i + 1))
+        })
+        .collect();
+    let target = format!(
+        "{}.{}({})",
+        SqlServerDialect.quote_identifier(&object.schema),
+        SqlServerDialect.quote_identifier(&object.name),
+        arguments.join(", ")
+    );
+    Ok(if table {
+        format!("SELECT * FROM {target}")
+    } else {
+        format!("SELECT {target} AS result")
+    })
+}
+
 pub async fn procedure_call(conn: &SqlServerConnection, object: &SchemaObject) -> Result<String> {
+    if object.kind == SchemaObjectKind::Function {
+        return function_call(conn, object).await;
+    }
     if object.kind != SchemaObjectKind::Procedure {
         return Err(DriverError::Other(format!(
-            "{} is not a procedure",
+            "{} is not a procedure or a function",
             object.name
         )));
     }

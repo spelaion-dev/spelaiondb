@@ -287,6 +287,8 @@ pub struct ObjectActionsItem {
     pub drop_schemas: bool,
     pub drop_constraints: bool,
     pub rebuild_drops: bool,
+    pub routine_source: bool,
+    pub routine_calls: bool,
     pub create: Vec<CreateKindItem>,
     pub new_index: Vec<NewIndexKindItem>,
     pub active_schema: bool,
@@ -475,6 +477,8 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             drop_schemas,
             drop_constraints,
             rebuild_drops,
+            routine_source,
+            routine_calls,
             create,
             new_index,
             active_schema,
@@ -489,6 +493,8 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             drop_schemas,
             drop_constraints,
             rebuild_drops,
+            routine_source,
+            routine_calls,
             create: create.into_iter().map(CreateKindItem::from).collect(),
             new_index: new_index.into_iter().map(NewIndexKindItem::from).collect(),
             active_schema,
@@ -734,6 +740,27 @@ impl AlterationPreviewItem {
                 .collect(),
             transactional: plan.transactional(),
             rebuilds: plan.rebuilds(),
+        }
+    }
+}
+
+/// What "Edit source" opens (ADR-047): a view, or a function or procedure.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SourceTargetItem {
+    View { schema: String, name: String },
+    Routine { object: SchemaObjectItem },
+}
+
+impl From<SourceTargetItem> for spelaion_core::SourceTarget {
+    fn from(item: SourceTargetItem) -> Self {
+        match item {
+            SourceTargetItem::View { schema, name } => Self::View { schema, name },
+            SourceTargetItem::Routine { object } => Self::Routine(object.into()),
         }
     }
 }

@@ -269,6 +269,8 @@ enum Command {
     Referencing(String, String, Reply<Vec<ReferencingKey>>),
     SchemaObjects(String, LikeFilter, Reply<Vec<SchemaObject>>),
     Definition(Box<SchemaObject>, Reply<String>),
+    /// The call of a macro (`Connection::procedure_call`).
+    Call(Box<SchemaObject>, Reply<String>),
     RelationDefinition(String, String, Reply<String>),
     /// Whether a transaction is open (ADR-031).
     TransactionState(Reply<TransactionState>),
@@ -345,6 +347,9 @@ fn actor(
             }
             Command::Definition(object, reply) => {
                 let _ = reply.send(objects::object_definition(conn, &object));
+            }
+            Command::Call(object, reply) => {
+                let _ = reply.send(objects::procedure_call(conn, &object));
             }
             Command::RelationDefinition(schema, name, reply) => {
                 let _ = reply.send(objects::relation_definition(conn, &schema, &name));
@@ -585,6 +590,11 @@ impl Connection for DuckdbConnection {
     async fn object_definition(&self, object: &SchemaObject) -> Result<String> {
         let object = Box::new(object.clone());
         self.ask(|reply| Command::Definition(object, reply)).await
+    }
+
+    async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
+        let object = Box::new(object.clone());
+        self.ask(|reply| Command::Call(object, reply)).await
     }
 
     async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {

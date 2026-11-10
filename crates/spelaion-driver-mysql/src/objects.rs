@@ -148,9 +148,12 @@ pub(crate) async fn procedure_call(
     conn: &MysqlConnection,
     object: &SchemaObject,
 ) -> Result<String> {
+    if object.kind == SchemaObjectKind::Function {
+        return function_call(conn, object).await;
+    }
     if object.kind != SchemaObjectKind::Procedure {
         return Err(DriverError::Other(format!(
-            "{} is not a procedure",
+            "{} is not a procedure or a function",
             object.name
         )));
     }
@@ -207,6 +210,44 @@ pub(crate) async fn procedure_call(
         statements.push(format!("SELECT {};", outputs.join(", ")));
     }
     Ok(statements.join("\n"))
+}
+
+/// `SELECT schema.f(:a, :b)`: a function's parameters as placeholders, in order.
+async fn function_call(conn: &MysqlConnection, object: &SchemaObject) -> Result<String> {
+    let exists = conn
+        .rows(
+            "select 1 from information_schema.routines \
+             where routine_schema = ? and routine_name = ? and routine_type = 'FUNCTION'",
+            vec![object.schema.clone(), object.name.clone()],
+        )
+        .await?;
+    if exists.is_empty() {
+        return Err(DriverError::Other(format!(
+            "{}.{} does not exist",
+            object.schema, object.name
+        )));
+    }
+    // Position 0 is the function's result.
+    let rows = conn
+        .rows(
+            "select parameter_name from information_schema.parameters \
+             where specific_schema = ? and specific_name = ? and routine_type = 'FUNCTION' \
+               and ordinal_position > 0 \
+             order by ordinal_position",
+            vec![object.schema.clone(), object.name.clone()],
+        )
+        .await?;
+    let arguments: Vec<String> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| spelaion_driver_api::parameter_placeholder(&text(row, 0), i + 1))
+        .collect();
+    Ok(format!(
+        "SELECT {}.{}({});",
+        MysqlDialect.quote_identifier(&object.schema),
+        MysqlDialect.quote_identifier(&object.name),
+        arguments.join(", ")
+    ))
 }
 
 pub(crate) async fn object_definition(

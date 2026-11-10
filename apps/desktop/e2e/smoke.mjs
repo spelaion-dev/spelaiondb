@@ -1990,6 +1990,15 @@ try {
   await page.getByRole("menuitem", { name: "Open as SQL" }).click();
   await panel.locator(".cm-content", { hasText: "FROM big_orders" }).waitFor();
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "SELECT *\nFROM big_orders\nLIMIT 100;");
+  // "Edit source" on a view (ADR-047): the statement that replaces it opens in a new tab, not
+  // run; SQLite has no OR REPLACE, so it drops the view first.
+  await page.getByRole("button", { name: "Expand or collapse big_orders", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Edit source" }).click();
+  await panel.locator(".cm-content", { hasText: "DROP VIEW IF EXISTS big_orders;" }).waitFor();
+  assert.equal(
+    (await panel.locator(".cm-content").innerText()).trimEnd(),
+    "DROP VIEW IF EXISTS big_orders;\nCREATE VIEW big_orders as select * from orders where total > 500;",
+  );
   // A trigger's definition, as SQLite keeps it, opens in a new tab and does not run.
   await page.getByRole("button", { name: "Expand or collapse Triggers", exact: true }).click();
   const triggerNode = page.getByRole("button", { name: "product_stock_check: open its definition", exact: true });
@@ -4142,6 +4151,26 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("menuitem", { name: "Generate CALL" }).click();
   await panel.locator(".cm-content", { hasText: "CALL `spelaion`.`smoke_call`" }).waitFor();
   assert.equal((await panel.locator(".cm-content").innerText()).trimEnd(), "CALL `spelaion`.`smoke_call`(:a, @b);\nSELECT @b AS `b`;");
+  // "Run…" (ADR-047): the call runs in a new tab, and the parameter form writes its values in.
+  await page.getByRole("button", { name: "smoke_call: open its definition", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Run…" }).click();
+  const callParams = page.getByRole("dialog", { name: "Query parameters" });
+  await callParams.getByLabel(":a").fill("41");
+  await shot("sdb-21-run-routine");
+  await callParams.getByRole("button", { name: "Run", exact: true }).click();
+  await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+  const callGrid = panel.locator(".grid-scroller");
+  const callBox = await callGrid.boundingBox();
+  const copiedBeforeCall = await page.evaluate(() => window.__copied.length);
+  await page.mouse.click(callBox.x + 80, callBox.y + 34 + 12);
+  await page.keyboard.press("Control+c");
+  assert.equal((await copied(copiedBeforeCall + 1)).trimEnd(), "42");
+  // "Edit source": MySQL has no OR REPLACE for a procedure, so it is dropped and created again.
+  await page.getByRole("button", { name: "smoke_call: open its definition", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Edit source" }).click();
+  await panel.locator(".cm-content", { hasText: "DROP PROCEDURE IF EXISTS `spelaion`.`smoke_call`;" }).waitFor();
+  assert.match((await panel.locator(".cm-content").innerText()).trimEnd(), /^DROP PROCEDURE IF EXISTS `spelaion`\.`smoke_call`;\nDELIMITER \$\$\nCREATE [\s\S]*PROCEDURE `smoke_call`[\s\S]*\$\$\nDELIMITER ;$/);
+  await shot("sdb-21-edit-source");
   await mysqlProcedures.click();
 
   step("editing table data: cells, NULL, delete and insert applied in one transaction");

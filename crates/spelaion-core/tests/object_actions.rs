@@ -9,10 +9,11 @@ use spelaion_config::Safeguards;
 use spelaion_core::{
     ColumnEdit, CoreEvent, CreateKind, DroppedConstraint, EditableColumn, FoundObject, NewColumn,
     NewForeignKey, NewIndex, NewIndexKind, NewTable, NewTableElement, ObjectChange, ObjectError,
-    ObjectTarget, ResultStore, SEARCH_LIMIT, Session, TableAlteration, TableStructure,
-    active_schema, alteration_plan, apply_alteration, apply_change, apply_create_table, create_sql,
-    create_table_plan, new_index_sql, new_table_element_sql, object_actions, search_objects,
-    set_active_schema, supports_added_checks, table_structure,
+    ObjectTarget, ResultStore, SEARCH_LIMIT, Session, SourceTarget, TableAlteration,
+    TableStructure, active_schema, alteration_plan, apply_alteration, apply_change,
+    apply_create_table, create_sql, create_table_plan, editable_source, new_index_sql,
+    new_table_element_sql, object_actions, search_objects, set_active_schema,
+    supports_added_checks, table_structure,
 };
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, NameFilter, ObjectKind, SchemaObject, SchemaObjectKind,
@@ -1840,5 +1841,178 @@ async fn the_create_table_form_runs_on_every_engine() {
             "{label}"
         );
         run(label, &session, &cleanup, true).await;
+    }
+}
+
+async fn listed_object(session: &Session, schema: &str, name: &str) -> SchemaObject {
+    session
+        .connection()
+        .list_schema_objects(schema)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|o| o.name == name)
+        .unwrap_or_else(|| panic!("{name} is not listed"))
+}
+
+#[tokio::test]
+async fn routines_are_called_with_their_parameters_on_every_engine() {
+    for (label, session, schema) in engines().await {
+        let (create, cleanup): (&str, &str) = match label {
+            "postgres" => (
+                "CREATE FUNCTION oa_add(a integer, b integer) RETURNS integer LANGUAGE sql AS 'SELECT a + b'",
+                "DROP FUNCTION oa_add",
+            ),
+            "mysql" | "mariadb" => (
+                "CREATE FUNCTION oa_add(a INT, b INT) RETURNS INT DETERMINISTIC RETURN a + b",
+                "DROP FUNCTION oa_add",
+            ),
+            "sqlserver" => (
+                "CREATE FUNCTION dbo.oa_add(@a INT, @b INT) RETURNS INT AS BEGIN RETURN @a + @b END",
+                "DROP FUNCTION dbo.oa_add",
+            ),
+            "duckdb" => ("CREATE MACRO oa_add(a, b) AS a + b", "DROP MACRO oa_add"),
+            // SQLite has no functions of its own.
+            _ => continue,
+        };
+        run(label, &session, &[cleanup], true).await;
+        run(label, &session, &[create], false).await;
+        let object = listed_object(&session, schema, "oa_add").await;
+        let call = session
+            .connection()
+            .procedure_call(&object)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let dialect = session.dialect();
+        assert_eq!(
+            spelaion_core::script_params(dialect.as_ref(), &call),
+            ["a", "b"],
+            "{label}: {call}"
+        );
+        let values = [
+            ("a".to_string(), "2".to_string()),
+            ("b".to_string(), "3".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let bound = spelaion_core::bind_params(dialect.as_ref(), &call, &values).unwrap();
+        assert_eq!(text(&session, &bound).await, "5", "{label}: {bound}");
+        run(label, &session, &[cleanup], true).await;
+    }
+}
+
+/// Changes `41` to `42` in an editable source and runs it as the editor would, as one script.
+async fn edit_and_run(label: &str, session: &Session, target: SourceTarget) -> String {
+    let source = editable_source(session, &target)
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {target:?}: {e}"));
+    assert!(source.contains("41"), "{label}: {source}");
+    let edited = source.replacen("41", "42", 1);
+    run(label, session, &[edited.as_str()], false).await;
+    edited
+}
+
+#[tokio::test]
+async fn edited_sources_replace_views_and_routines_on_every_engine() {
+    for (label, session, schema) in engines().await {
+        let (function, procedure, cleanup): (Option<&str>, Option<&str>, &[&str]) = match label {
+            "postgres" => (
+                Some("CREATE FUNCTION oa_src_f() RETURNS integer LANGUAGE sql AS 'SELECT 41'"),
+                Some("CREATE PROCEDURE oa_src_p() LANGUAGE sql AS 'SELECT 41'"),
+                &[
+                    "DROP VIEW oa_src_v",
+                    "DROP FUNCTION oa_src_f",
+                    "DROP PROCEDURE oa_src_p",
+                ],
+            ),
+            "mysql" | "mariadb" => (
+                Some("CREATE FUNCTION oa_src_f() RETURNS INT DETERMINISTIC RETURN 41"),
+                Some(
+                    "DELIMITER $$
+CREATE PROCEDURE oa_src_p() BEGIN SELECT 41; SELECT 1; END$$
+DELIMITER ;",
+                ),
+                &[
+                    "DROP VIEW oa_src_v",
+                    "DROP FUNCTION oa_src_f",
+                    "DROP PROCEDURE oa_src_p",
+                ],
+            ),
+            "sqlserver" => (
+                Some("CREATE FUNCTION dbo.oa_src_f() RETURNS INT AS BEGIN RETURN 41 END"),
+                Some("CREATE PROCEDURE dbo.oa_src_p AS SELECT 41"),
+                &[
+                    "DROP VIEW oa_src_v",
+                    "DROP FUNCTION oa_src_f",
+                    "DROP PROCEDURE oa_src_p",
+                ],
+            ),
+            "duckdb" => (
+                Some("CREATE MACRO oa_src_f() AS 41"),
+                None,
+                &["DROP VIEW oa_src_v", "DROP MACRO oa_src_f"],
+            ),
+            _ => (None, None, &["DROP VIEW oa_src_v"]),
+        };
+        run(label, &session, cleanup, true).await;
+        run(
+            label,
+            &session,
+            &["CREATE VIEW oa_src_v AS SELECT 41 AS n"],
+            false,
+        )
+        .await;
+        let edited = edit_and_run(
+            label,
+            &session,
+            SourceTarget::View {
+                schema: schema.into(),
+                name: "oa_src_v".into(),
+            },
+        )
+        .await;
+        assert_eq!(
+            text(&session, "SELECT n FROM oa_src_v").await,
+            "42",
+            "{label}: {edited}"
+        );
+        if let Some(function) = function {
+            run(label, &session, &[function], false).await;
+            let object = listed_object(&session, schema, "oa_src_f").await;
+            let edited = edit_and_run(label, &session, SourceTarget::Routine(object.clone())).await;
+            let call = session.connection().procedure_call(&object).await.unwrap();
+            assert_eq!(text(&session, &call).await, "42", "{label}: {edited}");
+        }
+        if let Some(procedure) = procedure {
+            run(label, &session, &[procedure], false).await;
+            let object = listed_object(&session, schema, "oa_src_p").await;
+            let edited = edit_and_run(label, &session, SourceTarget::Routine(object.clone())).await;
+            let definition = session
+                .connection()
+                .object_definition(&object)
+                .await
+                .unwrap();
+            assert!(
+                definition.contains("42") && !definition.contains("41"),
+                "{label}: {edited}\n{definition}"
+            );
+        }
+        // A table has no source to edit here.
+        assert!(
+            editable_source(
+                &session,
+                &SourceTarget::Routine(SchemaObject {
+                    schema: schema.into(),
+                    name: "oa_src_v".into(),
+                    kind: SchemaObjectKind::Sequence,
+                    detail: None,
+                    comment: None,
+                })
+            )
+            .await
+            .is_err(),
+            "{label}"
+        );
+        run(label, &session, cleanup, true).await;
     }
 }

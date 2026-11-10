@@ -1243,7 +1243,7 @@ async fn procedure_calls_pass_inputs_and_collect_outputs() {
             conn.procedure_call(&find("nothing")).await.unwrap(),
             format!("CALL {schema}.nothing();")
         );
-        // A function is not called with CALL.
+        // A procedure is not selected as a function.
         let mut function = find("calc");
         function.kind = spelaion_driver_api::SchemaObjectKind::Function;
         assert!(conn.procedure_call(&function).await.is_err());

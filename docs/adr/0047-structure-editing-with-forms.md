@@ -63,11 +63,27 @@ action per statement), and SQLite cannot do most of them at all: it must create 
    the same way: only as shown, never read-only, risky statements confirmed. A constraint or
    index left without a name is named after the table and its columns. This replaces ADR-026's
    "New table" template for tables; the script can still be opened in the editor.
-7. **Where the forms are:** "Edit columns…" in a table's Columns view (on the chosen columns, or
+7. **A routine's or view's source is edited in the editor** (`source.rs`): "Edit source" opens
+   its definition written as the statement that replaces it, where the editor's barriers apply
+   (read-only mode, the guard, the connection's type) and nothing runs until the user does:
+   `CREATE OR REPLACE` on PostgreSQL, DuckDB and MariaDB (a materialized view cannot be
+   replaced), `CREATE OR ALTER` on SQL Server, `CREATE OR REPLACE VIEW` on MySQL but a function
+   or procedure dropped (`DROP … IF EXISTS`) and created again between `DELIMITER` lines, and
+   `DROP VIEW IF EXISTS` before SQLite's view.
+8. **Running a routine writes its call with a parameter form:** each driver's `procedure_call`
+   now writes a function's call too (`SELECT * FROM f(:a)` on PostgreSQL, `SELECT f(:a)` on
+   MySQL and MariaDB, `SELECT dbo.f(:a) AS result` or `SELECT * FROM` a table-valued one on SQL
+   Server, a DuckDB macro or table macro), never a procedure as a function or the other way
+   round. "Run…" opens the call in a new tab and runs it once the tab is connected, like Run
+   script: the editor's parameter form asks the values and the core writes them into the call as
+   literals, then the usual barriers apply. The request to run is cleared before it runs and
+   never saved with the tab, so nothing runs again after a restart or a reconnect.
+9. **Where the forms are:** "Edit columns…" in a table's Columns view (on the chosen columns, or
    all of them) and "Edit column…" in a column's explorer menu (on the column, or the columns
    chosen with Ctrl+click); a SQLite unique constraint's or foreign key's "Drop…" opens the
    rebuild's script; "New table…" in a schema's and its Tables folder's menu opens the create
-   table form.
+   table form; "Edit source" is in a view's, function's and procedure's explorer menu, "Run…"
+   and "Generate CALL" in a function's and procedure's.
 
 ## Consequences
 - Each engine's statements are tested by running them on that engine
@@ -78,4 +94,5 @@ action per statement), and SQLite cannot do most of them at all: it must create 
   table that is no longer the one the SQL was written for.
 - MySQL and MariaDB cannot apply several statements atomically; a form there writes one
   `ALTER TABLE` for the columns, and constraint drops before it are their own statements.
-- Editing routines' source and running them with a parameter form follow in their own change.
+- `tests/object_actions.rs` also edits and runs every engine's views, functions and procedures
+  from their editable source, and calls a function with its parameters bound.
