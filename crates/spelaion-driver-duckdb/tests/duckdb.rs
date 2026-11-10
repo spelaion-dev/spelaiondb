@@ -365,23 +365,179 @@ async fn errors_are_reported_and_connection_survives() {
     assert_eq!(rows[0][0], "1");
 }
 
+/// Never ends on its own: only a cancel stops it.
+const ENDLESS: &str = "select count(*) from range(100000000) a, range(100000000) b";
+
+/// How long a cancelled statement may take to stop. A cancel that is lost fails the test
+/// here instead of hanging it (and CI) forever.
+const CANCEL_LIMIT: Duration = Duration::from_secs(10);
+
+/// Collects a statement's events, failing if it does not end within [`CANCEL_LIMIT`].
+async fn finish(
+    events: spelaion_driver_api::EventStream,
+    what: &str,
+) -> Result<Vec<ExecEvent>, DriverError> {
+    tokio::time::timeout(CANCEL_LIMIT, events.try_collect())
+        .await
+        .unwrap_or_else(|_| panic!("{what}: the cancel was lost, the statement still runs"))
+}
+
+/// The connection still answers after a cancel, and no cancel is left over for it.
+async fn still_answers(conn: &dyn Connection) {
+    let answer = tokio::time::timeout(CANCEL_LIMIT, table(conn, "select 42"))
+        .await
+        .expect("the connection should answer after a cancel");
+    assert_eq!(answer.1, vec![vec!["42".to_string()]]);
+}
+
 #[tokio::test]
 async fn cancel_interrupts_a_long_query() {
     let conn: Arc<dyn Connection> = Arc::from(memory().await);
     let cancel = conn.cancel_handle();
-    let canceller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        cancel.cancel().await
-    });
     let started = Instant::now();
-    let result = run(
-        &*conn,
-        "select count(*) from range(100000000) a, range(100000000) b",
-    )
-    .await;
-    canceller.await.unwrap().unwrap();
+    let events = conn
+        .execute(ENDLESS, &ExecOptions::default())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    cancel.cancel().await.unwrap();
+    let result = finish(events, "during").await;
     assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
-    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(started.elapsed() < CANCEL_LIMIT);
+    still_answers(&*conn).await;
+}
+
+/// A cancel that arrives while the statement is still queued on the connection's thread, or is
+/// being prepared, used to be wiped by DuckDB when the statement started: it must stop it.
+#[tokio::test]
+async fn cancel_before_the_statement_starts_stops_it() {
+    let conn = memory().await;
+    let cancel = conn.cancel_handle();
+    for round in 0..20 {
+        let events = conn
+            .execute(ENDLESS, &ExecOptions::default())
+            .await
+            .unwrap();
+        cancel.cancel().await.unwrap();
+        let result = finish(events, &format!("before, round {round}")).await;
+        assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
+    }
+    still_answers(&*conn).await;
+}
+
+/// Cancels at every moment of a statement's start: queued, being prepared, starting to run.
+#[tokio::test]
+async fn cancel_while_the_statement_starts_stops_it() {
+    let conn = memory().await;
+    let cancel = conn.cancel_handle();
+    for micros in [
+        0, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000,
+    ] {
+        let events = conn
+            .execute(ENDLESS, &ExecOptions::default())
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        // A busy wait: tokio's timer is too coarse for these delays.
+        while started.elapsed() < Duration::from_micros(micros) {
+            std::hint::spin_loop();
+        }
+        cancel.cancel().await.unwrap();
+        let result = finish(events, &format!("{micros} µs after it was sent")).await;
+        assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
+    }
+    still_answers(&*conn).await;
+}
+
+/// A cancel stops every statement sent before it, also those waiting behind the running one.
+#[tokio::test]
+async fn cancel_stops_queued_statements_and_appends() {
+    let conn = memory().await;
+    exec_all(&*conn, "create table t (a int)").await;
+    let first = conn
+        .execute(ENDLESS, &ExecOptions::default())
+        .await
+        .unwrap();
+    let second = conn
+        .execute(ENDLESS, &ExecOptions::default())
+        .await
+        .unwrap();
+    let target = spelaion_driver_api::InsertTarget {
+        schema: String::new(),
+        table: "t".into(),
+        columns: vec!["a".into()],
+    };
+    let rows = vec![vec![Some("1".to_string())]];
+    let mut append = Box::pin(conn.insert_rows(&target, rows));
+    // Polled once: the append is queued behind the statements before the cancel.
+    assert!(futures_util::poll!(append.as_mut()).is_pending());
+    conn.cancel_handle().cancel().await.unwrap();
+    for (events, what) in [(first, "running"), (second, "queued")] {
+        let result = finish(events, what).await;
+        assert!(
+            matches!(result, Err(DriverError::Cancelled)),
+            "{what}: {result:?}"
+        );
+    }
+    let appended = tokio::time::timeout(CANCEL_LIMIT, append)
+        .await
+        .expect("the queued append should stop");
+    assert!(
+        matches!(appended, Err(DriverError::Cancelled)),
+        "{appended:?}"
+    );
+    assert_eq!(table(&*conn, "select count(*) from t").await.1[0][0], "0");
+}
+
+/// A cancel reaches only what was sent before it: never a statement sent afterwards.
+#[tokio::test]
+async fn a_cancel_never_reaches_a_later_statement() {
+    let conn = memory().await;
+    let cancel = conn.cancel_handle();
+    // With nothing running.
+    cancel.cancel().await.unwrap();
+    still_answers(&*conn).await;
+    // After a statement that ended.
+    table(&*conn, "select 1").await;
+    cancel.cancel().await.unwrap();
+    still_answers(&*conn).await;
+    // After a cancelled one, many times, with the next statement sent at once.
+    for _ in 0..20 {
+        let events = conn
+            .execute(ENDLESS, &ExecOptions::default())
+            .await
+            .unwrap();
+        cancel.cancel().await.unwrap();
+        let result = finish(events, "cancelled").await;
+        assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
+        let next = run(&*conn, "select count(*) from range(3000000)").await;
+        assert!(next.is_ok(), "the next statement was cancelled: {next:?}");
+    }
+}
+
+/// A cancel while the rows of a large result are being read stops it between batches.
+#[tokio::test]
+async fn cancel_stops_a_result_being_read() {
+    let conn = memory().await;
+    let mut events = conn
+        .execute(
+            "select * from range(1000000000)",
+            &ExecOptions { batch_size: 100 },
+        )
+        .await
+        .unwrap();
+    use futures_util::StreamExt;
+    let first = tokio::time::timeout(CANCEL_LIMIT, events.next())
+        .await
+        .unwrap();
+    assert!(
+        matches!(first, Some(Ok(ExecEvent::Columns(_)))),
+        "{first:?}"
+    );
+    conn.cancel_handle().cancel().await.unwrap();
+    let result = finish(events, "reading").await;
+    assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
+    still_answers(&*conn).await;
 }
 
 #[tokio::test]

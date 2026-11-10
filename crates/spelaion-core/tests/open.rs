@@ -854,11 +854,15 @@ async fn sqlite_on_a_server_through_two_hops() {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         cancel.cancel().await
     });
-    let (_, error) = script(
-        &conn,
-        "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c",
+    let (_, error) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        script(
+            &conn,
+            "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c",
+        ),
     )
-    .await;
+    .await
+    .expect("the cancel was lost");
     canceller.await.unwrap().unwrap();
     assert!(error.as_ref().is_some_and(|e| e.cancelled), "{error:?}");
     // sqlite3 ends when interrupted: the session says so, and a new one goes on.
