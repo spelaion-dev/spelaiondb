@@ -572,6 +572,15 @@ export const commands = {
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
+	/**  The server's locks, waits and blocking tree, read once on the monitor's session. */
+	listLocks: (session: string) => typedError<LockSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_locks", { session })),
+	/**  Every setting, variable, status counter or property the server exposes. */
+	serverSettings: (session: string) => typedError<ServerSettingItem_Serialize[], string>(__TAURI_INVOKE("server_settings", { session })),
+	/**
+	 *  A table's size on disk, index size and row estimate, from the catalog's statistics;
+	 *  `None` when the engine keeps none or the object is not a table.
+	 */
+	tableStats: (session: string, schema: string, table: string) => typedError<TableStatsItem_Serialize | null, string>(__TAURI_INVOKE("table_stats", { session, schema, table })),
 	/**  Runs a script and keeps sending events through the channel. Returns as soon as it starts. */
 	runScript: (session: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_script", { session, sql, confirmed, options, onEvent })),
 	/**
@@ -751,6 +760,13 @@ export type AuditSessionItem = {
 };
 
 export type AuditStatusItem = "ok" | "error" | "refused" | "cleared";
+
+/**  A row of the blocking tree, in display order. */
+export type BlockingNodeItem = {
+	session: string,
+	depth: number,
+	cycle: boolean,
+};
 
 /**  An object bookmarked in the explorer (ADR-026). */
 export type BookmarkItem = {
@@ -2192,6 +2208,52 @@ export type KubernetesDraftItem = {
 /**  The line break a `.sql` file is written with. */
 export type LineEndingItem = "lf" | "crLf" | "cr";
 
+/**  One lock of the lock view (`spelaion_core::Lock`). */
+export type LockItem = LockItem_Serialize | LockItem_Deserialize;
+
+/**  One lock of the lock view (`spelaion_core::Lock`). */
+export type LockItem_Deserialize = {
+	session: string,
+	object: string,
+	lockType: string,
+	mode: string,
+	granted: boolean,
+	seconds?: number | null,
+	detail?: string | null,
+};
+
+/**  One lock of the lock view (`spelaion_core::Lock`). */
+export type LockItem_Serialize = {
+	session: string,
+	object: string,
+	lockType: string,
+	mode: string,
+	granted: boolean,
+	seconds: number | null,
+	detail: string | null,
+};
+
+export type LockSnapshotItem = LockSnapshotItem_Serialize | LockSnapshotItem_Deserialize;
+
+export type LockSnapshotItem_Deserialize = {
+	ownId: string,
+	locks: LockItem_Deserialize[],
+	waits: LockWaitItem[],
+	tree: BlockingNodeItem[],
+};
+
+export type LockSnapshotItem_Serialize = {
+	ownId: string,
+	locks: LockItem_Serialize[],
+	waits: LockWaitItem[],
+	tree: BlockingNodeItem[],
+};
+
+export type LockWaitItem = {
+	waiting: string,
+	blocking: string,
+};
+
 /**  The form of a connection mapped to another engine, and what that did. */
 export type MappedConnectionItem = MappedConnectionItem_Serialize | MappedConnectionItem_Deserialize;
 
@@ -3360,6 +3422,31 @@ export type ServerObjectItem_Serialize = {
 
 export type ServerObjectKindItem = "role" | "user" | "login" | "tablespace" | "extension";
 
+/**  One server setting, variable, status counter or property. */
+export type ServerSettingItem = ServerSettingItem_Serialize | ServerSettingItem_Deserialize;
+
+/**  One server setting, variable, status counter or property. */
+export type ServerSettingItem_Deserialize = {
+	name: string,
+	value: string,
+	/**  `setting`, `variable`, `status` or `property`. */
+	kind: string,
+	category?: string | null,
+	description?: string | null,
+	source?: string | null,
+};
+
+/**  One server setting, variable, status counter or property. */
+export type ServerSettingItem_Serialize = {
+	name: string,
+	value: string,
+	/**  `setting`, `variable`, `status` or `property`. */
+	kind: string,
+	category: string | null,
+	description: string | null,
+	source: string | null,
+};
+
 /**
  *  An editor session's connection is gone (ADR-028): the tab shows it and offers to
  *  reconnect. Nothing was re-run.
@@ -3520,6 +3607,25 @@ export type TablePageItem = {
 export type TableRefItem = {
 	schema: string,
 	name: string,
+};
+
+/**  A table's sizes in bytes and row estimate; any may be unknown. */
+export type TableStatsItem = TableStatsItem_Serialize | TableStatsItem_Deserialize;
+
+/**  A table's sizes in bytes and row estimate; any may be unknown. */
+export type TableStatsItem_Deserialize = {
+	totalBytes?: number | null,
+	tableBytes?: number | null,
+	indexBytes?: number | null,
+	rowEstimate?: number | null,
+};
+
+/**  A table's sizes in bytes and row estimate; any may be unknown. */
+export type TableStatsItem_Serialize = {
+	totalBytes: number | null,
+	tableBytes: number | null,
+	indexBytes: number | null,
+	rowEstimate: number | null,
 };
 
 /**  How searching one table ended. */

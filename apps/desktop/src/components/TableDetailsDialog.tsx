@@ -5,12 +5,14 @@ import { connectTabFromExplorer, explorerDatabase, EXPLORER_REFRESH_EVENT, openS
 import { useApp, type Tab } from "../store";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { NewTableElementDialog } from "./NewTableElementDialog";
+import { formatBytes } from "./ServerObservation";
+import type { TableStatsItem_Serialize as TableStatsItem } from "../bindings";
 
 type Row = { cells: string[]; target?: ObjectTargetItem; definition?: string; trigger?: SchemaObjectItem; column?: string; data?: { schema: string; table: string } };
 
 /** Catalog data is loaded on this tab's own session, independently of the explorer. */
 export function TableDetailsView({ tab }: { tab: Tab }) {
-  const { t } = useTranslation("shell");
+  const { t, i18n } = useTranslation("shell");
   const view = tab.tableDetails!;
   const { schema, name: table, kind } = view;
   const [details, setDetails] = useState<TableDetails | null>(null);
@@ -18,6 +20,8 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
   /** The foreign keys of other tables that point to this one (the "References" tab). */
   const [references, setReferences] = useState<TableKeyItem[]>([]);
   const [actions, setActions] = useState<ObjectActionsItem | null>(null);
+  /** Size on disk, index size and row estimate from the catalog's statistics (`null`: none). */
+  const [stats, setStats] = useState<{ value: TableStatsItem | null } | { error: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [change, setChange] = useState<{ target: ObjectTargetItem; name: string; rename: boolean } | null>(null);
@@ -38,8 +42,11 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       call(commands.objectActions(tab.id)),
       kind === "triggers" ? call(commands.listSchemaObjects(tab.id, schema, null, false)) : Promise.resolve([]),
       kind === "references" ? call(commands.referencingKeys(tab.id, schema, table)) : Promise.resolve([]),
-    ]).then(([result, capabilities, objects, referencing]) => {
+      // The statistics are extra: when they cannot be read, the rest of the tab still shows.
+      call(commands.tableStats(tab.id, schema, table)).then((value) => ({ value }), (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })),
+    ]).then(([result, capabilities, objects, referencing, statistics]) => {
       if (!current) return;
+      setStats(statistics);
       setDetails(result);
       setActions(capabilities);
       setTriggers(objects.filter((object) => object.kind === "trigger" && object.detail === table));
@@ -123,7 +130,15 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
   return (
     <section className="table-details-view" aria-label={t("tableDetails.title", { section: title, table })}>
       <div className="table-details-heading">
-        <div><p className="table-details-path">{schema} / {table}</p><h2>{title}</h2></div>
+        <div><p className="table-details-path">{schema} / {table}</p><h2>{title}</h2>
+          {stats && "value" in stats && stats.value && <dl className="table-stats" aria-label={t("tableStats.title")}>
+            {stats.value.totalBytes !== null && <div><dt>{t("tableStats.total")}</dt><dd>{formatBytes(stats.value.totalBytes, i18n.language)}</dd></div>}
+            {stats.value.tableBytes !== null && <div><dt>{t("tableStats.table")}</dt><dd>{formatBytes(stats.value.tableBytes, i18n.language)}</dd></div>}
+            {stats.value.indexBytes !== null && <div><dt>{t("tableStats.indexes")}</dt><dd>{formatBytes(stats.value.indexBytes, i18n.language)}</dd></div>}
+            {stats.value.rowEstimate !== null && <div><dt>{t("tableStats.rows")}</dt><dd title={t("tableStats.estimateHint")}>{t("tableStats.rowsValue", { rows: new Intl.NumberFormat(i18n.language).format(stats.value.rowEstimate) })}</dd></div>}
+          </dl>}
+          {stats && "error" in stats && <p className="muted small">{t("tableStats.failed", { detail: stats.error })}</p>}
+        </div>
         <div className="table-details-actions">
           <span className="table-details-count">{t("tableDetails.count", { count: rows.length })}</span>
           {creates && <button type="button" className="primary" disabled={tab.status !== "connected" || loading || !details || !canCreate}

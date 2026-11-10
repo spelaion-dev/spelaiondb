@@ -3477,6 +3477,69 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await monitor.getByLabel("State", { exact: true }).selectOption("idle");
   await monitor.locator(".process-table tbody tr").first().waitFor();
   assert.equal(await page.getByRole("dialog").count(), 0, "PostgreSQL credentials are reused");
+  step("process monitor: locks, who blocks whom, and the server's settings");
+  await monitor.getByLabel("State", { exact: true }).selectOption("all");
+  // Two psql sessions in the PostgreSQL container: one holds a row lock, the other waits for it.
+  const psql = (sql) => ["compose", "-f", join(root, "testing/docker/compose.yaml"), "exec", "-T", "postgres", "psql", "-U", "spelaion", "-d", "spelaion", "-X", "-q", "-c", sql];
+  execFileSync("docker", psql("DROP TABLE IF EXISTS smoke_locks; CREATE TABLE smoke_locks (id int PRIMARY KEY, v int); INSERT INTO smoke_locks VALUES (1, 1);"), { stdio: "ignore" });
+  const lockHolder = spawn("docker", psql("BEGIN; UPDATE smoke_locks SET v = 10 WHERE id = 1; SELECT pg_sleep(120); ROLLBACK;"), { stdio: "ignore" });
+  await page.waitForTimeout(1500);
+  const lockWaiter = spawn("docker", psql("UPDATE smoke_locks SET v = 20 WHERE id = 1;"), { stdio: "ignore" });
+  try {
+    await monitor.getByRole("radio", { name: "Locks", exact: true }).click();
+    const chains = monitor.getByRole("list", { name: "Who blocks whom" });
+    const refreshMonitor = monitor.getByRole("button", { name: "Refresh", exact: true });
+    // The waiter needs a moment to reach the lock: refresh until the pair shows.
+    for (let i = 0; i < 30 && (await chains.count()) === 0; i++) {
+      await page.waitForTimeout(500);
+      await refreshMonitor.click();
+    }
+    const head = chains.locator("li").first();
+    await head.getByText("Blocks 1 session", { exact: true }).waitFor();
+    await chains.locator("li").nth(1).getByText(/^Waiting/).waitFor();
+    const lockTable = monitor.locator(".process-table");
+    await lockTable.locator("tbody tr", { hasText: "public.smoke_locks" }).first().waitFor();
+    await lockTable.locator("tbody tr:has(.lock-status.waiting)").first().waitFor();
+    await head.getByRole("button").click();
+    const lockDetails = monitor.getByRole("complementary", { name: "Lock details" });
+    await lockDetails.locator(".process-sql-detail", { hasText: "pg_sleep(120)" }).waitFor();
+    // Ending the blocking session goes through the process monitor's checks and confirmation.
+    assert.ok(!(await lockDetails.getByRole("button", { name: "End connection" }).isDisabled()), "the blocking session can be ended from here");
+    await shot("07c-lock-view");
+    await setTheme("dark", "dark");
+    await head.getByText("Blocks 1 session", { exact: true }).waitFor();
+    await shot("07c-lock-view-dark");
+    await setTheme("light", "light");
+    await lockTable.locator("tbody tr:has(.lock-status.waiting)").first().click();
+    await lockDetails.getByText("Waiting for", { exact: true }).waitFor();
+    await monitor.getByLabel("Show", { exact: true }).selectOption("waiting");
+    assert.equal(await lockTable.locator("tbody tr:has(.lock-status.granted)").count(), 0, "only waiting locks");
+    await monitor.getByLabel("Show", { exact: true }).selectOption("all");
+    await monitor.getByLabel("Search locks…").fill("no-such-lock-marker");
+    await monitor.getByText("No locks match these filters.").waitFor();
+    await monitor.getByLabel("Search locks…").fill("");
+
+    await monitor.getByRole("radio", { name: "Settings", exact: true }).click();
+    const settingsTable = monitor.locator(".settings-table");
+    await settingsTable.locator("tbody tr", { hasText: "max_connections" }).first().waitFor();
+    await monitor.getByLabel("Search settings…").fill("shared_buffers");
+    await settingsTable.locator("tbody tr").first().waitFor();
+    await settingsTable.locator("tbody tr", { hasText: "shared_buffers" }).first().click();
+    const settingDetails = monitor.getByRole("complementary", { name: "Setting details" });
+    await settingDetails.locator(".process-sql-detail", { hasText: /^\d+[kMG]B$/ }).waitFor();
+    await settingDetails.getByText(/shared memory buffers/i).waitFor();
+    await monitor.getByLabel("Search settings…").fill("");
+    await shot("07d-server-settings");
+    await monitor.getByLabel("Search settings…").fill("no-such-setting-marker");
+    await monitor.getByText("No settings match this search.").waitFor();
+    await monitor.getByLabel("Search settings…").fill("");
+    await monitor.getByRole("radio", { name: "Processes", exact: true }).click();
+    await monitor.locator(".process-table tbody tr:has(.process-own)").waitFor();
+  } finally {
+    lockHolder.kill();
+    lockWaiter.kill();
+    execFileSync("docker", psql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE query LIKE '%smoke_locks%' AND pid <> pg_backend_pid(); DROP TABLE IF EXISTS smoke_locks;"), { stdio: "ignore" });
+  }
   await activities.getByRole("button", { name: "Connections", exact: true }).click();
   assert.equal(await panel.locator(".cm-content").innerText(), currentSqlBeforeMonitor);
   // SQLyog-style column filters on SHOW FULL PROCESSLIST (no WHERE possible there).
@@ -3667,6 +3730,12 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const mysqlDetails = smokeEditNode.locator("xpath=..");
   await mysqlDetails.getByRole("button", { name: "Expand or collapse Columns", exact: true }).locator(".label").dblclick();
   const mysqlColumnsView = page.getByRole("region", { name: "Columns of smoke_edit" });
+  // Size on disk, index size and row estimate from the catalog's statistics (SDB-24).
+  const mysqlStats = mysqlColumnsView.getByRole("definition").filter({ hasText: /\d/ });
+  await mysqlColumnsView.locator(".table-stats", { hasText: "Size on disk" }).waitFor();
+  assert.ok((await mysqlStats.count()) >= 3, "sizes and a row estimate are shown");
+  await mysqlColumnsView.locator(".table-stats", { hasText: "Indexes" }).waitFor();
+  await shot("07e-table-stats");
   await mysqlColumnsView.getByRole("button", { name: "Add…" }).click();
   const mysqlColumnForm = page.getByRole("dialog", { name: "Add to Columns of smoke_edit" });
   await mysqlColumnForm.getByLabel("Name", { exact: true }).fill("new_counter");

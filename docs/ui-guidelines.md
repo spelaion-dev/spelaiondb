@@ -199,7 +199,7 @@ to an action that is also in a context menu, never its only way in.
 | Tab strip | tabs and files | new tab, the file menu (Open…, recent files: the app has no menu bar), each tab's context menu |
 | Explorer header | the explorer itself | link with editor, connected only, quick filter (finds connections by name, tag, type or host, forgiving a typo), add connection |
 | Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create, Import data… (a table, or a new table from a schema),  Move to folder… (also by dragging the connection onto a folder title), Rename…, Drop… (last, red); a connection's: New query, Open object by name…, Refresh all schemas, Edit…, Configure filters…, New schema, Duplicate, Copy, Paste connection, Move to folder…, Delete… (last, red) |
-| Activity bar | panels and pages | explorer, processes, search (names from the explorer's catalog, values in chosen tables, ADR-043); history, saved queries, MCP and Settings at the bottom |
+| Activity bar | panels and pages | explorer, processes (its Processes, Locks and Settings views; ending a session from Locks uses the process actions), search (names from the explorer's catalog, values in chosen tables, ADR-043); history, saved queries, MCP and Settings at the bottom |
 | Settings | preferences for every workspace | applied and saved as they change, with no Save button |
 | Command palette | every app command, and the actions of connections and loaded objects | Ctrl+Shift+P: commands with their shortcuts, connections, the explorer's loaded objects (open data, open structure, new console, copy names, show in explorer) and recent files |
 

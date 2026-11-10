@@ -1008,6 +1008,32 @@ select {
 .process-details-actions button { flex: 1 1 110px; padding: 5px 8px; font-size: 12px; }
 .process-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 @media (max-width: 850px) { .process-details { flex-basis: 220px; } .process-heading { flex-wrap: wrap; } }
+/* Server observation (SDB-24): the monitor's lock and settings views, and table statistics. */
+.process-status { align-self: center; font-variant-numeric: tabular-nums; }
+.process-heading-actions .segmented { align-self: center; }
+.lock-section-title { padding: var(--space-md) var(--space-lg) var(--space-xs); color: var(--muted); font-size: var(--text-xs); line-height: var(--leading-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.lock-chains { border-bottom: 1px solid var(--line); padding-bottom: var(--space-md); }
+.lock-chains-empty { padding: var(--space-xs) var(--space-lg); font-size: var(--text-sm); line-height: var(--leading-sm); }
+.lock-tree { list-style: none; margin: 0; padding: 0 var(--space-md); }
+.lock-tree li { padding-left: calc(var(--space-2xl) * var(--lock-depth, 0)); }
+.lock-node { display: flex; align-items: center; gap: var(--space-md); width: 100%; min-height: var(--row-h); padding: 0 var(--space-md); border: none; border-radius: var(--radius-md); background: none; color: var(--fg); font-size: var(--text-sm); line-height: var(--leading-sm); text-align: left; }
+.lock-node:hover { background: var(--hover); }
+.lock-node.active { background: var(--accent-soft); }
+.lock-node:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lock-node-id { font-variant-numeric: tabular-nums; font-weight: 600; }
+.lock-node-who { color: var(--muted); white-space: nowrap; }
+.lock-node-sql { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--font-code); }
+.lock-status { display: inline-block; padding: var(--space-2xs) var(--space-sm); border-radius: var(--radius-sm); font-size: var(--text-xs); line-height: var(--leading-xs); font-weight: 600; white-space: nowrap; }
+.lock-status.granted { background: var(--success-soft); color: var(--success-fg); }
+.lock-status.waiting { background: var(--warning-soft); color: var(--warning-fg); }
+.lock-status.blocking { background: var(--danger-soft); color: var(--danger-fg); }
+.lock-mode, .lock-detail, .settings-name, .settings-value { font-family: var(--font-code); }
+.settings-table .settings-value { max-width: 320px; }
+.settings-description { margin: 0; padding: 0 var(--space-lg) var(--space-lg); color: var(--muted); font-size: var(--text-sm); line-height: 1.5; }
+.table-stats { display: flex; flex-wrap: wrap; gap: var(--space-xs) var(--space-xl); margin: var(--space-sm) 0 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
+.table-stats div { display: flex; gap: var(--space-xs); }
+.table-stats dt { color: var(--muted); }
+.table-stats dd { margin: 0; font-variant-numeric: tabular-nums; }
 .editor-workspace {
   display: flex;
   flex: 1;
