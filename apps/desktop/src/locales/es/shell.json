@@ -93,6 +93,7 @@
   "toggleObject": "Expandir o contraer {{name}}",
   "viewRowsHint": "Doble clic: ver filas. Clic derecho: generar SQL",
   "toggleFolder": "Expandir o contraer {{name}}",
+  "collapseAllFolders": "Contraer todas las carpetas de conexiones",
   "openObject": "{{name}}: abrir su definición",
   "openDefinition": "Generar DDL",
   "generatedSql": {

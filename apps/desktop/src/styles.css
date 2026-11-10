@@ -536,6 +536,15 @@ select {
   text-align: left;
   cursor: pointer;
 }
+.connection-folder > .group-title {
+  padding: 0 14px;
+}
+.connection-folder > .group-title .connection-folder-toggle {
+  min-height: 24px;
+  width: 100%;
+}
+.connection-folder-icon { flex: none; color: var(--muted); }
+.connections-header .sidebar-tools { gap: 2px; }
 .connection-folder-toggle::before {
   content: "▸";
   width: 10px;
@@ -550,6 +559,10 @@ select {
 .group-segment {
   border-radius: var(--radius-sm);
   padding: 0 var(--space-2xs);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tree.drag-active {
   cursor: grabbing;

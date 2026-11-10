@@ -1232,6 +1232,19 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     folder.items.push(c);
   }
 
+  const allFolderKeys = (folder: ConnectionFolder): string[] => [
+    connectionFolderKey(folder.personal, folder.path),
+    ...[...folder.children.values()].flatMap(allFolderKeys),
+  ];
+  const folderKeys = [
+    ...[...repository.children.values()].flatMap(allFolderKeys),
+    ...(personal.items.length > 0 || personal.children.size > 0 ? allFolderKeys(personal) : []),
+  ];
+  const collapseFolders = () => {
+    const set = filtering || explorer.connectedOnly ? setClosedFilteredFolders : setClosedFolders;
+    set(new Set(folderKeys));
+  };
+
   const connectionRows = (items: ConnectionItem[]) => items.map((c) => (
     <ConnectionNode
       key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
@@ -1261,6 +1274,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
               return next;
             })}
           >
+            <svg className="connection-folder-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true"><path d="M1.8 4.1h4l1.3 1.4h7v6.8H1.8z" strokeLinejoin="round" /></svg>
             <span
               className={`group-segment${dropClass(folder.personal, folder.path)}`}
               data-drop-folder={folder.path}
@@ -1299,6 +1313,9 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         </div>
         <div className="sidebar-tools">
           <span className="sidebar-section-title">{t("connections")}</span>
+          <button className="ghost icon-button" type="button" aria-label={t("collapseAllFolders")} title={t("collapseAllFolders")} onClick={collapseFolders} disabled={folderKeys.length === 0}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" aria-hidden="true"><rect x="3.5" y="4.5" width="9" height="9" rx="1" /><path d="M6 9h4M2 10.5V3a1 1 0 0 1 1-1h7.5" strokeLinecap="round" /></svg>
+          </button>
           <button
             className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
             onClick={() => void usePreferences.getState().setExplorer({ ...explorer, linkWithEditor: !explorer.linkWithEditor })}
