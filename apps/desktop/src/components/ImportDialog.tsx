@@ -22,7 +22,7 @@ import type {
   RiskKind,
 } from "../bindings";
 import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase } from "../connect";
-import { pasteIsForText } from "../connectionCopies";
+import { isTextField, useFocusedPaste } from "../focusedPaste";
 import { chooseOpenFile } from "../dialogs";
 import { Icon } from "./Icons";
 import { useApp, useDialogs } from "../store";
@@ -259,19 +259,11 @@ function ImportForm({ request }: { request: ImportRequest }) {
   // is behind it (the explorer would paste a connection, the editor the text); on the source step
   // it takes the text from the paste event. Judged by the focused element: WebKitGTK sends the
   // event to wherever the page's selection was left, which can be the editor behind the dialog.
-  const onPaste = useRef<(e: ClipboardEvent) => void>(() => {});
-  onPaste.current = (e) => {
-    const focused = document.activeElement;
-    if (pasteIsForText(focused) && focused?.closest('[aria-modal="true"]')) return;
-    e.preventDefault();
-    e.stopPropagation();
+  useFocusedPaste((e, focused) => {
+    if (isTextField(focused) && focused?.closest('[aria-modal="true"]')) return false;
     if (step === "source") takeText(e.clipboardData?.getData("text/plain") ?? "");
-  };
-  useEffect(() => {
-    const listener = (e: ClipboardEvent) => onPaste.current(e);
-    window.addEventListener("paste", listener, true);
-    return () => window.removeEventListener("paste", listener, true);
-  }, []);
+    return true;
+  });
 
   function importRequest(): ImportRequestItem | null {
     if (!source || !options || !preview) return null;

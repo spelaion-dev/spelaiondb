@@ -50,7 +50,9 @@ import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
-import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard, pasteIsForText } from "../connectionCopies";
+import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard } from "../connectionCopies";
+import { isTextField, useFocusedPaste } from "../focusedPaste";
+import { topDialog } from "../modalFocus";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
@@ -1014,6 +1016,16 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const [folderError, setFolderError] = useState<string | null>(null);
   /** What the last paste of a connection (Ctrl+V) went wrong with. */
   const [pasteError, setPasteError] = useState<string | null>(null);
+  const tree = useRef<HTMLDivElement>(null);
+  // Ctrl+V with the focus on the explorer (a row, not a text field such as the filter): a
+  // connection from the clipboard, checked by the core as untrusted text. Taken before the event
+  // reaches its target, which on WebKitGTK can be the SQL editor that last held the selection.
+  useFocusedPaste((e, focused) => {
+    if (!focused || !tree.current?.contains(focused) || isTextField(focused) || topDialog()) return false;
+    setPasteError(null);
+    pasteConnection(e.clipboardData?.getData("text/plain") ?? "").catch((err: unknown) => setPasteError(errorText(err)));
+    return true;
+  });
   const filter = useApp((s) => s.explorerFilter);
   const openConnections = useApp((s) => s.openConnections);
   const filterBox = useRef<HTMLInputElement>(null);
@@ -1447,14 +1459,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         </div>
       )}
       <div
+        ref={tree}
         className={`tree${drag?.dragging ? " drag-active" : ""}`}
-        onPaste={(e) => {
-          // Ctrl+V in the explorer (not in a text field): a connection from the clipboard.
-          if (pasteIsForText(e.target)) return;
-          e.preventDefault();
-          setPasteError(null);
-          pasteConnection(e.clipboardData.getData("text/plain")).catch((err: unknown) => setPasteError(errorText(err)));
-        }}
       >
         <BookmarksSection />
         {connections.length > 0 && filtering && !connections.some(shown) && (
