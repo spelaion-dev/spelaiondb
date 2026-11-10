@@ -69,6 +69,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
   they reach, replace in place, target folder, what was not mapped, passwords read from another
   app's keychain only on import); a client is a reader that returns `ImportedConnection`s.
+  On Linux a reader's default search also looks in the client's Flatpak and Snap folders
+  (`linux_dirs.rs`; native first, each package path citing the manifest it was checked against);
+  HeidiSQL's registry only exists on Windows (`heidisql_has_registry`), elsewhere its import
+  starts by choosing an exported file.
   `dbeaver.rs` reads DBeaver's connections and saved credentials (passwords only as `Secret`,
   to the keychain; its connection types map to the closest built-in type); `datagrip.rs` reads
   DataGrip's (and other JetBrains IDEs') XML data sources and SSH configurations, tested against

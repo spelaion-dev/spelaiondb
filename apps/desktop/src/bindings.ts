@@ -2164,6 +2164,16 @@ export type ImportScan_Deserialize = {
 	needsPassword: boolean,
 	/**  The password given does not open it. */
 	wrongPassword: boolean,
+	/**
+	 *  Nothing was read: nothing was chosen, and the client keeps nothing this system can read
+	 *  on its own, so the user chooses a folder or file first.
+	 */
+	needsChoice: boolean,
+	/**
+	 *  The client keeps its connections somewhere this system reads when nothing is chosen
+	 *  (its folders, or HeidiSQL's registry on Windows), so the UI can offer to go back to it.
+	 */
+	defaultSource: boolean,
 };
 
 /**  What a scan found, and where. */
@@ -2174,6 +2184,16 @@ export type ImportScan_Serialize = {
 	needsPassword: boolean,
 	/**  The password given does not open it. */
 	wrongPassword: boolean,
+	/**
+	 *  Nothing was read: nothing was chosen, and the client keeps nothing this system can read
+	 *  on its own, so the user chooses a folder or file first.
+	 */
+	needsChoice: boolean,
+	/**
+	 *  The client keeps its connections somewhere this system reads when nothing is chosen
+	 *  (its folders, or HeidiSQL's registry on Windows), so the UI can offer to go back to it.
+	 */
+	defaultSource: boolean,
 };
 
 /**  One connection that could not be imported, and why. */

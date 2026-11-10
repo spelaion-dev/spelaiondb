@@ -50,6 +50,10 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
   const [typedPassword, setTypedPassword] = useState("");
   const [filePassword, setFilePassword] = useState("");
   const [locked, setLocked] = useState<{ dir: string; wrong: boolean } | null>(null);
+  // The core's answer: nothing was chosen and the client keeps nothing this system reads on its
+  // own (HeidiSQL outside Windows), and whether it does keep something (to offer going back).
+  const [needsChoice, setNeedsChoice] = useState(false);
+  const [defaultSource, setDefaultSource] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [duplicates, setDuplicates] = useState<Record<string, DuplicateChoice>>({});
@@ -66,9 +70,16 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
     let active = true;
     setError(null);
     setFound(null);
+    setNeedsChoice(false);
     call(commands.scanConnections(props.client, dir, filePassword || null))
       .then((scan) => {
         if (!active) return;
+        setDefaultSource(scan.defaultSource);
+        if (scan.needsChoice) {
+          setLocked(null);
+          setNeedsChoice(true);
+          return;
+        }
         if (scan.needsPassword) {
           setLocked({ dir: scan.dir, wrong: scan.wrongPassword });
           return;
@@ -195,12 +206,28 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
       <div className="conn-import-source">
         <span className="muted small">{t("importer.from")}</span>
         <code className="conn-import-dir" title={found?.dir ?? dir ?? ""}>
-          {found?.dir ?? dir ?? (props.client === "heidisql" ? t("importer.registrySource") : t("importer.defaultFolder", { client }))}
+          {found?.dir ??
+            dir ??
+            (needsChoice
+              ? t("importer.nothingChosen")
+              : props.client === "heidisql"
+                ? t("importer.registrySource")
+                : t("importer.defaultFolder", { client }))}
         </code>
         {props.client !== "heidisql" && <button onClick={() => void pickFolder()}>{t("importer.chooseFolder")}</button>}
-        {props.client === "heidisql" && dir && <button onClick={() => choose(null)}>{t("importer.windowsRegistry")}</button>}
-        {clientInfo?.exportExtensions && <button onClick={() => void pickExport()}>{t("importer.chooseFile")}</button>}
+        {props.client === "heidisql" && dir && defaultSource && <button onClick={() => choose(null)}>{t("importer.windowsRegistry")}</button>}
+        {clientInfo?.exportExtensions && (
+          // When there is nothing to read until a file is chosen, the dialog opens on this button.
+          <button key={needsChoice ? "needs-file" : "file"} autoFocus={needsChoice} onClick={() => void pickExport()}>
+            {t("importer.chooseFile")}
+          </button>
+        )}
       </div>
+      {needsChoice && (
+        <p className="muted">
+          {props.client === "heidisql" ? t("importer.chooseHeidisqlExport") : t("importer.chooseSource", { client })}
+        </p>
+      )}
       {error && (
         <p className="error" role="alert">
           {error}
@@ -238,7 +265,7 @@ export function ConnectionImport(props: { client: ImportClientId; onBack(): void
           </div>
         </form>
       )}
-      {!found && !error && !locked && <p className="muted">{t("importer.reading", { client })}</p>}
+      {!found && !error && !locked && !needsChoice && <p className="muted">{t("importer.reading", { client })}</p>}
       {found && found.items.length === 0 && <p className="muted">{t("importer.none")}</p>}
       {found && found.items.length > 0 && (
         <>

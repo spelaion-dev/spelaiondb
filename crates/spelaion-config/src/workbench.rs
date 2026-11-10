@@ -25,6 +25,7 @@ use spelaion_driver_api::Secret;
 
 use crate::datagrip::{Node, parse_text, shown};
 use crate::import::{ImportedConnection, ImportedSsh, ImportedTls, KeychainItem};
+use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
 /// The largest `connections.xml` read: a few hundred bytes per connection.
@@ -56,7 +57,8 @@ fn unreadable(path: &Path, e: impl std::fmt::Display) -> WorkbenchError {
     }
 }
 
-/// Where MySQL Workbench keeps its connections on this system (it may not exist).
+/// Where MySQL Workbench keeps its connections on this system (it may not exist). On Linux, the
+/// first of [`workbench_linux_dirs`] that has a `connections.xml`.
 pub fn workbench_dir() -> Option<PathBuf> {
     if cfg!(windows) {
         std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("MySQL").join("Workbench"))
@@ -68,8 +70,27 @@ pub fn workbench_dir() -> Option<PathBuf> {
                 .join("Workbench")
         })
     } else {
-        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".mysql").join("workbench"))
+        let home = LinuxHome::from_env()?;
+        first_found(workbench_linux_dirs(&home), |dir| {
+            dir.join(CONNECTIONS_FILE).is_file()
+        })
     }
+}
+
+/// Where MySQL Workbench's folder may be on Linux, native install first. Workbench builds it
+/// from GLib's home folder, `HOME` (`frontend/linux/workbench/program.cpp`,
+/// <https://github.com/mysql/mysql-workbench/blob/8.0/frontend/linux/workbench/program.cpp>).
+/// Flathub has no Workbench.
+fn workbench_linux_dirs(home: &LinuxHome) -> Vec<PathBuf> {
+    vec![
+        home.home.join(".mysql").join("workbench"),
+        // The snap (mysql-workbench-community, published by a third party, not Oracle) is
+        // strict, so its HOME is its own folder
+        // (<https://github.com/tonybolzan/snap-mysql-workbench/blob/main/snapcraft.yaml>).
+        home.snap("mysql-workbench-community")
+            .join(".mysql")
+            .join("workbench"),
+    ]
 }
 
 /// Which system wrote the file: it decides where Workbench keeps the passwords. Always this
@@ -469,6 +490,50 @@ fn connection_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Workbench's folder at `dir`, with the `connections.xml` a real Workbench wrote.
+    fn write_workbench_dir(dir: &Path) {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/workbench/Workbench")
+            .join(CONNECTIONS_FILE);
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::copy(fixture, dir.join(CONNECTIONS_FILE)).unwrap();
+    }
+
+    fn found_on_linux(home: &Path) -> PathBuf {
+        let home = LinuxHome::at(home);
+        first_found(workbench_linux_dirs(&home), |dir| {
+            dir.join(CONNECTIONS_FILE).is_file()
+        })
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_search_finds_the_snap_folder() {
+        let home = crate::linux_dirs::testing::fake_home("workbench-snap");
+        let revision =
+            crate::linux_dirs::testing::snap_revision(&home, "mysql-workbench-community", "13");
+        write_workbench_dir(&revision.join(".mysql/workbench"));
+        let found = found_on_linux(&home);
+        assert_eq!(
+            found,
+            home.join("snap/mysql-workbench-community/current/.mysql/workbench")
+        );
+        let read = read_workbench(&found, WorkbenchPasswords::SecretService).unwrap();
+        assert!(!read.is_empty());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn linux_search_prefers_the_native_folder_and_names_it_when_none_exists() {
+        let home = crate::linux_dirs::testing::fake_home("workbench-native");
+        let native = home.join(".mysql/workbench");
+        assert_eq!(found_on_linux(&home), native);
+        write_workbench_dir(&native);
+        assert_eq!(found_on_linux(&home), native);
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn ssh_hosts_take_an_optional_port() {
