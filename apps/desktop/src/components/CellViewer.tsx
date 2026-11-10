@@ -126,10 +126,14 @@ export function CellViewer(props: {
   /** The views offered (the cell and the row unless said otherwise). */
   modes?: ViewerMode[];
   edits?: Record<string, string | null>;
+  /** Keys of `edits` set to the column's default. */
+  defaults?: Set<string>;
   editable?: boolean;
   /** The tab has changes not yet saved: a file is loaded only when there are none. */
   pendingChanges?: boolean;
   onEdit?(row: number, column: number, value: string | null | undefined): void;
+  /** A keystroke in the value's text box: typing on in one cell is one undo step. */
+  onType?(row: number, column: number, value: string | null | undefined): void;
   /** Loads the file at `path` into this cell now (the core writes one UPDATE by key). */
   onLoadFile?(row: number, column: number, path: string): Promise<void>;
   /** The table an editable result's rows are from: its columns may take a value picker. */
@@ -365,8 +369,8 @@ export function CellViewer(props: {
                 aria-label={t("edit.cellLabel", { column: meta.name })}
                 spellCheck={false}
                 value={value?.text ?? ""}
-                placeholder={value?.text === null ? "NULL" : undefined}
-                onChange={(e) => { setCopied(false); setCopyError(null); props.onEdit?.(row, column, e.target.value === item?.text ? undefined : e.target.value); }}
+                placeholder={value?.text === null ? (props.defaults?.has(editKey) ? "DEFAULT" : "NULL") : undefined}
+                onChange={(e) => { setCopied(false); setCopyError(null); (props.onType ?? props.onEdit)?.(row, column, e.target.value === item?.text ? undefined : e.target.value); }}
               />
               {picker && props.pickerSource && value && (
                 <ValuePicker

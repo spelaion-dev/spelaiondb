@@ -76,7 +76,11 @@ import {
   type ImportItem_Serialize,
   type ImportScan_Serialize,
   type ImportReport,
-  type RowChangeItem_Deserialize,
+  type PendingEditItem_Deserialize,
+  type PendingEditsItem_Serialize,
+  type BlockItem,
+  type BulkActionItem,
+  type CellInputItem,
   type UpdateStatus_Serialize,
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
@@ -124,6 +128,7 @@ export type SearchHitItem = SearchHitItem_Deserialize;
 export type TableStatusItem = TableStatusItem_Deserialize;
 export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, SchemaColumnItem, SearchTableItem };
 export type { ImportReport, KubernetesDraftItem };
+export type { BlockItem, BulkActionItem, CellInputItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
 export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
@@ -140,7 +145,8 @@ export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
 export type ImportItem = ImportItem_Serialize;
 export type KubePort = KubePortItem_Serialize;
 export type ImportScan = ImportScan_Serialize;
-export type RowChangeItem = RowChangeItem_Deserialize;
+export type PendingEditItem = PendingEditItem_Deserialize;
+export type PendingEdits = PendingEditsItem_Serialize;
 export type CellEditItem = CellEditItem_Deserialize;
 export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;

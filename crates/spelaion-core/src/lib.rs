@@ -28,6 +28,7 @@ mod observe;
 mod open;
 mod open_tabs;
 mod params;
+mod pending;
 pub mod plan;
 mod processes;
 mod progress;
@@ -113,6 +114,10 @@ pub use open::{
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
 pub use params::{ParamError, bind_params, script_params};
+pub use pending::{
+    Block, BulkAction, CellEdit, EditOutcome, MAX_PASTE_BYTES, MAX_UNDO_STEPS, PendingEdit,
+    PendingEdits, parse_block,
+};
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use progress::{ROWS_PROGRESS_INTERVAL, coalesce_rows};
 pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};

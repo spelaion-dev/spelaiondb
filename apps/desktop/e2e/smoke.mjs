@@ -3874,6 +3874,68 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.press("Control+r");
     await panel.getByText("No pending changes").waitFor();
   }
+  // Bulk edits of a selection, kept in the core with undo and redo (ADR-044).
+  step("table data: bulk edits of a selection, undo and redo");
+  {
+    const cell = async (row, x) => {
+      const now = await panel.locator(".grid-scroller").boundingBox();
+      return [now.x + 52 + x + 20, now.y + 34 + 12 + row * 24];
+    };
+    const counts = (updated) => panel.getByText(`Inserted: 0 · Deleted: 0 · Updated: ${updated}`);
+    // The four names: upper case from the cell menu's submenu.
+    const selectDown = async (x) => {
+      await page.mouse.click(...(await cell(0, x)));
+      for (let i = 0; i < 3; i++) await page.keyboard.press("Shift+ArrowDown");
+    };
+    await selectDown(110);
+    await panel.getByText("1 column selected", { exact: true }).waitFor();
+    await page.mouse.click(...(await cell(3, 110)), { button: "right" });
+    await panel.getByRole("menuitem", { name: "Change selected cells ▸" }).hover();
+    await panel.getByRole("menuitem", { name: "Upper case" }).waitFor();
+    await shot("07e-bulk-edit-menu");
+    await panel.getByRole("menuitem", { name: "Upper case" }).click();
+    await counts(4).waitFor();
+    await panel.getByRole("status").filter({ hasText: "Changed 4 cells (not saved yet)" }).waitFor();
+    // Undo and redo restore exactly what was pending, from the keyboard and the toolbar.
+    await page.keyboard.press("Control+z");
+    await panel.getByText("No pending changes").waitFor();
+    await page.keyboard.press("Control+y");
+    await counts(4).waitFor();
+    // qty of the four rows: fill down from the first (row 2's NULL becomes 1).
+    await selectDown(270);
+    await page.keyboard.press("Control+d");
+    await panel.getByRole("status").filter({ hasText: "Changed 1 cell (not saved yet)" }).waitFor();
+    // A block pasted from the clipboard (Ctrl+V on the grid): names of rows 3 and 4.
+    await page.mouse.click(...(await cell(2, 110)));
+    await panel.locator(".grid-scroller").evaluate((grid) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", "pasted three\npasted four\n");
+      grid.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await panel.getByRole("status").filter({ hasText: "Changed 2 cells (not saved yet)" }).waitFor();
+    // Set value… on row 1's name, then take that step back from the toolbar and redo it.
+    await page.mouse.click(...(await cell(0, 110)), { button: "right" });
+    await panel.getByRole("menuitem", { name: "Set value…" }).click();
+    const setValue = page.getByRole("dialog", { name: "Set the value of 1 cell" });
+    await setValue.getByRole("textbox").fill("bulk one");
+    await setValue.getByRole("button", { name: "Set value" }).click();
+    await panel.getByRole("button", { name: "Undo", exact: true }).click();
+    await panel.getByRole("button", { name: "Redo", exact: true }).click();
+    await counts(4).waitFor();
+    await shot("07f-bulk-edits-pending");
+    await panel.getByRole("button", { name: "Save changes" }).click();
+    await panel.getByRole("status").filter({ hasText: "Applied 4 changes" }).waitFor();
+    await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
+    let box = null;
+    for (let i = 0; i < 40 && !(box = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Control+c");
+    assert.deepEqual((await copied(before + 1)).trimEnd().split("\n"), ["1\tbulk one\t1", "2\tTWO\t1", "4\tpasted three\t1", "5\tpasted four\t1"]);
+    // Nothing pending is left to undo after saving.
+    assert.ok(await panel.getByRole("button", { name: "Undo", exact: true }).isDisabled());
+  }
   // Wait for the table tab to finish closing before opening the next query: closing is
   // asynchronous and its completion can otherwise overtake the following double click.
   const editedTableTab = page.locator(".tabbar .tab.active");

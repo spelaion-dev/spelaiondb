@@ -18,11 +18,11 @@ export type CommandMenu = "tab" | "file" | "activity" | "welcome" | "editor";
 /**
  * Who handles the shortcut: `global` ones `App.tsx`'s handler (they do nothing while a modal is
  * open); `editor` ones the SQL editor, where the focus must be (the palette and the menus only
- * show them).
+ * show them); `grid` ones the result grid of an editable result (pending table edits).
  */
-export type ShortcutScope = "global" | "editor";
+export type ShortcutScope = "global" | "editor" | "grid";
 
-export type CommandCategory = "general" | "tab" | "file" | "editor" | "view";
+export type CommandCategory = "general" | "tab" | "file" | "editor" | "view" | "data";
 
 export interface CommandSpec {
   id: string;
@@ -54,6 +54,8 @@ export const COMMANDS = [
   { id: "tab.previous", category: "tab", label: "app:commands.previousTab", shortcut: "Ctrl+PageUp", scope: "global" },
   { id: "tab.moveRight", category: "tab", label: "app:commands.moveTabRight", shortcut: "Ctrl+Shift+PageDown", scope: "global" },
   { id: "tab.moveLeft", category: "tab", label: "app:commands.moveTabLeft", shortcut: "Ctrl+Shift+PageUp", scope: "global" },
+  { id: "edits.undo", category: "data", label: "app:commands.undoEdit", shortcut: "Ctrl+Z", scope: "grid" },
+  { id: "edits.redo", category: "data", label: "app:commands.redoEdit", shortcut: "Ctrl+Y", scope: "grid" },
   { id: "results.maximize", category: "view", label: "app:commands.maximizeResults", shortcut: "Ctrl+Alt+M", scope: "global" },
   { id: "file.open", category: "file", label: "app:files.open", shortcut: "Ctrl+O", scope: "global", menus: ["file", "welcome"] },
   { id: "file.openPlan", category: "file", label: "editor:plan.open", menus: ["file"] },

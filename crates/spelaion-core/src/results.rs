@@ -12,8 +12,10 @@ use arrow::ipc::writer::StreamWriter;
 use spelaion_driver_api::{ResultSchema, Value};
 
 use crate::chart::{self, ChartData, ChartError, ChartRequest};
+use crate::edit::EditError;
 use crate::filter::{ColumnFilter, matches, validate};
 use crate::find::{FindMatches, FindQuery, FindTicket, search};
+use crate::pending::{EditOutcome, PendingEdit, PendingEdits};
 use crate::selection_stats::{self, CellBlock, SelectionStats, StatsTicket};
 use crate::sort::{SortKey, ViewError, sorted_rows};
 
@@ -48,6 +50,8 @@ pub struct StoredResult {
     stats_latest: Arc<AtomicU64>,
     /// The number of the latest chart started (or cancelled).
     chart_latest: Arc<AtomicU64>,
+    /// The edits of a table data page not yet applied (ADR-044), by position in the view.
+    pending: PendingEdits,
 }
 
 impl StoredResult {
@@ -67,6 +71,34 @@ impl StoredResult {
             find_latest: Arc::new(AtomicU64::new(0)),
             stats_latest: Arc::new(AtomicU64::new(0)),
             chart_latest: Arc::new(AtomicU64::new(0)),
+            pending: PendingEdits::default(),
+        }
+    }
+
+    /// The edits of this page not yet applied (ADR-044).
+    pub fn pending(&self) -> &PendingEdits {
+        &self.pending
+    }
+
+    /// Does one edit to this page's pending edits (or undoes or redoes one).
+    pub fn edit_pending(&mut self, edit: PendingEdit) -> Result<EditOutcome, EditError> {
+        let mut pending = std::mem::take(&mut self.pending);
+        let outcome = pending.edit(self, edit);
+        self.pending = pending;
+        outcome
+    }
+
+    /// Forgets the pending edits and their history (they were applied).
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
+    }
+
+    /// Pending edits name rows by position: the view cannot change under them.
+    fn check_unedited(&self) -> Result<(), ViewError> {
+        if self.pending.is_empty() {
+            Ok(())
+        } else {
+            Err(ViewError::PendingEdits)
         }
     }
 
@@ -102,6 +134,9 @@ impl StoredResult {
     /// Sorts the rows by one column (`None` goes back to the order the server sent). Every
     /// later window, copy and export sees the new order.
     pub fn sort(&mut self, key: Option<SortKey>) -> Result<(), ViewError> {
+        if self.sort_key() != key {
+            self.check_unedited()?;
+        }
         let Some(key) = key else {
             self.sort = None;
             self.rebuild_view();
@@ -133,6 +168,9 @@ impl StoredResult {
     /// ignoring case; `None` or blank shows every row again. Returns the rows left.
     pub fn filter(&mut self, text: Option<&str>) -> Result<usize, ViewError> {
         let text = text.map(str::trim).filter(|t| !t.is_empty());
+        if self.filter_text() != text {
+            self.check_unedited()?;
+        }
         let Some(text) = text else {
             self.filter = None;
             self.rebuild_view();
@@ -167,6 +205,9 @@ impl StoredResult {
     /// Keeps the rows that pass every column filter (an empty list removes them), on top of
     /// the text filter. Returns the rows left.
     pub fn filter_columns(&mut self, filters: Vec<ColumnFilter>) -> Result<usize, ViewError> {
+        if self.column_filters() != filters.as_slice() {
+            self.check_unedited()?;
+        }
         if filters.is_empty() {
             self.column_filters = None;
             self.rebuild_view();

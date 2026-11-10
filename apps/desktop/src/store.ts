@@ -227,6 +227,8 @@ export type EditorCommand = "runCurrent" | "runScript" | "explain" | "format" | 
 
 /** Window event asking the editor tab `detail.tab` to do `detail.command` (SDB-18). */
 export const EDITOR_COMMAND_EVENT = "spelaion:editor-command";
+/** Undo or redo of a tab's pending table edits, from the command palette (`{ tab, command }`). */
+export const EDITS_COMMAND_EVENT = "spelaion:edits-command";
 
 /** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
 export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;

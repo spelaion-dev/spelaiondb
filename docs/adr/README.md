@@ -23,7 +23,7 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [011](0011-local-storage.md) | Local SQLite in WAL mode | Accepted |
 | [012](0012-ci-as-reviewer.md) | CI is the code reviewer | Accepted |
 | [013](0013-license-and-repo.md) | Apache-2.0 + DCO + trademark policy; monorepo (plugins have their own repositories: ADR-042) | Accepted |
-| [014](0014-editing-table-data.md) | Editing in table data tabs, by primary key, in one transaction | Accepted |
+| [014](0014-editing-table-data.md) | Editing in table data tabs, by primary key, in one transaction (pending changes in the core: superseded by ADR-044) | Accepted |
 | [015](0015-kubernetes-tunnels.md) | Kubernetes connections through `kubectl port-forward` | Accepted |
 | [016](0016-duckdb.md) | DuckDB driver: bundled, one open per file (its MCP part superseded by ADR-020) | Accepted |
 | [017](0017-sql-server.md) | SQL Server driver: tiberius, T-SQL batches, cancel by Attention | Accepted |
@@ -53,3 +53,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [041](0041-engines-as-plugins.md) | Engines as plugins: every driver in its own process behind the same contract, migrated one at a time; dialects and barriers stay in the core (where ours are built and checked: superseded by ADR-042) | Accepted (not implemented) |
 | [042](0042-plugin-repositories.md) | Our plugins live in their own repositories; this one keeps the contract and pins, by hash, the builds it ships and tests | Accepted (not implemented) |
 | [043](0043-searching-the-database.md) | Searching the database: names from the explorer's catalog, values bound in a read-only session | Accepted |
+| [044](0044-pending-edits-in-the-core.md) | Pending edits live in the core, with bulk edits of a selection and undo / redo (supersedes ADR-014's pending changes in the UI) | Accepted |

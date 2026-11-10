@@ -10,7 +10,7 @@ import { closeQueryTab, connectTabFromExplorer, explorerDatabase } from "./conne
 import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
-import { EDITOR_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type Tab } from "./store";
+import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type Tab } from "./store";
 import {
   closable,
   closeAllTabs,
@@ -57,6 +57,19 @@ function editorCommand(command: EditorCommand): CommandBinding["run"] {
   return (context) => {
     const tab = editorTab(context);
     if (tab) window.dispatchEvent(new CustomEvent(EDITOR_COMMAND_EVENT, { detail: { tab: tab.id, command } }));
+  };
+}
+
+/** A tab whose result may hold pending table edits (a table's data, or a query's). */
+function editableTab(context: CommandContext): Tab | undefined {
+  const tab = tabOf(context);
+  return tab && !tab.tableDetails && !tab.plan && tab.status === "connected" ? tab : undefined;
+}
+
+function editsCommand(command: "undo" | "redo"): CommandBinding["run"] {
+  return (context) => {
+    const tab = editableTab(context);
+    if (tab) window.dispatchEvent(new CustomEvent(EDITS_COMMAND_EVENT, { detail: { tab: tab.id, command } }));
   };
 }
 
@@ -188,6 +201,8 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   "editor.run": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runCurrent") },
   "editor.runScript": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runScript") },
+  "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
+  "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },
   "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
   "editor.lineComment": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("lineComment") },

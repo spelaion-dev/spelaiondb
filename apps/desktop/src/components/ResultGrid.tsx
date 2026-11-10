@@ -3,12 +3,13 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
+import { call, commands, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
 import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
 import { RowCache } from "../grid/rowCache";
-import type { ResultMeta, SortState } from "../store";
+import { useDialogs, type ResultMeta, type SortState } from "../store";
+import { commandSpec, matchesShortcut } from "../commandRegistry";
 import { useExport } from "./ExportDialog";
 import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
 import { Icon, PATHS } from "./Icons";
@@ -126,12 +127,19 @@ function cssVar(style: CSSStyleDeclaration, name: string): string {
   return style.getPropertyValue(name).trim() || "#888";
 }
 
-/** Pending changes of a table data tab (ADR-014): drawn over the page until applied. */
+/** Pending edits of a table data tab, as the core holds them (ADR-044): drawn over the page
+ *  until applied. */
 export interface GridEditing {
   /** `"row:col"` → the value typed (`null` is NULL). */
   cells: Record<string, string | null>;
+  /** Keys of `cells` set to the column's default. */
+  defaults: Set<string>;
   deleted: number[];
   inserts: CellEditItem[][];
+  /** Rows with a pending value, not counting rows to delete. */
+  updatedRows: number;
+  canUndo: boolean;
+  canRedo: boolean;
   primaryKey: string[];
   /** The table the rows are from: its columns may take a value picker in the cell panel. */
   table: { schema: string; name: string };
@@ -146,9 +154,25 @@ export interface GridEditing {
   onDiscard(): void;
   /** `undefined` takes the cell back to its value in the database. */
   onEdit(row: number, col: number, value: string | null | undefined): void;
+  /** A keystroke in the cell panel's text box: typing on in one cell is one undo step. */
+  onType(row: number, col: number, value: string | null | undefined): void;
   onDelete(rows: number[]): void;
   onRevert(rows: number[]): void;
+  /** A bulk edit of the selection's block (its shown columns). */
+  onBulk(block: BlockItem, action: BulkActionItem): void;
+  /** Tab-separated text pasted on the selection; `columns` are the shown ones from its first. */
+  onPaste(selection: BlockItem, columns: number[], text: string): void;
+  onUndo(): void;
+  onRedo(): void;
 }
+
+/** The grid's own keys for pending edits (undo and redo are app commands, `commandRegistry.ts`). */
+const UNDO_SHORTCUT = commandSpec("edits.undo").shortcut ?? "";
+const REDO_SHORTCUT = commandSpec("edits.redo").shortcut ?? "";
+const FILL_DOWN_SHORTCUT = "Ctrl+D";
+const PASTE_SHORTCUT = "Ctrl+V";
+const SET_NULL_SHORTCUT = "Ctrl+Alt+N";
+const REVERT_SHORTCUT = "Ctrl+Alt+Z";
 
 const EDITED_BG = "rgba(250, 204, 21, 0.30)";
 /** Cells the search found, and the one it is on. */
@@ -163,12 +187,14 @@ const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
 ];
 const DELETED_BG = "rgba(239, 68, 68, 0.20)";
 
-function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "save" | "cancel" }) {
+function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "redo" | "revert" | "save" | "cancel" }) {
   return <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     {name === "add" && <><rect x="3" y="4" width="14" height="12" rx="1" /><path d="M10 7v6M7 10h6" /></>}
     {name === "duplicate" && <><rect x="7" y="6" width="10" height="11" rx="1" /><path d="M13 6V3H3v11h4M12 9v5M9.5 11.5h5" /></>}
     {name === "delete" && <><path d="M4 6h12M7 6V4h6v2M6 6l1 10h6l1-10M9 9v4M11 9v4" /></>}
     {name === "undo" && <><path d="M7 6 3.5 9.5 7 13M4 9.5h7.5a4 4 0 0 1 0 8H10" /></>}
+    {name === "redo" && <><path d="M13 6l3.5 3.5L13 13M16 9.5H8.5a4 4 0 0 0 0 8H10" /></>}
+    {name === "revert" && <><path d="M3.5 4v4h4" /><path d="M4 8a6.5 6.5 0 1 1-.5 4" /></>}
     {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4zM6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
     {name === "cancel" && <><circle cx="10" cy="10" r="7" /><path d="m7 7 6 6M13 7l-6 6" /></>}
   </svg>;
@@ -386,12 +412,68 @@ export function ResultGrid({
     }
   }
 
+  /** One cell switches between NULL and its value; a larger selection is set to NULL. */
   function setSelectedNull() {
-    if (!editing || !selection || editing.deleted.includes(selection.focus.row)) return;
+    if (!editing || !selection) return;
+    const block = selectedBlock();
+    if (block && (block.firstRow !== block.lastRow || block.columns.length > 1)) {
+      editing.onBulk(block, { kind: "set", value: { kind: "null" } });
+      return;
+    }
+    if (editing.deleted.includes(selection.focus.row)) return;
     const { row, col } = selection.focus;
     const original = cache.get(row, col);
     if (original === undefined) return;
     editing.onEdit(row, col, original === null ? undefined : null);
+  }
+
+  /** The selection's rows and shown columns. */
+  function selectedBlock(): BlockItem | null {
+    if (!selection) return null;
+    const b = bounds(selection);
+    const columns = visibleCols.filter((c) => c >= b.c0 && c <= b.c1);
+    return columns.length ? { firstRow: b.r0, lastRow: b.r1, columns } : null;
+  }
+
+  function bulkEdit(action: BulkActionItem) {
+    setMenu(null);
+    const block = selectedBlock();
+    if (editing && block && !editing.busy && !sorting) editing.onBulk(block, action);
+    scrollerRef.current?.focus();
+  }
+
+  /** "Set value…": one value typed for every selected cell. */
+  async function setSelectedValue() {
+    setMenu(null);
+    const block = selectedBlock();
+    if (!editing || !block) return;
+    const cells = (block.lastRow - block.firstRow + 1) * block.columns.length;
+    const text = await useDialogs.getState().askText({
+      title: t("edit.setValueTitle", { count: cells }),
+      label: t("edit.setValueLabel"),
+      initial: "",
+      confirm: t("edit.setValueConfirm"),
+    });
+    scrollerRef.current?.focus();
+    if (text !== null) editing.onBulk(block, { kind: "set", value: { kind: "text", text } });
+  }
+
+  /** Text pasted on the selection: the core lays it out and checks every value. */
+  function pasteText(text: string) {
+    const block = selectedBlock();
+    if (!editing || !block || editing.busy || sorting) return;
+    const from = visibleCols.indexOf(block.columns[0] ?? -1);
+    editing.onPaste(block, from < 0 ? block.columns : visibleCols.slice(from), text);
+  }
+
+  async function pasteFromMenu() {
+    setMenu(null);
+    try {
+      pasteText(await navigator.clipboard.readText());
+    } catch (e) {
+      setNotice({ text: t("edit.pasteUnavailable", { detail: e instanceof Error ? e.message : String(e) }), error: true });
+    }
+    scrollerRef.current?.focus();
   }
 
   /** Ctrl+Shift+J: the column picker's search text (`null` when closed). */
@@ -564,7 +646,10 @@ export function ResultGrid({
       }
       const numeric = NUMERIC.has(logical);
       let text: string;
-      if (value === undefined) {
+      if (edited && editing?.defaults.has(editKey)) {
+        ctx.fillStyle = c.muted;
+        text = "DEFAULT";
+      } else if (value === undefined) {
         ctx.fillStyle = c.muted;
         text = "…";
       } else if (value === null) {
@@ -1478,7 +1563,7 @@ export function ResultGrid({
   const pageCanLoad = !!paging?.hasMore && (paging.total === undefined || result.rows < paging.total);
   const pageStart = paging ? queryPage * paging.pageSize : 0;
   const hasPendingEdits = !!editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0);
-  const updatedRows = editing ? new Set(Object.keys(editing.cells).map((key) => key.split(":")[0]).filter((row) => !editing.deleted.includes(Number(row)))).size : 0;
+  const updatedRows = editing?.updatedRows ?? 0;
 
   function onGridScroll() {
     redraw();
@@ -1545,18 +1630,41 @@ export function ResultGrid({
       e.preventDefault();
       e.stopPropagation();
       if (selection) editing.onDelete(selectedRows());
-    } else if (mod && !e.altKey && !e.shiftKey && key === "z") {
+    } else if (matchesShortcut(e, UNDO_SHORTCUT)) {
+      e.preventDefault();
+      e.stopPropagation();
+      editing.onUndo();
+    } else if (matchesShortcut(e, REDO_SHORTCUT) || (mod && e.shiftKey && !e.altKey && key === "z")) {
+      e.preventDefault();
+      e.stopPropagation();
+      editing.onRedo();
+    } else if (matchesShortcut(e, REVERT_SHORTCUT)) {
       e.preventDefault();
       e.stopPropagation();
       if (selection) editing.onRevert(selectedRows());
-    } else if (mod && e.altKey && !e.shiftKey && key === "n") {
+    } else if (matchesShortcut(e, SET_NULL_SHORTCUT)) {
       e.preventDefault();
       e.stopPropagation();
       setSelectedNull();
+    } else if (matchesShortcut(e, FILL_DOWN_SHORTCUT)) {
+      e.preventDefault();
+      e.stopPropagation();
+      bulkEdit({ kind: "fillDown" });
     }
   }
   return (
-    <div className="grid-wrap" ref={wrapRef} onKeyDown={onResultShortcut}>
+    <div
+      className="grid-wrap"
+      ref={wrapRef}
+      onKeyDown={onResultShortcut}
+      onPaste={(e) => {
+        // Ctrl+V on the grid pastes into the selected cells; text boxes keep their own paste.
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        if (!editing || target?.closest('input, textarea, [contenteditable="true"], [role="dialog"]')) return;
+        e.preventDefault();
+        pasteText(e.clipboardData.getData("text/plain"));
+      }}
+    >
     <div className="grid-main">
     {(result.columnFilters?.length ?? 0) > 0 && (
       <div className="filter-bar" role="toolbar" aria-label={t("results.columnFilters")}>
@@ -1745,14 +1853,53 @@ export function ResultGrid({
               >
                 {t("edit.editCell")}
               </button>
+              <button role="menuitem" onClick={() => void setSelectedValue()}>
+                {t("edit.setValue")}
+              </button>
+              <button role="menuitem" onClick={() => void pasteFromMenu()}>
+                <span>{t("edit.paste")}</span><span className="menu-shortcut">{PASTE_SHORTCUT}</span>
+              </button>
+              <button role="menuitem" onClick={() => bulkEdit({ kind: "fillDown" })}>
+                <span>{t("edit.fillDown")}</span><span className="menu-shortcut">{FILL_DOWN_SHORTCUT}</span>
+              </button>
               <button
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
-                  if (menu.cell && !editing.deleted.includes(menu.cell.row)) editing.onEdit(menu.cell.row, menu.cell.col, cache.get(menu.cell.row, menu.cell.col) === null ? undefined : null);
+                  setSelectedNull();
                 }}
               >
-                {t("edit.setNull")}
+                <span>{t("edit.setNull")}</span><span className="menu-shortcut">{SET_NULL_SHORTCUT}</span>
+              </button>
+              <GridSubmenu label={t("edit.changeCells")}>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "trim" })}>{t("edit.trim")}</button>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "upperCase" })}>{t("edit.upperCase")}</button>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "lowerCase" })}>{t("edit.lowerCase")}</button>
+                <hr />
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "set", value: { kind: "default" } })}>{t("edit.setDefault")}</button>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "newUuid" })}>{t("edit.newUuid")}</button>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "now" })}>{t("edit.now")}</button>
+              </GridSubmenu>
+              <hr />
+              <button
+                role="menuitem"
+                disabled={!editing.canUndo}
+                onClick={() => {
+                  setMenu(null);
+                  editing.onUndo();
+                }}
+              >
+                <span>{t("edit.undo")}</span><span className="menu-shortcut">{UNDO_SHORTCUT}</span>
+              </button>
+              <button
+                role="menuitem"
+                disabled={!editing.canRedo}
+                onClick={() => {
+                  setMenu(null);
+                  editing.onRedo();
+                }}
+              >
+                <span>{t("edit.redo")}</span><span className="menu-shortcut">{REDO_SHORTCUT}</span>
               </button>
               <button
                 role="menuitem"
@@ -1771,7 +1918,7 @@ export function ResultGrid({
                     editing.onRevert(selectedRows());
                   }}
                 >
-                  {t("edit.revert")}
+                  <span>{t("edit.revert")}</span><span className="menu-shortcut">{REVERT_SHORTCUT}</span>
                 </button>
               )}
               <hr />
@@ -2052,9 +2199,11 @@ export function ResultGrid({
               <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !result.complete} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
               <button className="ghost" title={t("edit.shortcutDuplicate")} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /><span>{t("edit.duplicateAction")}</span></button>
               <button className="ghost" title={t("edit.shortcutDelete")} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /><span>{t("edit.deleteAction")}</span></button>
-              <button className="ghost" title={t("edit.shortcutRevert")} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="undo" /><span>{t("edit.undoAction")}</span></button>
+              <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="revert" /><span>{t("edit.revertAction")}</span></button>
             </div>
             <div className="result-commit-actions" role="group" aria-label={t("edit.pendingActions")}>
+              <button className="ghost" title={`${t("edit.undo")} (${UNDO_SHORTCUT})`} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><EditIcon name="undo" /></button>
+              <button className="ghost" title={`${t("edit.redo")} (${REDO_SHORTCUT})`} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><EditIcon name="redo" /></button>
               <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave")} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /><span>{t("edit.saveChanges")}</span></button>
               <button className="ghost" title={t("edit.shortcutDiscard")} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><EditIcon name="cancel" /><span>{t("edit.discard")}</span></button>
             </div>
@@ -2156,8 +2305,10 @@ export function ResultGrid({
         mode={shownMode}
         modes={viewerModes}
         edits={editing?.cells}
+        defaults={editing?.defaults}
         editable={!!editing && !editing.busy && !sorting && !editing.deleted.includes(selection.focus.row)}
         onEdit={editing?.onEdit}
+        onType={editing?.onType}
         pendingChanges={hasPendingEdits}
         onLoadFile={editing?.onLoadFile}
         pickerSource={editing ? { session, schema: editing.table.schema, table: editing.table.name } : undefined}

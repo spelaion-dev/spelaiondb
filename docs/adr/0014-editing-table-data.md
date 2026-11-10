@@ -16,7 +16,8 @@ identify the rows of one table.
   SELECT of that table), so every row maps to one row of the table. Query results and
   tables without a primary key stay read-only: guessing a row from all its columns can
   change several rows at once.
-- **Pending changes live in the UI** until applied: they are the user's input (a few typed
+- **Pending changes live in the UI** until applied (superseded by ADR-044: they live in the
+  core, with the stored page, so bulk edits and undo can use its values): they are the user's input (a few typed
   values, deleted and added rows), not result data. Edited cells and deleted rows are drawn
   differently; **Apply** sends them, **Discard** drops them, and paging waits until one of
   the two happens.
