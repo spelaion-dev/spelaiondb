@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
-import type { EditorPreferencesItem } from "./bindings";
+import type { EditorPreferencesItem, MapPreferencesItem } from "./bindings";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -28,7 +28,7 @@ export function applyTheme(preference: ThemePreference): void {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export type PreferenceSetting = "language" | "theme" | "explorer" | "grid" | "script" | "editor";
+export type PreferenceSetting = "language" | "theme" | "explorer" | "grid" | "script" | "editor" | "map";
 
 export interface PreferenceError {
   setting: PreferenceSetting;
@@ -48,6 +48,11 @@ interface PreferencesStore {
   /** Display and formatting preferences applied to every mounted editor. */
   editor: EditorPreferencesItem;
   setEditor(next: EditorPreferencesItem): Promise<boolean>;
+  /** The map's background (ADR-045): tiles from the user's server, off by default. */
+  map: MapPreferencesItem;
+  /** Saves the map's preferences; `false` when the core refused them (the error says why).
+   *  `optimistic` shows the change at once and takes it back if saving fails (a checkbox). */
+  setMap(next: MapPreferencesItem, optimistic?: boolean): Promise<boolean>;
   /** Connect the restored tabs at startup (ADR-036): connect only, never run. Off by default. */
   reconnectOnStart: boolean;
   loading: boolean;
@@ -70,12 +75,13 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
   grid: { zebra: true, nullText: true, boolCheckboxes: false },
   script: { onError: "stop", notify: false, notifyAfterSeconds: 30, confirmDelaySeconds: 0 },
   editor: { font: "system", fontSize: 13, lineHeight: 18, tabSize: 2, lineNumbers: true, wordWrap: false, keywordCase: "preserve", indent: 2, commaPosition: "trailing" },
+  map: { tiles: false, tileName: "", tileUrl: "", tileAttribution: "" },
   reconnectOnStart: false,
   loading: true,
   saving: null,
   error: null,
   async load() {
-    const [language, theme, explorer, grid, script, reconnect, editor] = await Promise.allSettled([
+    const [language, theme, explorer, grid, script, reconnect, editor, map] = await Promise.allSettled([
       call(commands.getLanguage()),
       call(commands.getTheme()),
       call(commands.getExplorerPreferences()),
@@ -83,8 +89,11 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
       call(commands.getScriptPreferences()),
       call(commands.getReconnectOnStart()),
       call(commands.getEditorPreferences()),
+      call(commands.getMapPreferences()),
     ]);
     let error: PreferenceError | null = null;
+    if (map.status === "fulfilled") set({ map: map.value });
+    else error = { setting: "map", phase: "load", detail: errorText(map.reason) };
     if (editor.status === "fulfilled") set({ editor: editor.value });
     else error = { setting: "editor", phase: "load", detail: errorText(editor.reason) };
     if (reconnect.status === "fulfilled") set({ reconnectOnStart: reconnect.value });
@@ -169,6 +178,21 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
     try { await call(commands.setEditorPreferences(next)); return true; }
     catch (e) { set({ editor: previous, error: { setting: "editor", phase: "save", detail: errorText(e) } }); return false; }
     finally { set({ saving: null }); }
+  },
+  async setMap(next, optimistic = false) {
+    if (get().saving) return false;
+    const previous = get().map;
+    set({ saving: "map", error: null, ...(optimistic ? { map: next } : {}) });
+    try {
+      await call(commands.setMapPreferences(next));
+      set({ map: next });
+      return true;
+    } catch (e) {
+      set({ ...(optimistic ? { map: previous } : {}), error: { setting: "map", phase: "save", detail: errorText(e) } });
+      return false;
+    } finally {
+      set({ saving: null });
+    }
   },
   async setReconnectOnStart(next) {
     if (get().saving) return;

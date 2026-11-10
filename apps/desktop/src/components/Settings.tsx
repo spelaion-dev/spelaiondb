@@ -13,8 +13,8 @@ import { call, commands, type NamePatternPreview, type NetworkProfileItem } from
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates" | "scripts" | "editor";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates", "scripts", "editor"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates" | "scripts" | "editor" | "map";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates", "scripts", "editor", "map"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -68,6 +68,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "updates" && <UpdateSettings />}
         {category === "scripts" && <ScriptSettings />}
         {category === "editor" && <EditorSettings />}
+        {category === "map" && <MapSettings />}
       </section>
     </div>
   );
@@ -268,6 +269,67 @@ function ScriptSettings() {
       </fieldset>
       <p className="muted small">{t("scripts.notifyHint")}</p>
       <SaveError setting="script" />
+    </>
+  );
+}
+
+/** The map's background (ADR-045): tiles from a server the user names, off by default. The
+ *  server's fields are saved when they lose focus and the core accepts them (all three empty
+ *  removes the server); tiles can be turned on only once a server is saved. */
+function MapSettings() {
+  const { t } = useTranslation("settings");
+  const map = usePreferences((s) => s.map);
+  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const setMap = usePreferences((s) => s.setMap);
+  const [draft, setDraft] = useState({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution });
+  useEffect(() => setDraft({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution }), [map.tileName, map.tileUrl, map.tileAttribution]);
+  const saved = map.tileUrl !== "";
+  const changed = draft.tileName !== map.tileName || draft.tileUrl !== map.tileUrl || draft.tileAttribution !== map.tileAttribution;
+  const saveServer = () => {
+    if (!changed) return;
+    const empty = draft.tileName.trim() === "" && draft.tileUrl === "" && draft.tileAttribution === "";
+    // A half-typed server waits for its other fields; the core checks it once name and address are there.
+    if (!empty && (draft.tileName.trim() === "" || draft.tileUrl === "")) return;
+    void setMap({ ...draft, tiles: empty ? false : map.tiles });
+  };
+  const field = (key: "tileName" | "tileUrl" | "tileAttribution", label: string, hint?: string, placeholder?: string) => (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        name={key}
+        value={draft[key]}
+        placeholder={placeholder}
+        spellCheck={false}
+        onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+        onBlur={saveServer}
+        onKeyDown={(e) => e.key === "Enter" && saveServer()}
+      />
+      {hint && <span className="muted small">{hint}</span>}
+    </label>
+  );
+  return (
+    <>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("map.background")}</legend>
+        <label className="check">
+          <input type="checkbox" name="mapTiles" checked={map.tiles} disabled={!saved} onChange={(e) => void setMap({ ...map, tiles: e.target.checked }, true)} />
+          {t("map.tiles")}
+        </label>
+      </fieldset>
+      <p className="muted small">{t("map.tilesHint")}</p>
+      {!saved && <p className="muted small">{t("map.tilesNeedServer")}</p>}
+      <fieldset className="settings-choice">
+        <legend>{t("map.server")}</legend>
+        {field("tileName", t("map.name"))}
+        {field("tileUrl", t("map.url"), t("map.urlHint"), "https://tiles.example.com/{z}/{x}/{y}.png")}
+        {field("tileAttribution", t("map.attribution"), t("map.attributionHint"))}
+        {saved && (
+          <div>
+            <button className="small" disabled={busy} onClick={() => void setMap({ tiles: false, tileName: "", tileUrl: "", tileAttribution: "" })}>{t("map.remove")}</button>
+          </div>
+        )}
+      </fieldset>
+      <SaveError setting="map" />
     </>
   );
 }

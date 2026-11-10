@@ -10,8 +10,8 @@ use futures_util::stream::BoxStream;
 use spelaion_store::{
     AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, EditorPreferences,
     ExplorerFilter, ExplorerPreferences, GridPreferences, HistoryEntry, HistoryFilter, HistoryPage,
-    NewHistoryEntry, RecentFile, SavedTabs, ScriptPreferences, Snippet, SnippetFilter,
-    SnippetFolder, Store, StoreError, ToolOutput,
+    MapPreferences, NewHistoryEntry, RecentFile, SavedTabs, ScriptPreferences, Snippet,
+    SnippetFilter, SnippetFolder, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -142,6 +142,13 @@ enum Request {
     },
     GetGrid {
         reply: Reply<GridPreferences>,
+    },
+    GetMap {
+        reply: Reply<MapPreferences>,
+    },
+    SetMap {
+        preferences: MapPreferences,
+        reply: Reply<()>,
     },
     SetGrid {
         preferences: GridPreferences,
@@ -340,6 +347,12 @@ impl QueryHistory {
                         }
                         Request::GetGrid { reply } => {
                             let _ = reply.send(store.get_grid_preferences());
+                        }
+                        Request::GetMap { reply } => {
+                            let _ = reply.send(store.get_map_preferences());
+                        }
+                        Request::SetMap { preferences, reply } => {
+                            let _ = reply.send(store.set_map_preferences(&preferences));
                         }
                         Request::SetGrid { preferences, reply } => {
                             let _ = reply.send(store.set_grid_preferences(&preferences));
@@ -707,6 +720,20 @@ impl QueryHistory {
         preferences: EditorPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetEditor { preferences, reply })
+            .await
+    }
+
+    /// The map view's background (ADR-045): tiles off until the user turns them on.
+    pub async fn map_preferences(&self) -> Result<MapPreferences, HistoryError> {
+        self.request(|reply| Request::GetMap { reply }).await
+    }
+
+    /// Saves the map's preferences; a tile server that fails `check_tile_server` is refused.
+    pub async fn set_map_preferences(
+        &self,
+        preferences: MapPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetMap { preferences, reply })
             .await
     }
 

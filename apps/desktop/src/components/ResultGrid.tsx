@@ -2325,6 +2325,12 @@ export function ResultGrid({
           setViewerMode("cell");
           scrollerRef.current?.focus();
         }}
+        rowCount={result.rows}
+        onPickRow={(row) => {
+          const cell = { row, col: selection.focus.col };
+          setSelection({ anchor: cell, focus: cell });
+          scrollIntoView(cell);
+        }}
         onClose={() => {
           setViewer(false);
           scrollerRef.current?.focus();

@@ -296,6 +296,57 @@ async fn set_grid_preferences(
         .map_err(|e| e.to_string())
 }
 
+/// The map view's background (ADR-045): tiles from the user's tile server, off by default.
+#[tauri::command]
+#[specta::specta]
+async fn get_map_preferences(state: State<'_, AppState>) -> CmdResult<MapPreferencesItem> {
+    state
+        .history
+        .map_preferences()
+        .await
+        .map(MapPreferencesItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the map's preferences; the core checks the tile server first.
+#[tauri::command]
+#[specta::specta]
+async fn set_map_preferences(
+    preferences: MapPreferencesItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_map_preferences(preferences.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Every geometry of a result's column, in the current view, for one map (ADR-045): GeoJSON
+/// from the core, at most `MAP_MAX_SHAPES` shapes.
+#[tauri::command]
+#[specta::specta]
+async fn column_map(
+    result: u32,
+    column: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<ColumnMapItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        spelaion_core::column_map(&stored, column as usize)
+            .map(ColumnMapItem::from)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// A system notification that a long run finished in the background (ADR-035). The app sends
 /// it only when the user turned it on; its text names the tab and counts statements, never SQL,
 /// data or error text.
@@ -4639,6 +4690,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_editor_preferences,
             get_grid_preferences,
             set_grid_preferences,
+            get_map_preferences,
+            set_map_preferences,
+            column_map,
             get_script_preferences,
             set_script_preferences,
             files::open_sql_file,

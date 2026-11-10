@@ -11,6 +11,8 @@ import { execFileSync, spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { crc32, deflateSync } from "node:zlib";
 import { createCipheriv } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +22,42 @@ import { chromium } from "playwright-core";
 const root = resolve(import.meta.dirname, "../../..");
 const exe = process.env.SPELAION_E2E_EXE ?? join(root, "target/release/spelaion-desktop" + (process.platform === "win32" ? ".exe" : ""));
 const demo = join(root, "examples/demo");
+/** A 256 px map tile (PNG): a light square with a darker edge, served by the smoke's own tile
+ *  server so tiles are tested without leaving this computer. */
+function tilePng() {
+  const size = 256;
+  const raw = Buffer.alloc((size * 3 + 1) * size);
+  for (let y = 0; y < size; y++) {
+    raw[y * (size * 3 + 1)] = 0;
+    for (let x = 0; x < size; x++) {
+      const edge = x === 0 || y === 0;
+      const at = y * (size * 3 + 1) + 1 + x * 3;
+      raw[at] = edge ? 170 : 222;
+      raw[at + 1] = edge ? 190 : 234;
+      raw[at + 2] = edge ? 170 : 222;
+    }
+  }
+  const chunk = (type, data) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.length);
+    head.write(type, 4, "ascii");
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])));
+    return Buffer.concat([head, data, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header[8] = 8;
+  header[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
 const shots = resolve(process.argv[2] ?? join(import.meta.dirname, "screenshots"));
 const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
 const port = await freePort();
@@ -229,7 +267,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, history: 6, network: 7, scripts: 9, editor: 10 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, history: 6, network: 7, scripts: 9, editor: 10, map: 11 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -2951,6 +2989,145 @@ try {
     await note.filter({ hasText: "Only the loaded rows: load every row to chart the whole result." }).waitFor();
     await panel.getByRole("button", { name: "Show as grid" }).click();
     await chart.waitFor({ state: "detached" });
+  }
+
+  step("geometry on a map: WKB read by the core, drawn with no network, tiles only from the user's server");
+  {
+    // Plain WKB blobs (little endian): what DuckDB's spatial and any blob of WKB give.
+    const wkb = (type, write) => {
+      const parts = [];
+      const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); parts.push(b); };
+      const f64 = (n) => { const b = Buffer.alloc(8); b.writeDoubleLE(n); parts.push(b); };
+      parts.push(Buffer.from([1]));
+      u32(type);
+      write(u32, f64);
+      return Buffer.concat(parts).toString("hex");
+    };
+    const points = (u32, f64, list) => { u32(list.length); for (const [x, y] of list) { f64(x); f64(y); } };
+    const retiro = [[-3.6905, 40.4185], [-3.6765, 40.4185], [-3.6765, 40.4075], [-3.6905, 40.4075], [-3.6905, 40.4185]];
+    const rows = [
+      ["Retiro", wkb(3, (u32, f64) => { u32(1); points(u32, f64, retiro); })],
+      ["Route", wkb(2, (u32, f64) => points(u32, f64, [[-3.7038, 40.4168], [-3.695, 40.4155], [-3.6883, 40.4066]]))],
+      ["Sol", wkb(1, (_u32, f64) => { f64(-3.7038); f64(40.4168); })],
+      ["Atocha", wkb(1, (_u32, f64) => { f64(-3.6907); f64(40.4066); })],
+    ];
+    const values = rows.map(([name, hex]) => `('${name}', x'${hex}')`).concat(["('Nowhere', NULL)"]).join(", ");
+    // Every request the web view makes while the map has no tiles: none may leave this computer.
+    const requests = [];
+    const onRequest = (request) => requests.push(request.url());
+    page.on("request", onRequest);
+    await replaceQuery(panel, `select column1 as place, column2 as geom from (values ${values});`);
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "5 rows" }).waitFor();
+    const viewerToggle = panel.getByRole("button", { name: "Cell value panel" });
+    if ((await viewerToggle.getAttribute("aria-pressed")) !== "true") await viewerToggle.click();
+    const viewer = panel.getByRole("complementary", { name: "Cell value" });
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
+    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
+    const mapHost = viewer.locator(".map-host");
+    await mapHost.locator("path.map-area").waitFor();
+    assert.equal(await viewer.getByRole("button", { name: "Map", exact: true }).getAttribute("aria-pressed"), "true");
+    await viewer.getByText("Polygon · WKB · No SRID · read as longitude and latitude").waitFor();
+    await viewer.getByText(/^Plain background: no map tiles are loaded\./).waitFor();
+    assert.equal(await mapHost.locator(".map-tiles").count(), 0);
+    await shot("sdb-60-map-value");
+
+    // The whole column: four shapes, the NULL counted; a shape picks its row.
+    await viewer.getByRole("button", { name: "Whole column" }).click();
+    await viewer.getByText("4 shapes from 5 rows · 1 NULL · No SRID · read as longitude and latitude").waitFor();
+    // Drawn once the map has its size.
+    await mapHost.locator('.map-feature[data-feature="3"] path.map-point').waitFor({ state: "attached" });
+    assert.equal(await mapHost.locator(".map-feature").count(), 4);
+    const pointBox = async (i) => {
+      const b = await mapHost.locator(`.map-feature[data-feature="${i}"] path.map-point`).boundingBox();
+      return [b.x + b.width / 2, b.y + b.height / 2];
+    };
+    const [solX, solY] = await pointBox(2);
+    await page.mouse.move(solX, solY);
+    await mapHost.locator(".map-hover", { hasText: "Row 3" }).waitFor();
+    await shot("sdb-60-map-column");
+    await page.mouse.click(solX, solY);
+    await viewer.locator(".cell-viewer-title", { hasText: "Row 3" }).waitFor();
+    // Still the column's map, not read again.
+    assert.equal(await mapHost.locator(".map-feature").count(), 4);
+    // Keyboard zoom: the points move apart, and 0 fits them again.
+    const spread = async () => { const [ax, ay] = await pointBox(2); const [bx, by] = await pointBox(3); return Math.hypot(ax - bx, ay - by); };
+    const before = await spread();
+    await mapHost.focus();
+    await page.keyboard.press("+");
+    await page.waitForTimeout(300);
+    const zoomed = await spread();
+    assert.ok(zoomed > before * 1.3, `zooming in should spread the points: ${before} → ${zoomed}`);
+    await page.keyboard.press("0");
+    await page.waitForTimeout(300);
+    assert.ok(Math.abs((await spread()) - before) < 2, "0 fits the shapes again");
+    await setTheme("dark", "dark");
+    await mapHost.locator(".map-feature").first().waitFor();
+    await shot("sdb-60-map-column-dark");
+    await setTheme("light", "light");
+    // The value itself is one click away.
+    await viewer.getByRole("button", { name: "Value", exact: true }).click();
+    await viewer.locator(".cell-viewer-hex").waitFor();
+    await viewer.getByRole("button", { name: "Map", exact: true }).click();
+    await mapHost.locator(".map-feature").first().waitFor();
+    page.off("request", onRequest);
+    const away = requests.filter((url) => /^https?:/.test(url) && !new URL(url).hostname.endsWith("localhost"));
+    assert.deepEqual(away, [], "the map without tiles asks nothing of the network");
+
+    // Tiles from a server of the user's own (here a local one): sent without a referrer.
+    const tileRequests = [];
+    const tileServer = createHttpServer((req, res) => {
+      tileRequests.push({ url: req.url, referer: req.headers.referer ?? null });
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      res.end(tilePng());
+    });
+    await new Promise((done) => tileServer.listen(0, "127.0.0.1", done));
+    const tilePort = tileServer.address().port;
+    try {
+      await withSettings("map", async (settings) => {
+        const tiles = settings.locator('input[name="mapTiles"]');
+        assert.ok(await tiles.isDisabled(), "tiles need a server first");
+        assert.equal(await tiles.isChecked(), false, "tiles are off by default");
+        await settings.locator('input[name="tileName"]').fill("Local tiles");
+        await settings.locator('input[name="tileUrl"]').fill(`http://127.0.0.1:${tilePort}/{z}/{x}/{y}.png`);
+        await page.keyboard.press("Enter");
+        await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.disabled === false);
+        await settings.locator('input[name="tileAttribution"]').fill("Test tiles");
+        await page.keyboard.press("Enter");
+        await page.waitForFunction(() => !document.querySelector(".settings-page input:disabled"));
+        // An address the core refuses is said, and the saved one stays.
+        await settings.locator('input[name="tileUrl"]').fill("http://tiles.example.com/{z}/{x}/{y}.png");
+        await page.keyboard.press("Enter");
+        await settings.locator(".error", { hasText: "https://" }).waitFor();
+        await settings.locator('input[name="tileUrl"]').fill(`http://127.0.0.1:${tilePort}/{z}/{x}/{y}.png`);
+        await tiles.check();
+        await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.checked && !document.querySelector('input[name="mapTiles"]').disabled);
+        await shot("sdb-60-settings-map");
+      });
+      await mapHost.locator(".map-tiles img").first().waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll(".map-tiles img")].some((img) => img.complete && img.naturalWidth === 256));
+      await mapHost.locator(".map-attribution", { hasText: "Local tiles · Test tiles" }).waitFor();
+      assert.ok(tileRequests.length > 0, "tiles were asked of the chosen server");
+      for (const request of tileRequests) {
+        assert.match(request.url, /^\/\d+\/\d+\/\d+\.png$/);
+        assert.equal(request.referer, null, "tiles go without a referrer");
+      }
+      await shot("sdb-60-map-tiles");
+      // Hidden for this map with its toggle.
+      await mapHost.getByRole("button", { name: "Tiles" }).click();
+      await mapHost.locator(".map-tiles").waitFor({ state: "detached" });
+    } finally {
+      // A dialog left open by a failure above is closed first, so the cleanup cannot hide it.
+      if (await page.locator(".settings-dialog").count()) await page.locator(".settings-dialog .wizard-header button").click();
+      await withSettings("map", async (settings) => {
+        await settings.getByRole("button", { name: "Remove tile server" }).click();
+        await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.disabled === true);
+      });
+      tileServer.close();
+    }
+    await viewerToggle.click();
+    await viewer.waitFor({ state: "detached" });
   }
 
   step("query parameters: :name values asked once, written in by the core");

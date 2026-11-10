@@ -4,7 +4,7 @@
 //! name, and only those four: nothing active (SVG, HTML) is ever handed to the UI to render.
 //! XML is pretty-printed here as text. A value can be saved to a file byte for byte, and a
 //! file loaded into a cell becomes an ordinary edit of `edit.rs` (ADR-014): one UPDATE by
-//! primary key.
+//! primary key. A geometry (ADR-045) is read into GeoJSON here too, for the map view.
 
 use std::io::Read;
 use std::path::Path;
@@ -15,6 +15,7 @@ use quick_xml::{Reader, Writer};
 use spelaion_driver_api::{LogicalType, Value};
 
 use crate::edit::{CellInput, RowChange};
+use crate::geometry::{GeoValue, read_geometry};
 use crate::results::StoredResult;
 use crate::sql_file::replace_atomically;
 
@@ -116,6 +117,8 @@ pub struct CellView {
     /// The extension a file of this value would have (`png`, `bin`, `xml`, `json`, `txt`).
     pub extension: &'static str,
     pub content: CellContent,
+    /// The value read as a geometry, when it is one and it is shown (not withheld).
+    pub geometry: Option<GeoValue>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -168,17 +171,29 @@ pub fn view_cell(
             image: None,
             extension: text_extension(meta.logical, xml_type),
             content: CellContent::Null,
+            geometry: None,
         },
         Value::Bytes(bytes) => {
             let image = ImageFormat::detect(&bytes);
             let size = bytes.len();
+            let mut geometry = None;
             let content = match fits(size) {
                 None => CellContent::TooBig,
                 Some(false) => CellContent::Withheld,
-                Some(true) => CellContent::Bytes {
-                    image_url: image.map(|format| format.data_url(&bytes)),
-                    text: Value::Bytes(bytes).to_string(),
-                },
+                Some(true) => {
+                    let value = Value::Bytes(bytes);
+                    geometry = image
+                        .is_none()
+                        .then(|| read_geometry(&value, &meta.native_type))
+                        .flatten();
+                    let Value::Bytes(bytes) = &value else {
+                        unreachable!("built just above")
+                    };
+                    CellContent::Bytes {
+                        image_url: image.map(|format| format.data_url(bytes)),
+                        text: value.to_string(),
+                    }
+                }
             };
             CellView {
                 size,
@@ -186,15 +201,18 @@ pub fn view_cell(
                 image,
                 extension: image.map_or("bin", ImageFormat::extension),
                 content,
+                geometry,
             }
         }
         other => {
             let text = other.to_string();
             let size = text.len();
+            let mut geometry = None;
             let content = match fits(size) {
                 None => CellContent::TooBig,
                 Some(false) => CellContent::Withheld,
                 Some(true) => {
+                    geometry = read_geometry(&other, &meta.native_type);
                     let xml = (xml_type || text.trim_start().starts_with('<'))
                         .then(|| pretty_xml(&text))
                         .flatten();
@@ -207,6 +225,7 @@ pub fn view_cell(
                 image: None,
                 extension: text_extension(meta.logical, xml_type),
                 content,
+                geometry,
             }
         }
     })

@@ -72,6 +72,15 @@ export const commands = {
 	setEditorPreferences: (preferences: EditorPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_editor_preferences", { preferences })),
 	getGridPreferences: () => typedError<GridPreferencesItem, string>(__TAURI_INVOKE("get_grid_preferences")),
 	setGridPreferences: (preferences: GridPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_grid_preferences", { preferences })),
+	/**  The map view's background (ADR-045): tiles from the user's tile server, off by default. */
+	getMapPreferences: () => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("get_map_preferences")),
+	/**  Saves the map's preferences; the core checks the tile server first. */
+	setMapPreferences: (preferences: MapPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
+	/**
+	 *  Every geometry of a result's column, in the current view, for one map (ADR-045): GeoJSON
+	 *  from the core, at most `MAP_MAX_SHAPES` shapes.
+	 */
+	columnMap: (result: number, column: number) => typedError<ColumnMapItem_Serialize, string>(__TAURI_INVOKE("column_map", { result, column })),
 	/**
 	 *  How scripts run from the editor: the default error mode and the opt-in notification
 	 *  (ADR-035).
@@ -814,6 +823,14 @@ export type BookmarkItem = {
 	detail: string,
 };
 
+/**  A rectangle in the geometry's own units. */
+export type Bounds = {
+	minX: number | null,
+	minY: number | null,
+	maxX: number | null,
+	maxY: number | null,
+};
+
 /**  What a bulk edit does to each cell of the selection. */
 export type BulkActionItem = { kind: "set"; value: CellInputItem } | { kind: "fillDown" } | { kind: "trim" } | { kind: "upperCase" } | { kind: "lowerCase" } | { kind: "newUuid" } | { kind: "now" };
 
@@ -886,6 +903,8 @@ export type CellViewItem_Deserialize = {
 	imageUrl?: string | null,
 	/**  The size past which a value waits for "load anyway". */
 	limit: number | null,
+	/**  The value read as a geometry, for the map view (ADR-045). */
+	geometry?: GeoItem_Deserialize | null,
 };
 
 /**
@@ -908,6 +927,8 @@ export type CellViewItem_Serialize = {
 	imageUrl: string | null,
 	/**  The size past which a value waits for "load anyway". */
 	limit: number | null,
+	/**  The value read as a geometry, for the map view (ADR-045). */
+	geometry: GeoItem_Serialize | null,
 };
 
 /**  `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file. */
@@ -1044,6 +1065,41 @@ export type ColumnItem = {
 
 /**  What a column's sampled values look like. */
 export type ColumnKindItem = "integer" | "decimal" | "float" | "boolean" | "date" | "timestamp" | "timestampTz" | "text";
+
+/**  A column of a result on one map, and what was left out of it. */
+export type ColumnMapItem = ColumnMapItem_Serialize | ColumnMapItem_Deserialize;
+
+/**  A column of a result on one map, and what was left out of it. */
+export type ColumnMapItem_Deserialize = {
+	shapes: MapShapeItem[],
+	srid?: number | null,
+	mixedSrids: boolean,
+	crs: MapCrs,
+	bounds?: Bounds | null,
+	rowsRead: number,
+	nulls: number,
+	unreadable: number,
+	tooBig: number,
+	truncated: boolean,
+	/**  The most shapes a column's map holds. */
+	maxShapes: number,
+};
+
+/**  A column of a result on one map, and what was left out of it. */
+export type ColumnMapItem_Serialize = {
+	shapes: MapShapeItem[],
+	srid: number | null,
+	mixedSrids: boolean,
+	crs: MapCrs,
+	bounds: Bounds | null,
+	rowsRead: number,
+	nulls: number,
+	unreadable: number,
+	tooBig: number,
+	truncated: boolean,
+	/**  The most shapes a column's map holds. */
+	maxShapes: number,
+};
 
 /**  Where one column of the source goes. */
 export type ColumnMappingItem = { kind: "skip" } | { kind: "existing"; column: string } | { kind: "new"; name: string; sqlType: string };
@@ -1506,6 +1562,9 @@ export type DataSearchSummaryItem = {
 	stopped: boolean,
 };
 
+/**  The coordinates a value had before Z and M were left out. */
+export type Dimensions = "xy" | "xyz" | "xym" | "xyzm";
+
 /**  A connection made by "Duplicate" (ADR-030). */
 export type DuplicatedItem = {
 	id: string,
@@ -1862,6 +1921,59 @@ export type FoundObjectItem_Deserialize = { kind: "relation"; object: ObjectItem
 
 /**  What "Open object by name" found: a relation or another object of a schema. */
 export type FoundObjectItem_Serialize = { kind: "relation"; object: ObjectItem_Serialize } | { kind: "schemaObject"; object: SchemaObjectItem_Serialize };
+
+/**  How the stored value was written. */
+export type GeoFormat = 
+/**  OGC well-known binary (DuckDB, and any blob of plain WKB). */
+"wkb" | 
+/**  PostGIS's extended WKB, with the SRID inside. */
+"ewkb" | 
+/**  MySQL's and MariaDB's: a four-byte SRID, then WKB. */
+"mysql" | 
+/**  SpatiaLite's own blob. */
+"spatialite" | 
+/**  A GeoPackage geometry: its header, then WKB. */
+"geoPackage";
+
+/**
+ *  A cell or a column read as geometry, for the map (ADR-045): GeoJSON from the core, never
+ *  the database's bytes.
+ */
+export type GeoItem = GeoItem_Serialize | GeoItem_Deserialize;
+
+/**
+ *  A cell or a column read as geometry, for the map (ADR-045): GeoJSON from the core, never
+ *  the database's bytes.
+ */
+export type GeoItem_Deserialize = {
+	geometry: Geometry,
+	srid?: number | null,
+	format: GeoFormat,
+	dimensions: Dimensions,
+	crs: MapCrs,
+	bounds?: Bounds | null,
+};
+
+/**
+ *  A cell or a column read as geometry, for the map (ADR-045): GeoJSON from the core, never
+ *  the database's bytes.
+ */
+export type GeoItem_Serialize = {
+	geometry: Geometry,
+	srid: number | null,
+	format: GeoFormat,
+	dimensions: Dimensions,
+	crs: MapCrs,
+	bounds: Bounds | null,
+};
+
+/**
+ *  A geometry as GeoJSON writes it (RFC 7946, section 3.1): `serde_json` turns it into that
+ *  text, and the desktop app hands it to the map as it is.
+ */
+export type Geometry = 
+/**  Empty (`POINT EMPTY`) when `coordinates` is empty; otherwise x and y. */
+{ type: "Point"; coordinates: (number | null)[] } | { type: "LineString"; coordinates: ([(number | null), (number | null)])[] } | { type: "Polygon"; coordinates: (([(number | null), (number | null)])[])[] } | { type: "MultiPoint"; coordinates: ([(number | null), (number | null)])[] } | { type: "MultiLineString"; coordinates: (([(number | null), (number | null)])[])[] } | { type: "MultiPolygon"; coordinates: ((([(number | null), (number | null)])[])[])[] } | { type: "GeometryCollection"; geometries: Geometry[] };
 
 /**  How the result grid draws its cells; personal, like the theme. */
 export type GridPreferencesItem = {
@@ -2326,6 +2438,35 @@ export type LockSnapshotItem_Serialize = {
 export type LockWaitItem = {
 	waiting: string,
 	blocking: string,
+};
+
+/**  What the coordinates are, which decides whether a web map's tiles can go behind them. */
+export type MapCrs = 
+/**  Longitude and latitude in degrees, from the SRID (4326 and other geographic ones). */
+"lonLat" | 
+/**  No SRID (or 0), but every coordinate fits longitude and latitude: read as them. */
+"assumedLonLat" | 
+/**  Web Mercator metres (3857), the tiles' own projection. */
+"webMercator" | 
+/**
+ *  Anything else (a projected system, or no SRID with coordinates past the degrees):
+ *  drawn as they are on a plain background, never over tiles.
+ */
+"plane";
+
+/**  The map view's background (ADR-045): tiles from the user's server, off by default. */
+export type MapPreferencesItem = {
+	tiles: boolean,
+	tileName: string,
+	/**  An image address with `{z}`, `{x}` and `{y}`. */
+	tileUrl: string,
+	tileAttribution: string,
+};
+
+/**  One shape of a column's map and the row of the current view it is on. */
+export type MapShapeItem = {
+	row: number,
+	geometry: Geometry,
 };
 
 /**  The form of a connection mapped to another engine, and what that did. */
