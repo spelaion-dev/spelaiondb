@@ -18,9 +18,9 @@ import { ColumnStatsPopover } from "./ColumnStatsPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
 
-const ROW_H = 26;
-const HEADER_H = 36;
-const PAD = 8;
+const ROW_H = 24;
+const HEADER_H = 34;
+const PAD = 6;
 const MIN_COL = 72;
 const MAX_COL = 420;
 /** Limits when the user resizes a column (wider than the automatic maximum). */
@@ -29,7 +29,7 @@ const MAX_RESIZE = 2000;
 /** Pixels on each side of a header edge that grab it. */
 const EDGE = 4;
 // Regular UI text is easier to scan across dense rows; the header remains distinct.
-const DATA_FONT = '400 13px "Segoe UI", system-ui, sans-serif';
+const DATA_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
 const ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
 const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
 const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
@@ -423,7 +423,7 @@ export function ResultGrid({
       const name = ctx.measureText(c.name).width;
       ctx.font = TYPE_FONT;
       const type = ctx.measureText(c.nativeType).width;
-      const base = NUMERIC.has(c.logical) ? 110 : 160;
+      const base = NUMERIC.has(c.logical) ? 96 : 132;
       return Math.round(Math.min(MAX_COL, Math.max(MIN_COL, name + PAD * 2 + 8, type + PAD * 2, base)));
     });
   }, [result.columns]);
@@ -685,7 +685,7 @@ export function ResultGrid({
       }
       ctx.font = TYPE_FONT;
       ctx.fillStyle = c.muted;
-      ctx.fillText(fit(ctx, meta.nativeType, w - PAD * 2), x + PAD, 27);
+      ctx.fillText(fit(ctx, meta.nativeType, w - PAD * 2), x + PAD, 26);
       ctx.fillStyle = c.line;
       ctx.fillRect(Math.round(x + w) - 1, 0, 1, HEADER_H);
     };
