@@ -14,6 +14,7 @@ use arrow::datatypes::{
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt64Type,
 };
+use spelaion_driver_api::thread_cancel::Work;
 use spelaion_driver_api::{ColumnMeta, DriverError, ExecEvent, LogicalType, Result, ResultSchema};
 use tokio::sync::mpsc;
 
@@ -257,18 +258,24 @@ pub fn execute(
     params: &[String],
     batch_size: usize,
     events: &Events,
+    work: &Work,
 ) -> Result<()> {
     let mut statement = conn.prepare(sql).map_err(map_error)?;
+    // DuckDB clears an interrupt when a statement starts: a cancel that came meanwhile is
+    // caught here, or by the interrupts `thread_cancel` keeps sending while it runs.
+    work.check()?;
     // `$1`, `$2`…: every value bound as text, never written into the SQL (ADR-043).
     let mut stream = statement
         .stream_arrow(duckdb::params_from_iter(params.iter().map(String::as_str)))
         .map_err(map_error)?;
     let schema = stream.get_schema();
+    work.check()?;
 
     if let Some(status) = status(sql, &schema) {
         let mut rows_affected = None;
         for batch in stream.by_ref() {
             let batch = batch.map_err(map_error)?;
+            work.check()?;
             if matches!(status, Status::Count) && batch.num_rows() > 0 {
                 let counts = batch.column(0).as_primitive::<Int64Type>();
                 rows_affected = Some(u64::try_from(counts.value(0)).unwrap_or(0));
@@ -326,6 +333,7 @@ pub fn execute(
     };
     for batch in stream {
         let batch = batch.map_err(map_error)?;
+        work.check()?;
         let arrays = batch
             .columns()
             .iter()

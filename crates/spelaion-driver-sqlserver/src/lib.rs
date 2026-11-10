@@ -170,6 +170,9 @@ enum Request {
         /// Bound as `@P1`, `@P2`… through `sp_executesql` (ADR-043); none for a plain batch.
         params: Vec<String>,
         batch_size: usize,
+        /// The cancels asked for when the batch was sent: any later one stops it, also while it
+        /// still waits behind another request.
+        cancel_epoch: u64,
         events: mpsc::Sender<Result<ExecEvent>>,
     },
     /// The server settings, query and restoration belong to one actor request.
@@ -235,19 +238,30 @@ async fn actor(
                 sql,
                 params,
                 batch_size,
+                cancel_epoch,
                 events,
             } => {
-                // Cancels asked for before this statement do not count.
-                let asked = *cancels.borrow_and_update();
+                // Cancels asked for before this statement was sent do not count; one asked for
+                // while it waited in the queue does: it never starts. Nothing was sent to the
+                // server, so there is nothing to interrupt and the session is as it was.
+                if *cancels.borrow_and_update() > cancel_epoch {
+                    let _ = events.send(Err(DriverError::Cancelled)).await;
+                    continue;
+                }
                 let cancelled = async {
-                    while cancels.changed().await.is_ok() {
-                        if *cancels.borrow() > asked {
+                    loop {
+                        if *cancels.borrow_and_update() > cancel_epoch {
                             return;
                         }
+                        if cancels.changed().await.is_err() {
+                            std::future::pending::<()>().await;
+                        }
                     }
-                    std::future::pending::<()>().await;
                 };
                 let finished = tokio::select! {
+                    // The batch is sent before a cancel is looked at: an Attention only follows
+                    // a request.
+                    biased;
                     outcome = execute(&mut client, &sql, &params, batch_size, &events) => outcome,
                     () = cancelled => ExecutionOutcome::Cancelled,
                 };
@@ -724,11 +738,13 @@ impl Connection for SqlServerConnection {
 
     async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
         let (events, mut receiver) = mpsc::channel(4);
+        let cancel_epoch = *self.cancel.0.borrow();
         self.requests
             .send(Request::Execute {
                 sql: sql.to_string(),
                 params: Vec::new(),
                 batch_size: opts.batch_size.max(1),
+                cancel_epoch,
                 events,
             })
             .await
@@ -745,11 +761,13 @@ impl Connection for SqlServerConnection {
         opts: &ExecOptions,
     ) -> Result<EventStream> {
         let (events, mut receiver) = mpsc::channel(4);
+        let cancel_epoch = *self.cancel.0.borrow();
         self.requests
             .send(Request::Execute {
                 sql: sql.to_string(),
                 params,
                 batch_size: opts.batch_size.max(1),
+                cancel_epoch,
                 events,
             })
             .await

@@ -12,6 +12,7 @@ use arrow::array::{
 };
 use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::{ErrorCode, Statement};
+use spelaion_driver_api::thread_cancel::Work;
 use spelaion_driver_api::{
     ColumnMeta, DriverError, ExecEvent, LogicalType, Result, ResultSchema, Value,
 };
@@ -304,10 +305,14 @@ pub fn execute(
     params: &[String],
     batch_size: usize,
     events: &mpsc::Sender<Result<ExecEvent>>,
+    work: &Work,
 ) -> Result<()> {
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| locate_name(map_error(e), sql))?;
+    // An interrupt while preparing lands on no running statement: a cancel that came meanwhile
+    // is caught here, or by the interrupts `thread_cancel` keeps sending while it runs.
+    work.check()?;
     // `?1`, `?2`…: every value bound as text, never written into the SQL (ADR-043).
     for (i, param) in params.iter().enumerate() {
         stmt.raw_bind_parameter(i + 1, param.as_str())

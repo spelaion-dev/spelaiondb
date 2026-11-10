@@ -563,7 +563,12 @@ async fn a_cancelled_run_stops_in_every_mode() {
                 tokio::time::sleep(Duration::from_millis(800)).await;
                 engine.a.cancel().await.unwrap();
             };
-            let ((finished, summary), ()) = tokio::join!(consume, cancel);
+            // A lost cancel fails here instead of waiting for the slow statement to end.
+            let ((finished, summary), ()) = tokio::time::timeout(Duration::from_secs(60), async {
+                tokio::join!(consume, cancel)
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{name} {on_error:?}: the cancel was lost"));
             let summary = summary.unwrap();
             assert!(
                 finished.is_empty(),
@@ -737,16 +742,21 @@ async fn a_statement_that_runs_too_long_times_out_on_every_engine() {
         let name = engine.name;
         let script = format!("{};\nselect 1", slow_statement(name));
         let started = Instant::now();
-        let out = run(
-            &engine.a,
-            &script,
-            ScriptOptions {
-                on_error: OnError::Continue,
-                statement_timeout: Some(Duration::from_millis(700)),
-            },
-            &[],
+        // The timeout's cancel must stop the statement: a lost one fails here.
+        let out = tokio::time::timeout(
+            Duration::from_secs(60),
+            run(
+                &engine.a,
+                &script,
+                ScriptOptions {
+                    on_error: OnError::Continue,
+                    statement_timeout: Some(Duration::from_millis(700)),
+                },
+                &[],
+            ),
         )
-        .await;
+        .await
+        .unwrap_or_else(|_| panic!("{name}: the statement timeout's cancel was lost"));
         assert!(
             started.elapsed() < Duration::from_secs(20),
             "{name}: took {:?}",
@@ -761,16 +771,20 @@ async fn a_statement_that_runs_too_long_times_out_on_every_engine() {
         assert_eq!(out.summary.stop, None, "{name}");
 
         // In stop mode the timeout stops the run like any error.
-        let out = run(
-            &engine.a,
-            &script,
-            ScriptOptions {
-                on_error: OnError::Stop,
-                statement_timeout: Some(Duration::from_millis(700)),
-            },
-            &[],
+        let out = tokio::time::timeout(
+            Duration::from_secs(60),
+            run(
+                &engine.a,
+                &script,
+                ScriptOptions {
+                    on_error: OnError::Stop,
+                    statement_timeout: Some(Duration::from_millis(700)),
+                },
+                &[],
+            ),
         )
-        .await;
+        .await
+        .unwrap_or_else(|_| panic!("{name}: the statement timeout's cancel was lost"));
         assert_eq!(out.timed_out, [0], "{name}");
         assert_eq!(
             out.summary.stop,

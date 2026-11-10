@@ -13,6 +13,7 @@ mod filter;
 mod introspect;
 mod remote;
 mod secret;
+pub mod thread_cancel;
 mod value;
 
 use std::net::SocketAddr;

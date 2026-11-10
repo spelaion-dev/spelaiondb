@@ -29,6 +29,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one read with text values bound to `bound_placeholder`'s placeholders (MySQL binds them to
   user variables with a prepared `SET`, then reads with the text protocol;
   `Capabilities::bound_params` is false for SQLite over SSH).
+  `thread_cancel` is the cancel of the engines that run on a thread of their own (DuckDB, local
+  SQLite): their interrupt only reaches the statement running at that moment, so a cancel is
+  remembered for everything sent before it (a queued statement never starts, a running one is
+  interrupted again until it ends) and never reaches what is sent after it. Every cancel test
+  is bounded with `tokio::time::timeout`, so a lost cancel fails in seconds.
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.

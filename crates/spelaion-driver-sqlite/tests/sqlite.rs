@@ -1,7 +1,6 @@
 //! SQLite driver tests. They need nothing external: they always run.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::TryStreamExt;
@@ -296,23 +295,118 @@ async fn errors_are_reported_and_connection_survives() {
     assert_eq!(rows[0][0], "1");
 }
 
+/// Never ends on its own: only a cancel stops it.
+const ENDLESS: &str =
+    "with recursive c(n) as (select 1 union all select n + 1 from c) select count(*) from c";
+
+/// How long a cancelled statement may take to stop. A cancel that is lost fails the test
+/// here instead of hanging it (and CI) forever.
+const CANCEL_LIMIT: Duration = Duration::from_secs(10);
+
+/// Collects a statement's events, failing if it does not end within [`CANCEL_LIMIT`].
+async fn finish(
+    events: spelaion_driver_api::EventStream,
+    what: &str,
+) -> Result<Vec<ExecEvent>, DriverError> {
+    tokio::time::timeout(CANCEL_LIMIT, events.try_collect())
+        .await
+        .unwrap_or_else(|_| panic!("{what}: the cancel was lost, the statement still runs"))
+}
+
+/// The connection still answers after a cancel, and no cancel is left over for it.
+async fn still_answers(conn: &dyn Connection) {
+    let answer = tokio::time::timeout(CANCEL_LIMIT, table(conn, "select 42"))
+        .await
+        .expect("the connection should answer after a cancel");
+    assert_eq!(answer.1, vec![vec!["42".to_string()]]);
+}
+
 #[tokio::test]
 async fn cancel_interrupts_a_long_query() {
-    let conn: Arc<dyn Connection> = Arc::from(memory().await);
-    let cancel = conn.cancel_handle();
-    let canceller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        cancel.cancel().await
-    });
+    let conn = memory().await;
     let started = Instant::now();
-    let result = run(
-        &*conn,
-        "with recursive c(n) as (select 1 union all select n + 1 from c) select count(*) from c",
-    )
-    .await;
-    canceller.await.unwrap().unwrap();
+    let events = conn
+        .execute(ENDLESS, &ExecOptions::default())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    conn.cancel_handle().cancel().await.unwrap();
+    let result = finish(events, "during").await;
     assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
-    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(started.elapsed() < CANCEL_LIMIT);
+    still_answers(&*conn).await;
+}
+
+/// SQLite ignores an interrupt when no statement runs: a cancel that arrives while the
+/// statement is queued on the connection's thread, or is being prepared, must still stop it.
+#[tokio::test]
+async fn cancel_before_and_while_the_statement_starts_stops_it() {
+    let conn = memory().await;
+    let cancel = conn.cancel_handle();
+    for micros in [
+        0, 0, 0, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 50_000,
+    ] {
+        let events = conn
+            .execute(ENDLESS, &ExecOptions::default())
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        // A busy wait: tokio's timer is too coarse for these delays.
+        while started.elapsed() < Duration::from_micros(micros) {
+            std::hint::spin_loop();
+        }
+        cancel.cancel().await.unwrap();
+        let result = finish(events, &format!("{micros} µs after it was sent")).await;
+        assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
+    }
+    still_answers(&*conn).await;
+}
+
+/// A cancel stops what was sent before it, queued too, and never what is sent after it.
+#[tokio::test]
+async fn cancel_reaches_queued_work_and_never_later_work() {
+    let conn = memory().await;
+    exec_all(&*conn, "create table t (a int)").await;
+    let first = conn
+        .execute(ENDLESS, &ExecOptions::default())
+        .await
+        .unwrap();
+    let target = spelaion_driver_api::InsertTarget {
+        schema: String::new(),
+        table: "t".into(),
+        columns: vec!["a".into()],
+    };
+    let mut insert = Box::pin(conn.insert_rows(&target, vec![vec![Some("1".to_string())]]));
+    // Polled once: the insert is queued behind the statement before the cancel.
+    assert!(futures_util::poll!(insert.as_mut()).is_pending());
+    conn.cancel_handle().cancel().await.unwrap();
+    let result = finish(first, "running").await;
+    assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
+    let inserted = tokio::time::timeout(CANCEL_LIMIT, insert).await.unwrap();
+    assert!(
+        matches!(inserted, Err(DriverError::Cancelled)),
+        "{inserted:?}"
+    );
+    assert_eq!(table(&*conn, "select count(*) from t").await.1[0][0], "0");
+    // With nothing running, and right after a cancelled statement.
+    conn.cancel_handle().cancel().await.unwrap();
+    still_answers(&*conn).await;
+    for _ in 0..20 {
+        let events = conn
+            .execute(ENDLESS, &ExecOptions::default())
+            .await
+            .unwrap();
+        conn.cancel_handle().cancel().await.unwrap();
+        let result = finish(events, "cancelled").await;
+        assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
+        let next = run(
+            &*conn,
+            "with recursive c(n) as (select 1 union all select n + 1 from c where n < 300000) \
+             select count(*) from c",
+        )
+        .await;
+        assert!(next.is_ok(), "the next statement was cancelled: {next:?}");
+    }
 }
 
 #[tokio::test]
