@@ -59,6 +59,8 @@ import { useFittingMarks } from "../connectionMarks";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { StructureDialog } from "./StructureDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
+import { AccountDialog, usePrincipalActions, type AccountAction } from "./AccountDialog";
+import type { PrincipalActionsItem, PrincipalKindItem } from "../bindings";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
@@ -887,6 +889,74 @@ function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[numbe
   }
 }
 
+/** The kind of account a server folder holds (ADR-048), or none. */
+function folderAccountKind(folder: (typeof SERVER_FOLDERS)[number]): PrincipalKindItem | null {
+  switch (folder) {
+    case "roles":
+      return "role";
+    case "users":
+      return "user";
+    case "logins":
+      return "login";
+    case "tablespaces":
+    case "extensions":
+      return null;
+  }
+}
+
+/** An account of the server (ADR-048): its menu changes its password, locks it or drops it. */
+function AccountRow({ object, kind, actions, onAct }: {
+  object: ServerObjectItem;
+  kind: PrincipalKindItem;
+  actions: PrincipalActionsItem | undefined;
+  onAct(request: AccountAction): void;
+}) {
+  const { t } = useTranslation("shell");
+  const [menu, setMenu] = useContextMenu();
+  // Built-in accounts (fixed roles, internal users) are only listed.
+  const can = (kinds: PrincipalKindItem[] | undefined) => !object.system && (kinds ?? []).includes(kind);
+  const canPassword = can(actions?.password);
+  const canLock = can(actions?.lock);
+  const canDrop = can(actions?.drop);
+  const any = canPassword || canLock || canDrop;
+  const act = (action: "password" | "lock" | "drop") => {
+    setMenu(null);
+    onAct({ action, target: { kind, name: object.name } });
+  };
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        title={object.detail ?? ""}
+        tabIndex={any ? 0 : undefined}
+        onKeyDown={(e) => {
+          if (canDrop && isDropKey(e)) act("drop");
+          else if (any && (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey))) {
+            e.preventDefault();
+            const box = e.currentTarget.getBoundingClientRect();
+            setMenu({ x: box.left + 24, y: box.bottom });
+          }
+        }}
+        onContextMenu={(e) => {
+          if (!any) return;
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        <span className="label">{object.name}</span>
+        {object.detail && <span className="muted small">{object.detail}</span>}
+      </div>
+      {menu && any && (
+        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+          {canPassword && <button role="menuitem" onClick={() => act("password")}>{t("accounts.passwordMenu")}</button>}
+          {canLock && <button role="menuitem" onClick={() => act("lock")}>{t("accounts.lockMenu")}</button>}
+          {canDrop && <DropMenuItem onClick={() => act("drop")} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** A folder of the explorer, closed until clicked, with how many items it holds. */
 function Folder({
   label,
@@ -1569,6 +1639,9 @@ function ConnectionNode({
   }
   const session = `meta:${connection.id}`;
   const actions = useObjectActions(session, schemas !== null);
+  const principalActions = usePrincipalActions(session, schemas !== null);
+  /** The account dialog that is open (ADR-048). */
+  const [account, setAccount] = useState<AccountAction | null>(null);
   useEffect(() => {
     const refresh = (event: Event) => {
       if ((event as CustomEvent<string>).detail === connection.id && schemas) void refreshAll();
@@ -1835,23 +1908,50 @@ function ConnectionNode({
           {busy && <div className="muted small">{t(schemas ? "refreshing" : "connecting")}</div>}
           {error && <div className="error small">{error}</div>}
           {!foldersFirst && schemaNodes}
-          {SERVER_FOLDERS.map((folder) => {
+          {schemas && SERVER_FOLDERS.map((folder) => {
             const items = shownServerObjects.filter((o) => serverFolder(o.kind) === folder);
+            const kind = folderAccountKind(folder);
+            // A folder of accounts the engine can create shows even empty (the session may
+            // read none), unless the quick filter is looking for something else.
+            const creatable = kind !== null && (principalActions?.create ?? []).includes(kind);
             return (
-              items.length > 0 && (
-                <Folder key={folder} label={t(`folders.${folder}`)} count={items.length} forceOpen={inner !== ""}>
-                  {items.map((o) => (
-                    <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
-                      <span className="label">{o.name}</span>
-                      {o.detail && <span className="muted small">{o.detail}</span>}
-                    </div>
-                  ))}
+              (items.length > 0 || (creatable && inner === "")) && (
+                <Folder
+                  key={folder}
+                  label={t(`folders.${folder}`)}
+                  count={items.length}
+                  forceOpen={inner !== ""}
+                  create={creatable && kind ? { label: t(`accounts.newMenu.${kind}`), run: () => setAccount({ action: "create", kind }) } : undefined}
+                >
+                  {items.map((o) =>
+                    kind ? (
+                      <AccountRow key={`${o.kind}:${o.name}`} object={o} kind={kind} actions={principalActions} onAct={setAccount} />
+                    ) : (
+                      <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
+                        <span className="label">{o.name}</span>
+                        {o.detail && <span className="muted small">{o.detail}</span>}
+                      </div>
+                    ),
+                  )}
                 </Folder>
               )
             );
           })}
           {foldersFirst && schemaNodes}
         </div>
+      )}
+      {account && (
+        <AccountDialog
+          session={session}
+          connectionId={connection.id}
+          request={account}
+          logins={serverObjects.filter((o) => o.kind === "login" && !o.system).map((o) => o.name)}
+          onClose={() => setAccount(null)}
+          onDone={() => {
+            setAccount(null);
+            void refreshAll();
+          }}
+        />
       )}
       {editingFilters && (
         <ExplorerFilterDialog

@@ -5801,3 +5801,132 @@ impl From<spelaion_core::ReferencedRows> for ReferencedRowsItem {
         }
     }
 }
+
+/// An account's kind (ADR-048): PostgreSQL roles, MySQL and MariaDB users and roles, SQL Server
+/// logins, users and roles.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PrincipalKindItem {
+    Role,
+    User,
+    Login,
+}
+
+impl From<PrincipalKindItem> for spelaion_core::PrincipalKind {
+    fn from(kind: PrincipalKindItem) -> Self {
+        match kind {
+            PrincipalKindItem::Role => Self::Role,
+            PrincipalKindItem::User => Self::User,
+            PrincipalKindItem::Login => Self::Login,
+        }
+    }
+}
+
+impl From<spelaion_core::PrincipalKind> for PrincipalKindItem {
+    fn from(kind: spelaion_core::PrincipalKind) -> Self {
+        match kind {
+            spelaion_core::PrincipalKind::Role => Self::Role,
+            spelaion_core::PrincipalKind::User => Self::User,
+            spelaion_core::PrincipalKind::Login => Self::Login,
+        }
+    }
+}
+
+/// An account as the explorer lists it (a MySQL user as `'name'@'host'`).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalTargetItem {
+    pub kind: PrincipalKindItem,
+    pub name: String,
+}
+
+impl From<PrincipalTargetItem> for spelaion_core::PrincipalTarget {
+    fn from(item: PrincipalTargetItem) -> Self {
+        Self {
+            kind: item.kind.into(),
+            name: item.name,
+        }
+    }
+}
+
+/// A new account. Its password is never part of it: only whether one is set (ADR-048).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewPrincipalItem {
+    pub kind: PrincipalKindItem,
+    pub name: String,
+    pub host: String,
+    pub with_password: bool,
+    pub can_login: bool,
+    pub superuser: bool,
+    pub create_db: bool,
+    pub create_role: bool,
+    pub default_database: String,
+    pub check_policy: bool,
+    pub login: String,
+    pub default_schema: String,
+}
+
+/// What to do with an account (ADR-048).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "action",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PrincipalChangeItem {
+    Create { account: NewPrincipalItem },
+    SetPassword { target: PrincipalTargetItem },
+    Lock { target: PrincipalTargetItem },
+    Unlock { target: PrincipalTargetItem },
+    Drop { target: PrincipalTargetItem },
+}
+
+impl From<PrincipalChangeItem> for spelaion_core::PrincipalChange {
+    fn from(item: PrincipalChangeItem) -> Self {
+        match item {
+            PrincipalChangeItem::Create { account } => Self::Create(spelaion_core::NewPrincipal {
+                kind: Some(account.kind.into()),
+                name: account.name,
+                host: account.host,
+                with_password: account.with_password,
+                can_login: account.can_login,
+                superuser: account.superuser,
+                create_db: account.create_db,
+                create_role: account.create_role,
+                default_database: account.default_database,
+                check_policy: account.check_policy,
+                login: account.login,
+                default_schema: account.default_schema,
+            }),
+            PrincipalChangeItem::SetPassword { target } => Self::SetPassword(target.into()),
+            PrincipalChangeItem::Lock { target } => Self::Lock(target.into()),
+            PrincipalChangeItem::Unlock { target } => Self::Unlock(target.into()),
+            PrincipalChangeItem::Drop { target } => Self::Drop(target.into()),
+        }
+    }
+}
+
+/// Which kinds of account each action has on the session's engine: the core decides.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalActionsItem {
+    pub create: Vec<PrincipalKindItem>,
+    pub password: Vec<PrincipalKindItem>,
+    pub lock: Vec<PrincipalKindItem>,
+    pub drop: Vec<PrincipalKindItem>,
+}
+
+impl From<spelaion_core::PrincipalActions> for PrincipalActionsItem {
+    fn from(actions: spelaion_core::PrincipalActions) -> Self {
+        let kinds = |kinds: Vec<spelaion_core::PrincipalKind>| {
+            kinds.into_iter().map(PrincipalKindItem::from).collect()
+        };
+        Self {
+            create: kinds(actions.create),
+            password: kinds(actions.password),
+            lock: kinds(actions.lock),
+            drop: kinds(actions.drop),
+        }
+    }
+}
