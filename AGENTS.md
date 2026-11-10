@@ -266,7 +266,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   file menus, the activity bar, the global shortcuts and the command palette
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
   menus against it. The palette's objects are only what the explorer already read (`catalog.ts`). Smoke test against the real app:
-  `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
+  `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
+  bundled DuckDB is compiled once: `npx tauri build --no-bundle -- -p spelaion-desktop -p
+  spelaion-cli`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`, see `CONTRIBUTING.md`).
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;
   `SPELAION_NO_UPDATES` switches them off, as the smoke test does). Update artifacts are signed only in the release workflow
