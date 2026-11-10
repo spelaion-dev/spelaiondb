@@ -22,6 +22,7 @@ import { Sidebar, refreshConnections } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
+import { ErDiagramView } from "./components/ErDiagram";
 import { EXPLORER_SESSION_CLOSED_EVENT, tabName } from "./connect";
 import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./commandRegistry";
 import { activeContext, isCommandId, runCommand } from "./commands";
@@ -220,7 +221,7 @@ export default function App() {
               tabs.map((t) => (
                 // All mounted (the editor keeps its state); only the active one is visible.
                 <div key={t.id} className="tab-panel" hidden={t.id !== activeTab}>
-                  {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : <EditorTab tab={t} />}
+                  {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
                 </div>
               ))
             )}

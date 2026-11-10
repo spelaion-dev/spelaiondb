@@ -15,19 +15,20 @@ import { commandSpec, type CommandId } from "../commandRegistry";
 import { CommandMenuItem } from "./CommandMenuItem";
 
 /** Distinguishes SQL, table data and table metadata without adding labels to the tab bar. */
-function TabIcon({ kind }: { kind: "query" | "file" | "table" | "details" }) {
+function TabIcon({ kind }: { kind: "query" | "file" | "table" | "details" | "diagram" }) {
   return (
     <svg className="tab-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {kind === "query" ? <><path d="m3 4 3 3-3 3M8 11h5" /></> :
         kind === "file" ? <><path d="M4 2.5h5.5L12.5 5.5v8H4z" /><path d="M9.5 2.5v3h3M6 9h4.5M6 11.5h3" /></> :
         kind === "table" ? <><rect x="2.5" y="3" width="11" height="10" rx="1" /><path d="M2.5 6.5h11M6.2 6.5V13M9.8 6.5V13" /></> :
+        kind === "diagram" ? <><rect x="1.5" y="2" width="6" height="5" rx="1" /><rect x="8.5" y="9" width="6" height="5" rx="1" /><path d="M7.5 4.5h2.5v4.5" /></> :
           <><rect x="2.5" y="3" width="11" height="10" rx="1" /><path d="M6 3v10M8 6h3.5M8 9.5h3.5" /></>}
     </svg>
   );
 }
 
-function tabKind(tab: Tab): "query" | "file" | "table" | "details" {
-  return tab.tableDetails ? "details" : tab.table ? "table" : tab.file ? "file" : "query";
+function tabKind(tab: Tab): "query" | "file" | "table" | "details" | "diagram" {
+  return tab.diagram ? "diagram" : tab.tableDetails ? "details" : tab.table ? "table" : tab.file ? "file" : "query";
 }
 
 /** Pixels the pointer moves before a press on a tab becomes a drag. */
@@ -353,7 +354,7 @@ function TabMenu({ id, x, y, onClose }: { id: string; x: number; y: number; onCl
       {item("tab.rename")}
       {item("tab.duplicate")}
       {item("tab.pin")}
-      {!tab.table && !tab.tableDetails && !tab.plan && (
+      {!tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && (
         <>
           <hr />
           {tab.file && item("file.save")}

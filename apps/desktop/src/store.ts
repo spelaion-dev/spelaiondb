@@ -5,7 +5,7 @@ import type { EditorActionId } from "./editorActions";
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, ErrorAnswerItem, FieldChangeItem, FileFormatItem, InteractionKind, OnErrorItem, RestoreNoteItem, RiskKind, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
-import type { RestoredTabItem } from "./bindings";
+import type { DiagramScopeItem_Deserialize, RestoredTabItem } from "./bindings";
 
 export interface ResultMeta {
   id: number;
@@ -101,6 +101,9 @@ export interface Tab {
   /** A table data tab (pages of one table) instead of an SQL editor. */
   table?: TableView;
   tableDetails?: { schema: string; name: string; kind: TableDetailKind };
+  /** An ER diagram (ADR-046) of a schema, chosen tables or one table and its neighbours, read
+   *  from the catalog on this tab's own session. */
+  diagram?: DiagramScopeItem_Deserialize;
   /** A local saved plan, opened without executing SQL. */
   plan?: { path: string };
   /** Pending row changes are kept in the mounted editor until saved or discarded. */
@@ -177,7 +180,7 @@ export interface ClosedTab {
 /** The durable part of a tab. Only SQL editor tabs have one: table data and metadata tabs
  *  are reopened from the explorer. */
 export function snapshotOf(tab: Tab): TabSnapshot | null {
-  if (tab.table || tab.tableDetails || tab.plan) return null;
+  if (tab.table || tab.tableDetails || tab.plan || tab.diagram) return null;
   return {
     connectionId: tab.connectionId,
     sql: tab.sql,
@@ -282,6 +285,9 @@ interface AppStore {
    *  `filter` when given (a followed foreign key's, written by the core). */
   addTableTab(connectionId: string, schema: string, name: string, filter?: string): string;
   addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
+  /** Opens an ER diagram tab, or shows the one already open on the same scope. The second value
+   *  says whether the tab is new (and needs connecting). */
+  addDiagramTab(connectionId: string, scope: DiagramScopeItem_Deserialize): [string, boolean];
   /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
   closeTabs(ids: string[]): void;
   /** Opens again the last closed query tab (its connection, SQL and name, not its results). */
@@ -393,6 +399,15 @@ export const useApp = create<AppStore>((set) => ({
     app.updateTab(id, { tableDetails: { schema, name, kind } });
     return id;
   },
+  addDiagramTab: (connectionId, scope): [string, boolean] => {
+    const app = useApp.getState();
+    const key = JSON.stringify(scope);
+    const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.diagram && JSON.stringify(tab.diagram) === key);
+    if (existing) { app.setActiveTab(existing.id); return [existing.id, false]; }
+    const id = app.addTab(connectionId);
+    app.updateTab(id, { diagram: scope });
+    return [id, true];
+  },
   closedTabs: [],
   recentTabs: [],
   renamingTab: null,
@@ -442,7 +457,7 @@ export const useApp = create<AppStore>((set) => ({
     const s: AppStore = useApp.getState();
     const source = s.tabs.find((t) => t.id === id);
     // A metadata tab is opened once per object (addTableDetailsTab finds the open one).
-    if (!source || source.tableDetails) return null;
+    if (!source || source.tableDetails || source.diagram) return null;
     const copy: string = s.addTab(source.connectionId, source.sql);
     set((now) => {
       const tab = now.tabs.find((t) => t.id === copy);

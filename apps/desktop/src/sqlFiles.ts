@@ -73,7 +73,7 @@ export async function openFilePath(path: string): Promise<string | null> {
     recentChanged();
   }
   const active = app.tabs.find((t) => t.id === app.activeTab);
-  const connectionId = active && !active.table && !active.tableDetails ? active.connectionId : null;
+  const connectionId = active && !active.table && !active.tableDetails && !active.diagram ? active.connectionId : null;
   const id = useApp.getState().addTab(connectionId, file.text);
   useApp.getState().updateTab(id, { file: tabFile(file) });
   return id;
@@ -157,7 +157,7 @@ async function writeTab(id: string, path: string, format: FileFormatItem | null,
 /** Ctrl+S on a file tab: saves to its file. A tab without a file asks where (save as). */
 export async function saveTab(id: string): Promise<boolean> {
   const tab = useApp.getState().tabs.find((t) => t.id === id);
-  if (!tab || tab.table || tab.tableDetails) return false;
+  if (!tab || tab.table || tab.tableDetails || tab.diagram) return false;
   if (!tab.file) return saveTabAs(id);
   return writeTab(id, tab.file.path, tab.file.format, tab.file.hash);
 }
@@ -165,7 +165,7 @@ export async function saveTab(id: string): Promise<boolean> {
 /** Ctrl+Shift+S: saves the tab's text to a file the user picks; the tab then shows that file. */
 export async function saveTabAs(id: string): Promise<boolean> {
   const tab = useApp.getState().tabs.find((t) => t.id === id);
-  if (!tab || tab.table || tab.tableDetails) return false;
+  if (!tab || tab.table || tab.tableDetails || tab.diagram) return false;
   const path = await chooseSavePath({
     title: i18n.t("editor:files.saveAsTitle"),
     defaultPath: tab.file?.path ?? `${(tab.title ?? i18n.t("editor:files.defaultName")).replace(/[\\/:*?"<>|]/g, "_")}.sql`,

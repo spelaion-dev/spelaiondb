@@ -59,7 +59,7 @@ export async function reviewChanges<T extends ConnectResult | ConnectionTestResu
  *  data tabs' and the process monitor's sessions stay in auto-commit. */
 function isEditorSession(session: string): boolean {
   const tab = useApp.getState().tabs.find((t) => t.id === session);
-  return Boolean(tab && !tab.table && !tab.tableDetails && !tab.plan);
+  return Boolean(tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram);
 }
 
 /** Shows the transaction the core keeps for a freshly connected editor tab. */
@@ -84,6 +84,12 @@ export function defaultTabLabel(tab: Tab): string {
   if (tab.file) return tab.file.name;
   if (tab.tableDetails) return `${tab.tableDetails.name} · ${i18n.t(`shell:folders.${tab.tableDetails.kind}`)}`;
   if (tab.table) return tab.table.name;
+  if (tab.diagram) {
+    const scope = tab.diagram;
+    if (scope.kind === "schema") return i18n.t("shell:diagram.titleSchema", { schema: scope.schema });
+    if (scope.kind === "focus") return i18n.t("shell:diagram.titleFocus", { table: scope.table });
+    return i18n.t("shell:diagram.titleTables", { count: scope.tables.length });
+  }
   return i18n.t("shell:queryTab", { number: tab.number });
 }
 

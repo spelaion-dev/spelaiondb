@@ -2391,7 +2391,7 @@ try {
   await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
   // Enter lists the object's actions; Escape goes back to the search as it was.
   await page.keyboard.press("Enter");
-  assert.deepEqual(await paletteLabels(), ["Open data", "Open structure", "New console", "Copy name", "Copy qualified name", "Show in explorer"]);
+  assert.deepEqual(await paletteLabels(), ["Open data", "Open structure", "New console", "ER diagram of related tables", "Copy name", "Copy qualified name", "Show in explorer"]);
   await shot("sdb-18-palette-actions");
   await page.keyboard.press("Escape");
   assert.equal(await paletteBox.inputValue(), "ord");
@@ -3129,6 +3129,162 @@ try {
     }
     await viewerToggle.click();
     await viewer.waitFor({ state: "detached" });
+  }
+
+  step("ER diagram: read from the explorer's catalog, laid out once by the core, panned and zoomed, exported");
+  {
+    const queryTitle = (await page.locator(".tabbar .tab.active").innerText()).trim();
+    const queryTab = page.locator(".tabbar .tab").filter({ hasText: new RegExp(`^${queryTitle}$`) });
+    // Around one table: orders and the customer it points to, in crow's foot notation.
+    await page.getByRole("button", { name: "Expand or collapse orders", exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "ER diagram of related tables" }).click();
+    await page.locator(".tabbar .tab.active", { hasText: "orders · ER diagram" }).waitFor();
+    const view = page.locator(".tab-panel:not([hidden]) .er-view");
+    const canvas = view.locator(".er-canvas");
+    await canvas.locator(".er-node").nth(1).waitFor();
+    assert.equal(await canvas.locator(".er-node").count(), 2);
+    assert.equal(await canvas.locator(".er-edge").count(), 1);
+    await view.locator(".er-status", { hasText: "2 tables, 1 relation" }).waitFor();
+    assert.equal(await canvas.locator(".er-node.focus .er-title").textContent(), "orders");
+    assert.deepEqual(await canvas.locator(".er-node.focus .er-name").allTextContents(), ["id", "customer_id", "created", "total"]);
+    assert.deepEqual(await canvas.locator(".er-node.focus .er-key").allTextContents(), ["PK", "FK"]);
+    assert.equal(await canvas.getAttribute("data-layouts"), "1");
+    await shot("sdb-23-focus");
+    await setTheme("dark", "dark");
+    await shot("sdb-23-focus-dark");
+    await setTheme("light", "light");
+    // Keys only and names only lay it out again; the catalog is not read again.
+    await view.getByRole("radio", { name: "Keys only" }).click();
+    await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .er-canvas")?.getAttribute("data-layouts") === "2");
+    assert.deepEqual(await canvas.locator(".er-node.focus .er-name").allTextContents(), ["id", "customer_id"]);
+    await view.getByRole("radio", { name: "Names only" }).click();
+    await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .er-canvas")?.getAttribute("data-layouts") === "3");
+    assert.equal(await canvas.locator(".er-name").count(), 0);
+    await view.getByRole("radio", { name: "All columns" }).click();
+    await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .er-canvas")?.getAttribute("data-layouts") === "4");
+    // A table's menu focuses on it in a new tab.
+    await canvas.locator(".er-node:not(.focus) .er-box").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Focus on this table" }).click();
+    await page.locator(".tabbar .tab.active", { hasText: "customer · ER diagram" }).waitFor();
+    await page.locator(".tab-panel:not([hidden]) .er-node.focus .er-title", { hasText: "customer" }).waitFor();
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab.active", { hasText: "orders · ER diagram" }).waitFor();
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab", { hasText: "orders · ER diagram" }).waitFor({ state: "detached" });
+
+    // The schema's explorer menu: the demo's three tables, product with no keys.
+    const mainRow = page.getByRole("button", { name: "Expand or collapse schema main" });
+    await mainRow.scrollIntoViewIfNeeded();
+    await mainRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "ER diagram", exact: true }).click();
+    await page.locator(".tabbar .tab.active", { hasText: "main · ER diagram" }).waitFor();
+    await page.locator(".tab-panel:not([hidden]) .er-status", { hasText: "3 tables, 1 relation" }).waitFor();
+    assert.equal(await page.locator(".tab-panel:not([hidden]) .er-node").count(), 3);
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab", { hasText: "main · ER diagram" }).waitFor({ state: "detached" });
+    await queryTab.click();
+
+    // 200 generated tables in the schema (dropped below): chains, hubs and lone tables.
+    const big = [];
+    for (let i = 0; i < 200; i++) {
+      const columns = ["id integer primary key", "name text"];
+      if (i > 0 && i % 23 !== 0) columns.push(`parent_id integer references er_t${String(Math.floor(i * 0.618)).padStart(3, "0")}`);
+      if (i > 3 && i % 3 === 0) columns.push(`hub_id integer not null references er_t${String(i % 4).padStart(3, "0")}`);
+      big.push(`create table er_t${String(i).padStart(3, "0")} (${columns.join(", ")});`);
+    }
+    await replaceQuery(panel, big.join("\n"));
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "200 OK, 0 failed, 0 not run" }).waitFor({ timeout: 60_000 });
+    try {
+      // The palette's command: the diagram of the active console's schema.
+      await page.keyboard.press("Control+Shift+P");
+      const erPalette = page.getByRole("dialog", { name: "Command palette" });
+      await erPalette.getByRole("combobox").fill("ER diagram of the current");
+      await page.keyboard.press("Enter");
+      await page.locator(".tabbar .tab.active", { hasText: "main · ER diagram" }).waitFor();
+      const schemaView = page.locator(".tab-panel:not([hidden]) .er-view");
+      const schemaCanvas = schemaView.locator(".er-canvas");
+      await schemaView.locator(".er-status", { hasText: "203 tables" }).waitFor({ timeout: 60_000 });
+      await schemaCanvas.locator(".er-node").nth(202).waitFor();
+      assert.equal(await schemaCanvas.getAttribute("data-layouts"), "1");
+      const layoutsNow = () => schemaCanvas.getAttribute("data-layouts");
+      // Pan (drag, arrows) and zoom (wheel, keys, buttons, fit) never lay it out again.
+      const zoomBefore = await schemaView.locator(".er-zoom").innerText();
+      const box = await schemaCanvas.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel(0, -600);
+      await page.waitForFunction((before) => document.querySelector(".tab-panel:not([hidden]) .er-zoom")?.textContent !== before, zoomBefore);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 80, { steps: 5 });
+      await page.mouse.up();
+      await schemaCanvas.focus();
+      for (const key of ["ArrowLeft", "ArrowDown", "+", "-", "1", "0"]) await page.keyboard.press(key);
+      await schemaView.getByRole("button", { name: "Zoom in" }).click();
+      await schemaView.getByRole("button", { name: "Fit to screen" }).click();
+      assert.equal(await layoutsNow(), "1", "panning and zooming never ask for a new layout");
+      await shot("sdb-23-schema-200");
+      await setTheme("dark", "dark");
+      await shot("sdb-23-schema-200-dark");
+      await setTheme("light", "light");
+      // The layout of 203 tables, from the click to the boxes on screen.
+      const started = Date.now();
+      await schemaView.getByRole("radio", { name: "Keys only" }).click();
+      await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .er-canvas")?.getAttribute("data-layouts") === "2");
+      console.log(`  ER diagram of 203 tables: a new layout on screen in ${Date.now() - started} ms`);
+      await shot("sdb-23-schema-200-keys");
+      // A click on a table lights up its relations.
+      await schemaCanvas.locator(".er-node", { hasText: "er_t001" }).locator(".er-box").click({ force: true });
+      await schemaCanvas.locator(".er-node.selected .er-title", { hasText: "er_t001" }).waitFor();
+      assert.ok((await schemaCanvas.locator(".er-edge.lit").count()) > 0);
+      await page.keyboard.press("Escape");
+
+      // Exports: PNG and SVG drawn here and checked by the core; Mermaid and DBML written by the
+      // core, and parsed here by their own tools.
+      const files = { png: "PNG image…", svg: "SVG image…", mmd: "Mermaid…", dbml: "DBML…" };
+      const saved = {};
+      for (const [extension, item] of Object.entries(files)) {
+        const target = join(tmpdir(), `spelaion-er-${process.pid}.${extension}`);
+        await page.evaluate((path) => (window.__spelaionSavePath = path), target);
+        await schemaView.getByRole("button", { name: "Export", exact: true }).click();
+        await page.getByRole("menuitem", { name: item }).click();
+        await schemaView.getByText(`Saved spelaion-er-${process.pid}.${extension}`).waitFor({ timeout: 60_000 });
+        saved[extension] = target;
+      }
+      await page.evaluate(() => delete window.__spelaionSavePath);
+      assert.deepEqual([...readFileSync(saved.png).subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const svgText = readFileSync(saved.svg, "utf8");
+      assert.match(svgText, /^<svg[^>]*xmlns="http:\/\/www.w3.org\/2000\/svg"/);
+      assert.ok(svgText.includes("er_t199") && !svgText.includes("var(--"), "the SVG carries every table and real colors");
+      const mermaidText = readFileSync(saved.mmd, "utf8");
+      const dbmlText = readFileSync(saved.dbml, "utf8");
+      const { default: mermaid } = await import("mermaid");
+      await mermaid.parse(mermaidText);
+      const { Parser } = await import("@dbml/core");
+      const database = new Parser().parse(dbmlText, "dbml");
+      assert.equal(database.schemas.flatMap((schema) => schema.tables).length, 203);
+      assert.ok(mermaidText.includes('"customer" ||..o{ "orders" : "fk_0"'), mermaidText.slice(0, 400));
+      for (const path of Object.values(saved)) rmSync(path, { force: true });
+
+      // The same command again shows the tab already open on that schema.
+      await queryTab.click();
+      await page.keyboard.press("Control+Shift+P");
+      await erPalette.getByRole("combobox").fill("ER diagram of the current");
+      await page.keyboard.press("Enter");
+      await page.locator(".tabbar .tab.active", { hasText: "main · ER diagram" }).waitFor();
+      assert.equal(await page.locator(".tabbar .tab", { hasText: "main · ER diagram" }).count(), 1);
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab", { hasText: "main · ER diagram" }).waitFor({ state: "detached" });
+    } finally {
+      // Back to the demo's three tables.
+      const drops = [];
+      for (let i = 199; i >= 0; i--) drops.push(`drop table if exists er_t${String(i).padStart(3, "0")};`);
+      await queryTab.click();
+      await replaceQuery(panel, drops.join("\n"));
+      await run(panel);
+      const risk = page.getByRole("dialog", { name: "Run these statements?" });
+      await risk.getByRole("button", { name: "Run anyway", exact: true }).click({ timeout: 30_000 });
+      await panel.locator(".statusline", { hasText: "200 OK, 0 failed, 0 not run" }).waitFor({ timeout: 60_000 });
+    }
   }
 
   step("query parameters: :name values asked once, written in by the core");

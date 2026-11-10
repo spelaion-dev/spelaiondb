@@ -12,6 +12,7 @@ mod conn_test;
 mod cursor;
 mod data_search;
 mod edit;
+mod er;
 mod export;
 mod export_stream;
 mod filter;
@@ -79,6 +80,12 @@ pub use data_search::{
 pub use edit::{
     CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements,
     editable_query_source, editable_query_table,
+};
+pub use er::{
+    Cardinality, DiagramError, DiagramScope, ErColumn, ErColumns, ErEdge, ErKeyMark, ErLayout,
+    ErLayoutOptions, ErMetrics, ErModel, ErNode, ErPoint, ErRelation, ErRow, ErSide, ErTable,
+    MAX_DIAGRAM_TABLES, MAX_DIAGRAM_TEXT_BYTES, ReadProgress, TableName, dbml, layout as er_layout,
+    mermaid, read_model as read_er_model, save_diagram_text,
 };
 pub use export::{
     CopyError, CsvOptions, ExportFormat, ExportOptions, FileSummary, GenericDialect, MAX_IN_LIST,

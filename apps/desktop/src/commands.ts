@@ -10,6 +10,7 @@ import { closeQueryTab, connectTabFromExplorer, explorerDatabase } from "./conne
 import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
+import { openDiagram } from "./diagramTabs";
 import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type Tab } from "./store";
 import {
   closable,
@@ -50,7 +51,7 @@ function tabOf(context: CommandContext): Tab | undefined {
 /** A SQL editor tab (not a table's data or details). */
 function editorTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && !tab.table && !tab.tableDetails && !tab.plan ? tab : undefined;
+  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram ? tab : undefined;
 }
 
 function editorCommand(command: EditorCommand): CommandBinding["run"] {
@@ -63,7 +64,7 @@ function editorCommand(command: EditorCommand): CommandBinding["run"] {
 /** A tab whose result may hold pending table edits (a table's data, or a query's). */
 function editableTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && !tab.tableDetails && !tab.plan && tab.status === "connected" ? tab : undefined;
+  return tab && !tab.tableDetails && !tab.plan && !tab.diagram && tab.status === "connected" ? tab : undefined;
 }
 
 function editsCommand(command: "undo" | "redo"): CommandBinding["run"] {
@@ -103,6 +104,25 @@ async function importFromClipboard(context: CommandContext) {
   useImport.getState().open({ ...target, schema, table: null, text });
 }
 
+/** The connected tab an "ER diagram" command starts from: any but a diagram or a plan. */
+function diagramSource(context: CommandContext): Tab | undefined {
+  const tab = tabOf(context);
+  return tab && tab.connectionId && !tab.diagram && !tab.plan && tab.status === "connected" ? tab : undefined;
+}
+
+/** A diagram around the active tab's table, or of its editor's current schema. */
+async function openActiveDiagram(context: CommandContext) {
+  const tab = diagramSource(context);
+  if (!tab?.connectionId) return;
+  const table = tab.table ?? tab.tableDetails;
+  if (table) {
+    openDiagram(tab.connectionId, { kind: "focus", schema: table.schema, table: table.name }, tab.id);
+    return;
+  }
+  const schema = await call(core.activeSchema(tab.id));
+  if (schema !== null) openDiagram(tab.connectionId, { kind: "schema", schema, filter: null }, tab.id);
+}
+
 function stepTab(back: boolean) {
   const app = useApp.getState();
   const order = app.tabs.map((tab) => tab.id);
@@ -128,7 +148,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "tab.duplicate": {
     enabled: (c) => {
       const tab = tabOf(c);
-      return tab !== undefined && !tab.tableDetails && !tab.plan;
+      return tab !== undefined && !tab.tableDetails && !tab.plan && !tab.diagram;
     },
     run: (c) => c.tab && duplicateTab(c.tab),
   },
@@ -232,6 +252,10 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   "view.processes": { run: () => toggleSection("processes") },
   // The shortcut always shows the search and focuses its box; the activity button toggles it.
+  "view.erDiagram": {
+    enabled: (c) => diagramSource(c) !== undefined,
+    run: (c) => openActiveDiagram(c),
+  },
   "view.search": {
     run: (c) => {
       const app = useApp.getState();
@@ -352,6 +376,9 @@ export function objectActions(item: PaletteObject): PaletteObjectAction[] {
         { id: "openData", label: "app:palette.actions.openData", run: () => openFound(connectionId, { kind: "relation", object }) },
         { id: "openStructure", label: "app:palette.actions.openStructure", run: () => openStructure(connectionId, object) },
         { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, object.schema) },
+        ...(object.kind === "view" || object.kind === "materialized_view"
+          ? []
+          : [{ id: "erDiagram", label: "app:palette.actions.erDiagram", run: () => openDiagram(connectionId, { kind: "focus", schema: object.schema, table: object.name }) }]),
         { id: "copyName", label: "shell:copyName", run: () => copyName(object.name) },
         { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, object.schema, object.name) },
         {

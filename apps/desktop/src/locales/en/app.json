@@ -76,7 +76,8 @@
     "undoEdit": "Undo the last pending edit",
     "redoEdit": "Redo the pending edit undone",
     "explorerFilter": "Filter the explorer",
-    "importClipboard": "Import data from the clipboard…"
+    "importClipboard": "Import data from the clipboard…",
+    "erDiagram": "ER diagram of the current table or schema"
   },
   "palette": {
     "title": "Command palette",
@@ -96,7 +97,8 @@
       "openStructure": "Open structure",
       "openDefinition": "Open definition",
       "newConsole": "New console",
-      "showInExplorer": "Show in explorer"
+      "showInExplorer": "Show in explorer",
+      "erDiagram": "ER diagram of related tables"
     }
   }
 }

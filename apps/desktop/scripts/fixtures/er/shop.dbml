@@ -1,0 +1,41 @@
+Table "erd_alone" {
+  "id" "INT"
+}
+
+Table "erd_country" {
+  "code" "CHAR(2)" [pk]
+  "name" "VARCHAR(40)"
+}
+
+Table "erd_customer" {
+  "id" "INT" [pk]
+  "country" "CHAR(2)" [not null]
+  "referrer" "INT"
+  "email" "VARCHAR(80)" [unique]
+}
+
+Table "erd_line" {
+  "id" "INT" [pk]
+  "order region" "VARCHAR(10)"
+  "number" "INT"
+}
+
+Table "erd_order" {
+  "order region" "VARCHAR(10)" [not null]
+  "number" "INT" [not null]
+  "customer" "INT"
+  indexes {
+    ("order region", "number") [pk]
+  }
+}
+
+Table "erd_profile" {
+  "customer" "INT" [pk]
+  "bio" "VARCHAR(200)"
+}
+
+Ref "fk_0": "erd_customer"."referrer" > "erd_customer"."id"
+Ref "fk_1": "erd_customer"."country" > "erd_country"."code"
+Ref "fk_0 (2)": "erd_line".("order region", "number") > "erd_order".("order region", "number")
+Ref "fk_0 (3)": "erd_order"."customer" > "erd_customer"."id"
+Ref "fk_0 (4)": "erd_profile"."customer" - "erd_customer"."id"

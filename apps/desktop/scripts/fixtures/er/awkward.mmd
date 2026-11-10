@@ -1,0 +1,43 @@
+erDiagram
+    "Ventas ñ.empty" {
+    }
+    "Ventas ñ.ficha" {
+        int id PK
+    }
+    "Ventas ñ.producto" {
+        int id PK
+        int variante PK
+        int ficha FK, UK "one-to-one"
+    }
+    "sales.Orders" {
+        character_varying(80) number PK
+        character_varying(80) parent FK
+        int customer FK
+    }
+    %% sales.order lines: Lines of an order: it's 'quoted' and on two lines \ with a backslash
+    "sales.order lines" {
+        integer id PK "the line's number"
+        character_varying(80) order_no PK, FK "order no"
+        numeric(12_2) pk_ UK "pk: a column named like a key"
+        _char_ _1st "1st"
+        text name_quote "name'quote: a 'double' quote in the name"
+        text 日本語 "non-Latin name"
+        int Ref FK, UK
+        int Note FK, UK
+        int indexes
+        int back_slash "back\slash: a \' pair, and a backslash at the end \"
+        _ untyped
+        timestamp_with_time_zone Table
+        uk_ uk_ "uk"
+        int[] arr
+    }
+    %% sales.orders: lower case
+    "sales.orders" {
+        int id PK
+    }
+    "Ventas ñ.ficha" ||..o| "Ventas ñ.producto" : "producto_ficha"
+    "sales.Orders" |o..o{ "sales.Orders" : "fk_1"
+    "sales.orders" |o..o{ "sales.Orders" : "fk_customer"
+    "sales.Orders" ||--o{ "sales.order lines" : "fk_1"
+    "sales.Orders" ||--o{ "sales.order lines" : "fk_1_again"
+    "Ventas ñ.producto" |o..o| "sales.order lines" : "lines→product"

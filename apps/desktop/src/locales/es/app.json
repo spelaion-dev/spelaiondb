@@ -76,7 +76,8 @@
     "undoEdit": "Deshacer el último cambio pendiente",
     "redoEdit": "Rehacer el cambio pendiente deshecho",
     "explorerFilter": "Filtrar el explorador",
-    "importClipboard": "Importar datos del portapapeles…"
+    "importClipboard": "Importar datos del portapapeles…",
+    "erDiagram": "Diagrama ER de la tabla o el esquema actual"
   },
   "palette": {
     "title": "Paleta de comandos",
@@ -96,7 +97,8 @@
       "openStructure": "Abrir estructura",
       "openDefinition": "Abrir definición",
       "newConsole": "Nueva consola",
-      "showInExplorer": "Mostrar en el explorador"
+      "showInExplorer": "Mostrar en el explorador",
+      "erDiagram": "Diagrama ER de las tablas relacionadas"
     }
   }
 }

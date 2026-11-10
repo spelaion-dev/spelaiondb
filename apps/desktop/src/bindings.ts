@@ -7,6 +7,21 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	/**
+	 *  Reads a diagram's tables from the catalog on the tab's session, one table at a time
+	 *  (`on_progress` hears each one), and keeps the model as `diagram` for its layouts and
+	 *  exports.
+	 */
+	readDiagram: (session: string, diagram: number, scope: DiagramScopeItem_Deserialize, onProgress: Channel<DiagramProgressItem>) => typedError<DiagramSummaryItem_Serialize, string>(__TAURI_INVOKE("read_diagram", { session, diagram, scope, onProgress })),
+	/**
+	 *  Where each table of the diagram goes and how its relations are drawn, for these display
+	 *  options and font measures. Panning and zooming never ask for it again.
+	 */
+	diagramLayout: (diagram: number, options: DiagramOptionsItem, metrics: DiagramMetricsItem) => typedError<DiagramLayoutItem_Serialize, string>(__TAURI_INVOKE("diagram_layout", { diagram, options, metrics })),
+	/**  Writes the diagram's whole model as Mermaid or DBML (written by the core) to `path`. */
+	saveDiagramText: (diagram: number, format: DiagramTextFormatItem, path: string) => typedError<null, string>(__TAURI_INVOKE("save_diagram_text", { diagram, format, path })),
+	/**  Forgets a diagram's model (its tab closed or read it again under another id). */
+	closeDiagram: (diagram: number) => typedError<null, string>(__TAURI_INVOKE("close_diagram", { diagram })),
 	explainPreflight: (session: string, sql: string, options: ExplainOptions_Deserialize) => typedError<ExplainCheck, string>(__TAURI_INVOKE("explain_preflight", { session, sql, options })),
 	planCapabilities: (session: string) => typedError<PlanCapabilities_Serialize, string>(__TAURI_INVOKE("plan_capabilities", { session })),
 	explainQuery: (session: string, sql: string, options: ExplainOptions_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<PlanSummary_Serialize, string>(__TAURI_INVOKE("explain_query", { session, sql, options, onEvent })),
@@ -845,6 +860,8 @@ export type Bounds = {
 /**  What a bulk edit does to each cell of the selection. */
 export type BulkActionItem = { kind: "set"; value: CellInputItem } | { kind: "fillDown" } | { kind: "trim" } | { kind: "upperCase" } | { kind: "lowerCase" } | { kind: "newUuid" } | { kind: "now" };
 
+export type CardinalityItem = "one" | "zeroOrOne" | "zeroOrMany";
+
 /**  A value typed in the grid for a result column (`None` is NULL). */
 export type CellEditItem = CellEditItem_Serialize | CellEditItem_Deserialize;
 
@@ -1572,6 +1589,193 @@ export type DataSearchSummaryItem = {
 	/**  It stopped at the most hits a search returns. */
 	stopped: boolean,
 };
+
+export type DiagramColumnsItem = "all" | "keys" | "none";
+
+/**
+ *  A relation's line: six points, drawn `M p0 L p1 C p2 p3 p4 L p5`; crow's foot marks go on
+ *  the stubs (p0–p1 at the referencing table, p4–p5 at the referenced one).
+ */
+export type DiagramEdgeItem = {
+	from: number,
+	to: number,
+	name: string,
+	fromColumns: string[],
+	toColumns: string[],
+	fromCardinality: CardinalityItem,
+	toCardinality: CardinalityItem,
+	fromSide: DiagramSideItem,
+	toSide: DiagramSideItem,
+	points: DiagramPointItem[],
+};
+
+export type DiagramLayoutItem = DiagramLayoutItem_Serialize | DiagramLayoutItem_Deserialize;
+
+export type DiagramLayoutItem_Deserialize = {
+	width: number,
+	height: number,
+	lineHeight: number,
+	nodes: DiagramNodeItem_Deserialize[],
+	edges: DiagramEdgeItem[],
+};
+
+export type DiagramLayoutItem_Serialize = {
+	width: number,
+	height: number,
+	lineHeight: number,
+	nodes: DiagramNodeItem_Serialize[],
+	edges: DiagramEdgeItem[],
+};
+
+/**  The diagram font's measures, in pixels, as the UI measured them. */
+export type DiagramMetricsItem = {
+	charWidth: number | null,
+	lineHeight: number | null,
+};
+
+/**  A table's box, in pixels; the row and text positions are relative to its corner. */
+export type DiagramNodeItem = DiagramNodeItem_Serialize | DiagramNodeItem_Deserialize;
+
+/**  A table's box, in pixels; the row and text positions are relative to its corner. */
+export type DiagramNodeItem_Deserialize = {
+	schema: string,
+	name: string,
+	focus: boolean,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	title: string,
+	comment?: string | null,
+	fullComment?: string | null,
+	rowsTop: number,
+	keyX: number,
+	nameX: number,
+	typeX: number,
+	commentX: number,
+	rows: DiagramRowItem_Deserialize[],
+};
+
+/**  A table's box, in pixels; the row and text positions are relative to its corner. */
+export type DiagramNodeItem_Serialize = {
+	schema: string,
+	name: string,
+	focus: boolean,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	title: string,
+	comment: string | null,
+	fullComment: string | null,
+	rowsTop: number,
+	keyX: number,
+	nameX: number,
+	typeX: number,
+	commentX: number,
+	rows: DiagramRowItem_Serialize[],
+};
+
+export type DiagramOptionsItem = {
+	columns: DiagramColumnsItem,
+	types: boolean,
+	comments: boolean,
+};
+
+export type DiagramPointItem = {
+	x: number,
+	y: number,
+};
+
+/**  `read` of `total` tables described so far. */
+export type DiagramProgressItem = {
+	read: number,
+	total: number,
+};
+
+/**  A listed column: its texts as the box shows them (shortened), and whole for the tooltip. */
+export type DiagramRowItem = DiagramRowItem_Serialize | DiagramRowItem_Deserialize;
+
+/**  A listed column: its texts as the box shows them (shortened), and whole for the tooltip. */
+export type DiagramRowItem_Deserialize = {
+	/**  "PK", "FK", "UK" or a combination; empty for no key. */
+	key: string,
+	primary: boolean,
+	name: string,
+	nativeType: string,
+	comment?: string | null,
+	fullName: string,
+	fullType: string,
+	fullComment?: string | null,
+	nullable: boolean,
+};
+
+/**  A listed column: its texts as the box shows them (shortened), and whole for the tooltip. */
+export type DiagramRowItem_Serialize = {
+	/**  "PK", "FK", "UK" or a combination; empty for no key. */
+	key: string,
+	primary: boolean,
+	name: string,
+	nativeType: string,
+	comment: string | null,
+	fullName: string,
+	fullType: string,
+	fullComment: string | null,
+	nullable: boolean,
+};
+
+/**
+ *  What a diagram shows: a schema (with the explorer's table filter), chosen tables, or one
+ *  table and the tables it is joined to.
+ */
+export type DiagramScopeItem = DiagramScopeItem_Serialize | DiagramScopeItem_Deserialize;
+
+/**
+ *  What a diagram shows: a schema (with the explorer's table filter), chosen tables, or one
+ *  table and the tables it is joined to.
+ */
+export type DiagramScopeItem_Deserialize = { kind: "schema"; schema: string; filter?: NameFilterItem | null } | { kind: "tables"; tables: TableNameItem[] } | { kind: "focus"; schema: string; table: string };
+
+/**
+ *  What a diagram shows: a schema (with the explorer's table filter), chosen tables, or one
+ *  table and the tables it is joined to.
+ */
+export type DiagramScopeItem_Serialize = { kind: "schema"; schema: string; filter: NameFilterItem | null } | { kind: "tables"; tables: TableNameItem[] } | { kind: "focus"; schema: string; table: string };
+
+export type DiagramSideItem = "left" | "right";
+
+/**  What was read: counts, and what the diagram leaves out. */
+export type DiagramSummaryItem = DiagramSummaryItem_Serialize | DiagramSummaryItem_Deserialize;
+
+/**  What was read: counts, and what the diagram leaves out. */
+export type DiagramSummaryItem_Deserialize = {
+	tables: number,
+	relations: number,
+	/**  Keys to tables outside the diagram. */
+	outsideKeys: number,
+	/**  Tables past the most a diagram reads. */
+	leftOut: number,
+	maxTables: number,
+	/**  Tables that could not be described, and the first error. */
+	unreadable: number,
+	firstError?: string | null,
+};
+
+/**  What was read: counts, and what the diagram leaves out. */
+export type DiagramSummaryItem_Serialize = {
+	tables: number,
+	relations: number,
+	/**  Keys to tables outside the diagram. */
+	outsideKeys: number,
+	/**  Tables past the most a diagram reads. */
+	leftOut: number,
+	maxTables: number,
+	/**  Tables that could not be described, and the first error. */
+	unreadable: number,
+	firstError: string | null,
+};
+
+export type DiagramTextFormatItem = "mermaid" | "dbml";
 
 /**  The coordinates a value had before Z and M were left out. */
 export type Dimensions = "xy" | "xyz" | "xym" | "xyzm";
@@ -3982,6 +4186,11 @@ export type TableKeyItem = {
 	columns: string[],
 	/**  The other table's columns, in the same order. */
 	otherColumns: string[],
+};
+
+export type TableNameItem = {
+	schema: string,
+	name: string,
 };
 
 /**  A page of a table for the table data tab (see `spelaion_core::TablePage`). */
