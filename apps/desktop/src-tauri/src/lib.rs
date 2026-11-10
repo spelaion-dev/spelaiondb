@@ -4313,7 +4313,43 @@ async fn apply_object_change(
     Ok(u32::try_from(ran).unwrap_or(u32::MAX))
 }
 
-/// The statements the core would run for the pending changes of a table data tab, to show
+/// The pending edits of a table data page, as the core holds them (ADR-044).
+#[tauri::command]
+#[specta::specta]
+async fn pending_edits(result: u32, state: State<'_, AppState>) -> CmdResult<PendingEditsItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    Ok(PendingEditsItem::new(
+        stored.pending(),
+        spelaion_core::EditOutcome::default(),
+    ))
+}
+
+/// Does one thing to a table data page's pending edits: a cell typed, rows deleted or
+/// reverted, a new row, a bulk edit of the selection, a paste, Discard, undo or redo
+/// (ADR-044). Returns the edits now pending; nothing is written to the database.
+#[tauri::command]
+#[specta::specta]
+async fn edit_pending(
+    result: u32,
+    edit: PendingEditItem,
+    state: State<'_, AppState>,
+) -> CmdResult<PendingEditsItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let mut stored = stored.write().map_err(|_| "result lock poisoned")?;
+    let outcome = stored
+        .edit_pending(edit.into())
+        .map_err(|e| e.to_string())?;
+    Ok(PendingEditsItem::new(stored.pending(), outcome))
+}
+
+/// The statements the core would run for the pending edits of a table data page, to show
 /// before applying them (production asks for confirmation).
 #[tauri::command]
 #[specta::specta]
@@ -4322,15 +4358,15 @@ async fn preview_table_edits(
     result: u32,
     schema: String,
     name: String,
-    changes: Vec<RowChangeItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
     let open = state.session(&session).await?;
-    table_edit_statements(&state, &open, result, &schema, &name, changes).await
+    table_edit_statements(&state, &open, result, &schema, &name).await
 }
 
-/// Applies the pending changes in one transaction (ADR-014): refused on read-only
-/// connections, and on production unless the user confirmed the statements.
+/// Applies the page's pending edits in one transaction (ADR-014): refused on read-only
+/// connections, and on production unless the user confirmed the statements. Once applied
+/// they are forgotten, with their undo history.
 #[tauri::command]
 #[specta::specta]
 async fn apply_table_edits(
@@ -4338,7 +4374,6 @@ async fn apply_table_edits(
     result: u32,
     schema: String,
     name: String,
-    changes: Vec<RowChangeItem>,
     confirmed: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
@@ -4349,10 +4384,15 @@ async fn apply_table_edits(
         confirmed,
     )
     .map_err(|e| e.to_string())?;
-    let statements = table_edit_statements(&state, &open, result, &schema, &name, changes).await?;
+    let statements = table_edit_statements(&state, &open, result, &schema, &name).await?;
     let applied = spelaion_core::apply_edits(&open.session, &statements)
         .await
         .map_err(|e| e.to_string())?;
+    if let Some(stored) = state.results.get(ResultId(result.into()))
+        && let Ok(mut stored) = stored.write()
+    {
+        stored.clear_pending();
+    }
     Ok(u32::try_from(applied).unwrap_or(u32::MAX))
 }
 
@@ -4362,7 +4402,6 @@ async fn table_edit_statements(
     result: u32,
     schema: &str,
     name: &str,
-    changes: Vec<RowChangeItem>,
 ) -> CmdResult<Vec<String>> {
     // The primary key comes from the database, never from the UI.
     let table = open
@@ -4376,7 +4415,7 @@ async fn table_edit_statements(
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
-    let changes: Vec<spelaion_core::RowChange> = changes.into_iter().map(Into::into).collect();
+    let changes = stored.pending().changes();
     spelaion_core::edit_statements(open.session.dialect().as_ref(), &table, &stored, &changes)
         .map_err(|e| e.to_string())
 }
@@ -4684,6 +4723,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             search_objects,
             set_active_schema,
             active_schema,
+            pending_edits,
+            edit_pending,
             preview_table_edits,
             apply_table_edits,
             save_snippet,

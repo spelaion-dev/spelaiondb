@@ -2405,6 +2405,12 @@ select {
 .grid-menu button:hover {
   background: var(--accent-soft);
 }
+/* A shortcut sits at the right of its item. */
+.grid-menu button:has(> .menu-shortcut) {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-xl);
+}
 .result-grid-menu,
 .grid-submenu > .grid-child-menu {
   position: fixed;

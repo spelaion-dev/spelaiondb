@@ -30,6 +30,8 @@ pub enum ViewError {
     UnexpectedArray(usize),
     #[error("column {column} holds numbers: \"{value}\" is not one")]
     NotANumber { column: usize, value: String },
+    #[error("apply or discard the pending edits first: they name rows by their place on the page")]
+    PendingEdits,
 }
 
 /// Row numbers of `values` in sorted order.

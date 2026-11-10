@@ -3166,38 +3166,265 @@ pub struct CellEditItem {
     pub value: Option<String>,
 }
 
-/// A pending change of a table data tab (ADR-014), by position in the page shown.
+/// A value given to a cell: text, NULL or the column's default (ADR-044).
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-pub enum RowChangeItem {
-    Update { row: u32, values: Vec<CellEditItem> },
-    Delete { row: u32 },
-    Insert { values: Vec<CellEditItem> },
+pub enum CellInputItem {
+    Text { text: String },
+    Null,
+    Default,
 }
 
-impl From<RowChangeItem> for spelaion_core::RowChange {
-    fn from(item: RowChangeItem) -> Self {
-        let values = |values: Vec<CellEditItem>| {
-            values
-                .into_iter()
-                .map(|v| {
-                    (
-                        v.column as usize,
-                        match v.value {
-                            Some(text) => spelaion_core::CellInput::Text(text),
-                            None => spelaion_core::CellInput::Null,
-                        },
-                    )
-                })
-                .collect()
-        };
+impl From<CellInputItem> for spelaion_core::CellInput {
+    fn from(item: CellInputItem) -> Self {
         match item {
-            RowChangeItem::Update { row, values: v } => Self::Update {
-                row: row as usize,
-                values: values(v),
+            CellInputItem::Text { text } => Self::Text(text),
+            CellInputItem::Null => Self::Null,
+            CellInputItem::Default => Self::Default,
+        }
+    }
+}
+
+/// A cell's new value; `null` takes it back to its value in the database.
+#[derive(Debug, Clone, Deserialize, Type)]
+pub struct PendingCellItem {
+    pub row: u32,
+    pub column: u32,
+    pub value: Option<CellInputItem>,
+}
+
+impl From<PendingCellItem> for spelaion_core::CellEdit {
+    fn from(item: PendingCellItem) -> Self {
+        Self {
+            row: item.row as usize,
+            column: item.column as usize,
+            value: item.value.map(Into::into),
+        }
+    }
+}
+
+/// A rectangle of the page: rows `firstRow..=lastRow` of the shown `columns`, in order.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockItem {
+    pub first_row: u32,
+    pub last_row: u32,
+    pub columns: Vec<u32>,
+}
+
+impl From<BlockItem> for spelaion_core::Block {
+    fn from(item: BlockItem) -> Self {
+        Self {
+            first_row: item.first_row as usize,
+            last_row: item.last_row as usize,
+            columns: item.columns.into_iter().map(|c| c as usize).collect(),
+        }
+    }
+}
+
+/// What a bulk edit does to each cell of the selection.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BulkActionItem {
+    Set { value: CellInputItem },
+    FillDown,
+    Trim,
+    UpperCase,
+    LowerCase,
+    NewUuid,
+    Now,
+}
+
+impl From<BulkActionItem> for spelaion_core::BulkAction {
+    fn from(item: BulkActionItem) -> Self {
+        match item {
+            BulkActionItem::Set { value } => Self::Set(value.into()),
+            BulkActionItem::FillDown => Self::FillDown,
+            BulkActionItem::Trim => Self::Trim,
+            BulkActionItem::UpperCase => Self::UpperCase,
+            BulkActionItem::LowerCase => Self::LowerCase,
+            BulkActionItem::NewUuid => Self::NewUuid,
+            BulkActionItem::Now => Self::Now,
+        }
+    }
+}
+
+/// What the user did to a table data page's pending edits (ADR-044); the core keeps them.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PendingEditItem {
+    SetCells {
+        cells: Vec<PendingCellItem>,
+    },
+    /// A keystroke in a cell's text box: typing on in the same cell is one undo step.
+    Type {
+        cell: PendingCellItem,
+    },
+    Delete {
+        rows: Vec<u32>,
+    },
+    Revert {
+        rows: Vec<u32>,
+    },
+    Insert {
+        values: Vec<CellEditItem>,
+    },
+    UpdateInsert {
+        index: u32,
+        values: Vec<CellEditItem>,
+    },
+    RemoveInsert {
+        index: u32,
+    },
+    Discard,
+    Bulk {
+        block: BlockItem,
+        action: BulkActionItem,
+    },
+    Paste {
+        selection: BlockItem,
+        columns: Vec<u32>,
+        text: String,
+    },
+    Undo,
+    Redo,
+}
+
+fn insert_values(values: Vec<CellEditItem>) -> Vec<(usize, spelaion_core::CellInput)> {
+    values
+        .into_iter()
+        .map(|v| {
+            (
+                v.column as usize,
+                match v.value {
+                    Some(text) => spelaion_core::CellInput::Text(text),
+                    None => spelaion_core::CellInput::Null,
+                },
+            )
+        })
+        .collect()
+}
+
+impl From<PendingEditItem> for spelaion_core::PendingEdit {
+    fn from(item: PendingEditItem) -> Self {
+        let rows = |rows: Vec<u32>| rows.into_iter().map(|r| r as usize).collect();
+        match item {
+            PendingEditItem::SetCells { cells } => {
+                Self::SetCells(cells.into_iter().map(Into::into).collect())
+            }
+            PendingEditItem::Type { cell } => Self::Type(cell.into()),
+            PendingEditItem::Delete { rows: r } => Self::Delete(rows(r)),
+            PendingEditItem::Revert { rows: r } => Self::Revert(rows(r)),
+            PendingEditItem::Insert { values } => Self::Insert(insert_values(values)),
+            PendingEditItem::UpdateInsert { index, values } => Self::UpdateInsert {
+                index: index as usize,
+                values: insert_values(values),
             },
-            RowChangeItem::Delete { row } => Self::Delete { row: row as usize },
-            RowChangeItem::Insert { values: v } => Self::Insert { values: values(v) },
+            PendingEditItem::RemoveInsert { index } => Self::RemoveInsert(index as usize),
+            PendingEditItem::Discard => Self::Discard,
+            PendingEditItem::Bulk { block, action } => Self::Bulk {
+                block: block.into(),
+                action: action.into(),
+            },
+            PendingEditItem::Paste {
+                selection,
+                columns,
+                text,
+            } => Self::Paste {
+                selection: selection.into(),
+                columns: columns.into_iter().map(|c| c as usize).collect(),
+                text,
+            },
+            PendingEditItem::Undo => Self::Undo,
+            PendingEditItem::Redo => Self::Redo,
+        }
+    }
+}
+
+/// A pending value as the grid draws it: its text (`null` is NULL), or the column's default.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingValueItem {
+    pub row: u32,
+    pub column: u32,
+    pub value: Option<String>,
+    pub is_default: bool,
+}
+
+/// A value of a new row, as typed (`null` is NULL).
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct CellEditViewItem {
+    pub column: u32,
+    pub value: Option<String>,
+}
+
+/// A table data page's pending edits, as the core holds them, and what the last edit did.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingEditsItem {
+    pub cells: Vec<PendingValueItem>,
+    pub deleted: Vec<u32>,
+    pub inserts: Vec<Vec<CellEditViewItem>>,
+    pub updated_rows: u32,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    /// Cells, deletions and new rows the last edit changed (or undo / redo restored).
+    pub changed: u32,
+    /// Pasted values left out past the last row or column.
+    pub clipped: u32,
+}
+
+/// Bytes are shown in hex up to this size, past it by their length.
+const PENDING_BYTES_SHOWN: usize = 4096;
+
+fn input_text(input: &spelaion_core::CellInput) -> (Option<String>, bool) {
+    match input {
+        spelaion_core::CellInput::Null => (None, false),
+        spelaion_core::CellInput::Default => (None, true),
+        spelaion_core::CellInput::Text(text) => (Some(text.clone()), false),
+        spelaion_core::CellInput::Bytes(bytes) if bytes.len() <= PENDING_BYTES_SHOWN => {
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            (Some(format!("\\x{hex}")), false)
+        }
+        spelaion_core::CellInput::Bytes(bytes) => (Some(format!("({} bytes)", bytes.len())), false),
+    }
+}
+
+impl PendingEditsItem {
+    pub fn new(pending: &spelaion_core::PendingEdits, outcome: spelaion_core::EditOutcome) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            cells: pending
+                .cells()
+                .map(|(row, column, input)| {
+                    let (value, is_default) = input_text(input);
+                    PendingValueItem {
+                        row: count(row),
+                        column: count(column),
+                        value,
+                        is_default,
+                    }
+                })
+                .collect(),
+            deleted: pending.deleted().map(count).collect(),
+            inserts: pending
+                .inserts()
+                .iter()
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|(column, input)| CellEditViewItem {
+                            column: count(*column),
+                            value: input_text(input).0,
+                        })
+                        .collect()
+                })
+                .collect(),
+            updated_rows: count(pending.updated_rows()),
+            can_undo: pending.can_undo(),
+            can_redo: pending.can_redo(),
+            changed: count(outcome.changed),
+            clipped: count(outcome.clipped),
         }
     }
 }

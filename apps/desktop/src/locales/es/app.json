@@ -55,7 +55,8 @@
       "tab": "Pestaña",
       "file": "Archivo",
       "editor": "Editor",
-      "view": "Ver"
+      "view": "Ver",
+      "data": "Datos de tabla"
     },
     "palette": "Mostrar todos los comandos",
     "paletteHint": "{{shortcut}} muestra todos los comandos.",
@@ -68,6 +69,8 @@
     "restoreEditor": "Restaurar el editor",
     "saveQuery": "Guardar la consulta",
     "cancelQuery": "Cancelar la consulta",
+    "undoEdit": "Deshacer el último cambio pendiente",
+    "redoEdit": "Rehacer el cambio pendiente deshecho",
     "explorerFilter": "Filtrar el explorador",
     "importClipboard": "Importar datos del portapapeles…"
   },

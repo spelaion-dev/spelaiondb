@@ -234,13 +234,15 @@ async fn unique_schema(session: &Session, name: &str) -> Result<Option<String>, 
     Ok(found)
 }
 
-/// A value typed in the grid (or NULL), or the bytes of a file loaded into a binary cell
-/// (`value_view::read_value_file`).
+/// A value typed in the grid (or NULL), the bytes of a file loaded into a binary cell
+/// (`value_view::read_value_file`), or the column's default (ADR-044).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CellInput {
     Null,
     Text(String),
     Bytes(Vec<u8>),
+    /// `SET column = DEFAULT`; a new row leaves the column out.
+    Default,
 }
 
 /// One change, by position in the result shown (`row`) and result column (`column`).
@@ -267,6 +269,10 @@ pub enum EditError {
     KeyNotInResult(String),
     #[error("there is no row {0} on this page")]
     NoSuchRow(usize),
+    #[error("there is no new row {0}")]
+    NoSuchNewRow(usize),
+    #[error("the clipboard holds more than {0} bytes: too much to paste into the grid")]
+    TooMuchToPaste(usize),
     #[error("column {0} is not a column of the table")]
     NotATableColumn(String),
     #[error("{column}: \"{value}\" is not {expected}")]
@@ -375,11 +381,11 @@ pub fn edit_statements(
                     .iter()
                     .map(|(i, input)| {
                         let (name, logical) = column(*i)?;
-                        Ok(format!(
-                            "{} = {}",
-                            dialect.quote_identifier(name),
-                            literal(dialect.name(), name, logical, input)?
-                        ))
+                        let value = match input {
+                            CellInput::Default => default_value(dialect.name(), table, name),
+                            other => literal(dialect.name(), name, logical, other)?,
+                        };
+                        Ok(format!("{} = {value}", dialect.quote_identifier(name)))
                     })
                     .collect::<Result<Vec<_>, EditError>>()?;
                 statements.push(format!(
@@ -396,6 +402,10 @@ pub fn edit_statements(
                 let mut literals = Vec::new();
                 for (i, input) in values {
                     let (column_name, logical) = column(*i)?;
+                    // Left out, the column takes its default.
+                    if *input == CellInput::Default {
+                        continue;
+                    }
                     names.push(dialect.quote_identifier(column_name));
                     literals.push(literal(dialect.name(), column_name, logical, input)?);
                 }
@@ -497,6 +507,37 @@ pub(crate) async fn run_one(session: &Session, sql: &str) -> Result<Option<u64>,
     }
 }
 
+/// The value `SET column = DEFAULT` gives. SQLite has no `DEFAULT` there, so the column's
+/// default expression is written as the catalog holds it (the database's own text, what an
+/// INSERT without the column would evaluate), or NULL without one, as SQLite does.
+fn default_value(dialect: &str, table: &TableInfo, column: &str) -> String {
+    match dialect {
+        "sqlite" => table
+            .columns
+            .iter()
+            .find(|c| c.name == column)
+            .and_then(|c| c.default.as_deref())
+            .map_or_else(
+                || "NULL".to_string(),
+                |expression| format!("({expression})"),
+            ),
+        _ => "DEFAULT".to_string(),
+    }
+}
+
+/// Refuses an input the column's type cannot take (a pending value is checked when it is
+/// given, so a bulk edit or a paste fails at once, not when it is applied).
+pub(crate) fn check_input(
+    column: &str,
+    logical: LogicalType,
+    input: &CellInput,
+) -> Result<(), EditError> {
+    match input {
+        CellInput::Default => Ok(()),
+        other => literal("postgres", column, logical, other).map(|_| ()),
+    }
+}
+
 /// What the user typed, as a literal for a column of this type.
 fn literal(
     dialect: &str,
@@ -506,6 +547,8 @@ fn literal(
 ) -> Result<String, EditError> {
     let text = match input {
         CellInput::Null => return Ok("NULL".into()),
+        // Written by the caller: `DEFAULT`, or the column left out of an INSERT.
+        CellInput::Default => return Ok("DEFAULT".into()),
         CellInput::Text(text) => text,
         // Raw bytes only go to a binary column; anything else takes text.
         CellInput::Bytes(bytes) => {

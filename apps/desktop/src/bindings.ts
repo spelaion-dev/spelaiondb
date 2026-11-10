@@ -460,16 +460,25 @@ export const commands = {
 	setActiveSchema: (session: string, schema: string) => typedError<null, string>(__TAURI_INVOKE("set_active_schema", { session, schema })),
 	/**  The schema where a session finds unqualified names ("Link with editor"). */
 	activeSchema: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("active_schema", { session })),
+	/**  The pending edits of a table data page, as the core holds them (ADR-044). */
+	pendingEdits: (result: number) => typedError<PendingEditsItem_Serialize, string>(__TAURI_INVOKE("pending_edits", { result })),
 	/**
-	 *  The statements the core would run for the pending changes of a table data tab, to show
+	 *  Does one thing to a table data page's pending edits: a cell typed, rows deleted or
+	 *  reverted, a new row, a bulk edit of the selection, a paste, Discard, undo or redo
+	 *  (ADR-044). Returns the edits now pending; nothing is written to the database.
+	 */
+	editPending: (result: number, edit: PendingEditItem_Deserialize) => typedError<PendingEditsItem_Serialize, string>(__TAURI_INVOKE("edit_pending", { result, edit })),
+	/**
+	 *  The statements the core would run for the pending edits of a table data page, to show
 	 *  before applying them (production asks for confirmation).
 	 */
-	previewTableEdits: (session: string, result: number, schema: string, name: string, changes: RowChangeItem_Deserialize[]) => typedError<string[], string>(__TAURI_INVOKE("preview_table_edits", { session, result, schema, name, changes })),
+	previewTableEdits: (session: string, result: number, schema: string, name: string) => typedError<string[], string>(__TAURI_INVOKE("preview_table_edits", { session, result, schema, name })),
 	/**
-	 *  Applies the pending changes in one transaction (ADR-014): refused on read-only
-	 *  connections, and on production unless the user confirmed the statements.
+	 *  Applies the page's pending edits in one transaction (ADR-014): refused on read-only
+	 *  connections, and on production unless the user confirmed the statements. Once applied
+	 *  they are forgotten, with their undo history.
 	 */
-	applyTableEdits: (session: string, result: number, schema: string, name: string, changes: RowChangeItem_Deserialize[], confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_table_edits", { session, result, schema, name, changes, confirmed })),
+	applyTableEdits: (session: string, result: number, schema: string, name: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_table_edits", { session, result, schema, name, confirmed })),
 	/**
 	 *  Saves the query under `name` for the open workspace (or personally outside one),
 	 *  replacing a saved query with that name. Returns its identifier.
@@ -775,6 +784,13 @@ export type AuditSessionItem = {
 
 export type AuditStatusItem = "ok" | "error" | "refused" | "cleared";
 
+/**  A rectangle of the page: rows `firstRow..=lastRow` of the shown `columns`, in order. */
+export type BlockItem = {
+	firstRow: number,
+	lastRow: number,
+	columns: number[],
+};
+
 /**  A row of the blocking tree, in display order. */
 export type BlockingNodeItem = {
 	session: string,
@@ -794,6 +810,9 @@ export type BookmarkItem = {
 	detail: string,
 };
 
+/**  What a bulk edit does to each cell of the selection. */
+export type BulkActionItem = { kind: "set"; value: CellInputItem } | { kind: "fillDown" } | { kind: "trim" } | { kind: "upperCase" } | { kind: "lowerCase" } | { kind: "newUuid" } | { kind: "now" };
+
 /**  A value typed in the grid for a result column (`None` is NULL). */
 export type CellEditItem = CellEditItem_Serialize | CellEditItem_Deserialize;
 
@@ -808,6 +827,24 @@ export type CellEditItem_Serialize = {
 	column: number,
 	value: string | null,
 };
+
+/**  A value of a new row, as typed (`null` is NULL). */
+export type CellEditViewItem = CellEditViewItem_Serialize | CellEditViewItem_Deserialize;
+
+/**  A value of a new row, as typed (`null` is NULL). */
+export type CellEditViewItem_Deserialize = {
+	column: number,
+	value?: string | null,
+};
+
+/**  A value of a new row, as typed (`null` is NULL). */
+export type CellEditViewItem_Serialize = {
+	column: number,
+	value: string | null,
+};
+
+/**  A value given to a cell: text, NULL or the column's default (ADR-044). */
+export type CellInputItem = { kind: "text"; text: string } | { kind: "null" } | { kind: "default" };
 
 /**
  *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
@@ -2673,6 +2710,86 @@ export type PastedItem = {
 	leftOut: string[],
 };
 
+/**  A cell's new value; `null` takes it back to its value in the database. */
+export type PendingCellItem = PendingCellItem_Serialize | PendingCellItem_Deserialize;
+
+/**  A cell's new value; `null` takes it back to its value in the database. */
+export type PendingCellItem_Deserialize = {
+	row: number,
+	column: number,
+	value?: CellInputItem | null,
+};
+
+/**  A cell's new value; `null` takes it back to its value in the database. */
+export type PendingCellItem_Serialize = {
+	row: number,
+	column: number,
+	value: CellInputItem | null,
+};
+
+/**  What the user did to a table data page's pending edits (ADR-044); the core keeps them. */
+export type PendingEditItem = PendingEditItem_Serialize | PendingEditItem_Deserialize;
+
+/**  What the user did to a table data page's pending edits (ADR-044); the core keeps them. */
+export type PendingEditItem_Deserialize = { kind: "setCells"; cells: PendingCellItem_Deserialize[] } | 
+/**  A keystroke in a cell's text box: typing on in the same cell is one undo step. */
+{ kind: "type"; cell: PendingCellItem_Deserialize } | { kind: "delete"; rows: number[] } | { kind: "revert"; rows: number[] } | { kind: "insert"; values: CellEditItem_Deserialize[] } | { kind: "updateInsert"; index: number; values: CellEditItem_Deserialize[] } | { kind: "removeInsert"; index: number } | { kind: "discard" } | { kind: "bulk"; block: BlockItem; action: BulkActionItem } | { kind: "paste"; selection: BlockItem; columns: number[]; text: string } | { kind: "undo" } | { kind: "redo" };
+
+/**  What the user did to a table data page's pending edits (ADR-044); the core keeps them. */
+export type PendingEditItem_Serialize = { kind: "setCells"; cells: PendingCellItem_Serialize[] } | 
+/**  A keystroke in a cell's text box: typing on in the same cell is one undo step. */
+{ kind: "type"; cell: PendingCellItem_Serialize } | { kind: "delete"; rows: number[] } | { kind: "revert"; rows: number[] } | { kind: "insert"; values: CellEditItem_Serialize[] } | { kind: "updateInsert"; index: number; values: CellEditItem_Serialize[] } | { kind: "removeInsert"; index: number } | { kind: "discard" } | { kind: "bulk"; block: BlockItem; action: BulkActionItem } | { kind: "paste"; selection: BlockItem; columns: number[]; text: string } | { kind: "undo" } | { kind: "redo" };
+
+/**  A table data page's pending edits, as the core holds them, and what the last edit did. */
+export type PendingEditsItem = PendingEditsItem_Serialize | PendingEditsItem_Deserialize;
+
+/**  A table data page's pending edits, as the core holds them, and what the last edit did. */
+export type PendingEditsItem_Deserialize = {
+	cells: PendingValueItem_Deserialize[],
+	deleted: number[],
+	inserts: CellEditViewItem_Deserialize[][],
+	updatedRows: number,
+	canUndo: boolean,
+	canRedo: boolean,
+	/**  Cells, deletions and new rows the last edit changed (or undo / redo restored). */
+	changed: number,
+	/**  Pasted values left out past the last row or column. */
+	clipped: number,
+};
+
+/**  A table data page's pending edits, as the core holds them, and what the last edit did. */
+export type PendingEditsItem_Serialize = {
+	cells: PendingValueItem_Serialize[],
+	deleted: number[],
+	inserts: CellEditViewItem_Serialize[][],
+	updatedRows: number,
+	canUndo: boolean,
+	canRedo: boolean,
+	/**  Cells, deletions and new rows the last edit changed (or undo / redo restored). */
+	changed: number,
+	/**  Pasted values left out past the last row or column. */
+	clipped: number,
+};
+
+/**  A pending value as the grid draws it: its text (`null` is NULL), or the column's default. */
+export type PendingValueItem = PendingValueItem_Serialize | PendingValueItem_Deserialize;
+
+/**  A pending value as the grid draws it: its text (`null` is NULL), or the column's default. */
+export type PendingValueItem_Deserialize = {
+	row: number,
+	column: number,
+	value?: string | null,
+	isDefault: boolean,
+};
+
+/**  A pending value as the grid draws it: its text (`null` is NULL), or the column's default. */
+export type PendingValueItem_Serialize = {
+	row: number,
+	column: number,
+	value: string | null,
+	isDefault: boolean,
+};
+
 /**  A date and time as picked in the date and time picker. */
 export type PickedTimeItem = {
 	year: number,
@@ -3148,15 +3265,6 @@ export type RiskyItem = {
 	end: number,
 	risk: RiskKind,
 };
-
-/**  A pending change of a table data tab (ADR-014), by position in the page shown. */
-export type RowChangeItem = RowChangeItem_Serialize | RowChangeItem_Deserialize;
-
-/**  A pending change of a table data tab (ADR-014), by position in the page shown. */
-export type RowChangeItem_Deserialize = { kind: "update"; row: number; values: CellEditItem_Deserialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Deserialize[] };
-
-/**  A pending change of a table data tab (ADR-014), by position in the page shown. */
-export type RowChangeItem_Serialize = { kind: "update"; row: number; values: CellEditItem_Serialize[] } | { kind: "delete"; row: number } | { kind: "insert"; values: CellEditItem_Serialize[] };
 
 /**
  *  One key of a row in the references panel: where it leads and its first rows (as text,
