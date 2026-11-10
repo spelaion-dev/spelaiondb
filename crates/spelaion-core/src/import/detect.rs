@@ -150,7 +150,10 @@ fn split_zone(value: &str) -> (&str, Option<FixedOffset>) {
         return (naive.trim_end(), FixedOffset::east_opt(0));
     }
     // The zone starts at the last sign after the date.
-    match value[10..].rfind(['+', '-']) {
+    let Some(after_date) = value.get(10..) else {
+        return (value, None);
+    };
+    match after_date.rfind(['+', '-']) {
         Some(i) => {
             let at = 10 + i;
             match parse_offset(&value[at..]) {
@@ -441,6 +444,32 @@ mod tests {
         assert_eq!(detect(&[Some("hello")]), Text);
         // No values at all: text.
         assert_eq!(detect(&[None, None]), Text);
+    }
+
+    #[test]
+    fn unicode_text_is_not_mistaken_for_a_timestamp() {
+        let formats = Formats::default();
+        for value in ["ITEM-Молоко 3.2%", "CODE-商品名称テスト", "2024-ééééééééé"]
+        {
+            assert_eq!(value_kind(value, &formats), ColumnKind::Text, "{value}");
+        }
+        for ch in ['é', '商', '🦀'] {
+            for len in 0..=20 {
+                let value = format!("ABCD-{} product", ch.to_string().repeat(len));
+                assert_eq!(value_kind(&value, &formats), ColumnKind::Text, "{value}");
+            }
+        }
+        // A text value being normalized for a timestamp column must not panic either.
+        let normalizer = Normalizer {
+            kinds: vec![TargetKind::TimestampTz],
+            formats,
+            zone: parse_offset("UTC"),
+            mysql: false,
+        };
+        assert_eq!(
+            normalizer.value(0, "ITEM-Молоко 3.2%".into()).unwrap(),
+            "ITEM-Молоко 3.2%"
+        );
     }
 
     #[test]
