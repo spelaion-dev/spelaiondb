@@ -141,6 +141,7 @@
     "checking": "Checking…",
     "upToDate": "You have the latest version.",
     "available": "Version {{version}} is available.",
+    "notesAction": "Release notes…",
     "install": "Install and restart",
     "installing": "Installing…",
     "hint": "Updates are signed and installed only when you click “Install and restart”. Open tabs come back with their SQL, not run.",

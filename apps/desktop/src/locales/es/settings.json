@@ -141,6 +141,7 @@
     "checking": "Buscando…",
     "upToDate": "Tienes la última versión.",
     "available": "La versión {{version}} está disponible.",
+    "notesAction": "Notas de la versión…",
     "install": "Instalar y reiniciar",
     "installing": "Instalando…",
     "hint": "Las actualizaciones van firmadas y solo se instalan cuando pulsas «Instalar y reiniciar». Las pestañas abiertas vuelven con su SQL, sin ejecutarlo.",

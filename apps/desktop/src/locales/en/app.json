@@ -12,7 +12,10 @@
     "available": "SpelaionDB {{version}} is available (you have {{current}}).",
     "install": "Install and restart",
     "installing": "Installing…",
-    "later": "Later"
+    "later": "Later",
+    "notesAction": "Release notes…",
+    "notesTitle": "What's new in {{version}}",
+    "notesUnavailable": "Release notes are not available for this version."
   },
   "tabs": {
     "menu": "Actions for {{name}}",

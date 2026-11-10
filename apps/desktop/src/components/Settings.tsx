@@ -652,6 +652,7 @@ function UpdateSettings() {
   const error = useUpdate((s) => s.error);
   const check = useUpdate((s) => s.check);
   const setCheckAtStartup = useUpdate((s) => s.setCheckAtStartup);
+  const showNotes = useUpdate((s) => s.showNotes);
   useEffect(() => {
     void getVersion().then(setVersion);
   }, []);
@@ -683,6 +684,7 @@ function UpdateSettings() {
           {/* Installed from here too, without closing the dialog for the notice behind it. */}
           {status?.kind === "available" && (
             <div>
+              <button disabled={installing} onClick={showNotes}>{t("updates.notesAction")}</button>{" "}
               <button className="primary" disabled={installing} onClick={() => void install()}>
                 {installing ? t("updates.installing") : t("updates.install")}
               </button>

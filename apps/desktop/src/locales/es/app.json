@@ -12,7 +12,10 @@
     "available": "Hay una nueva versión de SpelaionDB, la {{version}} (tienes la {{current}}).",
     "install": "Instalar y reiniciar",
     "installing": "Instalando…",
-    "later": "Más tarde"
+    "later": "Más tarde",
+    "notesAction": "Notas de la versión…",
+    "notesTitle": "Novedades de la versión {{version}}",
+    "notesUnavailable": "No hay notas disponibles para esta versión."
   },
   "tabs": {
     "menu": "Acciones de {{name}}",

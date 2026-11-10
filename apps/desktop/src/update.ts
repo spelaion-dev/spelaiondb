@@ -16,11 +16,14 @@ interface UpdateStore {
   error: string | null;
   /** The notice was closed with "Later": shown again on the next start. */
   dismissed: boolean;
+  notesOpen: boolean;
   start(): Promise<void>;
   check(): Promise<void>;
   install(): Promise<void>;
   setCheckAtStartup(enabled: boolean): Promise<void>;
   dismiss(): void;
+  showNotes(): void;
+  hideNotes(): void;
 }
 
 export const useUpdate = create<UpdateStore>((set, get) => ({
@@ -30,6 +33,7 @@ export const useUpdate = create<UpdateStore>((set, get) => ({
   installing: false,
   error: null,
   dismissed: false,
+  notesOpen: false,
   async start() {
     try {
       const enabled = await call(commands.getUpdateCheck());
@@ -72,5 +76,11 @@ export const useUpdate = create<UpdateStore>((set, get) => ({
   },
   dismiss() {
     set({ dismissed: true });
+  },
+  showNotes() {
+    set({ notesOpen: true });
+  },
+  hideNotes() {
+    set({ notesOpen: false });
   },
 }));
