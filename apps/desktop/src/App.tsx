@@ -27,7 +27,7 @@ import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./c
 import { activeContext, isCommandId, runCommand } from "./commands";
 import { call, commands, events } from "./api";
 import { usePreferences } from "./preferences";
-import { useUpdate } from "./update";
+import { manualUpdateKey, useUpdate } from "./update";
 import { useApp, useDialogs } from "./store";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
@@ -271,16 +271,26 @@ function UpdateNotice() {
   const install = useUpdate((s) => s.install);
   const dismiss = useUpdate((s) => s.dismiss);
   const showNotes = useUpdate((s) => s.showNotes);
+  const openReleasesPage = useUpdate((s) => s.openReleasesPage);
   if (status?.kind !== "available" || dismissed) return null;
+  // Only a copy that can replace itself offers to install (the core refuses the others too).
+  const manual = manualUpdateKey(status.method);
   return (
     <div className="banner update-notice" role="status">
-      <span>{t("update.available", { version: status.version, current: status.currentVersion })}</span>
+      <span>
+        {t("update.available", { version: status.version, current: status.currentVersion })}
+        {manual && ` ${t(`update.${manual}`)}`}
+      </span>
       {error && <span className="error">{error}</span>}
       <div className="banner-actions">
         <button disabled={installing} onClick={showNotes}>{t("update.notesAction")}</button>
-        <button className="primary" disabled={installing} onClick={() => void install()}>
-          {installing ? t("update.installing") : t("update.install")}
-        </button>
+        {manual ? (
+          <button className="primary" onClick={() => void openReleasesPage()}>{t("update.openReleases")}</button>
+        ) : (
+          <button className="primary" disabled={installing} onClick={() => void install()}>
+            {installing ? t("update.installing") : t("update.install")}
+          </button>
+        )}
         <button disabled={installing} onClick={dismiss}>
           {t("update.later")}
         </button>

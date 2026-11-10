@@ -4709,6 +4709,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             notify_run_finished,
             update::update_check,
             update::update_install,
+            update::update_open_releases_page,
             engine_catalog,
             keychain_available,
             list_tunnels,

@@ -129,9 +129,15 @@ export const commands = {
 	updateCheck: () => typedError<UpdateStatus_Serialize, string>(__TAURI_INVOKE("update_check")),
 	/**
 	 *  Downloads and installs the update the last check found, then restarts the app. Open tabs
-	 *  come back with their SQL, not executed (AGENTS.md).
+	 *  come back with their SQL, not executed (AGENTS.md). Refused for an install the app cannot
+	 *  replace (see `update_method`), whatever the web view asks.
 	 */
 	updateInstall: () => typedError<null, string>(__TAURI_INVOKE("update_install")),
+	/**
+	 *  Opens the latest release's page in the system's browser, for an install that is updated by
+	 *  hand or by the package manager. Only that fixed address can be opened.
+	 */
+	updateOpenReleasesPage: () => typedError<null, string>(__TAURI_INVOKE("update_open_releases_page")),
 	/**  Engines shown when adding a connection, including the ones not supported yet. */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
 	/**
@@ -4282,15 +4288,29 @@ export type TunnelTestOutcome_Serialize = { kind: "tested"; report: TestReportIt
 /**  The repository is not trusted: ask before resolving anything. */
 { kind: "untrusted" };
 
+/**  How this copy of the app gets a new version. */
+export type UpdateMethod = 
+/**
+ *  The app downloads, verifies and installs it itself ("Install and restart"): Windows,
+ *  macOS and a Linux AppImage.
+ */
+"inApp" | 
+/**  Installed from a `.deb` package: the new `.deb` is installed with the package manager. */
+"deb" | 
+/**  Installed from an `.rpm` package: the new `.rpm` is installed with the package manager. */
+"rpm" | 
+/**  A Linux binary that is none of those: the new version is downloaded by hand. */
+"releasesPage";
+
 export type UpdateStatus = UpdateStatus_Serialize | UpdateStatus_Deserialize;
 
 export type UpdateStatus_Deserialize = 
 /**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
-{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null };
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes?: string | null; method: UpdateMethod };
 
 export type UpdateStatus_Serialize = 
 /**  Updates are switched off in this run (`SPELAION_NO_UPDATES`). */
-{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null };
+{ kind: "unavailable" } | { kind: "upToDate" } | { kind: "available"; version: string; currentVersion: string; notes: string | null; method: UpdateMethod };
 
 /**
  *  What a pasted connection URL fills in the form. The password goes only to the form's
