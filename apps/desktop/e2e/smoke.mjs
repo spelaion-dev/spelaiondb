@@ -466,7 +466,30 @@ try {
   await moveDialog.waitFor({ state: "detached" });
   await page.locator('.group-segment[data-drop-folder="docker/eu"]').waitFor();
   assert.ok(existsSync(nestedShop) && !existsSync(movedShop));
-  const euFolder = page.getByRole("button", { name: "Expand or collapse eu", exact: true });
+  // It stays mounted while its parent is hidden, so inspect it even when it is not accessible.
+  const euFolder = page.locator('button[aria-label="Expand or collapse eu"]');
+  // Collapse all affects nested connection folders only; the live explorer stays mounted.
+  await page.getByRole("button", { name: "Expand or collapse Shop (SQLite)", exact: true }).click();
+  const nestedSchema = page.getByRole("button", { name: "Expand or collapse schema main", exact: true });
+  await nestedSchema.waitFor();
+  const collapseFolders = page.getByRole("button", { name: "Collapse all connection folders" });
+  await collapseFolders.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await dockerFolder.getAttribute("aria-expanded"), "false");
+  assert.equal(await euFolder.getAttribute("aria-expanded"), "false");
+  await nestedSchema.waitFor({ state: "hidden" });
+  // Searching temporarily opens ancestors, then clearing restores the collapsed state.
+  await page.keyboard.press("Control+Shift+F");
+  const collapseFilter = page.getByRole("searchbox", { name: "Filter the explorer" });
+  await collapseFilter.fill("Shop (SQLite)");
+  await nestedSchema.waitFor({ state: "visible" });
+  await collapseFilter.fill("");
+  await page.keyboard.press("Escape");
+  assert.equal(await dockerFolder.getAttribute("aria-expanded"), "false");
+  await dockerFolder.click();
+  assert.equal(await euFolder.getAttribute("aria-expanded"), "false");
+  await euFolder.click();
+  await nestedSchema.waitFor({ state: "visible" });
   await euFolder.click();
   await page.locator('.connection-row:has-text("Shop (SQLite)")').waitFor({ state: "hidden" });
   await dockerFolder.click();

@@ -93,6 +93,7 @@
   "toggleObject": "Expand or collapse {{name}}",
   "viewRowsHint": "Double-click: view rows. Right-click: generate SQL",
   "toggleFolder": "Expand or collapse {{name}}",
+  "collapseAllFolders": "Collapse all connection folders",
   "openObject": "{{name}}: open its definition",
   "openDefinition": "Generate DDL",
   "generatedSql": {
