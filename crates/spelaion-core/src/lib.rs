@@ -36,6 +36,7 @@ mod query_page;
 mod readonly;
 mod references;
 mod results;
+mod save_name;
 mod script;
 mod selection_stats;
 mod server_settings;
@@ -128,6 +129,7 @@ pub use references::{
     reference_targets, table_keys,
 };
 pub use results::{ResultId, ResultStore, StoredResult};
+pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
 };

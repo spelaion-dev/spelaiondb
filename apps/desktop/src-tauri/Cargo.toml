@@ -57,5 +57,10 @@ tauri-plugin-updater = "2"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 tokio = { workspace = true, features = ["sync", "time"] }
 
+# Linux's file dialogs get the app's window as their parent (src/file_dialog.rs); the version
+# Tauri itself uses.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
 [lints]
 workspace = true

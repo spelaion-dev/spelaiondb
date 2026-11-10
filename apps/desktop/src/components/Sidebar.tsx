@@ -2,8 +2,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { chooseFolder, workspaceParent } from "../dialogs";
 import { Trans, useTranslation } from "react-i18next";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   call,
   commands,
@@ -1175,8 +1175,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     drag?.dragging && drag.personal === personal && drag.target === folder ? " drop-target" : "";
 
   async function openFolder() {
-    const path = await open({ directory: true, title: t("openFolderTitle") });
-    if (typeof path !== "string") return;
+    const path = await chooseFolder(t("openFolderTitle"), workspaceParent());
+    if (!path) return;
     const app = useApp.getState();
     // A connection ID can refer to a different server in the next folder: the tabs on screen
     // are kept under this folder and the next folder's own tabs come back (ADR-036).

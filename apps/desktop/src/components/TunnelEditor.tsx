@@ -4,8 +4,8 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { chooseOpenFile } from "../dialogs";
 import { useKeychainAvailable } from "../keychain";
-import { open } from "@tauri-apps/plugin-dialog";
 import { call, commands, type HopDraft, type PasswordMode, type ProxyDraft, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
@@ -211,8 +211,8 @@ export function TunnelEditor(props: {
   useEffect(() => log.clear(), [testedKey]);
 
   async function browseKey(i: number) {
-    const path = await open({ multiple: false, directory: false });
-    if (typeof path === "string") updateHop(i, { identityFile: path });
+    const path = await chooseOpenFile(undefined, [], hops[i]?.identityFile);
+    if (path) updateHop(i, { identityFile: path });
   }
 
   /** Tests the profile step by step (ADR-032): the proxy and each hop, in the log. */

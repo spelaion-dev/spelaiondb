@@ -3,6 +3,7 @@
 
 mod connection_import;
 mod dto;
+mod file_dialog;
 mod files;
 mod import;
 mod interaction;
@@ -4641,6 +4642,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_grid_preferences,
             get_script_preferences,
             set_script_preferences,
+            file_dialog::choose_path,
             files::open_sql_file,
             files::save_sql_file,
             files::recent_files,

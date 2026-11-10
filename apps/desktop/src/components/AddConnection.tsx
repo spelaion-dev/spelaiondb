@@ -4,7 +4,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   call,
   commands,
@@ -22,7 +21,7 @@ import { ConnectionTypePicker, pickedType, useConnectionTypes } from "./Connecti
 import { EngineIcon } from "./EngineIcon";
 import { TagInput } from "./TagInput";
 import { refreshConnections } from "./Sidebar";
-import { chooseSavePath, openFilters } from "../dialogs";
+import { chooseOpenFile, chooseSavePath } from "../dialogs";
 import { confirmOpenTransactions, reviewChanges } from "../connect";
 import { useKeychainAvailable } from "../keychain";
 import { ensureEditorAccess } from "../connectionCopies";
@@ -542,16 +541,14 @@ function ConnectionForm(props: {
   }
 
   async function browse(field: "database" | "tlsCa" | "tlsCert" | "tlsKey") {
-    const path = await open({
-      multiple: false,
-      directory: false,
-      filters: openFilters(
-        field === "database"
-          ? [...databaseFilters(), { name: t("allFiles"), extensions: ["*"] }]
-          : [{ name: t("certificates"), extensions: ["pem", "crt", "cer", "key"] }, { name: t("allFiles"), extensions: ["*"] }],
-      ),
-    });
-    if (typeof path === "string") update({ [field]: path });
+    const path = await chooseOpenFile(
+      undefined,
+      field === "database"
+        ? [...databaseFilters(), { name: t("allFiles"), extensions: ["*"] }]
+        : [{ name: t("certificates"), extensions: ["pem", "crt", "cer", "key"] }, { name: t("allFiles"), extensions: ["*"] }],
+      draft[field],
+    );
+    if (path) update({ [field]: path });
   }
 
   function databaseFilters() {

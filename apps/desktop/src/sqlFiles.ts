@@ -44,7 +44,9 @@ function filters() {
 
 /** Ctrl+O: asks for a file and opens it (or shows the tab that has it). */
 export async function openFileDialog(): Promise<void> {
-  const path = await chooseOpenFile(i18n.t("editor:files.openTitle"), filters());
+  const app = useApp.getState();
+  const near = app.tabs.find((t) => t.id === app.activeTab)?.file?.path;
+  const path = await chooseOpenFile(i18n.t("editor:files.openTitle"), filters(), near);
   if (path) await openFilePath(path);
 }
 
