@@ -561,3 +561,106 @@ fn the_cli_is_found_next_to_the_app_then_on_the_path() {
         None
     );
 }
+
+/// A file's permission bits.
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+}
+
+/// AI clients write their files owner-only (they hold tokens): installing keeps that for the
+/// new file and the backup, whatever the umask.
+#[cfg(unix)]
+#[test]
+fn a_private_file_and_its_backup_stay_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for client in [McpClient::ClaudeCode, McpClient::Codex] {
+        let root = temp("private");
+        let path = config_path(client, &ClientEnv::under(&root, Os::Linux));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = if client == McpClient::Codex {
+            "[mcp_servers.other]\ncommand = \"other\"\nenv = { TOKEN = \"secret\" }\n"
+        } else {
+            "{\"oauthAccount\": {\"token\": \"secret\"}}\n"
+        };
+        std::fs::write(&path, original).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let plan = plan_install(client, &path, &command()).unwrap();
+        let backup = apply_shown(client, &path, &command(), &plan.fingerprint())
+            .unwrap()
+            .expect("a backup of the old file");
+        assert_eq!(mode(&path), 0o600, "{client:?} file");
+        assert_eq!(mode(&backup), 0o600, "{client:?} backup");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+        assert_eq!(
+            install_state(client, &path, &command()),
+            InstallState::Installed
+        );
+    }
+}
+
+/// A configuration kept in a dotfiles repository and linked into place: the link stays a
+/// link, its target gets our entry with its mode kept, and the backup (owner-only like the
+/// target) sits beside the link, outside the repository.
+#[cfg(unix)]
+#[test]
+fn a_linked_file_stays_a_link() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = temp("linked");
+    let dotfiles = root.join("dotfiles");
+    std::fs::create_dir_all(&dotfiles).unwrap();
+    let target = dotfiles.join("claude.json");
+    let original = "{\"mcpServers\": {\"other\": {\"command\": \"other\"}}}\n";
+    std::fs::write(&target, original).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let path = config_path(McpClient::ClaudeCode, &ClientEnv::under(&root, Os::Linux));
+    std::os::unix::fs::symlink("dotfiles/claude.json", &path).unwrap();
+
+    let plan = plan_install(McpClient::ClaudeCode, &path, &command()).unwrap();
+    let backup = apply_shown(
+        McpClient::ClaudeCode,
+        &path,
+        &command(),
+        &plan.fingerprint(),
+    )
+    .unwrap()
+    .expect("a backup of the old file");
+
+    let link = std::fs::symlink_metadata(&path).unwrap();
+    assert!(link.file_type().is_symlink(), "the link was replaced");
+    assert_eq!(
+        std::fs::read_link(&path).unwrap(),
+        Path::new("dotfiles/claude.json")
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(entry(&json)["args"], serde_json::json!(["mcp"]));
+    assert_eq!(json["mcpServers"]["other"]["command"], "other");
+    assert_eq!(mode(&target), 0o600);
+    assert!(
+        !std::fs::symlink_metadata(&backup)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(backup.parent(), path.parent());
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+    assert_eq!(mode(&backup), 0o600);
+    // Nothing else in the repository: no backup, no temporary file.
+    let in_dotfiles: Vec<_> = std::fs::read_dir(&dotfiles).unwrap().collect();
+    assert_eq!(in_dotfiles.len(), 1);
+}
+
+/// A file the client has not created yet is created owner-only, not with the umask's mode.
+#[cfg(unix)]
+#[test]
+fn a_new_file_is_owner_only() {
+    for client in [McpClient::ClaudeCode, McpClient::Codex, McpClient::Cursor] {
+        let root = temp("new-private");
+        let path = config_path(client, &ClientEnv::under(&root, Os::Linux));
+        let (_, backup) = install(client, &path);
+        assert!(backup.is_none());
+        assert_eq!(mode(&path), 0o600, "{client:?}");
+    }
+}

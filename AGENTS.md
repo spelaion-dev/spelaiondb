@@ -207,7 +207,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
   `open.rs`); a tunnel file's is per SSH hop.
   `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a
-  BOM, UTF-16, Windows-1252, the file's line ending, temp file + rename, a content hash that
+  BOM, UTF-16, Windows-1252, the file's line ending, temp file + rename through
+  `spelaion-config::atomic_file`, which keeps the mode and follows links, a content hash that
   refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
   writes them at most a second after a change) and checks them before they come back
   (`restore_tabs`): never results, secrets or session state, and nothing is run.
@@ -235,8 +236,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `spelaion-config::mcp_clients` finds each AI client's file and writes our entry there for the
   app's MCP page (ADR-033): only our entry changes, JSON edited as text at the spans it finds,
   Codex's TOML with `toml_edit`, a backup first, and only the change the user saw (its
-  fingerprint). Tests and the smoke test point it at `SPELAION_MCP_CLIENTS_HOME`, never at the
-  user's files; `SPELAION_CLI` names the `spelaiondb` it installs. The installers ship the CLI
+  fingerprint); the new file and the backup keep the old file's mode (owner-only when new) and
+  a symbolic link stays a link. Tests and the smoke test point it at
+  `SPELAION_MCP_CLIENTS_HOME`, never at the user's files; `SPELAION_CLI` names the `spelaiondb` it installs. The installers ship the CLI
   next to the app (`externalBin`, only in `tauri.release.conf.json`).
   Every MCP tool call goes to the store's append-only `audit` table with its tool and its
   process's session; the app's Activity tab reads it through `spelaion-core::audit`, which masks

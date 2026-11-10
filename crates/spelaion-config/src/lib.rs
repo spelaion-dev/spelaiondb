@@ -10,6 +10,7 @@
 //! anything is resolved ([`TrustStore`]).
 
 mod accounts;
+pub mod atomic_file;
 mod beekeeper;
 mod check;
 mod conn_url;

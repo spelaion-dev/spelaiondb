@@ -7,11 +7,15 @@
 //! the spans a small scanner finds, after `serde_json` has checked the file; Codex's TOML goes
 //! through `toml_edit`. A file that does not parse is never written: the user edits it by
 //! hand. Before writing, the file is read again and must be exactly what the shown change was
-//! made from; the old file is kept as `<file>.spelaion-backup-<date>`.
+//! made from; the old file is kept as `<file>.spelaion-backup-<date>`. The new file and the
+//! backup keep the old file's mode (owner-only for a new file), and a symbolic link is
+//! followed, so the link stays a link (`atomic_file`).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::atomic_file::{self, NewFileMode};
 
 /// The name of our entry in every client's file.
 pub const SERVER_NAME: &str = "spelaiondb";
@@ -466,23 +470,22 @@ pub fn apply_install(plan: &InstallPlan) -> Result<Option<PathBuf>, McpClientErr
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(write_error)?;
     }
+    // These files hold tokens (other servers' `env`, the client's own login): the backup and
+    // the new file keep the old file's mode, and a new file is owner-only. The backup sits
+    // beside the path the client reads, even when that is a link into a dotfiles repository,
+    // so it never lands in that repository.
     let backup = match &plan.before {
         Some(before) => {
             let backup = backup_path(path, SystemTime::now());
-            std::fs::write(&backup, before).map_err(write_error)?;
+            atomic_file::create_like(&backup, before.as_bytes(), path).map_err(write_error)?;
             Some(backup)
         }
         None => None,
     };
-    // Written beside it, then moved over it: a client never reads half a file.
-    let mut temp = path.as_os_str().to_owned();
-    temp.push(".spelaion-tmp");
-    let temp = PathBuf::from(temp);
-    std::fs::write(&temp, &plan.after).map_err(write_error)?;
-    if let Err(e) = std::fs::rename(&temp, path) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(write_error(e));
-    }
+    // Written beside the file (the link's target for a link), then moved over it: a client
+    // never reads half a file, and a link stays a link.
+    atomic_file::replace(path, plan.after.as_bytes(), NewFileMode::OwnerOnly)
+        .map_err(write_error)?;
     Ok(backup)
 }
 
