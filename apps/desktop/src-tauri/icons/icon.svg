@@ -1,27 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <!-- SpelaionDB: a database lit by a caver's lamp. Source of every icon size (`npx tauri icon`). -->
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#22355c"/>
-      <stop offset="1" stop-color="#0e1729"/>
-    </linearGradient>
-    <linearGradient id="beam" x1="1" y1="0" x2="0.2" y2="0.9">
-      <stop offset="0" stop-color="#ffcf5c" stop-opacity="0.95"/>
-      <stop offset="1" stop-color="#ffcf5c" stop-opacity="0"/>
-    </linearGradient>
-    <linearGradient id="body" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#c9d6ee"/>
-      <stop offset="0.55" stop-color="#eef3fb"/>
-      <stop offset="1" stop-color="#b7c6e3"/>
-    </linearGradient>
-  </defs>
-  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#bg)"/>
-  <path d="M770 250 L330 420 L600 610 Z" fill="url(#beam)"/>
-  <path d="M230 420 v330 a200 72 0 0 0 400 0 v-330 z" fill="url(#body)"/>
-  <ellipse cx="430" cy="420" rx="200" ry="72" fill="#ffffff"/>
-  <ellipse cx="430" cy="420" rx="200" ry="72" fill="#ffcf5c" fill-opacity="0.35"/>
-  <path d="M230 535 a200 72 0 0 0 400 0" fill="none" stroke="#22355c" stroke-width="22"/>
-  <path d="M230 645 a200 72 0 0 0 400 0" fill="none" stroke="#22355c" stroke-width="22"/>
-  <circle cx="790" cy="236" r="78" fill="#ffcf5c"/>
-  <circle cx="790" cy="236" r="40" fill="#fff4d6"/>
+  <!-- SpelaionDB: a database whose lit top disc is the sigma of σπήλαιον (cave); the amber is a
+       caver's lamp. Flat shapes only. Source of every icon size (`npx tauri icon`). -->
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="#f1ece1" stroke="#ddd6c8" stroke-width="6"/>
+  <path d="M184 372 A288 160 0 0 0 760 372 V512 A288 160 0 0 1 184 512 Z" fill="#17233f"/>
+  <path d="M184 556 A288 160 0 0 0 760 556 V696 A288 160 0 0 1 184 696 Z" fill="#17233f"/>
+  <ellipse cx="472" cy="328" rx="240" ry="112" fill="#f29d1d" stroke="#17233f" stroke-width="96"/>
+  <path d="M472 216 H792" fill="none" stroke="#17233f" stroke-width="96" stroke-linecap="round"/>
 </svg>

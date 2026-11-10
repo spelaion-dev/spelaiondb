@@ -352,19 +352,25 @@ lookups follow the same rules:
 ## App icon
 
 The icon is the first thing anyone sees of the brand, at 16px in a taskbar as often as at
-256px in an installer. The current one, a database cylinder lit by a caver's lamp and drawn
-with gradients, says "database" generically and loses its detail below 48px. Its replacement:
+256px in an installer. It is the σ of σπήλαιον (a cave), the letter Spelaion starts with, drawn
+as a database: a cylinder of stacked discs whose top disc, a ring with a bar to its right, is
+the σ, lit from inside by a caver's lamp. The icon:
 
 - has one bold silhouette that is recognizable at 16px and in a single color (system trays,
   monochrome taskbars);
-- uses at most two brand colors and a neutral, close to the interface's accent, in flat shapes
-  or one subtle gradient: no gloss and no thin lines that vanish when small;
-- carries the idea of Spelaion (from σπήλαιον, a cave: exploring, light in the dark, layers)
-  without the stock database cylinder;
-- works as a family: SpelaionSSH (ADR-023) shares the mark and changes one element or color;
-- has a single SVG source, `apps/desktop/src-tauri/icons/icon.svg`, from which
-  `npx tauri icon` generates every size, with hand-tuned 16px and 32px versions if the
-  generated ones blur, and is checked on light and dark taskbars on Windows, macOS and Linux.
+- uses two brand colors and a neutral, in flat shapes: ink `#17233f` (the interface's accent
+  blue, darkened), lamp amber `#f29d1d` and a limestone tile `#f1ece1`. No gradients, no gloss
+  and no thin lines that vanish when small;
+- keeps the σ whole. A database cylinder alone says "database" generically; the ring, its bar
+  and the lamp are what make this one Spelaion's, so no size drops them;
+- works as a family: every Spelaion product keeps the σ, its lamp, the tile and the colors, and
+  changes one element. The brand's own mark is the σ alone, and SpelaionSSH (ADR-023) cuts its
+  bar into the teeth of a key;
+- has a single SVG source, `apps/desktop/src-tauri/icons/icon.svg`, from which `npm run icons`
+  generates every size with `tauri icon`. Scaled down to 16px and 24px the mark blurs, so
+  `icon.ico` carries those two sizes drawn on the pixel grid (`icon-16.svg` and `icon-24.svg`,
+  next to the source): change the three together, and check the result on light and dark
+  taskbars on Windows, macOS and Linux.
 
 ## Verification
 
