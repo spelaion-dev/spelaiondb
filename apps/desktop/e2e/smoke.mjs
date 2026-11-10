@@ -2,9 +2,10 @@
 // with Playwright (CDP). It uses examples/demo and a temporary personal directory, so it does
 // not touch the user's configuration or keychain.
 //
-// Requirements: the app built (npx tauri build --no-bundle) and the CLI (cargo build --release
-// -p spelaion-cli, for the MCP activity steps), examples/demo/make-shop-db.py
-// run and, for the PostgreSQL steps, testing/docker up.
+// Requirements: the app and the CLI (for the MCP activity steps) built in one command, so DuckDB
+// is compiled once (CONTRIBUTING.md): npx tauri build --no-bundle -- -p spelaion-desktop
+// -p spelaion-cli; examples/demo/make-shop-db.py run and, for the PostgreSQL steps,
+// testing/docker up.
 //   node e2e/smoke.mjs [screenshots-dir]
 
 import { execFileSync, spawn } from "node:child_process";
@@ -89,10 +90,10 @@ function startApp() {
 let app = startApp();
 
 /** Runs `spelaiondb mcp` as an AI client would (stdio, JSON-RPC): `list_connections`, then each
- *  call, as the client "smoke-agent". Needs `cargo build --release -p spelaion-cli`. */
+ *  call, as the client "smoke-agent". Needs the CLI, built with the app (see the top). */
 async function agentSession(calls) {
   const cli = process.env.SPELAION_E2E_CLI ?? join(root, "target/release/spelaiondb" + (process.platform === "win32" ? ".exe" : ""));
-  if (!existsSync(cli)) throw new Error(`${cli} is missing: run cargo build --release -p spelaion-cli`);
+  if (!existsSync(cli)) throw new Error(`${cli} is missing: in apps/desktop, run npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli`);
   const agent = spawn(cli, ["mcp", "--workspace", demo], {
     env: { ...process.env, SPELAION_USER_DIR: userDir },
     stdio: ["pipe", "pipe", "inherit"],

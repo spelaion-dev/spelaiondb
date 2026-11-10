@@ -47,9 +47,46 @@ SPELAION_TEST_PG=127.0.0.1:15432 SPELAION_TEST_MYSQL=127.0.0.1:13306 SPELAION_TE
 
 - If dependencies change: `cargo deny check`.
 - If the desktop app changes: `npm run build` in `apps/desktop` with no type errors and, if the
-  UI changes, the smoke test (`node e2e/smoke.mjs`, after `npx tauri build --no-bundle`).
+  UI changes, the smoke test (`node e2e/smoke.mjs`, after building the app and the CLI as
+  [below](#release-build-the-app-and-the-cli)).
 - If something could not be tested (an OS you do not have, Pageant…), say so in the pull
   request.
+
+### Memory and jobs
+DuckDB is compiled into the app from its C++ sources (`libduckdb-sys`, bundled), and that is
+what decides how much memory a build needs:
+
+- **Debug builds** (`cargo clippy`, `cargo test`, `npm run tauri dev`) peak near 8 GB with 8
+  jobs (`-j 8`).
+- **Release builds** compile DuckDB with optimizations, and each C++ compiler job then holds
+  about 2 GB. With cargo's default of one job per thread, a 16 GB machine runs out of memory
+  (8 jobs went past 9 GB). On 16 GB use **3 jobs** (`CARGO_BUILD_JOBS=3`): the build below
+  built everything, DuckDB included, with a peak of 4.8 GB in 23 minutes on a 16-thread laptop.
+
+`CARGO_BUILD_JOBS` (or `-j`) caps cargo's jobs and the C++ compiler jobs together, because the
+build script shares cargo's job slots. On Linux, cap the build's memory too, so that the kernel
+stops the compiler and not your desktop:
+
+```bash
+systemd-run --user --scope -p MemoryMax=8G -p MemorySwapMax=0 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+### Release build: the app and the CLI
+The smoke test needs both the app and the `spelaiondb` CLI. Build them **in one command**, from
+`apps/desktop`:
+
+```bash
+CARGO_BUILD_JOBS=3 npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli
+```
+
+The app ends up in `target/release/spelaion-desktop` and the CLI in `target/release/spelaiondb`.
+Building them separately (`npx tauri build`, then `cargo build --release -p spelaion-cli`)
+compiles DuckDB twice, about 20 minutes each with 3 jobs: DuckDB's build script has build
+dependencies of its own (`serde`, `serde_json`, `flate2`…), cargo turns on their features from
+all the packages of the same command only, and the app's build dependencies (Tauri's) turn on
+more of them than the CLI's. Each set of packages therefore gets its own DuckDB, and so does
+`cargo build --release -p spelaion-driver-duckdb` alone. Build both again with the same command
+after a change and only what changed is rebuilt.
 
 ## Pull requests
 - Work on a branch of your own, from an up-to-date `dev`, and open the pull request against
