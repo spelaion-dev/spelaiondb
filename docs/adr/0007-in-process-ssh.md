@@ -42,6 +42,12 @@ Rules:
   via `SSH_AUTH_SOCK` on Linux.
 - Finding: even with an agent, the key must be pinnable per hop (`IdentityFile` +
   `IdentitiesOnly`); trying all the agent's keys hits `MaxAuthTries`.
+- Measured on Windows 11 against the Docker bastions: 2 hops with a key in 43 ms + 75 ms;
+  a wrong passphrase gives a clear error; Pageant 0.83 through both hops; `pg_sleep(30)`
+  cancelled through the tunnel after 1.0 s; 1 M rows streamed through both hops in
+  1.5–1.7 s (~600,000 rows/s, debug build), the first row after 45 ms.
+- Note (2026-11-10): the experiment's code was removed from the repository after v0.8.0.
+  It can be read at tag `v0.8.0`, under `spikes/`.
 
 ## Implementation (2026-11-02, `crates/spelunk-ssh`)
 - Independent of the configuration: it receives an already resolved `TunnelSpec` (the core

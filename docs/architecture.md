@@ -62,7 +62,8 @@ See [execution plans](execution-plans.md) for metric semantics, capabilities and
    own transaction, in a session separate from the reads, also audited (ADR-019).
 
 ## Phases
-- **Phase 0** (current): risk experiments in `spikes/`.
+- **Phase 0** (done, 2026-11-02): risk experiments for the conditional decisions; ADR-003,
+  ADR-007 and ADR-010 record what they measured.
 - **v0.1:** PostgreSQL + SQLite, multi-hop SSH with agent, editor, read-only grid,
   explorer, history, read-only `spelaiondb mcp`.
 - **v0.2:** MySQL/MariaDB (in the MCP since ADR-020), result editing,

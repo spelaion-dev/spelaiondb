@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Prepares Ubuntu (WSL or real Linux) to build the SpelaionDB spikes:
-# Tauri 2 dependencies (WebKitGTK 4.1) and stable Rust.
+# Prepares Ubuntu (WSL or real Linux) to build SpelaionDB: Tauri 2 dependencies
+# (WebKitGTK 4.1) and stable Rust. Node.js, for the frontend in apps/desktop, is not
+# installed here.
 set -euo pipefail
 
 sudo apt-get update
@@ -15,4 +16,4 @@ fi
 
 "$HOME/.cargo/bin/rustc" --version
 pkg-config --modversion webkit2gtk-4.1
-echo "SETUP-WSL LISTO"
+echo "SETUP-WSL DONE"
