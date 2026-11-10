@@ -53,8 +53,8 @@ pub use datagrip::{DatagripError, datagrip_dirs, jetbrains_dir, read_datagrip};
 pub use dbeaver::{DbeaverError, dbeaver_workspace, read_dbeaver};
 pub use draft::{
     CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, SessionDraft, add_connection,
-    connection_revision, connections_dir, delete_connection, normalize_tags, slug,
-    update_connection, update_connection_at_revision,
+    connection_password_stored, connection_revision, connections_dir, delete_connection,
+    normalize_tags, slug, update_connection, update_connection_at_revision,
 };
 pub use edit::{
     CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_vars,
@@ -90,7 +90,8 @@ pub use resolve::{
     ResolvedSession, ResolvedTunnel, Resolver, TunnelSettings,
 };
 pub use secrets::{
-    KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef, SystemBackend,
+    KEYCHAIN_NOT_KEPT, KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef,
+    SystemBackend,
 };
 pub use tableplus::{TableplusError, read_tableplus, tableplus_dir};
 pub use trust::{
@@ -98,9 +99,9 @@ pub use trust::{
     team_known_hosts, tunnel_item,
 };
 pub use tunnel_draft::{
-    HopDraft, ProxyDraft, TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, TunnelPasswords,
-    add_tunnel, delete_tunnel, tunnel_revision, tunnel_users, tunnels_dir, update_tunnel,
-    update_tunnel_at_revision,
+    HopDraft, ProxyDraft, StoredTunnelPasswords, TUNNEL_SCHEMA_URL, TunnelDraft,
+    TunnelDraftOptions, TunnelPasswords, add_tunnel, delete_tunnel, tunnel_passwords_stored,
+    tunnel_revision, tunnel_users, tunnels_dir, update_tunnel, update_tunnel_at_revision,
 };
 pub use types::{ConnectionType, ConnectionTypes, PRODUCTION, Safeguards, type_id};
 pub use types_edit::{remove_personal_type, set_personal_type};

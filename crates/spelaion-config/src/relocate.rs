@@ -114,7 +114,7 @@ pub fn move_connection(
         let stored = match backend.keychain_get(&old_account) {
             Ok(Some(secret)) => {
                 password_moved = true;
-                backend.keychain_set(&new_account, &secret)
+                crate::secrets::store(backend, &new_account, &secret)
             }
             // Nothing stored: an entry left under the new name must not reach this server.
             Ok(None) => forget(backend, &new_account),

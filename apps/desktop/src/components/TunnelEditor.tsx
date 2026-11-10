@@ -24,6 +24,9 @@ interface HopState {
   identityFile: string;
   /** For `password` / `keyboard-interactive`: keychain when true, asked when false. */
   savePassword: boolean;
+  /** Whether the keychain holds a password for it (never the value): only then does an
+   * empty field keep one. */
+  stored: boolean;
   /** Original reference when it is not keychain/prompt (`env:…`, `op://…`): kept as is. */
   fixedMode: PasswordMode | null;
   passwordEnv: string;
@@ -42,6 +45,7 @@ function emptyHop(savePassword = true): HopState {
     auth: ["agent"],
     identityFile: "",
     savePassword,
+    stored: false,
     fixedMode: null,
     passwordEnv: "",
     passwordOther: "",
@@ -49,7 +53,7 @@ function emptyHop(savePassword = true): HopState {
   };
 }
 
-function fromDraft(hop: HopDraft): HopState {
+function fromDraft(hop: HopDraft, stored: boolean): HopState {
   const method: Method = hop.auth.length === 1 && hop.auth[0] ? hop.auth[0] : "custom";
   return {
     host: hop.host,
@@ -59,6 +63,7 @@ function fromDraft(hop: HopDraft): HopState {
     auth: hop.auth,
     identityFile: hop.identityFile,
     savePassword: hop.passwordMode !== "prompt",
+    stored,
     fixedMode: hop.passwordMode === "env" || hop.passwordMode === "other" ? hop.passwordMode : null,
     passwordEnv: hop.passwordEnv,
     passwordOther: hop.passwordOther,
@@ -92,6 +97,9 @@ interface ProxyState {
   user: string;
   /** Keychain when true, asked when false. */
   savePassword: boolean;
+  /** Whether the keychain holds a password for it (never the value): only then does an
+   * empty field keep one. */
+  stored: boolean;
   /** Original reference when it is not keychain/prompt (`env:…`, `op://…`): kept as is. */
   fixedMode: PasswordMode | null;
   passwordEnv: string;
@@ -99,9 +107,9 @@ interface ProxyState {
   password: string;
 }
 
-const noProxy: ProxyState = { enabled: false, kind: "socks5", host: "", port: null, user: "", savePassword: true, fixedMode: null, passwordEnv: "", passwordOther: "", password: "" };
+const noProxy: ProxyState = { enabled: false, kind: "socks5", host: "", port: null, user: "", savePassword: true, stored: false, fixedMode: null, passwordEnv: "", passwordOther: "", password: "" };
 
-function proxyFromDraft(proxy: ProxyDraft | null | undefined): ProxyState {
+function proxyFromDraft(proxy: ProxyDraft | null | undefined, stored: boolean): ProxyState {
   if (!proxy) return noProxy;
   return {
     enabled: true,
@@ -110,6 +118,7 @@ function proxyFromDraft(proxy: ProxyDraft | null | undefined): ProxyState {
     port: proxy.port ?? null,
     user: proxy.user,
     savePassword: proxy.passwordMode !== "prompt",
+    stored,
     fixedMode: proxy.passwordMode === "env" || proxy.passwordMode === "other" ? proxy.passwordMode : null,
     passwordEnv: proxy.passwordEnv,
     passwordOther: proxy.passwordOther,
@@ -150,6 +159,9 @@ export function TunnelEditor(props: {
   // Without a system keychain a new tunnel asks for its passwords; an edited one keeps what
   // its file says (a repository file is the team's) unless the user unticks it.
   const keychain = useKeychainAvailable();
+  /** An edited password field's hint: keep the stored password, or there is none to keep. */
+  const storedPlaceholder = (stored: boolean) =>
+    stored ? t("auth.keepPlaceholder") : keychain === false ? "" : t("auth.notStoredPlaceholder");
   useEffect(() => {
     if (keychain !== false || editing) return;
     setHops((list) => list.map((hop) => ({ ...hop, savePassword: false })));
@@ -159,14 +171,14 @@ export function TunnelEditor(props: {
   useEffect(() => {
     if (mode.kind !== "edit") return;
     call(commands.tunnelDraft(mode.name, mode.personal))
-      .then(([draft, version]) => {
-        const loaded = draft as TunnelDraft;
-        setRevision(version);
-        setHops(loaded.hops.map(fromDraft));
+      .then((edited) => {
+        const loaded = edited.draft as TunnelDraft;
+        setRevision(edited.revision);
+        setHops(loaded.hops.map((hop, i) => fromDraft(hop, edited.hopPasswordsStored[i] ?? false)));
         setKeepaliveInterval(loaded.keepaliveInterval ?? null);
         setKeepaliveCount(loaded.keepaliveCount ?? null);
         setConnectTimeout(loaded.connectTimeout ?? null);
-        setProxy(proxyFromDraft(loaded.proxy));
+        setProxy(proxyFromDraft(loaded.proxy, edited.proxyPasswordStored));
       })
       .catch((e: unknown) => setLoadError(errorText(e)));
   }, [mode]);
@@ -398,7 +410,7 @@ export function TunnelEditor(props: {
                             aria-label={`${label} ${t("fields.password")}`}
                             value={hop.password}
                             autoComplete="off"
-                            placeholder={editing && hop.savePassword ? t("auth.keepPlaceholder") : ""}
+                            placeholder={editing && hop.savePassword ? storedPlaceholder(hop.stored) : ""}
                             onChange={(e) => updateHop(i, { password: e.target.value })}
                           />
                         </label>
@@ -466,7 +478,7 @@ export function TunnelEditor(props: {
                             type="password"
                             value={proxy.password}
                             autoComplete="off"
-                            placeholder={editing && proxy.savePassword ? t("auth.keepPlaceholder") : ""}
+                            placeholder={editing && proxy.savePassword ? storedPlaceholder(proxy.stored) : ""}
                             onChange={(e) => updateProxy({ password: e.target.value })}
                           />
                         </label>

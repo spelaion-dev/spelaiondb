@@ -64,6 +64,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   regenerate the schema: `SPELAION_UPDATE_SCHEMA=1 cargo test -p spelaion-config`.
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
+  Every password written to the keychain goes through `secrets::store`, which reads it back
+  (a store that answers `Ok` and keeps nothing is an error); never call `keychain_set` directly.
   A connection's `description` is the user's free text (the explorer's tooltip, and what
   `list_connections` tells agents a database is for) and its `tags` are short labels the
   explorer filters connections by (`normalize_tags` in `draft.rs`): both bounded and without

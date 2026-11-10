@@ -1045,7 +1045,7 @@ async fn connection_editor_access(
 async fn connection_draft(
     connection: String,
     state: State<'_, AppState>,
-) -> CmdResult<(ConnectionDraftItem, String)> {
+) -> CmdResult<EditedConnectionItem> {
     let config = state.config.read().await;
     let id = parse_id(&connection);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
@@ -1056,7 +1056,15 @@ async fn connection_draft(
         .connection(&id)
         .ok_or_else(|| format!("connection {connection} does not exist"))?;
     let revision = spelaion_config::connection_revision(entry).map_err(|e| e.to_string())?;
-    Ok((ConnectionDraft::from_entry(entry).into(), revision))
+    Ok(EditedConnectionItem {
+        draft: ConnectionDraft::from_entry(entry).into(),
+        revision,
+        password_stored: spelaion_config::connection_password_stored(
+            &config,
+            entry,
+            &SystemBackend,
+        ),
+    })
 }
 
 /// Saves an edited connection (same file; for `keychain`, a typed password replaces the
@@ -1385,7 +1393,7 @@ async fn tunnel_draft(
     name: String,
     personal: bool,
     state: State<'_, AppState>,
-) -> CmdResult<(TunnelDraftItem, String)> {
+) -> CmdResult<EditedTunnelItem> {
     let config = state.config.read().await;
     let entry = config
         .tunnels
@@ -1393,10 +1401,13 @@ async fn tunnel_draft(
         .find(|t| t.source == source_of(personal) && t.name == name)
         .ok_or_else(|| format!("tunnel {name} does not exist"))?;
     let revision = spelaion_config::tunnel_revision(entry).map_err(|e| e.to_string())?;
-    Ok((
-        spelaion_config::TunnelDraft::from_entry(entry).into(),
+    let stored = spelaion_config::tunnel_passwords_stored(&config, entry, &SystemBackend);
+    Ok(EditedTunnelItem {
+        draft: spelaion_config::TunnelDraft::from_entry(entry).into(),
         revision,
-    ))
+        hop_passwords_stored: stored.hops,
+        proxy_password_stored: stored.proxy,
+    })
 }
 
 /// Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
