@@ -17,6 +17,7 @@ mod export_stream;
 mod filter;
 mod find;
 mod generate;
+mod geometry;
 mod guard;
 mod health;
 mod history;
@@ -92,6 +93,10 @@ pub use export_stream::{
 pub use filter::{ColumnFilter, FilterOp};
 pub use find::{FindMatch, FindMatches, FindQuery, FindTicket, MAX_MATCHES};
 pub use generate::{SqlTemplate, count_rows, join_sql, table_sql, table_templates};
+pub use geometry::{
+    Bounds, ColumnMap, Dimensions, GeoFormat, GeoValue, Geometry, MAP_MAX_POINTS, MAP_MAX_SHAPES,
+    MapCrs, MapError, MapShape, Position, column_map, is_geometry_type, map_crs, read_geometry,
+};
 pub use guard::{NeedsConfirmation, Risk, RiskyStatement, check_script, script_risks};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, HistoryScope, QueryHistory};
@@ -149,7 +154,8 @@ pub use spelaion_store::{
 };
 pub use spelaion_store::{
     Bookmark, EditorPreferences, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences,
-    RecentFile, SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
+    MapPreferences, RecentFile, SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
+    TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,

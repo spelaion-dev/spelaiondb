@@ -4,13 +4,16 @@
 // row view lists every column of the active row instead. Values are asked to the core when
 // the viewer opens, so it works for rows that are not in the grid's cache; a value past the
 // core's limit waits for "Load anyway". A value can be saved to a file, and in an editable
-// table a file can be loaded into it (one UPDATE by primary key, written by the core).
+// table a file can be loaded into it (one UPDATE by primary key, written by the core). A
+// geometry the core recognised (ADR-045) is drawn on a map, alone or with the rest of its column.
 
 import type { TFunction } from "i18next";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ColumnItem } from "../api";
-import type { CellViewItem_Serialize as CellViewItem } from "../bindings";
+import type { CellViewItem_Serialize as CellViewItem, ColumnMapItem_Serialize as ColumnMapItem, GeoFormat, GeoItem_Serialize as GeoItem, MapCrs } from "../bindings";
+import { usePreferences } from "../preferences";
+import { canShowTiles, MapView, type MapFeature } from "./MapView";
 import { chooseOpenFile, chooseSavePath } from "../dialogs";
 import { usePicker, ValuePicker, type PickedEdit, type PickerSource } from "./ValuePicker";
 
@@ -141,6 +144,10 @@ export function CellViewer(props: {
   onMode(mode: ViewerMode): void;
   /** A field of the row view was picked: show that cell. */
   onPickColumn(column: number): void;
+  /** A shape of the column's map was picked: show that row's cell. */
+  onPickRow?(row: number): void;
+  /** Rows in the result's current view: the column's map is read again when it changes. */
+  rowCount?: number;
   onClose(): void;
 }) {
   const { resultId, row, column, meta, mode } = props;
@@ -156,6 +163,10 @@ export function CellViewer(props: {
   const [fileNote, setFileNote] = useState<{ cell: string; text: string; error: boolean } | null>(null);
   const [loadingFile, setLoadingFile] = useState(false);
   const [binaryView, setBinaryView] = useState<"image" | "hex">("image");
+  const [geometryView, setGeometryView] = useState<"map" | "value">("map");
+  const [mapScope, setMapScope] = useState<"cell" | "column">("cell");
+  /** The last column a geometry was seen in: its map stays while another row's value loads. */
+  const [geometryColumn, setGeometryColumn] = useState<string | null>(null);
   const [image, setImage] = useState<{ cell: string; width: number; height: number } | { cell: string; failed: true } | null>(null);
 
   useEffect(() => {
@@ -180,6 +191,14 @@ export function CellViewer(props: {
   /** The value as text (`\x…` for bytes), when it is known: what Copy copies and the editor edits. */
   const value = item && !withheld ? { text: hasEdit ? editText : item.text } : null;
   const imageInfo = image?.cell === cell ? image : null;
+  /** The value read as a geometry by the core, while it is the stored one. */
+  const geometry = !hasEdit && item && !withheld ? item.geometry : null;
+  const columnKey = `${resultId}:${column}`;
+  if (geometry && geometryColumn !== columnKey) setGeometryColumn(columnKey);
+  /** The column's map is shown for any of its rows once one of them was a geometry. */
+  const columnMapShown = mapScope === "column" && geometryColumn === columnKey && !hasEdit;
+  const geometryKnown = !!geometry || columnMapShown;
+  const showMap = geometryKnown && geometryView === "map";
   const shown: View | null = !item || withheld
     ? null
     : hasEdit
@@ -275,6 +294,17 @@ export function CellViewer(props: {
 
   const editable = !!(props.editable && props.onEdit);
   const binary = meta.logical === "bytes";
+  const map = showMap && (geometry || columnMapShown) && (
+    <GeometryPanel
+      resultId={resultId}
+      column={column}
+      columnName={meta.name}
+      geometry={geometry}
+      scope={columnMapShown ? "column" : "cell"}
+      rowCount={props.rowCount}
+      onPickRow={props.onPickRow}
+    />
+  );
   const canLoad = editable && !!props.onLoadFile;
   const loadBlocked = props.pendingChanges || loadingFile;
   const preview = shown && shown.kind !== "null" && (
@@ -313,6 +343,18 @@ export function CellViewer(props: {
             <div className="viewer-modes" role="group" aria-label={t("viewer.showAs")}>
               <button className="ghost small" aria-pressed={binaryView === "image"} onClick={() => setBinaryView("image")}>{t("viewer.asImage")}</button>
               <button className="ghost small" aria-pressed={binaryView === "hex"} onClick={() => setBinaryView("hex")}>{t("viewer.asHex")}</button>
+            </div>
+          )}
+          {geometryKnown && (
+            <div className="viewer-modes" role="group" aria-label={t("viewer.showAs")}>
+              <button className="ghost small" aria-pressed={geometryView === "map"} onClick={() => setGeometryView("map")}>{t("viewer.asMap")}</button>
+              <button className="ghost small" aria-pressed={geometryView === "value"} onClick={() => setGeometryView("value")}>{t("viewer.asValue")}</button>
+            </div>
+          )}
+          {showMap && (
+            <div className="viewer-modes" role="group" aria-label={t("viewer.map.scope")}>
+              <button className="ghost small" aria-pressed={mapScope === "cell"} onClick={() => setMapScope("cell")}>{t("viewer.map.thisValue")}</button>
+              <button className="ghost small" aria-pressed={mapScope === "column"} onClick={() => setMapScope("column")}>{t("viewer.map.column")}</button>
             </div>
           )}
           <div className="cell-viewer-actions">
@@ -359,7 +401,9 @@ export function CellViewer(props: {
       )}
       {editable && (value || withheld) && (
         <>
-          {binary || withheld ? (
+          {map ? (
+            map
+          ) : binary || withheld ? (
             preview
           ) : (
             <>
@@ -404,8 +448,93 @@ export function CellViewer(props: {
         </>
       )}
       {!editable && shown?.kind === "null" && <p className="muted cell-viewer-null">NULL</p>}
-      {!editable && preview}
+      {!editable && (map || preview)}
     </aside>
+  );
+}
+
+/** Names of the stored formats (brand and format names: not translated). */
+const GEO_FORMATS: Record<GeoFormat, string> = { wkb: "WKB", ewkb: "EWKB", mysql: "MySQL", spatialite: "SpatiaLite", geoPackage: "GeoPackage" };
+
+/** The cell's geometry on a map, or every geometry of its column (read from the core's current
+ *  view of the result, at most the core's limit of shapes). */
+function GeometryPanel(props: {
+  resultId: number;
+  column: number;
+  columnName: string;
+  /** The cell's geometry; may be missing on the column's map (a NULL row, or still loading). */
+  geometry: GeoItem | null;
+  scope: "cell" | "column";
+  rowCount?: number;
+  onPickRow?(row: number): void;
+}) {
+  const { resultId, column, scope, geometry } = props;
+  const { t, i18n } = useTranslation("editor");
+  const preferences = usePreferences((s) => s.map);
+  const key = `${resultId}:${column}:${props.rowCount ?? ""}`;
+  const [loaded, setLoaded] = useState<{ key: string; map: ColumnMapItem | null; error: string | null } | null>(null);
+  useEffect(() => {
+    if (scope !== "column") return;
+    let active = true;
+    call(commands.columnMap(resultId, column))
+      .then((map) => active && setLoaded({ key, map, error: null }))
+      .catch((e: unknown) => active && setLoaded({ key, map: null, error: errorText(e) }));
+    return () => {
+      active = false;
+    };
+  }, [scope, key, resultId, column]);
+  const columnMap = scope === "column" && loaded?.key === key ? loaded : null;
+
+  const cellFeatures = useMemo<MapFeature[]>(() => (geometry ? [{ geometry: geometry.geometry }] : []), [geometry]);
+  const columnFeatures = useMemo<MapFeature[]>(() => columnMap?.map?.shapes.map((s) => ({ geometry: s.geometry, row: s.row })) ?? [], [columnMap]);
+  const n = (count: number) => count.toLocaleString(i18n.language);
+
+  let crs: MapCrs;
+  let srid: number | null;
+  let notes: string[] = [];
+  if (scope === "column") {
+    if (!columnMap) return <p className="muted small">{t("viewer.map.loading")}</p>;
+    if (columnMap.error || !columnMap.map) return <p className="error small" role="alert">{columnMap.error}</p>;
+    const m = columnMap.map;
+    crs = m.crs;
+    srid = m.srid;
+    notes = [
+      t("viewer.map.shapes", { count: m.shapes.length, formattedCount: n(m.shapes.length), rows: n(m.rowsRead) }),
+      m.nulls > 0 ? t("viewer.map.nulls", { count: m.nulls, formattedCount: n(m.nulls) }) : "",
+      m.unreadable > 0 ? t("viewer.map.unreadable", { count: m.unreadable, formattedCount: n(m.unreadable) }) : "",
+      m.tooBig > 0 ? t("viewer.map.tooBig", { count: m.tooBig, formattedCount: n(m.tooBig) }) : "",
+      m.truncated ? t("viewer.map.truncated", { max: n(m.maxShapes) }) : "",
+      m.mixedSrids ? t("viewer.map.mixedSrids") : "",
+    ].filter(Boolean);
+  } else {
+    if (!geometry) return null;
+    crs = geometry.crs;
+    srid = geometry.srid;
+    notes = [
+      `${geometry.geometry.type} · ${GEO_FORMATS[geometry.format]}`,
+      geometry.dimensions === "xyz" ? t("viewer.map.noZ") : geometry.dimensions === "xym" ? t("viewer.map.noM") : geometry.dimensions === "xyzm" ? t("viewer.map.noZM") : "",
+    ].filter(Boolean);
+  }
+  const features = scope === "column" ? columnFeatures : cellFeatures;
+  const where = [srid == null ? t("viewer.map.noSrid") : t("viewer.map.srid", { srid }), t(`viewer.map.crs.${crs}`)].join(" · ");
+  const tilesHere = canShowTiles(crs);
+  return (
+    <div className="cell-viewer-map">
+      <p className="muted small">{[...notes, where].join(" · ")}</p>
+      {features.length === 0 ? (
+        <p className="muted small">{t("viewer.map.empty")}</p>
+      ) : (
+        <MapView
+          features={features}
+          crs={crs}
+          preferences={preferences}
+          label={t(scope === "column" ? "viewer.map.columnLabel" : "viewer.map.label", { column: props.columnName })}
+          onPickRow={scope === "column" ? props.onPickRow : undefined}
+        />
+      )}
+      {!preferences.tiles && tilesHere && <p className="muted small">{t("viewer.map.noTiles")}</p>}
+      {preferences.tiles && !tilesHere && <p className="muted small">{t("viewer.map.noTilesHere")}</p>}
+    </div>
   );
 }
 

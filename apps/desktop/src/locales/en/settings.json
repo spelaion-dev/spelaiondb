@@ -186,5 +186,19 @@
     "trailing": "End of line",
     "leading": "Start of line",
     "snippets": "Type sel, ins or upd and press Tab to expand a snippet. Tab moves to its next field; Shift+Tab moves back."
+  },
+  "map": {
+    "title": "Map",
+    "background": "Map background",
+    "tiles": "Show map tiles from a tile server",
+    "tilesHint": "Off by default. Every tile the map loads tells that server which part of the world you are looking at. Without tiles, shapes are drawn on a plain background and nothing leaves this computer.",
+    "tilesNeedServer": "Give a tile server below first.",
+    "server": "Tile server",
+    "name": "Name",
+    "url": "Tile address",
+    "urlHint": "An https:// address with {z}, {x} and {y} where the server puts the zoom and the tile, as its documentation gives it (http:// only for a server on this computer). Check that its terms allow use from an app.",
+    "attribution": "Attribution",
+    "attributionHint": "The credit the server asks maps to show. It is shown on the map.",
+    "remove": "Remove tile server"
   }
 }

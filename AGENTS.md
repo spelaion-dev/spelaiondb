@@ -167,6 +167,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `processes.rs`'s `control_process`), `server_settings.rs` the settings, variables and status,
   `table_stats.rs` a table's sizes and row estimate from the catalog; `tests/server_observation.rs`
   makes one session wait for another's row lock on every engine and checks the pair.
+  `geometry.rs` (ADR-045) reads geometry values into GeoJSON for the cell panel's map: PostGIS's
+  EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs and
+  DuckDB's WKB, as untrusted bytes (counts checked before allocating, bounded nesting, read to
+  the last byte); `column_map` puts a column of the current view on one map, bounded.
+  `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
+  PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
+  (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
   `export.rs` also holds the CSV options and formula escaping of files;

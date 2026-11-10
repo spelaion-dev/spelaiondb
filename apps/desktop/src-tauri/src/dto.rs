@@ -681,6 +681,129 @@ impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
     }
 }
 
+/// The map view's background (ADR-045): tiles from the user's server, off by default.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MapPreferencesItem {
+    pub tiles: bool,
+    pub tile_name: String,
+    /// An image address with `{z}`, `{x}` and `{y}`.
+    pub tile_url: String,
+    pub tile_attribution: String,
+}
+
+impl From<spelaion_core::MapPreferences> for MapPreferencesItem {
+    fn from(p: spelaion_core::MapPreferences) -> Self {
+        let spelaion_core::MapPreferences {
+            tiles,
+            tile_name,
+            tile_url,
+            tile_attribution,
+        } = p;
+        Self {
+            tiles,
+            tile_name,
+            tile_url,
+            tile_attribution,
+        }
+    }
+}
+
+impl From<MapPreferencesItem> for spelaion_core::MapPreferences {
+    fn from(p: MapPreferencesItem) -> Self {
+        let MapPreferencesItem {
+            tiles,
+            tile_name,
+            tile_url,
+            tile_attribution,
+        } = p;
+        Self {
+            tiles,
+            tile_name,
+            tile_url,
+            tile_attribution,
+        }
+    }
+}
+
+/// A cell or a column read as geometry, for the map (ADR-045): GeoJSON from the core, never
+/// the database's bytes.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoItem {
+    pub geometry: spelaion_core::Geometry,
+    pub srid: Option<u32>,
+    pub format: spelaion_core::GeoFormat,
+    pub dimensions: spelaion_core::Dimensions,
+    pub crs: spelaion_core::MapCrs,
+    pub bounds: Option<spelaion_core::Bounds>,
+}
+
+impl From<spelaion_core::GeoValue> for GeoItem {
+    fn from(value: spelaion_core::GeoValue) -> Self {
+        Self {
+            crs: value.crs(),
+            bounds: value.geometry.bounds(),
+            geometry: value.geometry,
+            srid: value.srid,
+            format: value.format,
+            dimensions: value.dimensions,
+        }
+    }
+}
+
+/// One shape of a column's map and the row of the current view it is on.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MapShapeItem {
+    pub row: u32,
+    pub geometry: spelaion_core::Geometry,
+}
+
+/// A column of a result on one map, and what was left out of it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnMapItem {
+    pub shapes: Vec<MapShapeItem>,
+    pub srid: Option<u32>,
+    pub mixed_srids: bool,
+    pub crs: spelaion_core::MapCrs,
+    pub bounds: Option<spelaion_core::Bounds>,
+    pub rows_read: u32,
+    pub nulls: u32,
+    pub unreadable: u32,
+    pub too_big: u32,
+    pub truncated: bool,
+    /// The most shapes a column's map holds.
+    pub max_shapes: u32,
+}
+
+impl From<spelaion_core::ColumnMap> for ColumnMapItem {
+    fn from(map: spelaion_core::ColumnMap) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            shapes: map
+                .shapes
+                .into_iter()
+                .map(|s| MapShapeItem {
+                    row: count(s.row),
+                    geometry: s.geometry,
+                })
+                .collect(),
+            srid: map.srid,
+            mixed_srids: map.mixed_srids,
+            crs: map.crs,
+            bounds: map.bounds,
+            rows_read: count(map.rows_read),
+            nulls: count(map.nulls),
+            unreadable: count(map.unreadable),
+            too_big: count(map.too_big),
+            truncated: map.truncated,
+            max_shapes: count(spelaion_core::MAP_MAX_SHAPES),
+        }
+    }
+}
+
 /// How the result grid draws its cells; personal, like the theme.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -3449,6 +3572,8 @@ pub struct CellViewItem {
     pub image_url: Option<String>,
     /// The size past which a value waits for "load anyway".
     pub limit: f64,
+    /// The value read as a geometry, for the map view (ADR-045).
+    pub geometry: Option<GeoItem>,
 }
 
 /// `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file.
@@ -3492,6 +3617,7 @@ impl From<spelaion_core::CellView> for CellViewItem {
             xml,
             image_url,
             limit: spelaion_core::VIEW_LIMIT as f64,
+            geometry: view.geometry.map(GeoItem::from),
         }
     }
 }

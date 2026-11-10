@@ -186,5 +186,19 @@
     "trailing": "Final de línea",
     "leading": "Inicio de línea",
     "snippets": "Escribe sel, ins o upd y pulsa Tab para expandir un fragmento. Tab avanza al siguiente campo; Mayús+Tab vuelve atrás."
+  },
+  "map": {
+    "title": "Mapa",
+    "background": "Fondo del mapa",
+    "tiles": "Mostrar teselas de un servidor de mapas",
+    "tilesHint": "Desactivado por defecto. Cada tesela que carga el mapa le dice a ese servidor qué parte del mundo estás mirando. Sin teselas, las formas se dibujan sobre un fondo liso y nada sale de este equipo.",
+    "tilesNeedServer": "Indica antes un servidor de teselas.",
+    "server": "Servidor de teselas",
+    "name": "Nombre",
+    "url": "Dirección de las teselas",
+    "urlHint": "Una dirección https:// con {z}, {x} e {y} donde el servidor pone el zoom y la tesela, tal como la da su documentación (http:// solo para un servidor en este equipo). Comprueba que sus condiciones permiten usarlo desde una aplicación.",
+    "attribution": "Atribución",
+    "attributionHint": "El crédito que el servidor pide mostrar en los mapas. Se muestra en el mapa.",
+    "remove": "Quitar el servidor de teselas"
   }
 }

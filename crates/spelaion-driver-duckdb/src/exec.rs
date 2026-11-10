@@ -109,6 +109,19 @@ fn logical(conversion: Conversion) -> LogicalType {
     }
 }
 
+/// DuckDB's name for a result column's type. The spatial extension's `GEOMETRY` reaches
+/// Arrow as WKB marked `geoarrow.wkb`: named so, the map view knows it (ADR-045).
+fn field_native_type(field: &arrow::datatypes::Field) -> String {
+    if field
+        .metadata()
+        .get("ARROW:extension:name")
+        .is_some_and(|name| name == "geoarrow.wkb")
+    {
+        return "GEOMETRY".into();
+    }
+    native_type(field.data_type())
+}
+
 /// DuckDB's name for the type behind an Arrow type (`INTEGER`, `VARCHAR[]`…).
 pub fn native_type(data_type: &DataType) -> String {
     match data_type {
@@ -277,7 +290,7 @@ pub fn execute(
         .map(|(field, conversion)| ColumnMeta {
             name: field.name().clone(),
             logical: logical(*conversion),
-            native_type: native_type(field.data_type()),
+            native_type: field_native_type(field),
             native_id: None,
         })
         .collect();

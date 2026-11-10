@@ -27,6 +27,13 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
 - MySQL and MariaDB accept TLS with `keys/mysql.crt` (valid for `localhost`, `mysql` and
   `mariadb`).
 - The `big` table has 1 M rows with varied types.
+- PostgreSQL is the PostGIS image (`postgis/postgis:17-3.5-alpine`), but only the
+  `spelaion_gis` database has the extension (`postgres-init/02-postgis.sql`), for the map
+  view's tests (ADR-045); `spelaion` stays plain. An older container made from
+  `postgres:17-alpine` has no `spelaion_gis`: recreate it with
+  `docker compose -f testing/docker/compose.yaml up -d --force-recreate --renew-anon-volumes --wait postgres`
+  (the image keeps its data in an anonymous volume, so without `--renew-anon-volumes` the init
+  scripts do not run again).
 - PostgreSQL accepts TLS (without requiring it) with a certificate signed by `keys/ca.crt`,
   valid for `localhost` and `postgres` (not for `127.0.0.1`): that way `verify-full` and
   `verify-ca` are tested, also through the bastions.
