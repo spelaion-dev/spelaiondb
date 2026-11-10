@@ -2367,14 +2367,35 @@ try {
   await shot("05h-drop-dialog");
   await dropTable.getByRole("button", { name: "Drop", exact: true }).click();
   await renamedProbe.waitFor({ state: "detached" });
-  // "New table" on the Tables folder: the core's statement in SQLite's types, opened, not run.
+  // "New table…" on the Tables folder: the create table form (ADR-047). The core writes the
+  // script, shown as it follows the form, and Create table runs exactly that.
   await tablesFolder.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "New table" }).click();
-  await panel.locator(".cm-content", { hasText: "CREATE TABLE new_table" }).waitFor();
-  assert.equal(
-    (await panel.locator(".cm-content").innerText()).trimEnd(),
-    "CREATE TABLE new_table (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);",
-  );
+  await page.getByRole("menuitem", { name: "New table…" }).click();
+  const newTable = page.getByRole("dialog", { name: "New table in main" });
+  await newTable.getByLabel("Table name").fill("smoke_form_table");
+  await newTable.getByRole("button", { name: "Add index" }).click();
+  await newTable.getByLabel("Columns of index 1", { exact: true }).fill("name");
+  await newTable.getByRole("button", { name: "Add foreign key" }).click();
+  await newTable.getByLabel("Columns of foreign key 1", { exact: true }).fill("id");
+  await newTable.getByLabel("Referenced table of foreign key 1", { exact: true }).fill("customer");
+  await newTable.getByLabel("Referenced columns of foreign key 1", { exact: true }).fill("id");
+  const newTableSql = newTable.getByLabel("SQL that will run");
+  await newTableSql.filter({ hasText: "CREATE INDEX smoke_form_table_name_idx ON smoke_form_table (name);" }).waitFor();
+  await newTableSql.filter({ hasText: "CONSTRAINT smoke_form_table_id_fkey FOREIGN KEY (id) REFERENCES customer (id)" }).waitFor();
+  await shot("sdb-21-create-table");
+  const themeBeforeCreate = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+  await shot("sdb-21-create-table-dark");
+  await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforeCreate);
+  await newTable.getByRole("button", { name: "Create table" }).click();
+  await newTable.waitFor({ state: "detached" });
+  const formTable = page.getByRole("button", { name: "Expand or collapse smoke_form_table", exact: true });
+  await formTable.waitFor();
+  assert.equal(await tablesFolder.locator(".muted").innerText(), "4");
+  await formTable.focus();
+  await page.keyboard.press("Delete");
+  const dropFormTable = page.getByRole("dialog", { name: "Drop smoke_form_table" });
+  await dropFormTable.getByRole("button", { name: "Drop", exact: true }).click();
+  await formTable.waitFor({ state: "detached" });
   assert.equal(await tablesFolder.locator(".muted").innerText(), "3");
   // Open object by name (Ctrl+Shift+D): found in the catalog, opened, and shown in the tree.
   const viewsFolder = page.getByRole("button", { name: "Expand or collapse Views", exact: true });

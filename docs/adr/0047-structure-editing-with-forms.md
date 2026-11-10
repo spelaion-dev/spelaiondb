@@ -57,10 +57,17 @@ action per statement), and SQLite cannot do most of them at all: it must create 
    where the engine's DDL is transactional (all but MySQL and MariaDB, where each statement
    commits on its own and the dialog says so), rolled back at the first failure, which names the
    statement and what the engine answered.
-6. **Where the forms are:** "Edit columns…" in a table's Columns view (on the chosen columns, or
+6. **New tables come from a form too** (`create.rs`): columns (type, nullability, default,
+   comment), a primary key, foreign keys and indexes become one script (`CREATE TABLE` with its
+   constraints, then `CREATE INDEX` and comments), validated like the column form and applied
+   the same way: only as shown, never read-only, risky statements confirmed. A constraint or
+   index left without a name is named after the table and its columns. This replaces ADR-026's
+   "New table" template for tables; the script can still be opened in the editor.
+7. **Where the forms are:** "Edit columns…" in a table's Columns view (on the chosen columns, or
    all of them) and "Edit column…" in a column's explorer menu (on the column, or the columns
    chosen with Ctrl+click); a SQLite unique constraint's or foreign key's "Drop…" opens the
-   rebuild's script.
+   rebuild's script; "New table…" in a schema's and its Tables folder's menu opens the create
+   table form.
 
 ## Consequences
 - Each engine's statements are tested by running them on that engine
@@ -71,4 +78,4 @@ action per statement), and SQLite cannot do most of them at all: it must create 
   table that is no longer the one the SQL was written for.
 - MySQL and MariaDB cannot apply several statements atomically; a form there writes one
   `ALTER TABLE` for the columns, and constraint drops before it are their own statements.
-- Creating tables with a form and editing routines' source follow in their own changes.
+- Editing routines' source and running them with a parameter form follow in their own change.

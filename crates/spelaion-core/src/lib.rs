@@ -118,11 +118,12 @@ pub use import::{
 pub use locks::{BlockingNode, Lock, LockSnapshot, LockWait, blocking_tree, list_locks};
 pub use objects::{
     AlterationPlan, ColumnEdit, CreateKind, DroppedConstraint, EditableColumn, FoundObject,
-    NewIndexKind, NewTableElement, ObjectActions, ObjectChange, ObjectError, ObjectTarget,
-    PlanRisk, SEARCH_LIMIT, TableAlteration, TableStructure, active_schema, alteration_plan,
-    apply_alteration, apply_change, can_cascade, change_script, change_statements, create_sql,
-    new_index_sql, new_table_element_sql, object_actions, qualified_name, search_objects,
-    set_active_schema, supports_added_checks, table_structure,
+    NewColumn, NewForeignKey, NewIndex, NewIndexKind, NewTable, NewTableElement, ObjectActions,
+    ObjectChange, ObjectError, ObjectTarget, PlanRisk, SEARCH_LIMIT, TableAlteration,
+    TableStructure, active_schema, alteration_plan, apply_alteration, apply_change,
+    apply_create_table, can_cascade, change_script, change_statements, create_sql,
+    create_table_plan, new_index_sql, new_table_element_sql, object_actions, qualified_name,
+    search_objects, set_active_schema, supports_added_checks, table_structure,
 };
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,
