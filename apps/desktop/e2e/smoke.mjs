@@ -642,14 +642,14 @@ try {
   }
   const grid = panel.locator(".grid-scroller");
   const gridBox = await grid.boundingBox();
-  // First data cell: below the 36 px header, right of the row numbers.
-  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
+  // First data cell: below the 34 px header, right of the row numbers.
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12);
   await page.keyboard.press("Control+a");
   await page.keyboard.press("Control+c");
   const all = (await copied(1)).trimEnd().split("\n");
   assert.equal(all.length, 6);
   assert.equal(all[0].split("\t").length, 3);
-  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12);
   await page.keyboard.press("Shift+ArrowDown");
   await page.keyboard.press("Shift+ArrowDown");
   await page.keyboard.press("Shift+ArrowRight");
@@ -657,7 +657,7 @@ try {
   const withHeaders = (await copied(2)).trimEnd().split("\n");
   assert.deepEqual(withHeaders[0].split("\t"), ["country", "orders"]);
   assert.equal(withHeaders.length, 4);
-  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12, { button: "right" });
   await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
   await panel.getByRole("menuitem", { name: "Copy as JSON" }).waitFor();
   await shot("03b-copy-menu");
@@ -667,8 +667,8 @@ try {
   assert.equal(typeof json[0].orders, "number");
   assert.ok(json[0].country);
   await panel.getByRole("status").filter({ hasText: "Copied 3 rows × 2 columns" }).waitFor();
-  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
-  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12);
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12, { button: "right" });
   await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
   await panel.getByRole("menuitem", { name: "Copy as Markdown table" }).click();
   const markdown = (await copied(4)).trimEnd().split("\n");
@@ -676,14 +676,14 @@ try {
   assert.equal(markdown[1], "| --- |");
   assert.equal(markdown.length, 3);
   await panel.getByRole("status").filter({ hasText: "Copied 1 row × 1 column" }).waitFor();
-  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13);
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12);
   await page.keyboard.press("Shift+ArrowDown");
   await page.keyboard.press("Shift+ArrowDown");
-  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12, { button: "right" });
   await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
   await panel.getByRole("menuitem", { name: "Copy as SQL IN list" }).click();
   assert.match(await copied(5), /^\('[^']+', '[^']+', '[^']+'\)$/);
-  await page.mouse.click(gridBox.x + 80, gridBox.y + 36 + 13, { button: "right" });
+  await page.mouse.click(gridBox.x + 80, gridBox.y + 34 + 12, { button: "right" });
   await panel.getByRole("menuitem", { name: "Copy ▸" }).hover();
   await panel.getByRole("menuitem", { name: "Copy as SQL INSERT" }).click();
   const tuples = json.map((row) => `('${row.country.replaceAll("'", "''")}')`).join(",\n  ");
@@ -742,11 +742,11 @@ try {
   // A selection: its rows and its columns, from the grid's menu.
   {
     const grid = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.click(grid.x + 80, grid.y + 36 + 13);
+    await page.mouse.click(grid.x + 80, grid.y + 34 + 12);
     await page.keyboard.press("Shift+ArrowDown");
     await page.keyboard.press("Shift+ArrowRight");
     const openSelection = async () => {
-      await page.mouse.click(grid.x + 80, grid.y + 36 + 13, { button: "right" });
+      await page.mouse.click(grid.x + 80, grid.y + 34 + 12, { button: "right" });
       await panel.getByRole("menuitem", { name: "Export selection…" }).click();
     };
     const selected = await exportWith(openSelection, "Export selection", "tsv", exportPath("selection.tsv"));
@@ -792,7 +792,7 @@ try {
   await viewer.getByText("Select a cell to see its value.").waitFor();
   assert.ok(Math.abs((await viewer.boundingBox()).width - narrower) < 2, "the viewer keeps its width after toggling");
   const viewerGrid = await panel.locator(".grid-scroller").boundingBox();
-  await page.mouse.click(viewerGrid.x + 80, viewerGrid.y + 36 + 13);
+  await page.mouse.click(viewerGrid.x + 80, viewerGrid.y + 34 + 12);
   await viewer.locator(".cell-viewer-json").waitFor();
   assert.equal(await viewer.locator(".cell-viewer-value").innerText(), '{\n  "a": [\n    1,\n    2\n  ]\n}');
   await page.keyboard.press("ArrowRight");
@@ -909,7 +909,7 @@ try {
   await run(panel);
   await panel.locator(".statusline", { hasText: "50,000 rows" }).waitFor();
   assert.equal(await panel.getByText("Loaded rows only", { exact: true }).count(), 0);
-  await panel.locator(".grid-scroller").evaluate((el) => (el.scrollTop = 26 * 25_000));
+  await panel.locator(".grid-scroller").evaluate((el) => (el.scrollTop = 24 * 25_000));
   await page.waitForTimeout(500);
   await shot("04-grid-scroll");
 
@@ -920,9 +920,11 @@ try {
     el.scrollLeft = 0;
   });
   const sortBox = await sortGrid.boundingBox();
-  // Row numbers take 64 px with 50,000 rows; then id 110, customer_id 110, created 160.
-  const ID_X = 64 + 20;
-  const TOTAL_X = 64 + 110 + 110 + 160 + 20;
+  // Row numbers take 60 px with 50,000 rows; read automatic widths from the real grid.
+  const ROW_GUTTER_50K = 60;
+  const ID_X = ROW_GUTTER_50K + 20;
+  const initialWidths = (await sortGrid.getAttribute("data-column-widths")).split(",").map(Number);
+  const TOTAL_X = ROW_GUTTER_50K + initialWidths.slice(0, 3).reduce((sum, width) => sum + width, 0) + 20;
   const sortedAs = (label) => panel.locator(`.grid-scroller[aria-label="Result with 50,000 rows${label}"]`).waitFor();
   const clickHeader = (x) => page.mouse.click(sortBox.x + x, sortBox.y + 18);
   const copyFirstRows = async (column, rows) => {
@@ -931,7 +933,7 @@ try {
       el.scrollTop = 0;
       el.scrollLeft = 0;
     });
-    await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+    await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12);
     for (let i = 0; i < column; i++) await page.keyboard.press("ArrowRight");
     for (let i = 1; i < rows; i++) await page.keyboard.press("Shift+ArrowDown");
     await page.keyboard.press("Control+c");
@@ -957,22 +959,22 @@ try {
   step("columns: drag a header edge to resize, double-click it to fit the content");
   const widthsNow = async () => (await sortGrid.getAttribute("data-column-widths")).split(",").map(Number);
   const [idWidth, customerWidth, createdWidth] = await widthsNow();
-  const createdEdge = sortBox.x + 64 + idWidth + customerWidth + createdWidth;
+  const createdEdge = sortBox.x + ROW_GUTTER_50K + idWidth + customerWidth + createdWidth;
   await page.mouse.move(createdEdge - 1, sortBox.y + 18);
   await page.mouse.down();
   await page.mouse.move(createdEdge + 60, sortBox.y + 18, { steps: 5 });
   await page.mouse.up();
   assert.equal((await widthsNow())[2], createdWidth + 61);
   await sortedAs("");
-  // "created" holds 10-character dates: fitting makes it narrower than 160 px.
-  await page.mouse.dblclick(sortBox.x + 64 + idWidth + customerWidth + createdWidth + 61, sortBox.y + 18);
+  // "created" holds 10-character dates: fitting makes it narrower than its initial width.
+  await page.mouse.dblclick(sortBox.x + ROW_GUTTER_50K + idWidth + customerWidth + createdWidth + 61, sortBox.y + 18);
   for (let i = 0; i < 20 && (await widthsNow())[2] >= createdWidth; i++) await page.waitForTimeout(100);
   const fitted = (await widthsNow())[2];
   assert.ok(fitted < createdWidth && fitted > 60, `fitted width ${fitted}`);
   await sortedAs("");
 
   step("jump to column: Ctrl+Shift+J, type, Enter");
-  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12);
   await page.keyboard.press("Control+Shift+J");
   const jump = panel.getByRole("dialog", { name: "Jump to column" });
   await jump.getByRole("textbox").fill("tot");
@@ -987,7 +989,7 @@ try {
 
   step("grid: spreadsheet keys select cells, rows and columns, and the footer counts them");
   const selectionText = panel.locator(".grid-selection");
-  const topLeftCell = () => page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+  const topLeftCell = () => page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12);
   await sortGrid.evaluate((el) => {
     el.scrollTop = 0;
     el.scrollLeft = 0;
@@ -1031,7 +1033,7 @@ try {
   await shot("04b2-grid-column-selected");
 
   step("grid: hide a column from its header, the footer shows it, the chooser brings it back");
-  const CUSTOMER_X = 64 + (await widthsNow())[0] + 20;
+  const CUSTOMER_X = ROW_GUTTER_50K + (await widthsNow())[0] + 20;
   await page.mouse.click(sortBox.x + CUSTOMER_X, sortBox.y + 18, { button: "right" });
   const headerMenu = panel.locator(".result-grid-menu");
   await headerMenu.getByRole("menuitem", { name: "Hide customer_id" }).click();
@@ -1062,7 +1064,7 @@ try {
 
   step("grid: freeze the first column, it stays while the others scroll");
   // "total" made wide enough for the grid to scroll sideways.
-  const totalEdge = sortBox.x + 64 + (await widthsNow()).reduce((a, b) => a + b, 0);
+  const totalEdge = sortBox.x + ROW_GUTTER_50K + (await widthsNow()).reduce((a, b) => a + b, 0);
   await page.mouse.move(totalEdge - 1, sortBox.y + 18);
   await page.mouse.down();
   await page.mouse.move(totalEdge + 1200, sortBox.y + 18, { steps: 5 });
@@ -1074,7 +1076,7 @@ try {
   await sortGrid.evaluate((el) => (el.scrollLeft = 400));
   await page.waitForTimeout(100);
   assert.equal(await sortGrid.evaluate((el) => el.scrollLeft), 400);
-  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12);
   {
     const before = await page.evaluate(() => window.__copied.length);
     await page.keyboard.press("Control+c");
@@ -1086,7 +1088,7 @@ try {
   assert.equal(await unfreeze.getAttribute("aria-checked"), "true");
   await unfreeze.click();
   // Unfrozen, the same place shows a column that scrolled in.
-  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13);
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12);
   {
     const before = await page.evaluate(() => window.__copied.length);
     await page.keyboard.press("Control+c");
@@ -1095,15 +1097,15 @@ try {
   // Fit "total" back to its content, from its edge at the far right.
   const farLeft = await sortGrid.evaluate((el) => (el.scrollLeft = el.scrollWidth - el.clientWidth));
   await page.waitForTimeout(100);
-  await page.mouse.dblclick(sortBox.x + 64 + (await widthsNow()).reduce((a, b) => a + b, 0) - farLeft - 1, sortBox.y + 18);
+  await page.mouse.dblclick(sortBox.x + ROW_GUTTER_50K + (await widthsNow()).reduce((a, b) => a + b, 0) - farLeft - 1, sortBox.y + 18);
   for (let i = 0; i < 20 && (await widthsNow())[3] > 400; i++) await page.waitForTimeout(100);
   assert.ok((await widthsNow())[3] < 400, "total fitted back");
   await sortGrid.evaluate((el) => (el.scrollLeft = 0));
   await sortedAs("");
 
   step("grid look: zebra rows switched off in Settings repaint the grid");
-  const createdRight = 64 + (await widthsNow()).slice(0, 3).reduce((a, b) => a + b, 0) - 4;
-  const rowY = (row) => 36 + row * 26 + 13;
+  const createdRight = ROW_GUTTER_50K + (await widthsNow()).slice(0, 3).reduce((a, b) => a + b, 0) - 4;
+  const rowY = (row) => 34 + row * 24 + 12;
   assert.notEqual(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "odd rows are tinted");
   await setGridLook({ zebra: false });
   assert.equal(await pixel(panel, createdRight, rowY(3)), await pixel(panel, createdRight, rowY(4)), "no tint without zebra rows");
@@ -1160,7 +1162,7 @@ try {
   await topLeftCell();
   await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.press("Shift+ArrowDown");
-  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13, { button: "right" });
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12, { button: "right" });
   const cellMenu = panel.locator(".result-grid-menu");
   {
     const before = await page.evaluate(() => window.__copied.length);
@@ -1170,7 +1172,7 @@ try {
     assert.ok(html.startsWith("<table>\n  <thead>\n    <tr><th>id</th><th>customer_id</th></tr>"), html);
     assert.match(html, /<tr><td>1<\/td><td>\d+<\/td><\/tr>\n    <tr><td>2<\/td>/);
   }
-  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13, { button: "right" });
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12, { button: "right" });
   {
     const before = await page.evaluate(() => window.__copied.length);
     await cellMenu.getByRole("menuitem", { name: "Copy column names ▸" }).hover();
@@ -1189,7 +1191,7 @@ try {
   }
 
   step("filter by this value: contains, from the cell menu, on the loaded rows");
-  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 36 + 13, { button: "right" });
+  await page.mouse.click(sortBox.x + ID_X, sortBox.y + 34 + 12, { button: "right" });
   await cellMenu.getByRole("menuitem", { name: "Filter ▸" }).hover();
   await panel.getByRole("menuitem", { name: "id contains '1'" }).click();
   await panel.locator(".filter-chip", { hasText: "id contains '1'" }).waitFor();
@@ -1287,7 +1289,7 @@ try {
       box = await grid.boundingBox();
     }
     const before = await page.evaluate(() => window.__copied.length);
-    await page.mouse.click(box.x + 80, box.y + 36 + 13);
+    await page.mouse.click(box.x + 80, box.y + 34 + 12);
     await page.keyboard.press("Control+c");
     return (await copied(before + 1)).trimEnd();
   };
@@ -2621,7 +2623,7 @@ try {
       const grid = await panel.locator(".grid-scroller").boundingBox();
       if (!grid) continue;
       const before = await page.evaluate(() => window.__copied.length);
-      await page.mouse.click(grid.x + 52 + 20, grid.y + 36 + 13);
+      await page.mouse.click(grid.x + 52 + 20, grid.y + 34 + 12);
       await page.keyboard.press("Control+c");
       // While that page is on its way there may be no cell to copy yet: try again, not wait.
       const copiedNow = await page
@@ -2634,7 +2636,7 @@ try {
   // "Filter by this value" goes to the table's WHERE, written by the core.
   {
     const grid = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.click(grid.x + 52 + 20, grid.y + 36 + 13, { button: "right" });
+    await page.mouse.click(grid.x + 52 + 20, grid.y + 34 + 12, { button: "right" });
     await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
     await panel.getByText("Added to the table's WHERE").waitFor();
     await panel.getByRole("menuitem", { name: "id = 50000", exact: true }).click();
@@ -2647,7 +2649,7 @@ try {
     }
     const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
     const createdX = box.x + 52 + widths[0] + widths[1] + 20;
-    await page.mouse.click(createdX, box.y + 36 + 13, { button: "right" });
+    await page.mouse.click(createdX, box.y + 34 + 12, { button: "right" });
     await panel.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
     await panel.getByRole("menuitem", { name: /^created contains '/ }).click();
     await page.waitForFunction(() => document.querySelector('input[aria-label="WHERE"]')?.value.includes(" AND "));
@@ -2688,7 +2690,7 @@ try {
     // The first row's customer_id, as the grid has it.
     let box = await gridBox();
     let widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
-    const customerCell = { x: box.x + 52 + widths[0] + 20, y: box.y + 36 + 13 };
+    const customerCell = { x: box.x + 52 + widths[0] + 20, y: box.y + 34 + 12 };
     await page.mouse.click(customerCell.x, customerCell.y);
     const before = await page.evaluate(() => window.__copied.length);
     await page.keyboard.press("Control+c");
@@ -2732,7 +2734,7 @@ try {
     // And forward again from there, with the keyboard: Ctrl+Enter on customer_id.
     box = await gridBox();
     widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
-    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 36 + 13);
+    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
     await page.keyboard.press("Control+Enter");
     await page.locator(".tabbar .tab.active", { hasText: "customer" }).waitFor();
     assert.equal(await panel.getByRole("textbox", { name: "WHERE" }).inputValue(), `id = ${customerId}`);
@@ -2774,7 +2776,7 @@ try {
     }
     const widths = (await panel.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
     // The whole id column (Ctrl+Space): the core adds up 1 to 500.
-    await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
     await page.keyboard.press("Control+Space");
     await panel.getByRole("button", { name: "Selection numbers panel" }).click();
     const calc = panel.getByRole("complementary", { name: "Selection numbers" });
@@ -2790,7 +2792,7 @@ try {
     assert.equal(await field("Maximum").innerText(), "500");
     await shot("sdb-12-calc-panel");
     // Names are not numbers: no sum, but their minimum, maximum and counts.
-    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 36 + 13);
+    await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
     await page.keyboard.press("Control+Space");
     await calc.getByText("No numbers in the selection.").waitFor();
     assert.equal(await field("Count").innerText(), "500");
@@ -2934,7 +2936,7 @@ try {
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
     const before = await page.evaluate(() => window.__copied.length);
-    await page.mouse.click(box.x + 80, box.y + 36 + 13);
+    await page.mouse.click(box.x + 80, box.y + 34 + 12);
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Control+c");
     assert.equal((await copied(before + 1)).trimEnd(), "O'Brien\t42\tO'Brien!");
@@ -3488,7 +3490,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // The filter bar moves the grid down: its box is read before every right-click.
   const rightClickFirstCell = async () => {
     const box = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.click(box.x + 80, box.y + 36 + 13, { button: "right" });
+    await page.mouse.click(box.x + 80, box.y + 34 + 12, { button: "right" });
   };
   const filterBy = async (op, value) => {
     await rightClickFirstCell();
@@ -3545,7 +3547,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.getByRole("button", { name: "Add row" }).waitFor();
   const mysqlGrid = panel.locator(".grid-scroller");
   const mysqlBox = await mysqlGrid.boundingBox();
-  await page.mouse.dblclick(mysqlBox.x + 52 + 20, mysqlBox.y + 36 + 13);
+  await page.mouse.dblclick(mysqlBox.x + 52 + 20, mysqlBox.y + 34 + 12);
   await panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for id" })).fill("901");
   await panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for id" })).press("Enter");
   assert.ok(await mysqlPages.getByLabel("Rows per page").isDisabled());
@@ -3716,7 +3718,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     // clicks still land on the intended cell.
     const cellAt = async (row, x) => {
       const now = await panel.locator(".grid-scroller").boundingBox();
-      return [now.x + 52 + x + 20, now.y + 36 + 13 + row * 26];
+      return [now.x + 52 + x + 20, now.y + 34 + 12 + row * 24];
     };
     // name of row 1 → "edited" (inline editor).
     await page.mouse.dblclick(...(await cellAt(0, 110)));
@@ -3762,7 +3764,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.locator(".table-range", { hasText: "rows 1–4" }).waitFor();
     for (let i = 0; i < 40 && !(box = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
     const before = await page.evaluate(() => window.__copied.length);
-    await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+    await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Control+c");
     assert.deepEqual((await copied(before + 1)).trimEnd().split("\n"), ["1\tedited from viewer\t1", "2\ttwo\t", "4\tfour\t1", "5\tedited from viewer\t1"]);
@@ -3770,7 +3772,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Saving directly from an active cell commits its current input as well as other changes.
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 36 + 13);
+    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("saved by shortcut");
     await editor.press("Control+s");
@@ -3781,21 +3783,21 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     for (let i = 0; i < 40 && !(after = await panel.locator(".grid-scroller").boundingBox()); i++) await page.waitForTimeout(100);
     assert.ok(after, "the grid is visible after saving");
     const before = await page.evaluate(() => window.__copied.length);
-    await page.mouse.click(after.x + 52 + 110 + 20, after.y + 36 + 13);
+    await page.mouse.click(after.x + 52 + 110 + 20, after.y + 34 + 12);
     await page.keyboard.press("Control+c");
     assert.equal((await copied(before + 1)).trimEnd(), "saved by shortcut");
   }
   // A typed value that does not fit the column is refused by the core; nothing is applied.
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 36 + 13);
+    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 34 + 12);
     // The grid's own editor: the open cell viewer has an edit box with the same name.
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for qty" }));
     await editor.fill("123");
     await editor.press("Enter");
     await page.keyboard.press("Control+z");
     await panel.getByText("No pending changes").waitFor();
-    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 36 + 13);
+    await page.mouse.dblclick(box.x + 52 + 270 + 20, box.y + 34 + 12);
     await editor.fill("lots");
     await editor.press("Enter");
     await panel.getByRole("button", { name: "Save changes" }).click();
@@ -3824,7 +3826,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
   {
     const box = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 36 + 13);
+    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
     const editor = panel.locator("input.cell-editor").and(panel.getByRole("textbox", { name: "New value for name" }));
     await editor.fill("query edit");
     await editor.press("Enter");
@@ -3839,7 +3841,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.waitForFunction((el) => !el.isConnected, beforeSave);
     await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
     const updated = await panel.locator(".grid-scroller").boundingBox();
-    await page.mouse.click(updated.x + 52 + 110 + 20, updated.y + 36 + 13);
+    await page.mouse.click(updated.x + 52 + 110 + 20, updated.y + 34 + 12);
     await page.keyboard.press("Enter");
     await panel.locator(".cell-viewer").getByRole("textbox", { name: "New value for name" }).waitFor();
     assert.equal(await panel.locator(".cell-viewer textarea").inputValue(), "viewer shortcut");
@@ -3877,7 +3879,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
     const openImage = async () => {
       const box = await panel.locator(".grid-scroller").boundingBox();
-      await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+      await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
       await page.keyboard.press("ArrowRight");
       await page.keyboard.press("Enter");
     };
@@ -3916,7 +3918,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.evaluate((target) => (window.__spelaionSavePath = target), menuSaved);
     {
       const box = await panel.locator(".grid-scroller").boundingBox();
-      await page.mouse.click(box.x + 52 + 110 + 20, box.y + 36 + 13, { button: "right" });
+      await page.mouse.click(box.x + 52 + 110 + 20, box.y + 34 + 12, { button: "right" });
     }
     await panel.getByRole("menuitem", { name: "Save to file…" }).click();
     await panel.locator(".grid-notice", { hasText: "menu-icon.png" }).waitFor();
@@ -3930,7 +3932,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
     {
       const box = await panel.locator(".grid-scroller").boundingBox();
-      await page.mouse.click(box.x + 52 + 20, box.y + 36 + 13);
+      await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
       await page.keyboard.press("Enter");
     }
     const xmlViewer = panel.locator(".cell-viewer");
@@ -4139,7 +4141,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await looks.locator(".statusline", { hasText: "1 row" }).waitFor();
     const [yesW, noW] = (await looks.locator(".grid-scroller").getAttribute("data-column-widths")).split(",").map(Number);
     const ROW_NUM = 52;
-    const middle = 36 + 13;
+    const middle = 34 + 12;
     const yesCentre = ROW_NUM + yesW / 2;
     const nothingX = ROW_NUM + yesW + noW;
     const nullInk = () => inked(looks, nothingX + 4, middle - 6, nothingX + 40, middle + 6);
@@ -4169,7 +4171,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     timings.load = measured;
     const grid = big.locator(".grid-scroller");
     const box = await grid.boundingBox();
-    const rowNum = 9 * 8 + 16; // "1,000,000" in the row-number gutter
+    const rowNum = 9 * 8 + 12; // "1,000,000" in the row-number gutter
     const widths = async () => (await grid.getAttribute("data-column-widths")).split(",").map(Number);
     const status = big.locator(".grid-selection");
     // Scrolling to the middle and the end.
@@ -4181,7 +4183,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       await grid.evaluate((el) => (el.scrollTop = 0));
       await page.waitForTimeout(200);
     });
-    await page.mouse.click(box.x + rowNum + 20, box.y + 36 + 13);
+    await page.mouse.click(box.x + rowNum + 20, box.y + 34 + 12);
     timings.selectAll = await longestFrameGap(async () => {
       await page.keyboard.press("Control+a");
       await status.getByText("All 1,000,000 rows selected", { exact: true }).waitFor();
@@ -4190,7 +4192,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
       await page.keyboard.press("Control+Shift+Home");
       await status.getByText("All 1,000,000 rows selected", { exact: true }).waitFor();
     });
-    await page.mouse.click(box.x + rowNum + 20, box.y + 36 + 13);
+    await page.mouse.click(box.x + rowNum + 20, box.y + 34 + 12);
     // Find: the core reads every cell of the million rows.
     await page.keyboard.press("Control+f");
     const bar = big.getByRole("search", { name: "Find in results" });
@@ -4214,10 +4216,10 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     });
     // Filter by this value: name contains "item 12345" (12345 and 123450–123459).
     timings.filter = await longestFrameGap(async () => {
-      await grid.evaluate((el) => (el.scrollTop = 26 * 12_345));
+      await grid.evaluate((el) => (el.scrollTop = 24 * 12_345));
       await page.waitForTimeout(300);
-      // The row at the top is 12345 (rows are 26 px high).
-      await page.mouse.click(box.x + rowNum + idW + 20, box.y + 36 + 13, { button: "right" });
+      // The row at the top is 12345 (rows are 24 px high).
+      await page.mouse.click(box.x + rowNum + idW + 20, box.y + 34 + 12, { button: "right" });
       await big.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
       await big.getByRole("menuitem", { name: "name contains 'item 12345'" }).click();
       await big.locator(".statusline", { hasText: "11 of 1,000,000 rows" }).waitFor({ timeout: 60_000 });

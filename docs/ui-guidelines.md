@@ -103,8 +103,9 @@ Each role is defined for both themes:
   behind modal ones. Panels, cards and buttons have no shadow.
 - Heights: `--control-sm` 24px (icon buttons in toolbars, inline controls), `--control-md`
   28px (buttons, inputs and selects) and `--control-lg` 32px (welcome and empty-state
-  actions). Rows in lists, trees, menus and the grid are `--row-h` (26px); bars (the tab strip
-  and the editor's and the results' toolbars) are `--bar-h` (36px).
+  actions). Rows in lists, trees and menus are `--row-h` (26px); result grid rows are 24px to
+  display more data with 12px text. Bars (the tab strip and the editor's and the
+  results' toolbars) are `--bar-h` (36px).
 - Stacking order, lowest first: `--z-sticky`, `--z-dropdown`, `--z-dialog`, `--z-popover` (a
   menu opened from a dialog shows above it) and `--z-toast`.
 
