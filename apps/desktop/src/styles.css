@@ -1875,10 +1875,60 @@ select {
   display: grid;
   gap: var(--space-xs);
 }
-.account-dialog legend {
+.account-dialog legend,
+.privileges-dialog legend {
   padding: 0;
   margin-bottom: var(--space-xs);
   font-size: var(--text-sm);
+}
+.privileges-dialog h3 {
+  margin: 0 0 var(--space-xs);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.privileges-dialog fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-sm);
+}
+.privileges-dialog .field {
+  display: grid;
+  gap: var(--space-xs);
+}
+.privileges-granted .structure-scroll {
+  max-height: 30vh;
+}
+.privileges-granted table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.privileges-granted th,
+.privileges-granted td {
+  padding: var(--space-2xs) var(--space-xs);
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--line);
+}
+.privileges-granted thead th {
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--muted);
+}
+.privileges-granted .structure-icon {
+  width: 32px;
+}
+.privileges-granted .icon-button {
+  padding: 0;
+}
+.privileges-granted .tag {
+  margin-left: var(--space-sm);
+}
+.privileges-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-xs) var(--space-md);
 }
 /* Structure editing with forms (ADR-047). */
 .structure-dialog {

@@ -90,6 +90,8 @@ pub struct PrincipalActions {
     pub password: Vec<PrincipalKind>,
     pub lock: Vec<PrincipalKind>,
     pub drop: Vec<PrincipalKind>,
+    /// Kinds that can be granted privileges (`privileges.rs`).
+    pub privileges: Vec<PrincipalKind>,
 }
 
 pub fn principal_actions(dialect: &dyn Dialect) -> PrincipalActions {
@@ -100,18 +102,21 @@ pub fn principal_actions(dialect: &dyn Dialect) -> PrincipalActions {
             password: vec![Role],
             lock: vec![Role],
             drop: vec![Role],
+            privileges: vec![Role],
         },
         "mysql" => PrincipalActions {
             create: vec![User, Role],
             password: vec![User],
             lock: vec![User],
             drop: vec![User, Role],
+            privileges: vec![User, Role],
         },
         "sqlserver" => PrincipalActions {
             create: vec![Login, User, Role],
             password: vec![Login],
             lock: vec![Login],
             drop: vec![Login, User, Role],
+            privileges: vec![Login, User, Role],
         },
         _ => PrincipalActions::default(),
     }

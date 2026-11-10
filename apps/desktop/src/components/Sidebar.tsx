@@ -60,7 +60,8 @@ import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { StructureDialog } from "./StructureDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AccountDialog, usePrincipalActions, type AccountAction } from "./AccountDialog";
-import type { PrincipalActionsItem, PrincipalKindItem } from "../bindings";
+import { PrivilegesDialog } from "./PrivilegesDialog";
+import type { PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } from "../bindings";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
@@ -904,12 +905,16 @@ function folderAccountKind(folder: (typeof SERVER_FOLDERS)[number]): PrincipalKi
   }
 }
 
-/** An account of the server (ADR-048): its menu changes its password, locks it or drops it. */
+/** What an account's menu opens: the account dialog, or its privileges. */
+type AccountRequest = AccountAction | { action: "privileges"; target: PrincipalTargetItem };
+
+/** An account of the server (ADR-048): its menu changes its password, locks it, shows and
+ * changes its privileges, or drops it. */
 function AccountRow({ object, kind, actions, onAct }: {
   object: ServerObjectItem;
   kind: PrincipalKindItem;
   actions: PrincipalActionsItem | undefined;
-  onAct(request: AccountAction): void;
+  onAct(request: AccountRequest): void;
 }) {
   const { t } = useTranslation("shell");
   const [menu, setMenu] = useContextMenu();
@@ -918,8 +923,9 @@ function AccountRow({ object, kind, actions, onAct }: {
   const canPassword = can(actions?.password);
   const canLock = can(actions?.lock);
   const canDrop = can(actions?.drop);
-  const any = canPassword || canLock || canDrop;
-  const act = (action: "password" | "lock" | "drop") => {
+  const canPrivileges = can(actions?.privileges);
+  const any = canPassword || canLock || canPrivileges || canDrop;
+  const act = (action: "password" | "lock" | "privileges" | "drop") => {
     setMenu(null);
     onAct({ action, target: { kind, name: object.name } });
   };
@@ -950,6 +956,7 @@ function AccountRow({ object, kind, actions, onAct }: {
         <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
           {canPassword && <button role="menuitem" onClick={() => act("password")}>{t("accounts.passwordMenu")}</button>}
           {canLock && <button role="menuitem" onClick={() => act("lock")}>{t("accounts.lockMenu")}</button>}
+          {canPrivileges && <button role="menuitem" onClick={() => act("privileges")}>{t("privileges.menu")}</button>}
           {canDrop && <DropMenuItem onClick={() => act("drop")} />}
         </div>
       )}
@@ -1641,7 +1648,7 @@ function ConnectionNode({
   const actions = useObjectActions(session, schemas !== null);
   const principalActions = usePrincipalActions(session, schemas !== null);
   /** The account dialog that is open (ADR-048). */
-  const [account, setAccount] = useState<AccountAction | null>(null);
+  const [account, setAccount] = useState<AccountRequest | null>(null);
   useEffect(() => {
     const refresh = (event: Event) => {
       if ((event as CustomEvent<string>).detail === connection.id && schemas) void refreshAll();
@@ -1940,7 +1947,10 @@ function ConnectionNode({
           {foldersFirst && schemaNodes}
         </div>
       )}
-      {account && (
+      {account?.action === "privileges" && (
+        <PrivilegesDialog session={session} connectionId={connection.id} target={account.target} onClose={() => setAccount(null)} />
+      )}
+      {account && account.action !== "privileges" && (
         <AccountDialog
           session={session}
           connectionId={connection.id}

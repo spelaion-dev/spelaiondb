@@ -3692,6 +3692,30 @@ try {
     await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforePassword);
     await passwordRole.getByRole("button", { name: "Change password", exact: true }).click();
     await passwordRole.waitFor({ state: "detached" });
+    // Privileges: what it has, read by the core; a grant written by the core from the form, and a
+    // revoke from the row it shows.
+    await roleRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Privileges…" }).click();
+    const privileges = page.getByRole("dialog", { name: "Privileges of smoke_account" });
+    await privileges.getByText("No privileges or roles of its own.").waitFor();
+    assert.equal(await privileges.getByLabel("On", { exact: true }).inputValue(), "database");
+    await privileges.getByLabel("Database", { exact: true }).fill("spelaion");
+    await privileges.getByRole("group", { name: "Privileges" }).getByLabel("CONNECT").check();
+    await privileges.getByLabel("SQL that will run").filter({ hasText: "GRANT CONNECT ON DATABASE spelaion TO smoke_account;" }).waitFor();
+    await privileges.getByRole("button", { name: "Grant", exact: true }).click();
+    await privileges.getByRole("status").filter({ hasText: "Granted." }).waitFor();
+    const revokeConnect = privileges.getByRole("button", { name: "Revoke CONNECT on spelaion…" });
+    await revokeConnect.waitFor();
+    await shot("sdb-25-privileges");
+    const themeBeforePrivileges = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+    await shot("sdb-25-privileges-dark");
+    await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforePrivileges);
+    await revokeConnect.click();
+    await privileges.getByLabel("SQL that will run").filter({ hasText: "REVOKE CONNECT ON DATABASE spelaion FROM smoke_account;" }).waitFor();
+    await privileges.getByRole("button", { name: "Revoke", exact: true }).click();
+    await privileges.getByText("No privileges or roles of its own.").waitFor();
+    await privileges.getByRole("button", { name: "Close", exact: true }).click();
+    await privileges.waitFor({ state: "detached" });
     // Delete on the row asks to drop it; Cancel has the focus.
     await roleRow.focus();
     await page.keyboard.press("Delete");

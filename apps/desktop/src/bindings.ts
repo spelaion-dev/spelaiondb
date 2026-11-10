@@ -490,6 +490,20 @@ export const commands = {
 	/**  Whether an account is locked now, for the lock dialog (ADR-048); `None` when unknown. */
 	principalLocked: (session: string, target: PrincipalTargetItem) => typedError<boolean | null, string>(__TAURI_INVOKE("principal_locked", { session, target })),
 	/**
+	 *  The scopes an account can be granted on this session's engine, each with the names it asks
+	 *  and its privileges (ADR-048): the core decides.
+	 */
+	privilegeScopes: (session: string, kind: PrincipalKindItem) => typedError<PrivilegeScopeInfoItem[], string>(__TAURI_INVOKE("privilege_scopes", { session, kind })),
+	/**  What an account has: its privileges on each scope and its roles, read from the catalog. */
+	principalPrivileges: (session: string, target: PrincipalTargetItem) => typedError<GrantedPrivilegeItem[], string>(__TAURI_INVOKE("principal_privileges", { session, target })),
+	/**  The `GRANT` or `REVOKE` a privilege form would run, written by the core. Nothing runs. */
+	previewPrivilegeChange: (session: string, change: PrivilegeChangeItem) => typedError<AlterationPreviewItem, string>(__TAURI_INVOKE("preview_privilege_change", { session, change })),
+	/**
+	 *  Grants or revokes on the explorer's session, only as the script `sql` the user was shown
+	 *  (ADR-048); refused on a read-only connection. Returns how many statements ran.
+	 */
+	applyPrivilegeChange: (session: string, change: PrivilegeChangeItem, sql: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_privilege_change", { session, change, sql, confirmed })),
+	/**
 	 *  A table's columns for its structure form (ADR-047), read from the catalog on the tab's
 	 *  session: each field as SQL the engine writes.
 	 */
@@ -2344,6 +2358,14 @@ export type Geometry =
 /**  Empty (`POINT EMPTY`) when `coordinates` is empty; otherwise x and y. */
 { type: "Point"; coordinates: (number | null)[] } | { type: "LineString"; coordinates: ([(number | null), (number | null)])[] } | { type: "Polygon"; coordinates: (([(number | null), (number | null)])[])[] } | { type: "MultiPoint"; coordinates: ([(number | null), (number | null)])[] } | { type: "MultiLineString"; coordinates: (([(number | null), (number | null)])[])[] } | { type: "MultiPolygon"; coordinates: ((([(number | null), (number | null)])[])[])[] } | { type: "GeometryCollection"; geometries: Geometry[] };
 
+/**  A privilege an account has, as the catalog says. */
+export type GrantedPrivilegeItem = {
+	target: PrivilegeTargetItem,
+	privilege: string,
+	grantable: boolean,
+	denied: boolean,
+};
+
 /**  How the result grid draws its cells; personal, like the theme. */
 export type GridPreferencesItem = {
 	zebra: boolean,
@@ -3734,6 +3756,7 @@ export type PrincipalActionsItem = {
 	password: PrincipalKindItem[],
 	lock: PrincipalKindItem[],
 	drop: PrincipalKindItem[],
+	privileges: PrincipalKindItem[],
 };
 
 /**  What to do with an account (ADR-048). */
@@ -3748,6 +3771,35 @@ export type PrincipalKindItem = "role" | "user" | "login";
 /**  An account as the explorer lists it (a MySQL user as `'name'@'host'`). */
 export type PrincipalTargetItem = {
 	kind: PrincipalKindItem,
+	name: string,
+};
+
+/**  Grant or revoke privileges of one scope to an account (ADR-048). */
+export type PrivilegeChangeItem = {
+	grantee: PrincipalTargetItem,
+	target: PrivilegeTargetItem,
+	privileges: string[],
+	revoke: boolean,
+	grantOption: boolean,
+};
+
+/**  A scope the form offers for an account, with the names it asks and its privileges. */
+export type PrivilegeScopeInfoItem = {
+	scope: PrivilegeScopeItem,
+	needsDatabase: boolean,
+	needsSchema: boolean,
+	needsName: boolean,
+	privileges: string[],
+};
+
+/**  What a privilege is on (ADR-048). */
+export type PrivilegeScopeItem = "global" | "database" | "schema" | "all_tables_in_schema" | "table" | "sequence" | "function" | "procedure" | "role";
+
+/**  Where a privilege applies. */
+export type PrivilegeTargetItem = {
+	scope: PrivilegeScopeItem,
+	database: string,
+	schema: string,
 	name: string,
 };
 

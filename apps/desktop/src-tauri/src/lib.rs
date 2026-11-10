@@ -4452,6 +4452,102 @@ async fn apply_principal_change(
     Ok(u32::try_from(ran).unwrap_or(u32::MAX))
 }
 
+/// The scopes an account can be granted on this session's engine, each with the names it asks
+/// and its privileges (ADR-048): the core decides.
+#[tauri::command]
+#[specta::specta]
+async fn privilege_scopes(
+    session: String,
+    kind: PrincipalKindItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<PrivilegeScopeInfoItem>> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    Ok(
+        spelaion_core::privilege_scopes(dialect.as_ref(), kind.into())
+            .into_iter()
+            .map(|scope| {
+                let (needs_database, needs_schema, needs_name) =
+                    spelaion_core::privilege_scope_fields(dialect.as_ref(), scope);
+                PrivilegeScopeInfoItem {
+                    scope: scope.into(),
+                    needs_database,
+                    needs_schema,
+                    needs_name,
+                    privileges: spelaion_core::privilege_options(dialect.as_ref(), scope)
+                        .iter()
+                        .map(|p| (*p).to_string())
+                        .collect(),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// What an account has: its privileges on each scope and its roles, read from the catalog.
+#[tauri::command]
+#[specta::specta]
+async fn principal_privileges(
+    session: String,
+    target: PrincipalTargetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<GrantedPrivilegeItem>> {
+    let open = state.session(&session).await?;
+    spelaion_core::principal_privileges(&open.session, &target.into())
+        .await
+        .map(|granted| {
+            granted
+                .into_iter()
+                .filter_map(GrantedPrivilegeItem::from_core)
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// The `GRANT` or `REVOKE` a privilege form would run, written by the core. Nothing runs.
+#[tauri::command]
+#[specta::specta]
+async fn preview_privilege_change(
+    session: String,
+    change: PrivilegeChangeItem,
+    state: State<'_, AppState>,
+) -> CmdResult<AlterationPreviewItem> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    let plan = spelaion_core::privilege_plan(dialect.as_ref(), &change.into())
+        .map_err(|e| e.to_string())?;
+    Ok(AlterationPreviewItem::new(
+        &plan,
+        dialect.as_ref(),
+        &open.resolved.safeguards(),
+    ))
+}
+
+/// Grants or revokes on the explorer's session, only as the script `sql` the user was shown
+/// (ADR-048); refused on a read-only connection. Returns how many statements ran.
+#[tauri::command]
+#[specta::specta]
+async fn apply_privilege_change(
+    session: String,
+    change: PrivilegeChangeItem,
+    sql: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    let ran = spelaion_core::apply_privilege_change(
+        &open.session,
+        &change.into(),
+        &sql,
+        open.resolved.params.read_only,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
 /// Whether an account is locked now, for the lock dialog (ADR-048); `None` when unknown.
 #[tauri::command]
 #[specta::specta]
@@ -5006,6 +5102,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             preview_principal_change,
             apply_principal_change,
             principal_locked,
+            privilege_scopes,
+            principal_privileges,
+            preview_privilege_change,
+            apply_privilege_change,
             table_structure,
             preview_table_alteration,
             apply_table_alteration,
