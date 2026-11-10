@@ -553,6 +553,9 @@ fn literal(
                     .collect(),
             )
         }
+        // The grid shows a time zone as `+00` (UTC), which SQL Server does not read back: it
+        // takes `+00:00`.
+        LogicalType::TimestampTz if dialect == "sqlserver" => Value::Text(sqlserver_offset(text)),
         LogicalType::Text
         | LogicalType::Date
         | LogicalType::Time
@@ -565,6 +568,25 @@ fn literal(
         | LogicalType::Native => Value::Text(text.clone()),
     };
     Ok(sql_literal(&value, dialect))
+}
+
+/// `… 08:00:00+02` → `… 08:00:00+02:00`: an offset of whole hours, as the grid writes it, with
+/// the minutes SQL Server needs. Anything else is left as typed.
+fn sqlserver_offset(text: &str) -> String {
+    let trimmed = text.trim_end();
+    let bytes = trimmed.as_bytes();
+    let n = bytes.len();
+    let hours_only = n >= 4
+        && matches!(bytes[n - 3], b'+' | b'-')
+        && bytes[n - 2].is_ascii_digit()
+        && bytes[n - 1].is_ascii_digit()
+        && bytes[n - 4].is_ascii_digit()
+        && trimmed[..n - 3].contains(':');
+    if hours_only {
+        format!("{trimmed}:00")
+    } else {
+        text.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -656,6 +678,33 @@ mod tests {
             "X'895000'"
         );
         assert!(literal("postgres", "c", LogicalType::Text, &bytes).is_err());
+        // SQL Server reads a time zone written as the grid shows it.
+        let tz = |dialect, text: &str| {
+            literal(
+                dialect,
+                "c",
+                LogicalType::TimestampTz,
+                &CellInput::Text(text.into()),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            tz("sqlserver", "2024-01-01 08:00:00.5+00"),
+            "N'2024-01-01 08:00:00.5+00:00'"
+        );
+        assert_eq!(
+            tz("sqlserver", "2024-01-01 08:00:00-05"),
+            "N'2024-01-01 08:00:00-05:00'"
+        );
+        assert_eq!(
+            tz("sqlserver", "2024-01-01 08:00:00 +05:30"),
+            "N'2024-01-01 08:00:00 +05:30'"
+        );
+        assert_eq!(tz("sqlserver", "2024-01-01"), "N'2024-01-01'");
+        assert_eq!(
+            tz("postgres", "2024-01-01 08:00:00+00"),
+            "'2024-01-01 08:00:00+00'"
+        );
         assert_eq!(
             literal(
                 "mysql",

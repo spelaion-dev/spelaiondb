@@ -544,6 +544,66 @@ async fn scalar_result(
     }
 }
 
+/// Every row of a short read written by the core (a page of a few dozen rows, a catalog
+/// list), as values with the result's columns; the result is freed. `metadata` runs it as an
+/// internal metadata read ([`Session::run_metadata`]) instead of a generated statement.
+pub(crate) async fn short_rows(
+    session: &Session,
+    sql: &str,
+    metadata: bool,
+) -> Result<(Vec<spelaion_driver_api::ColumnMeta>, Vec<Vec<Value>>), String> {
+    let mut events = if metadata {
+        session.run_metadata(sql)
+    } else {
+        session.run_generated(sql)
+    };
+    let mut results = Vec::new();
+    let mut failure = None;
+    while let Some(event) = events.next().await {
+        match event {
+            CoreEvent::ResultStarted { result: id, .. } => results.push(id),
+            CoreEvent::StatementFailed { error, .. } => failure = Some(error.message),
+            CoreEvent::StatementStarted { .. }
+            | CoreEvent::Rows { .. }
+            | CoreEvent::Notice { .. }
+            | CoreEvent::StatementFinished { .. }
+            | CoreEvent::ScriptFinished { .. }
+            | CoreEvent::ErrorPaused { .. }
+            | CoreEvent::HistoryWarning { .. } => {}
+        }
+    }
+    let store = session.results();
+    let read = results.first().and_then(|id| {
+        let stored = store.get(*id)?;
+        let stored = stored.read().ok()?;
+        let columns = stored.schema().columns.clone();
+        let mut rows = Vec::with_capacity(stored.rows());
+        for batch in stored.window(0, stored.rows()) {
+            for row in 0..batch.num_rows() {
+                rows.push(
+                    columns
+                        .iter()
+                        .enumerate()
+                        .map(|(i, meta)| {
+                            Value::from_array(batch.column(i).as_ref(), row, meta.logical)
+                                .unwrap_or(Value::Null)
+                        })
+                        .collect(),
+                );
+            }
+        }
+        Some((columns, rows))
+    });
+    for id in results {
+        store.remove(id);
+    }
+    match (failure, read) {
+        (Some(message), _) => Err(message),
+        (None, Some(read)) => Ok(read),
+        (None, None) => Err("the read returned no result".into()),
+    }
+}
+
 /// Runs a `SELECT COUNT(*)` written by the core and returns the number; the result is freed.
 pub(crate) async fn scalar_count(session: &Session, sql: &str) -> Result<i64, String> {
     match scalar_value(session, sql).await? {

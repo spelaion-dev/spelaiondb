@@ -133,6 +133,8 @@ export interface GridEditing {
   deleted: number[];
   inserts: CellEditItem[][];
   primaryKey: string[];
+  /** The table the rows are from: its columns may take a value picker in the cell panel. */
+  table: { schema: string; name: string };
   busy: boolean;
   onInsert(values: CellEditItem[]): void;
   onUpdateInsert(index: number, values: CellEditItem[]): void;
@@ -2158,6 +2160,7 @@ export function ResultGrid({
         onEdit={editing?.onEdit}
         pendingChanges={hasPendingEdits}
         onLoadFile={editing?.onLoadFile}
+        pickerSource={editing ? { session, schema: editing.table.schema, table: editing.table.name } : undefined}
         onMode={(mode) => {
           setViewerMode(mode);
           // Arrow keys keep moving through the grid.

@@ -4013,6 +4013,104 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await xmlViewer.getByRole("button", { name: "Load anyway" }).click();
     await xmlViewer.getByText("2,200,000 characters").waitFor();
   }
+  step("value pickers: a date and time, allowed values, and a row of the referenced table found by pages");
+  {
+    await replaceQuery(panel, [
+      // No DROP: the guard would ask first. The tables stay in the test database.
+      "create table if not exists smoke_pick_ref (id int primary key, name varchar(40));",
+      "create table if not exists smoke_pick (id int primary key, due datetime(3), mood enum('sad','ok','happy'), status varchar(10) check (status in ('new','paid')), ref_id int, foreign key (ref_id) references smoke_pick_ref (id));",
+      "delete from smoke_pick where id > 0;",
+      "delete from smoke_pick_ref where id > 0;",
+      "insert into smoke_pick_ref (id, name) with recursive s (n) as (select 1 union all select n + 1 from s where n < 120) select n, concat('customer ', n) from s;",
+      "insert into smoke_pick values (1, '2026-01-31 10:20:30.120', 'sad', 'new', 5);",
+    ].join("\n"));
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "6 OK, 0 failed, 0 not run" }).waitFor();
+    // The setup script left no result: the status line tells when the query has run.
+    await replaceQuery(panel, "select id, due, mood, status, ref_id from smoke_pick order by id;");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    {
+      const box = await panel.locator(".grid-scroller").boundingBox();
+      await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Enter");
+    }
+    const viewer = panel.locator(".cell-viewer");
+    const valueText = viewer.getByRole("textbox", { name: "New value for due" });
+    // A date and time: the column keeps 3 digits, written as the grid shows it.
+    const datePicker = viewer.getByRole("region", { name: "Pick a date and time" });
+    await datePicker.waitFor();
+    assert.equal(await datePicker.getByLabel("Date").inputValue(), "2026-01-31");
+    assert.equal(await datePicker.getByLabel("Time").inputValue(), "10:20:30");
+    assert.equal(await datePicker.getByLabel("Fraction of a second").inputValue(), "12");
+    await datePicker.getByText("This column keeps 3 digits of a second.").waitFor();
+    await datePicker.getByLabel("Date").fill("2026-11-10");
+    await datePicker.getByLabel("Time").fill("09:05:07");
+    await datePicker.getByLabel("Fraction of a second").fill("5");
+    await page.waitForFunction((el) => el.value === "2026-11-10 09:05:07.5", await valueText.elementHandle());
+    // More digits than the column keeps are refused by the core, and what was typed stays.
+    await datePicker.getByLabel("Fraction of a second").evaluate((el) => el.removeAttribute("maxlength"));
+    await datePicker.getByLabel("Fraction of a second").fill("1234");
+    await datePicker.getByRole("alert").filter({ hasText: "up to 3 digits" }).waitFor();
+    assert.equal(await valueText.inputValue(), "2026-11-10 09:05:07.5");
+    await datePicker.getByLabel("Fraction of a second").fill("5");
+    await shot("05j-picker-date");
+    // An enum: its values from the catalog.
+    await viewer.getByRole("button", { name: "Row", exact: true }).click();
+    await viewer.getByRole("button", { name: "Show the value of mood" }).click();
+    const moodPicker = viewer.getByRole("region", { name: "Pick a value" });
+    await moodPicker.getByText("The values of the column's enum type.").waitFor();
+    assert.deepEqual(await moodPicker.locator(".value-picker-value").allInnerTexts(), ["sad", "ok", "happy"]);
+    assert.ok(await moodPicker.getByRole("radio", { name: "sad" }).isChecked());
+    await moodPicker.getByRole("radio", { name: "happy" }).check();
+    await page.waitForFunction((el) => el.value === "happy", await viewer.getByRole("textbox", { name: "New value for mood" }).elementHandle());
+    await shot("05k-picker-enum");
+    // A CHECK list.
+    await viewer.getByRole("button", { name: "Row", exact: true }).click();
+    await viewer.getByRole("button", { name: "Show the value of status" }).click();
+    await viewer.getByText("The values its CHECK constraint allows.").waitFor();
+    await viewer.getByRole("radio", { name: "paid" }).check();
+    await page.waitForFunction((el) => el.value === "paid", await viewer.getByRole("textbox", { name: "New value for status" }).elementHandle());
+    // A foreign key: the referenced table a page at a time, searched by the core.
+    await viewer.getByRole("button", { name: "Row", exact: true }).click();
+    await viewer.getByRole("button", { name: "Show the value of ref_id" }).click();
+    const keyPicker = viewer.getByRole("region", { name: "Pick a row of smoke_pick_ref" });
+    const keyRows = keyPicker.getByRole("list", { name: "Rows of smoke_pick_ref" });
+    await keyPicker.getByText("Rows 1–50").waitFor();
+    assert.equal(await keyRows.getByRole("button").count(), 50);
+    assert.match(await keyRows.getByRole("button", { pressed: true }).innerText(), /^5\s*customer 5$/);
+    await keyPicker.getByRole("button", { name: "Next", exact: true }).click();
+    await keyPicker.getByText("Rows 51–100").waitFor();
+    await keyPicker.getByRole("button", { name: "Next", exact: true }).click();
+    await keyPicker.getByText("Rows 101–120").waitFor();
+    assert.ok(await keyPicker.getByRole("button", { name: "Next", exact: true }).isDisabled());
+    await keyPicker.getByRole("searchbox", { name: "Search smoke_pick_ref" }).fill("customer 77");
+    await keyPicker.locator(".value-picker-row:not(.value-picker-row-head)", { hasText: "customer 77" }).waitFor();
+    await page.waitForFunction((list) => list.querySelectorAll("button.value-picker-row").length === 1, await keyRows.elementHandle());
+    await shot("05l-picker-key");
+    await keyRows.getByRole("button", { name: /customer 77/ }).click();
+    await page.waitForFunction((el) => el.value === "77", await viewer.getByRole("textbox", { name: "New value for ref_id" }).elementHandle());
+    // Saved like any edit: one UPDATE by primary key, then the query runs again.
+    const beforeSave = await panel.getByRole("button", { name: "Result 1", exact: true }).elementHandle();
+    await viewer.getByRole("textbox", { name: "New value for ref_id" }).press("Control+s");
+    await panel.getByRole("status").filter({ hasText: "Applied 1 change" }).waitFor();
+    await page.waitForFunction((el) => !el.isConnected, beforeSave);
+    await panel.getByRole("toolbar", { name: "Row actions" }).waitFor();
+    {
+      const box = await panel.locator(".grid-scroller").boundingBox();
+      await page.mouse.click(box.x + 52 + 20, box.y + 34 + 12);
+      await page.keyboard.press("Enter");
+    }
+    await panel.locator(".cell-viewer").getByRole("button", { name: "Row", exact: true }).click();
+    await panel.locator(".cell-viewer .row-field").nth(4).waitFor();
+    assert.deepEqual(
+      await panel.locator(".cell-viewer .row-field dd").allInnerTexts(),
+      ["1", "2026-11-10 09:05:07.5", "happy", "paid", "77"],
+    );
+    await panel.locator(".cell-viewer").getByRole("button", { name: "Cell", exact: true }).click();
+  }
   await page.keyboard.press("Control+w");
   if (process.env.SPELAION_E2E_EDIT_ONLY === "1") throw editSmokeComplete;
 

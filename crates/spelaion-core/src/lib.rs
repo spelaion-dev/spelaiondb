@@ -45,6 +45,7 @@ mod sql_file;
 mod table_data;
 mod table_stats;
 mod transaction;
+mod value_pick;
 mod value_view;
 mod write;
 
@@ -153,6 +154,12 @@ pub use table_data::{
 };
 pub use table_stats::{TableStats, table_stats};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
+pub use value_pick::{
+    ChoicePicker, ChoiceSource, KEY_LABEL_CHARS, KEY_LABEL_COLUMNS, KEY_PAGE_ROWS, KeyPicker,
+    MAX_OFFSET_MINUTES, PickError, PickedTime, ReferencedPageSql, ReferencedRows, TemporalKind,
+    TemporalPicker, TemporalStep, ValuePicker, check_list, picked_choice_text, picked_time_text,
+    referenced_page_sql, search_referenced, temporal_picker, value_picker,
+};
 pub use value_view::{
     CellContent, CellView, DISPLAY_STATEMENT_CHARS, ImageFormat, LOAD_FILE_MAX, VIEW_LIMIT,
     VIEW_MAX, ValueError, file_change, pretty_xml, read_value_file, save_cell,

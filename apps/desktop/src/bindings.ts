@@ -361,6 +361,20 @@ export const commands = {
 	 */
 	saveCellValue: (result: number, row: number, column: number, path: string) => typedError<number | null, string>(__TAURI_INVOKE("save_cell_value", { result, row, column, path })),
 	/**
+	 *  The value picker the cell panel offers for `column` of `schema.table` in an editable result
+	 *  (a date and time, the allowed values, a foreign key's search), read from the catalog now.
+	 */
+	valuePicker: (session: string, schema: string, table: string, column: string) => typedError<ValuePickerItem_Serialize | null, string>(__TAURI_INVOKE("value_picker", { session, schema, table, column })),
+	/**  The text a picked date and time is written as (and shown as once saved). */
+	pickTime: (picker: TemporalPickerItem, picked: PickedTimeItem) => typedError<string, string>(__TAURI_INVOKE("pick_time", { picker, picked })),
+	/**  The text of the values picked from a column's allowed values. */
+	pickChoices: (picker: ChoicePickerItem, chosen: string[]) => typedError<string, string>(__TAURI_INVOKE("pick_choices", { picker, chosen })),
+	/**
+	 *  A page of the table `column`'s foreign key references, keeping the rows that contain
+	 *  `search`: the key is read from the catalog again and the core writes the page's filter.
+	 */
+	searchReferenced: (session: string, schema: string, table: string, column: string, search: string, offset: number) => typedError<ReferencedRowsItem, string>(__TAURI_INVOKE("search_referenced", { session, schema, table, column, search, offset })),
+	/**
 	 *  The statement that loading the file at `path` into one cell of a table data page would
 	 *  run, shortened for the confirmation dialog (production asks before data changes).
 	 */
@@ -939,6 +953,14 @@ export type ChartSeriesItem = {
 	name: string,
 	values: (number | null)[],
 };
+
+/**  A column's allowed values, in the catalog's order. */
+export type ChoicePickerItem = {
+	source: ChoiceSourceItem,
+	values: string[],
+};
+
+export type ChoiceSourceItem = "enum" | "set" | "check";
 
 /**  The clipboard form of a connection: no secrets, nothing that runs a program. */
 export type ClipboardConnectionItem = {
@@ -2164,6 +2186,17 @@ export type KeyPartItem = {
 	value: string,
 };
 
+/**  The foreign key a column belongs to. */
+export type KeyPickerItem = {
+	name: string,
+	schema: string,
+	table: string,
+	/**  This table's columns, in the key's order. */
+	columns: string[],
+	/**  The referenced table's columns, in the same order. */
+	referencedColumns: string[],
+};
+
 /**  The key the UI wants to follow, by name: the core looks its columns up in the catalog. */
 export type KeyRefItem = {
 	direction: KeyDirectionItem,
@@ -2640,6 +2673,20 @@ export type PastedItem = {
 	leftOut: string[],
 };
 
+/**  A date and time as picked in the date and time picker. */
+export type PickedTimeItem = {
+	year: number,
+	month: number,
+	day: number,
+	hour: number,
+	minute: number,
+	second: number,
+	/**  Fractional digits of the second, as typed. */
+	fraction: string,
+	/**  Minutes east of UTC the time was picked in. */
+	offsetMinutes: number,
+};
+
 export type PlanCapabilities = PlanCapabilities_Serialize | PlanCapabilities_Deserialize;
 
 export type PlanCapabilities_Deserialize = {
@@ -3018,6 +3065,18 @@ export type RecentFileItem = {
 	name: string,
 	/**  Still on disk (checked when listed). */
 	exists: boolean,
+};
+
+/**  A page of the foreign key picker's search of the referenced table. */
+export type ReferencedRowsItem = {
+	/**  The referenced key's columns first, then a few text columns. */
+	columns: string[],
+	keyColumns: number,
+	rows: ((string | null)[])[],
+	offset: number,
+	hasMore: boolean,
+	/**  Rows a page holds. */
+	pageRows: number,
 };
 
 /**  A table or view chosen in the explorer. */
@@ -3637,6 +3696,25 @@ export type TableStatusItem_Deserialize = { kind: "searched"; columns: number; h
 /**  How searching one table ended. */
 export type TableStatusItem_Serialize = { kind: "searched"; columns: number; hits: SearchHitItem_Serialize[]; more: boolean } | { kind: "noColumns" } | { kind: "failed"; message: string } | { kind: "cancelled" };
 
+export type TemporalKindItem = "date" | "time" | "timestamp" | 
+/**  Written in UTC with `+00`, as the grid shows it. */
+"timestampTz";
+
+/**  A date and time picker: what it writes and how precisely. */
+export type TemporalPickerItem = {
+	kind: TemporalKindItem,
+	/**  Fractional digits of a second the column keeps (0 to 6). */
+	digits: number,
+	padded: boolean,
+	step: TemporalStepItem,
+};
+
+export type TemporalStepItem = "fraction" | 
+/**  SQL Server's `datetime`: thousandths ending in 0, 3 or 7. */
+"sqlServerDatetime" | 
+/**  Whole minutes (SQL Server's `smalldatetime`). */
+"minutes";
+
 export type TestFailureItem = {
 	kind: FailureKindItem,
 	message: string,
@@ -3921,6 +3999,36 @@ export type UrlFields_Serialize = {
 	password: string | null,
 	tlsMode: TlsModeItem | null,
 };
+
+/**
+ *  What a cell panel's value picker writes (SDB-58): a date and time, one of the allowed values,
+ *  or a row of the table a foreign key references. Exactly the field its `kind` names is set.
+ */
+export type ValuePickerItem = ValuePickerItem_Serialize | ValuePickerItem_Deserialize;
+
+/**
+ *  What a cell panel's value picker writes (SDB-58): a date and time, one of the allowed values,
+ *  or a row of the table a foreign key references. Exactly the field its `kind` names is set.
+ */
+export type ValuePickerItem_Deserialize = {
+	kind: ValuePickerKind,
+	temporal?: TemporalPickerItem | null,
+	choice?: ChoicePickerItem | null,
+	key?: KeyPickerItem | null,
+};
+
+/**
+ *  What a cell panel's value picker writes (SDB-58): a date and time, one of the allowed values,
+ *  or a row of the table a foreign key references. Exactly the field its `kind` names is set.
+ */
+export type ValuePickerItem_Serialize = {
+	kind: ValuePickerKind,
+	temporal: TemporalPickerItem | null,
+	choice: ChoicePickerItem | null,
+	key: KeyPickerItem | null,
+};
+
+export type ValuePickerKind = "temporal" | "choice" | "foreignKey";
 
 export type WorkspaceInfo = WorkspaceInfo_Serialize | WorkspaceInfo_Deserialize;
 

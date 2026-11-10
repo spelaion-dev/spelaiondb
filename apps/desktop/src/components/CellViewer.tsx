@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type ColumnItem } from "../api";
 import type { CellViewItem_Serialize as CellViewItem } from "../bindings";
 import { chooseOpenFile, chooseSavePath } from "../dialogs";
+import { usePicker, ValuePicker, type PickedEdit, type PickerSource } from "./ValuePicker";
 
 type View =
   | { kind: "null" }
@@ -131,6 +132,8 @@ export function CellViewer(props: {
   onEdit?(row: number, column: number, value: string | null | undefined): void;
   /** Loads the file at `path` into this cell now (the core writes one UPDATE by key). */
   onLoadFile?(row: number, column: number, path: string): Promise<void>;
+  /** The table an editable result's rows are from: its columns may take a value picker. */
+  pickerSource?: PickerSource;
   onMode(mode: ViewerMode): void;
   /** A field of the row view was picked: show that cell. */
   onPickColumn(column: number): void;
@@ -211,6 +214,38 @@ export function CellViewer(props: {
       await props.onLoadFile(row, column, path);
     } finally {
       setLoadingFile(false);
+    }
+  }
+
+  const pickerEnabled = mode === "cell" && !!props.editable && !!props.onEdit && meta.logical !== "bytes";
+  const picker = usePicker(pickerEnabled ? props.pickerSource : undefined, meta.name);
+  // A foreign key's other columns: what the row holds now, for a key of several columns.
+  const rowKey = `${resultId}:${row}`;
+  const [rowValues, setRowValues] = useState<{ key: string; values: (string | null)[] } | null>(null);
+  const needsRow = picker?.kind === "foreignKey";
+  useEffect(() => {
+    if (!needsRow) return;
+    let active = true;
+    call(commands.rowValues(resultId, row))
+      .then((values) => active && setRowValues({ key: rowKey, values }))
+      .catch(() => active && setRowValues({ key: rowKey, values: [] }));
+    return () => {
+      active = false;
+    };
+  }, [needsRow, rowKey, resultId, row]);
+  const storedRow = rowValues?.key === rowKey ? rowValues.values : [];
+  const rowText = (col: number): string | null => {
+    const key = `${row}:${col}`;
+    if (props.edits && key in props.edits) return props.edits[key] ?? null;
+    if (col === column) return item && !withheld ? item.text : null;
+    return storedRow[col] ?? null;
+  };
+  function applyPicked(edits: PickedEdit[]) {
+    setCopied(false);
+    setCopyError(null);
+    for (const edit of edits) {
+      const original = edit.column === column ? item?.text : storedRow[edit.column];
+      props.onEdit?.(row, edit.column, edit.value === original ? undefined : edit.value);
     }
   }
 
@@ -326,13 +361,25 @@ export function CellViewer(props: {
             <>
               <div className="viewer-value-heading">{t("viewer.editValue")}</div>
               <textarea
-                className="cell-viewer-value cell-viewer-editor"
+                className={`cell-viewer-value cell-viewer-editor ${picker ? "with-picker" : ""}`}
                 aria-label={t("edit.cellLabel", { column: meta.name })}
                 spellCheck={false}
                 value={value?.text ?? ""}
                 placeholder={value?.text === null ? "NULL" : undefined}
                 onChange={(e) => { setCopied(false); setCopyError(null); props.onEdit?.(row, column, e.target.value === item?.text ? undefined : e.target.value); }}
               />
+              {picker && props.pickerSource && value && (
+                <ValuePicker
+                  key={`${resultId}:${row}:${column}`}
+                  picker={picker}
+                  source={props.pickerSource}
+                  column={meta.name}
+                  text={value.text}
+                  columns={props.columns}
+                  rowText={rowText}
+                  onPick={applyPicked}
+                />
+              )}
             </>
           )}
           {binary && shown?.kind === "null" && <p className="muted cell-viewer-null">NULL</p>}

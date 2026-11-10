@@ -167,6 +167,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           deleted: pending.deleted,
           inserts: pending.inserts,
           primaryKey: editTarget.primaryKey,
+          table: { schema: editTarget.schema, name: editTarget.name },
           busy: (tab.run?.running ?? false) || savingEdits || pageLoading || (activeResult?.paging?.loading ?? false),
           onInsert: (values) => setPending((p) => ({ ...p, inserts: [...p.inserts, values] })),
           onUpdateInsert: (index, values) => setPending((p) => ({ ...p, inserts: p.inserts.map((row, i) => i === index ? values : row) })),
