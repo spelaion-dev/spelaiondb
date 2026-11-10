@@ -250,6 +250,7 @@ to an action that is also in a context menu, never its only way in.
 | Table data edits | F2 edit cell · Alt+Insert add row · Ctrl+Alt+Insert duplicate row · Delete or Alt+Delete delete rows · Ctrl+Z undo the selected rows' edits · Ctrl+Alt+N set NULL · Ctrl+S save changes · Ctrl+R discard all |
 | Explorer row | Enter / Space expand · Ctrl+Enter or double-click open the overview (a connection: a new query) · Menu key / Shift+F10 a connection's menu · F5 refresh · F2 rename · Delete Drop… · Ctrl+C copy names (a connection row copies the connection) · Ctrl+Shift+C qualified names · Ctrl+V paste a connection |
 | Tab strip | arrows, Home, End move between tabs · F2 rename · Menu key or Shift+F10 tab menu |
+| Import dialog | Ctrl+V on the source step (outside a text field) pastes the clipboard's text as the source |
 | Command palette | Up / Down, PageUp / PageDown move · Enter runs a command, or lists an object's actions · Escape or Backspace (empty box) goes back from an object's actions, Escape closes |
 | Dialogs, menus, separators | Escape cancels the topmost · Enter submits a one-field dialog · Tab stays inside a modal · arrows resize a separator (Shift: bigger steps), Home / End to its limits |
 

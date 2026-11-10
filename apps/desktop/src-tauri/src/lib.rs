@@ -4787,6 +4787,29 @@ pub fn export_bindings(path: &std::path::Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// The main window, from `tauri.conf.json` (where `create` is false so it is built here).
+///
+/// On Linux, WebKitGTK refuses `navigator.clipboard.readText()` for text another program
+/// copied unless the page may access the clipboard, so "Paste from clipboard", "Import data
+/// from the clipboard" and "Paste connection" could never read it. With access on, WebKitGTK
+/// still reads only while handling a click or a key, which is when the app reads it; the text
+/// stays untrusted input that the core checks (ADR-030, ADR-038). WebView2 and WKWebView keep
+/// their own behaviour: on Windows this switch would also grant every read without asking.
+fn open_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .ok_or("tauri.conf.json has no \"main\" window")?;
+    let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+    #[cfg(target_os = "linux")]
+    let window = window.enable_clipboard_access();
+    window.build()?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = specta_builder();
@@ -4888,7 +4911,7 @@ pub fn run() {
         })
         .setup(move |app| {
             builder.mount_events(app);
-            let _ = app.handle().get_webview_window("main");
+            open_main_window(app)?;
             Ok(())
         })
         .build(tauri::generate_context!())
