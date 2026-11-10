@@ -4391,6 +4391,81 @@ async fn apply_object_change(
     Ok(u32::try_from(ran).unwrap_or(u32::MAX))
 }
 
+/// Which accounts the explorer may create, give a password, lock or drop on this session's
+/// engine (ADR-048): the core decides.
+#[tauri::command]
+#[specta::specta]
+async fn principal_actions(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<PrincipalActionsItem> {
+    let open = state.session(&session).await?;
+    Ok(spelaion_core::principal_actions(open.session.dialect().as_ref()).into())
+}
+
+/// The script an account change would run, written by the core with the password masked
+/// (ADR-048), and the statements the connection's safeguards ask to confirm. Nothing runs.
+#[tauri::command]
+#[specta::specta]
+async fn preview_principal_change(
+    session: String,
+    change: PrincipalChangeItem,
+    state: State<'_, AppState>,
+) -> CmdResult<AlterationPreviewItem> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    let plan = spelaion_core::principal_plan(dialect.as_ref(), &change.into())
+        .map_err(|e| e.to_string())?;
+    Ok(AlterationPreviewItem::new(
+        &plan,
+        dialect.as_ref(),
+        &open.resolved.safeguards(),
+    ))
+}
+
+/// Runs an account change on the explorer's session, only as the masked script `sql` the user
+/// was shown (ADR-048). `password` is the new password when the change sets one: held as a
+/// secret, written only into the statement that runs, never recorded or returned.
+#[tauri::command]
+#[specta::specta]
+async fn apply_principal_change(
+    session: String,
+    change: PrincipalChangeItem,
+    password: Option<String>,
+    sql: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let password = password.map(Secret::new);
+    let open = state.session(&session).await?;
+    let ran = spelaion_core::apply_principal_change(
+        &open.session,
+        &change.into(),
+        password.as_ref(),
+        &sql,
+        open.resolved.params.read_only,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
+/// Whether an account is locked now, for the lock dialog (ADR-048); `None` when unknown.
+#[tauri::command]
+#[specta::specta]
+async fn principal_locked(
+    session: String,
+    target: PrincipalTargetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<bool>> {
+    let open = state.session(&session).await?;
+    spelaion_core::principal_locked(&open.session, &target.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// A table's columns for its structure form (ADR-047), read from the catalog on the tab's
 /// session: each field as SQL the engine writes.
 #[tauri::command]
@@ -4927,6 +5002,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             object_actions,
             preview_object_change,
             apply_object_change,
+            principal_actions,
+            preview_principal_change,
+            apply_principal_change,
+            principal_locked,
             table_structure,
             preview_table_alteration,
             apply_table_alteration,

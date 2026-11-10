@@ -1867,6 +1867,19 @@ select {
 .open-object-dialog {
   width: min(600px, 92vw);
 }
+/* Accounts (ADR-048): grouped options without a box. */
+.account-dialog fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-xs);
+}
+.account-dialog legend {
+  padding: 0;
+  margin-bottom: var(--space-xs);
+  font-size: var(--text-sm);
+}
 /* Structure editing with forms (ADR-047). */
 .structure-dialog {
   width: min(760px, 94vw);

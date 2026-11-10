@@ -3640,6 +3640,68 @@ try {
   await autoCommit.waitFor();
   assert.ok(await autoCommit.isChecked());
 
+  step("accounts: a new role with its password masked, locked and dropped from the explorer");
+  // ADR-048. The core writes the SQL with '***' in place of the password; it runs as shown.
+  {
+    await page.locator('.connection-row:has-text("Postgres (Docker)") .twisty').click();
+    await page.getByRole("dialog").getByText("Password for Postgres (Docker)").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    const pgNode = page.locator('.node:has(> .connection-row:has-text("Postgres (Docker)"))');
+    const rolesFolder = pgNode.getByRole("button", { name: "Expand or collapse Roles", exact: true });
+    await rolesFolder.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "New role…" }).click();
+    const newRole = page.getByRole("dialog", { name: "New role" });
+    await newRole.getByLabel("Name", { exact: true }).fill("smoke_account");
+    await newRole.getByLabel("Password", { exact: true }).fill("Smoke'secret-1");
+    await newRole.getByLabel("Repeat the password", { exact: true }).fill("Smoke'secret-2");
+    await newRole.getByText("The passwords do not match", { exact: false }).waitFor();
+    assert.ok(await newRole.getByRole("button", { name: "Create", exact: true }).isDisabled());
+    await newRole.getByLabel("Repeat the password", { exact: true }).fill("Smoke'secret-1");
+    await newRole.getByLabel("Can create databases").check();
+    await newRole.getByLabel("SQL that will run").filter({ hasText: "CREATE ROLE smoke_account WITH LOGIN CREATEDB PASSWORD '***';" }).waitFor();
+    assert.ok(!(await newRole.innerText()).includes("Smoke'secret"), "the dialog never shows the password");
+    // A script that sets a password cannot be opened in the editor.
+    assert.equal(await newRole.getByRole("button", { name: "Open in editor" }).count(), 0);
+    await shot("sdb-25-new-role");
+    const themeBeforeRole = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+    await shot("sdb-25-new-role-dark");
+    await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforeRole);
+    await newRole.getByRole("button", { name: "Create", exact: true }).click();
+    await newRole.waitFor({ state: "detached" });
+    if ((await rolesFolder.getAttribute("aria-expanded")) !== "true") await rolesFolder.click();
+    const roleRow = pgNode.locator(".leaf-row", { hasText: "smoke_account" });
+    await roleRow.waitFor();
+    await roleRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Lock or unlock…" }).click();
+    const lockRole = page.getByRole("dialog", { name: "Lock or unlock smoke_account" });
+    await lockRole.getByText("It is not locked now.").waitFor();
+    await lockRole.getByLabel("SQL that will run").filter({ hasText: "ALTER ROLE smoke_account WITH NOLOGIN;" }).waitFor();
+    await shot("sdb-25-lock");
+    await lockRole.getByRole("button", { name: "Lock", exact: true }).click();
+    await lockRole.waitFor({ state: "detached" });
+    await roleRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Change password…" }).click();
+    const passwordRole = page.getByRole("dialog", { name: "Change the password of smoke_account" });
+    await passwordRole.getByLabel("New password", { exact: true }).fill("Smoke-new-2");
+    await passwordRole.getByLabel("Repeat the password", { exact: true }).fill("Smoke-new-2");
+    await passwordRole.getByLabel("SQL that will run").filter({ hasText: "ALTER ROLE smoke_account WITH PASSWORD '***';" }).waitFor();
+    await shot("sdb-25-password");
+    const themeBeforePassword = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+    await shot("sdb-25-password-dark");
+    await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforePassword);
+    await passwordRole.getByRole("button", { name: "Change password", exact: true }).click();
+    await passwordRole.waitFor({ state: "detached" });
+    // Delete on the row asks to drop it; Cancel has the focus.
+    await roleRow.focus();
+    await page.keyboard.press("Delete");
+    const dropRole = page.getByRole("dialog", { name: "Drop smoke_account?" });
+    await dropRole.getByLabel("SQL that will run").filter({ hasText: "DROP ROLE smoke_account;" }).waitFor();
+    await shot("sdb-25-drop");
+    await dropRole.getByRole("button", { name: "Drop", exact: true }).click();
+    await roleRow.waitFor({ state: "detached" });
+  }
+
   step("session setup: a default schema and setup statements open tabs in that schema, and a write in it is refused on a read-only connection");
   // ADR-037. A schema of its own on the Docker PostgreSQL, made from the tab still open there.
   await replaceQuery(

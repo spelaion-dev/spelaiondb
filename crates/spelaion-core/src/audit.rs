@@ -47,13 +47,23 @@ fn redact_literals(text: &str) -> String {
         while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'=') {
             j += 1;
         }
+        // A Unicode (`N'…'`, SQL Server) or escape (`E'…'`, PostgreSQL) string's prefix is kept.
+        let prefix = bytes.get(j).copied().filter(|b| b"NnEe".contains(b));
+        if prefix.is_some() && bytes.get(j + 1) == Some(&b'\'') {
+            j += 1;
+        }
+        let escapes = prefix.is_some_and(|b| b.eq_ignore_ascii_case(&b'e'));
         let Some(&quote) = bytes.get(j).filter(|b| matches!(b, b'\'' | b'"')) else {
             i += word.len();
             continue;
         };
-        // The literal ends at the next quote that is not doubled.
+        // The literal ends at the next quote that is not doubled (nor escaped, in `E'…'`).
         let mut k = j + 1;
         while k < bytes.len() {
+            if escapes && bytes[k] == b'\\' {
+                k += 2;
+                continue;
+            }
             if bytes[k] == quote {
                 if bytes.get(k + 1) == Some(&quote) {
                     k += 2;
@@ -281,6 +291,16 @@ mod tests {
             ("select password from users", "select password from users"),
             ("select 'x' -- nothing", "select 'x' -- nothing"),
             ("password '", "password '***'"),
+            (
+                "CREATE LOGIN [a] WITH PASSWORD = N'Top''secret', CHECK_POLICY = OFF",
+                "CREATE LOGIN [a] WITH PASSWORD = N'***', CHECK_POLICY = OFF",
+            ),
+            (
+                r"ALTER ROLE a PASSWORD E'it\'s secret' VALID UNTIL 'infinity'",
+                "ALTER ROLE a PASSWORD E'***' VALID UNTIL 'infinity'",
+            ),
+            ("password = name", "password = name"),
+            ("password = n", "password = n"),
             (
                 "select 'ñandú' where pwd = 'clave'",
                 "select 'ñandú' where pwd = '***'",

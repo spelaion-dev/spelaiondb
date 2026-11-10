@@ -472,6 +472,24 @@ export const commands = {
 	 */
 	applyObjectChange: (session: string, change: ObjectChangeItem_Deserialize, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_object_change", { session, change, confirmed })),
 	/**
+	 *  Which accounts the explorer may create, give a password, lock or drop on this session's
+	 *  engine (ADR-048): the core decides.
+	 */
+	principalActions: (session: string) => typedError<PrincipalActionsItem, string>(__TAURI_INVOKE("principal_actions", { session })),
+	/**
+	 *  The script an account change would run, written by the core with the password masked
+	 *  (ADR-048), and the statements the connection's safeguards ask to confirm. Nothing runs.
+	 */
+	previewPrincipalChange: (session: string, change: PrincipalChangeItem) => typedError<AlterationPreviewItem, string>(__TAURI_INVOKE("preview_principal_change", { session, change })),
+	/**
+	 *  Runs an account change on the explorer's session, only as the masked script `sql` the user
+	 *  was shown (ADR-048). `password` is the new password when the change sets one: held as a
+	 *  secret, written only into the statement that runs, never recorded or returned.
+	 */
+	applyPrincipalChange: (session: string, change: PrincipalChangeItem, password: string | null, sql: string, confirmed: boolean) => typedError<number, string>(__TAURI_INVOKE("apply_principal_change", { session, change, password, sql, confirmed })),
+	/**  Whether an account is locked now, for the lock dialog (ADR-048); `None` when unknown. */
+	principalLocked: (session: string, target: PrincipalTargetItem) => typedError<boolean | null, string>(__TAURI_INVOKE("principal_locked", { session, target })),
+	/**
 	 *  A table's columns for its structure form (ADR-047), read from the catalog on the tab's
 	 *  session: each field as SQL the engine writes.
 	 */
@@ -3110,6 +3128,22 @@ export type NewIndexItem = {
 /**  What can be added on the columns chosen in the explorer (see `spelaion_core::NewIndexKind`). */
 export type NewIndexKindItem = "index" | "uniqueIndex" | "uniqueConstraint" | "primaryKey";
 
+/**  A new account. Its password is never part of it: only whether one is set (ADR-048). */
+export type NewPrincipalItem = {
+	kind: PrincipalKindItem,
+	name: string,
+	host: string,
+	withPassword: boolean,
+	canLogin: boolean,
+	superuser: boolean,
+	createDb: boolean,
+	createRole: boolean,
+	defaultDatabase: string,
+	checkPolicy: boolean,
+	login: string,
+	defaultSchema: string,
+};
+
 export type NewTableElementItem = { kind: "column"; name: string; dataType: string; nullable: boolean; default: string } | { kind: "constraint"; name: string; constraintKind: string; columns: string[]; expression: string } | { kind: "foreignKey"; name: string; columns: string[]; referencedSchema: string; referencedTable: string; referencedColumns: string[] } | { kind: "index"; name: string; columns: string[]; unique: boolean } | { kind: "trigger"; name: string; timing: string; event: string; body: string };
 
 /**  What the create table form asks for; the core writes the SQL. */
@@ -3692,6 +3726,29 @@ export type PreviewColumnItem = {
 	sqlType: string,
 	samples: string[],
 	nulls: number,
+};
+
+/**  Which kinds of account each action has on the session's engine: the core decides. */
+export type PrincipalActionsItem = {
+	create: PrincipalKindItem[],
+	password: PrincipalKindItem[],
+	lock: PrincipalKindItem[],
+	drop: PrincipalKindItem[],
+};
+
+/**  What to do with an account (ADR-048). */
+export type PrincipalChangeItem = { action: "create"; account: NewPrincipalItem } | { action: "setPassword"; target: PrincipalTargetItem } | { action: "lock"; target: PrincipalTargetItem } | { action: "unlock"; target: PrincipalTargetItem } | { action: "drop"; target: PrincipalTargetItem };
+
+/**
+ *  An account's kind (ADR-048): PostgreSQL roles, MySQL and MariaDB users and roles, SQL Server
+ *  logins, users and roles.
+ */
+export type PrincipalKindItem = "role" | "user" | "login";
+
+/**  An account as the explorer lists it (a MySQL user as `'name'@'host'`). */
+export type PrincipalTargetItem = {
+	kind: PrincipalKindItem,
+	name: string,
 };
 
 export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;

@@ -11,6 +11,7 @@ mod create;
 mod ddl;
 mod rebuild;
 mod source;
+mod users;
 
 pub use alter::{
     AlterationPlan, ColumnEdit, DroppedConstraint, EditableColumn, PlanRisk, TableAlteration,
@@ -20,6 +21,10 @@ pub use create::{
     NewColumn, NewForeignKey, NewIndex, NewTable, apply_create_table, create_table_plan,
 };
 pub use source::{SourceTarget, editable_source};
+pub use users::{
+    NewPrincipal, PrincipalActions, PrincipalChange, PrincipalKind, PrincipalTarget,
+    apply_principal_change, principal_actions, principal_locked, principal_plan,
+};
 
 use spelaion_driver_api::{
     Connection, ConstraintKind, Dialect, DriverError, NameFilter, ObjectInfo, ObjectKind,
