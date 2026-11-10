@@ -232,6 +232,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   and drops them: the script shown and compared has `'***'` for the password, the real one is
   written only into the statement that runs (never recorded) and scrubbed from its errors; any
   change there needs tests that try to leak the password (`tests/users.rs`).
+  `objects/privileges.rs` grants and revokes privileges globally, on a database, a schema, an
+  object or a role's membership (only the privilege names the core lists for that scope, never
+  typed SQL), and reads what an account has (PostgreSQL's ACLs, MySQL's `SHOW GRANTS`, SQL
+  Server's permissions); `tests/privileges.rs` tries each grant by logging in as the account.
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
   hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
   `Tunnel::probe`, login), its own tunnel, Stop that closes what it opened, failures classified

@@ -5915,6 +5915,7 @@ pub struct PrincipalActionsItem {
     pub password: Vec<PrincipalKindItem>,
     pub lock: Vec<PrincipalKindItem>,
     pub drop: Vec<PrincipalKindItem>,
+    pub privileges: Vec<PrincipalKindItem>,
 }
 
 impl From<spelaion_core::PrincipalActions> for PrincipalActionsItem {
@@ -5927,6 +5928,136 @@ impl From<spelaion_core::PrincipalActions> for PrincipalActionsItem {
             password: kinds(actions.password),
             lock: kinds(actions.lock),
             drop: kinds(actions.drop),
+            privileges: kinds(actions.privileges),
         }
+    }
+}
+
+/// What a privilege is on (ADR-048).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivilegeScopeItem {
+    Global,
+    Database,
+    Schema,
+    AllTablesInSchema,
+    Table,
+    Sequence,
+    Function,
+    Procedure,
+    Role,
+}
+
+impl From<PrivilegeScopeItem> for spelaion_core::PrivilegeScope {
+    fn from(scope: PrivilegeScopeItem) -> Self {
+        match scope {
+            PrivilegeScopeItem::Global => Self::Global,
+            PrivilegeScopeItem::Database => Self::Database,
+            PrivilegeScopeItem::Schema => Self::Schema,
+            PrivilegeScopeItem::AllTablesInSchema => Self::AllTablesInSchema,
+            PrivilegeScopeItem::Table => Self::Table,
+            PrivilegeScopeItem::Sequence => Self::Sequence,
+            PrivilegeScopeItem::Function => Self::Function,
+            PrivilegeScopeItem::Procedure => Self::Procedure,
+            PrivilegeScopeItem::Role => Self::Role,
+        }
+    }
+}
+
+impl From<spelaion_core::PrivilegeScope> for PrivilegeScopeItem {
+    fn from(scope: spelaion_core::PrivilegeScope) -> Self {
+        use spelaion_core::PrivilegeScope as S;
+        match scope {
+            S::Global => Self::Global,
+            S::Database => Self::Database,
+            S::Schema => Self::Schema,
+            S::AllTablesInSchema => Self::AllTablesInSchema,
+            S::Table => Self::Table,
+            S::Sequence => Self::Sequence,
+            S::Function => Self::Function,
+            S::Procedure => Self::Procedure,
+            S::Role => Self::Role,
+        }
+    }
+}
+
+/// A scope the form offers for an account, with the names it asks and its privileges.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivilegeScopeInfoItem {
+    pub scope: PrivilegeScopeItem,
+    pub needs_database: bool,
+    pub needs_schema: bool,
+    pub needs_name: bool,
+    pub privileges: Vec<String>,
+}
+
+/// Where a privilege applies.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivilegeTargetItem {
+    pub scope: PrivilegeScopeItem,
+    pub database: String,
+    pub schema: String,
+    pub name: String,
+}
+
+impl From<PrivilegeTargetItem> for spelaion_core::PrivilegeTarget {
+    fn from(item: PrivilegeTargetItem) -> Self {
+        Self {
+            scope: Some(item.scope.into()),
+            database: item.database,
+            schema: item.schema,
+            name: item.name,
+        }
+    }
+}
+
+/// Grant or revoke privileges of one scope to an account (ADR-048).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivilegeChangeItem {
+    pub grantee: PrincipalTargetItem,
+    pub target: PrivilegeTargetItem,
+    pub privileges: Vec<String>,
+    pub revoke: bool,
+    pub grant_option: bool,
+}
+
+impl From<PrivilegeChangeItem> for spelaion_core::PrivilegeChange {
+    fn from(item: PrivilegeChangeItem) -> Self {
+        Self {
+            grantee: item.grantee.into(),
+            target: item.target.into(),
+            privileges: item.privileges,
+            revoke: item.revoke,
+            grant_option: item.grant_option,
+        }
+    }
+}
+
+/// A privilege an account has, as the catalog says.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantedPrivilegeItem {
+    pub target: PrivilegeTargetItem,
+    pub privilege: String,
+    pub grantable: bool,
+    pub denied: bool,
+}
+
+impl GrantedPrivilegeItem {
+    pub fn from_core(granted: spelaion_core::GrantedPrivilege) -> Option<Self> {
+        Some(Self {
+            target: PrivilegeTargetItem {
+                scope: granted.target.scope?.into(),
+                database: granted.target.database,
+                schema: granted.target.schema,
+                name: granted.target.name,
+            },
+            privilege: granted.privilege,
+            grantable: granted.grantable,
+            denied: granted.denied,
+        })
     }
 }
