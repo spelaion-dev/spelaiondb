@@ -2083,6 +2083,95 @@ async fn control_process(
     .await
 }
 
+/// The server's locks, waits and blocking tree, read once on the monitor's session.
+#[tauri::command]
+#[specta::specta]
+async fn list_locks(session: String, state: State<'_, AppState>) -> CmdResult<LockSnapshotItem> {
+    let open = state.session(&session).await?;
+    let snapshot = spelaion_core::list_locks(&open.session).await?;
+    Ok(LockSnapshotItem {
+        own_id: snapshot.own_id,
+        locks: snapshot
+            .locks
+            .into_iter()
+            .map(|l| LockItem {
+                session: l.session,
+                object: l.object,
+                lock_type: l.lock_type,
+                mode: l.mode,
+                granted: l.granted,
+                seconds: l.seconds,
+                detail: l.detail,
+            })
+            .collect(),
+        waits: snapshot
+            .waits
+            .into_iter()
+            .map(|w| LockWaitItem {
+                waiting: w.waiting,
+                blocking: w.blocking,
+            })
+            .collect(),
+        tree: snapshot
+            .tree
+            .into_iter()
+            .map(|n| BlockingNodeItem {
+                session: n.session,
+                depth: n.depth,
+                cycle: n.cycle,
+            })
+            .collect(),
+    })
+}
+
+/// Every setting, variable, status counter or property the server exposes.
+#[tauri::command]
+#[specta::specta]
+async fn server_settings(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<ServerSettingItem>> {
+    let open = state.session(&session).await?;
+    let settings = spelaion_core::server_settings(&open.session).await?;
+    Ok(settings
+        .into_iter()
+        .map(|s| ServerSettingItem {
+            name: s.name,
+            value: s.value,
+            kind: match s.kind {
+                spelaion_core::SettingKind::Setting => "setting",
+                spelaion_core::SettingKind::Variable => "variable",
+                spelaion_core::SettingKind::Status => "status",
+                spelaion_core::SettingKind::Property => "property",
+            }
+            .into(),
+            category: s.category,
+            description: s.description,
+            source: s.source,
+        })
+        .collect())
+}
+
+/// A table's size on disk, index size and row estimate, from the catalog's statistics;
+/// `None` when the engine keeps none or the object is not a table.
+#[tauri::command]
+#[specta::specta]
+async fn table_stats(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<TableStatsItem>> {
+    let open = state.session(&session).await?;
+    let stats = spelaion_core::table_stats(&open.session, &schema, &table).await?;
+    Ok(stats.map(|s| TableStatsItem {
+        total_bytes: s.total_bytes,
+        table_bytes: s.table_bytes,
+        index_bytes: s.index_bytes,
+        row_estimate: s.row_estimate,
+    }))
+}
+
 /// Runs a script and keeps sending events through the channel. Returns as soon as it starts.
 #[tauri::command]
 #[specta::specta]
@@ -4581,6 +4670,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             disconnect,
             list_processes,
             control_process,
+            list_locks,
+            server_settings,
+            table_stats,
             run_script,
             answer_script_error,
             query_page_supported,

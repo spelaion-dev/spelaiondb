@@ -938,6 +938,72 @@ pub struct ProcessSnapshotItem {
     pub limited: bool,
 }
 
+/// One lock of the lock view (`spelaion_core::Lock`).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LockItem {
+    pub session: String,
+    pub object: String,
+    pub lock_type: String,
+    pub mode: String,
+    pub granted: bool,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub seconds: Option<i64>,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LockWaitItem {
+    pub waiting: String,
+    pub blocking: String,
+}
+
+/// A row of the blocking tree, in display order.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockingNodeItem {
+    pub session: String,
+    pub depth: u32,
+    pub cycle: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LockSnapshotItem {
+    pub own_id: String,
+    pub locks: Vec<LockItem>,
+    pub waits: Vec<LockWaitItem>,
+    pub tree: Vec<BlockingNodeItem>,
+}
+
+/// One server setting, variable, status counter or property.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerSettingItem {
+    pub name: String,
+    pub value: String,
+    /// `setting`, `variable`, `status` or `property`.
+    pub kind: String,
+    pub category: Option<String>,
+    pub description: Option<String>,
+    pub source: Option<String>,
+}
+
+/// A table's sizes in bytes and row estimate; any may be unknown.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStatsItem {
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub total_bytes: Option<i64>,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub table_bytes: Option<i64>,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub index_bytes: Option<i64>,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub row_estimate: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryItem {

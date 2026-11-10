@@ -2,10 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem } from "../api";
-import type { ProcessItem_Serialize as ProcessItem, ProcessSnapshotItem_Serialize as ProcessSnapshotItem } from "../bindings";
+import type { LockSnapshotItem_Serialize as LockSnapshotItem, ProcessItem_Serialize as ProcessItem, ProcessSnapshotItem_Serialize as ProcessSnapshotItem, ServerSettingItem_Serialize as ServerSettingItem } from "../bindings";
 import { openSession } from "../connect";
 import { useApp } from "../store";
 import { EngineIcon } from "./EngineIcon";
+import { LockView, SettingsView, type ProcessActions } from "./ServerObservation";
+
+/** The monitor's views: its processes, their locks, and the server's settings. */
+type MonitorView = "processes" | "locks" | "settings";
+const VIEWS: MonitorView[] = ["processes", "locks", "settings"];
 
 function supported(engine: string) { return ["mysql", "mariadb", "postgres", "sqlserver"].includes(engine); }
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
@@ -31,6 +36,11 @@ export function ProcessSidebar({ selected, onSelect }: { selected: string | null
 export function ProcessMonitor({ connection, onOpenEditor }: { connection: ConnectionItem; onOpenEditor(): void }) {
   const { t, i18n } = useTranslation("shell");
   const [snapshot, setSnapshot] = useState<ProcessSnapshotItem | null>(null);
+  const [locks, setLocks] = useState<LockSnapshotItem | null>(null);
+  const [settings, setSettings] = useState<ServerSettingItem[] | null>(null);
+  const [view, setView] = useState<MonitorView>("processes");
+  const viewRef = useRef<MonitorView>("processes");
+  viewRef.current = view;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
@@ -46,15 +56,30 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
   const translate = useRef(t);
   translate.current = t;
 
+  /** A view switched while a read was running: read again for it once that one ends. */
+  const stale = useRef(false);
   const refresh = useCallback(async () => {
     const id = session.current;
-    if (!id || inFlight.current) return;
+    if (!id) return;
+    if (inFlight.current) { stale.current = true; return; }
     inFlight.current = true;
+    stale.current = false;
     setBusy(true);
+    // Each view reads only what it shows; the lock view also needs the processes, for the
+    // sessions' details and for the same checked actions as the process table.
+    const current = viewRef.current;
     try {
-      const next = await call(commands.listProcesses(id));
-      if (session.current !== id) return;
-      setSnapshot(next);
+      if (current === "settings") {
+        const next = await call(commands.serverSettings(id));
+        if (session.current !== id) return;
+        setSettings(next);
+      } else {
+        const next = await call(commands.listProcesses(id));
+        const nextLocks = current === "locks" ? await call(commands.listLocks(id)) : null;
+        if (session.current !== id) return;
+        setSnapshot(next);
+        if (nextLocks) setLocks(nextLocks);
+      }
       setError(null);
       setUpdated(new Date());
     } catch (e) {
@@ -62,8 +87,11 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     } finally {
       inFlight.current = false;
       if (session.current === id) setBusy(false);
+      if (session.current === id && (stale.current || viewRef.current !== current)) window.setTimeout(() => void refreshRef.current(), 0);
     }
   }, []);
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   useEffect(() => {
     const token = ++sequence.current;
@@ -103,6 +131,11 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
   }, [attempt, connection.id, refresh]);
 
   useEffect(() => {
+    setError(null);
+    void refresh();
+  }, [view, refresh]);
+
+  useEffect(() => {
     if (!intervalSeconds) return;
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, intervalSeconds * 1000);
     return () => window.clearInterval(timer);
@@ -123,6 +156,22 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
   const ownDatabase = rows.find((row) => row.id === snapshot?.ownId)?.database;
   const otherPostgresDatabase = connection.engine === "postgres" && !!selected?.database && selected.database !== ownDatabase;
   const cannotVerify = (connection.engine === "postgres" || connection.engine === "sqlserver") && !selected?.identity;
+  const actions: ProcessActions = {
+    disabled(row, terminate) {
+      const verifiable = !((connection.engine === "postgres" || connection.engine === "sqlserver") && !row.identity);
+      if (busy || row.id === snapshot?.ownId || connection.readOnly || !verifiable) return true;
+      return !terminate && (connection.engine === "sqlserver" || row.activity === "idle" || row.activity === "unknown");
+    },
+    hints(row) {
+      const hints: string[] = [];
+      if (row.id === snapshot?.ownId) hints.push(t("processMonitor.ownHint"));
+      if (connection.readOnly) hints.push(t("processMonitor.readOnly"));
+      if ((connection.engine === "postgres" || connection.engine === "sqlserver") && !row.identity) hints.push(t("processMonitor.cannotVerify"));
+      if (connection.engine === "sqlserver") hints.push(t("processMonitor.cancelUnavailable"));
+      return hints;
+    },
+    act(row, terminate) { void act(row, terminate); },
+  };
 
   async function act(row: ProcessItem, terminate: boolean) {
     const id = session.current;
@@ -167,15 +216,19 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     <header className="process-heading">
       <div><div className="process-eyebrow">{t("processMonitor.title")}</div><h1><EngineIcon engine={connection.engine} />{connection.name}</h1></div>
       <div className="process-heading-actions">
+        <div className="segmented" role="radiogroup" aria-label={t("processMonitor.view")}>
+          {VIEWS.map((name) => <button key={name} type="button" role="radio" aria-checked={view === name} className={view === name ? "active" : ""} onClick={() => setView(name)}>{t(`processMonitor.views.${name}`)}</button>)}
+        </div>
         <label className="process-refresh-label">{t("processMonitor.autoRefresh")}
           <select aria-label={t("processMonitor.autoRefresh")} value={intervalSeconds} onChange={(e) => setIntervalSeconds(Number(e.target.value))}>
             <option value={0}>{t("processMonitor.off")}</option><option value={5}>5 s</option><option value={10}>10 s</option><option value={30}>30 s</option>
           </select>
         </label>
+        <span className="muted small process-status" role="status">{busy ? t("processMonitor.loading") : updated ? t("processMonitor.updated", { time: updated.toLocaleTimeString(i18n.language) }) : ""}</span>
         <button onClick={() => void refresh()} disabled={busy || !session.current} title={t("processMonitor.refresh")}><span aria-hidden="true">↻</span> {t("processMonitor.refresh")}</button>
       </div>
     </header>
-    <div className="process-toolbar">
+    {view === "processes" && <div className="process-toolbar">
       <input type="search" aria-label={t("processMonitor.search")} placeholder={t("processMonitor.search")} value={search} onChange={(e) => setSearch(e.target.value)} />
       <select aria-label={t("processMonitor.state")} value={filter} onChange={(e) => setFilter(e.target.value)}>
         <option value="all">{t("processMonitor.allStates")}</option><option value="active">{t("processMonitor.active")}</option><option value="idle">{t("processMonitor.idle")}</option><option value="waiting">{t("processMonitor.waiting")}</option>
@@ -184,12 +237,12 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         <option value="">{t("processMonitor.allDatabases")}</option><option value="none">{t("processMonitor.noDatabase")}</option>
         {databases.map((name) => <option key={name} value={`db:${name}`}>{name}</option>)}
       </select>
-      <span className="spacer" />
-      <span className="muted small" role="status">{busy ? t("processMonitor.loading") : updated ? t("processMonitor.updated", { time: updated.toLocaleTimeString(i18n.language) }) : ""}</span>
-    </div>
+    </div>}
     {error && <div className="banner banner-warn" role="alert">{error}{!session.current && <button onClick={() => { setError(null); setBusy(true); setAttempt((n) => n + 1); }}>{t("processMonitor.retry")}</button>}</div>}
-    {snapshot?.limited && <div className="banner banner-warn" role="status">{t("processMonitor.limitedVisibility")}</div>}
-    <div className="process-content">
+    {snapshot?.limited && view !== "settings" && <div className="banner banner-warn" role="status">{t("processMonitor.limitedVisibility")}</div>}
+    {view === "locks" && <LockView snapshot={locks} processes={rows} busy={busy} actions={actions} />}
+    {view === "settings" && <SettingsView settings={settings} busy={busy} />}
+    {view === "processes" && <><div className="process-content">
       <div className="process-table-wrap">
         <table className="process-table">
           <thead><tr>{["id", "user", "host", "database", "command", "seconds", "state", "sql"].map((name) => <th key={name}>{t(`processMonitor.${name}`)}</th>)}</tr></thead>
@@ -218,6 +271,6 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         </> : <div className="empty small">{t("processMonitor.selectRow")}</div>}
       </aside>
     </div>
-    <footer className="process-footer"><span>{t("processMonitor.count", { shown: filtered.length, total: rows.length })}</span><span>{t("processMonitor.visibility")}</span></footer>
+    <footer className="process-footer"><span>{t("processMonitor.count", { shown: filtered.length, total: rows.length })}</span><span>{t("processMonitor.visibility")}</span></footer></>}
   </section>;
 }

@@ -22,7 +22,9 @@ mod health;
 mod history;
 mod import;
 pub mod kube;
+mod locks;
 mod objects;
+mod observe;
 mod open;
 mod open_tabs;
 mod params;
@@ -35,11 +37,13 @@ mod references;
 mod results;
 mod script;
 mod selection_stats;
+mod server_settings;
 mod session;
 mod session_setup;
 mod sort;
 mod sql_file;
 mod table_data;
+mod table_stats;
 mod transaction;
 mod value_view;
 mod write;
@@ -96,6 +100,7 @@ pub use import::{
     PreviewColumn, SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import,
     preview, run_import, suggested_table, text_format,
 };
+pub use locks::{BlockingNode, Lock, LockSnapshot, LockWait, blocking_tree, list_locks};
 pub use objects::{
     CreateKind, FoundObject, NewIndexKind, NewTableElement, ObjectActions, ObjectChange,
     ObjectError, ObjectTarget, SEARCH_LIMIT, active_schema, apply_change, can_cascade,
@@ -120,6 +125,7 @@ pub use results::{ResultId, ResultStore, StoredResult};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
 };
+pub use server_settings::{ServerSetting, SettingKind, server_settings};
 pub use session::{
     AnswerError, CoreEvent, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop,
     ScriptSummary, Session, StatementError,
@@ -145,6 +151,7 @@ pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
     key_filter, table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
 };
+pub use table_stats::{TableStats, table_stats};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
 pub use value_view::{
     CellContent, CellView, DISPLAY_STATEMENT_CHARS, ImageFormat, LOAD_FILE_MAX, VIEW_LIMIT,

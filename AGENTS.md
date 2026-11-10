@@ -161,6 +161,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   written from the catalog's names, the tab's filter checked like a page, each one a read in
   the engine's read-only transaction (the export barrier) in a session of its own, sampled past
   100,000 rows; `tests/column_stats.rs` runs it on every engine.
+  Server observation (the process monitor's other views): `observe.rs` runs each statement
+  only after `classify_read_only` accepts it, as session metadata; `locks.rs` reads each
+  engine's locks and waits and builds the blocking tree (ending a blocker always goes through
+  `processes.rs`'s `control_process`), `server_settings.rs` the settings, variables and status,
+  `table_stats.rs` a table's sizes and row estimate from the catalog; `tests/server_observation.rs`
+  makes one session wait for another's row lock on every engine and checks the pair.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
   `export.rs` also holds the CSV options and formula escaping of files;

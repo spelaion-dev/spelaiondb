@@ -9,6 +9,7 @@ How to use SpelaionDB, one page per part of the app.
 | [Schema explorer](explorer.md) | Objects by type, filters, generated SQL, table data tabs, searching names and data, and editing data |
 | [Running SQL](editor.md) | Running statements and scripts, placeholders, confirmations, keyboard shortcuts, tabs and `.sql` files |
 | [Working with results](results.md) | Selecting, copying, exporting, sorting and filtering the grid, the cell viewer |
+| [Watching the server](server.md) | The process monitor: sessions, locks and who blocks whom, server settings, and table statistics |
 | [Saved queries and query history](saved-queries-and-history.md) | Saving SQL under a name, searching what ran |
 | [For AI agents (MCP)](mcp.md) | What agents may do through `spelaiondb mcp`, and how to set it up |
 | [Settings](settings.md) | Appearance, language, history, editor and automatic updates |
