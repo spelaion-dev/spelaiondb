@@ -59,6 +59,7 @@ import { useFittingMarks } from "../connectionMarks";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
+import { openDiagram } from "../diagramTabs";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -2101,6 +2102,15 @@ function SchemaNode({
           >
             {t("importNewTable")}
           </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              openDiagram(connectionId, { kind: "schema", schema, filter: objectFilter }, session);
+            }}
+          >
+            {t("diagram.menuSchema")}
+          </button>
           {actions && actions.create.some((kind) => kind !== "schema") && <hr />}
           {actions?.create
             .filter((kind) => kind !== "schema")
@@ -2505,6 +2515,20 @@ function ObjectNode({
               }}
             >
               {t("importData")}
+            </button>
+          )}
+          {!view && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                const tables = chosen && selection.length > 1 ? selection.map((o) => ({ schema: o.schema, name: o.name })) : null;
+                openDiagram(connectionId, tables ? { kind: "tables", tables } : { kind: "focus", schema: object.schema, table: object.name }, session);
+              }}
+            >
+              {chosen && selection.length > 1
+                ? t("diagram.menuTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
+                : t("diagram.menuFocus")}
             </button>
           )}
           <button role="menuitem" onClick={refresh}>

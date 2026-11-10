@@ -84,6 +84,7 @@ export const COMMANDS = [
   { id: "editor.insertUpdate", category: "editor", label: "editor:actions.insertUpdate", shortcut: "Ctrl+Alt+3", scope: "editor", menus: ["editor"] },
   { id: "view.explorer", category: "view", label: "shell:connections", menus: ["activity"] },
   { id: "view.explorerFilter", category: "view", label: "app:commands.explorerFilter", shortcut: "Ctrl+Shift+F", scope: "global" },
+  { id: "view.erDiagram", category: "view", label: "app:commands.erDiagram" },
   { id: "view.processes", category: "view", label: "shell:processMonitor.title", menus: ["activity"] },
   { id: "view.search", category: "view", label: "shell:search.title", shortcut: "Ctrl+H", scope: "global", menus: ["activity"] },
   { id: "view.history", category: "view", label: "shell:queryHistory", menus: ["activity"] },

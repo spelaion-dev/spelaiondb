@@ -2,6 +2,7 @@
 //! database or security logic here: only translation between UI commands and the core.
 
 mod connection_import;
+mod diagram;
 mod dto;
 mod file_dialog;
 mod files;
@@ -65,6 +66,8 @@ struct AppState {
     exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
     /// Imports running, by the id the UI gave them (ADR-038).
     imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ImportCancel>>>,
+    /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
+    diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
 }
 
 struct DesktopSession {
@@ -4652,6 +4655,10 @@ fn raw_handler(invoke: tauri::ipc::Invoke<tauri::Wry>) -> bool {
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![
+            diagram::read_diagram,
+            diagram::diagram_layout,
+            diagram::save_diagram_text,
+            diagram::close_diagram,
             plans::explain_preflight,
             plans::plan_capabilities,
             plans::explain_query,
@@ -5000,6 +5007,7 @@ pub fn run() {
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
         imports: std::sync::Mutex::new(HashMap::new()),
+        diagrams: std::sync::Mutex::new(HashMap::new()),
     };
 
     let typed = builder.invoke_handler();

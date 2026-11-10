@@ -145,7 +145,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
   `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
   only, stopped by a newer one or a cancel; `chart.rs` prepares a chart's points from that view,
-  ADR-040: at most `MAX_CHART_POINTS`, rows combined by X, and it writes the saved PNG or SVG)
+  ADR-040: at most `MAX_CHART_POINTS`, rows combined by X, and it writes the saved PNG or SVG;
+  `er/` is the ER diagram, ADR-046: the model read from the explorer's catalog, its layered layout
+  computed once per model and display options, and its Mermaid and DBML text, which must parse
+  with their own tools: `tests/er_diagram.rs` writes `apps/desktop/scripts/fixtures/er` and
+  `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again)
   and `cursor.rs` finds the statement under the editor's cursor. `progress.rs` thins a run's row
   counts to a few a second for the app (a big result streams hundreds of batches a second;
   every other event and the final count go through as they come). `table_data.rs` writes and checks

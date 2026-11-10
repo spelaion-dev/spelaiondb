@@ -4525,3 +4525,71 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .chart-tooltip-row { display: flex; align-items: center; gap: var(--space-sm); }
 .chart-tooltip-value { margin-left: auto; font-variant-numeric: tabular-nums; }
 .chart-swatch { width: 10px; height: 10px; border-radius: var(--radius-sm); flex: none; }
+
+/* ER diagram (ADR-046): plain SVG, every color from the theme. */
+.er-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+.er-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md) var(--space-lg);
+  min-height: var(--bar-h);
+  padding: var(--space-xs) var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+.er-toolbar-gap { flex: 1; }
+.er-zoom { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+.er-export { position: relative; }
+.er-export-menu { position: absolute; right: 0; top: calc(100% + var(--space-xs)); z-index: var(--z-dropdown); min-width: 160px; }
+.er-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-lg);
+  padding: var(--space-sm) var(--space-lg);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  font-variant-numeric: tabular-nums;
+}
+.er-status:empty { display: none; }
+.er-warning { color: var(--warning-fg); }
+.er-view > .banner { margin: 0 var(--space-lg) var(--space-sm); }
+.er-actions { display: flex; align-items: center; gap: var(--space-md); padding: 0 var(--space-lg) var(--space-sm); }
+.er-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+  cursor: grab;
+  touch-action: none;
+  /* Dragging pans: it never selects the boxes' text. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.er-canvas.panning { cursor: grabbing; }
+.er-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.er-canvas > .empty { position: absolute; inset: 0; display: grid; place-items: center; }
+.er-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.er-box { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1; }
+.er-node.focus .er-box { stroke: var(--accent); stroke-width: 2; }
+.er-node.selected .er-box { stroke: var(--accent); stroke-width: 2; }
+.er-node.dim, .er-edge.dim { opacity: 0.35; }
+.er-divider { stroke: var(--line); stroke-width: 1; }
+.er-node text { font-family: var(--font-code); font-size: var(--text-sm); }
+.er-title { fill: var(--fg); font-weight: 600; }
+.er-name { fill: var(--fg); }
+.er-type, .er-comment, .er-key { fill: var(--muted); }
+.er-key { font-weight: 600; }
+.er-key.primary { fill: var(--tone-amber-fg); }
+.er-edge path { fill: none; stroke: var(--muted); stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
+.er-edge .er-ring { fill: var(--bg); stroke: var(--muted); stroke-width: 1.25; }
+.er-edge.lit path, .er-edge.lit .er-ring { stroke: var(--accent); stroke-width: 2; }

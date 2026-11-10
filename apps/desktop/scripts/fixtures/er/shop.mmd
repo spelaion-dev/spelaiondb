@@ -1,0 +1,33 @@
+erDiagram
+    "erd_alone" {
+        INT id
+    }
+    "erd_country" {
+        CHAR(2) code PK
+        VARCHAR(40) name
+    }
+    "erd_customer" {
+        INT id PK
+        CHAR(2) country FK
+        INT referrer FK
+        VARCHAR(80) email UK
+    }
+    "erd_line" {
+        INT id PK
+        VARCHAR(10) order_region FK "order region"
+        INT number FK
+    }
+    "erd_order" {
+        VARCHAR(10) order_region PK "order region"
+        INT number PK
+        INT customer FK
+    }
+    "erd_profile" {
+        INT customer PK, FK
+        VARCHAR(200) bio
+    }
+    "erd_customer" |o..o{ "erd_customer" : "fk_0"
+    "erd_country" ||..o{ "erd_customer" : "fk_1"
+    "erd_order" |o..o{ "erd_line" : "fk_0"
+    "erd_customer" |o..o{ "erd_order" : "fk_0"
+    "erd_customer" ||--o| "erd_profile" : "fk_0"
