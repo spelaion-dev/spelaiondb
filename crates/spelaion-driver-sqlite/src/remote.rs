@@ -9,8 +9,9 @@
 //! local driver. `.explain off` keeps `EXPLAIN` and `EXPLAIN QUERY PLAN` in quote mode too:
 //! otherwise the shell draws them as a table or a tree, which are not values. Only
 //! statements from the core's splitter are sent: one that starts with `.` (a command of the
-//! `sqlite3` shell) or is not complete is refused, so user text never reaches the shell as a
-//! command.
+//! `sqlite3` shell) or `#` once its leading comments are skipped, or is not complete, is
+//! refused, and any later line that starts with `.` or `#` outside a quote gets a space
+//! before it, so user text never reaches the shell as a command.
 
 use std::sync::Arc;
 
@@ -27,7 +28,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::catalog::{self, Row};
-use crate::dialect::SqliteDialect;
+use crate::dialect::{self, Skipped, SqliteDialect};
 use crate::exec::{self, Affinity, Builder, Seen};
 
 /// Oldest `sqlite3` with `-safe`.
@@ -59,10 +60,17 @@ pub(crate) fn command_line(program: &str, path: &str, read_only: bool) -> Result
 
 /// Refuses what must not reach the `sqlite3` shell: its own commands, and statements that
 /// do not end where they seem to (an open quote or comment would swallow the end marker).
-pub(crate) fn check_statement(sql: &str) -> Result<()> {
-    if sql.trim_start().starts_with('.') {
+/// Returns the statement from its first word, without its leading comments.
+///
+/// The shell reads a line as one of its commands when it starts with `.` and no statement is
+/// in progress, and skips a line starting with `#` there; a line that is only white space or
+/// a comment starts no statement. So the statement is looked at where the shell will look.
+pub(crate) fn check_statement(sql: &str) -> Result<&str> {
+    let statement = &sql[statement_start(sql)..];
+    if statement.starts_with(['.', '#']) {
         return Err(DriverError::Other(
-            "commands of the sqlite3 shell (starting with a dot) are not run on the server".into(),
+            "commands of the sqlite3 shell (a line starting with a dot or #) are not run on the server"
+                .into(),
         ));
     }
     if SqliteDialect
@@ -74,7 +82,44 @@ pub(crate) fn check_statement(sql: &str) -> Result<()> {
             "the statement is not complete (an open quote or comment)".into(),
         ));
     }
-    Ok(())
+    Ok(statement)
+}
+
+/// Where the statement's first word is: past leading white space and comments.
+fn statement_start(sql: &str) -> usize {
+    let mut i = 0;
+    loop {
+        i = sql.len() - sql[i..].trim_start().len();
+        match dialect::skip_quote_or_comment(sql, i) {
+            Some(Skipped::Comment(end)) => i = end,
+            Some(Skipped::Quoted(_)) | None => return i,
+        }
+    }
+}
+
+/// What is written to `sqlite3` for a statement: the statement, `;` on a line of its own (a
+/// trailing `--` comment cannot swallow it) and the end marker.
+///
+/// A line that starts with `.` or `#` outside a quote or comment is written with a space
+/// before it, which is the same SQL (` .5` is `.5`), so the shell can never read it as a
+/// command, even where it would end a statement early (a trigger body's `CASE … END;`).
+/// Inside a quote a statement is in progress and the shell reads no command: values are
+/// sent byte for byte.
+fn stdin_text(sql: &str, marker: &str) -> String {
+    let mut text = String::with_capacity(sql.len() + marker.len() + 16);
+    let mut from = 0;
+    for start in dialect::code_line_starts(sql) {
+        if sql[start..].starts_with(['.', '#']) {
+            text.push_str(&sql[from..start]);
+            text.push(' ');
+            from = start;
+        }
+    }
+    text.push_str(&sql[from..]);
+    text.push_str("\n;\n.print ");
+    text.push_str(marker);
+    text.push('\n');
+    text
 }
 
 /// One line of output, or a record that spans lines (a text value with line breaks).
@@ -321,7 +366,7 @@ struct Process {
 
 impl Process {
     async fn send(&mut self, sql: &str) -> Result<()> {
-        let text = format!("{sql}\n;\n.print {}\n", self.marker);
+        let text = stdin_text(sql, &self.marker);
         let written = async {
             self.stdin.write_all(text.as_bytes()).await?;
             self.stdin.flush().await
@@ -380,10 +425,13 @@ impl Process {
         events: &mpsc::Sender<Result<ExecEvent>>,
     ) {
         let send = |event| async move { events.send(event).await.is_ok() };
-        if let Err(e) = check_statement(sql) {
-            send(Err(e)).await;
-            return;
-        }
+        let sql = match check_statement(sql) {
+            Ok(statement) => statement,
+            Err(e) => {
+                send(Err(e)).await;
+                return;
+            }
+        };
         if self.dead.is_some() {
             send(Err(self.closed())).await;
             return;
@@ -914,6 +962,61 @@ mod tests {
                 .is_ok()
         );
         assert!(check_statement("select '.shell'").is_ok());
+    }
+
+    #[test]
+    fn a_command_after_comments_never_reaches_the_shell() {
+        // The shell skips a line that is only a comment, and then reads `.…` as its own.
+        for sql in [
+            "-- c\n.headers off",
+            "/* c */\n.mode list",
+            "-- a\n-- b\n.quit",
+            "# x\nselect 1",
+            "  -- c\r\n  /* d\n e */ .echo on",
+            "/* c */#x",
+        ] {
+            assert!(check_statement(sql).is_err(), "{sql:?}");
+        }
+        // The statement is sent from its first word: the shell's first line starts it.
+        assert_eq!(check_statement("-- c\nselect 1").unwrap(), "select 1");
+        assert_eq!(
+            check_statement(" /* a */ -- b\n  select 2 -- c").unwrap(),
+            "select 2 -- c"
+        );
+        assert_eq!(check_statement("select 1").unwrap(), "select 1");
+        assert!(check_statement("-- c\nselect 'open").is_err());
+        assert!(check_statement("/* open\n.headers off").is_err());
+    }
+
+    #[test]
+    fn lines_that_look_like_commands_are_written_as_sql_but_values_are_not_changed() {
+        // Inside a value a statement is in progress: the shell reads no command, and every
+        // byte is sent as it is.
+        let value = "insert into t values ('a\n.headers off\n#x\n.quit')";
+        assert_eq!(stdin_text(value, "m"), format!("{value}\n;\n.print m\n"));
+        let comment = "select 1 /*\n.quit */, 2";
+        assert_eq!(
+            stdin_text(comment, "m"),
+            format!("{comment}\n;\n.print m\n")
+        );
+        // Outside one, a space keeps the line SQL (` .5` means the same as `.5`).
+        assert_eq!(
+            stdin_text("select\n.5,\n#1", "m"),
+            "select\n .5,\n #1\n;\n.print m\n"
+        );
+        // Where the shell may run part of a trigger body (a `CASE … END;`), the next line is
+        // still not a command.
+        assert_eq!(
+            stdin_text(
+                "create trigger t after insert on a begin\nselect case when 1 then 2 end;\n.shell x;\nend",
+                "m"
+            ),
+            "create trigger t after insert on a begin\nselect case when 1 then 2 end;\n .shell x;\nend\n;\n.print m\n"
+        );
+        assert_eq!(
+            stdin_text("select \"a\n.b\", [c\n.d], `e\n.f`", "m"),
+            "select \"a\n.b\", [c\n.d], `e\n.f`\n;\n.print m\n"
+        );
     }
 
     #[test]

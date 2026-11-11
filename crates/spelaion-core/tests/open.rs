@@ -887,6 +887,68 @@ async fn sqlite_on_a_server_through_two_hops() {
     assert!(error.is_some(), "the session ended with sqlite3");
 }
 
+/// Scripts written for the `sqlite3` command line put its commands after a comment header:
+/// the shell skips a line that is only a comment and would then run the command, changing
+/// how it writes every later result. They are refused, and the session reads as before.
+#[tokio::test]
+async fn sqlite_on_a_server_never_runs_a_command_after_a_comment() {
+    let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
+        eprintln!("SPELAION_TEST_SSH not set: test skipped");
+        return;
+    };
+    let ws = Workspace::new("sqlite-remote-dot");
+    sqlite_server(&ws, &addr, "sqlitehost");
+    ws.write(
+        ".spelaion/connections/shop.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"/home/spelaion/shop.db\"\ntunnel = \"server\"\n",
+    );
+    let conn = ws
+        .open("shop", None, Arc::new(AcceptHosts))
+        .await
+        .expect("opening the remote file");
+    for refused in [
+        "-- show everything\n.headers off",
+        "/* c */\n.mode list",
+        "-- a\n-- b\n.changes off",
+        "# x\nselect 1",
+        "-- a\n-- b\n.quit",
+    ] {
+        let (_, error) = script(&conn, refused).await;
+        let message = error.map(|e| e.message).unwrap_or_default();
+        assert!(
+            message.contains("not run on the server"),
+            "{refused:?}: {message}"
+        );
+    }
+    // A line of a value that starts with a dot is the value's, byte for byte.
+    assert_eq!(
+        first_value(&conn, "-- a comment first\nselect 'a\n.headers off\n#b'").await,
+        "a\n.headers off\n#b"
+    );
+    let (events, error) = script(&conn, "select id, name from product order by id").await;
+    assert!(error.is_none(), "{error:?}");
+    let stored = conn.session.results().get(first_result(&events)).unwrap();
+    let stored = stored.read().unwrap();
+    let names: Vec<&str> = stored
+        .schema()
+        .columns
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(names, ["id", "name"]);
+    let batch = &stored.window(0, 1)[0];
+    let cell = |c: usize| {
+        Value::from_array(
+            batch.column(c).as_ref(),
+            0,
+            stored.schema().columns[c].logical,
+        )
+        .unwrap()
+        .to_string()
+    };
+    assert_eq!((cell(0), cell(1)), ("1".to_string(), "Lamp".to_string()));
+}
+
 #[tokio::test]
 async fn sqlite_on_a_server_says_what_is_wrong() {
     let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
