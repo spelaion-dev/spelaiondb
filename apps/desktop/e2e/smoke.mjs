@@ -3250,6 +3250,8 @@ try {
     await page.getByRole("menuitem", { name: "ER diagram", exact: true }).click();
     await page.locator(".tabbar .tab.active", { hasText: "main · ER diagram" }).waitFor();
     await page.locator(".tab-panel:not([hidden]) .er-status", { hasText: "3 tables, 1 relation" }).waitFor();
+    // The status line can show before the tables are drawn: wait for the third one, then count.
+    await page.locator(".tab-panel:not([hidden]) .er-node").nth(2).waitFor();
     assert.equal(await page.locator(".tab-panel:not([hidden]) .er-node").count(), 3);
     await page.keyboard.press("Control+w");
     await page.locator(".tabbar .tab", { hasText: "main · ER diagram" }).waitFor({ state: "detached" });
