@@ -317,7 +317,10 @@
     "ok_one": "Tunnel OK · {{count}} hop",
     "ok_other": "Tunnel OK · {{count}} hops",
     "delete": "Delete profile",
-    "confirmDelete": "Click again to delete"
+    "confirmDelete": "Click again to delete",
+    "route": "Route",
+    "routeSsh": "SSH hops and proxy",
+    "routeKubernetes": "Kubernetes"
   },
   "newDatabase": "New database…",
   "url": {
@@ -401,7 +404,13 @@
     "kubectl": "kubectl program",
     "hint": "SpelaionDB runs kubectl port-forward with your kubeconfig. The connection’s port is the port of this resource; the host in the Main tab is only used for TLS.",
     "exclusive": "A connection goes through Kubernetes or an SSH tunnel, not both.",
-    "mainHint": "Through Kubernetes: the port is the resource’s, chosen in the Kubernetes tab."
+    "mainHint": "Through Kubernetes: the port is the resource’s, chosen in the Kubernetes tab.",
+    "profile": "Kubernetes profile",
+    "noProfile": "None: set it here",
+    "profilesHint": "A Kubernetes network profile keeps a cluster’s settings for several connections. Without one, this connection keeps its own.",
+    "fromProfile": "Locked fields come from the network profile; this connection sets the rest.",
+    "eachConnection": "Each connection chooses",
+    "profileHint": "Connections that use this profile take these settings and choose what is left empty here, such as the resource. SpelaionDB runs kubectl port-forward with your kubeconfig."
   },
   "cloudToken": {
     "awsRds": "AWS RDS (IAM authentication)",

@@ -59,6 +59,48 @@
       ],
       "type": "object"
     },
+    "KubernetesProfileConfig": {
+      "additionalProperties": false,
+      "description": "A Kubernetes network profile (ADR-050): the settings of `[kubernetes]` in a connection\n(ADR-015), shared. Each one is set here or in the connection that uses the profile, never\nin both; the resource may be left to each connection.",
+      "properties": {
+        "context": {
+          "description": "Context of the kubeconfig; its current context when absent here and in the connection.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubeconfig": {
+          "description": "A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubectl": {
+          "description": "The `kubectl` executable; `kubectl` on the PATH when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespace": {
+          "description": "The context's namespace when absent here and in the connection.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resource": {
+          "description": "`svc/<name>`, `pod/<name>` or `deployment/<name>`; when absent, each connection names\nits own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ProxyConfig": {
       "additionalProperties": false,
       "description": "A tunnel's proxy (ADR-027).",
@@ -133,7 +175,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "An SSH tunnel: `.spelaion/tunnels/<name>.toml`.",
+  "description": "A network profile (ADR-027): `.spelaion/tunnels/<name>.toml`. SSH hops, a proxy, or both;\nor a Kubernetes cluster (ADR-050).",
   "properties": {
     "connect_timeout": {
       "description": "Seconds each hop may take to answer and finish the SSH handshake (authentication,\nwhich may wait for the person, is not counted). 15 when absent.",
@@ -145,7 +187,7 @@
       ]
     },
     "hops": {
-      "description": "Hops in order; the last one is the one that reaches the database. None with a proxy\nthat reaches the database alone.",
+      "description": "Hops in order; the last one is the one that reaches the database. None with a proxy\nthat reaches the database alone, or with Kubernetes.",
       "items": {
         "$ref": "#/$defs/HopConfig"
       },
@@ -168,6 +210,17 @@
         "integer",
         "null"
       ]
+    },
+    "kubernetes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KubernetesProfileConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`kubectl port-forward` through a cluster, shared by every connection that names this\nprofile (ADR-050). It has no hops or proxy."
     },
     "proxy": {
       "anyOf": [

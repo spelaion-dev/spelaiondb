@@ -8,8 +8,8 @@ use serde::de::DeserializeOwned;
 
 use crate::error::ConfigError;
 use crate::model::{
-    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, SCHEMA_VERSION,
-    SessionConfig, TunnelFile, UserFile,
+    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, KubernetesProfileConfig,
+    SCHEMA_VERSION, SessionConfig, TunnelFile, UserFile,
 };
 
 /// Configuration directory inside a repository.
@@ -433,9 +433,13 @@ pub(crate) fn validate_connection(
 ) -> Result<ConnectionFile, ConfigError> {
     check_version(path, file.schema_version)?;
     let missing: Vec<&str> = match file.engine {
-        // Through Kubernetes the host is only a name for TLS: it may be left out.
+        // Through Kubernetes the host is only a name for TLS: it may be left out. A network
+        // profile may be a Kubernetes one (ADR-050): the resolver asks for the host otherwise.
         Engine::Postgres => [
-            ("host", file.host.is_none() && file.kubernetes.is_none()),
+            (
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            ),
             ("database", file.database.is_none()),
             ("user", file.user.is_none()),
         ]
@@ -444,7 +448,10 @@ pub(crate) fn validate_connection(
         .collect(),
         // A MySQL connection may have no default database: `USE` or qualified names work.
         Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => [
-            ("host", file.host.is_none() && file.kubernetes.is_none()),
+            (
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            ),
             ("user", file.user.is_none()),
         ]
         .into_iter()
@@ -582,23 +589,32 @@ pub(crate) fn validate_connection(
     check_tags(&file.tags).map_err(|m| ConfigError::new(path, m))?;
     check_session(file.engine, &file.session).map_err(|m| ConfigError::new(path, m))?;
     if let Some(kubernetes) = &file.kubernetes {
-        if file.tunnel.is_some() {
+        // With a network profile, the profile must be a Kubernetes one and may name the
+        // resource: the resolver checks both (ADR-050).
+        if !(file.tunnel.is_some() && kubernetes.resource.trim().is_empty()) {
+            check_kubernetes_resource(&kubernetes.resource)
+                .map_err(|m| ConfigError::new(path, m))?;
+        }
+        if file.local_port.is_some() {
             return Err(ConfigError::new(
                 path,
-                "a connection goes through an SSH tunnel or Kubernetes, not both",
+                "local_port is the local end of an SSH tunnel: kubectl chooses its own",
             ));
         }
-        check_kubernetes_resource(&kubernetes.resource).map_err(|m| ConfigError::new(path, m))?;
     }
     Ok(file)
 }
 
 pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFile, ConfigError> {
     check_version(path, file.schema_version)?;
+    if let Some(kubernetes) = &file.kubernetes {
+        check_kubernetes_profile(&file, kubernetes).map_err(|m| ConfigError::new(path, m))?;
+        return Ok(file);
+    }
     if file.hops.is_empty() && file.proxy.is_none() {
         return Err(ConfigError::new(
             path,
-            "a tunnel needs at least one hop in [[hops]], or a [proxy]",
+            "a tunnel needs at least one hop in [[hops]], a [proxy] or [kubernetes]",
         ));
     }
     if let Some(proxy) = &file.proxy {
@@ -800,6 +816,49 @@ fn check_tags(tags: &[String]) -> Result<(), String> {
         if !seen.insert(tag.to_lowercase()) {
             return Err(format!("tag {tag:?} is repeated"));
         }
+    }
+    Ok(())
+}
+
+/// A Kubernetes network profile (ADR-050): the cluster alone, never with hops, a proxy or the
+/// SSH settings, and with a valid resource when it names one.
+fn check_kubernetes_profile(
+    file: &TunnelFile,
+    kubernetes: &KubernetesProfileConfig,
+) -> Result<(), String> {
+    if !file.hops.is_empty() || file.proxy.is_some() {
+        return Err(
+            "a Kubernetes profile reaches the database through kubectl: it has no [[hops]] or [proxy]"
+                .into(),
+        );
+    }
+    if file.keepalive_interval.is_some()
+        || file.keepalive_count.is_some()
+        || file.connect_timeout.is_some()
+    {
+        return Err(
+            "keepalive_interval, keepalive_count and connect_timeout are SSH settings: a Kubernetes profile has none"
+                .into(),
+        );
+    }
+    for (name, value) in [
+        ("context", &kubernetes.context),
+        ("namespace", &kubernetes.namespace),
+        ("resource", &kubernetes.resource),
+        ("kubeconfig", &kubernetes.kubeconfig),
+        ("kubectl", &kubernetes.kubectl),
+    ] {
+        if let Some(value) = value {
+            if value.trim().is_empty() {
+                return Err(format!("kubernetes.{name} is empty: leave it out instead"));
+            }
+            if value.chars().any(is_hidden_char) {
+                return Err(format!("kubernetes.{name} has hidden characters"));
+            }
+        }
+    }
+    if let Some(resource) = &kubernetes.resource {
+        check_kubernetes_resource(resource)?;
     }
     Ok(())
 }

@@ -203,3 +203,156 @@ async fn kubectl_errors_reach_the_user() {
     assert!(tokio::net::TcpStream::connect(local).await.is_err());
     let _ = OpenError::Kube(KubeError::Timeout).to_string();
 }
+
+/// Kubernetes network profiles in a trusted repository (ADR-050): connections name their own
+/// resource through a profile that leaves it out, or use a profile that names it. The same
+/// resolved forward (cluster, namespace and resource) is one `kubectl port-forward`.
+#[tokio::test]
+async fn connections_share_a_kubernetes_network_profile() {
+    let Some(kubeconfig) = kubeconfig() else {
+        return;
+    };
+    let base = std::env::temp_dir().join(format!("spelaion-kube-profile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let user = base.join("user");
+    let repo = base.join("repo");
+    let spelaion = repo.join(".spelaion");
+    std::fs::create_dir_all(user.join("connections")).unwrap();
+    std::fs::create_dir_all(spelaion.join("tunnels")).unwrap();
+    std::fs::create_dir_all(spelaion.join("connections")).unwrap();
+    // The kubeconfig is each user's: a variable, so the shared file names no local path.
+    std::fs::write(
+        user.join("user.toml"),
+        format!(
+            "schema_version = 1\n[vars]\nkubeconfig = {:?}\n",
+            kubeconfig.display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        spelaion.join("tunnels/test-cluster.toml"),
+        "schema_version = 1\n[kubernetes]\nnamespace = \"spelaion-test\"\nkubeconfig = \"${user.kubeconfig}\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        spelaion.join("tunnels/test-postgres.toml"),
+        "schema_version = 1\n[kubernetes]\nnamespace = \"spelaion-test\"\nresource = \"svc/postgres\"\nkubeconfig = \"${user.kubeconfig}\"\n",
+    )
+    .unwrap();
+    let connection = |tunnel: &str, extra: &str| {
+        format!(
+            "schema_version = 1\nengine = \"postgres\"\nport = 5432\ndatabase = \"spelaion\"\nuser = \"spelaion\"\n\
+             password = {{ secret = \"prompt\" }}\ntunnel = \"{tunnel}\"\n[tls]\nmode = \"disable\"\n{extra}"
+        )
+    };
+    for (name, tunnel, extra) in [
+        (
+            "svc-a",
+            "test-cluster",
+            "[kubernetes]\nresource = \"svc/postgres\"\n",
+        ),
+        (
+            "svc-b",
+            "test-cluster",
+            "[kubernetes]\nresource = \"svc/postgres\"\n",
+        ),
+        (
+            "deploy",
+            "test-cluster",
+            "[kubernetes]\nresource = \"deployment/postgres\"\n",
+        ),
+        ("named", "test-postgres", ""),
+    ] {
+        std::fs::write(
+            spelaion.join(format!("connections/{name}.toml")),
+            connection(tunnel, extra),
+        )
+        .unwrap();
+    }
+    let config = load(Some(&repo), &user);
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let mut trust = TrustStore::load(&user).unwrap();
+    trust.trust(&config).unwrap();
+    let pool = Arc::new(TunnelPool::new());
+    let open = |path: &'static str| {
+        let resolved = Resolver::new(&config, &trust, &SystemBackend)
+            .resolve(&ConnectionId {
+                source: Source::Workspace,
+                path: path.into(),
+            })
+            .unwrap();
+        let pool = pool.clone();
+        let app_file = user.join("known_hosts");
+        async move {
+            open_connection(
+                resolved,
+                &Engines::builtin(),
+                OpenOptions {
+                    tunnels: pool,
+                    known_hosts: KnownHosts {
+                        team_file: None,
+                        user_file: None,
+                        app_file,
+                    },
+                    interaction: Arc::new(NonInteractive),
+                    password: Some(Secret::new("spelaion")),
+                    read_only_session: false,
+                },
+                Arc::new(ResultStore::new()),
+            )
+            .await
+            .expect("opening through the profile")
+        }
+    };
+    let a = open("svc-a").await;
+    let b = open("svc-b").await;
+    assert_eq!(
+        pool.active().await,
+        1,
+        "same profile and service: one kubectl"
+    );
+    let deploy = open("deploy").await;
+    assert_eq!(pool.active().await, 2, "another resource: another kubectl");
+    let named = open("named").await;
+    assert_eq!(
+        pool.active().await,
+        2,
+        "the same service through another profile is the same forward"
+    );
+    for conn in [&a, &b, &deploy, &named] {
+        let events: Vec<CoreEvent> = conn
+            .session
+            .run_script("select current_database()")
+            .collect()
+            .await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(CoreEvent::ScriptFinished { failed: false, .. })
+            ),
+            "{events:?}"
+        );
+    }
+    for conn in [a, b, deploy, named] {
+        conn.close().await;
+    }
+    assert_eq!(pool.active().await, 0);
+
+    // A pull that points the profile at another kubectl is reviewed before anything runs.
+    std::fs::write(
+        spelaion.join("tunnels/test-cluster.toml"),
+        "schema_version = 1\n[kubernetes]\nnamespace = \"spelaion-test\"\nkubeconfig = \"${user.kubeconfig}\"\nkubectl = \"./evil\"\n",
+    )
+    .unwrap();
+    let config = load(Some(&repo), &user);
+    let changed = Resolver::new(&config, &trust, &SystemBackend).resolve(&ConnectionId {
+        source: Source::Workspace,
+        path: "svc-a".into(),
+    });
+    assert!(
+        matches!(changed, Err(spelaion_config::ResolveError::Changed { .. })),
+        "{:?}",
+        changed.map(|r| r.kubernetes)
+    );
+    let _ = std::fs::remove_dir_all(base);
+}

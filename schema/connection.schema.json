@@ -63,13 +63,10 @@
           ]
         },
         "resource": {
-          "description": "`svc/<name>`, `pod/<name>` or `deployment/<name>`.",
+          "description": "`svc/<name>`, `pod/<name>` or `deployment/<name>`. Left out only when the connection's\nKubernetes network profile names it (ADR-050).",
           "type": "string"
         }
       },
-      "required": [
-        "resource"
-      ],
       "type": "object"
     },
     "McpConfig": {
@@ -259,7 +256,7 @@
           "type": "null"
         }
       ],
-      "description": "Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):\n`port` is then the resource's port and `host` is only the name TLS checks."
+      "description": "Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):\n`port` is then the resource's port and `host` is only the name TLS checks. With a\nKubernetes network profile in `tunnel` (ADR-050), only what the profile leaves out."
     },
     "local_port": {
       "description": "A fixed port on 127.0.0.1 for this connection's end of its SSH tunnel, so other tools\ncan use it too. A free port when absent (from the personal `[tunnels]` range, if set).",
@@ -342,7 +339,7 @@
       "$ref": "#/$defs/TlsConfig"
     },
     "tunnel": {
-      "description": "Name of a tunnel in `.spelaion/tunnels/`.",
+      "description": "Name of a tunnel (a network profile) in `.spelaion/tunnels/`. With a Kubernetes profile\n(ADR-050), `[kubernetes]` may set what the profile leaves out, such as the resource.",
       "type": [
         "string",
         "null"

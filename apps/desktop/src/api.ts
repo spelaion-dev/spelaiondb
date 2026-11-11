@@ -73,6 +73,7 @@ import {
   type RiskKind,
   type KubernetesDraftItem,
   type KubePortItem_Serialize,
+  type KubeEditor_Deserialize,
   type ImportItem_Serialize,
   type ImportScan_Serialize,
   type ImportReport,
@@ -145,6 +146,8 @@ export type TransactionStatusItem = TransactionStatusItem_Serialize;
 export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
 export type ImportItem = ImportItem_Serialize;
 export type KubePort = KubePortItem_Serialize;
+/** Which editor asks kubectl for its lists (ADR-015, ADR-050). */
+export type KubeEditor = KubeEditor_Deserialize;
 export type ImportScan = ImportScan_Serialize;
 export type PendingEditItem = PendingEditItem_Deserialize;
 export type PendingEdits = PendingEditsItem_Serialize;

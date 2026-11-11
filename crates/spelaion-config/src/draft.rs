@@ -124,10 +124,12 @@ pub struct ConnectionDraft {
     /// Client certificate and its private key (ADR-022); empty for none.
     pub tls_cert: String,
     pub tls_key: String,
+    /// A network profile (ADR-027): an SSH one, or a Kubernetes one used with `kubernetes`
+    /// for what the profile leaves out (ADR-050).
     pub tunnel: String,
     /// Fixed local port of the SSH tunnel; `None` for a free one.
     pub local_port: Option<u16>,
-    /// Through `kubectl port-forward` instead of a tunnel (ADR-015).
+    /// Through `kubectl port-forward` instead of an SSH tunnel (ADR-015).
     pub kubernetes: Option<KubernetesDraft>,
     /// SQLite on a server: the program that opens the file there; empty for `sqlite3`.
     pub sqlite3: String,
@@ -180,7 +182,8 @@ impl SessionDraft {
     }
 }
 
-/// The Kubernetes tab of the connection form; empty fields mean the defaults.
+/// The Kubernetes tab of the connection form; empty fields mean the defaults, or what the
+/// connection's Kubernetes network profile sets (ADR-050).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KubernetesDraft {
     pub context: String,
@@ -387,6 +390,12 @@ impl ConnectionDraft {
             Source::Workspace => config.workspace_root.as_deref(),
             Source::User => None,
         };
+        // A Kubernetes network profile (ADR-050): the form sets only what it leaves out, and
+        // the resolver checks that nothing is set in both.
+        let kube_profile = network
+            && non_empty(&self.tunnel)
+                .and_then(|name| config.tunnel_for(self.source, &name))
+                .is_some_and(|t| t.file.kubernetes.is_some());
         let kubernetes = self
             .kubernetes
             .as_ref()
@@ -395,17 +404,31 @@ impl ConnectionDraft {
                 Ok(KubernetesConfig {
                     context: non_empty(&k.context),
                     namespace: non_empty(&k.namespace),
-                    resource: non_empty(&k.resource)
-                        .ok_or_else(|| ConfigError::new(path, "choose the Kubernetes resource"))?,
+                    resource: match non_empty(&k.resource) {
+                        Some(resource) => resource,
+                        None if kube_profile => String::new(),
+                        None => {
+                            return Err(ConfigError::new(path, "choose the Kubernetes resource"));
+                        }
+                    },
                     kubeconfig: non_empty(&k.kubeconfig).map(|f| portable_path(&f, root)),
                     kubectl: non_empty(&k.kubectl),
                 })
             })
-            .transpose()?;
+            .transpose()?
+            // With a profile, a section that sets nothing is left out.
+            .filter(|k| {
+                !kube_profile
+                    || k.context.is_some()
+                    || k.namespace.is_some()
+                    || !k.resource.is_empty()
+                    || k.kubeconfig.is_some()
+                    || k.kubectl.is_some()
+            });
         // SQLite through a tunnel: the file is on the server (ADR-018).
         let remote_sqlite = self.engine == Engine::Sqlite && non_empty(&self.tunnel).is_some();
-        let tunnel =
-            non_empty(&self.tunnel).filter(|_| (network || remote_sqlite) && kubernetes.is_none());
+        let tunnel = non_empty(&self.tunnel)
+            .filter(|_| (network || remote_sqlite) && (kubernetes.is_none() || kube_profile));
         if let Some(name) = &tunnel
             && config.tunnel_for(self.source, name).is_none()
         {
@@ -438,7 +461,7 @@ impl ConnectionDraft {
                 .map(|secret| SecretSpec { secret }),
             local_port: self
                 .local_port
-                .filter(|_| tunnel.is_some() && !remote_sqlite),
+                .filter(|_| tunnel.is_some() && !remote_sqlite && !kube_profile),
             tunnel,
             kubernetes,
             sqlite3: non_empty(&self.sqlite3).filter(|_| remote_sqlite),
@@ -837,7 +860,9 @@ pub fn update_connection(
                 put(
                     &mut doc,
                     &["kubernetes", "resource"],
-                    Some(Value::from(k.resource.as_str())),
+                    Some(k.resource.as_str())
+                        .filter(|r| !r.is_empty())
+                        .map(Value::from),
                 );
                 put(&mut doc, &["kubernetes", "kubeconfig"], text(&k.kubeconfig));
                 put(&mut doc, &["kubernetes", "kubectl"], text(&k.kubectl));

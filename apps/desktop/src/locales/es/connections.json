@@ -317,7 +317,10 @@
     "ok_one": "Túnel correcto · {{count}} salto",
     "ok_other": "Túnel correcto · {{count}} saltos",
     "delete": "Borrar perfil",
-    "confirmDelete": "Pulsa otra vez para borrar"
+    "confirmDelete": "Pulsa otra vez para borrar",
+    "route": "Ruta",
+    "routeSsh": "Saltos SSH y proxy",
+    "routeKubernetes": "Kubernetes"
   },
   "newDatabase": "Nueva base de datos…",
   "url": {
@@ -401,7 +404,13 @@
     "kubectl": "Programa kubectl",
     "hint": "SpelaionDB ejecuta kubectl port-forward con tu kubeconfig. El puerto de la conexión es el de este recurso; el host de la pestaña Principal solo se usa para TLS.",
     "exclusive": "Una conexión va por Kubernetes o por un túnel SSH, no por los dos.",
-    "mainHint": "Por Kubernetes: el puerto es el del recurso, elegido en la pestaña Kubernetes."
+    "mainHint": "Por Kubernetes: el puerto es el del recurso, elegido en la pestaña Kubernetes.",
+    "profile": "Perfil de Kubernetes",
+    "noProfile": "Ninguno: se configura aquí",
+    "profilesHint": "Un perfil de red de Kubernetes guarda los ajustes de un clúster para varias conexiones. Sin él, esta conexión tiene los suyos.",
+    "fromProfile": "Los campos bloqueados vienen del perfil de red; esta conexión pone el resto.",
+    "eachConnection": "Lo elige cada conexión",
+    "profileHint": "Las conexiones que usan este perfil toman estos ajustes y eligen lo que aquí se deja vacío, como el recurso. SpelaionDB ejecuta kubectl port-forward con tu kubeconfig."
   },
   "cloudToken": {
     "awsRds": "AWS RDS (autenticación IAM)",

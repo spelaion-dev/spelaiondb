@@ -2587,12 +2587,31 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
     }
 }
 
-/// A tunnel that a new connection can use.
+/// A tunnel (a network profile) that a new connection can use.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TunnelItem {
     pub name: String,
     pub personal: bool,
+    /// A Kubernetes profile (ADR-050): what it sets, for the Kubernetes tab to show; `None`
+    /// for an SSH one (hops, a proxy, or both).
+    pub kubernetes: Option<KubernetesDraftItem>,
+}
+
+impl TunnelItem {
+    pub fn of(entry: &spelaion_config::TunnelEntry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            personal: entry.source == spelaion_config::Source::User,
+            kubernetes: entry.file.kubernetes.as_ref().map(|k| KubernetesDraftItem {
+                context: k.context.clone().unwrap_or_default(),
+                namespace: k.namespace.clone().unwrap_or_default(),
+                resource: k.resource.clone().unwrap_or_default(),
+                kubeconfig: k.kubeconfig.clone().unwrap_or_default(),
+                kubectl: k.kubectl.clone().unwrap_or_default(),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -2906,6 +2925,8 @@ pub struct TunnelDraftItem {
     pub connect_timeout: Option<u32>,
     /// A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027).
     pub proxy: Option<ProxyDraftItem>,
+    /// A Kubernetes profile (ADR-050): then no hops, proxy or SSH settings are saved.
+    pub kubernetes: Option<KubernetesDraftItem>,
 }
 
 /// A connection opened in the editor.
@@ -2975,6 +2996,25 @@ impl From<KubernetesDraftItem> for spelaion_config::KubernetesDraft {
     }
 }
 
+/// Which editor asks `kubectl` for its lists, so its values are checked against trust before
+/// a process starts (ADR-015, ADR-050).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum KubeEditor {
+    /// The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
+    /// the Kubernetes network profile it uses, whose settings come first.
+    Connection {
+        personal: bool,
+        editing: Option<String>,
+        profile: Option<String>,
+    },
+    /// The network profile editor; `editing` is the profile's name.
+    Profile {
+        personal: bool,
+        editing: Option<String>,
+    },
+}
+
 /// A port of a Kubernetes resource, for the port picker.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -3025,6 +3065,9 @@ pub struct NetworkProfileItem {
     pub proxy: Option<String>,
     /// `user@host:port` per hop, in order.
     pub hops: Vec<String>,
+    /// A Kubernetes profile (ADR-050): `context / namespace / resource`, with `…` where the
+    /// profile leaves it out.
+    pub kubernetes: Option<String>,
     /// Display names of the connections that use it.
     pub used_by: Vec<String>,
 }
@@ -3047,6 +3090,15 @@ impl NetworkProfileItem {
                 .iter()
                 .map(|hop| format!("{}@{}:{}", hop.user, hop.host, hop.port.unwrap_or(22)))
                 .collect(),
+            kubernetes: entry.file.kubernetes.as_ref().map(|k| {
+                let part = |v: &Option<String>| v.clone().unwrap_or_else(|| "…".into());
+                format!(
+                    "{} / {} / {}",
+                    part(&k.context),
+                    part(&k.namespace),
+                    part(&k.resource)
+                )
+            }),
             used_by: spelaion_config::tunnel_users(config, entry.source, &entry.name),
         }
     }
@@ -3169,6 +3221,15 @@ impl From<TunnelDraftItem> for spelaion_config::TunnelDraft {
                     proxy.password_other,
                 ),
             }),
+            kubernetes: item
+                .kubernetes
+                .map(|k| spelaion_config::KubernetesProfileDraft {
+                    context: k.context,
+                    namespace: k.namespace,
+                    resource: k.resource,
+                    kubeconfig: k.kubeconfig,
+                    kubectl: k.kubectl,
+                }),
         }
     }
 }
@@ -3216,6 +3277,13 @@ impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
                     password_env,
                     password_other,
                 }
+            }),
+            kubernetes: draft.kubernetes.map(|k| KubernetesDraftItem {
+                context: k.context,
+                namespace: k.namespace,
+                resource: k.resource,
+                kubeconfig: k.kubeconfig,
+                kubectl: k.kubectl,
             }),
         }
     }

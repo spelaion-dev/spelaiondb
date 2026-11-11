@@ -2,7 +2,7 @@
 // 2) fill in the engine's form, test it and save it. Validation and writing the file live
 // in the core: this only collects what the user typed.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   call,
@@ -29,7 +29,7 @@ import { saveHistoryPreference } from "../historyPreference";
 import { fieldList } from "../fieldNames";
 import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
-import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
+import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 
 const CATEGORIES = ["relational", "analytical", "nosql"] as const;
@@ -408,6 +408,10 @@ function ConnectionForm(props: {
   // Kubernetes and an SSH tunnel exclude each other (the core rejects both).
   const [useKubernetes, setUseKubernetes] = useState(Boolean(initial?.kubernetes));
   const [kubernetes, setKubernetes] = useState(initial?.kubernetes ?? EMPTY_KUBERNETES);
+  // The Kubernetes network profile the connection uses (ADR-050); "" for its own settings.
+  // A saved connection's profile is known once the profiles are listed.
+  const [kubeProfile, setKubeProfile] = useState("");
+  const initialProfileSeen = useRef(false);
   const [password, setPassword] = useState(prefill?.password ?? props.initialPassword ?? "");
   /** The user typed a name: the pattern stops filling it (until the field is emptied). */
   const [nameTyped, setNameTyped] = useState(Boolean(editing));
@@ -464,7 +468,24 @@ function ConnectionForm(props: {
     try {
       const list = await call(commands.listTunnels());
       setTunnels(list);
-      setTunnel((current) => select ?? (list.some((item) => item.name === current) ? current : (list[0]?.name ?? "")));
+      const ssh = list.filter((item) => !item.kubernetes);
+      const kube = list.filter((item) => item.kubernetes);
+      // A saved connection through a Kubernetes profile: its Kubernetes tab, not the SSH one.
+      if (!initialProfileSeen.current) {
+        initialProfileSeen.current = true;
+        if (initial?.tunnel && kube.some((item) => item.name === initial.tunnel)) {
+          setKubeProfile(initial.tunnel);
+          setUseKubernetes(true);
+          setUseTunnel(false);
+        }
+      }
+      const selectKube = select !== undefined && kube.some((item) => item.name === select);
+      if (selectKube) setKubeProfile(select);
+      setKubeProfile((current) => (current && !kube.some((item) => item.name === current) ? "" : current));
+      setTunnel((current) => {
+        const wanted = selectKube ? current : (select ?? current);
+        return ssh.some((item) => item.name === wanted) ? wanted : (ssh[0]?.name ?? "");
+      });
     } catch {
       setTunnels([]);
     }
@@ -472,7 +493,10 @@ function ConnectionForm(props: {
   useEffect(() => {
     if (tunnelsAllowed) void loadTunnels();
   }, [network]);
-  const selectedTunnel = tunnels.find((item) => item.name === tunnel);
+  const sshTunnels = tunnels.filter((item) => !item.kubernetes);
+  const kubeProfiles = tunnels.filter((item) => item.kubernetes);
+  const selectedTunnel = sshTunnels.find((item) => item.name === tunnel);
+  const selectedKubeProfile = kubeProfiles.find((item) => item.name === kubeProfile);
 
   const changed = () => {
     test.clear();
@@ -510,7 +534,7 @@ function ConnectionForm(props: {
     ...draft,
     mcpWrites: agentsWrite,
     passwordMode,
-    tunnel: tunnelsAllowed && useTunnel && !useKubernetes ? tunnel : "",
+    tunnel: network && useKubernetes ? kubeProfile : tunnelsAllowed && useTunnel ? tunnel : "",
     sqlite3: remoteFile && useTunnel ? draft.sqlite3 : "",
     localPort: network && useTunnel && !useKubernetes ? (draft.localPort ?? null) : null,
     kubernetes: network && useKubernetes ? kubernetes : null,
@@ -913,7 +937,7 @@ function ConnectionForm(props: {
                 <input
                   type="checkbox"
                   checked={useTunnel && !useKubernetes}
-                  disabled={tunnels.length === 0}
+                  disabled={sshTunnels.length === 0}
                   onChange={(e) => {
                     setUseTunnel(e.target.checked);
                     if (e.target.checked) setUseKubernetes(false);
@@ -925,7 +949,7 @@ function ConnectionForm(props: {
               <div className="form-pair">
                 <Field label={t("fields.tunnel")} className="grow">
                   <select aria-label={t("fields.tunnel")} value={tunnel} disabled={!useTunnel || useKubernetes} onChange={(e) => { setTunnel(e.target.value); changed(); }}>
-                    {tunnels.map((item) => (
+                    {sshTunnels.map((item) => (
                       <option key={`${item.personal}:${item.name}`} value={item.name}>
                         {item.name}
                         {item.personal ? ` (${t("fields.personal")})` : ""}
@@ -941,7 +965,7 @@ function ConnectionForm(props: {
                 </button>
               </div>
               <p className="muted small">
-                {tunnels.length === 0 ? t("fields.noTunnelsHint") : remoteFile ? t("fields.tunnelForFileHint") : t("fields.tunnelHint")}
+                {sshTunnels.length === 0 ? t("fields.noTunnelsHint") : remoteFile ? t("fields.tunnelForFileHint") : t("fields.tunnelHint")}
               </p>
               {!remoteFile && (
                 <>
@@ -971,10 +995,33 @@ function ConnectionForm(props: {
         {network && (
           <div id="connection-tab-kubernetes" role="tabpanel" hidden={tab !== "kubernetes"}>
             <KubernetesTab
+              mode="connection"
               enabled={useKubernetes}
               personal={draft.personal}
               editing={editing ?? null}
               trusted={Boolean(workspace?.trusted)}
+              profiles={kubeProfiles}
+              profile={kubeProfile}
+              onProfile={(name) => {
+                setKubeProfile(name);
+                // What the profile sets is no longer the connection's own.
+                setKubernetes((k) => withoutProfileFields(k, kubeProfiles.find((item) => item.name === name)?.kubernetes));
+                changed();
+              }}
+              profileActions={
+                <>
+                  <button
+                    type="button"
+                    disabled={!useKubernetes || !selectedKubeProfile}
+                    onClick={() => selectedKubeProfile && setTunnelEditor({ kind: "edit", name: selectedKubeProfile.name, personal: selectedKubeProfile.personal })}
+                  >
+                    {t("tunnel.editButton")}
+                  </button>
+                  <button type="button" disabled={!useKubernetes} onClick={() => setTunnelEditor({ kind: "add", personal: draft.personal, kubernetes: true })}>
+                    {t("tunnel.newButton")}
+                  </button>
+                </>
+              }
               onEnabled={(enabled) => {
                 void (async () => {
                   if (enabled && !draft.personal && !(await trustForKubernetes())) return;
@@ -1234,8 +1281,15 @@ function ConnectionForm(props: {
         onClose={() => setTunnelEditor(null)}
         onSaved={(saved) => {
           setTunnelEditor(null);
-          setUseTunnel(true);
-          setUseKubernetes(false);
+          if (saved.kubernetes) {
+            // A Kubernetes profile is used from the Kubernetes tab (ADR-050).
+            setUseKubernetes(true);
+            setUseTunnel(false);
+            setKubernetes((k) => withoutProfileFields(k, saved.kubernetes));
+          } else {
+            setUseTunnel(true);
+            setUseKubernetes(false);
+          }
           changed();
           void loadTunnels(saved.name);
         }}

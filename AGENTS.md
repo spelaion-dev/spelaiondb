@@ -129,7 +129,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   SOCKS5 or HTTP proxy (`proxy.rs`, ADR-027): its first hop, or the database itself with no
   hops; tests against `testing/docker/proxy` with `SPELAION_TEST_SOCKS=127.0.0.1:11080` and
   `SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128`.
-  Kubernetes (ADR-015) is not a tunnel file but a connection's `[kubernetes]` section:
+  Kubernetes (ADR-015) is a connection's `[kubernetes]` section, or a tunnel file's (a
+  Kubernetes network profile, ADR-050: the resolver merges the two, each setting from one
+  place, into the connection's `ResolvedKubernetes`):
   `spelaion-core::kube` runs `kubectl port-forward` and lists contexts, namespaces, names and
   ports for the form's Kubernetes tab; tests against a kind cluster with
   `SPELAION_TEST_K8S=<kubeconfig>` (see `testing/k8s`).

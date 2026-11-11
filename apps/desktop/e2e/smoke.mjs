@@ -5962,6 +5962,89 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.getByLabel("Password", { exact: true }).fill("spelaion");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+
+    step("Kubernetes network profile: a cluster's settings shared, the resource chosen per connection");
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    wizard = page.locator(".modal.wizard").first();
+    await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+    await wizard.getByLabel("Name", { exact: true }).fill("PG via cluster profile");
+    await wizard.getByLabel("Database", { exact: true }).fill("spelaion");
+    await wizard.getByLabel("User", { exact: true }).fill("spelaion");
+    await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+    await wizard.getByLabel("Password", { exact: true }).fill("spelaion");
+    await wizard.getByRole("tab", { name: "Options" }).click();
+    await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+    await wizard.getByRole("tab", { name: "Kubernetes" }).click();
+    const viaProfile = wizard.locator("#connection-tab-kubernetes");
+    await viaProfile.getByRole("checkbox", { name: "Connect through kubectl port-forward" }).check();
+    await viaProfile.getByRole("button", { name: "New profile…" }).click();
+    const profileEditor = page.locator(".tunnel-editor");
+    await profileEditor.waitFor();
+    assert.equal(await profileEditor.getByRole("radio", { name: "Kubernetes", exact: true }).isChecked(), true);
+    await profileEditor.getByLabel("Profile name").fill("Test cluster");
+    await profileEditor.getByRole("radio", { name: "Personal", exact: true }).check();
+    await profileEditor.getByLabel("Kubeconfig file").fill(process.env.SPELAION_TEST_K8S);
+    await profileEditor.getByLabel("Kubeconfig file").blur();
+    await profileEditor.getByLabel("Context").locator("option", { hasText: "kind-spelaion-test" }).waitFor({ state: "attached" });
+    await profileEditor.getByLabel("Context").selectOption("kind-spelaion-test");
+    await profileEditor.getByLabel("Namespace").locator("option[value='spelaion-test']").waitFor({ state: "attached" });
+    await profileEditor.getByLabel("Namespace").selectOption("spelaion-test");
+    // The resource is left to each connection.
+    assert.equal(await profileEditor.getByLabel("Resource name").inputValue(), "");
+    await shot("14d-kubernetes-profile");
+    {
+      // The same form in the dark theme, without closing it.
+      const theme = await page.evaluate(() => document.documentElement.dataset.theme);
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+      await shot("14d-kubernetes-profile-dark");
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    }
+    await profileEditor.getByRole("button", { name: "Save", exact: true }).click();
+    await profileEditor.waitFor({ state: "detached" });
+    // What the profile sets is shown and locked; the connection chooses the resource.
+    assert.equal(await viaProfile.getByLabel("Kubernetes profile").inputValue(), "test-cluster");
+    assert.equal(await viaProfile.getByLabel("Context").isDisabled(), true);
+    assert.equal(await viaProfile.getByLabel("Namespace").inputValue(), "spelaion-test");
+    assert.equal(await viaProfile.getByLabel("Kubeconfig file").isDisabled(), true);
+    await viaProfile.getByLabel("Resource name").locator("option[value='postgres']").waitFor({ state: "attached" });
+    await viaProfile.getByLabel("Resource name").selectOption("postgres");
+    await viaProfile.getByLabel("Resource port").locator("option[value='5432']").waitFor({ state: "attached" });
+    await shot("14e-kubernetes-tab-with-profile");
+    {
+      // The same form in the dark theme, without closing it.
+      const theme = await page.evaluate(() => document.documentElement.dataset.theme);
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+      await shot("14e-kubernetes-tab-with-profile-dark");
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    }
+    // Only SSH profiles are offered in the SSH tab.
+    await wizard.getByRole("tab", { name: "SSH" }).click();
+    assert.equal(await wizard.locator("#connection-tab-ssh").getByLabel("Network profile", { exact: true }).locator("option[value='test-cluster']").count(), 0);
+    await wizard.getByRole("button", { name: "Test connection" }).click();
+    await wizard.locator(".test-result", { hasText: /Connected · 17\./ }).waitFor();
+    await wizard.getByRole("button", { name: "Save", exact: true }).click();
+    await wizard.waitFor({ state: "detached" });
+    const profileFile = readFileSync(join(userDir, "tunnels", "test-cluster.toml"), "utf8");
+    assert.match(profileFile, /\[kubernetes\]/);
+    assert.match(profileFile, /namespace = "spelaion-test"/);
+    assert.doesNotMatch(profileFile, /resource/);
+    const viaProfileFile = readFileSync(join(userDir, "connections", "pg-via-cluster-profile.toml"), "utf8");
+    assert.match(viaProfileFile, /^tunnel = "test-cluster"/m);
+    assert.match(viaProfileFile, /resource = "svc\/postgres"/);
+    assert.doesNotMatch(viaProfileFile, /kubeconfig|namespace|context/);
+    // Settings → Network lists it with its route and the connection that uses it.
+    await withSettings("network", async (settings) => {
+      const profileRow = settings.getByRole("listitem", { name: "test-cluster" });
+      await profileRow.waitFor();
+      assert.match(await profileRow.innerText(), /Kubernetes: kind-spelaion-test \/ spelaion-test \/ …/);
+      assert.match(await profileRow.innerText(), /Used by: PG via cluster profile/);
+    });
+    panel = await newQuery("PG via cluster profile", "select current_database() as db;");
+    await run(panel);
+    await page.getByRole("dialog").getByText("Password for PG via cluster profile").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
   }
 
   step("delete a connection: confirmation, its tab is left without a connection");

@@ -1436,6 +1436,7 @@ fn two_hop_tunnel() -> TunnelDraft {
         ],
         options: TunnelDraftOptions::default(),
         proxy: None,
+        kubernetes: None,
     }
 }
 
@@ -1570,10 +1571,31 @@ fn kubernetes_and_an_ssh_tunnel_do_not_mix() {
         "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"x.db\"\n[kubernetes]\nresource = \"svc/db\"\n",
     )
     .unwrap();
+    std::fs::create_dir_all(fx.repo().join(".spelaion/tunnels")).unwrap();
+    std::fs::write(
+        fx.repo().join(".spelaion/tunnels/jump.toml"),
+        "schema_version = 1
+[[hops]]
+host = \"bastion\"
+user = \"ops\"
+",
+    )
+    .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     let problems = format!("{:?}", config.problems);
-    assert!(problems.contains("not both"), "{problems}");
     assert!(problems.contains("SQLite is a local file"), "{problems}");
+    // The profile could be a Kubernetes one (ADR-050): only resolving knows it is not.
+    let mut trust = TrustStore::load(&fx.user()).unwrap();
+    trust.trust(&config).unwrap();
+    let id = ConnectionId {
+        source: Source::Workspace,
+        path: "mixed".into(),
+    };
+    let error = Resolver::new(&config, &trust, &FakeBackend::default())
+        .resolve(&id)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not both"), "{error}");
 }
 
 #[test]
@@ -2351,6 +2373,7 @@ fn proxies_are_written_without_their_password_and_resolved() {
         hops: Vec::new(),
         options: TunnelDraftOptions::default(),
         proxy: Some(proxy_draft("proxy.corp.example")),
+        kubernetes: None,
     };
     let passwords = TunnelPasswords {
         hops: Vec::new(),
@@ -2470,6 +2493,7 @@ fn invalid_proxies_explain_what_is_wrong() {
         hops: Vec::new(),
         options: TunnelDraftOptions::default(),
         proxy,
+        kubernetes: None,
     };
     assert!(error(alone(None)).contains("[proxy]"));
     assert!(error(alone(Some(proxy_draft(" ")))).contains("host"));

@@ -9,9 +9,10 @@ use spelaion_driver_api::{ConnectParams, Secret, TlsMode};
 use crate::accounts::{connection_account, proxy_account, tunnel_account};
 use crate::draft::ConnectionDraft;
 use crate::error::{ConfigError, ResolveError};
-use crate::load::{Config, ConnectionEntry, ConnectionId, Source};
+use crate::load::{Config, ConnectionEntry, ConnectionId, Source, TunnelEntry};
 use crate::model::{
-    Engine, IsolationLevel, McpConfig, ProxyType, SecretSpec, SshAuth, TlsModeConfig, TunnelFile,
+    Engine, IsolationLevel, KubernetesConfig, KubernetesProfileConfig, McpConfig, ProxyType,
+    SecretSpec, SshAuth, TlsModeConfig, TunnelFile,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::trust::TrustStore;
@@ -161,14 +162,15 @@ impl TunnelSettings {
     }
 }
 
-/// A connection's Kubernetes resource, ready for `kubectl port-forward` (ADR-015).
+/// A connection's Kubernetes resource, ready for `kubectl port-forward` (ADR-015), from its
+/// `[kubernetes]` section, its Kubernetes network profile (ADR-050), or both.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedKubernetes {
     pub context: Option<String>,
     pub namespace: Option<String>,
     pub resource: String,
     pub kubeconfig: Option<PathBuf>,
-    /// `kubectl` unless the tunnel names another executable.
+    /// `kubectl` unless the connection or its profile names another executable.
     pub kubectl: String,
 }
 
@@ -181,6 +183,16 @@ pub struct ResolvedHop {
     pub identity_file: Option<PathBuf>,
     pub password: Password,
     pub command: Option<String>,
+}
+
+/// A connection's own Kubernetes fields, ready, before a profile's are added (ADR-050).
+#[derive(Default)]
+struct KubeFields {
+    context: Option<String>,
+    namespace: Option<String>,
+    resource: Option<String>,
+    kubeconfig: Option<PathBuf>,
+    kubectl: Option<String>,
 }
 
 pub struct Resolver<'a> {
@@ -240,6 +252,76 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
+    /// Checks the provenance of a network profile editor before its `kubectl` and kubeconfig
+    /// are used (ADR-050): an existing repository profile must still match its snapshot; a
+    /// new one is the user's input.
+    pub fn check_tunnel_editor_access(
+        &self,
+        source: Source,
+        editing: Option<&str>,
+    ) -> Result<(), ResolveError> {
+        if source == Source::Workspace && self.config.workspace_root.is_none() {
+            return Err(ConfigError::new(&self.config.user_dir, "no repository is open").into());
+        }
+        let base = self.base_dir(source)?;
+        if let Some(name) = editing {
+            let entry = self
+                .config
+                .tunnels
+                .iter()
+                .find(|t| t.source == source && t.name == name)
+                .ok_or_else(|| {
+                    ConfigError::new(Path::new(name), format!("tunnel {name:?} does not exist"))
+                })?;
+            if source == Source::Workspace {
+                self.trust
+                    .check_tunnel(&base, entry)
+                    .map_err(|change| ResolveError::Changed { root: base, change })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// What `kubectl` is asked with from a connection form that uses the Kubernetes network
+    /// profile `name` (ADR-050): the profile, found from the form's layer and checked against
+    /// trust like when connecting, with what the form sets (as typed) where the profile leaves
+    /// a field out. A field set in both is an error, as in a saved connection.
+    pub fn kubernetes_profile_for_editor(
+        &self,
+        source: Source,
+        name: &str,
+        form: &KubernetesConfig,
+    ) -> Result<ResolvedKubernetes, ResolveError> {
+        let profile = self.config.tunnel_for(source, name).ok_or_else(|| {
+            ConfigError::new(
+                Path::new(name),
+                format!("tunnel {name:?} does not exist in .spelaion/tunnels/"),
+            )
+        })?;
+        let base = self.base_dir(profile.source)?;
+        if profile.source == Source::Workspace {
+            self.trust
+                .check_tunnel(&base, profile)
+                .map_err(|change| ResolveError::Changed { root: base, change })?;
+        }
+        let settings = profile.file.kubernetes.as_ref().ok_or_else(|| {
+            ConfigError::new(
+                &profile.file_path,
+                format!("the network profile {name:?} is not a Kubernetes one"),
+            )
+        })?;
+        let typed = |v: &Option<String>| v.clone().filter(|v| !v.trim().is_empty());
+        let own = KubeFields {
+            context: typed(&form.context),
+            namespace: typed(&form.namespace),
+            resource: typed(&Some(form.resource.clone())),
+            kubeconfig: typed(&form.kubeconfig).map(PathBuf::from),
+            kubectl: typed(&form.kubectl),
+        };
+        // An editor lists before a resource is chosen: an empty one is not an error here.
+        self.kubernetes_fields(profile, settings, own, &profile.file_path)
+    }
+
     /// Resolves a connection that has not been saved yet (to test it from the UI). The same
     /// trust rules apply: a repository draft can use the repository's tunnels.
     pub fn resolve_draft(
@@ -278,25 +360,94 @@ impl<'a> Resolver<'a> {
         };
 
         let database = text(&file.database)?.unwrap_or_default();
-        let kubernetes = file
-            .kubernetes
-            .as_ref()
-            .map(|k| -> Result<ResolvedKubernetes, ResolveError> {
-                let field =
-                    |v: &Option<String>| text(v).map(|v| v.filter(|v| !v.trim().is_empty()));
-                Ok(ResolvedKubernetes {
+        // The network profile, before anything of it is used: a repository one must be as the
+        // user trusted it, even under a draft (ADR-022).
+        let profile = match &file.tunnel {
+            None => None,
+            Some(name) => {
+                let tunnel = self
+                    .config
+                    .tunnel_for(entry.id.source, name)
+                    .ok_or_else(|| {
+                        ConfigError::new(
+                            &entry.file_path,
+                            format!("tunnel {name:?} does not exist in .spelaion/tunnels/"),
+                        )
+                    })?;
+                if tunnel.source == Source::Workspace {
+                    let root = self.base_dir(Source::Workspace)?;
+                    self.trust
+                        .check_tunnel(&root, tunnel)
+                        .map_err(|change| ResolveError::Changed { root, change })?;
+                }
+                Some(tunnel)
+            }
+        };
+        let kube_profile =
+            profile.and_then(|t| t.file.kubernetes.as_ref().map(|settings| (t, settings)));
+        let field = |v: &Option<String>| text(v).map(|v| v.filter(|v| !v.trim().is_empty()));
+        let kubernetes = match (kube_profile, &file.kubernetes) {
+            (None, None) => None,
+            (None, Some(k)) => {
+                if let Some(name) = &file.tunnel {
+                    return Err(ConfigError::new(
+                        &entry.file_path,
+                        format!(
+                            "the network profile {name:?} is not a Kubernetes one: a connection goes through an SSH tunnel or Kubernetes, not both"
+                        ),
+                    )
+                    .into());
+                }
+                Some(ResolvedKubernetes {
                     context: field(&k.context)?,
                     namespace: field(&k.namespace)?,
                     resource: self.expand(&entry.file_path, &k.resource)?,
                     kubeconfig: field(&k.kubeconfig)?.map(|f| resolve_path(&f, &base)),
                     kubectl: field(&k.kubectl)?.unwrap_or_else(|| "kubectl".into()),
                 })
-            })
-            .transpose()?;
+            }
+            (Some((profile, settings)), own) => {
+                if file.engine.is_file() {
+                    return Err(ConfigError::new(
+                        &entry.file_path,
+                        "a local file does not support Kubernetes",
+                    )
+                    .into());
+                }
+                if file.local_port.is_some() {
+                    return Err(ConfigError::new(
+                        &entry.file_path,
+                        "local_port is the local end of an SSH tunnel: kubectl chooses its own",
+                    )
+                    .into());
+                }
+                let own = match own {
+                    Some(k) => KubeFields {
+                        context: field(&k.context)?,
+                        namespace: field(&k.namespace)?,
+                        resource: field(&Some(k.resource.clone()))?,
+                        kubeconfig: field(&k.kubeconfig)?.map(|f| resolve_path(&f, &base)),
+                        kubectl: field(&k.kubectl)?,
+                    },
+                    None => KubeFields::default(),
+                };
+                Some(self.kubernetes_with_profile(profile, settings, own, &entry.file_path)?)
+            }
+        };
         let host = match text(&file.host)? {
             Some(host) => host,
             // Through Kubernetes the host only names the server for TLS.
             None if kubernetes.is_some() => "localhost".into(),
+            None if file.tunnel.is_some() && !file.engine.is_file() => {
+                return Err(ConfigError::new(
+                    &entry.file_path,
+                    format!(
+                        "a {} connection is missing: host (the server the tunnel's last hop reaches)",
+                        file.engine.as_str()
+                    ),
+                )
+                .into());
+            }
             None => String::new(),
         };
         let params = ConnectParams {
@@ -340,32 +491,16 @@ impl<'a> Resolver<'a> {
             &connection_account(self.config, &entry.id),
         )?;
 
-        let tunnel = match &file.tunnel {
+        // A Kubernetes profile is not an SSH tunnel: it became `kubernetes` above.
+        let tunnel = match profile.filter(|t| t.file.kubernetes.is_none()) {
             None => None,
-            Some(name) => {
-                let tunnel = self
-                    .config
-                    .tunnel_for(entry.id.source, name)
-                    .ok_or_else(|| {
-                        ConfigError::new(
-                            &entry.file_path,
-                            format!("tunnel {name:?} does not exist in .spelaion/tunnels/"),
-                        )
-                    })?;
+            Some(tunnel) => {
                 // The tunnel's relative paths belong to its own layer: a personal connection
-                // may use a repository tunnel and the reverse (`Config::tunnel_for`).
+                // may use a repository tunnel and the reverse (`Config::tunnel_for`). Its trust
+                // was checked above, before anything of it was used.
                 let tunnel_base = self.base_dir(tunnel.source)?;
-                // A repository tunnel, even under a draft, must be as the user trusted it.
-                if tunnel.source == Source::Workspace {
-                    self.trust
-                        .check_tunnel(&tunnel_base, tunnel)
-                        .map_err(|change| ResolveError::Changed {
-                            root: tunnel_base.clone(),
-                            change,
-                        })?;
-                }
                 let mut resolved = self.resolve_tunnel(
-                    name,
+                    &tunnel.name,
                     tunnel.source,
                     &tunnel.file,
                     &tunnel_base,
@@ -412,6 +547,82 @@ impl<'a> Resolver<'a> {
                 isolation: file.session.isolation,
             },
             mcp: file.mcp.clone(),
+        })
+    }
+
+    /// A Kubernetes network profile's settings with the connection's own (ADR-050): each field
+    /// comes from one of them, never both, and the resource from one of them.
+    fn kubernetes_with_profile(
+        &self,
+        profile: &TunnelEntry,
+        settings: &KubernetesProfileConfig,
+        own: KubeFields,
+        connection_path: &Path,
+    ) -> Result<ResolvedKubernetes, ResolveError> {
+        let resolved = self.kubernetes_fields(profile, settings, own, connection_path)?;
+        if resolved.resource.is_empty() {
+            return Err(ConfigError::new(
+                connection_path,
+                format!(
+                    "choose the Kubernetes resource: the network profile {:?} leaves it to each connection",
+                    profile.name
+                ),
+            )
+            .into());
+        }
+        crate::load::check_kubernetes_resource(&resolved.resource)
+            .map_err(|m| ConfigError::new(connection_path, m))?;
+        Ok(resolved)
+    }
+
+    /// The profile's values are expanded where the profile lives, and its kubeconfig resolved
+    /// against the profile's layer; a field both set is refused.
+    fn kubernetes_fields(
+        &self,
+        profile: &TunnelEntry,
+        settings: &KubernetesProfileConfig,
+        own: KubeFields,
+        connection_path: &Path,
+    ) -> Result<ResolvedKubernetes, ResolveError> {
+        let base = self.base_dir(profile.source)?;
+        let shared = |v: &Option<String>| -> Result<Option<String>, ResolveError> {
+            v.as_deref()
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| self.expand(&profile.file_path, v))
+                .transpose()
+        };
+        let both = |field: &str| -> ResolveError {
+            ConfigError::new(
+                connection_path,
+                format!(
+                    "kubernetes.{field} is set by the network profile {:?}: set it in one place",
+                    profile.name
+                ),
+            )
+            .into()
+        };
+        let one = |field: &str,
+                   shared: Option<String>,
+                   own: Option<String>|
+         -> Result<Option<String>, ResolveError> {
+            match (shared, own) {
+                (Some(_), Some(_)) => Err(both(field)),
+                (shared, own) => Ok(shared.or(own)),
+            }
+        };
+        let kubeconfig = match (shared(&settings.kubeconfig)?, own.kubeconfig) {
+            (Some(_), Some(_)) => return Err(both("kubeconfig")),
+            (Some(path), None) => Some(resolve_path(&path, &base)),
+            (None, own) => own,
+        };
+        Ok(ResolvedKubernetes {
+            context: one("context", shared(&settings.context)?, own.context)?,
+            namespace: one("namespace", shared(&settings.namespace)?, own.namespace)?,
+            resource: one("resource", shared(&settings.resource)?, own.resource)?
+                .unwrap_or_default(),
+            kubeconfig,
+            kubectl: one("kubectl", shared(&settings.kubectl)?, own.kubectl)?
+                .unwrap_or_else(|| "kubectl".into()),
         })
     }
 

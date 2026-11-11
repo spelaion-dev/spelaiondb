@@ -14,7 +14,8 @@ use crate::edit::{new_file_mode, read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, Source, TunnelEntry, validate_tunnel, workspace_dir};
 use crate::model::{
-    HopConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec, SshAuth, TunnelFile,
+    HopConfig, KubernetesProfileConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec,
+    SshAuth, TunnelFile,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 
@@ -47,6 +48,19 @@ pub struct TunnelDraft {
     pub options: TunnelDraftOptions,
     /// A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027).
     pub proxy: Option<ProxyDraft>,
+    /// A Kubernetes profile (ADR-050): then there are no hops, proxy or SSH settings.
+    pub kubernetes: Option<KubernetesProfileDraft>,
+}
+
+/// A Kubernetes network profile as typed in the form. Empty strings mean "not set": the
+/// connection that uses the profile may set them, or the defaults apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KubernetesProfileDraft {
+    pub context: String,
+    pub namespace: String,
+    pub resource: String,
+    pub kubeconfig: String,
+    pub kubectl: String,
 }
 
 /// The proxy as typed in the form. Empty strings mean "not set".
@@ -300,6 +314,34 @@ impl TunnelDraft {
                 })
             }
         };
+        if let Some(kubernetes) = &self.kubernetes {
+            if !self.hops.is_empty() || self.proxy.is_some() {
+                return Err(ConfigError::new(
+                    path,
+                    "a Kubernetes profile reaches the database through kubectl: it has no hops or proxy",
+                ));
+            }
+            // The form's SSH settings do not apply: they are left out.
+            return validate_tunnel(
+                path,
+                TunnelFile {
+                    schema_version: SCHEMA_VERSION,
+                    keepalive_interval: None,
+                    keepalive_count: None,
+                    connect_timeout: None,
+                    proxy: None,
+                    kubernetes: Some(KubernetesProfileConfig {
+                        context: non_empty(&kubernetes.context),
+                        namespace: non_empty(&kubernetes.namespace),
+                        resource: non_empty(&kubernetes.resource),
+                        kubeconfig: non_empty(&kubernetes.kubeconfig)
+                            .map(|f| portable_path(&f, root)),
+                        kubectl: non_empty(&kubernetes.kubectl),
+                    }),
+                    hops: Vec::new(),
+                },
+            );
+        }
         let options = &self.options;
         validate_tunnel(
             path,
@@ -315,6 +357,7 @@ impl TunnelDraft {
                     .connect_timeout
                     .filter(|s| *s != TunnelFile::DEFAULT_CONNECT_TIMEOUT),
                 proxy,
+                kubernetes: None,
                 hops,
             },
         )
@@ -355,6 +398,17 @@ impl TunnelDraft {
                 user: proxy.user.clone().unwrap_or_default(),
                 password: choice_of(proxy.password.as_ref()),
             }),
+            kubernetes: entry
+                .file
+                .kubernetes
+                .as_ref()
+                .map(|k| KubernetesProfileDraft {
+                    context: k.context.clone().unwrap_or_default(),
+                    namespace: k.namespace.clone().unwrap_or_default(),
+                    resource: k.resource.clone().unwrap_or_default(),
+                    kubeconfig: k.kubeconfig.clone().unwrap_or_default(),
+                    kubectl: k.kubectl.clone().unwrap_or_default(),
+                }),
         }
     }
 }
@@ -546,6 +600,26 @@ fn write_options(table: &mut Table, old: &TunnelFile, new: &TunnelFile) {
                     put(section, "port", Some(Value::from(i64::from(proxy.port))));
                     put(section, "user", text(&proxy.user));
                     put(section, "password", secret_value(&proxy.password));
+                }
+            }
+        }
+    }
+    if old.kubernetes != new.kubernetes {
+        match &new.kubernetes {
+            None => {
+                table.remove("kubernetes");
+            }
+            Some(kubernetes) => {
+                let item = table
+                    .entry("kubernetes")
+                    .or_insert_with(|| Item::Table(Table::new()));
+                if let Some(section) = item.as_table_mut() {
+                    let text = |v: &Option<String>| v.clone().map(Value::from);
+                    put(section, "context", text(&kubernetes.context));
+                    put(section, "namespace", text(&kubernetes.namespace));
+                    put(section, "resource", text(&kubernetes.resource));
+                    put(section, "kubeconfig", text(&kubernetes.kubeconfig));
+                    put(section, "kubectl", text(&kubernetes.kubectl));
                 }
             }
         }
