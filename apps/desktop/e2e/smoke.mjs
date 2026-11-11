@@ -256,6 +256,22 @@ try {
   async function waitForHistoryCount(count) {
     await page.waitForFunction((expected) => document.querySelectorAll(".history-entry").length === expected && document.querySelector(".history-entries")?.getAttribute("aria-busy") === "false", count);
   }
+  /** Waits until the history panel shows exactly the entries `select <n> as <marker>;` for the
+   *  numbers from `first` down to `last`, and returns their statements, read in the same frame.
+   *  A count alone is not enough: when the search applies, one frame still shows the previous
+   *  page's 50 entries as not busy, and they are cleared right after. */
+  async function waitForHistoryPage(marker, first, last) {
+    const handle = await page.waitForFunction(({ marker, first, last }) => {
+      if (document.querySelector(".history-entries")?.getAttribute("aria-busy") !== "false") return false;
+      const statements = [...document.querySelectorAll(".history-entry .history-sql")].map((sql) => sql.textContent);
+      if (statements.length !== first - last + 1) return false;
+      const pattern = new RegExp(`^select (\\d+) as ${marker};?$`);
+      const numbers = new Set(statements.map((sql) => Number(pattern.exec(sql.trim())?.[1] ?? NaN)));
+      for (let n = last; n <= first; n++) if (!numbers.has(n)) return false;
+      return statements;
+    }, { marker, first, last });
+    return handle.jsonValue();
+  }
   // A connection's actions are all in its row's context menu (SDB-102).
   async function connectionMenu(connection) {
     await page.locator(`.connection-row:has-text("${connection}")`).click({ button: "right" });
@@ -470,15 +486,31 @@ try {
   const movedShop = join(demo, ".spelaion", "connections", "docker", "shop.toml");
   const nestedShop = join(demo, ".spelaion", "connections", "docker", "eu", "shop.toml");
   // Drags with real pointer events: press on the name, move past the threshold, drop on target.
+  // Each move waits for the state it leads to (the row dragged, then the target marked), and
+  // the pointer is aimed again at the target's settled box until the explorer marks it.
   async function dragConnection(name, target) {
-    const label = page.locator(".connection-row", { hasText: name }).locator(".label");
-    const from = await label.boundingBox();
+    const row = page.locator(".connection-row", { hasText: name });
+    const from = await settledBox(row.locator(".label"));
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 + 12, { steps: 3 });
-    const to = await target().boundingBox();
-    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 8 });
-    await target().and(page.locator(".drop-target")).waitFor();
+    await row.and(page.locator(".dragged")).waitFor();
+    for (let attempt = 0; ; attempt++) {
+      const to = await settledBox(target());
+      await page.mouse.move(to.x + to.width / 2 + (attempt % 2), to.y + to.height / 2, { steps: attempt === 0 ? 8 : 2 });
+      try {
+        await target().and(page.locator(".drop-target")).waitFor({ timeout: 3_000 });
+        return;
+      } catch (error) {
+        if (attempt < 4) continue;
+        // What the pointer is over, and whether the drag is still on, for the next failure.
+        const state = await page.evaluate(({ x, y }) => ({
+          under: document.elementFromPoint(x, y)?.outerHTML.slice(0, 200) ?? null,
+          dragging: document.querySelector(".connection-row.dragged")?.textContent ?? null,
+        }), { x: to.x + to.width / 2, y: to.y + to.height / 2 });
+        throw new Error(`${error.message}\n${JSON.stringify(state)}`);
+      }
+    }
   }
   const dockerTitle = () => page.locator('.group-segment[data-drop-folder="docker"][data-drop-personal="false"]');
   await dragConnection("Shop (SQLite)", dockerTitle);
@@ -6713,25 +6745,20 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.getByRole("button", { name: "Run", exact: true }).waitFor();
   await page.getByRole("button", { name: "Query history", exact: true }).click();
   await history.getByRole("textbox", { name: "Search query history" }).fill("history_page_marker");
-  await waitForHistoryCount(50);
-  const pageStatements = await history.locator(".history-sql").allTextContents();
+  // Newest first: page 1 is statements 104 to 55, page 2 is 54 to 5 and page 3 is 4 to 0.
+  const pageStatements = await waitForHistoryPage("history_page_marker", 104, 55);
   assert.ok(await history.getByRole("button", { name: "Previous", exact: true }).isDisabled());
-  for (const [number, count] of [[2, 50], [3, 5]]) {
-    const previousEntry = await history.locator(".history-entry").first().elementHandle();
+  for (const [number, first, last] of [[2, 54, 5], [3, 4, 0]]) {
     await history.getByRole("button", { name: "Next", exact: true }).click();
-    await page.waitForFunction((entry) => !entry.isConnected, previousEntry);
     await history.getByText(`Page ${number}`, { exact: true }).waitFor();
-    await waitForHistoryCount(count);
-    pageStatements.push(...await history.locator(".history-sql").allTextContents());
+    pageStatements.push(...await waitForHistoryPage("history_page_marker", first, last));
   }
   assert.equal(pageStatements.length, 105);
   assert.equal(new Set(pageStatements).size, 105);
   assert.ok(await history.getByRole("button", { name: "Next", exact: true }).isDisabled());
-  const lastEntry = await history.locator(".history-entry").first().elementHandle();
   await history.getByRole("button", { name: "Previous", exact: true }).click();
-  await page.waitForFunction((entry) => !entry.isConnected, lastEntry);
-  await waitForHistoryCount(50);
-  assert.deepEqual(await history.locator(".history-sql").allTextContents(), pageStatements.slice(50, 100));
+  await history.getByText("Page 2", { exact: true }).waitFor();
+  assert.deepEqual(await waitForHistoryPage("history_page_marker", 54, 5), pageStatements.slice(50, 100));
   await shot("11-history-pages");
 
   step("personal variables a connection needs are asked once and saved in user.toml");
