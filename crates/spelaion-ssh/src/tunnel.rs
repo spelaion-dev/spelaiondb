@@ -5,8 +5,9 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use russh::Preferred;
 use russh::client::{self, DisconnectReason, Handle};
-use russh::keys::PublicKeyOrCertificate;
+use russh::keys::{Algorithm, PublicKeyOrCertificate};
 use russh::{ChannelMsg, ChannelWriteHalf, Sig};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
@@ -211,12 +212,20 @@ impl Tunnel {
                 .ok_or(SshError::Cancelled)?,
             );
         }
-        let config = Arc::new(client::Config {
-            keepalive_interval: spec.options.keepalive_interval,
-            keepalive_max: usize::try_from(spec.options.keepalive_count).unwrap_or(usize::MAX),
-            nodelay: true,
-            ..Default::default()
-        });
+        // Each hop asks its server for the key types `known_hosts` pins for it first.
+        let hop_config = |hop_spec: &HopSpec| {
+            let pinned = hostkeys::pinned_algorithms(known_hosts, &hop_spec.host, hop_spec.port);
+            Arc::new(client::Config {
+                keepalive_interval: spec.options.keepalive_interval,
+                keepalive_max: usize::try_from(spec.options.keepalive_count).unwrap_or(usize::MAX),
+                nodelay: true,
+                preferred: Preferred {
+                    key: preferred_key_types(&pinned, &Preferred::DEFAULT.key).into(),
+                    ..Preferred::DEFAULT
+                },
+                ..Default::default()
+            })
+        };
         let known = Arc::new(known_hosts.clone());
         let state = Arc::new(watch::Sender::new(TunnelState::Down {
             reason: "opening".into(),
@@ -250,6 +259,7 @@ impl Tunnel {
             if hop > 0 || proxy.is_none() || ssm_first.is_some() {
                 observe(TunnelStage::Hop(hop));
             }
+            let config = hop_config(hop_spec);
             let outcome = Arc::new(Mutex::new(None));
             let handler = HopHandler {
                 hop,
@@ -806,6 +816,27 @@ pub(crate) fn seconds(duration: Duration) -> String {
     }
 }
 
+/// The host key types a hop asks its server for: russh's defaults, with those `known_hosts`
+/// pins for the host first. A server usually has several keys and a file often pins one
+/// (the one `ssh` first negotiated): asked in the default order, the server would present
+/// another, which is a blocking "host key changed" (as OpenSSH does, the pinned types go
+/// first). The pinned types keep the defaults' order among themselves, so the server presents
+/// the same key as with the defaults whenever that type is pinned. A pinned `ssh-rsa` key is
+/// asked with its SHA-2 signatures first. The check itself does not change.
+fn preferred_key_types(pinned: &[Algorithm], defaults: &[Algorithm]) -> Vec<Algorithm> {
+    let is_pinned = |candidate: &&Algorithm| {
+        pinned.iter().any(|p| {
+            p == *candidate
+                || matches!(
+                    (p, candidate),
+                    (Algorithm::Rsa { .. }, Algorithm::Rsa { .. })
+                )
+        })
+    };
+    let (first, rest): (Vec<&Algorithm>, Vec<&Algorithm>) = defaults.iter().partition(is_pinned);
+    first.into_iter().chain(rest).cloned().collect()
+}
+
 type CommandStream = tokio::io::Join<tokio::process::ChildStdout, tokio::process::ChildStdin>;
 
 /// How long a failed hop command's error output may take to arrive after it is stopped.
@@ -894,5 +925,51 @@ fn shell_command(command: &str) -> tokio::process::Command {
         let mut process = tokio::process::Command::new("sh");
         process.args(["-c", command]);
         process
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use russh::keys::{EcdsaCurve, HashAlg};
+
+    const P256: Algorithm = Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP256,
+    };
+
+    fn names(types: &[Algorithm]) -> Vec<String> {
+        types.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn pinned_key_types_come_first_in_the_default_order() {
+        let defaults = &Preferred::DEFAULT.key;
+        // Nothing pinned (an unknown host): the defaults, as they are.
+        assert_eq!(preferred_key_types(&[], defaults), defaults.to_vec());
+        // Only ECDSA pinned: asked first; nothing is left out.
+        let ecdsa = preferred_key_types(&[P256], defaults);
+        assert_eq!(ecdsa[0], P256);
+        assert_eq!(ecdsa.len(), defaults.len());
+        // `ssh-rsa` in known_hosts: the same key with SHA-2 signatures first.
+        let rsa = preferred_key_types(&[Algorithm::Rsa { hash: None }], defaults);
+        assert_eq!(
+            names(&rsa[..3]),
+            ["rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"]
+        );
+        assert_eq!(rsa[3], Algorithm::Ed25519);
+        // Several pinned: the defaults' order among them, whatever the file's order.
+        let both = preferred_key_types(&[Algorithm::Rsa { hash: None }, P256], defaults);
+        assert_eq!(both[0], P256);
+        assert_eq!(
+            both[1],
+            Algorithm::Rsa {
+                hash: Some(HashAlg::Sha512)
+            }
+        );
+        let with_ed = preferred_key_types(&[P256, Algorithm::Ed25519], defaults);
+        assert_eq!(&with_ed[..2], &[Algorithm::Ed25519, P256]);
+        // A pinned type russh does not offer is not added.
+        let dsa = preferred_key_types(&[Algorithm::Dsa], defaults);
+        assert_eq!(dsa, defaults.to_vec());
     }
 }
