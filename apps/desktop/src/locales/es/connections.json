@@ -130,7 +130,7 @@
     "maskNever": "Dejar visibles estas columnas",
     "maskNeverPlaceholder": "email_verified",
     "maskTypeRequires": "El tipo {{type}} siempre enmascara: {{patterns}}.",
-    "maskingHint": "Un patrón por línea, comparado con los nombres de columna sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Los valores enmascarados se muestran como •••••• en la cuadrícula, las copias, las exportaciones, las estadísticas y las respuestas a los agentes; puedes mostrar una celda cada vez. «Dejar visibles» exime de tus propios patrones aquí, nunca de los de un tipo de conexión. El enmascarado aparta los valores de la pantalla, no del SQL: un alias como SELECT email AS e lo salta, así que usa los permisos de la base de datos para apartar los datos de las personas."
+    "maskingHint": "Un patrón por línea, sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Un patrón coincide con el nombre de una columna o con la columna de tabla que lee; tabla.columna nombra también la tabla. Los valores enmascarados se muestran como •••••• en la cuadrícula, las copias, las exportaciones, las estadísticas y las respuestas a los agentes; puedes mostrar una celda cada vez. «Dejar visibles» exime de tus propios patrones aquí, nunca de los de un tipo de conexión. El enmascarado aparta los valores de la pantalla, no del SQL: una expresión como lower(email) lo salta, y también un alias en SQL Server, DuckDB y SQLite en un servidor. Usa los permisos de la base de datos para apartar los datos de las personas."
   },
   "tls": {
     "disable": "Desactivado",
