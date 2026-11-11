@@ -16,6 +16,9 @@ use spelaion_core::{
 use spelaion_driver_api::{Secret, Value};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
+mod support;
+use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
+
 fn unique(prefix: &str) -> String {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     format!(
@@ -131,18 +134,40 @@ async fn run(open: &OpenConnection, sql: &str) -> Result<(), String> {
 }
 
 /// A database server to test against: its connection file (without `[session]`), password,
-/// how to create a schema with one table in it, and the setup statement that makes it where
-/// unqualified names are found.
+/// how to create a schema with one table in it (and drop it again), and the setup statement
+/// that makes it where unqualified names are found.
 struct Server {
     label: &'static str,
     head: String,
     password: &'static str,
     create: fn(&str) -> String,
+    drop: fn(&str) -> String,
     search: fn(&str) -> String,
     isolation: &'static str,
     /// The session's isolation level, as the engine names it.
     read_isolation: &'static str,
     expected_isolation: &'static str,
+}
+
+/// Runs `sql` (a cleanup's drop) on `server` in a session of its own, without setup, with
+/// `run_cleanup`'s rule for failures.
+async fn drop_on(ws: &Workspace, server: &Server, sql: String, panicked: bool) {
+    let label = server.label;
+    match tokio::time::timeout(
+        CLEANUP_TIMEOUT,
+        ws.open(label, &server.head, Some(server.password), false),
+    )
+    .await
+    {
+        Ok(Ok(plain)) => {
+            run_cleanup(label, &plain.session, &[sql], panicked).await;
+            plain.close().await;
+        }
+        Ok(Err(e)) if panicked => eprintln!("{label}: cleanup `{sql}` failed: {e}"),
+        Err(_) if panicked => eprintln!("{label}: cleanup `{sql}` timed out"),
+        Ok(Err(e)) => panic!("{label}: cleanup `{sql}` failed: {e}"),
+        Err(_) => panic!("{label}: cleanup `{sql}` timed out"),
+    }
 }
 
 fn servers() -> Vec<Server> {
@@ -169,6 +194,7 @@ fn servers() -> Vec<Server> {
                     "drop schema if exists {s} cascade; create schema {s}; create table {s}.only_here (id int); insert into {s}.only_here values (7)"
                 )
             },
+            drop: |s| format!("drop schema if exists {s} cascade"),
             search: |s| format!("SET search_path TO {s}, public"),
             isolation: "repeatable-read",
             read_isolation: "show transaction_isolation",
@@ -191,6 +217,7 @@ fn servers() -> Vec<Server> {
                         "drop database if exists {s}; create database {s}; create table {s}.only_here (id int); insert into {s}.only_here values (7)"
                     )
                 },
+                drop: |s| format!("drop database if exists {s}"),
                 search: |s| format!("USE {s}"),
                 isolation: "read-committed",
                 read_isolation: "select @@session.transaction_isolation",
@@ -208,52 +235,60 @@ async fn setup_and_default_schema_open_sessions_in_that_schema_on_every_engine_w
     for server in servers() {
         let label = server.label;
         let schema = unique("setup_app").to_lowercase();
-        let plain = ws
-            .open(label, &server.head, Some(server.password), false)
-            .await
-            .unwrap_or_else(|e| panic!("{label}: {e}"));
-        run(&plain, &(server.create)(&schema))
-            .await
-            .unwrap_or_else(|e| panic!("{label}: {e}"));
-        plain.close().await;
-
-        let content = format!(
-            "{}\n[session]\nsetup = \"\"\"\n{};\nSELECT 1;\n\"\"\"\nschema = \"{schema}\"\nisolation = \"{}\"\n",
-            server.head,
-            (server.search)(&schema),
-            server.isolation
-        );
-        // Opening twice: a reconnect is a new session, set up again in the same way.
-        for attempt in ["first", "reconnect"] {
-            let open = ws
-                .open(label, &content, Some(server.password), false)
+        let body = async {
+            let plain = ws
+                .open(label, &server.head, Some(server.password), false)
                 .await
-                .unwrap_or_else(|e| panic!("{label} {attempt}: {e}"));
-            assert_eq!(open.setup.statements, 2, "{label}");
-            assert!(open.setup.skipped.is_empty(), "{label}");
-            // The setup's SELECT left no result behind.
-            assert_eq!(open.session.results().len(), 0, "{label}");
-            assert_eq!(
-                spelaion_core::active_schema(&open.session)
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+            run(&plain, &(server.create)(&schema))
+                .await
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+            plain.close().await;
+
+            let content = format!(
+                "{}\n[session]\nsetup = \"\"\"\n{};\nSELECT 1;\n\"\"\"\nschema = \"{schema}\"\nisolation = \"{}\"\n",
+                server.head,
+                (server.search)(&schema),
+                server.isolation
+            );
+            // Opening twice: a reconnect is a new session, set up again in the same way.
+            for attempt in ["first", "reconnect"] {
+                let open = ws
+                    .open(label, &content, Some(server.password), false)
                     .await
-                    .unwrap()
-                    .as_deref(),
-                Some(schema.as_str()),
-                "{label} {attempt}"
-            );
-            // Unqualified names are found there.
-            assert_eq!(
-                value(&open, "select id from only_here").await,
-                "7",
-                "{label} {attempt}"
-            );
-            assert_eq!(
-                value(&open, server.read_isolation).await,
-                server.expected_isolation,
-                "{label} {attempt}"
-            );
-            open.close().await;
-        }
+                    .unwrap_or_else(|e| panic!("{label} {attempt}: {e}"));
+                assert_eq!(open.setup.statements, 2, "{label}");
+                assert!(open.setup.skipped.is_empty(), "{label}");
+                // The setup's SELECT left no result behind.
+                assert_eq!(open.session.results().len(), 0, "{label}");
+                assert_eq!(
+                    spelaion_core::active_schema(&open.session)
+                        .await
+                        .unwrap()
+                        .as_deref(),
+                    Some(schema.as_str()),
+                    "{label} {attempt}"
+                );
+                // Unqualified names are found there.
+                assert_eq!(
+                    value(&open, "select id from only_here").await,
+                    "7",
+                    "{label} {attempt}"
+                );
+                assert_eq!(
+                    value(&open, server.read_isolation).await,
+                    server.expected_isolation,
+                    "{label} {attempt}"
+                );
+                open.close().await;
+            }
+        };
+        // The schema goes even when an assertion fails: left behind, it would pile up in the
+        // shared database (one more per run) and push the explorer's other folders down.
+        cleaning_up(body, |panicked| {
+            drop_on(&ws, &server, (server.drop)(&schema), panicked)
+        })
+        .await;
         tested += 1;
     }
     eprintln!("{tested} servers tested");
@@ -383,61 +418,71 @@ async fn postgres_read_only_setup_takes_settings_and_refuses_writes() {
     };
     let ws = Workspace::new();
     let table = unique("setup_ro");
-    let plain = ws
-        .open("pg", &server.head, Some(server.password), false)
-        .await
-        .unwrap();
-    run(&plain, &format!("create table {table} (a int)"))
-        .await
-        .unwrap();
-    plain.close().await;
+    let body = async {
+        let plain = ws
+            .open("pg", &server.head, Some(server.password), false)
+            .await
+            .unwrap();
+        run(&plain, &format!("create table {table} (a int)"))
+            .await
+            .unwrap();
+        plain.close().await;
 
-    let open = ws
-        .open(
-            "pg",
-            &format!(
-                "{}read_only = true\n\n[session]\nsetup = \"SET search_path TO public; SET TIME ZONE 'UTC'; SET statement_timeout = '30s'\"\n",
+        let open = ws
+            .open(
+                "pg",
+                &format!(
+                    "{}read_only = true\n\n[session]\nsetup = \"SET search_path TO public; SET TIME ZONE 'UTC'; SET statement_timeout = '30s'\"\n",
+                    server.head
+                ),
+                Some(server.password),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(value(&open, "show timezone").await, "UTC");
+        open.close().await;
+
+        for setup in [
+            format!("insert into {table} values (1)"),
+            "SET default_transaction_read_only = off".to_string(),
+            "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE".to_string(),
+            "select set_config('default_transaction_read_only', 'off', false)".to_string(),
+            format!("SET search_path TO public; create table {table}_x (a int)"),
+        ] {
+            let content = format!(
+                "{}read_only = true\n\n[session]\nsetup = \"{setup}\"\nignore_setup_errors = true\n",
                 server.head
-            ),
-            Some(server.password),
-            false,
-        )
-        .await
-        .unwrap();
-    assert_eq!(value(&open, "show timezone").await, "UTC");
-    open.close().await;
-
-    for setup in [
-        format!("insert into {table} values (1)"),
-        "SET default_transaction_read_only = off".to_string(),
-        "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE".to_string(),
-        "select set_config('default_transaction_read_only', 'off', false)".to_string(),
-        format!("SET search_path TO public; create table {table}_x (a int)"),
-    ] {
-        let content = format!(
-            "{}read_only = true\n\n[session]\nsetup = \"{setup}\"\nignore_setup_errors = true\n",
-            server.head
-        );
-        match ws.open("pg", &content, Some(server.password), false).await {
-            Err(OpenError::Setup(SetupError::Refused { .. })) => {}
-            Err(other) => panic!("{setup}: {other}"),
-            Ok(_) => panic!("{setup}: must be refused"),
+            );
+            match ws.open("pg", &content, Some(server.password), false).await {
+                Err(OpenError::Setup(SetupError::Refused { .. })) => {}
+                Err(other) => panic!("{setup}: {other}"),
+                Ok(_) => panic!("{setup}: must be refused"),
+            }
         }
-    }
-    let plain = ws
-        .open("pg", &server.head, Some(server.password), false)
-        .await
-        .unwrap();
-    assert_eq!(
-        value(&plain, &format!("select count(*) from {table}")).await,
-        "0"
-    );
-    assert_eq!(
-        value(&plain, &format!("select to_regclass('{table}_x') is null")).await,
-        "true"
-    );
-    run(&plain, &format!("drop table {table}")).await.unwrap();
-    plain.close().await;
+        let plain = ws
+            .open("pg", &server.head, Some(server.password), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            value(&plain, &format!("select count(*) from {table}")).await,
+            "0"
+        );
+        assert_eq!(
+            value(&plain, &format!("select to_regclass('{table}_x') is null")).await,
+            "true"
+        );
+        plain.close().await;
+    };
+    cleaning_up(body, |panicked| {
+        drop_on(
+            &ws,
+            &server,
+            format!("drop table if exists {table}; drop table if exists {table}_x"),
+            panicked,
+        )
+    })
+    .await;
 }
 
 #[tokio::test]

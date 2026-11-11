@@ -141,10 +141,24 @@ async fn process_monitor_shows_the_current_sqlserver_session_without_admin_right
         }
         Err(error) => Err(error.to_string()),
     };
-    let _: Vec<_> = admin
-        .run_script(&format!("DROP LOGIN [{login}]"))
-        .collect()
-        .await;
+    // The low session closes in the background, and a login still connected cannot be
+    // dropped: try again until it goes, so no login is left behind on the shared server.
+    let mut dropped = false;
+    for _ in 0..50 {
+        let events: Vec<CoreEvent> = admin
+            .run_script(&format!("DROP LOGIN [{login}]"))
+            .collect()
+            .await;
+        if !events
+            .iter()
+            .any(|e| matches!(e, CoreEvent::StatementFailed { .. }))
+        {
+            dropped = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(dropped, "the login {login} could not be dropped");
     let snapshot =
         result.expect("a login can inspect its own process without server-wide permissions");
     assert!(snapshot.limited);

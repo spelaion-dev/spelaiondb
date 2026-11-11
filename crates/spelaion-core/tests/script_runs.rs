@@ -21,6 +21,9 @@ use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
 
+mod support;
+use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
+
 /// Two sessions on the same database: `a` is the editor tab, `b` looks from outside.
 struct Engine {
     name: &'static str,
@@ -243,6 +246,21 @@ async fn value(session: &Session, sql: &str) -> String {
     out.unwrap_or_else(|| panic!("{sql}: no rows"))
 }
 
+/// A test's cleanup: drops its tables from `b`. When the test failed, it first stops a run
+/// it left paused and rolls back what it may have left open in `a`, which would hold the
+/// tables.
+async fn drop_tables(engine: &Engine, tables: Vec<String>, panicked: bool) {
+    if panicked {
+        let _ = engine.a.stop_paused_run();
+        let _ = tokio::time::timeout(CLEANUP_TIMEOUT, engine.a.rollback()).await;
+    }
+    let drops: Vec<String> = tables
+        .iter()
+        .map(|table| format!("drop table if exists {table}"))
+        .collect();
+    run_cleanup(engine.name, &engine.b, &drops, panicked).await;
+}
+
 async fn count(engine: &Engine, table: &str) -> String {
     value(
         &engine.b,
@@ -282,89 +300,88 @@ async fn an_error_in_statement_3_of_5_in_every_mode_on_every_engine() {
             for mode in [Mode::Stop, Mode::Continue, Mode::AskSkip, Mode::AskStop] {
                 let case = format!("{name}, manual commit {manual}, {mode:?}");
                 let table = unique("runs");
-                run(
-                    &engine.b,
-                    &format!("create table {table} (id int primary key)"),
-                    ScriptOptions::default(),
-                    &[],
-                )
-                .await;
-                engine.a.set_auto_commit(!manual).await.unwrap();
-                let (on_error, answers): (_, &[ErrorAnswer]) = match mode {
-                    Mode::Stop => (OnError::Stop, &[]),
-                    Mode::Continue => (OnError::Continue, &[]),
-                    Mode::AskSkip => (OnError::Ask, &[ErrorAnswer::Skip]),
-                    Mode::AskStop => (OnError::Ask, &[ErrorAnswer::Stop]),
-                };
-                let out = run(
-                    &engine.a,
-                    &three_of_five(&table),
-                    options(on_error),
-                    answers,
-                )
-                .await;
-                let summary = out.summary;
-                assert_eq!(summary.statements, 5, "{case}");
-                assert_eq!(out.failed, [2], "{case}");
-                assert!(
-                    out.timing_ok,
-                    "{case}: execution and fetch fit in the statement"
-                );
-
-                // Whether the run went past the failed statement.
-                let aborted = manual && engine.aborts_transactions();
-                let went_on = !aborted && matches!(mode, Mode::Continue | Mode::AskSkip);
-                let asked = !aborted && matches!(mode, Mode::AskSkip | Mode::AskStop);
-                assert_eq!(
-                    out.paused,
-                    if asked { vec![(2, 2)] } else { vec![] },
-                    "{case}"
-                );
-                if went_on {
-                    assert_eq!(out.finished, [0, 1, 3, 4], "{case}");
-                    assert_eq!((summary.executed, summary.succeeded), (5, 4), "{case}");
-                    assert_eq!(summary.stop, None, "{case}");
-                } else {
-                    assert_eq!(out.finished, [0, 1], "{case}");
-                    assert_eq!((summary.executed, summary.succeeded), (3, 2), "{case}");
-                    assert_eq!(summary.not_run(), 2, "{case}");
-                    let expected = if aborted && mode != Mode::Stop {
-                        ScriptStop::TransactionAborted { index: 2 }
-                    } else {
-                        ScriptStop::Failed { index: 2 }
+                let body = async {
+                    run(
+                        &engine.b,
+                        &format!("create table {table} (id int primary key)"),
+                        ScriptOptions::default(),
+                        &[],
+                    )
+                    .await;
+                    engine.a.set_auto_commit(!manual).await.unwrap();
+                    let (on_error, answers): (_, &[ErrorAnswer]) = match mode {
+                        Mode::Stop => (OnError::Stop, &[]),
+                        Mode::Continue => (OnError::Continue, &[]),
+                        Mode::AskSkip => (OnError::Ask, &[ErrorAnswer::Skip]),
+                        Mode::AskStop => (OnError::Ask, &[ErrorAnswer::Stop]),
                     };
-                    assert_eq!(summary.stop, Some(expected), "{case}");
-                }
+                    let out = run(
+                        &engine.a,
+                        &three_of_five(&table),
+                        options(on_error),
+                        answers,
+                    )
+                    .await;
+                    let summary = out.summary;
+                    assert_eq!(summary.statements, 5, "{case}");
+                    assert_eq!(out.failed, [2], "{case}");
+                    assert!(
+                        out.timing_ok,
+                        "{case}: execution and fetch fit in the statement"
+                    );
 
-                if manual {
-                    // Nothing is committed until the user commits.
-                    assert_eq!(count(&engine, &table).await, "0", "{case}");
-                    let status = engine.a.transaction_status();
-                    if aborted {
-                        assert_eq!(status.state, Some(TransactionState::Failed), "{case}");
-                        engine.a.rollback().await.unwrap();
-                        assert_eq!(count(&engine, &table).await, "0", "{case}");
+                    // Whether the run went past the failed statement.
+                    let aborted = manual && engine.aborts_transactions();
+                    let went_on = !aborted && matches!(mode, Mode::Continue | Mode::AskSkip);
+                    let asked = !aborted && matches!(mode, Mode::AskSkip | Mode::AskStop);
+                    assert_eq!(
+                        out.paused,
+                        if asked { vec![(2, 2)] } else { vec![] },
+                        "{case}"
+                    );
+                    if went_on {
+                        assert_eq!(out.finished, [0, 1, 3, 4], "{case}");
+                        assert_eq!((summary.executed, summary.succeeded), (5, 4), "{case}");
+                        assert_eq!(summary.stop, None, "{case}");
                     } else {
-                        assert_eq!(status.state, Some(TransactionState::Open), "{case}");
-                        engine.a.commit().await.unwrap();
+                        assert_eq!(out.finished, [0, 1], "{case}");
+                        assert_eq!((summary.executed, summary.succeeded), (3, 2), "{case}");
+                        assert_eq!(summary.not_run(), 2, "{case}");
+                        let expected = if aborted && mode != Mode::Stop {
+                            ScriptStop::TransactionAborted { index: 2 }
+                        } else {
+                            ScriptStop::Failed { index: 2 }
+                        };
+                        assert_eq!(summary.stop, Some(expected), "{case}");
+                    }
+
+                    if manual {
+                        // Nothing is committed until the user commits.
+                        assert_eq!(count(&engine, &table).await, "0", "{case}");
+                        let status = engine.a.transaction_status();
+                        if aborted {
+                            assert_eq!(status.state, Some(TransactionState::Failed), "{case}");
+                            engine.a.rollback().await.unwrap();
+                            assert_eq!(count(&engine, &table).await, "0", "{case}");
+                        } else {
+                            assert_eq!(status.state, Some(TransactionState::Open), "{case}");
+                            engine.a.commit().await.unwrap();
+                            let kept = if went_on { "4" } else { "2" };
+                            assert_eq!(count(&engine, &table).await, kept, "{case}");
+                        }
+                    } else {
+                        assert_eq!(
+                            engine.a.transaction_status().state,
+                            Some(TransactionState::Idle),
+                            "{case}"
+                        );
                         let kept = if went_on { "4" } else { "2" };
                         assert_eq!(count(&engine, &table).await, kept, "{case}");
                     }
-                } else {
-                    assert_eq!(
-                        engine.a.transaction_status().state,
-                        Some(TransactionState::Idle),
-                        "{case}"
-                    );
-                    let kept = if went_on { "4" } else { "2" };
-                    assert_eq!(count(&engine, &table).await, kept, "{case}");
-                }
-                run(
-                    &engine.b,
-                    &format!("drop table {table}"),
-                    ScriptOptions::default(),
-                    &[],
-                )
+                };
+                cleaning_up(body, |panicked| {
+                    drop_tables(&engine, vec![table.clone()], panicked)
+                })
                 .await;
             }
         }
@@ -376,34 +393,33 @@ async fn skip_all_does_not_ask_again() {
     for engine in engines().await {
         let name = engine.name;
         let table = unique("runs_all");
-        run(
-            &engine.a,
-            &format!("create table {table} (id int primary key)"),
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
-        let script = [1, 1, 1, 2, 3]
-            .map(|id| format!("insert into {table} values ({id})"))
-            .join(";\n");
-        let out = run(
-            &engine.a,
-            &script,
-            options(OnError::Ask),
-            &[ErrorAnswer::SkipAll],
-        )
-        .await;
-        assert_eq!(out.paused, [(1, 3)], "{name}");
-        assert_eq!(out.failed, [1, 2], "{name}");
-        assert_eq!(out.finished, [0, 3, 4], "{name}");
-        assert_eq!(out.summary.stop, None, "{name}");
-        assert_eq!(count(&engine, &table).await, "3", "{name}");
-        run(
-            &engine.a,
-            &format!("drop table {table}"),
-            ScriptOptions::default(),
-            &[],
-        )
+        let body = async {
+            run(
+                &engine.a,
+                &format!("create table {table} (id int primary key)"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            let script = [1, 1, 1, 2, 3]
+                .map(|id| format!("insert into {table} values ({id})"))
+                .join(";\n");
+            let out = run(
+                &engine.a,
+                &script,
+                options(OnError::Ask),
+                &[ErrorAnswer::SkipAll],
+            )
+            .await;
+            assert_eq!(out.paused, [(1, 3)], "{name}");
+            assert_eq!(out.failed, [1, 2], "{name}");
+            assert_eq!(out.finished, [0, 3, 4], "{name}");
+            assert_eq!(out.summary.stop, None, "{name}");
+            assert_eq!(count(&engine, &table).await, "3", "{name}");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
         .await;
     }
 }
@@ -442,97 +458,96 @@ async fn a_paused_run_takes_only_its_ticket_and_stops_when_cancelled_or_closed()
     for engine in engines().await {
         let name = engine.name;
         let table = unique("runs_pause");
-        run(
-            &engine.a,
-            &format!("create table {table} (id int primary key)"),
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
-        let script = three_of_five(&table);
+        let body = async {
+            run(
+                &engine.a,
+                &format!("create table {table} (id int primary key)"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            let script = three_of_five(&table);
 
-        // Only the current ticket answers, once.
-        let (events, ticket) = until_paused(&engine.a, &script).await;
-        assert_eq!(
-            engine
-                .a
-                .answer_error(ErrorTicket(ticket.0 + 1), ErrorAnswer::Skip),
-            Err(AnswerError::NotWaiting),
-            "{name}"
-        );
-        engine.a.answer_error(ticket, ErrorAnswer::Stop).unwrap();
-        assert_eq!(
-            engine.a.answer_error(ticket, ErrorAnswer::Skip),
-            Err(AnswerError::NotWaiting),
-            "{name}"
-        );
-        let summary = summary_of(events).await;
-        assert_eq!(
-            summary.stop,
-            Some(ScriptStop::Failed { index: 2 }),
-            "{name}"
-        );
-        run(
-            &engine.a,
-            &format!("delete from {table}"),
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
+            // Only the current ticket answers, once.
+            let (events, ticket) = until_paused(&engine.a, &script).await;
+            assert_eq!(
+                engine
+                    .a
+                    .answer_error(ErrorTicket(ticket.0 + 1), ErrorAnswer::Skip),
+                Err(AnswerError::NotWaiting),
+                "{name}"
+            );
+            engine.a.answer_error(ticket, ErrorAnswer::Stop).unwrap();
+            assert_eq!(
+                engine.a.answer_error(ticket, ErrorAnswer::Skip),
+                Err(AnswerError::NotWaiting),
+                "{name}"
+            );
+            let summary = summary_of(events).await;
+            assert_eq!(
+                summary.stop,
+                Some(ScriptStop::Failed { index: 2 }),
+                "{name}"
+            );
+            run(
+                &engine.a,
+                &format!("delete from {table}"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
 
-        // Cancel stops it without running anything else; the old ticket is dead.
-        let (events, ticket) = until_paused(&engine.a, &script).await;
-        engine.a.cancel().await.unwrap();
-        let summary = summary_of(events).await;
-        assert_eq!(
-            summary.stop,
-            Some(ScriptStop::Cancelled { index: 2 }),
-            "{name}"
-        );
-        assert_eq!(summary.not_run(), 2, "{name}");
-        assert_eq!(
-            engine.a.answer_error(ticket, ErrorAnswer::Skip),
-            Err(AnswerError::NotWaiting),
-            "{name}"
-        );
-        assert_eq!(count(&engine, &table).await, "2", "{name}");
-        run(
-            &engine.a,
-            &format!("delete from {table}"),
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
+            // Cancel stops it without running anything else; the old ticket is dead.
+            let (events, ticket) = until_paused(&engine.a, &script).await;
+            engine.a.cancel().await.unwrap();
+            let summary = summary_of(events).await;
+            assert_eq!(
+                summary.stop,
+                Some(ScriptStop::Cancelled { index: 2 }),
+                "{name}"
+            );
+            assert_eq!(summary.not_run(), 2, "{name}");
+            assert_eq!(
+                engine.a.answer_error(ticket, ErrorAnswer::Skip),
+                Err(AnswerError::NotWaiting),
+                "{name}"
+            );
+            assert_eq!(count(&engine, &table).await, "2", "{name}");
+            run(
+                &engine.a,
+                &format!("delete from {table}"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
 
-        // Closing the tab stops it too.
-        let (events, _) = until_paused(&engine.a, &script).await;
-        assert!(engine.a.stop_paused_run(), "{name}");
-        let summary = summary_of(events).await;
-        assert_eq!(
-            summary.stop,
-            Some(ScriptStop::Closed { index: 2 }),
-            "{name}"
-        );
-        assert!(
-            !engine.a.stop_paused_run(),
-            "{name}: nothing waits any more"
-        );
+            // Closing the tab stops it too.
+            let (events, _) = until_paused(&engine.a, &script).await;
+            assert!(engine.a.stop_paused_run(), "{name}");
+            let summary = summary_of(events).await;
+            assert_eq!(
+                summary.stop,
+                Some(ScriptStop::Closed { index: 2 }),
+                "{name}"
+            );
+            assert!(
+                !engine.a.stop_paused_run(),
+                "{name}: nothing waits any more"
+            );
 
-        // The session still runs scripts afterwards.
-        let out = run(
-            &engine.a,
-            &format!("select count(*) from {table}"),
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
-        assert_eq!(out.finished, [0], "{name}");
-        run(
-            &engine.a,
-            &format!("drop table {table}"),
-            ScriptOptions::default(),
-            &[],
-        )
+            // The session still runs scripts afterwards.
+            let out = run(
+                &engine.a,
+                &format!("select count(*) from {table}"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            assert_eq!(out.finished, [0], "{name}");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
         .await;
     }
 }
@@ -595,63 +610,62 @@ async fn continue_after_a_failed_write_under_smart_commit() {
     for engine in engines().await {
         let name = engine.name;
         let table = unique("runs_smart");
-        run(
-            &engine.b,
-            &format!("create table {table} (id int primary key)"),
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
-        run(
-            &engine.b,
-            &format!("insert into {table} values (1)"),
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
-        let status = engine.a.follow_transactions(&SMART).await;
-        assert!(status.auto_commit, "{name}");
-        // The first write switches to manual and fails; the rest goes on in its transaction.
-        let script = format!(
-            "select count(*) from {table};\ninsert into {table} values (1);\ninsert into {table} values (2)"
-        );
-        let out = run(&engine.a, &script, options(OnError::Continue), &[]).await;
-        assert_eq!(out.failed, [1], "{name}");
-        let status = engine.a.transaction_status();
-        if engine.aborts_transactions() {
-            assert_eq!(
-                out.summary.stop,
-                Some(ScriptStop::TransactionAborted { index: 1 }),
-                "{name}"
+        let body = async {
+            run(
+                &engine.b,
+                &format!("create table {table} (id int primary key)"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            run(
+                &engine.b,
+                &format!("insert into {table} values (1)"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            let status = engine.a.follow_transactions(&SMART).await;
+            assert!(status.auto_commit, "{name}");
+            // The first write switches to manual and fails; the rest goes on in its transaction.
+            let script = format!(
+                "select count(*) from {table};\ninsert into {table} values (1);\ninsert into {table} values (2)"
             );
-            assert_eq!(status.state, Some(TransactionState::Failed), "{name}");
-            engine.a.rollback().await.unwrap();
-        } else {
-            assert_eq!(out.finished, [0, 2], "{name}");
-            assert!(status.smart_switched && !status.auto_commit, "{name}");
-            assert_eq!(status.state, Some(TransactionState::Open), "{name}");
-            // SQL Server's READPAST would skip the row the failed insert locked.
-            if name != "sqlserver" {
+            let out = run(&engine.a, &script, options(OnError::Continue), &[]).await;
+            assert_eq!(out.failed, [1], "{name}");
+            let status = engine.a.transaction_status();
+            if engine.aborts_transactions() {
                 assert_eq!(
-                    count(&engine, &table).await,
-                    "1",
-                    "{name}: waits for Commit"
+                    out.summary.stop,
+                    Some(ScriptStop::TransactionAborted { index: 1 }),
+                    "{name}"
                 );
+                assert_eq!(status.state, Some(TransactionState::Failed), "{name}");
+                engine.a.rollback().await.unwrap();
+            } else {
+                assert_eq!(out.finished, [0, 2], "{name}");
+                assert!(status.smart_switched && !status.auto_commit, "{name}");
+                assert_eq!(status.state, Some(TransactionState::Open), "{name}");
+                // SQL Server's READPAST would skip the row the failed insert locked.
+                if name != "sqlserver" {
+                    assert_eq!(
+                        count(&engine, &table).await,
+                        "1",
+                        "{name}: waits for Commit"
+                    );
+                }
+                engine.a.commit().await.unwrap();
+                assert_eq!(count(&engine, &table).await, "2", "{name}");
             }
-            engine.a.commit().await.unwrap();
-            assert_eq!(count(&engine, &table).await, "2", "{name}");
-        }
-        let status = engine.a.transaction_status();
-        assert!(
-            status.auto_commit && !status.smart_switched,
-            "{name}: back to auto-commit"
-        );
-        run(
-            &engine.b,
-            &format!("drop table {table}"),
-            ScriptOptions::default(),
-            &[],
-        )
+            let status = engine.a.transaction_status();
+            assert!(
+                status.auto_commit && !status.smart_switched,
+                "{name}: back to auto-commit"
+            );
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
         .await;
     }
 }
@@ -664,57 +678,56 @@ async fn an_error_that_rolls_back_the_transaction_stops_continue() {
             continue;
         }
         let table = unique("runs_xact");
-        run(
-            &engine.b,
-            &format!("create table {table} (id int primary key)"),
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
-        engine.a.follow_transactions(&Safeguards::default()).await;
-        run(
-            &engine.a,
-            "set xact_abort on",
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
-        engine.a.set_auto_commit(false).await.unwrap();
-        for on_error in [OnError::Continue, OnError::Ask] {
-            let out = run(&engine.a, &three_of_five(&table), options(on_error), &[]).await;
-            assert_eq!(out.failed, [2]);
-            assert!(out.paused.is_empty(), "{on_error:?}: nothing to ask");
-            assert_eq!(
-                out.summary.stop,
-                Some(ScriptStop::TransactionRolledBack { index: 2 })
-            );
-            assert!(
-                out.notices
-                    .iter()
-                    .any(|n| n.contains("rolled back by this error")),
-                "{:?}",
-                out.notices
-            );
-            assert_eq!(
-                engine.a.transaction_status().state,
-                Some(TransactionState::Idle)
-            );
-            assert_eq!(count(&engine, &table).await, "0");
-        }
-        engine.a.set_auto_commit(true).await.unwrap();
-        run(
-            &engine.a,
-            "set xact_abort off",
-            ScriptOptions::default(),
-            &[],
-        )
-        .await;
-        run(
-            &engine.b,
-            &format!("drop table {table}"),
-            ScriptOptions::default(),
-            &[],
-        )
+        let body = async {
+            run(
+                &engine.b,
+                &format!("create table {table} (id int primary key)"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            engine.a.follow_transactions(&Safeguards::default()).await;
+            run(
+                &engine.a,
+                "set xact_abort on",
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            engine.a.set_auto_commit(false).await.unwrap();
+            for on_error in [OnError::Continue, OnError::Ask] {
+                let out = run(&engine.a, &three_of_five(&table), options(on_error), &[]).await;
+                assert_eq!(out.failed, [2]);
+                assert!(out.paused.is_empty(), "{on_error:?}: nothing to ask");
+                assert_eq!(
+                    out.summary.stop,
+                    Some(ScriptStop::TransactionRolledBack { index: 2 })
+                );
+                assert!(
+                    out.notices
+                        .iter()
+                        .any(|n| n.contains("rolled back by this error")),
+                    "{:?}",
+                    out.notices
+                );
+                assert_eq!(
+                    engine.a.transaction_status().state,
+                    Some(TransactionState::Idle)
+                );
+                assert_eq!(count(&engine, &table).await, "0");
+            }
+            engine.a.set_auto_commit(true).await.unwrap();
+            run(
+                &engine.a,
+                "set xact_abort off",
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
         .await;
     }
 }
