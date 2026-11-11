@@ -84,6 +84,11 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
+      # libduckdb-sys reuses its unpacked sources in target/duckdb-sources only when its
+      # `.complete` marker is there, and rust-cache's cleanup leaves that folder's tree without
+      # its files, so a rerun of its build script could not unpack (see ci.yml's Linux job).
+      - shell: bash
+        run: rm -rf target/duckdb-sources
       # WebKitGTK and friends for the app; libdbus for the keychain (Secret Service).
       - if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -94,14 +99,26 @@ jobs:
       # The `spelaiondb` CLI ships inside the app, next to its binary (ADR-033), so the MCP page
       # can set up AI clients on a machine with nothing else installed. Tauri's `externalBin`
       # (only in tauri.release.conf.json) wants it as binaries/spelaiondb-<target triple>.
-      - name: Build the CLI that ships with the app
+      #
+      # The app and the CLI are built by one cargo command: the same `tauri build` (same
+      # `--target`, same `-p` list) as tauri-action's below, so that one finds everything built
+      # but the app's own crate, which it builds again with the release config. Built apart,
+      # bundled DuckDB is compiled twice: cargo turns on the features of build dependencies
+      # from the packages of one command only, and the app's (Tauri's) turn on more of them
+      # than the CLI's, so libduckdb-sys gets a different hash in each command (CONTRIBUTING.md,
+      # "Release build"). Keep both `-p` lists the same, or every dependency whose features
+      # differ is built twice. This one runs without the release config, so it needs no CLI yet.
+      - name: Build the app and the CLI that ships with it
         shell: bash
+        working-directory: apps/desktop
         run: |
-          cargo build --release --locked -p spelaion-cli --target ${{ matrix.target }}
+          npm run tauri build -- --no-bundle ${{ matrix.args }} -- --locked -p spelaion-desktop -p spelaion-cli
           ext=""
           if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
-          mkdir -p apps/desktop/src-tauri/binaries
-          cp "target/${{ matrix.target }}/release/spelaiondb$ext" "apps/desktop/src-tauri/binaries/spelaiondb-${{ matrix.target }}$ext"
+          out="../../target/release"
+          if [ -n "${{ matrix.args }}" ]; then out="../../target/${{ matrix.target }}/release"; fi
+          mkdir -p src-tauri/binaries
+          cp "$out/spelaiondb$ext" "src-tauri/binaries/spelaiondb-${{ matrix.target }}$ext"
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,8 +132,10 @@ jobs:
           # Not a pre-release: the app's updater follows /releases/latest, which skips them
           # (ADR-021).
           prerelease: false
-          # Update artifacts only here: local builds need no signing key.
-          args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }}
+          # Update artifacts only here: local builds need no signing key. After `--`: the same
+          # packages as the build step above, so the CLI's features match and nothing but the
+          # app's crate is built again.
+          args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }} -- --locked -p spelaion-desktop -p spelaion-cli
 
   cli:
     name: CLI · ${{ matrix.target }}
@@ -144,6 +163,9 @@ jobs:
         with:
           key: cli-${{ matrix.target }}
           save-if: false
+      # The DuckDB sources folder rust-cache leaves behind (see the app job).
+      - shell: bash
+        run: rm -rf target/duckdb-sources
       - if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
