@@ -323,7 +323,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `node apps/desktop/e2e/smoke-linux.mjs` drives the same release build through
   `tauri-driver` and WebKitWebDriver (`e2e/webdriver.mjs`, no dependencies): a shorter pass
   (start, trust, a query on every engine, the real clipboard both ways, an SSH tunnel, quitting
-  with a transaction open), with what it needs in `CONTRIBUTING.md`. macOS has neither (no
+  with a transaction open), with what it needs in `CONTRIBUTING.md`. CI runs this Linux pass
+  (`.github/workflows/smoke-linux.yml`, not a required check) on every pull request and push
+  to `dev` that touches more than documentation: a release build on
+  ubuntu with `testing/docker` up, under Xvfb with Openbox, so it takes the X11 paths (`xclip`
+  for the clipboard, `wmctrl` for the close request). A failure names the step and uploads the
+  screenshots and the log (artifact `smoke-linux`). macOS has neither (no
   WebDriver for WKWebView). `e2e/processes.mjs` closes windows and lists processes for both.
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;
