@@ -6,7 +6,8 @@
 //!
 //! Nothing secret is ever given to it: no argument or environment variable of ours carries a
 //! password. The AWS CLI starts the Session Manager plugin as its child, so stopping a session
-//! stops the whole process tree.
+//! stops the whole process tree, and closing one waits until every process of it has exited: a
+//! plugin left running would keep its local port open.
 
 use std::ffi::OsString;
 use std::net::SocketAddr;
@@ -24,6 +25,9 @@ use crate::{SshError, SsmFailure, SsmSpec};
 
 /// How long a session may take to be ready at least: the CLI first asks AWS for it.
 const MIN_START_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long closing a session waits for the CLI and its plugin to be gone once they are killed.
+const STOP_WAIT: Duration = Duration::from_secs(5);
 
 /// The documents AWS provides for port forwarding.
 const TO_NODE: &str = "AWS-StartPortForwardingSession";
@@ -247,7 +251,7 @@ pub(crate) struct SsmSession {
     pub local: SocketAddr,
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
-    pid: Option<u32>,
+    tree: ProcessTree,
 }
 
 impl SsmSession {
@@ -300,7 +304,8 @@ impl SsmSession {
                     format!("could not run {}: {e}", tools.aws.display()),
                 )
             })?;
-        let pid = child.id();
+        let tree = ProcessTree::new(&child);
+        let pid = tree.pid;
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
         let last_error = Arc::new(Mutex::new(String::new()));
@@ -347,7 +352,7 @@ impl SsmSession {
                 ));
             }
             Err(_) => {
-                kill_tree(pid);
+                tree.kill();
                 return Err(fail(
                     SsmFailure::Timeout,
                     format!(
@@ -381,11 +386,12 @@ impl SsmSession {
             local: SocketAddr::from(([127, 0, 0, 1], local_port)),
             stop: Some(stop),
             task: Some(task),
-            pid,
+            tree,
         })
     }
 
-    /// Stops the session (the CLI and its plugin) and waits for them to exit.
+    /// Stops the session (the CLI and its plugin) and waits for them to exit: the CLI, which is
+    /// our child, and then every other process it started, which nobody waits for otherwise.
     pub(crate) async fn close(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
@@ -393,19 +399,125 @@ impl SsmSession {
         if let Some(task) = self.task.take() {
             let _ = task.await;
         }
+        // What the CLI left behind if it had already exited: nothing stopped it above.
+        self.tree.kill();
+        self.tree.wait_gone(STOP_WAIT).await;
     }
 }
 
 impl Drop for SsmSession {
     fn drop(&mut self) {
         if self.stop.is_some() {
-            // Not closed in order: stop the plugin too, which `kill_on_drop` would leave.
-            kill_tree(self.pid);
+            // Not closed in order: stop the plugin too, which `kill_on_drop` would leave. A drop
+            // cannot wait; on Windows closing the job (dropped with `tree`) stops them as well.
+            self.tree.kill();
         }
         if let Some(task) = self.task.take() {
             task.abort();
         }
     }
+}
+
+/// The AWS CLI and every process it starts (the plugin), so a stop reaches them all and a close
+/// can wait until none is left.
+struct ProcessTree {
+    pid: Option<u32>,
+    /// The CLI leads its own process group (`process_group(0)`): every process it starts is in
+    /// it unless it leaves on purpose, and the group exists while any of them does.
+    #[cfg(unix)]
+    group: Option<rustix::process::Pid>,
+    /// A job the CLI is put in as soon as it starts, so the plugin it starts later is in it too.
+    /// It kills whatever is still in it when it is closed: when the session is dropped, and when
+    /// the app ends however it ends. `None` if Windows refused one (a parent job that forbids
+    /// it); `taskkill /T` still stops the tree then, and a close waits only for the CLI.
+    #[cfg(windows)]
+    job: Option<win32job::Job>,
+}
+
+impl ProcessTree {
+    fn new(child: &tokio::process::Child) -> Self {
+        let pid = child.id();
+        #[cfg(unix)]
+        {
+            Self {
+                pid,
+                group: pid.and_then(group_of),
+            }
+        }
+        #[cfg(windows)]
+        {
+            let job = child.raw_handle().and_then(|handle| {
+                let mut limits = win32job::ExtendedLimitInfo::new();
+                limits.limit_kill_on_job_close();
+                let job = win32job::Job::create_with_limit_info(&limits).ok()?;
+                // A handle is an address-sized value; the job only passes it to Windows.
+                job.assign_process(handle as isize).ok()?;
+                Some(job)
+            });
+            Self { pid, job }
+        }
+    }
+
+    /// Stops what is left of the CLI and everything it started, without waiting. Only processes
+    /// still in the tree: never by the CLI's id once it may have been reaped and reused.
+    fn kill(&self) {
+        #[cfg(unix)]
+        if let Some(group) = self.group
+            && self.alive()
+        {
+            // A group with a process in it keeps its id: it cannot be someone else's.
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
+        #[cfg(windows)]
+        match &self.job {
+            Some(job) => {
+                // Every process in the job, so a plugin whose CLI is gone is reached too.
+                let ids: Vec<u32> = job
+                    .query_process_id_list()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|id| u32::try_from(id).ok())
+                    .collect();
+                taskkill(&ids);
+            }
+            // No job: the CLI's tree, by its id, as before there was one.
+            None => kill_tree(self.pid),
+        }
+    }
+
+    /// Whether any process of the tree is still there. Killed processes leave in their own
+    /// time: a killed plugin may still hold its port until the system has ended it.
+    fn alive(&self) -> bool {
+        #[cfg(unix)]
+        {
+            // A process has ended (its sockets closed) before it leaves its group.
+            self.group
+                .is_some_and(|group| rustix::process::test_kill_process_group(group).is_ok())
+        }
+        #[cfg(windows)]
+        {
+            self.job.as_ref().is_some_and(|job| {
+                job.query_basic_and_io_accounting_info()
+                    .is_ok_and(|info| info.active_processes > 0)
+            })
+        }
+    }
+
+    /// Waits, at most `bound`, until no process of the tree is left.
+    async fn wait_gone(&self, bound: Duration) {
+        let deadline = tokio::time::Instant::now() + bound;
+        while self.alive() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+/// The process group the CLI leads (`process_group(0)`): its id is the group's.
+#[cfg(unix)]
+fn group_of(pid: u32) -> Option<rustix::process::Pid> {
+    i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
 }
 
 /// A free port on 127.0.0.1 for the plugin to listen on.
@@ -417,39 +529,39 @@ fn free_port() -> Result<u16, SshError> {
 }
 
 /// Stops a process and everything it started: the AWS CLI and its plugin. With the system's
-/// own tool and an argument list, so nothing here needs `unsafe`.
+/// own tool (Windows) or a safe system call (Unix), so nothing here needs `unsafe`.
 fn kill_tree(pid: Option<u32>) {
     let Some(pid) = pid else { return };
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let system = std::env::var_os("SystemRoot")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-        let _ = std::process::Command::new(system.join("System32").join("taskkill.exe"))
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-    }
+    taskkill(&[pid]);
     #[cfg(unix)]
-    {
-        // The CLI leads its own process group (`process_group(0)`): its id is the group's.
-        let kill = if std::path::Path::new("/bin/kill").is_file() {
-            "/bin/kill"
-        } else {
-            "/usr/bin/kill"
-        };
-        let _ = std::process::Command::new(kill)
-            .args(["-KILL", "--", &format!("-{pid}")])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    if let Some(group) = group_of(pid) {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
     }
+}
+
+/// `taskkill /F /T` on these processes and everything they started.
+#[cfg(windows)]
+fn taskkill(ids: &[u32]) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    if ids.is_empty() {
+        return;
+    }
+    let system = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let mut command = std::process::Command::new(system.join("System32").join("taskkill.exe"));
+    for id in ids {
+        command.args(["/PID", &id.to_string()]);
+    }
+    let _ = command
+        .args(["/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
 }
 
 #[cfg(test)]
@@ -582,6 +694,65 @@ mod tests {
             );
         }
         assert!(ssm_arguments(&spec(&"i".repeat(300)), "localhost", 1, 1).is_err());
+    }
+
+    /// A program that starts a child of its own and waits for it, as the CLI does the plugin.
+    fn parent_with_child() -> Command {
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("cmd");
+            command.args(["/d", "/c", "ping -n 60 127.0.0.1 >nul"]);
+            command
+        }
+        #[cfg(unix)]
+        {
+            // `; true` keeps the shell waiting for `sleep` instead of becoming it.
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 60; true"]).process_group(0);
+            command
+        }
+    }
+
+    /// The tree knows the grandchild too (the plugin, which is not our child): killing reaches
+    /// it, and waiting ends only once it is gone.
+    #[tokio::test]
+    async fn a_stopped_tree_is_waited_for_to_the_last_process() {
+        let mut child = parent_with_child()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let tree = ProcessTree::new(&child);
+        assert!(tree.alive());
+        #[cfg(windows)]
+        {
+            // `ping` started by `cmd` is in the CLI's job without being put there.
+            let job = tree.job.as_ref().expect("a job for the CLI");
+            let mut both = false;
+            for _ in 0..500 {
+                if job
+                    .query_basic_and_io_accounting_info()
+                    .unwrap()
+                    .active_processes
+                    == 2
+                {
+                    both = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(both, "the grandchild is in the job");
+        }
+        #[cfg(unix)]
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // The parent alone ends (a CLI that exited on its own): its child is still the tree's.
+        child.kill().await.unwrap();
+        assert!(tree.alive(), "the orphaned grandchild is still in the tree");
+        tree.kill();
+        tree.wait_gone(Duration::from_secs(10)).await;
+        assert!(!tree.alive(), "a process of the tree outlived the wait");
     }
 
     fn temp(name: &str) -> PathBuf {

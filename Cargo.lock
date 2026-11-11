@@ -5986,10 +5986,12 @@ dependencies = [
  "futures-util",
  "ring",
  "russh",
+ "rustix",
  "spelaion-driver-api",
  "spelaion-driver-postgres",
  "thiserror 2.0.21",
  "tokio",
+ "win32job",
 ]
 
 [[package]]
@@ -7662,6 +7664,16 @@ dependencies = [
  "objc2-system-configuration",
  "wasite",
  "web-sys",
+]
+
+[[package]]
+name = "win32job"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21b25acac91041257d64f5625690b626133e0ca9e4e17814552b5803b1a82f7c"
+dependencies = [
+ "thiserror 1.0.69",
+ "windows",
 ]
 
 [[package]]

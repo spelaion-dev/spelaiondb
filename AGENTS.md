@@ -131,7 +131,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128`.
   AWS SSM (ADR-050) is a tunnel file's `[ssm]` table: `ssm.rs` runs `aws ssm start-session` with
   an argument list (values checked, options as `--name=value`) and stops the CLI and its plugin
-  together; `tunnel.rs` uses it like the proxy. Its tests run the stand-in
+  together (their process group on Unix, a job object on Windows), a close waiting until both
+  have exited; `tunnel.rs` uses it like the proxy. Its tests run the stand-in
   `tests/support/fake_aws.rs` (the `spelaion-test-fake-aws` binary); a real AWS account is only
   tested by hand.
   Kubernetes (ADR-015) is a connection's `[kubernetes]` section, or a tunnel file's (a
