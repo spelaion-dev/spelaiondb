@@ -297,7 +297,7 @@ try {
         }, { capture: true });
       });
       await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
-      await wd.perform([{ type: "key", id: "kbd", actions: [{ type: "keyDown", value: "" }, { type: "keyUp", value: "" }] }]).catch((e) => console.log("[debug] perform:", e.message));
+      await wd.press("\ue039").catch((e) => console.log("[debug] press:", e.message));
       await new Promise((r) => setTimeout(r, 1500));
       console.log("[debug] root shot:", sh(`import -window root ${join(shots, "debug-root.png")} && echo saved`));
       console.log("[debug] readText after F9:", await wd.evaluate(() => window.__dbg));

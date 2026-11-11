@@ -62,7 +62,7 @@ jobs:
             status=failed
             if sudo apt-get update \
               && sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-                webkitgtk-webdriver xvfb openbox wmctrl xclip
+                webkitgtk-webdriver xvfb openbox wmctrl xclip x11-utils imagemagick
             then
               status=ready
             fi
@@ -91,7 +91,8 @@ jobs:
       # pushes to `dev`, like ci.yml's. It keeps tauri-driver too (~/.cargo/bin).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: true
+          cache-on-failure: true
       # Does nothing when the cache already has this version.
       - run: cargo install tauri-driver --locked --version 2.1.0
       - run: npm ci
@@ -128,6 +129,7 @@ jobs:
           timeout 30 bash -c 'until wmctrl -m > /dev/null 2>&1; do sleep 0.2; done'
           wmctrl -m
           set -o pipefail
+          export SMOKE_DEBUG_CLIPBOARD=1
           if ! node e2e/smoke-linux.mjs 2>&1 | tee "$RUNNER_TEMP/smoke-linux.log"; then
             step=$(sed -n 's/^FAILED at step "\(.*\)":.*/\1/p' "$RUNNER_TEMP/smoke-linux.log" | head -1)
             echo "::error title=Linux smoke test failed::${step:-see the log}"
