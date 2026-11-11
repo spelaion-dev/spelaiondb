@@ -130,6 +130,7 @@ jobs:
           wmctrl -m
           set -o pipefail
           export SMOKE_DEBUG_CLIPBOARD=1
+          export SMOKE_XCLIP_TARGET='text/plain;charset=utf-8'
           if ! node e2e/smoke-linux.mjs 2>&1 | tee "$RUNNER_TEMP/smoke-linux.log"; then
             step=$(sed -n 's/^FAILED at step "\(.*\)":.*/\1/p' "$RUNNER_TEMP/smoke-linux.log" | head -1)
             echo "::error title=Linux smoke test failed::${step:-see the log}"

@@ -49,7 +49,7 @@ const clipboard = {
   // process's output open, or whatever reads it never sees the end.
   set(text) {
     if (wayland) execFileSync("wl-copy", [], { input: text, stdio: ["pipe", "ignore", "ignore"] });
-    else execFileSync("xclip", ["-selection", "clipboard", "-in"], { input: text, stdio: ["pipe", "ignore", "ignore"] });
+    else execFileSync("xclip", ["-selection", "clipboard", "-in", ...(process.env.SMOKE_XCLIP_TARGET ? ["-t", process.env.SMOKE_XCLIP_TARGET] : [])], { input: text, stdio: ["pipe", "ignore", "ignore"] });
   },
   get() {
     return wayland
@@ -296,11 +296,15 @@ try {
           if (e.key === "F9") navigator.clipboard.readText().then((t) => (window.__dbg = "ok:" + t), (err) => (window.__dbg = "err:" + err));
         }, { capture: true });
       });
-      await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
-      await wd.press("\ue039").catch((e) => console.log("[debug] press:", e.message));
-      await new Promise((r) => setTimeout(r, 1500));
-      console.log("[debug] root shot:", sh(`import -window root ${join(shots, "debug-root.png")} && echo saved`));
-      console.log("[debug] readText after F9:", await wd.evaluate(() => window.__dbg));
+      for (const target of ["", "UTF8_STRING", "STRING", "text/plain", "text/plain;charset=utf-8"]) {
+        execFileSync("xclip", ["-selection", "clipboard", "-in", ...(target ? ["-t", target] : [])], { input: `via ${target || "default"} ñ`, stdio: ["pipe", "ignore", "ignore"] });
+        await wd.evaluate(() => (window.__dbg = "none"));
+        await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
+        await wd.press("\ue039").catch((e) => console.log("[debug] press:", e.message));
+        await new Promise((r) => setTimeout(r, 800));
+        console.log(`[debug] xclip -t ${target || "(default)"} -> TARGETS ${sh("xclip -selection clipboard -out -t TARGETS").replace(/\n/g, " ")} -> readText:`, JSON.stringify(await wd.evaluate(() => window.__dbg)));
+      }
+      clipboard.set("first_id,first_name\n1,Ann\n");
       console.log("[debug] hasFocus:", await wd.evaluate(() => document.hasFocus()));
     }
     await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
