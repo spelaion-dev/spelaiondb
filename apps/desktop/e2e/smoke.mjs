@@ -3744,6 +3744,19 @@ try {
     const roleRow = pgNode.locator(".leaf-row", { hasText: "smoke_account" });
     await roleRow.waitFor();
     await roleRow.click({ button: "right" });
+    // The menu stays inside the window, moved up when the row is near the bottom of the explorer.
+    {
+      const accountMenu = await page.locator(".object-menu").boundingBox();
+      const view = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+      assert.ok(
+        accountMenu.x >= 0 && accountMenu.y >= 0 && accountMenu.x + accountMenu.width <= view.width && accountMenu.y + accountMenu.height <= view.height,
+        `the account menu is inside the window: ${JSON.stringify({ accountMenu, view })}`,
+      );
+      await shot("sdb-246-account-menu");
+      const themeBeforeMenu = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+      await shot("sdb-246-account-menu-dark");
+      await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforeMenu);
+    }
     await page.getByRole("menuitem", { name: "Lock or unlock…" }).click();
     const lockRole = page.getByRole("dialog", { name: "Lock or unlock smoke_account" });
     await lockRole.getByText("It is not locked now.").waitFor();

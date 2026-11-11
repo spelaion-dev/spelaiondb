@@ -67,6 +67,7 @@ import type { PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } fro
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
+import { MENU_MARGIN, placeMenu, useMenuInWindow } from "../menuPlacement";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -194,6 +195,18 @@ function matchesFilter(name: string, filter: string): boolean {
   return filter === "" || name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
 }
 
+/** An explorer row's context menu: where it was opened when it fits, otherwise moved up or left
+ * to stay inside the window (a row at the bottom of a long explorer opens it near the edge). */
+function ObjectMenu({ at, className, children }: { at: { x: number; y: number }; className?: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useMenuInWindow(ref, at.x, at.y);
+  return (
+    <div ref={ref} className={className ? `grid-menu object-menu ${className}` : "grid-menu object-menu"} role="menu" style={{ position: "fixed", left: at.x, top: at.y }}>
+      {children}
+    </div>
+  );
+}
+
 /** A separate submenu, positioned outside the scrollable explorer menu. */
 function GenerateMenu({ children }: { children: ReactNode }) {
   const { t } = useTranslation("shell");
@@ -205,10 +218,9 @@ function GenerateMenu({ children }: { children: ReactNode }) {
     const position = () => {
       if (!trigger.current || !submenu.current) return;
       const anchor = trigger.current.getBoundingClientRect();
-      const rect = submenu.current.getBoundingClientRect();
-      const x = anchor.right + rect.width <= window.innerWidth - 8 ? anchor.right : anchor.left - rect.width;
-      submenu.current.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-      submenu.current.style.top = `${Math.max(8, Math.min(anchor.top, window.innerHeight - rect.height - 8))}px`;
+      const width = submenu.current.getBoundingClientRect().width;
+      const x = anchor.right + width <= window.innerWidth - MENU_MARGIN ? anchor.right : anchor.left - width;
+      placeMenu(submenu.current, x, anchor.top);
     };
     position();
     window.addEventListener("resize", position);
@@ -490,14 +502,14 @@ function LeafRow({
         <span className="muted small">{detail}</span>
       </div>
       {menu && target && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <DropMenuItem
             onClick={() => {
               setMenu(null);
               setDropping(true);
             }}
           />
-        </div>
+        </ObjectMenu>
       )}
       {dropping && target && (
         <DropDialog
@@ -675,7 +687,7 @@ function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
         <span className="muted small">{where}</span>
       </div>
       {menu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <button role="menuitem" onClick={open}>
             {t("bookmarkOpenMenu")}
           </button>
@@ -692,7 +704,7 @@ function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
           <button role="menuitem" title="Delete" onClick={remove}>
             {t("removeBookmark")}
           </button>
-        </div>
+        </ObjectMenu>
       )}
       {error && (
         <p className="error small" role="alert">
@@ -962,12 +974,12 @@ function AccountRow({ object, kind, actions, onAct }: {
         {object.detail && <span className="muted small">{object.detail}</span>}
       </div>
       {menu && any && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           {canPassword && <button role="menuitem" onClick={() => act("password")}>{t("accounts.passwordMenu")}</button>}
           {canLock && <button role="menuitem" onClick={() => act("lock")}>{t("accounts.lockMenu")}</button>}
           {canPrivileges && <button role="menuitem" onClick={() => act("privileges")}>{t("privileges.menu")}</button>}
           {canDrop && <DropMenuItem onClick={() => act("drop")} />}
-        </div>
+        </ObjectMenu>
       )}
     </div>
   );
@@ -1058,7 +1070,7 @@ function Folder({
         <span className="muted small">{count.toLocaleString(i18n.language)}</span>
       </div>
       {menu && (onConfigureFilter || create) && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           {create && (
             <button
               role="menuitem"
@@ -1081,7 +1093,7 @@ function Folder({
               {t("configureFilter")}
             </button>
           )}
-        </div>
+        </ObjectMenu>
       )}
       {open && <div className="children">{children}</div>}
     </div>
@@ -2188,7 +2200,7 @@ function SchemaNode({
         )}
       </div>
       {menu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <CopyMenuItems
             session={session}
             paths={[{ schema: "", names: [schema] }]}
@@ -2274,7 +2286,7 @@ function SchemaNode({
               />
             </>
           )}
-        </div>
+        </ObjectMenu>
       )}
       {creatingTable && (
         <CreateTableDialog
@@ -2632,16 +2644,7 @@ function ObjectNode({
         )}
       </div>
       {menu && (
-        <div
-          className="grid-menu object-menu explorer-relation-menu"
-          role="menu"
-          style={{
-            position: "fixed",
-            left: Math.max(8, Math.min(menu.x, window.innerWidth - 300)),
-            top: Math.max(8, Math.min(menu.y, window.innerHeight - 250)),
-            maxHeight: Math.min(window.innerHeight - Math.max(8, Math.min(menu.y, window.innerHeight - 250)) - 8, 480),
-          }}
-        >
+        <ObjectMenu at={menu} className="explorer-relation-menu">
           <button role="menuitem" onClick={preview}>
             {t("sql.preview")}
           </button>
@@ -2748,7 +2751,7 @@ function ObjectNode({
               </button>
             ))}
           </GenerateMenu>
-        </div>
+        </ObjectMenu>
       )}
       {error && (
         <p className="error small" role="alert">
@@ -2984,7 +2987,7 @@ function ColumnRow({
         </span>
       </div>
       {menu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
           <button
             role="menuitem"
@@ -3020,7 +3023,7 @@ function ColumnRow({
                 {t(`newIndex.${kind}`, { columns: indexColumns.join(", ") })}
               </button>
             ))}
-        </div>
+        </ObjectMenu>
       )}
       {editing && (
         <StructureDialog
@@ -3140,7 +3143,7 @@ function IndexNode({
         )}
       </div>
       {menu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <button role="menuitem" onClick={openDefinition}>
             {t("openDefinition")}
           </button>
@@ -3152,7 +3155,7 @@ function IndexNode({
               setDropping(true);
             }}
           />
-        </div>
+        </ObjectMenu>
       )}
       {dropping && (
         <DropDialog
@@ -3291,11 +3294,7 @@ function SchemaObjectNode({
         {detail && <span className="muted small">{detail}</span>}
       </div>
       {menu && (
-        <div
-          className="grid-menu object-menu"
-          role="menu"
-          style={{ position: "fixed", left: menu.x, top: menu.y }}
-        >
+        <ObjectMenu at={menu}>
           <button role="menuitem" onClick={() => void openDefinition()}>
             {t("openDefinition")}
           </button>
@@ -3329,7 +3328,7 @@ function SchemaObjectNode({
             }}
           />
           <FilterMenuItems kind="objects" names={[object.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
-        </div>
+        </ObjectMenu>
       )}
       {dropping && (
         <DropDialog

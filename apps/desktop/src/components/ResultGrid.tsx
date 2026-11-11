@@ -20,6 +20,7 @@ import { ColumnStatsPopover } from "./ColumnStatsPopover";
 import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
+import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 
 const ROW_H = 24;
 const HEADER_H = 34;
@@ -60,14 +61,6 @@ function drawKeyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, color:
   ctx.lineJoin = "round";
   for (const path of keyIconPaths) ctx.stroke(path);
   ctx.restore();
-}
-const MENU_MARGIN = 8;
-
-/** Keep a measured popup inside the window, including when the window is resized. */
-function placeMenu(menu: HTMLElement, x: number, y: number) {
-  const rect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(MENU_MARGIN, Math.min(x, window.innerWidth - rect.width - MENU_MARGIN))}px`;
-  menu.style.top = `${Math.max(MENU_MARGIN, Math.min(y, window.innerHeight - rect.height - MENU_MARGIN))}px`;
 }
 
 interface Cell {
