@@ -368,8 +368,40 @@ async fn sqlserver() -> Option<Session> {
     ))
 }
 
-/// Minutes of work for SQL Server: a cross join whose every row must be computed.
-const MSSQL_SLOW: &str = "select count_big(*) from sys.all_objects a cross join sys.all_objects b cross join sys.all_objects c where checksum(a.object_id, b.object_id, c.object_id) = 7";
+/// Ten rows built in the statement itself, so SQL Server reads no table and takes no lock.
+macro_rules! mssql_digits {
+    () => {
+        "(values (0), (1), (2), (3), (4), (5), (6), (7), (8), (9))"
+    };
+}
+
+/// Minutes of work for SQL Server: a cross join of ten billion rows, every one computed.
+/// It reads no table: a scan of `sys.all_objects` locks catalog rows that other tests'
+/// DDL locks too, and SQL Server then picks it as a deadlock victim (error 1205) before
+/// the timeout it is there to provoke.
+const MSSQL_SLOW: &str = concat!(
+    "select count_big(*) from ",
+    mssql_digits!(),
+    " a(x) cross join ",
+    mssql_digits!(),
+    " b(x) cross join ",
+    mssql_digits!(),
+    " c(x) cross join ",
+    mssql_digits!(),
+    " d(x) cross join ",
+    mssql_digits!(),
+    " e(x) cross join ",
+    mssql_digits!(),
+    " f(x) cross join ",
+    mssql_digits!(),
+    " g(x) cross join ",
+    mssql_digits!(),
+    " h(x) cross join ",
+    mssql_digits!(),
+    " i(x) cross join ",
+    mssql_digits!(),
+    " j(x) where checksum(a.x, b.x, c.x, d.x, e.x, f.x, g.x, h.x, i.x, j.x) = 7"
+);
 
 #[tokio::test]
 async fn sqlserver_reads_roll_back_explain_without_running_and_time_out() {
@@ -390,7 +422,13 @@ async fn sqlserver_reads_roll_back_explain_without_running_and_time_out() {
     let started = Instant::now();
     let r = session
         .run_read_only(
-            "select a.object_id from sys.all_objects a cross join sys.all_objects b",
+            concat!(
+                "select a.x from ",
+                mssql_digits!(),
+                " a(x) cross join ",
+                mssql_digits!(),
+                " b(x)"
+            ),
             &limits(5),
         )
         .await
