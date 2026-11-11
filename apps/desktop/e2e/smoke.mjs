@@ -935,6 +935,10 @@ try {
   await page.mouse.click(edgeBox.x + edgeBox.width - 30, edgeBox.y + edgeBox.height - 30, { button: "right" });
   const edgeMenu = panel.locator(".result-grid-menu");
   await edgeMenu.waitFor();
+  // "100 rows" shows before the statement has finished; "Export selection…" appears in the
+  // menu once the result is complete. Every item is there before the menu is measured.
+  await edgeMenu.getByRole("menuitem", { name: "Export selection…" }).waitFor();
+  await settledBox(edgeMenu);
   const withinWindow = async (locator) => {
     const box = await locator.boundingBox();
     const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
@@ -951,12 +955,23 @@ try {
   await edgeCopy.waitFor();
   await withinWindow(edgeCopy);
   assert.ok(await hitTarget(edgeCopy.getByRole("menuitem", { name: "Copy as SQL INSERT" })));
-  await edgeMenu.getByRole("menuitem", { name: "Filter ▸" }).hover();
+  const filterItem = edgeMenu.getByRole("menuitem", { name: "Filter ▸" });
+  await filterItem.hover();
   const edgeSubmenu = panel.getByRole("menu", { name: "Filter", exact: true });
   await edgeSubmenu.waitFor();
   await withinWindow(edgeSubmenu);
   const customFilter = edgeSubmenu.getByRole("menuitem", { name: "Custom filter…" });
   assert.ok(await hitTarget(customFilter));
+  // Into the submenu the way a person goes: sideways from "Filter ▸" into the submenu, which
+  // sits beside it, then along the submenu to the item, never over the menu's other items.
+  {
+    const from = await filterItem.boundingBox();
+    const sub = await settledBox(edgeSubmenu);
+    const target = await settledBox(customFilter);
+    const rowY = Math.min(Math.max(from.y + from.height / 2, sub.y + 4), sub.y + sub.height - 4);
+    await page.mouse.move(target.x + target.width / 2, rowY, { steps: 8 });
+    await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 8 });
+  }
   await customFilter.click();
   await page.getByRole("dialog", { name: "Custom filter" }).getByRole("button", { name: "Cancel" }).click();
   await page.keyboard.press("Control+w");
