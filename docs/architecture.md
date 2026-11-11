@@ -65,7 +65,8 @@ See [execution plans](execution-plans.md) for metric semantics, capabilities and
 **A query from an agent (v0.1)**
 1. The agent launches `spelaiondb mcp --profile <profile>`.
 2. `spelaiondb mcp` loads the same config and keychain, and only sees the connections with
-   `mcp.exposed = true`.
+   `mcp.exposed = true`. It reads the configuration and the trust store again at the start of
+   every tool call, so the user's changes apply to a server that is already running.
 3. Every `run_query` goes through the classifier, runs in a read-only transaction with
    limits, and is recorded in the audit log.
 4. On connections with `mcp.writes = "allow"`, `execute_write` runs one checked write in its
