@@ -49,6 +49,9 @@ pub struct ReadResult {
     pub truncated: bool,
     pub kind: ReadKind,
     pub elapsed: Duration,
+    /// Positions of the columns the connection masks (ADR-051): their values in `rows` are
+    /// the mask (NULL stays NULL).
+    pub masked: Vec<usize>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -121,7 +124,7 @@ impl Session {
             "postgres" => limits.timeout + CLIENT_GRACE,
             _ => limits.timeout,
         };
-        let (columns, rows, truncated) = match tokio::time::timeout(client_timeout, run).await {
+        let (columns, mut rows, truncated) = match tokio::time::timeout(client_timeout, run).await {
             Ok(result) => result?,
             Err(_) => {
                 let _ = self.cancel().await;
@@ -131,12 +134,18 @@ impl Session {
                 return Err(ReadError::Timeout(limits.timeout));
             }
         };
+        // Agents never get a masked column's values (ADR-051). A plan shows the plan, not rows.
+        let masked = match kind {
+            ReadKind::Explain => Vec::new(),
+            ReadKind::Query | ReadKind::Show => self.masking().mask_rows(&columns, &mut rows),
+        };
         Ok(ReadResult {
             columns,
             rows,
             truncated,
             kind,
             elapsed: started.elapsed(),
+            masked,
         })
     }
 

@@ -723,3 +723,88 @@ async fn an_agents_read_session_refuses_a_setup_that_writes() {
     assert!(!refused(&result), "{}", body(&result));
     assert_eq!(rows(&db), 1);
 }
+
+/// Column masking (ADR-051) on an agent's query: the masked column's values never reach the
+/// agent, whatever the output format, whether the rule is the connection's, the user's or a
+/// connection type's, and the connection's `never` cannot unmask what the type requires.
+#[tokio::test]
+async fn agents_get_the_mask_never_the_value() {
+    let user_dir = temp("masking");
+    let db = user_dir.join("people.db");
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            "create table people (id integer primary key, email text, card text, ssn text);
+             insert into people values (1, 'ada@example.com', '4111111111111111', '123-45-6789'),
+                                       (2, null, '5500000000000004', '987-65-4321');",
+        )
+        .unwrap();
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    std::fs::write(
+        user_dir.join("connection-types.toml"),
+        "schema_version = 1\n[types.pii]\nname = \"PII\"\nmask_columns = [\"ssn\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        user_dir.join("user.toml"),
+        "schema_version = 1\n[masking]\nalways = [\"card\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        user_dir.join("connections/people.toml"),
+        format!(
+            "schema_version = 1\nname = \"People\"\nengine = \"sqlite\"\nenv = \"pii\"\ndatabase = '{}'\n[mcp]\nexposed = true\n[masking]\nalways = [\"*email*\"]\nnever = [\"ssn\"]\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let server = server(None, &user_dir, false);
+    let leaks = [
+        "ada@example.com",
+        "4111111111111111",
+        "123-45-6789",
+        "987-65-4321",
+    ];
+    for sql in [
+        "select * from people order by id",
+        "select email as contact_email, card, ssn from people",
+        "select id, ssn from people where email = 'ada@example.com'",
+    ] {
+        for format in [OutputFormat::Json, OutputFormat::Toon] {
+            let text = body(
+                &server
+                    .read(&call("run_query"), "~/people", sql, Some(format))
+                    .await
+                    .unwrap(),
+            );
+            for leak in leaks {
+                assert!(!text.contains(leak), "{sql} leaked {leak}: {text}");
+            }
+            assert!(text.contains(spelaion_core::MASK), "{text}");
+        }
+    }
+    let json = body(
+        &server
+            .read(
+                &call("run_query"),
+                "~/people",
+                "select id, email, card, ssn from people order by id",
+                Some(OutputFormat::Json),
+            )
+            .await
+            .unwrap(),
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    // NULL stays NULL; the id is not masked; every masked column says so.
+    assert_eq!(
+        parsed["rows"],
+        serde_json::json!([
+            [1, "••••••", "••••••", "••••••"],
+            [2, null, "••••••", "••••••"]
+        ])
+    );
+    assert_eq!(parsed["columns"][0].get("masked"), None);
+    for c in 1..4 {
+        assert_eq!(parsed["columns"][c]["masked"], true, "{json}");
+    }
+}

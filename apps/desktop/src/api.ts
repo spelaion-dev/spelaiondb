@@ -58,6 +58,7 @@ import {
   type ChartLabelItem,
   type ChartPointsItem_Serialize,
   type ColumnStatsItem_Serialize,
+  type RevealedCellItem_Serialize,
   type DataSearchEventItem_Deserialize,
   type DataSearchLimitsItem,
   type DataSearchRequestItem,
@@ -174,6 +175,7 @@ export type SelectionStatsItem = SelectionStatsItem_Serialize;
 export type ChartPointsItem = ChartPointsItem_Serialize;
 export type { ChartAggregateItem, ChartKindItem, ChartLabelItem };
 export type ColumnStatsItem = ColumnStatsItem_Serialize;
+export type RevealedCellItem = RevealedCellItem_Serialize;
 export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize;
 export type TopValueItem = TopValueItem_Serialize;
 export type { ColumnStatsTarget, StatStateItem };

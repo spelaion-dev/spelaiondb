@@ -25,12 +25,30 @@
         }
       },
       "type": "object"
+    },
+    "UserMasking": {
+      "additionalProperties": false,
+      "description": "The user's own masking patterns, for every connection (ADR-051).",
+      "properties": {
+        "always": {
+          "description": "Columns to mask, as a connection's `[masking] always` patterns. A personal\nconnection's `never` may leave one of them visible; a repository connection's cannot.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Personal configuration: `<user config>/spelaiondb/user.toml`. Never goes to git.",
   "properties": {
+    "masking": {
+      "$ref": "#/$defs/UserMasking",
+      "description": "Columns masked on every connection on this computer (ADR-051)."
+    },
     "schema_version": {
       "default": 1,
       "format": "uint32",

@@ -453,6 +453,8 @@ function ConnectionForm(props: {
     ignoreSetupErrors: false,
     defaultSchema: "",
     isolation: null,
+    maskAlways: [],
+    maskNever: [],
   });
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
   // Types and what they do come from the core (ADR-029).
@@ -1228,6 +1230,36 @@ function ConnectionForm(props: {
               <p className="banner" role="alert">{t("fields.mcpProdWarning")}</p>
             )}
             <p className="muted small">{agentsWrite ? t("fields.mcpWriteHint") : t("fields.mcpHint")}</p>
+          </fieldset>
+          <fieldset>
+            <legend>{t("sections.masking")}</legend>
+            {/* ADR-051: one pattern per line; the core trims them and checks them. */}
+            <Field label={t("fields.maskAlways")}>
+              <textarea
+                className="masking-patterns"
+                name="maskAlways"
+                rows={3}
+                spellCheck={false}
+                value={draft.maskAlways.join("\n")}
+                placeholder={t("fields.maskAlwaysPlaceholder")}
+                onChange={(e) => update({ maskAlways: e.target.value.split("\n") })}
+              />
+            </Field>
+            <Field label={t("fields.maskNever")}>
+              <textarea
+                className="masking-patterns"
+                name="maskNever"
+                rows={2}
+                spellCheck={false}
+                value={draft.maskNever.join("\n")}
+                placeholder={t("fields.maskNeverPlaceholder")}
+                onChange={(e) => update({ maskNever: e.target.value.split("\n") })}
+              />
+            </Field>
+            {(selectedType?.maskColumns.length ?? 0) > 0 && (
+              <p className="muted small">{t("fields.maskTypeRequires", { type: selectedType?.name ?? "", patterns: selectedType?.maskColumns.join(", ") ?? "" })}</p>
+            )}
+            <p className="muted small">{t("fields.maskingHint")}</p>
           </fieldset>
           <fieldset>
             <legend>{t("sections.onThisComputer")}</legend>

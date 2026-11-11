@@ -53,6 +53,7 @@ async fn open_with_setup(
         statement_timeout: Some(Duration::from_secs(5)),
         session: setup,
         mcp: Default::default(),
+        masking: Default::default(),
     };
     Some(
         open_connection(

@@ -3472,9 +3472,7 @@ async fn table_filter_condition(
             .get(column as usize)
             .ok_or("no such column")?;
         let typed = match row {
-            Some(row) => stored
-                .value_at(row as usize, column as usize)
-                .ok_or("no such row")?,
+            Some(row) => spelaion_core::cell_filter_value(&stored, row as usize, column as usize)?,
             None => spelaion_core::typed_value(&value, meta.logical),
         };
         (meta.name.clone(), meta.logical, typed)
@@ -3660,6 +3658,27 @@ async fn view_cell(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// One masked cell's value, on the user's explicit request (ADR-051): read by the core from
+/// what it keeps aside, without running anything. Shown in a popover, never in the grid.
+#[tauri::command]
+#[specta::specta]
+async fn reveal_cell(
+    result: u32,
+    row: u32,
+    column: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<RevealedCellItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    stored
+        .reveal(row as usize, column as usize)
+        .map(RevealedCellItem::from)
+        .map_err(|e| e.to_string())
 }
 
 /// Saves a cell's value to `path` (bytes as stored, other values as UTF-8 text); returns the
@@ -5138,6 +5157,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             cancel_export,
             cell_value,
             view_cell,
+            reveal_cell,
             save_cell_value,
             value_picker,
             pick_time,

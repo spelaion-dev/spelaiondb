@@ -32,6 +32,9 @@ pub enum ViewError {
     NotANumber { column: usize, value: String },
     #[error("apply or discard the pending edits first: they name rows by their place on the page")]
     PendingEdits,
+    /// The column is masked (ADR-051): its values are not in the result to order by.
+    #[error("column \"{0}\" is masked: it cannot be sorted by")]
+    Masked(String),
 }
 
 /// Row numbers of `values` in sorted order.

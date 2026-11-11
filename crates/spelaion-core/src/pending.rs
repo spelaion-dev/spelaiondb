@@ -305,6 +305,10 @@ impl PendingEdits {
             }
             PendingEdit::Bulk { block, action } => {
                 page.check_block(&block)?;
+                // Even a bulk edit that would leave the mask as it is (trim) acts on it.
+                for &column in &block.columns {
+                    page.check_unmasked(column)?;
+                }
                 let planned = self.bulk(&page, &block, &action)?;
                 self.cell_changes(&page, planned)
             }
@@ -322,6 +326,19 @@ impl PendingEdits {
                 self.cell_changes(&page, planned)
             }
         };
+        // A masked cell holds the mask, not its value (ADR-051): editing it, or computing a
+        // value from it (fill down, trim, case), would write the mask over the data. Taking a
+        // pending value back (Revert, Discard, undo) is not an edit of the cell.
+        for change in &changes {
+            if let Change::Cell {
+                column,
+                after: Some(_),
+                ..
+            } = change
+            {
+                page.check_unmasked(*column)?;
+            }
+        }
         let changed = changes.len();
         if changed > 0 {
             self.record(changes, typing);
@@ -660,9 +677,26 @@ impl Page<'_> {
     }
 
     fn check_insert(&self, values: &[(usize, CellInput)]) -> Result<(), EditError> {
-        values
-            .iter()
-            .try_for_each(|(column, _)| self.check_column(*column))
+        values.iter().try_for_each(|(column, input)| {
+            self.check_column(*column)?;
+            // A new row's masked column is typed by the user; the mask itself, copied from a
+            // row of the page (duplicating it), would be written as data (ADR-051).
+            if self.result.is_masked(*column)
+                && matches!(input, CellInput::Text(text) if text == crate::masking::MASK)
+            {
+                return Err(EditError::Masked(self.name(*column).to_string()));
+            }
+            Ok(())
+        })
+    }
+
+    /// Masked cells cannot be edited (ADR-051).
+    fn check_unmasked(&self, column: usize) -> Result<(), EditError> {
+        if self.result.is_masked(column) {
+            Err(EditError::Masked(self.name(column).to_string()))
+        } else {
+            Ok(())
+        }
     }
 
     /// Refuses a value of a bulk edit or a paste that the column's type cannot take, before

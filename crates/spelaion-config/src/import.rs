@@ -429,6 +429,7 @@ pub fn import_plan(
             session: SessionDraft::default(),
             mcp_exposed: false,
             mcp_writes: false,
+            masking: Default::default(),
         },
         password: if file {
             None

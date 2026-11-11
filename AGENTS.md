@@ -210,6 +210,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   tests that try to get around it (`tests/export_stream.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
   database, one transaction, one row per statement).
+  `masking.rs` is column masking (ADR-051): the session compiles the connection's rules
+  (`spelaion-config::masking` combines its `[masking]`, the user's `user.toml` and its type's
+  `mask_columns`; required patterns only add up) and `ResultStore` masks every batch as it
+  arrives, keeping the originals aside for `StoredResult::reveal` only. Paths that skip the
+  store (streaming exports, column statistics, the data search, `run_read_only`) apply
+  `Session::masking` themselves; core reads it parses go through `run_parsed`. Like
+  `classify.rs`, any change there needs tests that try to get around it (`tests/masking.rs`).
   `value_view.rs` is the cell viewer's value, read from the stored result when the viewer opens
   (past `VIEW_LIMIT` only with "load anyway"): images recognised by their bytes (PNG, JPEG, GIF,
   WebP only, handed over as a `data:` URL; never SVG or HTML), XML pretty-printed as text, a value

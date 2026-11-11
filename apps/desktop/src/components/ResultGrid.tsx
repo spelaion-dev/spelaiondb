@@ -16,6 +16,7 @@ import { Icon, PATHS } from "./Icons";
 import { ReferencesPanel } from "./ReferencesPanel";
 import { CalcPanel } from "./CalcPanel";
 import { ColumnStatsPopover } from "./ColumnStatsPopover";
+import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
 
@@ -298,6 +299,8 @@ export function ResultGrid({
   const [chooser, setChooser] = useState<{ x: number; y: number } | null>(null);
   /** A table data tab column's statistics popover, where it was opened. */
   const [columnStats, setColumnStats] = useState<{ x: number; y: number; column: number } | null>(null);
+  /** A masked cell revealed on request (ADR-051): its value lives only in the popover. */
+  const [reveal, setReveal] = useState<{ x: number; y: number; row: number; col: number } | null>(null);
   const gridLook = usePreferences((s) => s.grid);
   /** The find bar (Ctrl+F): what is searched, and what the core found. */
   const [find, setFind] = useState<{ text: string; matchCase: boolean } | null>(null);
@@ -365,6 +368,11 @@ export function ResultGrid({
   /** Opens the inline editor on a cell, with its pending value or the one loaded. */
   async function startEdit(cell: Cell) {
     if (!editing || editing.deleted.includes(cell.row) || editing.busy || sorting) return;
+    const meta = result.columns[cell.col];
+    if (meta?.masked) {
+      setNotice({ text: t("masking.noEdit", { column: meta.name }), error: true });
+      return;
+    }
     const request = ++editRequest.current;
     const key = `${cell.row}:${cell.col}`;
     setSelection({ anchor: cell, focus: cell });
@@ -404,6 +412,7 @@ export function ResultGrid({
       const initial = values.flatMap((value, column): CellEditItem[] => {
         const key = `${row}:${column}`;
         if (editing.primaryKey.includes(result.columns[column]?.name ?? "")) return [];
+        if (result.columns[column]?.masked) return [];
         return [{ column, value: key in editing.cells ? editing.cells[key] ?? null : value }];
       });
       setInserting({ values: initial });
@@ -656,7 +665,8 @@ export function ResultGrid({
         ctx.fillStyle = c.muted;
         text = gridLook.nullText ? "NULL" : "";
       } else {
-        ctx.fillStyle = c.text;
+        // A masked value (ADR-051) holds the mask, not data: drawn like NULL.
+        ctx.fillStyle = result.columns[col]?.masked && !edited ? c.muted : c.text;
         text = value.replace(/[\r\n\t]+/g, " ");
       }
       // A foreign key value: a link at the right, which opens the referenced row.
@@ -772,7 +782,8 @@ export function ResultGrid({
       }
       ctx.font = TYPE_FONT;
       ctx.fillStyle = c.muted;
-      ctx.fillText(fit(ctx, meta.nativeType, w - PAD * 2), x + PAD, 26);
+      const typeLine = meta.masked ? `${meta.nativeType} · ${t("masking.header")}` : meta.nativeType;
+      ctx.fillText(fit(ctx, typeLine, w - PAD * 2), x + PAD, 26);
       ctx.fillStyle = c.line;
       ctx.fillRect(Math.round(x + w) - 1, 0, 1, HEADER_H);
     };
@@ -1281,6 +1292,11 @@ export function ResultGrid({
   function sortBy(sort: SortState | undefined) {
     setMenu(null);
     if (result.paging?.loading) return;
+    const sortColumn = sort ? result.columns[sort.column] : undefined;
+    if (sortColumn?.masked) {
+      setNotice({ text: t("masking.noSort", { column: sortColumn.name }), error: true });
+      return;
+    }
     if (editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) {
       setNotice({ text: t("edit.applyFirst"), error: true });
       return;
@@ -1814,6 +1830,7 @@ export function ResultGrid({
               setFrozen(!frozen);
             }}
             onSort={(sort) => sortBy(sort)}
+            masked={result.columns[menu.header ?? 0]?.masked ?? false}
           >
             <GridSubmenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
@@ -1923,6 +1940,19 @@ export function ResultGrid({
               )}
               <hr />
             </>
+          )}
+          {menu.cell && result.columns[menu.cell.col]?.masked && (
+            <button
+              role="menuitem"
+              title={t("masking.revealHint")}
+              onClick={() => {
+                const cell = menu.cell;
+                setMenu(null);
+                if (cell) setReveal({ x: menu.x, y: menu.y, row: cell.row, col: cell.col });
+              }}
+            >
+              {t("masking.reveal")}
+            </button>
           )}
           <button
             role="menuitem"
@@ -2121,6 +2151,19 @@ export function ResultGrid({
           onNext={() => void goToMatch("next")}
           onPrevious={() => void goToMatch("previous")}
           onClose={closeFind}
+        />
+      )}
+      {reveal && (
+        <RevealPopover
+          x={reveal.x}
+          y={reveal.y}
+          resultId={result.id}
+          row={reveal.row}
+          column={reveal.col}
+          onClose={() => {
+            setReveal(null);
+            scrollerRef.current?.focus();
+          }}
         />
       )}
       {columnStats && tableData && (
@@ -2476,6 +2519,8 @@ function HeaderMenuItems(props: {
   onShowAll(): void;
   onFreeze(): void;
   onSort(sort: SortState | undefined): void;
+  /** The column is masked (ADR-051): it cannot be sorted by. */
+  masked?: boolean;
   /** Column-wide copies, after the hide and freeze entries. */
   children?: React.ReactNode;
 }) {
@@ -2502,8 +2547,8 @@ function HeaderMenuItems(props: {
       {props.children && <hr />}
       {props.children}
       <hr />
-      <button role="menuitem" onClick={() => props.onSort({ column: props.column, descending: false })}>{t("results.sortAsc")}</button>
-      <button role="menuitem" onClick={() => props.onSort({ column: props.column, descending: true })}>{t("results.sortDesc")}</button>
+      <button role="menuitem" disabled={props.masked} title={props.masked ? t("masking.noSortHint") : undefined} onClick={() => props.onSort({ column: props.column, descending: false })}>{t("results.sortAsc")}</button>
+      <button role="menuitem" disabled={props.masked} title={props.masked ? t("masking.noSortHint") : undefined} onClick={() => props.onSort({ column: props.column, descending: true })}>{t("results.sortDesc")}</button>
       {props.sorted && <button role="menuitem" onClick={() => props.onSort(undefined)}>{t("results.sortClear")}</button>}
     </>
   );

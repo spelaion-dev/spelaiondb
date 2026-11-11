@@ -1295,5 +1295,21 @@
     },
     "readOnly": "This connection is read-only: running a file is refused.",
     "confirm": "Run file"
+  },
+  "masking": {
+    "header": "masked",
+    "reveal": "Reveal value",
+    "revealHint": "Show this cell's value here only: the grid, copies and exports stay masked",
+    "revealTitle": "Value of {{column}}",
+    "revealNote": "Shown only here. The grid, copies, exports and agents still get the mask.",
+    "revealCut": "Only the first 10,000 characters are shown.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "close": "Close (Esc)",
+    "null": "NULL",
+    "noSort": "\"{{column}}\" is masked: it cannot be sorted by.",
+    "noEdit": "\"{{column}}\" is masked: its cells cannot be edited.",
+    "noSortHint": "Masked columns cannot be sorted by",
+    "statsNote": "This column is masked: its values are shown as the mask."
   }
 }

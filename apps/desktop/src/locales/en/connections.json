@@ -28,7 +28,8 @@
     "about": "About this connection",
     "session": "Defaults",
     "setup": "Setup statements",
-    "onThisComputer": "On this computer"
+    "onThisComputer": "On this computer",
+    "masking": "Column masking"
   },
   "fields": {
     "name": "Name",
@@ -123,7 +124,13 @@
     "sessionSetup": "Run when a session opens",
     "ignoreSetupErrors": "Ignore errors in these statements",
     "sessionSetupHint": "Run on every new session, before anything else, including after a reconnect. They are not your queries: they are not in the history and nothing you ran is run again.",
-    "sessionSetupRestricted": "On this connection they may only read and change session settings (search path, time zone, role…): a statement that writes stops the session from opening."
+    "sessionSetupRestricted": "On this connection they may only read and change session settings (search path, time zone, role…): a statement that writes stops the session from opening.",
+    "maskAlways": "Mask these columns",
+    "maskAlwaysPlaceholder": "*password*\nemail\ncard_*",
+    "maskNever": "Leave these columns visible",
+    "maskNeverPlaceholder": "email_verified",
+    "maskTypeRequires": "The {{type}} type always masks: {{patterns}}.",
+    "maskingHint": "One pattern per line, matched against column names ignoring case: * is any characters, ? one. Masked values show as •••••• in the grid, copies, exports, statistics and agents' answers; you can reveal one cell at a time. \"Leave visible\" exempts your own patterns here, never a connection type's. Masking keeps values off the screen, not away from SQL: an alias such as SELECT email AS e gets past it, so use the database's permissions to keep data from people."
   },
   "tls": {
     "disable": "Disabled",

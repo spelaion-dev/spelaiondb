@@ -118,16 +118,23 @@ fn json_string(s: &str) -> String {
 
 /// The result as one JSON object: `columns` (name and type), `rows` (one array of values
 /// per row), `row_count`, `more_rows` and `elapsed_ms`. Decimals are strings, so no digit is
-/// lost to a client that reads numbers as floats.
+/// lost to a client that reads numbers as floats. A masked column (ADR-051) says
+/// `"masked":true`: its values are the mask, not data.
 fn result_json(result: &ReadResult) -> String {
     let columns = result
         .columns
         .iter()
-        .map(|c| {
+        .enumerate()
+        .map(|(i, c)| {
             format!(
-                "{{\"name\":{},\"type\":{}}}",
+                "{{\"name\":{},\"type\":{}{}}}",
                 json_string(&c.name),
-                json_string(&c.native_type)
+                json_string(&c.native_type),
+                if result.masked.contains(&i) {
+                    ",\"masked\":true"
+                } else {
+                    ""
+                }
             )
         })
         .collect::<Vec<_>>()
@@ -243,6 +250,20 @@ fn result_toon(result: &ReadResult) -> String {
                 toon_string(&c.native_type, false)
             ));
         }
+        // Masked columns (ADR-051): their values are the mask, not data.
+        let masked: Vec<String> = result
+            .masked
+            .iter()
+            .filter_map(|&i| result.columns.get(i))
+            .map(|c| toon_string(&c.name, false))
+            .collect();
+        if !masked.is_empty() {
+            out.push_str(&format!(
+                "masked_columns[{}]: {}\n",
+                masked.len(),
+                masked.join(",")
+            ));
+        }
         let mut rows = String::new();
         let mut shown = 0;
         for row in &result.rows {
@@ -307,7 +328,29 @@ mod tests {
             truncated,
             kind: ReadKind::Query,
             elapsed: Duration::from_millis(7),
+            masked: Vec::new(),
         }
+    }
+
+    #[test]
+    fn masked_columns_are_marked() {
+        let mut masked = result(
+            vec![vec![Value::Int(1), Value::Text(spelaion_core::MASK.into())]],
+            false,
+        );
+        masked.masked = vec![1];
+        let json = result_json(&masked);
+        assert!(
+            json.starts_with(
+                "{\"columns\":[{\"name\":\"id\",\"type\":\"int4\"},{\"name\":\"note\",\"type\":\"text\",\"masked\":true}]"
+            ),
+            "{json}"
+        );
+        let toon = result_toon(&masked);
+        assert!(
+            toon.contains("\nmasked_columns[1]: note\nrows[1]{id,note}:\n"),
+            "{toon}"
+        );
     }
 
     #[test]

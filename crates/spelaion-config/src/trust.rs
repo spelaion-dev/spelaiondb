@@ -180,6 +180,11 @@ fn connection_types_snapshot(file: &ConnectionTypesFile) -> Snapshot {
                 out.insert(field(name), "true".into());
             }
         }
+        // ADR-051's masked columns, only when there are some: older snapshots stay unchanged,
+        // and adding, changing or removing one is a change to review.
+        if !kind.mask_columns.is_empty() {
+            out.insert(field("mask_columns"), kind.mask_columns.join("\n"));
+        }
     }
     out
 }

@@ -69,6 +69,27 @@
       },
       "type": "object"
     },
+    "MaskingConfig": {
+      "additionalProperties": false,
+      "description": "A connection's column masking (ADR-051). Patterns match result column names, ignoring\ncase: `*` is any characters, `?` one character, and a pattern without them is a name.\nMasking keeps values off the screen, the clipboard, files and agents' answers in normal\nwork; it is not access control (an alias such as `SELECT email AS e` gets past it).",
+      "properties": {
+        "always": {
+          "description": "Columns to mask (`*password*`, `email`, `card_number`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "never": {
+          "description": "Columns to leave visible although a pattern of `always`, or one of the user's own\npatterns, matches them (`email_verified`). Never a connection type's `mask_columns`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "McpConfig": {
       "additionalProperties": false,
       "description": "What an agent can do with this connection (ADR-008).",
@@ -267,6 +288,10 @@
         "integer",
         "null"
       ]
+    },
+    "masking": {
+      "$ref": "#/$defs/MaskingConfig",
+      "description": "Columns whose values the app shows as `••••••` (ADR-051): in the grid, copies,\nexports, statistics and agents' answers."
     },
     "mcp": {
       "$ref": "#/$defs/McpConfig"

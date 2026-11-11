@@ -8,6 +8,9 @@
 /crates/spelaion-core/src/readonly.rs           @petilolz @frglez
 /crates/spelaion-core/src/write.rs              @petilolz @frglez
 /crates/spelaion-core/src/guard.rs              @petilolz @frglez
+# Column masking (ADR-051).
+/crates/spelaion-core/src/masking.rs            @petilolz @frglez
+/crates/spelaion-config/src/masking.rs          @petilolz @frglez
 /crates/spelaion-mcp/                           @petilolz @frglez
 
 # Secrets, repository trust and SSH host keys (ADR-009, ADR-022, ADR-007).

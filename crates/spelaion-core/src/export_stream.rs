@@ -31,6 +31,7 @@ use crate::export::{
     CsvOptions, ExportFormat, FileSummary, PartFile, RowWriter, TextEncoding, part_path,
 };
 use crate::guard::check_script;
+use crate::masking::{mask_batch, masked_schema};
 use crate::table_data::{PageError, table_export_sql};
 
 /// What a streaming export writes.
@@ -539,6 +540,9 @@ async fn write_stream(
         Err(e) => return Err(e.into()),
     };
     let mut file: Option<FileWriter> = None;
+    // The masked columns (ADR-051) and the schema they are written with: every batch is
+    // masked before it is written, and its original values dropped with it.
+    let mut masking: Option<(Arc<spelaion_driver_api::ResultSchema>, Vec<usize>)> = None;
     let mut reported = Instant::now();
     // Every exit but the end of the rows drops `file`, which deletes the temporary file.
     let failure = loop {
@@ -576,6 +580,8 @@ async fn write_stream(
                         "the statement returned more than one result".into(),
                     );
                 }
+                let (schema, masked) = masked_schema(session.masking(), &schema);
+                masking = Some((schema.clone(), masked));
                 let columns: Vec<usize> = match &export.columns {
                     Some(chosen) => chosen
                         .iter()
@@ -612,6 +618,12 @@ async fn write_stream(
             Ok(ExecEvent::Batch(batch)) => {
                 let Some(mut writer) = file.take() else {
                     continue;
+                };
+                let batch = match &masking {
+                    Some((schema, masked)) if !masked.is_empty() => {
+                        mask_batch(&batch, masked, schema).0
+                    }
+                    _ => batch,
                 };
                 // The only batch the export holds: written and dropped before the next one.
                 let held = batch.num_rows() as u64;

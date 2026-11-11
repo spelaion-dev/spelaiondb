@@ -60,3 +60,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [048](0048-users-and-privileges.md) | Users and privileges: forms that write reviewed SQL, with the password kept out of everything but the statement | Accepted |
 | [049](0049-backup-and-restore.md) | Backup and restore through the tunnel: the vendors' own tools, started by the core with an argument list and the password in their environment | Accepted |
 | [050](0050-kubernetes-and-ssm-network-profiles.md) | Network profiles reach Kubernetes clusters (reusable forwards) and AWS SSM managed nodes | Accepted |
+| [051](0051-column-masking.md) | Column masking: values replaced where results enter the core, revealed one cell at a time; not access control | Accepted |

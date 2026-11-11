@@ -109,6 +109,12 @@ fn tidy(kind: &ConnectionTypeConfig) -> ConnectionTypeConfig {
         close_idle_after: kind.close_idle_after.filter(|s| *s > 0),
         manual_commit: kind.manual_commit,
         smart_commit: kind.smart_commit,
+        mask_columns: kind
+            .mask_columns
+            .iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect(),
     }
 }
 

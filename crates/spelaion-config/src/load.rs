@@ -112,6 +112,9 @@ pub struct Config {
     pub team_types: TypesLayer,
     /// The user's connection types.
     pub user_types: TypesLayer,
+    /// `user.toml` exists but does not load: its masking patterns are unknown, so every
+    /// connection masks every column until it is fixed (ADR-051).
+    pub user_unreadable: bool,
     /// Files with problems. A broken file does not prevent loading the rest.
     pub problems: Vec<ConfigError>,
 }
@@ -207,7 +210,11 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
 
     let user_file = user_dir.join("user.toml");
     if user_file.is_file() {
-        match parse_file::<UserFile>(&user_file) {
+        match parse_file::<UserFile>(&user_file).and_then(|user| {
+            crate::masking::check_patterns("masking.always", &user.masking.always)
+                .map_err(|m| ConfigError::new(&user_file, m))?;
+            Ok(user)
+        }) {
             Ok(mut user) => {
                 // A wrong range is reported and ignored: tunnels then take any free port.
                 if let Err(message) = user.tunnels.range() {
@@ -216,7 +223,10 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
                 }
                 config.user = user;
             }
-            Err(e) => config.problems.push(e),
+            Err(e) => {
+                config.user_unreadable = true;
+                config.problems.push(e);
+            }
         }
     }
     config.workspace_root = start.and_then(find_workspace);
@@ -359,6 +369,8 @@ pub(crate) fn validate_type(id: &str, kind: &ConnectionTypeConfig) -> Result<(),
             ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER
         ));
     }
+    crate::masking::check_patterns("mask_columns", &kind.mask_columns)
+        .map_err(|m| format!("connection type {id:?}: {m}"))?;
     Ok(())
 }
 
@@ -587,6 +599,7 @@ pub(crate) fn validate_connection(
         check_description(description).map_err(|m| ConfigError::new(path, m))?;
     }
     check_tags(&file.tags).map_err(|m| ConfigError::new(path, m))?;
+    crate::masking::check_masking(&file.masking).map_err(|m| ConfigError::new(path, m))?;
     check_session(file.engine, &file.session).map_err(|m| ConfigError::new(path, m))?;
     if let Some(kubernetes) = &file.kubernetes {
         // With a network profile, the profile must be a Kubernetes one and may name the

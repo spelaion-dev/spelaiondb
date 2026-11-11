@@ -497,9 +497,11 @@ pub async fn count_rows(session: &Session, schema: &str, name: &str) -> Result<i
 }
 
 /// Runs one statement written by the core and returns the first cell of its result: `None`
-/// when it returns no result (`KILL`) or no rows. The result is freed, also on failure.
+/// when it returns no result (`KILL`) or no rows. The result is freed, also on failure. It is
+/// read unmasked (ADR-051): callers parse it (counts, catalog names) and never show a value
+/// of a table's column.
 pub(crate) async fn scalar_value(session: &Session, sql: &str) -> Result<Option<Value>, String> {
-    scalar_result(session, session.run_generated(sql)).await
+    scalar_result(session, session.run_parsed(sql)).await
 }
 
 /// The first cell of a fixed internal metadata read, excluded from the user's transaction
