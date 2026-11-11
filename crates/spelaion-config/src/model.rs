@@ -88,6 +88,37 @@ pub struct ConnectionFile {
     pub session: SessionConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_default")]
     pub mcp: McpConfig,
+    /// Columns whose values the app shows as `••••••` (ADR-051): in the grid, copies,
+    /// exports, statistics and agents' answers.
+    #[serde(default, skip_serializing_if = "MaskingConfig::is_default")]
+    pub masking: MaskingConfig,
+}
+
+/// A connection's column masking (ADR-051). Patterns match result column names, ignoring
+/// case: `*` is any characters, `?` one character, and a pattern without them is a name.
+/// Masking keeps values off the screen, the clipboard, files and agents' answers in normal
+/// work; it is not access control (an alias such as `SELECT email AS e` gets past it).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskingConfig {
+    /// Columns to mask (`*password*`, `email`, `card_number`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub always: Vec<String>,
+    /// Columns to leave visible although a pattern of `always`, or one of the user's own
+    /// patterns, matches them (`email_verified`). Never a connection type's `mask_columns`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub never: Vec<String>,
+}
+
+impl MaskingConfig {
+    /// Most patterns in one list.
+    pub const MAX_PATTERNS: usize = 100;
+    /// Longest pattern accepted, in characters.
+    pub const MAX_PATTERN: usize = 128;
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -544,6 +575,10 @@ pub struct ConnectionTypeConfig {
     /// until that transaction is committed or rolled back (ADR-031). On for Production.
     #[serde(default, skip_serializing_if = "is_false")]
     pub smart_commit: bool,
+    /// Columns every connection of this type masks (ADR-051), as `[masking] always`
+    /// patterns. They add up across layers, and no connection's `never` unmasks them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_columns: Vec<String>,
 }
 
 /// The tones a connection type's badge can have: a fixed palette the app draws for the light
@@ -590,6 +625,25 @@ pub struct UserFile {
     pub vars: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "TunnelPreferences::is_default")]
     pub tunnels: TunnelPreferences,
+    /// Columns masked on every connection on this computer (ADR-051).
+    #[serde(default, skip_serializing_if = "UserMasking::is_default")]
+    pub masking: UserMasking,
+}
+
+/// The user's own masking patterns, for every connection (ADR-051).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UserMasking {
+    /// Columns to mask, as a connection's `[masking] always` patterns. A personal
+    /// connection's `never` may leave one of them visible; a repository connection's cannot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub always: Vec<String>,
+}
+
+impl UserMasking {
+    pub fn is_default(&self) -> bool {
+        self.always.is_empty()
+    }
 }
 
 /// Personal settings of every SSH tunnel on this computer.

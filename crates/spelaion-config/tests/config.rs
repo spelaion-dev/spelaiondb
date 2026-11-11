@@ -541,6 +541,7 @@ fn creates_new_connection_files() {
         tls: Default::default(),
         session: Default::default(),
         mcp: Default::default(),
+        masking: Default::default(),
     };
     let path = create_connection(&dir, Source::Workspace, "team/analytics", &file).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
@@ -649,6 +650,7 @@ fn postgres_draft() -> ConnectionDraft {
         mcp_exposed: true,
         mcp_writes: false,
         session: Default::default(),
+        masking: Default::default(),
     }
 }
 
@@ -1476,6 +1478,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         mcp_exposed: false,
         mcp_writes: false,
         session: Default::default(),
+        masking: Default::default(),
     }
 }
 

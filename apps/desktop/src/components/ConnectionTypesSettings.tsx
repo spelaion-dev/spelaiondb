@@ -29,6 +29,7 @@ const EMPTY: ConnectionTypeDraft = {
   closeIdleAfter: null,
   manualCommit: false,
   smartCommit: false,
+  maskColumns: [],
 };
 
 function message(e: unknown): string {

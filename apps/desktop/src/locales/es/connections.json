@@ -28,7 +28,8 @@
     "about": "Sobre esta conexión",
     "session": "Valores por defecto",
     "setup": "Sentencias de inicio",
-    "onThisComputer": "En este equipo"
+    "onThisComputer": "En este equipo",
+    "masking": "Enmascarado de columnas"
   },
   "fields": {
     "name": "Nombre",
@@ -123,7 +124,13 @@
     "sessionSetup": "Ejecutar al abrir una sesión",
     "ignoreSetupErrors": "Ignorar errores en estas sentencias",
     "sessionSetupHint": "Se ejecutan en cada sesión nueva, antes que nada, también tras reconectar. No son tus consultas: no van al historial y no se vuelve a ejecutar nada de lo que ejecutaste.",
-    "sessionSetupRestricted": "En esta conexión solo pueden leer y cambiar ajustes de la sesión (search path, zona horaria, rol…): una sentencia que escribe impide abrir la sesión."
+    "sessionSetupRestricted": "En esta conexión solo pueden leer y cambiar ajustes de la sesión (search path, zona horaria, rol…): una sentencia que escribe impide abrir la sesión.",
+    "maskAlways": "Enmascarar estas columnas",
+    "maskAlwaysPlaceholder": "*password*\nemail\ncard_*",
+    "maskNever": "Dejar visibles estas columnas",
+    "maskNeverPlaceholder": "email_verified",
+    "maskTypeRequires": "El tipo {{type}} siempre enmascara: {{patterns}}.",
+    "maskingHint": "Un patrón por línea, comparado con los nombres de columna sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Los valores enmascarados se muestran como •••••• en la cuadrícula, las copias, las exportaciones, las estadísticas y las respuestas a los agentes; puedes mostrar una celda cada vez. «Dejar visibles» exime de tus propios patrones aquí, nunca de los de un tipo de conexión. El enmascarado aparta los valores de la pantalla, no del SQL: un alias como SELECT email AS e lo salta, así que usa los permisos de la base de datos para apartar los datos de las personas."
   },
   "tls": {
     "disable": "Desactivado",

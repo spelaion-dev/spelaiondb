@@ -14,8 +14,8 @@ use crate::load::{
     Config, ConnectionEntry, ConnectionId, Source, validate_connection, workspace_dir,
 };
 use crate::model::{
-    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, McpConfig, SCHEMA_VERSION,
-    SecretSpec, SessionConfig, TlsConfig, TlsModeConfig, WritePolicy,
+    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, MaskingConfig, McpConfig,
+    SCHEMA_VERSION, SecretSpec, SessionConfig, TlsConfig, TlsModeConfig, WritePolicy,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::vars::home_dir;
@@ -145,6 +145,19 @@ pub struct ConnectionDraft {
     pub mcp_writes: bool,
     /// How every new session starts (ADR-037).
     pub session: SessionDraft,
+    /// Columns masked on this connection (ADR-051): patterns as typed, one per entry.
+    pub masking: MaskingConfig,
+}
+
+/// Masking patterns as typed: trimmed, blank ones left out, each once.
+fn tidy_patterns(patterns: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for pattern in patterns.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        if !out.iter().any(|p| p == pattern) {
+            out.push(pattern.to_string());
+        }
+    }
+    out
 }
 
 /// The Session tab of the connection form (ADR-037); empty fields mean "not set".
@@ -498,6 +511,10 @@ impl ConnectionDraft {
                 },
                 ..McpConfig::default()
             },
+            masking: MaskingConfig {
+                always: tidy_patterns(&self.masking.always),
+                never: tidy_patterns(&self.masking.never),
+            },
         };
         validate_connection(path, file)
     }
@@ -601,6 +618,7 @@ impl ConnectionDraft {
             mcp_exposed: file.mcp.exposed,
             mcp_writes: file.mcp.writes == WritePolicy::Allow,
             session: SessionDraft::from_config(&file.session),
+            masking: file.masking.clone(),
         }
     }
 }
@@ -934,6 +952,18 @@ pub fn update_connection(
             &["mcp", "writes"],
             allows(&new).then(|| Value::from("allow")),
         );
+    }
+
+    // Column masking (ADR-051): each list as the form left it, removed when empty.
+    for (name, before, after) in [
+        ("always", &old.masking.always, &new.masking.always),
+        ("never", &old.masking.never, &new.masking.never),
+    ] {
+        if before != after {
+            let value = (!after.is_empty())
+                .then(|| Value::Array(after.iter().map(String::as_str).collect()));
+            put(&mut doc, &["masking", name], value);
+        }
     }
 
     // The result must still be a valid connection before it replaces the file.

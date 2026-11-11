@@ -10,6 +10,7 @@ use crate::accounts::{connection_account, proxy_account, tunnel_account};
 use crate::draft::ConnectionDraft;
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, ConnectionEntry, ConnectionId, Source, TunnelEntry};
+use crate::masking::MaskingRules;
 use crate::model::{
     Engine, IsolationLevel, KubernetesConfig, KubernetesProfileConfig, McpConfig, ProxyType,
     SecretSpec, SshAuth, TlsModeConfig, TunnelFile,
@@ -59,6 +60,8 @@ pub struct ResolvedConnection {
     /// How every new session starts (ADR-037); the core applies it when a session opens.
     pub session: ResolvedSession,
     pub mcp: McpConfig,
+    /// Which result columns are masked (ADR-051); the core applies it to every result.
+    pub masking: MaskingRules,
 }
 
 /// A connection's `[session]` table, ready to apply (ADR-037).
@@ -524,6 +527,12 @@ impl<'a> Resolver<'a> {
             }
         };
 
+        let masking = MaskingRules::combine(
+            (!self.config.user_unreadable).then_some(self.config.user.masking.always.as_slice()),
+            &file.masking,
+            entry.id.source == Source::User,
+            kind.as_ref().map_or(&[][..], |k| k.mask_columns.as_slice()),
+        );
         Ok(ResolvedConnection {
             id: entry.id.clone(),
             name: entry.name(),
@@ -559,6 +568,7 @@ impl<'a> Resolver<'a> {
                 isolation: file.session.isolation,
             },
             mcp: file.mcp.clone(),
+            masking,
         })
     }
 

@@ -1198,6 +1198,9 @@ pub struct ConnectionTypeDraft {
     pub manual_commit: bool,
     #[serde(default)]
     pub smart_commit: bool,
+    /// Column patterns every connection of the type masks (ADR-051).
+    #[serde(default)]
+    pub mask_columns: Vec<String>,
 }
 
 impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
@@ -1212,6 +1215,7 @@ impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
             close_idle_after: c.close_idle_after,
             manual_commit: c.manual_commit,
             smart_commit: c.smart_commit,
+            mask_columns: c.mask_columns.clone(),
         }
     }
 }
@@ -1228,6 +1232,7 @@ impl From<ConnectionTypeDraft> for spelaion_config::ConnectionTypeConfig {
             close_idle_after: d.close_idle_after,
             manual_commit: d.manual_commit,
             smart_commit: d.smart_commit,
+            mask_columns: d.mask_columns,
         }
     }
 }
@@ -1251,6 +1256,10 @@ pub struct ConnectionTypeItem {
     pub inherited: SafeguardsItem,
     /// The user's own definition or changes, if any.
     pub personal: Option<ConnectionTypeDraft>,
+    /// Column patterns its connections mask, every layer together (ADR-051).
+    pub mask_columns: Vec<String>,
+    /// The team's: the user cannot remove them.
+    pub inherited_mask_columns: Vec<String>,
 }
 
 impl From<&spelaion_config::ConnectionType> for ConnectionTypeItem {
@@ -1266,6 +1275,8 @@ impl From<&spelaion_config::ConnectionType> for ConnectionTypeItem {
             safeguards: t.safeguards.into(),
             inherited: t.inherited.into(),
             personal: t.personal.as_ref().map(ConnectionTypeDraft::from),
+            mask_columns: t.mask_columns.clone(),
+            inherited_mask_columns: t.inherited_mask_columns.clone(),
         }
     }
 }
@@ -1626,6 +1637,8 @@ pub struct ColumnItem {
     /// Common logical type (`int`, `text`, `timestamptz`…).
     pub logical: String,
     pub native_type: String,
+    /// Its values are masked (ADR-051): the cells hold the mask, and one can be revealed.
+    pub masked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -1884,10 +1897,12 @@ impl From<CoreEvent> for ScriptEvent {
                 columns: schema
                     .columns
                     .iter()
-                    .map(|c| ColumnItem {
+                    .enumerate()
+                    .map(|(i, c)| ColumnItem {
                         name: c.name.clone(),
                         logical: c.logical.as_str().into(),
                         native_type: c.native_type.clone(),
+                        masked: spelaion_core::masking::is_masked_field(schema.arrow.field(i)),
                     })
                     .collect(),
             },
@@ -2757,6 +2772,10 @@ pub struct ConnectionDraftItem {
     pub default_schema: String,
     /// `read-committed`…; null for the server's default.
     pub isolation: Option<String>,
+    /// Column patterns this connection masks (ADR-051, `[masking] always`).
+    pub mask_always: Vec<String>,
+    /// Column patterns it leaves visible (`[masking] never`).
+    pub mask_never: Vec<String>,
 }
 
 impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
@@ -2825,6 +2844,10 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
                     ),
                 },
             },
+            masking: spelaion_config::MaskingConfig {
+                always: item.mask_always,
+                never: item.mask_never,
+            },
         })
     }
 }
@@ -2883,6 +2906,8 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
                 .session
                 .isolation
                 .map(|level| level.as_str().to_string()),
+            mask_always: draft.masking.always,
+            mask_never: draft.masking.never,
         }
     }
 }
@@ -3945,6 +3970,45 @@ impl PendingEditsItem {
             can_redo: pending.can_redo(),
             changed: count(outcome.changed),
             clipped: count(outcome.clipped),
+        }
+    }
+}
+
+/// A masked cell's value, revealed on the user's request (ADR-051).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealedCellItem {
+    pub column: String,
+    /// The value as the grid would show it; `None` for NULL. Cut at
+    /// [`RevealedCellItem::MAX_CHARS`] characters.
+    pub text: Option<String>,
+    /// The value was longer and was cut.
+    pub cut: bool,
+    pub native_type: String,
+}
+
+impl RevealedCellItem {
+    /// Longest text shown in the popover.
+    pub const MAX_CHARS: usize = 10_000;
+}
+
+impl From<spelaion_core::RevealedCell> for RevealedCellItem {
+    fn from(cell: spelaion_core::RevealedCell) -> Self {
+        let (text, cut) = match cell.value {
+            spelaion_driver_api::Value::Null => (None, false),
+            value => {
+                let text = value.to_string();
+                match text.char_indices().nth(Self::MAX_CHARS) {
+                    Some((end, _)) => (Some(text[..end].to_string()), true),
+                    None => (Some(text), false),
+                }
+            }
+        };
+        Self {
+            column: cell.column,
+            text,
+            cut,
+            native_type: cell.native_type,
         }
     }
 }
@@ -5235,6 +5299,8 @@ pub struct ColumnStatsItem {
     pub top_state: StatStateItem,
     /// The statements that ran, every one a read.
     pub statements: Vec<String>,
+    /// The column is masked (ADR-051): minimum, maximum and frequent values are the mask.
+    pub masked: bool,
 }
 
 impl ColumnStatsItem {
@@ -5272,6 +5338,7 @@ impl ColumnStatsItem {
             },
             top_state,
             statements: s.statements,
+            masked: s.masked,
         }
     }
 }

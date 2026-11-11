@@ -299,6 +299,9 @@ pub enum EditError {
         "change {index} would affect {rows} rows instead of one (the row changed or vanished meanwhile?), nothing was applied"
     )]
     NotOneRow { index: usize, rows: String },
+    /// The column is masked (ADR-051): the page holds the mask, not its values.
+    #[error("{0} is masked: its cells cannot be edited, and rows cannot be changed by it")]
+    Masked(String),
 }
 
 /// Whether changes may be applied on this connection: never when it is read-only, and where
@@ -351,6 +354,10 @@ pub fn edit_statements(
         Ok((meta.name.as_str(), meta.logical))
     };
     let where_key = |row: usize| -> Result<String, EditError> {
+        // A masked key column holds the mask, not the value the row is found by (ADR-051).
+        if let Some((_, key)) = keys.iter().find(|(i, _)| result.is_masked(*i)) {
+            return Err(EditError::Masked((*key).to_string()));
+        }
         let batch = result
             .window(row, 1)
             .into_iter()
@@ -381,6 +388,9 @@ pub fn edit_statements(
                     .iter()
                     .map(|(i, input)| {
                         let (name, logical) = column(*i)?;
+                        if result.is_masked(*i) {
+                            return Err(EditError::Masked(name.to_string()));
+                        }
                         let value = match input {
                             CellInput::Default => default_value(dialect.name(), table, name),
                             other => literal(dialect.name(), name, logical, other)?,

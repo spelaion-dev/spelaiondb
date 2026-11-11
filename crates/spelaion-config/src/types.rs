@@ -79,6 +79,11 @@ pub struct ConnectionType {
     pub safeguards: Safeguards,
     /// The built-in and team layers alone: what the user cannot switch off.
     pub inherited: Safeguards,
+    /// Columns every connection of the type masks (ADR-051): every layer's `mask_columns`
+    /// together, which no connection can unmask.
+    pub mask_columns: Vec<String>,
+    /// The team layer's `mask_columns` alone: what the user cannot remove.
+    pub inherited_mask_columns: Vec<String>,
 }
 
 impl ConnectionType {
@@ -276,6 +281,25 @@ fn merge(layers: &[(Layer, &ConnectionTypesFile)]) -> Vec<ConnectionType> {
                     .and_then(|p| field(p).clone())
                     .or_else(|| team.and_then(|t| field(t).clone()))
             };
+            // Masked columns add up like safeguards: every layer's patterns, none removed.
+            let patterns = |config: Option<&ConnectionTypeConfig>| -> Vec<String> {
+                config
+                    .map(|c| {
+                        c.mask_columns
+                            .iter()
+                            .map(|p| p.trim().to_string())
+                            .filter(|p| !p.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let inherited_mask_columns = patterns(team);
+            let mut mask_columns = inherited_mask_columns.clone();
+            for pattern in patterns(personal) {
+                if !mask_columns.contains(&pattern) {
+                    mask_columns.push(pattern);
+                }
+            }
             let inherited = built_in
                 .map(|b| b.safeguards)
                 .unwrap_or_default()
@@ -297,6 +321,8 @@ fn merge(layers: &[(Layer, &ConnectionTypesFile)]) -> Vec<ConnectionType> {
                 personal: personal.cloned(),
                 safeguards: inherited.tighten(personal.map(Safeguards::of).unwrap_or_default()),
                 inherited,
+                mask_columns,
+                inherited_mask_columns,
                 id,
             }
         })

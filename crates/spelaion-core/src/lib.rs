@@ -26,6 +26,7 @@ mod history;
 mod import;
 pub mod kube;
 mod locks;
+pub mod masking;
 mod objects;
 mod observe;
 mod open;
@@ -119,6 +120,7 @@ pub use import::{
     preview, run_import, suggested_table, text_format,
 };
 pub use locks::{BlockingNode, Lock, LockSnapshot, LockWait, blocking_tree, list_locks};
+pub use masking::{MASK, MaskPolicy};
 pub use objects::{
     AlterationPlan, ColumnEdit, CreateKind, DroppedConstraint, EditableColumn, FoundObject,
     GrantedPrivilege, NewColumn, NewForeignKey, NewIndex, NewIndexKind, NewPrincipal, NewTable,
@@ -152,7 +154,7 @@ pub use references::{
     ReferenceOutcome, RowReference, TableKey, find_key, follow, key_rows, read_references,
     reference_targets, table_keys,
 };
-pub use results::{ResultId, ResultStore, StoredResult};
+pub use results::{ResultId, ResultStore, RevealError, RevealedCell, StoredResult};
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
@@ -182,8 +184,9 @@ pub use sql_file::{
     content_hash, read_sql_file, write_sql_file,
 };
 pub use table_data::{
-    ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, count_table_rows,
-    key_filter, table_count_sql, table_export_sql, table_page_sql, typed_value, value_condition,
+    ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, cell_filter_value,
+    count_table_rows, key_filter, table_count_sql, table_export_sql, table_page_sql, typed_value,
+    value_condition,
 };
 pub use table_stats::{TableStats, table_stats};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};

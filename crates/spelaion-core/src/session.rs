@@ -13,6 +13,7 @@ use spelaion_driver_api::{
 };
 
 use crate::health::{Health, SessionHealth, Tracked};
+use crate::masking::MaskPolicy;
 use crate::results::{ResultId, ResultStore};
 pub use crate::script::{
     AnswerError, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop, ScriptSummary,
@@ -148,6 +149,9 @@ pub struct Session {
     pause: Arc<Pause>,
     /// How many times the user asked to cancel: a run that sees it change stops.
     cancels: Arc<AtomicU64>,
+    /// The connection's column masking (ADR-051), applied to every result this session stores
+    /// from a run, and by the core's own reads that do not go through the result store.
+    masking: Arc<MaskPolicy>,
 }
 
 /// All paths share session serialization and state observation. Only editor SQL manages
@@ -156,6 +160,9 @@ pub struct Session {
 enum RunKind {
     User,
     Generated,
+    /// A generated read whose values the core parses itself (counts, statistics): its result
+    /// is not masked, and the caller applies [`Session::masking`] to what it shows (ADR-051).
+    Parsed,
     Metadata,
 }
 
@@ -192,7 +199,19 @@ impl Session {
             transaction: Arc::new(tokio::sync::watch::Sender::new(TransactionStatus::default())),
             pause: Arc::new(Pause::default()),
             cancels: Arc::new(AtomicU64::new(0)),
+            masking: Arc::new(MaskPolicy::none()),
         }
+    }
+
+    /// Masks these columns in every result the session stores (ADR-051).
+    pub fn with_masking(mut self, masking: MaskPolicy) -> Self {
+        self.masking = Arc::new(masking);
+        self
+    }
+
+    /// The connection's column masking (ADR-051).
+    pub fn masking(&self) -> &MaskPolicy {
+        &self.masking
     }
 
     /// Whether the connection still works. Once lost it stays lost: reconnecting means a
@@ -429,6 +448,12 @@ impl Session {
         self.run(script, RunKind::Metadata, ScriptOptions::default())
     }
 
+    /// Runs a read the core wrote and parses itself (counts, statistics), without masking its
+    /// result (ADR-051): the caller must apply [`Session::masking`] to anything it shows.
+    pub(crate) fn run_parsed(&self, script: &str) -> BoxStream<'static, CoreEvent> {
+        self.run(script, RunKind::Parsed, ScriptOptions::default())
+    }
+
     fn run(
         &self,
         script: &str,
@@ -466,8 +491,16 @@ impl Session {
         let cancels_at_start = self.cancels.load(Ordering::SeqCst);
         let (managed, count_statement) = match kind {
             RunKind::User => (true, true),
-            RunKind::Generated => (false, true),
+            RunKind::Generated | RunKind::Parsed => (false, true),
             RunKind::Metadata => (false, false),
+        };
+        // Every result that shows rows is masked (ADR-051); execution plans show the plan,
+        // not rows, and the core's own metadata and parsed reads apply it themselves.
+        let masking = match kind {
+            RunKind::User | RunKind::Generated if plan_mode.is_none() && intent.is_none() => {
+                Some(self.masking.clone())
+            }
+            RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
         };
         let script = script.to_string();
         let spans = self.dialect.split_statements(&script);
@@ -595,7 +628,10 @@ impl Session {
                                     if let Some(previous) = current {
                                         results.complete(previous);
                                     }
-                                    let result = results.create(schema.clone());
+                                    let (result, schema) = match &masking {
+                                        Some(policy) => results.create_masked(schema, policy),
+                                        None => (results.create(schema.clone()), schema),
+                                    };
                                     current = Some(result);
                                     yield CoreEvent::ResultStarted { index, result, schema };
                                 }

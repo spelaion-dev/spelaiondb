@@ -28,6 +28,7 @@ use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comm
 use crate::export_stream::{ExportCancel, barrier, drain};
 use crate::filter::FilterOp;
 use crate::generate::qualified;
+use crate::masking::MaskPolicy;
 use crate::session::Session;
 use crate::table_data::{key_filter, value_condition};
 
@@ -573,12 +574,16 @@ fn shown(value: &Value) -> Option<String> {
     }
 }
 
-/// The hits of a table's rows, read as [`TableSearchSql`] lays them out.
+/// The hits of a table's rows, read as [`TableSearchSql`] lays them out. A masked column
+/// (ADR-051) still finds its rows (the user typed the value), but shows the mask in place of
+/// its snippet and of a key value, and no filter is written from a masked value.
 fn hits(
     dialect: &dyn spelaion_driver_api::Dialect,
     search: &TableSearchSql,
     rows: &[Vec<Value>],
+    masking: &MaskPolicy,
 ) -> Vec<SearchHit> {
+    let key_masked = search.key.iter().any(|(name, _)| masking.masks(name));
     let keys = search.key.len();
     let per_column = if keys == 0 { 3 } else { 2 };
     rows.iter()
@@ -599,16 +604,19 @@ fn hits(
                 if !matched {
                     continue;
                 }
+                let masked = masking.masks(&column.name);
                 matches.push(ColumnMatch {
                     column: column.name.clone(),
                     text: match column.kind {
                         SearchColumnKind::Binary => None,
                         SearchColumnKind::Text
                         | SearchColumnKind::LargeText
-                        | SearchColumnKind::Number => shown(&at(base + 1)),
+                        | SearchColumnKind::Number => {
+                            shown(&masking.shown_value(&column.name, at(base + 1)))
+                        }
                     },
                 });
-                if keys == 0 && fallback.is_none() {
+                if keys == 0 && fallback.is_none() && !masked {
                     let raw = at(base + 2);
                     let fits = !matches!(raw, Value::Null)
                         && raw.to_string().chars().count() <= MAX_CONDITION_CHARS;
@@ -625,14 +633,19 @@ fn hits(
                 }
             }
             let filter = if keys > 0 {
-                key_filter(dialect, &key_values).ok()
+                (!key_masked)
+                    .then(|| key_filter(dialect, &key_values).ok())
+                    .flatten()
             } else {
                 fallback
             };
             SearchHit {
                 key: key_values
                     .into_iter()
-                    .map(|(name, _, value)| (name, value.to_string()))
+                    .map(|(name, _, value)| {
+                        let value = masking.shown_value(&name, value);
+                        (name, value.to_string())
+                    })
                     .collect(),
                 matches,
                 filter,
@@ -715,7 +728,7 @@ async fn search_table(
         Ok(TableStatus::Searched {
             columns: u32::try_from(search.columns.len()).unwrap_or(u32::MAX),
             more: rows.len() >= limit as usize,
-            hits: hits(dialect.as_ref(), &search, &rows),
+            hits: hits(dialect.as_ref(), &search, &rows, session.masking()),
         })
     }
     .await;

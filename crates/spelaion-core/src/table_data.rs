@@ -131,6 +131,29 @@ pub enum ConditionError {
     EmptyKey,
 }
 
+/// The typed value of a cell of a page, for "filter by this value". Never a masked cell's
+/// (ADR-051): the page holds the mask, and the condition would show the value it stands for.
+pub fn cell_filter_value(
+    stored: &crate::StoredResult,
+    row: usize,
+    column: usize,
+) -> Result<Value, String> {
+    let meta = stored
+        .schema()
+        .columns
+        .get(column)
+        .ok_or("no such column")?;
+    if stored.is_masked(column) {
+        return Err(format!(
+            "{} is masked: its values cannot be filtered by",
+            meta.name
+        ));
+    }
+    stored
+        .value_at(row, column)
+        .ok_or_else(|| "no such row".to_string())
+}
+
 /// "Filter by this value" in a table data tab: the condition added to its `WHERE`, written by
 /// the core from the typed value (a cell of the page, or a value typed for the column), so
 /// the UI never writes SQL. The column is quoted for the engine and the value is the engine's

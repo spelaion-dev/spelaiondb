@@ -181,6 +181,9 @@ pub enum PickError {
     Twice(String),
     #[error("could not search {table}: {message}")]
     Search { table: String, message: String },
+    /// The referenced key has a masked column (ADR-051): picking would write the mask.
+    #[error("{0} is masked: its values cannot be picked")]
+    Masked(String),
 }
 
 /// The picker for `column` of `schema.table`, from the catalog as it is now, or `None` when
@@ -799,6 +802,14 @@ pub async fn search_referenced(
     let key = column_key(&described, column)
         .ok_or_else(|| PickError::NotAKey(column.to_string()))?
         .clone();
+    if let Some(masked) = key
+        .referenced_columns
+        .iter()
+        .chain(&key.columns)
+        .find(|c| session.masking().masks(c))
+    {
+        return Err(PickError::Masked(masked.clone()));
+    }
     let referenced = conn
         .describe_table(&key.referenced_schema, &key.referenced_table)
         .await

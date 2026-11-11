@@ -221,6 +221,12 @@ fn sanitize(mut file: ConnectionFile) -> (ConnectionFile, Vec<String>) {
         left_out.push("mcp".to_string());
         file.mcp = McpConfig::default();
     }
+    // A pasted connection becomes the user's own, whose `never` would unmask the user's own
+    // patterns (ADR-051): pasted text may add masking, never take it away.
+    if !file.masking.never.is_empty() {
+        left_out.push("masking.never".to_string());
+        file.masking.never.clear();
+    }
     (file, left_out)
 }
 
@@ -353,6 +359,8 @@ fn variables(value: &toml::Value, out: &mut Vec<String>) {
 /// - nothing runs a program: `cmd:` passwords and cloud tokens, `kubernetes.kubectl`,
 ///   `kubernetes.kubeconfig` (which can run its own) and `sqlite3` are left out;
 /// - no SQL comes along: the session setup statements are left out (ADR-037);
+/// - masking can only be added: `[masking] never` is left out, since a personal connection's
+///   `never` would unmask the user's own patterns (ADR-051);
 /// - `${env:…}` is refused: resolving it would send an environment variable to the server
 ///   (or to DNS through the host name);
 /// - agents cannot use it (`[mcp]` is left out), and a tunnel is kept only if one of that

@@ -427,6 +427,11 @@ export const commands = {
 	 */
 	viewCell: (result: number, row: number, column: number, loadAnyway: boolean) => typedError<CellViewItem_Serialize, string>(__TAURI_INVOKE("view_cell", { result, row, column, loadAnyway })),
 	/**
+	 *  One masked cell's value, on the user's explicit request (ADR-051): read by the core from
+	 *  what it keeps aside, without running anything. Shown in a popover, never in the grid.
+	 */
+	revealCell: (result: number, row: number, column: number) => typedError<RevealedCellItem_Serialize, string>(__TAURI_INVOKE("reveal_cell", { result, row, column })),
+	/**
 	 *  Saves a cell's value to `path` (bytes as stored, other values as UTF-8 text); returns the
 	 *  bytes written.
 	 */
@@ -1304,6 +1309,8 @@ export type ColumnItem = {
 	/**  Common logical type (`int`, `text`, `timestamptz`…). */
 	logical: string,
 	nativeType: string,
+	/**  Its values are masked (ADR-051): the cells hold the mask, and one can be revealed. */
+	masked: boolean,
 };
 
 /**  What a column's sampled values look like. */
@@ -1385,6 +1392,8 @@ export type ColumnStatsItem_Deserialize = {
 	topState: StatStateItem,
 	/**  The statements that ran, every one a read. */
 	statements: string[],
+	/**  The column is masked (ADR-051): minimum, maximum and frequent values are the mask. */
+	masked: boolean,
 };
 
 /**  A table column's statistics, counted by the server with read-only queries. */
@@ -1403,6 +1412,8 @@ export type ColumnStatsItem_Serialize = {
 	topState: StatStateItem,
 	/**  The statements that ran, every one a read. */
 	statements: string[],
+	/**  The column is masked (ADR-051): minimum, maximum and frequent values are the mask. */
+	masked: boolean,
 };
 
 /**  How asking for a column's statistics ended. */
@@ -1531,6 +1542,10 @@ export type ConnectionDraftItem_Deserialize = {
 	defaultSchema: string,
 	/**  `read-committed`…; null for the server's default. */
 	isolation?: string | null,
+	/**  Column patterns this connection masks (ADR-051, `[masking] always`). */
+	maskAlways: string[],
+	/**  Column patterns it leaves visible (`[masking] never`). */
+	maskNever: string[],
 };
 
 /**
@@ -1585,6 +1600,10 @@ export type ConnectionDraftItem_Serialize = {
 	defaultSchema: string,
 	/**  `read-committed`…; null for the server's default. */
 	isolation: string | null,
+	/**  Column patterns this connection masks (ADR-051, `[masking] always`). */
+	maskAlways: string[],
+	/**  Column patterns it leaves visible (`[masking] never`). */
+	maskNever: string[],
 };
 
 export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deserialize;
@@ -1682,6 +1701,8 @@ export type ConnectionTypeDraft_Deserialize = {
 	closeIdleAfter?: number | null,
 	manualCommit?: boolean,
 	smartCommit?: boolean,
+	/**  Column patterns every connection of the type masks (ADR-051). */
+	maskColumns?: string[],
 };
 
 /**
@@ -1697,6 +1718,8 @@ export type ConnectionTypeDraft_Serialize = {
 	closeIdleAfter: number | null,
 	manualCommit: boolean,
 	smartCommit: boolean,
+	/**  Column patterns every connection of the type masks (ADR-051). */
+	maskColumns: string[],
 };
 
 /**
@@ -1724,6 +1747,10 @@ export type ConnectionTypeItem_Deserialize = {
 	inherited: SafeguardsItem_Deserialize,
 	/**  The user's own definition or changes, if any. */
 	personal?: ConnectionTypeDraft_Deserialize | null,
+	/**  Column patterns its connections mask, every layer together (ADR-051). */
+	maskColumns: string[],
+	/**  The team's: the user cannot remove them. */
+	inheritedMaskColumns: string[],
 };
 
 /**
@@ -1745,6 +1772,10 @@ export type ConnectionTypeItem_Serialize = {
 	inherited: SafeguardsItem_Serialize,
 	/**  The user's own definition or changes, if any. */
 	personal: ConnectionTypeDraft_Serialize | null,
+	/**  Column patterns its connections mask, every layer together (ADR-051). */
+	maskColumns: string[],
+	/**  The team's: the user cannot remove them. */
+	inheritedMaskColumns: string[],
 };
 
 export type ConstraintDetails = ConstraintDetails_Serialize | ConstraintDetails_Deserialize;
@@ -4231,6 +4262,35 @@ export type RestoredTabsItem_Serialize = {
 	active: number | null,
 	/**  The personal "reconnect at startup" setting: connect only, never run. */
 	reconnect: boolean,
+};
+
+/**  A masked cell's value, revealed on the user's request (ADR-051). */
+export type RevealedCellItem = RevealedCellItem_Serialize | RevealedCellItem_Deserialize;
+
+/**  A masked cell's value, revealed on the user's request (ADR-051). */
+export type RevealedCellItem_Deserialize = {
+	column: string,
+	/**
+	 *  The value as the grid would show it; `None` for NULL. Cut at
+	 *  [`RevealedCellItem::MAX_CHARS`] characters.
+	 */
+	text?: string | null,
+	/**  The value was longer and was cut. */
+	cut: boolean,
+	nativeType: string,
+};
+
+/**  A masked cell's value, revealed on the user's request (ADR-051). */
+export type RevealedCellItem_Serialize = {
+	column: string,
+	/**
+	 *  The value as the grid would show it; `None` for NULL. Cut at
+	 *  [`RevealedCellItem::MAX_CHARS`] characters.
+	 */
+	text: string | null,
+	/**  The value was longer and was cut. */
+	cut: boolean,
+	nativeType: string,
 };
 
 /**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */

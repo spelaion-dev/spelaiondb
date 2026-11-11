@@ -45,6 +45,14 @@ A summary of how the pieces fit together. The reasons behind each decision are i
    Sorting by a column keeps a row permutation in the core, so windows, copies and exports
    all see the same order.
 
+**Column masking (ADR-051)**
+A connection's masking rules (its `[masking]`, the user's `user.toml`, its connection type)
+are compiled into the session. Every result the session stores is masked as its batches
+arrive: masked columns become `••••••` in the stored batches and their originals are kept
+aside, read only to reveal one cell. Windows, sorting, filters, Ctrl+F, the calc panel,
+copies and exports never see a value; streaming exports, column statistics, the data search
+and agents' reads apply the same rules. It is not access control: aliases get past it.
+
 **Execution plans**
 The core's `plan` module owns the normalized tree, metrics, generic findings, bounded document
 store and raw/CSV file behavior. The desktop executes a core-prepared request on the selected

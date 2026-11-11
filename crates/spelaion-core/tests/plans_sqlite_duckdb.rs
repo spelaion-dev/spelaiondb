@@ -81,6 +81,7 @@ async fn open(engine: Engine, path: &Path, read_only: bool) -> OpenConnection {
         statement_timeout: Some(Duration::from_secs(5)),
         session: Default::default(),
         mcp: Default::default(),
+        masking: Default::default(),
     };
     open_connection(
         resolved,

@@ -5572,6 +5572,70 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   }
   await page.locator(".connection-row", { hasText: "MariaDB (copy)" }).waitFor({ state: "detached" });
 
+  step("column masking (ADR-051): a masked column shows and copies the mask, is not sorted by, and reveals one cell on request");
+  // Pasted as a personal connection: its `always` is kept, its `never` is left out (a paste can
+  // add masking, never take it away).
+  const maskedText = `schema_version = 1\nname = "Masked shop"\nengine = "sqlite"\ndatabase = '${join(demo, "data", "shop.db").replaceAll("\\", "/")}'\n\n[masking]\nalways = ["email"]\nnever = ["*"]\n`;
+  await page.evaluate((text) => (navigator.clipboard.readText = () => Promise.resolve(text)), maskedText);
+  await page.locator(".connection-row").first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Paste connection" }).click();
+  wizard = page.locator(".modal.wizard");
+  await wizard.getByRole("heading", { name: "Edit Masked shop" }).waitFor();
+  await wizard.getByRole("tab", { name: "Options" }).click();
+  const maskAlways = wizard.locator('textarea[name="maskAlways"]');
+  assert.equal(await maskAlways.inputValue(), "email");
+  assert.equal(await wizard.locator('textarea[name="maskNever"]').inputValue(), "");
+  await maskAlways.scrollIntoViewIfNeeded();
+  await shot("sdb-27-masking-form");
+  await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
+  await wizard.waitFor({ state: "detached" });
+  panel = await newQuery("Masked shop", "select email, name from customer order by id limit 3;");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+  const maskedBox = await panel.locator(".grid-scroller").boundingBox();
+  const maskedCell = { x: maskedBox.x + 80, y: maskedBox.y + 34 + 12 };
+  // Copies come from the core's stored result, which holds the mask: no e-mail leaves.
+  const copiesBefore = await page.evaluate(() => window.__copied.length);
+  await page.mouse.click(maskedCell.x, maskedCell.y);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.press("Control+c");
+  const maskedCopy = (await copied(copiesBefore + 1)).trimEnd().split("\n");
+  assert.equal(maskedCopy.length, 3);
+  for (const line of maskedCopy) {
+    const [email, name] = line.split("\t");
+    assert.equal(email, "••••••");
+    assert.match(name, /^Customer \d+$/);
+  }
+  await page.mouse.click(maskedCell.x, maskedCell.y);
+  await shot("sdb-27-masked-grid-light");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await shot("sdb-27-masked-grid-dark");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  // The header cannot sort a masked column.
+  await page.mouse.click(maskedCell.x, maskedBox.y + 12, { button: "right" });
+  assert.ok(await panel.getByRole("menuitem", { name: "Sort ascending" }).isDisabled());
+  await page.keyboard.press("Escape");
+  // Reveal value: the core gives that one cell's value, shown only in a popover.
+  await page.mouse.click(maskedCell.x, maskedCell.y, { button: "right" });
+  await panel.getByRole("menuitem", { name: "Reveal value" }).click();
+  const revealed = page.getByRole("dialog", { name: "Value of email" });
+  await revealed.waitFor();
+  assert.equal(await revealed.getByTestId("revealed-value").innerText(), "customer1@example.com");
+  await shot("sdb-27-reveal-light");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await shot("sdb-27-reveal-dark");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  await page.keyboard.press("Escape");
+  await revealed.waitFor({ state: "detached" });
+  // Revealing changed nothing else: a new copy is still the mask.
+  await page.mouse.click(maskedCell.x, maskedCell.y);
+  await page.keyboard.press("Control+c");
+  assert.equal((await copied(copiesBefore + 2)).trimEnd(), "••••••");
+  await (await connectionMenu("Masked shop")).getByRole("menuitem", { name: "Delete…" }).click();
+  const confirmMaskedDelete = page.getByRole("dialog", { name: "Delete connection?" });
+  await confirmMaskedDelete.getByRole("button", { name: "Delete", exact: true }).click();
+  await confirmMaskedDelete.waitFor({ state: "detached" });
+
   step("connection types: made in Settings, picked in the form, a tinted badge in the sidebar and the editor, asking before any run");
   await withSettings("types", async (settings) => {
     await settings.getByRole("listitem", { name: "Production" }).waitFor();

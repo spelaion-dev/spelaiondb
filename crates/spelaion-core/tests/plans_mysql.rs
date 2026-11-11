@@ -53,6 +53,7 @@ async fn open(variable: &str, engine: Engine, read_only: bool) -> Option<OpenCon
         statement_timeout: Some(Duration::from_secs(5)),
         session: Default::default(),
         mcp: Default::default(),
+        masking: Default::default(),
     };
     Some(
         open_connection(

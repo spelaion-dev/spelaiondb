@@ -1295,5 +1295,21 @@
     },
     "readOnly": "Esta conexión es de solo lectura: se rechaza ejecutar un archivo.",
     "confirm": "Ejecutar archivo"
+  },
+  "masking": {
+    "header": "enmascarada",
+    "reveal": "Mostrar valor",
+    "revealHint": "Mostrar el valor de esta celda solo aquí: la cuadrícula, las copias y las exportaciones siguen enmascaradas",
+    "revealTitle": "Valor de {{column}}",
+    "revealNote": "Se muestra solo aquí. La cuadrícula, las copias, las exportaciones y los agentes siguen recibiendo la máscara.",
+    "revealCut": "Solo se muestran los primeros 10.000 caracteres.",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "close": "Cerrar (Esc)",
+    "null": "NULL",
+    "noSort": "«{{column}}» está enmascarada: no se puede ordenar por ella.",
+    "noEdit": "«{{column}}» está enmascarada: sus celdas no se pueden editar.",
+    "noSortHint": "No se puede ordenar por una columna enmascarada",
+    "statsNote": "Esta columna está enmascarada: sus valores se muestran como la máscara."
   }
 }

@@ -549,6 +549,7 @@ fn the_connection_form_keeps_the_profile_and_writes_only_its_own_fields() {
         mcp_exposed: false,
         mcp_writes: false,
         session: Default::default(),
+        masking: Default::default(),
     };
     let file = draft("cluster", "svc/orders").to_file(&config).unwrap();
     assert_eq!(file.tunnel.as_deref(), Some("cluster"));
