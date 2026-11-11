@@ -28,6 +28,9 @@ use spelaion_core::{
 use spelaion_driver_api::{Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, SecretRequest};
 
+mod support;
+use support::{cleaning_up, run_cleanup};
+
 /// The password of the account each test creates: distinctive, so finding any piece of it in a
 /// log means it leaked.
 fn password() -> String {
@@ -302,147 +305,150 @@ async fn postgres_dumps_and_restores_through_two_hops() {
         );
     }
     let admin = ws.open("admin", "spelaion").await;
-    let quoted = password.replace('\'', "''");
-    exec(
-        &admin,
-        &format!(
-            "DROP SCHEMA IF EXISTS {schema} CASCADE; DROP ROLE IF EXISTS {role};
-             CREATE ROLE {role} LOGIN PASSWORD '{quoted}';
-             GRANT CREATE ON DATABASE spelaion TO {role};
-             CREATE SCHEMA {schema} AUTHORIZATION {role};
-             SET ROLE {role};
-             CREATE TABLE {schema}.items (id serial PRIMARY KEY, name text, price numeric(10,2), data bytea, at timestamptz);
-             INSERT INTO {schema}.items (name, price, data, at) VALUES
-               ('it''s', 1.50, '\\x00ff', '2026-11-11 10:00:00+00'),
-               ('ünïcødé ✓', NULL, NULL, NULL),
-               (E'tab\\there', 99999999.99, '\\xdeadbeef', '1999-12-31 23:59:59+00');
-             CREATE VIEW {schema}.cheap AS SELECT name FROM {schema}.items WHERE price < 10;
-             RESET ROLE;"
-        ),
-    )
-    .await;
-    let snapshot = format!(
-        "SELECT id, name, price, encode(data, 'hex'), at, (SELECT last_value FROM {schema}.items_id_seq) FROM {schema}.items ORDER BY id"
-    );
-    let before = rows(&admin, &snapshot).await;
-    assert_eq!(before.len(), 3);
-
-    let resolved = ws.resolve("remote");
-    for format in [PgFormat::Custom, PgFormat::Plain, PgFormat::Tar] {
-        let log = Log::default();
-        let request = DumpRequest {
-            tools: tools(PG_IMAGE),
-            folder: ws.out(),
-            name_pattern: format!("{{database}}_{format:?}_{{timestamp}}"),
-            extra_args: String::new(),
-            options: DumpOptions::Postgres(PgDumpOptions {
-                schemas: vec![schema.clone()],
-                format,
-                ..PgDumpOptions::default()
-            }),
-        };
-        let summary = run_dump(
-            &resolved,
-            Some(Secret::new(password.clone())),
-            ws.route(),
-            &request,
-            None,
-            &BackupCancel::new(),
-            &log.sink(),
-        )
-        .await
-        .unwrap_or_else(|e| panic!("{format:?} dump: {e}\n{:#?}", log.texts()));
-        assert!(summary.bytes > 0);
-        assert!(summary.path.is_file(), "{}", summary.path.display());
-        no_part_files(&ws.out());
-        log.assert_no_password(&password);
-
-        exec(&admin, &format!("DROP SCHEMA {schema} CASCADE")).await;
-
-        // A read-only connection and an unconfirmed restore are refused before anything runs.
-        let restore = RestoreRequest {
-            tools: tools(PG_IMAGE),
-            input: summary.path.clone(),
-            format: RestoreFormat::Auto,
-            extra_args: String::new(),
-            options: RestoreOptions::Postgres(PgRestoreOptions::default()),
-        };
-        let read_only = ws.resolve("remote_ro");
-        let refused = run_restore(
-            &read_only,
-            Some(Secret::new(password.clone())),
-            ws.route(),
-            &restore,
-            true,
-            &BackupCancel::new(),
-            &|_| panic!("nothing runs on a read-only connection"),
+    let cleanup = vec![
+        format!("DROP SCHEMA IF EXISTS {schema} CASCADE"),
+        format!("REVOKE CREATE ON DATABASE spelaion FROM {role}"),
+        format!("DROP ROLE IF EXISTS {role}"),
+    ];
+    let body = async {
+        let quoted = password.replace('\'', "''");
+        exec(
+            &admin,
+            &format!(
+                "DROP SCHEMA IF EXISTS {schema} CASCADE; DROP ROLE IF EXISTS {role};
+                 CREATE ROLE {role} LOGIN PASSWORD '{quoted}';
+                 GRANT CREATE ON DATABASE spelaion TO {role};
+                 CREATE SCHEMA {schema} AUTHORIZATION {role};
+                 SET ROLE {role};
+                 CREATE TABLE {schema}.items (id serial PRIMARY KEY, name text, price numeric(10,2), data bytea, at timestamptz);
+                 INSERT INTO {schema}.items (name, price, data, at) VALUES
+                   ('it''s', 1.50, '\\x00ff', '2026-11-11 10:00:00+00'),
+                   ('ünïcødé ✓', NULL, NULL, NULL),
+                   (E'tab\\there', 99999999.99, '\\xdeadbeef', '1999-12-31 23:59:59+00');
+                 CREATE VIEW {schema}.cheap AS SELECT name FROM {schema}.items WHERE price < 10;
+                 RESET ROLE;"
+            ),
         )
         .await;
-        assert!(matches!(refused, Err(BackupError::ReadOnly)), "{refused:?}");
-        let unconfirmed = run_restore(
-            &resolved,
-            Some(Secret::new(password.clone())),
-            ws.route(),
-            &restore,
-            false,
-            &BackupCancel::new(),
-            &|_| panic!("nothing runs unconfirmed"),
-        )
-        .await;
-        assert!(matches!(unconfirmed, Err(BackupError::NeedsConfirmation)));
-
-        let log = Log::default();
-        run_restore(
-            &resolved,
-            Some(Secret::new(password.clone())),
-            ws.route(),
-            &restore,
-            true,
-            &BackupCancel::new(),
-            &log.sink(),
-        )
-        .await
-        .unwrap_or_else(|e| panic!("{format:?} restore: {e}\n{:#?}", log.texts()));
-        log.assert_no_password(&password);
-        assert_eq!(rows(&admin, &snapshot).await, before, "{format:?}");
-        assert_eq!(
-            rows(&admin, &format!("SELECT name FROM {schema}.cheap")).await,
-            [["it's".to_string()]]
+        let snapshot = format!(
+            "SELECT id, name, price, encode(data, 'hex'), at, (SELECT last_value FROM {schema}.items_id_seq) FROM {schema}.items ORDER BY id"
         );
-    }
+        let before = rows(&admin, &snapshot).await;
+        assert_eq!(before.len(), 3);
 
-    // A cancelled dump leaves nothing behind.
-    let cancel = BackupCancel::new();
-    cancel.cancel().await;
-    let cancelled = run_dump(
-        &resolved,
-        Some(Secret::new(password.clone())),
-        ws.route(),
-        &DumpRequest {
-            tools: tools(PG_IMAGE),
-            folder: ws.out(),
-            name_pattern: "cancelled".into(),
-            extra_args: String::new(),
-            options: DumpOptions::Postgres(PgDumpOptions::default()),
-        },
-        None,
-        &cancel,
-        &|_| {},
-    )
-    .await;
-    assert!(
-        matches!(cancelled, Err(BackupError::Cancelled)),
-        "{cancelled:?}"
-    );
-    assert!(!ws.out().join("cancelled.dump").exists());
-    no_part_files(&ws.out());
+        let resolved = ws.resolve("remote");
+        for format in [PgFormat::Custom, PgFormat::Plain, PgFormat::Tar] {
+            let log = Log::default();
+            let request = DumpRequest {
+                tools: tools(PG_IMAGE),
+                folder: ws.out(),
+                name_pattern: format!("{{database}}_{format:?}_{{timestamp}}"),
+                extra_args: String::new(),
+                options: DumpOptions::Postgres(PgDumpOptions {
+                    schemas: vec![schema.clone()],
+                    format,
+                    ..PgDumpOptions::default()
+                }),
+            };
+            let summary = run_dump(
+                &resolved,
+                Some(Secret::new(password.clone())),
+                ws.route(),
+                &request,
+                None,
+                &BackupCancel::new(),
+                &log.sink(),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{format:?} dump: {e}\n{:#?}", log.texts()));
+            assert!(summary.bytes > 0);
+            assert!(summary.path.is_file(), "{}", summary.path.display());
+            no_part_files(&ws.out());
+            log.assert_no_password(&password);
 
-    exec(
-        &admin,
-        &format!(
-            "DROP SCHEMA IF EXISTS {schema} CASCADE; REVOKE CREATE ON DATABASE spelaion FROM {role}; DROP ROLE {role}"
-        ),
-    )
+            exec(&admin, &format!("DROP SCHEMA {schema} CASCADE")).await;
+
+            // A read-only connection and an unconfirmed restore are refused before anything runs.
+            let restore = RestoreRequest {
+                tools: tools(PG_IMAGE),
+                input: summary.path.clone(),
+                format: RestoreFormat::Auto,
+                extra_args: String::new(),
+                options: RestoreOptions::Postgres(PgRestoreOptions::default()),
+            };
+            let read_only = ws.resolve("remote_ro");
+            let refused = run_restore(
+                &read_only,
+                Some(Secret::new(password.clone())),
+                ws.route(),
+                &restore,
+                true,
+                &BackupCancel::new(),
+                &|_| panic!("nothing runs on a read-only connection"),
+            )
+            .await;
+            assert!(matches!(refused, Err(BackupError::ReadOnly)), "{refused:?}");
+            let unconfirmed = run_restore(
+                &resolved,
+                Some(Secret::new(password.clone())),
+                ws.route(),
+                &restore,
+                false,
+                &BackupCancel::new(),
+                &|_| panic!("nothing runs unconfirmed"),
+            )
+            .await;
+            assert!(matches!(unconfirmed, Err(BackupError::NeedsConfirmation)));
+
+            let log = Log::default();
+            run_restore(
+                &resolved,
+                Some(Secret::new(password.clone())),
+                ws.route(),
+                &restore,
+                true,
+                &BackupCancel::new(),
+                &log.sink(),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{format:?} restore: {e}\n{:#?}", log.texts()));
+            log.assert_no_password(&password);
+            assert_eq!(rows(&admin, &snapshot).await, before, "{format:?}");
+            assert_eq!(
+                rows(&admin, &format!("SELECT name FROM {schema}.cheap")).await,
+                [["it's".to_string()]]
+            );
+        }
+
+        // A cancelled dump leaves nothing behind.
+        let cancel = BackupCancel::new();
+        cancel.cancel().await;
+        let cancelled = run_dump(
+            &resolved,
+            Some(Secret::new(password.clone())),
+            ws.route(),
+            &DumpRequest {
+                tools: tools(PG_IMAGE),
+                folder: ws.out(),
+                name_pattern: "cancelled".into(),
+                extra_args: String::new(),
+                options: DumpOptions::Postgres(PgDumpOptions::default()),
+            },
+            None,
+            &cancel,
+            &|_| {},
+        )
+        .await;
+        assert!(
+            matches!(cancelled, Err(BackupError::Cancelled)),
+            "{cancelled:?}"
+        );
+        assert!(!ws.out().join("cancelled.dump").exists());
+        no_part_files(&ws.out());
+    };
+    cleaning_up(body, |panicked| {
+        run_cleanup("postgres", &admin.session, &cleanup, panicked)
+    })
     .await;
     admin.close().await;
 }
@@ -478,107 +484,111 @@ async fn mysql_round_trip(engine: &str, server_var: &str, host_in_network: &str,
         ),
     );
     let admin = ws.open("admin", "spelaion-root").await;
-    let quoted = password.replace('\'', "''");
-    exec(
-        &admin,
-        &format!(
-            "DROP DATABASE IF EXISTS {db}; DROP USER IF EXISTS '{user}'@'%';
-             CREATE DATABASE {db} CHARACTER SET utf8mb4;
-             CREATE USER '{user}'@'%' IDENTIFIED BY '{quoted}';
-             GRANT ALL ON {db}.* TO '{user}'@'%';
-             CREATE TABLE {db}.items (id int AUTO_INCREMENT PRIMARY KEY, name varchar(100), price decimal(10,2), data varbinary(16), at datetime(3)) ENGINE=InnoDB;
-             INSERT INTO {db}.items (name, price, data, at) VALUES
-               ('it''s', 1.50, 0x00ff, '2026-11-11 10:00:00.123'),
-               ('ünïcødé ✓', NULL, NULL, NULL),
-               ('back\\\\slash', 99999999.99, 0xdeadbeef, '1999-12-31 23:59:59');
-             CREATE DEFINER=root@'%' SQL SECURITY DEFINER VIEW {db}.cheap AS SELECT name FROM {db}.items WHERE price < 10;
-             CREATE DEFINER=root@'%' PROCEDURE {db}.item_count() SELECT COUNT(*) FROM {db}.items;"
-        ),
-    )
-    .await;
-    if engine == "mysql" {
-        // MySQL 8 shows another account's routine only with this privilege.
+    let cleanup = vec![
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("DROP USER IF EXISTS '{user}'@'%'"),
+    ];
+    let body = async {
+        let quoted = password.replace('\'', "''");
         exec(
             &admin,
-            &format!("GRANT SHOW_ROUTINE ON *.* TO '{user}'@'%'"),
+            &format!(
+                "DROP DATABASE IF EXISTS {db}; DROP USER IF EXISTS '{user}'@'%';
+                 CREATE DATABASE {db} CHARACTER SET utf8mb4;
+                 CREATE USER '{user}'@'%' IDENTIFIED BY '{quoted}';
+                 GRANT ALL ON {db}.* TO '{user}'@'%';
+                 CREATE TABLE {db}.items (id int AUTO_INCREMENT PRIMARY KEY, name varchar(100), price decimal(10,2), data varbinary(16), at datetime(3)) ENGINE=InnoDB;
+                 INSERT INTO {db}.items (name, price, data, at) VALUES
+                   ('it''s', 1.50, 0x00ff, '2026-11-11 10:00:00.123'),
+                   ('ünïcødé ✓', NULL, NULL, NULL),
+                   ('back\\\\slash', 99999999.99, 0xdeadbeef, '1999-12-31 23:59:59');
+                 CREATE DEFINER=root@'%' SQL SECURITY DEFINER VIEW {db}.cheap AS SELECT name FROM {db}.items WHERE price < 10;
+                 CREATE DEFINER=root@'%' PROCEDURE {db}.item_count() SELECT COUNT(*) FROM {db}.items;"
+            ),
         )
         .await;
-    }
-    let snapshot = format!("SELECT id, name, price, HEX(data), at FROM {db}.items ORDER BY id");
-    let before = rows(&admin, &snapshot).await;
-    assert_eq!(before.len(), 3);
+        if engine == "mysql" {
+            // MySQL 8 shows another account's routine only with this privilege.
+            exec(
+                &admin,
+                &format!("GRANT SHOW_ROUTINE ON *.* TO '{user}'@'%'"),
+            )
+            .await;
+        }
+        let snapshot = format!("SELECT id, name, price, HEX(data), at FROM {db}.items ORDER BY id");
+        let before = rows(&admin, &snapshot).await;
+        assert_eq!(before.len(), 3);
 
-    let resolved = ws.resolve("remote");
-    let log = Log::default();
-    let request = DumpRequest {
-        tools: tools(image),
-        folder: ws.out(),
-        name_pattern: "{connection}_{database}_{date}".into(),
-        extra_args: "--comments".into(),
-        options: DumpOptions::Mysql(MysqlDumpOptions {
-            strip_definer: true,
-            hex_blob: true,
-            ..MysqlDumpOptions::default()
-        }),
-    };
-    let summary = run_dump(
-        &resolved,
-        Some(Secret::new(password.clone())),
-        ws.route(),
-        &request,
-        None,
-        &BackupCancel::new(),
-        &log.sink(),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("{engine} dump: {e}\n{:#?}", log.texts()));
-    no_part_files(&ws.out());
-    log.assert_no_password(&password);
-    let text = std::fs::read_to_string(&summary.path).unwrap();
-    assert!(text.contains("CREATE TABLE `items`"), "{text}");
-    assert!(text.contains("item_count"), "the procedure was dumped");
-    for line in text.lines().filter(|l| !l.starts_with("INSERT INTO")) {
-        assert!(!line.contains("DEFINER=`"), "a definer is left: {line}");
-    }
-
-    exec(
-        &admin,
-        &format!("DROP VIEW {db}.cheap; DROP PROCEDURE {db}.item_count; DROP TABLE {db}.items"),
-    )
-    .await;
-
-    let log = Log::default();
-    run_restore(
-        &resolved,
-        Some(Secret::new(password.clone())),
-        ws.route(),
-        &RestoreRequest {
+        let resolved = ws.resolve("remote");
+        let log = Log::default();
+        let request = DumpRequest {
             tools: tools(image),
-            input: summary.path.clone(),
-            format: RestoreFormat::Auto,
-            extra_args: String::new(),
-            options: RestoreOptions::Mysql(MysqlRestoreOptions {
-                database: Some(db.clone()),
-                disable_foreign_keys: true,
+            folder: ws.out(),
+            name_pattern: "{connection}_{database}_{date}".into(),
+            extra_args: "--comments".into(),
+            options: DumpOptions::Mysql(MysqlDumpOptions {
+                strip_definer: true,
+                hex_blob: true,
+                ..MysqlDumpOptions::default()
             }),
-        },
-        true,
-        &BackupCancel::new(),
-        &log.sink(),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("{engine} restore: {e}\n{:#?}", log.texts()));
-    log.assert_no_password(&password);
-    assert_eq!(rows(&admin, &snapshot).await, before);
-    assert_eq!(
-        rows(&admin, &format!("SELECT name FROM {db}.cheap")).await,
-        [["it's".to_string()]]
-    );
+        };
+        let summary = run_dump(
+            &resolved,
+            Some(Secret::new(password.clone())),
+            ws.route(),
+            &request,
+            None,
+            &BackupCancel::new(),
+            &log.sink(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{engine} dump: {e}\n{:#?}", log.texts()));
+        no_part_files(&ws.out());
+        log.assert_no_password(&password);
+        let text = std::fs::read_to_string(&summary.path).unwrap();
+        assert!(text.contains("CREATE TABLE `items`"), "{text}");
+        assert!(text.contains("item_count"), "the procedure was dumped");
+        for line in text.lines().filter(|l| !l.starts_with("INSERT INTO")) {
+            assert!(!line.contains("DEFINER=`"), "a definer is left: {line}");
+        }
 
-    exec(
-        &admin,
-        &format!("DROP DATABASE {db}; DROP USER '{user}'@'%'"),
-    )
+        exec(
+            &admin,
+            &format!("DROP VIEW {db}.cheap; DROP PROCEDURE {db}.item_count; DROP TABLE {db}.items"),
+        )
+        .await;
+
+        let log = Log::default();
+        run_restore(
+            &resolved,
+            Some(Secret::new(password.clone())),
+            ws.route(),
+            &RestoreRequest {
+                tools: tools(image),
+                input: summary.path.clone(),
+                format: RestoreFormat::Auto,
+                extra_args: String::new(),
+                options: RestoreOptions::Mysql(MysqlRestoreOptions {
+                    database: Some(db.clone()),
+                    disable_foreign_keys: true,
+                }),
+            },
+            true,
+            &BackupCancel::new(),
+            &log.sink(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{engine} restore: {e}\n{:#?}", log.texts()));
+        log.assert_no_password(&password);
+        assert_eq!(rows(&admin, &snapshot).await, before);
+        assert_eq!(
+            rows(&admin, &format!("SELECT name FROM {db}.cheap")).await,
+            [["it's".to_string()]]
+        );
+    };
+    cleaning_up(body, |panicked| {
+        run_cleanup(engine, &admin.session, &cleanup, panicked)
+    })
     .await;
     admin.close().await;
 }

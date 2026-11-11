@@ -19,6 +19,9 @@ use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
 
+mod support;
+use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
+
 const SMART: Safeguards = Safeguards {
     confirm_execution: false,
     confirm_data_changes: true,
@@ -196,6 +199,19 @@ async fn value(session: &Session, sql: &str) -> String {
     out.unwrap_or_else(|| panic!("{sql}: no rows"))
 }
 
+/// A test's cleanup: drops its tables from `b`. When the test failed, it first rolls back
+/// what it may have left open in `a`, which would hold the tables.
+async fn drop_tables(engine: &Engine, tables: Vec<String>, panicked: bool) {
+    if panicked {
+        let _ = tokio::time::timeout(CLEANUP_TIMEOUT, engine.a.rollback()).await;
+    }
+    let drops: Vec<String> = tables
+        .iter()
+        .map(|table| format!("drop table if exists {table}"))
+        .collect();
+    run_cleanup(engine.name, &engine.b, &drops, panicked).await;
+}
+
 async fn count(engine: &Engine, session: &Session, table: &str) -> String {
     value(
         session,
@@ -209,95 +225,99 @@ async fn manual_commit_commit_and_rollback_on_every_engine() {
     for engine in engines().await {
         let name = engine.name;
         let table = unique("tx_manual");
-        run(
-            &engine.a,
-            &format!("create table {table} (id int primary key, v varchar(20))"),
-        )
-        .await
-        .unwrap();
-
-        let status = engine.a.follow_transactions(&Safeguards::default()).await;
-        assert!(status.supported, "{name}");
-        assert!(status.auto_commit, "{name}");
-        assert_eq!(status.state, Some(TransactionState::Idle), "{name}");
-        assert!(!engine.a.close_needs_confirmation().await, "{name}");
-        assert_eq!(
-            engine.a.commit().await.unwrap_err(),
-            TransactionError::NotOpen,
-            "{name}"
-        );
-
-        // Auto-commit off: several writes wait for Commit, and the badge says so.
-        let status = engine.a.set_auto_commit(false).await.unwrap();
-        assert!(!status.auto_commit, "{name}");
-        run(
-            &engine.a,
-            &format!("insert into {table} values (1, 'a'); insert into {table} values (2, 'b')"),
-        )
-        .await
-        .unwrap();
-        let status = engine.a.transaction_status();
-        assert_eq!(status.state, Some(TransactionState::Open), "{name}");
-        assert_eq!(status.statements, 2, "{name}");
-        assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
-        assert!(engine.a.close_needs_confirmation().await, "{name}");
-        assert_eq!(
-            engine.a.set_auto_commit(true).await.unwrap_err(),
-            TransactionError::Open,
-            "{name}"
-        );
-
-        let outcome = engine.a.rollback().await.unwrap();
-        assert_eq!(outcome.status.state, Some(TransactionState::Idle), "{name}");
-        assert!(!outcome.status.auto_commit, "{name}: manual stays manual");
-        assert_eq!(count(&engine, &engine.a, &table).await, "0", "{name}");
-
-        run(&engine.a, &format!("insert into {table} values (3, 'c')"))
+        let body = async {
+            run(
+                &engine.a,
+                &format!("create table {table} (id int primary key, v varchar(20))"),
+            )
             .await
             .unwrap();
-        assert!(engine.a.transaction_status().is_open(), "{name}");
-        assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
-        let outcome = engine.a.commit().await.unwrap();
-        assert_eq!(outcome.status.state, Some(TransactionState::Idle), "{name}");
-        assert_eq!(count(&engine, &engine.b, &table).await, "1", "{name}");
-        assert!(!engine.a.close_needs_confirmation().await, "{name}");
 
-        // A read opens a transaction too in manual commit (a function may write).
-        run(&engine.a, &format!("select count(*) from {table}"))
-            .await
-            .unwrap();
-        assert!(engine.a.transaction_status().is_open(), "{name}");
-        engine.a.rollback().await.unwrap();
+            let status = engine.a.follow_transactions(&Safeguards::default()).await;
+            assert!(status.supported, "{name}");
+            assert!(status.auto_commit, "{name}");
+            assert_eq!(status.state, Some(TransactionState::Idle), "{name}");
+            assert!(!engine.a.close_needs_confirmation().await, "{name}");
+            assert_eq!(
+                engine.a.commit().await.unwrap_err(),
+                TransactionError::NotOpen,
+                "{name}"
+            );
 
-        // Back to auto-commit: each statement commits, and a user's BEGIN shows.
-        assert!(engine.a.set_auto_commit(true).await.unwrap().auto_commit);
-        run(&engine.a, &format!("insert into {table} values (4, 'd')"))
+            // Auto-commit off: several writes wait for Commit, and the badge says so.
+            let status = engine.a.set_auto_commit(false).await.unwrap();
+            assert!(!status.auto_commit, "{name}");
+            run(
+                &engine.a,
+                &format!(
+                    "insert into {table} values (1, 'a'); insert into {table} values (2, 'b')"
+                ),
+            )
             .await
             .unwrap();
-        assert_eq!(
-            engine.a.transaction_status().state,
-            Some(TransactionState::Idle),
-            "{name}"
-        );
-        assert_eq!(count(&engine, &engine.b, &table).await, "2", "{name}");
-        run(&engine.a, engine.begin).await.unwrap();
-        run(&engine.a, &format!("delete from {table} where id = 4"))
-            .await
-            .unwrap();
-        let status = engine.a.transaction_status();
-        assert!(status.is_open(), "{name}: a typed BEGIN shows");
-        assert_eq!(status.statements, 1, "{name}");
-        run(&engine.a, "rollback").await.unwrap();
-        assert_eq!(
-            engine.a.transaction_status().state,
-            Some(TransactionState::Idle),
-            "{name}"
-        );
-        assert_eq!(count(&engine, &engine.b, &table).await, "2", "{name}");
+            let status = engine.a.transaction_status();
+            assert_eq!(status.state, Some(TransactionState::Open), "{name}");
+            assert_eq!(status.statements, 2, "{name}");
+            assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
+            assert!(engine.a.close_needs_confirmation().await, "{name}");
+            assert_eq!(
+                engine.a.set_auto_commit(true).await.unwrap_err(),
+                TransactionError::Open,
+                "{name}"
+            );
 
-        run(&engine.b, &format!("drop table {table}"))
-            .await
-            .unwrap();
+            let outcome = engine.a.rollback().await.unwrap();
+            assert_eq!(outcome.status.state, Some(TransactionState::Idle), "{name}");
+            assert!(!outcome.status.auto_commit, "{name}: manual stays manual");
+            assert_eq!(count(&engine, &engine.a, &table).await, "0", "{name}");
+
+            run(&engine.a, &format!("insert into {table} values (3, 'c')"))
+                .await
+                .unwrap();
+            assert!(engine.a.transaction_status().is_open(), "{name}");
+            assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
+            let outcome = engine.a.commit().await.unwrap();
+            assert_eq!(outcome.status.state, Some(TransactionState::Idle), "{name}");
+            assert_eq!(count(&engine, &engine.b, &table).await, "1", "{name}");
+            assert!(!engine.a.close_needs_confirmation().await, "{name}");
+
+            // A read opens a transaction too in manual commit (a function may write).
+            run(&engine.a, &format!("select count(*) from {table}"))
+                .await
+                .unwrap();
+            assert!(engine.a.transaction_status().is_open(), "{name}");
+            engine.a.rollback().await.unwrap();
+
+            // Back to auto-commit: each statement commits, and a user's BEGIN shows.
+            assert!(engine.a.set_auto_commit(true).await.unwrap().auto_commit);
+            run(&engine.a, &format!("insert into {table} values (4, 'd')"))
+                .await
+                .unwrap();
+            assert_eq!(
+                engine.a.transaction_status().state,
+                Some(TransactionState::Idle),
+                "{name}"
+            );
+            assert_eq!(count(&engine, &engine.b, &table).await, "2", "{name}");
+            run(&engine.a, engine.begin).await.unwrap();
+            run(&engine.a, &format!("delete from {table} where id = 4"))
+                .await
+                .unwrap();
+            let status = engine.a.transaction_status();
+            assert!(status.is_open(), "{name}: a typed BEGIN shows");
+            assert_eq!(status.statements, 1, "{name}");
+            run(&engine.a, "rollback").await.unwrap();
+            assert_eq!(
+                engine.a.transaction_status().state,
+                Some(TransactionState::Idle),
+                "{name}"
+            );
+            assert_eq!(count(&engine, &engine.b, &table).await, "2", "{name}");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
+        .await;
     }
 }
 
@@ -306,77 +326,79 @@ async fn smart_commit_switches_to_manual_on_the_first_write() {
     for engine in engines().await {
         let name = engine.name;
         let table = unique("tx_smart");
-        run(
-            &engine.a,
-            &format!(
-                "create table {table} (id int primary key, v varchar(20)); insert into {table} values (1, 'old')"
-            ),
-        )
-        .await
-        .unwrap();
-        let status = engine.a.follow_transactions(&SMART).await;
-        assert!(status.auto_commit && status.smart_commit, "{name}");
-
-        // Reads stay in auto-commit, with no transaction left open.
-        run(&engine.a, &format!("select v from {table}"))
+        let body = async {
+            run(
+                &engine.a,
+                &format!(
+                    "create table {table} (id int primary key, v varchar(20)); insert into {table} values (1, 'old')"
+                ),
+            )
             .await
             .unwrap();
-        let status = engine.a.transaction_status();
-        assert!(status.auto_commit && !status.smart_switched, "{name}");
-        assert_eq!(status.state, Some(TransactionState::Idle), "{name}");
+            let status = engine.a.follow_transactions(&SMART).await;
+            assert!(status.auto_commit && status.smart_commit, "{name}");
 
-        // The first write switches to manual, inside a transaction.
-        run(
-            &engine.a,
-            &format!("update {table} set v = 'new' where id = 1"),
-        )
-        .await
-        .unwrap();
-        let status = engine.a.transaction_status();
-        assert!(!status.auto_commit && status.smart_switched, "{name}");
-        assert!(status.is_open(), "{name}");
-        // The user cannot loosen it: auto-commit back on asks for Commit or Rollback first.
-        assert_eq!(
-            engine.a.set_auto_commit(true).await.unwrap_err(),
-            TransactionError::Open
-        );
-        let outcome = engine.a.rollback().await.unwrap();
-        assert!(outcome.status.auto_commit, "{name}: back to auto-commit");
-        assert!(!outcome.status.smart_switched, "{name}");
-        assert_eq!(
-            value(&engine.b, &format!("select v from {table}")).await,
-            "old",
-            "{name}"
-        );
+            // Reads stay in auto-commit, with no transaction left open.
+            run(&engine.a, &format!("select v from {table}"))
+                .await
+                .unwrap();
+            let status = engine.a.transaction_status();
+            assert!(status.auto_commit && !status.smart_switched, "{name}");
+            assert_eq!(status.state, Some(TransactionState::Idle), "{name}");
 
-        run(
-            &engine.a,
-            &format!("update {table} set v = 'new' where id = 1"),
-        )
-        .await
-        .unwrap();
-        assert!(engine.a.transaction_status().smart_switched, "{name}");
-        let outcome = engine.a.commit().await.unwrap();
-        assert!(outcome.status.auto_commit, "{name}");
-        assert_eq!(
-            value(&engine.b, &format!("select v from {table}")).await,
-            "new",
-            "{name}"
-        );
-
-        // The type's manual commit starts tabs with auto-commit off.
-        let status = engine
-            .a
-            .follow_transactions(&Safeguards {
-                manual_commit: true,
-                ..SMART
-            })
-            .await;
-        assert!(!status.auto_commit && !status.smart_switched, "{name}");
-
-        run(&engine.b, &format!("drop table {table}"))
+            // The first write switches to manual, inside a transaction.
+            run(
+                &engine.a,
+                &format!("update {table} set v = 'new' where id = 1"),
+            )
             .await
             .unwrap();
+            let status = engine.a.transaction_status();
+            assert!(!status.auto_commit && status.smart_switched, "{name}");
+            assert!(status.is_open(), "{name}");
+            // The user cannot loosen it: auto-commit back on asks for Commit or Rollback first.
+            assert_eq!(
+                engine.a.set_auto_commit(true).await.unwrap_err(),
+                TransactionError::Open
+            );
+            let outcome = engine.a.rollback().await.unwrap();
+            assert!(outcome.status.auto_commit, "{name}: back to auto-commit");
+            assert!(!outcome.status.smart_switched, "{name}");
+            assert_eq!(
+                value(&engine.b, &format!("select v from {table}")).await,
+                "old",
+                "{name}"
+            );
+
+            run(
+                &engine.a,
+                &format!("update {table} set v = 'new' where id = 1"),
+            )
+            .await
+            .unwrap();
+            assert!(engine.a.transaction_status().smart_switched, "{name}");
+            let outcome = engine.a.commit().await.unwrap();
+            assert!(outcome.status.auto_commit, "{name}");
+            assert_eq!(
+                value(&engine.b, &format!("select v from {table}")).await,
+                "new",
+                "{name}"
+            );
+
+            // The type's manual commit starts tabs with auto-commit off.
+            let status = engine
+                .a
+                .follow_transactions(&Safeguards {
+                    manual_commit: true,
+                    ..SMART
+                })
+                .await;
+            assert!(!status.auto_commit && !status.smart_switched, "{name}");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
+        .await;
     }
 }
 
@@ -385,57 +407,60 @@ async fn schema_metadata_keeps_user_transaction_counts_on_every_engine() {
     for engine in engines().await {
         let name = engine.name;
         let table = unique("tx_metadata");
-        run(&engine.a, &format!("create table {table} (id int)"))
-            .await
-            .unwrap();
-        engine.a.follow_transactions(&SMART).await;
-        let schema = spelaion_core::active_schema(&engine.a).await.unwrap();
-        assert_eq!(engine.a.transaction_status().statements, 0, "{name}");
-        assert_eq!(
-            engine.a.transaction_status().state,
-            Some(TransactionState::Idle),
-            "{name}: metadata does not start a transaction"
-        );
-
-        run(&engine.a, &format!("insert into {table} values (1)"))
-            .await
-            .unwrap();
-        let results_before = engine.a.results().len();
-        for _ in 0..3 {
+        let body = async {
+            run(&engine.a, &format!("create table {table} (id int)"))
+                .await
+                .unwrap();
+            engine.a.follow_transactions(&SMART).await;
+            let schema = spelaion_core::active_schema(&engine.a).await.unwrap();
+            assert_eq!(engine.a.transaction_status().statements, 0, "{name}");
             assert_eq!(
-                spelaion_core::active_schema(&engine.a).await.unwrap(),
-                schema,
+                engine.a.transaction_status().state,
+                Some(TransactionState::Idle),
+                "{name}: metadata does not start a transaction"
+            );
+
+            run(&engine.a, &format!("insert into {table} values (1)"))
+                .await
+                .unwrap();
+            let results_before = engine.a.results().len();
+            for _ in 0..3 {
+                assert_eq!(
+                    spelaion_core::active_schema(&engine.a).await.unwrap(),
+                    schema,
+                    "{name}"
+                );
+                let status = engine.a.transaction_status();
+                assert!(status.is_open() && status.smart_switched, "{name}");
+                assert_eq!(status.statements, 1, "{name}: metadata is not user work");
+                assert_eq!(engine.a.results().len(), results_before, "{name}");
+            }
+
+            // An explicit generated action still counts, even though its SQL is core-written.
+            assert_eq!(
+                spelaion_core::count_rows(&engine.a, schema.as_deref().unwrap_or(""), &table)
+                    .await
+                    .unwrap(),
+                1,
                 "{name}"
             );
-            let status = engine.a.transaction_status();
-            assert!(status.is_open() && status.smart_switched, "{name}");
-            assert_eq!(status.statements, 1, "{name}: metadata is not user work");
-            assert_eq!(engine.a.results().len(), results_before, "{name}");
-        }
+            assert_eq!(engine.a.transaction_status().statements, 2, "{name}");
+            engine.a.rollback().await.unwrap();
+            assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
 
-        // An explicit generated action still counts, even though its SQL is core-written.
-        assert_eq!(
-            spelaion_core::count_rows(&engine.a, schema.as_deref().unwrap_or(""), &table)
-                .await
-                .unwrap(),
-            1,
-            "{name}"
-        );
-        assert_eq!(engine.a.transaction_status().statements, 2, "{name}");
-        engine.a.rollback().await.unwrap();
-        assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
-
-        engine.a.set_auto_commit(false).await.unwrap();
-        spelaion_core::active_schema(&engine.a).await.unwrap();
-        assert_eq!(
-            engine.a.transaction_status().state,
-            Some(TransactionState::Idle),
-            "{name}: metadata does not send manual-mode BEGIN"
-        );
-        assert_eq!(engine.a.transaction_status().statements, 0, "{name}");
-        run(&engine.b, &format!("drop table {table}"))
-            .await
-            .unwrap();
+            engine.a.set_auto_commit(false).await.unwrap();
+            spelaion_core::active_schema(&engine.a).await.unwrap();
+            assert_eq!(
+                engine.a.transaction_status().state,
+                Some(TransactionState::Idle),
+                "{name}: metadata does not send manual-mode BEGIN"
+            );
+            assert_eq!(engine.a.transaction_status().statements, 0, "{name}");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
+        .await;
     }
 }
 
@@ -475,105 +500,108 @@ async fn statements_that_end_a_transaction_keep_the_badge_true() {
     for engine in engines().await {
         let name = engine.name;
         let table = unique("tx_end");
-        run(
-            &engine.a,
-            &format!("create table {table} (id int primary key)"),
-        )
-        .await
-        .unwrap();
-        engine.a.follow_transactions(&Safeguards::default()).await;
-        engine.a.set_auto_commit(false).await.unwrap();
-        run(&engine.a, &format!("insert into {table} values (1)"))
+        let body = async {
+            run(
+                &engine.a,
+                &format!("create table {table} (id int primary key)"),
+            )
             .await
             .unwrap();
-        assert!(engine.a.transaction_status().is_open(), "{name}");
+            engine.a.follow_transactions(&Safeguards::default()).await;
+            engine.a.set_auto_commit(false).await.unwrap();
+            run(&engine.a, &format!("insert into {table} values (1)"))
+                .await
+                .unwrap();
+            assert!(engine.a.transaction_status().is_open(), "{name}");
 
-        match name {
-            // DDL commits implicitly: the badge goes, and the run says so.
-            "mysql" | "mariadb" => {
-                let notices = run(&engine.a, &format!("create table {table}_2 (id int)"))
-                    .await
-                    .unwrap();
-                assert!(
-                    notices
-                        .iter()
-                        .any(|n| n.contains("committed by this statement")),
-                    "{name}: {notices:?}"
-                );
-                let status = engine.a.transaction_status();
-                assert_eq!(status.state, Some(TransactionState::Idle), "{name}");
-                assert_eq!(count(&engine, &engine.b, &table).await, "1", "{name}");
-                // A new BEGIN commits the open transaction too.
-                run(&engine.a, &format!("insert into {table} values (2)"))
-                    .await
-                    .unwrap();
-                let notices = run(&engine.a, "begin").await.unwrap();
-                assert!(
-                    notices
-                        .iter()
-                        .any(|n| n.contains("committed by this statement")),
-                    "{name}: {notices:?}"
-                );
-                assert_eq!(count(&engine, &engine.b, &table).await, "2", "{name}");
-                engine.a.rollback().await.unwrap();
-                run(&engine.b, &format!("drop table {table}_2"))
-                    .await
-                    .unwrap();
-            }
-            // An error leaves a transaction that can only be rolled back.
-            "postgres" | "duckdb" => {
-                assert!(
-                    run(&engine.a, &format!("insert into {table} values (1)"))
+            match name {
+                // DDL commits implicitly: the badge goes, and the run says so.
+                "mysql" | "mariadb" => {
+                    let notices = run(&engine.a, &format!("create table {table}_2 (id int)"))
                         .await
-                        .is_err()
-                );
-                let status = engine.a.transaction_status();
-                assert_eq!(status.state, Some(TransactionState::Failed), "{name}");
-                // Nothing to lose by closing it, but Commit can only roll it back.
-                assert!(!engine.a.close_needs_confirmation().await, "{name}");
-                let outcome = engine.a.commit().await.unwrap();
-                assert_eq!(outcome.status.state, Some(TransactionState::Idle), "{name}");
-                assert!(
-                    outcome
-                        .notices
-                        .iter()
-                        .any(|n| n.message.contains("rolled it back")),
-                    "{name}: {:?}",
-                    outcome.notices
-                );
-                assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
-            }
-            // With XACT_ABORT an error rolls the whole transaction back.
-            "sqlserver" => {
-                run(&engine.a, "set xact_abort on").await.unwrap();
-                let error = run(&engine.a, &format!("insert into {table} values (1)"))
-                    .await
-                    .unwrap_err();
-                assert!(
-                    error.contains("PRIMARY KEY") || error.contains("duplicate"),
-                    "{error}"
-                );
-                let status = engine.a.transaction_status();
-                assert_eq!(status.state, Some(TransactionState::Idle), "{name}");
-                assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
-                run(&engine.a, "set xact_abort off").await.unwrap();
-                engine.a.rollback().await.unwrap();
-            }
-            // SQLite has no failed state: a failed statement leaves the transaction open.
-            "sqlite" => {
-                assert!(
-                    run(&engine.a, &format!("insert into {table} values (1)"))
+                        .unwrap();
+                    assert!(
+                        notices
+                            .iter()
+                            .any(|n| n.contains("committed by this statement")),
+                        "{name}: {notices:?}"
+                    );
+                    let status = engine.a.transaction_status();
+                    assert_eq!(status.state, Some(TransactionState::Idle), "{name}");
+                    assert_eq!(count(&engine, &engine.b, &table).await, "1", "{name}");
+                    // A new BEGIN commits the open transaction too.
+                    run(&engine.a, &format!("insert into {table} values (2)"))
                         .await
-                        .is_err()
-                );
-                assert!(engine.a.transaction_status().is_open(), "{name}");
-                engine.a.rollback().await.unwrap();
+                        .unwrap();
+                    let notices = run(&engine.a, "begin").await.unwrap();
+                    assert!(
+                        notices
+                            .iter()
+                            .any(|n| n.contains("committed by this statement")),
+                        "{name}: {notices:?}"
+                    );
+                    assert_eq!(count(&engine, &engine.b, &table).await, "2", "{name}");
+                    engine.a.rollback().await.unwrap();
+                    run(&engine.b, &format!("drop table {table}_2"))
+                        .await
+                        .unwrap();
+                }
+                // An error leaves a transaction that can only be rolled back.
+                "postgres" | "duckdb" => {
+                    assert!(
+                        run(&engine.a, &format!("insert into {table} values (1)"))
+                            .await
+                            .is_err()
+                    );
+                    let status = engine.a.transaction_status();
+                    assert_eq!(status.state, Some(TransactionState::Failed), "{name}");
+                    // Nothing to lose by closing it, but Commit can only roll it back.
+                    assert!(!engine.a.close_needs_confirmation().await, "{name}");
+                    let outcome = engine.a.commit().await.unwrap();
+                    assert_eq!(outcome.status.state, Some(TransactionState::Idle), "{name}");
+                    assert!(
+                        outcome
+                            .notices
+                            .iter()
+                            .any(|n| n.message.contains("rolled it back")),
+                        "{name}: {:?}",
+                        outcome.notices
+                    );
+                    assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
+                }
+                // With XACT_ABORT an error rolls the whole transaction back.
+                "sqlserver" => {
+                    run(&engine.a, "set xact_abort on").await.unwrap();
+                    let error = run(&engine.a, &format!("insert into {table} values (1)"))
+                        .await
+                        .unwrap_err();
+                    assert!(
+                        error.contains("PRIMARY KEY") || error.contains("duplicate"),
+                        "{error}"
+                    );
+                    let status = engine.a.transaction_status();
+                    assert_eq!(status.state, Some(TransactionState::Idle), "{name}");
+                    assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
+                    run(&engine.a, "set xact_abort off").await.unwrap();
+                    engine.a.rollback().await.unwrap();
+                }
+                // SQLite has no failed state: a failed statement leaves the transaction open.
+                "sqlite" => {
+                    assert!(
+                        run(&engine.a, &format!("insert into {table} values (1)"))
+                            .await
+                            .is_err()
+                    );
+                    assert!(engine.a.transaction_status().is_open(), "{name}");
+                    engine.a.rollback().await.unwrap();
+                }
+                other => panic!("no case for {other}"),
             }
-            other => panic!("no case for {other}"),
-        }
-        run(&engine.b, &format!("drop table {table}"))
-            .await
-            .unwrap();
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone(), format!("{table}_2")], panicked)
+        })
+        .await;
     }
 }
 
@@ -584,31 +612,34 @@ async fn myisam_rollback_says_its_changes_stayed() {
             continue;
         }
         let table = unique("tx_myisam");
-        run(
-            &engine.a,
-            &format!("create table {table} (id int primary key) engine = MyISAM"),
-        )
-        .await
-        .unwrap();
-        engine.a.follow_transactions(&Safeguards::default()).await;
-        engine.a.set_auto_commit(false).await.unwrap();
-        run(&engine.a, &format!("insert into {table} values (1)"))
+        let body = async {
+            run(
+                &engine.a,
+                &format!("create table {table} (id int primary key) engine = MyISAM"),
+            )
             .await
             .unwrap();
-        let outcome = engine.a.rollback().await.unwrap();
-        assert!(
-            outcome
-                .notices
-                .iter()
-                .any(|n| n.message.contains("non-transactional")),
-            "{}: {:?}",
-            engine.name,
-            outcome.notices
-        );
-        assert_eq!(count(&engine, &engine.b, &table).await, "1");
-        run(&engine.b, &format!("drop table {table}"))
-            .await
-            .unwrap();
+            engine.a.follow_transactions(&Safeguards::default()).await;
+            engine.a.set_auto_commit(false).await.unwrap();
+            run(&engine.a, &format!("insert into {table} values (1)"))
+                .await
+                .unwrap();
+            let outcome = engine.a.rollback().await.unwrap();
+            assert!(
+                outcome
+                    .notices
+                    .iter()
+                    .any(|n| n.message.contains("non-transactional")),
+                "{}: {:?}",
+                engine.name,
+                outcome.notices
+            );
+            assert_eq!(count(&engine, &engine.b, &table).await, "1");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
+        .await;
     }
 }
 
@@ -629,32 +660,35 @@ async fn a_lost_session_remembers_its_open_transaction() {
         };
         let name = engine.name;
         let table = unique("tx_lost");
-        run(
-            &engine.a,
-            &format!("create table {table} (id int primary key)"),
-        )
-        .await
-        .unwrap();
-        engine.a.follow_transactions(&Safeguards::default()).await;
-        engine.a.set_auto_commit(false).await.unwrap();
-        run(&engine.a, &format!("insert into {table} values (1)"))
+        let body = async {
+            run(
+                &engine.a,
+                &format!("create table {table} (id int primary key)"),
+            )
             .await
             .unwrap();
-        let id = value(&engine.a, own_id).await;
-        // `sa` may kill; the PostgreSQL and MySQL test users end their own sessions.
-        run(&engine.b, &kill.replace("{id}", &id)).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        assert!(run(&engine.a, "select 1").await.is_err(), "{name}");
-        assert!(
-            matches!(*engine.a.health().borrow(), SessionHealth::Lost { .. }),
-            "{name}"
-        );
-        // The tab can say that a transaction was open when it was lost; nothing reconnects.
-        assert!(engine.a.transaction_status().is_open(), "{name}");
-        assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
-        run(&engine.b, &format!("drop table {table}"))
-            .await
-            .unwrap();
+            engine.a.follow_transactions(&Safeguards::default()).await;
+            engine.a.set_auto_commit(false).await.unwrap();
+            run(&engine.a, &format!("insert into {table} values (1)"))
+                .await
+                .unwrap();
+            let id = value(&engine.a, own_id).await;
+            // `sa` may kill; the PostgreSQL and MySQL test users end their own sessions.
+            run(&engine.b, &kill.replace("{id}", &id)).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            assert!(run(&engine.a, "select 1").await.is_err(), "{name}");
+            assert!(
+                matches!(*engine.a.health().borrow(), SessionHealth::Lost { .. }),
+                "{name}"
+            );
+            // The tab can say that a transaction was open when it was lost; nothing reconnects.
+            assert!(engine.a.transaction_status().is_open(), "{name}");
+            assert_eq!(count(&engine, &engine.b, &table).await, "0", "{name}");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
+        .await;
     }
 }
 
