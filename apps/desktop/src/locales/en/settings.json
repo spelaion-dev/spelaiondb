@@ -117,7 +117,7 @@
     "placeholder": "*password*\n*email*\ncard_*",
     "saved": "Saved. It applies to connections opened from now on.",
     "unreadable": "user.toml could not be read, so every column of every connection is masked until it is fixed.",
-    "hint": "One pattern per line, matched against column names ignoring case: * is any characters, ? one. A connection of your own can leave a column visible in its form; a connection from the repository cannot unmask these, and connection types can add their own. Masking keeps values off the screen, not away from SQL: an alias gets past it."
+    "hint": "One pattern per line, ignoring case: * is any characters, ? one. A pattern matches a column's name or the table column it reads; table.column names the table too. A connection of your own can leave a column visible in its form; a connection from the repository cannot unmask these, and connection types can add their own. Masking keeps values off the screen, not away from SQL: an expression such as lower(email) gets past it, and so does an alias on SQL Server, DuckDB and SQLite on a server."
   },
   "history": {
     "title": "History",

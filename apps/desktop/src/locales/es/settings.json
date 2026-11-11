@@ -117,7 +117,7 @@
     "placeholder": "*password*\n*email*\ncard_*",
     "saved": "Guardado. Se aplica a las conexiones que se abran a partir de ahora.",
     "unreadable": "No se pudo leer user.toml, así que todas las columnas de todas las conexiones se enmascaran hasta que se arregle.",
-    "hint": "Un patrón por línea, comparado con los nombres de columna sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Una conexión tuya puede dejar visible una columna en su formulario; una conexión del repositorio no puede desenmascarar estas, y los tipos de conexión pueden añadir las suyas. El enmascarado aparta los valores de la pantalla, no del SQL: un alias lo salta."
+    "hint": "Un patrón por línea, sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Un patrón coincide con el nombre de una columna o con la columna de tabla que lee; tabla.columna nombra también la tabla. Una conexión tuya puede dejar visible una columna en su formulario; una conexión del repositorio no puede desenmascarar estas, y los tipos de conexión pueden añadir las suyas. El enmascarado aparta los valores de la pantalla, no del SQL: una expresión como lower(email) lo salta, y también un alias en SQL Server, DuckDB y SQLite en un servidor."
   },
   "history": {
     "title": "Historial",

@@ -130,7 +130,7 @@
     "maskNever": "Leave these columns visible",
     "maskNeverPlaceholder": "email_verified",
     "maskTypeRequires": "The {{type}} type always masks: {{patterns}}.",
-    "maskingHint": "One pattern per line, matched against column names ignoring case: * is any characters, ? one. Masked values show as •••••• in the grid, copies, exports, statistics and agents' answers; you can reveal one cell at a time. \"Leave visible\" exempts your own patterns here, never a connection type's. Masking keeps values off the screen, not away from SQL: an alias such as SELECT email AS e gets past it, so use the database's permissions to keep data from people."
+    "maskingHint": "One pattern per line, ignoring case: * is any characters, ? one. A pattern matches a column's name or the table column it reads; table.column names the table too. Masked values show as •••••• in the grid, copies, exports, statistics and agents' answers; you can reveal one cell at a time. \"Leave visible\" exempts your own patterns here, never a connection type's. Masking keeps values off the screen, not away from SQL: an expression such as lower(email) gets past it, and so does an alias on SQL Server, DuckDB and SQLite on a server. Use the database's permissions to keep data from people."
   },
   "tls": {
     "disable": "Disabled",
