@@ -186,7 +186,9 @@ async fn ssm_alone_forwards_to_a_port_on_the_node() {
         local
     );
 
-    // Closing stops the CLI and the plugin it started: nothing listens there any more.
+    // Closing stops the CLI and the plugin it started, and waits until both have exited: nothing
+    // listens there any more as soon as it returns (the plugin is not our child, so nobody else
+    // waits for it).
     tunnel.close().await;
     assert!(
         StdStream::connect(("127.0.0.1", plugin_port)).is_err(),
@@ -223,6 +225,7 @@ async fn ssm_reaches_another_host_through_the_node() {
         "--parameters=host=orders.cluster-abc.eu-west-1.rds.amazonaws.com,portNumber=5432,localPortNumber={plugin_port}"
     )));
     assert!(StdStream::connect(("127.0.0.1", plugin_port)).is_ok());
+    // A drop kills them but cannot wait: the system ends the plugin a moment later.
     drop(tunnel);
     let mut stopped = false;
     for _ in 0..50 {

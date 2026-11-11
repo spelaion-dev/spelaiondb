@@ -117,9 +117,15 @@ the personal directory, pinned by trust. Both cases fit there.
   (`ssm_arguments`) and runs the session; `tunnel.rs` uses it like the proxy: the first hop's TCP
   connection goes to the session's local end (the host key still checked against the hop's
   name), or, with no hops, each forward or probe gets a session to its target. The plugin is
-  stopped with the CLI by stopping the process tree with the system's own tool (`taskkill /T`
-  on Windows, the process group on Unix), so nothing needs `unsafe`. The connection test shows
-  the session as its own step (`FailureKind::Ssm`).
+  stopped with the CLI by stopping the process tree (`taskkill /T` on Windows, a `SIGKILL` to
+  the process group on Unix), and closing a session waits, at most five seconds, until every
+  process of the tree has exited, not only the CLI: a killed plugin that has not ended yet still
+  holds its local port (SDB-251, found by CI on Linux). On Unix that is the CLI's process group
+  being gone (`rustix`); on Windows the CLI is put in a job object as it starts, so the plugin is
+  in it too, and the close waits until the job has no process left; the job kills what it holds
+  when it is closed, so a dropped session or an app that ends abruptly leaves no plugin behind
+  (`win32job`). Both are safe APIs, so nothing needs `unsafe`. The connection test shows the
+  session as its own step (`FailureKind::Ssm`).
 - Tests: `spelaion-ssh/tests/ssm.rs` runs a stand-in for `aws` and the plugin
   (`tests/support/fake_aws.rs`, built as `spelaion-test-fake-aws`, never shipped) that records
   its arguments and environment and forwards the port: the exact arguments, a remote host, AWS's
