@@ -68,12 +68,86 @@ pub fn script_risks(
 }
 
 fn statement_risk(engine: &str, sql: &str, safeguards: &Safeguards) -> Option<Risk> {
-    destructive(engine, sql)
+    let readings = readings(engine, sql);
+    readings
+        .iter()
+        .find_map(|reading| destructive(engine, reading))
         .or_else(|| {
-            (safeguards.confirm_data_changes && classify_read_only(engine, sql).is_err())
-                .then_some(Risk::DataChange)
+            (safeguards.confirm_data_changes
+                && readings
+                    .iter()
+                    .any(|reading| classify_read_only(engine, reading).is_err()))
+            .then_some(Risk::DataChange)
         })
         .or_else(|| safeguards.confirm_execution.then_some(Risk::Execution))
+}
+
+/// The ways the server may read `sql`, each checked: a statement is risky if any of them is.
+/// MySQL and MariaDB run the body of an executable comment (`/*! … */`, `/*!50001 … */`, and
+/// MariaDB's `/*M! … */`) only when the server's version and kind match it, which the
+/// statement alone does not tell. sqlparser always runs `/*!` bodies and never `/*M!` ones;
+/// the statement is also read with every such body run and with none run, so the guard asks
+/// about what any server may run (and never less than sqlparser's reading alone). Other
+/// engines' statements are read as they are.
+fn readings(engine: &str, sql: &str) -> Vec<String> {
+    if !matches!(engine, "mysql" | "mariadb") || executable_comment(sql).is_none() {
+        return vec![sql.to_string()];
+    }
+    vec![
+        sql.to_string(),
+        executable_bodies_as_code(sql),
+        // `/*!` becomes a plain comment; `/*M!` already is one for sqlparser.
+        sql.replace("/*!", "/* "),
+    ]
+}
+
+/// Where the next executable comment's marker starts in `sql`, and where its body starts
+/// (after `/*!` or `/*M!` and the version digits).
+fn executable_comment(sql: &str) -> Option<(usize, usize)> {
+    let bytes = sql.as_bytes();
+    (0..bytes.len()).find_map(|i| {
+        let rest = &bytes[i..];
+        let marker = if rest.starts_with(b"/*!") {
+            3
+        } else if rest.len() >= 4
+            && rest.starts_with(b"/*")
+            && rest[2].eq_ignore_ascii_case(&b'm')
+            && rest[3] == b'!'
+        {
+            4
+        } else {
+            return None;
+        };
+        let digits = rest[marker..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        Some((i, i + marker + digits))
+    })
+}
+
+/// `sql` with the body of every executable comment as plain code: `/*!50001 X */` is ` X `.
+fn executable_bodies_as_code(sql: &str) -> String {
+    let mut code = String::with_capacity(sql.len());
+    let mut rest = sql;
+    while let Some((marker, body)) = executable_comment(rest) {
+        code.push_str(&rest[..marker]);
+        code.push(' ');
+        let after = &rest[body..];
+        match after.find("*/") {
+            Some(end) => {
+                code.push_str(&after[..end]);
+                code.push(' ');
+                rest = &after[end + 2..];
+            }
+            None => {
+                code.push_str(after);
+                rest = "";
+            }
+        }
+    }
+    code.push_str(rest);
+    code
 }
 
 /// A script run from the editor that skipped the confirmation it needed.
@@ -411,5 +485,67 @@ mod tests {
         }
         assert!(check("select * from t", &PRODUCTION, false).is_ok());
         assert!(check("delete from t", &NONE, false).is_err());
+    }
+
+    /// The MySQL and MariaDB statement's risk, from every reading.
+    fn mysql_risk(sql: &str, safeguards: &Safeguards) -> Option<Risk> {
+        statement_risk("mysql", sql, safeguards)
+    }
+
+    #[test]
+    fn executable_comments_are_read_both_run_and_skipped() {
+        // What a server runs inside them is confirmed like any statement, MariaDB's too.
+        for (sql, risk) in [
+            ("/*!50000 drop table t */", Risk::Drop),
+            ("/*!50000 DROP EVENT e */", Risk::Drop),
+            ("/*!delete from t */", Risk::DeleteAll),
+            ("/*M!100000 drop table t */", Risk::Drop),
+            ("/*m!100000 truncate table t */", Risk::Truncate),
+            (
+                "-- c
+/*M!100000 update t set a = 1 */",
+                Risk::UpdateAll,
+            ),
+            ("select 1 /*M!100000 ; delete from t */", Risk::DeleteAll),
+            // A server older than the comment, or MySQL with MariaDB's, skips the body: the
+            // WHERE it would have added is not there.
+            ("delete from t /*!99999 where id = 1 */", Risk::DeleteAll),
+            (
+                "update t set a = 1 /*M!100000 where id = 1 */",
+                Risk::UpdateAll,
+            ),
+        ] {
+            assert_eq!(mysql_risk(sql, &NONE), Some(risk), "{sql}");
+        }
+        for sql in [
+            "/*!40101 SET @x = 1 */",
+            "/*M!100616 SET @x = 1 */",
+            "/*!50001 CREATE ALGORITHM=UNDEFINED */ /*!50001 VIEW v AS select 1 AS a */",
+            "delete from t where id = 1 /*!50000 and a > 0 */",
+            "select '/*!', 1",
+        ] {
+            assert_eq!(mysql_risk(sql, &NONE), None, "{sql}");
+        }
+        // Production confirms a data change in either reading.
+        assert_eq!(
+            mysql_risk("select 1 /*M!100000 , sleep(0) into @x */", &PRODUCTION),
+            Some(Risk::DataChange)
+        );
+        assert_eq!(mysql_risk("select 1 /*!50000 , 2 */", &PRODUCTION), None);
+        // Other engines keep them as comments.
+        assert_eq!(
+            statement_risk("postgres", "/*!50000 drop table t */", &NONE),
+            None
+        );
+    }
+
+    #[test]
+    fn executable_comment_bodies_become_code() {
+        assert_eq!(
+            executable_bodies_as_code("a /*!50001 b */ c /*M!100616 d*/ /* e */ /*!f"),
+            "a   b   c   d  /* e */  f"
+        );
+        assert_eq!(executable_bodies_as_code("no comments"), "no comments");
+        assert_eq!(executable_comment("/* M!1 */"), None);
     }
 }

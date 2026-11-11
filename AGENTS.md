@@ -38,7 +38,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
 - `crates/spelaion-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
-  per connection). `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
+  per connection). Its splitter counts a statement written only as executable comments
+  (how `mysqldump` writes views and triggers) as a statement. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
   name check (read its `PATCHED.md` before upgrading). Its type zoo (`tests/mysql.rs`) compares every type with the server's
   text, on both servers.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
@@ -159,7 +160,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (ADR-053, `classify_read_only_connection`): `check_run` refuses anything else before the guard
   asks and whatever was confirmed, the session refuses it again (`Session::with_read_only`, set
   by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's
-  own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine.
+  A MySQL/MariaDB statement with executable comments (`/*!50001 … */`, `/*M! … */`) is
+  checked by the guard with their bodies both run and skipped, as the server's version decides. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
   closes the ones a connection type says are idle too long, never with a transaction open
   (ADR-029): every use goes through its `Tracked` connection, and
   nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's

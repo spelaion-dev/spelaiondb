@@ -491,18 +491,18 @@ async fn read_only_servers_run_reads_settings_and_transactions_and_refuse_every_
                 assert!(message.contains("delete from"), "{label}: {message}");
 
                 if label == "mysql" || label == "mariadb" {
-                    // A lone executable comment is no statement: the splitter sends nothing.
-                    let events: Vec<CoreEvent> = open
-                        .session
-                        .run_script(&format!("/*!50000 delete from {t} */"))
-                        .collect()
-                        .await;
-                    assert!(
-                        !events
-                            .iter()
-                            .any(|e| matches!(e, CoreEvent::StatementStarted { .. })),
-                        "{label}: {events:?}"
-                    );
+                    // A statement written only as executable comments is a statement (the
+                    // server runs it, as a dump's views and triggers): refused like any write,
+                    // MariaDB's marker too.
+                    for sql in [
+                        format!("/*!50000 delete from {t} */"),
+                        format!("/*M!100000 delete from {t} */"),
+                        "/*!50001 CREATE ALGORITHM=UNDEFINED */ /*!50001 VIEW ro_v AS select 1 AS a */"
+                            .to_string(),
+                    ] {
+                        let message = refused(label, &open, &sql).await;
+                        assert!(message.contains("executable comment"), "{label}: {message}");
+                    }
                 }
                 if server.engine_mode {
                     // Around the core's check, the engine refuses the write itself.
