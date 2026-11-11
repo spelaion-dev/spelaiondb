@@ -39,7 +39,8 @@ pub(crate) fn first_word(sql: &str) -> &str {
 }
 
 /// If a comment starts at `i`, the byte after it. `-- ` needs a space (or end of line) after
-/// the dashes, as in MySQL. `/*! … */` (versioned code) is also skipped for splitting.
+/// the dashes, as in MySQL. An executable comment (`/*! … */`, `/*M! … */`) is skipped the
+/// same way when looking for the delimiter: a `;` inside it does not end the statement.
 fn comment_end(bytes: &[u8], i: usize) -> Option<usize> {
     let rest = &bytes[i.min(bytes.len())..];
     let line_end = |from: usize| {
@@ -105,6 +106,9 @@ fn split(script: &str) -> Vec<StatementSpan> {
             }
         }
         if let Some(end) = comment_end(bytes, i) {
+            // The server runs the body of an executable comment: a statement written only
+            // with them (as `mysqldump` writes views and triggers) is still a statement.
+            has_code |= is_executable_comment(&bytes[i..]);
             i = end;
             continue;
         }
@@ -130,6 +134,16 @@ fn split(script: &str) -> Vec<StatementSpan> {
     }
     push(&mut spans, start, bytes.len(), has_code);
     spans
+}
+
+/// `/*!` (MySQL and MariaDB, optionally with a version) or `/*M!` (MariaDB; `m` too): a
+/// comment whose body the server may run.
+fn is_executable_comment(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"/*!")
+        || (bytes.len() >= 4
+            && bytes.starts_with(b"/*")
+            && bytes[2].eq_ignore_ascii_case(&b'm')
+            && bytes[3] == b'!')
 }
 
 fn at_line_start(bytes: &[u8], i: usize) -> bool {
@@ -188,6 +202,34 @@ mod tests {
         // `--` without a space is not a comment in MySQL: `1--1` is arithmetic.
         assert_eq!(parts("select 1--1; select 2"), ["select 1--1", "select 2"]);
         assert!(parts("  -- only a comment\n# another\n/* and */ ;").is_empty());
+    }
+
+    #[test]
+    fn statements_written_as_executable_comments_are_statements() {
+        assert_eq!(
+            parts("/*!40101 SET @saved_cs_client = @@character_set_client */;"),
+            ["/*!40101 SET @saved_cs_client = @@character_set_client */"]
+        );
+        // mysqldump's view: three executable comments, one statement.
+        let view = "/*!50001 CREATE ALGORITHM=UNDEFINED */\n\
+                    /*!50013 DEFINER=`root`@`localhost` SQL SECURITY DEFINER */\n\
+                    /*!50001 VIEW `v` AS select 1 AS `a` */";
+        assert_eq!(parts(&format!("{view};\nselect 2")), [view, "select 2"]);
+        // Its trigger, under `DELIMITER ;;`: the `;` inside the body does not split it.
+        let trigger = "/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `t_bi` BEFORE INSERT ON `t` FOR EACH ROW BEGIN SET NEW.a = 1; END */";
+        assert_eq!(
+            parts(&format!(
+                "DELIMITER ;;\n{trigger};;\nDELIMITER ;\nselect 3;"
+            )),
+            [trigger, "select 3"]
+        );
+        // MariaDB's marker, either case.
+        assert_eq!(
+            parts("/*M!100616 SET @x = 1 */; /*m!100616 SET @y = 2 */;"),
+            ["/*M!100616 SET @x = 1 */", "/*m!100616 SET @y = 2 */"]
+        );
+        // Plain comments alone are still nothing; `/* M! */` is a plain comment.
+        assert!(parts("/* not ! code */; /* M!100000 x */; -- /*!40101 x */\n;").is_empty());
     }
 
     #[test]
