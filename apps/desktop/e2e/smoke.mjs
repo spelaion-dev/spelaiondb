@@ -3720,6 +3720,38 @@ try {
     await privileges.getByLabel("SQL that will run").filter({ hasText: "REVOKE CONNECT ON DATABASE spelaion FROM smoke_account;" }).waitFor();
     await privileges.getByRole("button", { name: "Revoke", exact: true }).click();
     await privileges.getByText("No privileges or roles of its own.").waitFor();
+    // Default privileges of tables created later in a schema, revoked from the row, which names
+    // the role that creates them.
+    await privileges.getByRole("radio", { name: "Grant", exact: true }).check();
+    await privileges.getByLabel("On", { exact: true }).selectOption("default_tables");
+    await privileges.getByLabel("Schema", { exact: true }).fill("public");
+    await privileges.getByRole("group", { name: "Privileges" }).getByLabel("SELECT", { exact: true }).check();
+    await privileges.getByLabel("SQL that will run").filter({ hasText: "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO smoke_account;" }).waitFor();
+    await privileges.getByRole("button", { name: "Grant", exact: true }).click();
+    await privileges.getByRole("status").filter({ hasText: "Granted." }).waitFor();
+    const revokeDefault = privileges.getByRole("button", { name: "Revoke SELECT on schema public, created by spelaion…" });
+    await revokeDefault.waitFor();
+    await shot("sdb-229-default-privileges");
+    const themeBeforeDefaults = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+    await shot("sdb-229-default-privileges-dark");
+    await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforeDefaults);
+    await revokeDefault.click();
+    await privileges.getByLabel("SQL that will run").filter({ hasText: "ALTER DEFAULT PRIVILEGES FOR ROLE spelaion IN SCHEMA public REVOKE SELECT ON TABLES FROM smoke_account;" }).waitFor();
+    await privileges.getByRole("button", { name: "Revoke", exact: true }).click();
+    await privileges.getByText("No privileges or roles of its own.").waitFor();
+    // Some columns of a table: the core names them after each privilege.
+    await privileges.getByRole("radio", { name: "Grant", exact: true }).check();
+    await privileges.getByLabel("On", { exact: true }).selectOption("column");
+    await privileges.getByLabel("Schema", { exact: true }).fill("public");
+    await privileges.getByLabel("Table", { exact: true }).fill("orders");
+    await privileges.getByLabel("Columns", { exact: true }).fill("id, Total");
+    await privileges.getByRole("group", { name: "Privileges" }).getByLabel("SELECT", { exact: true }).check();
+    await privileges.getByRole("group", { name: "Privileges" }).getByLabel("UPDATE", { exact: true }).check();
+    await privileges.getByLabel("SQL that will run").filter({ hasText: "GRANT SELECT (id, \"Total\"), UPDATE (id, \"Total\") ON TABLE public.orders TO smoke_account;" }).waitFor();
+    await shot("sdb-229-column-privileges");
+    const themeBeforeColumns = await page.evaluate(() => { const theme = document.documentElement.dataset.theme; document.documentElement.dataset.theme = "dark"; return theme; });
+    await shot("sdb-229-column-privileges-dark");
+    await page.evaluate((theme) => { if (theme === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; }, themeBeforeColumns);
     await privileges.getByRole("button", { name: "Close", exact: true }).click();
     await privileges.waitFor({ state: "detached" });
     // Delete on the row asks to drop it; Cancel has the focus.

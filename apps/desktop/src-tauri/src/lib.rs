@@ -4512,13 +4512,15 @@ async fn privilege_scopes(
         spelaion_core::privilege_scopes(dialect.as_ref(), kind.into())
             .into_iter()
             .map(|scope| {
-                let (needs_database, needs_schema, needs_name) =
-                    spelaion_core::privilege_scope_fields(dialect.as_ref(), scope);
+                let fields = spelaion_core::privilege_scope_fields(dialect.as_ref(), scope);
                 PrivilegeScopeInfoItem {
                     scope: scope.into(),
-                    needs_database,
-                    needs_schema,
-                    needs_name,
+                    needs_database: fields.database,
+                    needs_schema: fields.schema,
+                    needs_name: fields.name,
+                    schema_optional: fields.schema_optional,
+                    name_optional: fields.name_optional,
+                    needs_columns: fields.columns,
                     privileges: spelaion_core::privilege_options(dialect.as_ref(), scope)
                         .iter()
                         .map(|p| (*p).to_string())

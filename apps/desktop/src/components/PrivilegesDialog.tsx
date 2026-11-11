@@ -1,9 +1,11 @@
 // An account's privileges (ADR-048): what it has, read from the catalog by the core, and a form
-// that grants or revokes privileges globally, on a database, a schema, one object or a role's
-// membership. The core writes the GRANT or REVOKE, the dialog shows it, and it runs as shown.
+// that grants or revokes privileges globally, on a database, a schema, one object, some columns
+// of a table, PostgreSQL's default privileges of objects created later, or a role's membership.
+// The core writes the GRANT or REVOKE, the dialog shows it, and it runs as shown.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { call, commands } from "../api";
 import type {
   AlterationPreviewItem,
@@ -19,9 +21,26 @@ import { Icon } from "./Icons";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** Where a granted privilege applies, as one line: `shop.orders`, a role's name, the server. */
-function placeOf(target: PrivilegeTargetItem): string {
-  return [target.database, target.schema, target.name].filter((part) => part !== "").join(".");
+/** PostgreSQL's default privileges of objects created later. */
+function isDefault(scope: PrivilegeScopeItem | null): boolean {
+  return scope !== null && scope.startsWith("default_");
+}
+
+/** Column names typed in the form: separated by commas. */
+function splitColumns(text: string): string[] {
+  return text.split(",").map((c) => c.trim()).filter((c) => c !== "");
+}
+
+/** Where a granted privilege applies, as one line: `shop.orders`, `s.t (a, b)`, a role's name,
+ *  "in s, created by owner", the server. */
+function placeOf(target: PrivilegeTargetItem, t: TFunction<"shell">): string {
+  if (isDefault(target.scope)) {
+    return target.schema === ""
+      ? t("privileges.everySchemaBy", { role: target.name })
+      : t("privileges.inSchemaBy", { schema: target.schema, role: target.name });
+  }
+  const place = [target.database, target.schema, target.name].filter((part) => part !== "").join(".");
+  return target.columns.length > 0 ? `${place} (${target.columns.join(", ")})` : place;
 }
 
 export function PrivilegesDialog({ session, connectionId, target, onClose }: {
@@ -41,6 +60,7 @@ export function PrivilegesDialog({ session, connectionId, target, onClose }: {
   const [database, setDatabase] = useState("");
   const [schema, setSchema] = useState("");
   const [name, setName] = useState("");
+  const [columns, setColumns] = useState("");
   const [chosen, setChosen] = useState<string[]>([]);
   const [grantOption, setGrantOption] = useState(false);
   const [preview, setPreview] = useState<{ key: string; value: AlterationPreviewItem } | null>(null);
@@ -73,6 +93,7 @@ export function PrivilegesDialog({ session, connectionId, target, onClose }: {
 
   const info = scopes?.find((s) => s.scope === scope) ?? null;
   const isRole = scope === "role";
+  const defaults = isDefault(scope);
   const change: PrivilegeChangeItem | null = useMemo(() => scope === null ? null : ({
     grantee: target,
     target: {
@@ -80,11 +101,12 @@ export function PrivilegesDialog({ session, connectionId, target, onClose }: {
       database: info?.needsDatabase ? database : "",
       schema: info?.needsSchema ? schema : "",
       name: info?.needsName ? name : "",
+      columns: info?.needsColumns ? splitColumns(columns) : [],
     },
     privileges: isRole ? [] : chosen,
     revoke,
     grantOption,
-  }), [target, scope, info, database, schema, name, chosen, revoke, grantOption, isRole]);
+  }), [target, scope, info, database, schema, name, columns, chosen, revoke, grantOption, isRole]);
   const key = JSON.stringify(change);
 
   useEffect(() => {
@@ -115,6 +137,7 @@ export function PrivilegesDialog({ session, connectionId, target, onClose }: {
     setDatabase(row.target.database);
     setSchema(row.target.schema);
     setName(row.target.name);
+    setColumns(row.target.columns.join(", "));
     setChosen(row.target.scope === "role" ? [] : [row.privilege.toUpperCase()]);
     setGrantOption(false);
     setDone(null);
@@ -174,7 +197,7 @@ export function PrivilegesDialog({ session, connectionId, target, onClose }: {
                   {granted.map((row, index) => (
                     <tr key={index}>
                       <td>{t(`privileges.scopes.${row.target.scope}`)}</td>
-                      <td className="mono">{placeOf(row.target) || "—"}</td>
+                      <td className="mono">{placeOf(row.target, t) || "—"}</td>
                       <td className="mono">
                         {row.privilege}
                         {row.grantable && <span className="tag" title={t("privileges.grantableHint")}>{t("privileges.grantable")}</span>}
@@ -182,7 +205,7 @@ export function PrivilegesDialog({ session, connectionId, target, onClose }: {
                       </td>
                       <td>
                         {!row.denied && (scopes?.some((s) => s.scope === row.target.scope) ?? false) && (
-                          <button type="button" className="ghost icon-button" title={t("privileges.revokeRow")} aria-label={t("privileges.revokeRowOf", { privilege: row.privilege, on: placeOf(row.target) })}
+                          <button type="button" className="ghost icon-button" title={t("privileges.revokeRow")} aria-label={t("privileges.revokeRowOf", { privilege: row.privilege, on: placeOf(row.target, t) })}
                             onClick={() => revokeRow(row)}><Icon name="x" /></button>
                         )}
                       </td>
@@ -215,15 +238,30 @@ export function PrivilegesDialog({ session, connectionId, target, onClose }: {
           {info?.needsSchema && (
             <div className="field">
               <label htmlFor={`${ids}-schema`}>{t("privileges.schema")}</label>
-              <input id={`${ids}-schema`} type="text" className="mono" value={schema} spellCheck={false} onChange={(e) => setSchema(e.target.value)} />
+              <input id={`${ids}-schema`} type="text" className="mono" value={schema} spellCheck={false}
+                aria-describedby={info.schemaOptional ? `${ids}-schema-hint` : undefined} onChange={(e) => setSchema(e.target.value)} />
+              {info.schemaOptional && <span id={`${ids}-schema-hint`} className="muted small">{t("privileges.everySchema")}</span>}
             </div>
           )}
           {info?.needsName && (
             <div className="field">
-              <label htmlFor={`${ids}-name`}>{isRole ? t("privileges.role") : t("privileges.object")}</label>
-              <input id={`${ids}-name`} type="text" className="mono" value={name} spellCheck={false} onChange={(e) => setName(e.target.value)} />
+              <label htmlFor={`${ids}-name`}>
+                {isRole ? t("privileges.role") : defaults ? t("privileges.createdBy") : info.needsColumns ? t("privileges.table") : t("privileges.object")}
+              </label>
+              <input id={`${ids}-name`} type="text" className="mono" value={name} spellCheck={false}
+                aria-describedby={info.nameOptional ? `${ids}-name-hint` : undefined} onChange={(e) => setName(e.target.value)} />
+              {info.nameOptional && <span id={`${ids}-name-hint`} className="muted small">{t("privileges.createdByHint")}</span>}
             </div>
           )}
+          {info?.needsColumns && (
+            <div className="field">
+              <label htmlFor={`${ids}-columns`}>{t("privileges.columns")}</label>
+              <input id={`${ids}-columns`} type="text" className="mono" value={columns} spellCheck={false} placeholder="a, b"
+                aria-describedby={`${ids}-columns-hint`} onChange={(e) => setColumns(e.target.value)} />
+              <span id={`${ids}-columns-hint`} className="muted small">{t("privileges.columnsHint")}</span>
+            </div>
+          )}
+          {defaults && <p className="muted small">{t("privileges.defaultsNote")}</p>}
           {info && !isRole && (
             <div className="privileges-options" role="group" aria-label={t("privileges.privileges")}>
               {info.privileges.map((p) => (
