@@ -75,6 +75,26 @@ export const commands = {
 	runImport: (source: string, importId: number, request: ImportRequestItem, confirmed: boolean, onProgress: Channel<ImportProgressItem>) => typedError<ImportOutcome, string>(__TAURI_INVOKE("run_import", { source, importId, request, confirmed, onProgress })),
 	/**  Stops a running import: the batch it is in is rolled back; committed batches stay. */
 	cancelImport: (importId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_import", { importId })),
+	backupPreferences: () => typedError<BackupPreferencesItem, string>(__TAURI_INVOKE("backup_preferences")),
+	setBackupPreferences: (preferences: BackupPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_backup_preferences", { preferences })),
+	/**  The client tools of the connection's engine, from `folder` (empty: found automatically). */
+	backupTools: (session: string, folder: string) => typedError<BackupToolsItem_Serialize, string>(__TAURI_INVOKE("backup_tools", { session, folder })),
+	/**  The tool a backup will run and the file it will write, for the dialog to show first. */
+	previewBackup: (session: string, request: BackupRequestItem_Deserialize) => typedError<BackupPreviewItem, string>(__TAURI_INVOKE("preview_backup", { session, request })),
+	/**
+	 *  Backs up the connection's database with its vendor's tool, through its tunnel; the tool's
+	 *  output goes to `on_event` line by line.
+	 */
+	runBackup: (session: string, runId: number, request: BackupRequestItem_Deserialize, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<BackupOutcome, string>(__TAURI_INVOKE("run_backup", { session, runId, request, onEvent })),
+	/**  The tool a restore will run and what its confirmation must say. */
+	previewRestore: (session: string, request: RestoreRequestItem) => typedError<RestorePreviewItem, string>(__TAURI_INVOKE("preview_restore", { session, request })),
+	/**
+	 *  Restores a file into the connection's database with its vendor's tool, through its tunnel.
+	 *  The core refuses a read-only connection and an unconfirmed restore.
+	 */
+	runRestore: (session: string, runId: number, request: RestoreRequestItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<RestoreOutcome, string>(__TAURI_INVOKE("run_restore", { session, runId, request, confirmed, onEvent })),
+	/**  Stops a running backup or restore: the tool is killed and a partial backup removed. */
+	cancelBackup: (runId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_backup", { runId })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -894,6 +914,93 @@ export type AuditSessionItem = {
 
 export type AuditStatusItem = "ok" | "error" | "refused" | "cleared";
 
+/**  What a run reports as it goes. */
+export type BackupEventItem = BackupEventItem_Serialize | BackupEventItem_Deserialize;
+
+/**  What a run reports as it goes. */
+export type BackupEventItem_Deserialize = { kind: "started"; commandLine: string } | { kind: "log"; line: string } | { kind: "progress"; bytes: number | null; total?: number | null } | { kind: "statements"; done: number | null; total: number | null };
+
+/**  What a run reports as it goes. */
+export type BackupEventItem_Serialize = { kind: "started"; commandLine: string } | { kind: "log"; line: string } | { kind: "progress"; bytes: number | null; total: number | null } | { kind: "statements"; done: number | null; total: number | null };
+
+/**  Each tool's options, as the dialog shows them. */
+export type BackupOptionsItem = BackupOptionsItem_Serialize | BackupOptionsItem_Deserialize;
+
+/**  Each tool's options, as the dialog shows them. */
+export type BackupOptionsItem_Deserialize = { kind: "postgres"; schemas: string[]; tables: TableRefItem[]; format: PgFormatItem; 
+/**  0–9; `None`: the tool's default. */
+compression?: number | null; 
+/**  Empty: the database's. */
+encoding: string; content: DumpContentItem; inserts: boolean; noPrivileges: boolean; noOwner: boolean; clean: boolean; create: boolean } | { kind: "mysql"; databases: string[]; tables: string[]; consistency: MysqlConsistencyItem; addDrop: boolean; noCreate: boolean; noData: boolean; extendedInsert: boolean; routines: boolean; events: boolean; triggers: boolean; includeViews: boolean; stripDefiner: boolean; hexBlob: boolean; columnStatistics: ColumnStatisticsItem };
+
+/**  Each tool's options, as the dialog shows them. */
+export type BackupOptionsItem_Serialize = { kind: "postgres"; schemas: string[]; tables: TableRefItem[]; format: PgFormatItem; 
+/**  0–9; `None`: the tool's default. */
+compression: number | null; 
+/**  Empty: the database's. */
+encoding: string; content: DumpContentItem; inserts: boolean; noPrivileges: boolean; noOwner: boolean; clean: boolean; create: boolean } | { kind: "mysql"; databases: string[]; tables: string[]; consistency: MysqlConsistencyItem; addDrop: boolean; noCreate: boolean; noData: boolean; extendedInsert: boolean; routines: boolean; events: boolean; triggers: boolean; includeViews: boolean; stripDefiner: boolean; hexBlob: boolean; columnStatistics: ColumnStatisticsItem };
+
+export type BackupOutcome = { kind: "done"; path: string; bytes: number | null; millis: number | null } | 
+/**  The password must be asked first. */
+{ kind: "passwordRequired" } | { kind: "cancelled" } | { kind: "failed"; message: string };
+
+/**  The dialog's remembered choices. */
+export type BackupPreferencesItem = {
+	/**  Empty: the tools are found automatically. */
+	postgresTools: string,
+	mysqlTools: string,
+	folder: string,
+	/**  Empty: the default pattern. */
+	namePattern: string,
+	/**  The default pattern, for the field's placeholder. */
+	defaultNamePattern: string,
+};
+
+export type BackupPreviewItem = {
+	tool: string,
+	version: string,
+	/**  The file (or folder) the backup will be. */
+	path: string,
+	notes: string[],
+};
+
+export type BackupRequestItem = BackupRequestItem_Serialize | BackupRequestItem_Deserialize;
+
+export type BackupRequestItem_Deserialize = {
+	/**  Empty: the tools are found automatically. */
+	toolsFolder: string,
+	folder: string,
+	namePattern: string,
+	extraArgs: string,
+	options: BackupOptionsItem_Deserialize,
+};
+
+export type BackupRequestItem_Serialize = {
+	/**  Empty: the tools are found automatically. */
+	toolsFolder: string,
+	folder: string,
+	namePattern: string,
+	extraArgs: string,
+	options: BackupOptionsItem_Serialize,
+};
+
+/**  The connection's database and its engine's client tools. */
+export type BackupToolsItem = BackupToolsItem_Serialize | BackupToolsItem_Deserialize;
+
+/**  The connection's database and its engine's client tools. */
+export type BackupToolsItem_Deserialize = {
+	/**  The database the connection opens (what a backup dumps by default). */
+	database: string,
+	tools: ToolItem_Deserialize[],
+};
+
+/**  The connection's database and its engine's client tools. */
+export type BackupToolsItem_Serialize = {
+	/**  The database the connection opens (what a backup dumps by default). */
+	database: string,
+	tools: ToolItem_Serialize[],
+};
+
 /**  A rectangle of the page: rows `firstRow..=lastRow` of the shown `columns`, in order. */
 export type BlockItem = {
 	firstRow: number,
@@ -1240,6 +1347,8 @@ export type ColumnMatchItem_Serialize = {
 	/**  Its text around the match; `None` for binary columns. */
 	text: string | null,
 };
+
+export type ColumnStatisticsItem = "auto" | "off" | "on";
 
 /**  A table column's statistics, counted by the server with read-only queries. */
 export type ColumnStatsItem = ColumnStatsItem_Serialize | ColumnStatsItem_Deserialize;
@@ -1874,6 +1983,8 @@ export type Dimensions = "xy" | "xyz" | "xym" | "xyzm";
 
 /**  A constraint a structure form drops, by its name in the catalog. */
 export type DroppedConstraintItem = { kind: "constraint"; name: string } | { kind: "foreignKey"; name: string };
+
+export type DumpContentItem = "schemaAndData" | "schemaOnly" | "dataOnly";
 
 /**  A connection made by "Duplicate" (ADR-030). */
 export type DuplicatedItem = {
@@ -3034,6 +3145,8 @@ export type MovedItem = {
 	passwordMoved: boolean,
 };
 
+export type MysqlConsistencyItem = "singleTransaction" | "lockAllTables" | "noLocks";
+
 /**  Include and exclude patterns for one kind of name (ADR-025). */
 export type NameFilterItem = {
 	include: string[],
@@ -3472,6 +3585,8 @@ export type PendingValueItem_Serialize = {
 	value: string | null,
 	isDefault: boolean,
 };
+
+export type PgFormatItem = "plain" | "custom" | "directory" | "tar";
 
 /**  A date and time as picked in the date and time picker. */
 export type PickedTimeItem = {
@@ -3959,8 +4074,33 @@ export type RerunCheckItem_Serialize = {
 	openTransaction: boolean,
 };
 
+export type RestoreFormatItem = "auto" | "plain" | "custom" | "directory" | "tar";
+
 /**  Why a restored tab is not exactly as it was kept. */
 export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } | { kind: "fileMissing" } | { kind: "fileUnreadable"; message: string } | { kind: "fileChangedOnDisk" };
+
+export type RestoreOptionsItem = { kind: "postgres"; clean: boolean; noOwner: boolean; create: boolean } | { kind: "mysql"; 
+/**  Empty: the connection's. */
+database: string; disableForeignKeys: boolean };
+
+export type RestoreOutcome = { kind: "done"; bytes: number | null; millis: number | null } | { kind: "needsConfirmation" } | { kind: "passwordRequired" } | { kind: "cancelled" } | { kind: "failed"; message: string };
+
+export type RestorePreviewItem = {
+	tool: string,
+	version: string,
+	format: RestoreFormatItem,
+	notes: string[],
+	/**  The connection is read-only: the core will refuse the restore. */
+	readOnly: boolean,
+};
+
+export type RestoreRequestItem = {
+	toolsFolder: string,
+	input: string,
+	format: RestoreFormatItem,
+	extraArgs: string,
+	options: RestoreOptionsItem,
+};
 
 export type RestoredTabItem = RestoredTabItem_Serialize | RestoredTabItem_Deserialize;
 
@@ -4698,6 +4838,31 @@ export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "veri
 
 /**  The tone of a connection type's badge, from the app's fixed palette (ADR-029). */
 export type ToneItem = "neutral" | "green" | "blue" | "amber" | "red";
+
+/**  A client tool, found or not. */
+export type ToolItem = ToolItem_Serialize | ToolItem_Deserialize;
+
+/**  A client tool, found or not. */
+export type ToolItem_Deserialize = {
+	name: string,
+	/**  Where it was found; empty when it was not. */
+	path: string,
+	/**  Its `--version`'s first line. */
+	version: string,
+	/**  Why it is missing or broken. */
+	error?: string | null,
+};
+
+/**  A client tool, found or not. */
+export type ToolItem_Serialize = {
+	name: string,
+	/**  Where it was found; empty when it was not. */
+	path: string,
+	/**  Its `--version`'s first line. */
+	version: string,
+	/**  Why it is missing or broken. */
+	error: string | null,
+};
 
 export type ToolOutputItem = "json" | "toon";
 

@@ -1,6 +1,7 @@
 //! SpelaionDB desktop app: a thin Tauri adapter over `spelaion-core` (ADR-002). There is no
 //! database or security logic here: only translation between UI commands and the core.
 
+mod backup;
 mod connection_import;
 mod diagram;
 mod dto;
@@ -66,6 +67,8 @@ struct AppState {
     exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
     /// Imports running, by the id the UI gave them (ADR-038).
     imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ImportCancel>>>,
+    /// Backups and restores running, by the id the UI gave them (ADR-049).
+    backups: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::backup::BackupCancel>>>,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
 }
@@ -4991,6 +4994,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             import::import_plan,
             import::run_import,
             import::cancel_import,
+            backup::backup_preferences,
+            backup::set_backup_preferences,
+            backup::backup_tools,
+            backup::preview_backup,
+            backup::run_backup,
+            backup::preview_restore,
+            backup::run_restore,
+            backup::cancel_backup,
             get_language,
             set_language,
             get_theme,
@@ -5327,6 +5338,7 @@ pub fn run() {
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
         imports: std::sync::Mutex::new(HashMap::new()),
+        backups: std::sync::Mutex::new(HashMap::new()),
         diagrams: std::sync::Mutex::new(HashMap::new()),
     };
 

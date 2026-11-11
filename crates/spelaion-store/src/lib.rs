@@ -8,9 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+mod backup;
 mod library;
 mod map;
 mod tabs;
+pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
 pub use library::{HistoryFilter, HistoryPage, HistoryStatus, SnippetFilter, SnippetFolder};
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,

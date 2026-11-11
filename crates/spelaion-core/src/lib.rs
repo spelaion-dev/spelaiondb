@@ -4,6 +4,7 @@
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
 pub mod audit;
+pub mod backup;
 mod catalog;
 mod chart;
 mod classify;
@@ -130,7 +131,8 @@ pub use objects::{
     search_objects, set_active_schema, supports_added_checks, table_structure,
 };
 pub use open::{
-    Engines, OpenConnection, OpenError, OpenOptions, TunnelPool, open_connection, test_tunnel,
+    Engines, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
+    open_connection, open_route, test_tunnel,
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
 pub use params::{ParamError, bind_params, script_params};
@@ -167,9 +169,10 @@ pub use spelaion_store::{
     HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
 };
 pub use spelaion_store::{
-    Bookmark, EditorPreferences, ExplorerFilter, ExplorerPreferences, FilterKind, GridPreferences,
-    MapPreferences, RecentFile, SavedFile, SavedTab, SavedTabs, ScriptErrorMode, ScriptPreferences,
-    TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
+    BackupPreferences, Bookmark, EditorPreferences, ExplorerFilter, ExplorerPreferences,
+    FilterKind, GridPreferences, MapPreferences, RecentFile, SavedFile, SavedTab, SavedTabs,
+    ScriptErrorMode, ScriptPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX,
+    TileServerError, check_tile_server,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,

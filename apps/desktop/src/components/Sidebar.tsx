@@ -49,6 +49,7 @@ import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from ".
 import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
+import { backupFamily, useBackup } from "./BackupDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard } from "../connectionCopies";
 import { isTextField, useFocusedPaste } from "../focusedPaste";
@@ -365,6 +366,13 @@ function useObjectActions(session: string, enabled = true): ObjectActionsItem | 
 
 /** SQL written by the core, in a new tab of the connection (on the schema's database where the
  *  engine has one per schema): nothing runs. */
+/** Opens the backup or restore dialog of a connection the explorer has open (ADR-049). */
+function openBackup(connection: ConnectionItem, session: string, mode: "backup" | "restore") {
+  const family = backupFamily(connection.engine);
+  if (!family) return;
+  useBackup.getState().open({ session, connectionId: connection.id, connectionName: connection.name, family, mode });
+}
+
 function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string, run = false) {
   const tab = useApp.getState().addTab(connectionId, sql);
   // "Run…": the tab runs its script once connected, asking the call's parameters first.
@@ -1896,6 +1904,12 @@ function ConnectionNode({
             configureFilters: () => configureFilter(),
             createSchema: actions?.create.includes("schema")
               ? () => openCreate(connection.id, session, "schema", "").catch((e: unknown) => setError(errorText(e)))
+              : undefined,
+            backup: backupFamily(connection.engine)
+              ? () => openBackup(connection, session, "backup")
+              : undefined,
+            restore: backupFamily(connection.engine)
+              ? () => openBackup(connection, session, "restore")
               : undefined,
             duplicate,
             copy,

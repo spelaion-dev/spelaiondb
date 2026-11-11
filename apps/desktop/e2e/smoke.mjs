@@ -3726,6 +3726,90 @@ try {
     await roleRow.waitFor({ state: "detached" });
   }
 
+  step("backup and restore: the vendor's tools found or reported missing, a live log, a confirmed restore (ADR-049)");
+  {
+    // The explorer opened Postgres (Docker) in the accounts step: its menu has the backups.
+    const noTools = join(userDir, "no-db-tools");
+    const backups = join(userDir, "backups");
+    mkdirSync(noTools, { recursive: true });
+    mkdirSync(backups, { recursive: true });
+    // Real client tools only when the machine has them (SPELAION_SMOKE_DB_TOOLS: their folder).
+    const realTools = process.env.SPELAION_SMOKE_DB_TOOLS ?? null;
+    // The settings dialog cannot open over this one: the screenshots switch the theme directly.
+    const setThemeKeepingDialog = (theme) => page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+
+    await (await connectionMenu("Postgres (Docker)")).getByRole("menuitem", { name: "Back up…" }).click();
+    const backupDialog = page.getByRole("dialog", { name: "Back up Postgres (Docker)" });
+    await backupDialog.waitFor();
+    // A folder without the tools: the core says which one is missing and where it looked.
+    await backupDialog.getByLabel("Folder of the client tools", { exact: true }).fill(noTools);
+    await backupDialog.getByText(/pg_dump was not found/).waitFor();
+    await backupDialog.getByLabel("Folder", { exact: true }).fill(backups);
+    await backupDialog.getByText(/Could not prepare the backup: pg_dump was not found/).waitFor();
+    assert.ok(await backupDialog.getByRole("button", { name: "Back up", exact: true }).isDisabled());
+    // Tar archives have no compression level. (A select's name ends with its chosen option.)
+    const format = backupDialog.getByRole("combobox", { name: /^Format/ });
+    await format.selectOption("tar");
+    assert.ok(await backupDialog.getByRole("combobox", { name: /^Compression/ }).isDisabled());
+    await format.selectOption("custom");
+    await shot("sdb-20-backup-missing-tools-light");
+    await setThemeKeepingDialog("dark");
+    await shot("sdb-20-backup-missing-tools-dark");
+    await setThemeKeepingDialog("light");
+    if (realTools) {
+      await backupDialog.getByLabel("Folder of the client tools", { exact: true }).fill(realTools);
+      await backupDialog.locator(".backup-path").waitFor();
+      await backupDialog.getByRole("button", { name: "Back up", exact: true }).click();
+      await backupDialog.getByText(/^Backed up /).waitFor({ timeout: 120_000 });
+      const log = await backupDialog.getByRole("log", { name: "Tool output" }).textContent();
+      assert.ok(log.includes("--dbname="), "the command line is shown");
+      assert.ok(!log.includes("spelaion@") && !/password=spelaion/i.test(log), "no password in the log");
+      await shot("sdb-20-backup-log-light");
+      await setThemeKeepingDialog("dark");
+      await shot("sdb-20-backup-log-dark");
+      await setThemeKeepingDialog("light");
+    }
+    await backupDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await backupDialog.waitFor({ state: "detached" });
+
+    await (await connectionMenu("Postgres (Docker)")).getByRole("menuitem", { name: "Restore…" }).click();
+    const restoreDialog = page.getByRole("dialog", { name: "Restore into Postgres (Docker)" });
+    await restoreDialog.waitFor();
+    const sqlFile = join(userDir, "smoke-restore.sql");
+    writeFileSync(sqlFile, "CREATE TABLE IF NOT EXISTS smoke_restored (id int);\n");
+    await restoreDialog.getByLabel("Folder of the client tools", { exact: true }).fill(noTools);
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, sqlFile);
+    await restoreDialog.getByRole("button", { name: "Choose file…" }).click();
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    assert.equal(await restoreDialog.getByLabel("Backup file", { exact: true }).inputValue(), sqlFile);
+    await restoreDialog.getByRole("button", { name: "Restore…", exact: true }).click();
+    await restoreDialog.getByText(/Could not prepare the restore: psql was not found/).waitFor();
+    await restoreDialog.getByRole("list", { name: "Client tools" }).getByText(/psql was not found/).waitFor();
+    await shot("sdb-20-restore-missing-tools-light");
+    await setThemeKeepingDialog("dark");
+    await shot("sdb-20-restore-missing-tools-dark");
+    await setThemeKeepingDialog("light");
+    if (realTools) {
+      await restoreDialog.getByLabel("Folder of the client tools", { exact: true }).fill(realTools);
+      await restoreDialog.getByText("psql (PostgreSQL)", { exact: false }).waitFor();
+      await restoreDialog.getByRole("button", { name: "Restore…", exact: true }).click();
+      // The confirmation names the file and the tool, and Cancel has the focus.
+      const confirm = page.getByRole("alertdialog", { name: /^Restore into / });
+      await confirm.waitFor();
+      await confirm.getByText("psql runs the file's backslash commands", { exact: false }).waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Cancel");
+      await shot("sdb-20-restore-confirm-light");
+      await setThemeKeepingDialog("dark");
+      await shot("sdb-20-restore-confirm-dark");
+      await setThemeKeepingDialog("light");
+      await confirm.getByRole("button", { name: "Restore", exact: true }).click();
+      await restoreDialog.getByText(/^Restored in /).waitFor({ timeout: 120_000 });
+      await shot("sdb-20-restore-log");
+    }
+    await restoreDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await restoreDialog.waitFor({ state: "detached" });
+  }
+
   step("session setup: a default schema and setup statements open tabs in that schema, and a write in it is refused on a read-only connection");
   // ADR-037. A schema of its own on the Docker PostgreSQL, made from the tab still open there.
   await replaceQuery(
