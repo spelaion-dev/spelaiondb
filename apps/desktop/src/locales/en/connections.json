@@ -276,6 +276,7 @@
     "editButton": "Edit profile…",
     "newTitle": "New network profile",
     "editTitle": "Edit network profile {{name}}",
+    "loading": "Reading the profile…",
     "name": "Profile name",
     "nameHint": "Connections refer to the profile by this name. It is saved as a tunnel file (.spelaion/tunnels/).",
     "fixedHint": "When editing, the profile keeps its name and location: connections refer to it.",

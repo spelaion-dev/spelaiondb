@@ -276,6 +276,7 @@
     "editButton": "Editar perfil…",
     "newTitle": "Nuevo perfil de red",
     "editTitle": "Editar el perfil de red {{name}}",
+    "loading": "Leyendo el perfil…",
     "name": "Nombre del perfil",
     "nameHint": "Las conexiones se refieren al perfil por este nombre. Se guarda como un fichero de túnel (.spelaion/tunnels/).",
     "fixedHint": "Al editarlo, el perfil conserva su nombre y ubicación: las conexiones se refieren a él.",

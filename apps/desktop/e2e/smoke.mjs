@@ -6051,8 +6051,11 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     assert.match(await awsRow.innerText(), /AWS SSM i-0123456789abcdef0 \(eu-west-1, prod\)/);
     await awsRow.getByRole("button", { name: "Edit…" }).click();
     const editAws = page.getByRole("dialog", { name: "Edit network profile aws-route" });
-    assert.equal(await editAws.getByRole("radio", { name: "AWS SSM", exact: true }).isChecked(), true);
-    assert.equal(await editAws.getByLabel("Managed node").inputValue(), "i-0123456789abcdef0");
+    // The form appears only once the stored profile is read (never the default SSH kind first).
+    await editAws.getByRole("radio", { name: "AWS SSM", exact: true, checked: true }).waitFor();
+    assert.equal(await editAws.getByRole("radio", { name: "SSH hops and proxy", exact: true }).isChecked(), false);
+    const managedNode = await editAws.getByLabel("Managed node").elementHandle();
+    await page.waitForFunction((input) => input.value === "i-0123456789abcdef0", managedNode);
     await editAws.getByRole("button", { name: "Delete profile" }).click();
     await editAws.getByRole("button", { name: "Click again to delete" }).click();
     await editAws.waitFor({ state: "detached" });
