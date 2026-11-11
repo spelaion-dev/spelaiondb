@@ -84,6 +84,38 @@ fn refused(result: &CallToolResult) -> bool {
     result.is_error == Some(true)
 }
 
+/// What `list_connections` answers, as a new call of a running server.
+async fn listed(server: &SpelaionMcp) -> String {
+    let access = server.begin().await;
+    body(&server.list_connections_inner(&access).await.unwrap())
+}
+
+/// `run_query` as a new call.
+async fn query(server: &SpelaionMcp, connection: &str, sql: &str) -> CallToolResult {
+    server
+        .read(
+            &call("run_query"),
+            connection,
+            sql,
+            Some(OutputFormat::Json),
+        )
+        .await
+        .unwrap()
+}
+
+/// `execute_write` as a new call.
+async fn write(server: &SpelaionMcp, connection: &str, sql: &str) -> CallToolResult {
+    server
+        .write(&call("execute_write"), connection, sql)
+        .await
+        .unwrap()
+}
+
+/// Rewrites a connection file while the server keeps running.
+fn rewrite(path: &Path, content: &str) {
+    std::fs::write(path, content).unwrap();
+}
+
 /// A personal connection whose user lets agents write, and a server already running.
 struct Personal {
     user_dir: PathBuf,
@@ -129,8 +161,10 @@ async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning()
     std::fs::write(dir.join("connections/other.toml"), other).unwrap();
     let server = server(None, &dir, true);
     // Keep the test password in the owned resolved session, without mutating process env.
-    let entry = server.entry("~/plans").unwrap();
-    let mut resolved = Resolver::new(&server.state.config, &server.state.trust, &SystemBackend)
+    let access = server.begin().await;
+    let (snapshot, entry) = exposed_entry(&access, "~/plans").unwrap();
+    let definition = snapshot.definition(entry);
+    let mut resolved = Resolver::new(&snapshot.config, &snapshot.trust, &SystemBackend)
         .resolve(&entry.id)
         .unwrap();
     resolved.password =
@@ -156,12 +190,13 @@ async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning()
     .unwrap();
     // Subsequent pages read PlanStore and create no second execution/audit record.
     let session = Arc::new(tokio::sync::Mutex::new(open));
-    server
-        .state
-        .sessions
-        .lock()
-        .await
-        .insert(("~/plans".into(), Use::Read), session);
+    server.state.sessions.lock().await.insert(
+        ("~/plans".into(), Use::Read),
+        Cached {
+            open: session,
+            definition,
+        },
+    );
     let arguments = |sql: Option<&str>, id| ExplainArgs {
         connection: "~/plans".into(),
         sql: sql.map(str::to_owned),
@@ -320,8 +355,10 @@ async fn server_plans_return_the_core_tree_and_never_analyze() {
         )
         .unwrap();
         let server = server(None, &dir, true);
-        let entry = server.entry("~/plans").unwrap();
-        let mut resolved = Resolver::new(&server.state.config, &server.state.trust, &SystemBackend)
+        let access = server.begin().await;
+        let (snapshot, entry) = exposed_entry(&access, "~/plans").unwrap();
+        let definition = snapshot.definition(entry);
+        let mut resolved = Resolver::new(&snapshot.config, &snapshot.trust, &SystemBackend)
             .resolve(&entry.id)
             .unwrap();
         resolved.password =
@@ -347,7 +384,10 @@ async fn server_plans_return_the_core_tree_and_never_analyze() {
         .unwrap();
         server.state.sessions.lock().await.insert(
             ("~/plans".into(), Use::Read),
-            Arc::new(tokio::sync::Mutex::new(open)),
+            Cached {
+                open: Arc::new(tokio::sync::Mutex::new(open)),
+                definition,
+            },
         );
         let arguments = |sql: &str| ExplainArgs {
             connection: "~/plans".into(),
@@ -450,13 +490,9 @@ async fn the_switch_takes_writes_away_from_a_running_server() {
     assert_eq!(rows(&p.db), 2);
 
     // The agent is told before it tries.
-    let listed = p.server.list_connections_inner().await.unwrap();
-    assert!(
-        body(&listed).contains("every agent read-only"),
-        "{}",
-        body(&listed)
-    );
-    assert!(!body(&listed).contains("execute_write is allowed"));
+    let listed = listed(&p.server).await;
+    assert!(listed.contains("every agent read-only"), "{listed}");
+    assert!(!listed.contains("execute_write is allowed"));
 
     // Turning it off gives back exactly what the connection allowed.
     app_store(&p.user_dir).set_mcp_read_only(false).unwrap();
@@ -490,7 +526,7 @@ async fn a_trusted_repository_cannot_give_agents_writes_back() {
     store.set_mcp_read_only(true).unwrap();
 
     let server = server(Some(&repo), &user_dir, false);
-    let listed = body(&server.list_connections_inner().await.unwrap());
+    let listed = listed(&server).await;
     assert!(listed.contains("- orders"), "{listed}");
     assert!(listed.contains("every agent read-only"), "{listed}");
     let result = server
@@ -599,32 +635,42 @@ async fn every_call_is_recorded_with_its_tool_and_session() {
         .write(&call("execute_write"), "~/notes", "drop table notes")
         .await
         .unwrap();
+    let access = p.server.begin().await;
     let listed = p
         .server
         .audited(
             call("list_objects"),
+            &access,
             "~/notes",
             "schemas".into(),
-            p.server.list_objects_inner(Parameters(ListObjectsArgs {
-                connection: "~/notes".into(),
-                schema: None,
-                filter: None,
-            })),
+            p.server.list_objects_inner(
+                &access,
+                Parameters(ListObjectsArgs {
+                    connection: "~/notes".into(),
+                    schema: None,
+                    filter: None,
+                }),
+            ),
         )
         .await
         .unwrap();
     assert!(!refused(&listed), "{}", body(&listed));
+    let access = p.server.begin().await;
     let missing = p
         .server
         .audited(
             call("describe_table"),
+            &access,
             "~/nowhere",
             "main.x".into(),
-            p.server.describe_table_inner(Parameters(DescribeArgs {
-                connection: "~/nowhere".into(),
-                schema: "main".into(),
-                table: "x".into(),
-            })),
+            p.server.describe_table_inner(
+                &access,
+                Parameters(DescribeArgs {
+                    connection: "~/nowhere".into(),
+                    schema: "main".into(),
+                    table: "x".into(),
+                }),
+            ),
         )
         .await
         .unwrap();
@@ -809,4 +855,295 @@ async fn agents_get_the_mask_never_the_value() {
     for c in 1..4 {
         assert_eq!(parsed["columns"][c]["masked"], true, "{json}");
     }
+}
+
+// A running server and the user's changes (SDB-119): what agents may do is decided again at
+// every call, from the files as they are then, through the same checks as at start-up.
+
+/// A personal connection file for `db` with its `[mcp]` table.
+fn connection(db: &Path, mcp: &str) -> String {
+    format!(
+        "schema_version = 1\nname = \"Notes\"\nengine = \"sqlite\"\ndatabase = '{}'\n[mcp]\n{mcp}\n",
+        db.display()
+    )
+}
+
+#[tokio::test]
+async fn hiding_a_connection_takes_effect_at_the_next_call() {
+    let p = personal(false);
+    let file = p.user_dir.join("connections/notes.toml");
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    assert!(!p.server.state.sessions.lock().await.is_empty());
+
+    rewrite(
+        &file,
+        &connection(&p.db, "exposed = false\nwrites = \"allow\""),
+    );
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(refused(&read));
+    assert!(body(&read).contains("not exposed"), "{}", body(&read));
+    // Its cached session is closed, not kept for later.
+    assert!(p.server.state.sessions.lock().await.is_empty());
+    let written = write(&p.server, "~/notes", INSERT).await;
+    assert!(refused(&written));
+    assert_eq!(rows(&p.db), 1);
+    assert!(!listed(&p.server).await.contains("~/notes"));
+    let access = p.server.begin().await;
+    let answer = p
+        .server
+        .audited(
+            call("list_objects"),
+            &access,
+            "~/notes",
+            "schemas".into(),
+            p.server.list_objects_inner(
+                &access,
+                Parameters(ListObjectsArgs {
+                    connection: "~/notes".into(),
+                    schema: None,
+                    filter: None,
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(refused(&answer), "{}", body(&answer));
+    let last = &app_store(&p.user_dir).recent(1).unwrap()[0];
+    assert_eq!(last.decision, Decision::Rejected);
+}
+
+#[tokio::test]
+async fn denying_writes_refuses_the_next_write_and_records_it() {
+    let p = personal(false);
+    let file = p.user_dir.join("connections/notes.toml");
+    let done = write(&p.server, "~/notes", INSERT).await;
+    assert!(!refused(&done), "{}", body(&done));
+    assert_eq!(rows(&p.db), 2);
+
+    rewrite(
+        &file,
+        &connection(&p.db, "exposed = true\nwrites = \"deny\""),
+    );
+    let result = write(&p.server, "~/notes", INSERT).await;
+    assert!(refused(&result));
+    assert!(
+        body(&result).contains("read-only for agents"),
+        "{}",
+        body(&result)
+    );
+    assert_eq!(rows(&p.db), 2);
+    let last = &app_store(&p.user_dir).recent(1).unwrap()[0];
+    assert_eq!(last.decision, Decision::Rejected);
+    assert_eq!(last.statement, INSERT);
+    assert!(listed(&p.server).await.contains("Read-only."));
+
+    // Making the connection read-only refuses it too, whatever `writes` says.
+    rewrite(&file, &writable_connection(&p.db, "read_only = true\n"));
+    let result = write(&p.server, "~/notes", INSERT).await;
+    assert!(refused(&result));
+    assert!(
+        body(&result).contains("for agents and for the user"),
+        "{}",
+        body(&result)
+    );
+    assert_eq!(rows(&p.db), 2);
+
+    // Allowing writes again goes through the same checks: writes come back.
+    rewrite(&file, &writable_connection(&p.db, ""));
+    let done = write(&p.server, "~/notes", INSERT).await;
+    assert!(!refused(&done), "{}", body(&done));
+    assert_eq!(rows(&p.db), 3);
+}
+
+#[tokio::test]
+async fn a_lower_max_rows_applies_at_the_next_call() {
+    let p = personal(false);
+    let file = p.user_dir.join("connections/notes.toml");
+    for _ in 0..4 {
+        let done = write(&p.server, "~/notes", INSERT).await;
+        assert!(!refused(&done), "{}", body(&done));
+    }
+    assert_eq!(rows(&p.db), 5);
+    let sql = "select id from notes order by id";
+    let all: serde_json::Value =
+        serde_json::from_str(&body(&query(&p.server, "~/notes", sql).await)).unwrap();
+    assert_eq!(all["rows"].as_array().unwrap().len(), 5);
+
+    rewrite(
+        &file,
+        &connection(&p.db, "exposed = true\nwrites = \"allow\"\nmax_rows = 2"),
+    );
+    let some: serde_json::Value =
+        serde_json::from_str(&body(&query(&p.server, "~/notes", sql).await)).unwrap();
+    assert_eq!(some["rows"].as_array().unwrap().len(), 2, "{some}");
+    assert_eq!(some["more_rows"], true, "{some}");
+}
+
+#[tokio::test]
+async fn a_changed_definition_opens_a_new_session() {
+    let p = personal(false);
+    let file = p.user_dir.join("connections/notes.toml");
+    let other = p.user_dir.join("other.db");
+    rusqlite::Connection::open(&other)
+        .unwrap()
+        .execute_batch(
+            "create table notes (id integer primary key, body text); insert into notes values (1, 'elsewhere');",
+        )
+        .unwrap();
+    let sql = "select body from notes order by id";
+    assert!(body(&query(&p.server, "~/notes", sql).await).contains("first"));
+
+    // The same connection now points at another file: the cached session is not reused.
+    rewrite(&file, &writable_connection(&other, ""));
+    let read = body(&query(&p.server, "~/notes", sql).await);
+    assert!(read.contains("elsewhere"), "{read}");
+    assert!(!read.contains("first"), "{read}");
+
+    // A change outside the connection's file that it is opened with (`user.toml`'s masking)
+    // reopens it too.
+    std::fs::write(
+        p.user_dir.join("user.toml"),
+        "schema_version = 1\n[masking]\nalways = [\"body\"]\n",
+    )
+    .unwrap();
+    let read = body(&query(&p.server, "~/notes", sql).await);
+    assert!(!read.contains("elsewhere"), "{read}");
+    assert!(read.contains(spelaion_core::MASK), "{read}");
+}
+
+#[tokio::test]
+async fn removing_trust_hides_the_repositorys_connections() {
+    let user_dir = temp("trust-user");
+    let repo = temp("trust-repo");
+    let db = database(&repo);
+    let connections = repo.join(".spelaion/connections");
+    std::fs::create_dir_all(&connections).unwrap();
+    std::fs::write(
+        connections.join("orders.toml"),
+        writable_connection(&db, ""),
+    )
+    .unwrap();
+    let config = spelaion_config::load(Some(&repo), &user_dir);
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let root = config.workspace_root.clone().unwrap();
+    TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+    let server = server(Some(&repo), &user_dir, false);
+    assert!(listed(&server).await.contains("- orders"));
+    let read = query(&server, "orders", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+
+    // The user removes the repository's trust in the app.
+    TrustStore::load(&user_dir).unwrap().revoke(&root).unwrap();
+    let list = listed(&server).await;
+    assert!(!list.contains("- orders"), "{list}");
+    assert!(list.contains("is not trusted"), "{list}");
+    let read = query(&server, "orders", "select count(*) from notes").await;
+    assert!(refused(&read));
+    assert!(body(&read).contains("not exposed"), "{}", body(&read));
+    assert!(refused(&write(&server, "orders", INSERT).await));
+    assert!(server.state.sessions.lock().await.is_empty());
+    assert_eq!(rows(&db), 1);
+
+    // Trusted again, it comes back. A change to its file after that trust is then refused by
+    // the trust pin, exactly as at start-up (ADR-022), although a session was open.
+    let config = spelaion_config::load(Some(&repo), &user_dir);
+    TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+    let read = query(&server, "orders", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    let elsewhere = repo.join("elsewhere.db");
+    std::fs::copy(&db, &elsewhere).unwrap();
+    std::fs::write(
+        connections.join("orders.toml"),
+        writable_connection(&elsewhere, ""),
+    )
+    .unwrap();
+    let read = query(&server, "orders", "select count(*) from notes").await;
+    assert!(refused(&read), "{}", body(&read));
+    let written = write(&server, "orders", INSERT).await;
+    assert!(refused(&written), "{}", body(&written));
+    assert_eq!(rows(&elsewhere), 1);
+    assert_eq!(rows(&db), 1);
+}
+
+#[tokio::test]
+async fn a_broken_file_exposes_nothing_until_it_is_fixed() {
+    let p = personal(false);
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+
+    // Another file breaks (half written, or a typo): nothing is exposed, and the agent is told
+    // why, without the file's contents.
+    let broken = p.user_dir.join("connections/half.toml");
+    std::fs::write(
+        &broken,
+        "schema_version = 1\nname = \"secret-ish value\nengine =",
+    )
+    .unwrap();
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(refused(&read));
+    let reason = body(&read);
+    assert!(reason.contains("configuration has problems"), "{reason}");
+    assert!(reason.contains("half.toml"), "{reason}");
+    assert!(!reason.contains("secret-ish"), "{reason}");
+    assert!(p.server.state.sessions.lock().await.is_empty());
+    let written = write(&p.server, "~/notes", INSERT).await;
+    assert!(refused(&written));
+    assert_eq!(rows(&p.db), 1);
+    let last = &app_store(&p.user_dir).recent(1).unwrap()[0];
+    assert_eq!(last.decision, Decision::Rejected);
+    let access = p.server.begin().await;
+    let list = p
+        .server
+        .audited(
+            call("list_connections"),
+            &access,
+            "",
+            "list_connections".into(),
+            p.server.list_connections_inner(&access),
+        )
+        .await
+        .unwrap();
+    assert!(refused(&list));
+    assert!(!body(&list).contains("- ~/notes"), "{}", body(&list));
+    let last = &app_store(&p.user_dir).recent(1).unwrap()[0];
+    assert_eq!(last.decision, Decision::Rejected);
+
+    // A broken `user.toml` too.
+    std::fs::remove_file(&broken).unwrap();
+    std::fs::write(p.user_dir.join("user.toml"), "schema_version = = 1").unwrap();
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(refused(&read), "{}", body(&read));
+
+    // Fixed: served again, without a restart.
+    std::fs::remove_file(p.user_dir.join("user.toml")).unwrap();
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+}
+
+#[tokio::test]
+async fn a_newly_exposed_connection_appears_without_a_restart() {
+    let user_dir = temp("expose");
+    let db = database(&user_dir);
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    let file = user_dir.join("connections/notes.toml");
+    rewrite(&file, &connection(&db, "exposed = false"));
+    let server = server(None, &user_dir, false);
+    assert!(listed(&server).await.contains("No exposed connections"));
+    assert!(refused(&query(&server, "~/notes", "select 1").await));
+
+    rewrite(&file, &connection(&db, "exposed = true"));
+    std::fs::write(
+        user_dir.join("connections/more.toml"),
+        connection(&db, "exposed = true").replace("Notes", "More"),
+    )
+    .unwrap();
+    let list = listed(&server).await;
+    assert!(list.contains("- ~/notes"), "{list}");
+    assert!(list.contains("- ~/more"), "{list}");
+    let read = query(&server, "~/more", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    // Exposed for reading only: writes are still denied by default.
+    assert!(refused(&write(&server, "~/notes", INSERT).await));
+    assert_eq!(rows(&db), 1);
 }
