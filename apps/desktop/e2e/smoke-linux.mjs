@@ -277,6 +277,32 @@ try {
 
   await step("import: the dialog takes the system clipboard's text (Ctrl+Alt+V, then Paste from clipboard) into a new table", async () => {
     clipboard.set("first_id,first_name\n1,Ann\n");
+    if (process.env.SMOKE_DEBUG_CLIPBOARD) {
+      const sh = (cmd) => {
+        try {
+          return execFileSync("bash", ["-c", cmd], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+        } catch (e) {
+          return `ERR ${e.message} ${e.stderr ?? ""}`;
+        }
+      };
+      console.log("\n[debug] xclip -o:", JSON.stringify(sh("xclip -selection clipboard -out")));
+      console.log("[debug] xclip TARGETS:", sh("xclip -selection clipboard -out -t TARGETS"));
+      console.log("[debug] wmctrl -l -p:", sh("wmctrl -l -p"), "app pid", appPid());
+      console.log("[debug] active:", sh("xprop -root _NET_ACTIVE_WINDOW"));
+      console.log("[debug] hasFocus:", await wd.evaluate(() => document.hasFocus()));
+      await wd.evaluate(() => {
+        window.__dbg = "none";
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "F9") navigator.clipboard.readText().then((t) => (window.__dbg = "ok:" + t), (err) => (window.__dbg = "err:" + err));
+        }, { capture: true });
+      });
+      await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
+      await wd.perform([{ type: "key", id: "kbd", actions: [{ type: "keyDown", value: "" }, { type: "keyUp", value: "" }] }]).catch((e) => console.log("[debug] perform:", e.message));
+      await new Promise((r) => setTimeout(r, 1500));
+      console.log("[debug] root shot:", sh(`import -window root ${join(shots, "debug-root.png")} && echo saved`));
+      console.log("[debug] readText after F9:", await wd.evaluate(() => window.__dbg));
+      console.log("[debug] hasFocus:", await wd.evaluate(() => document.hasFocus()));
+    }
     await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
     await wd.press("Control+Alt+v");
     const d = await dialog("Import data");
