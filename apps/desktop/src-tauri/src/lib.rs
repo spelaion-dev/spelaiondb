@@ -2350,15 +2350,12 @@ async fn start_script(
             .ok_or_else(|| format!("there is no open connection for {session}"))?;
         (session.open.clone(), session.history_workspace.clone())
     };
-    // The core decides what needs confirmation; the UI asks first (`script_risks`), and a
-    // run that skipped the question is refused by the core, whatever its error mode.
-    spelaion_core::check_script(
-        open.session.dialect().as_ref(),
-        &sql,
-        &open.resolved.safeguards(),
-        confirmed,
-    )
-    .map_err(|e| e.to_string())?;
+    // The core decides what may run: a read-only connection refuses anything but reads,
+    // settings and transaction control (ADR-053), whatever was confirmed; then what needs
+    // confirmation, which the UI asks first (`script_risks`): a run that skipped the question
+    // is refused by the core, whatever its error mode.
+    spelaion_core::check_run(&open.session, &sql, &open.resolved.safeguards(), confirmed)
+        .map_err(|e| e.to_string())?;
     let events = state.history.run_script_in_context(
         &open.session,
         &sql,
@@ -2507,11 +2504,7 @@ async fn bind_params(
 }
 
 fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelaion_core::RiskyStatement> {
-    spelaion_core::script_risks(
-        open.session.dialect().as_ref(),
-        sql,
-        &open.resolved.safeguards(),
-    )
+    spelaion_core::run_risks(&open.session, sql, &open.resolved.safeguards())
 }
 
 /// Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE

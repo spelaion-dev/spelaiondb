@@ -62,7 +62,9 @@ pub struct ConnectionFile {
     /// (ADR-018); this names that program when it is not `sqlite3` on the PATH.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sqlite3: Option<String>,
-    /// Open read-only (native in SQLite).
+    /// Read-only (ADR-053): only reads, session settings and transaction control run, and the
+    /// engine's own read-only mode is set where it has one (the file opened read-only on SQLite
+    /// and DuckDB, read-only transactions on PostgreSQL, MySQL and MariaDB).
     #[serde(default, skip_serializing_if = "is_false")]
     pub read_only: bool,
     /// Seconds of idleness after which the app sends the server a keep-alive (ADR-028), so a

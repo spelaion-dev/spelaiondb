@@ -293,7 +293,9 @@ pub async fn open_connection(
     let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
     // Every result of the session is masked as its connection says (ADR-051).
     let session = Session::new(connection, driver.dialect(), results)
-        .with_masking(crate::masking::MaskPolicy::new(&resolved.masking));
+        .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
+        // A read-only connection runs only reads, settings and transaction control (ADR-053).
+        .with_read_only(resolved.params.read_only);
     // A tunnel that goes down takes its sessions with it (ADR-028).
     match &tunnel {
         Some(ActiveTunnel::Ssh(t)) => session.health_handle().watch_tunnel(t.state()),

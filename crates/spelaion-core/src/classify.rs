@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::{
     ContextModifier, Expr, ObjectName, Query, Set, SetExpr, SetSessionParamKind, Statement,
-    TransactionMode, UnaryOperator, Value as SqlValue, Visit, Visitor,
+    TransactionAccessMode, TransactionMode, UnaryOperator, Value as SqlValue, Visit, Visitor,
 };
 use sqlparser::parser::Parser;
 
@@ -37,7 +37,11 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
         [] => return Err("there is no statement".into()),
         _ => return Err("only one statement per query is allowed".into()),
     };
+    read_statement(engine, statement)
+}
 
+/// [`classify_read_only`] of one statement sqlparser has already read.
+fn read_statement(engine: &str, statement: &Statement) -> Result<ReadKind, String> {
     let kind = match statement {
         Statement::Query(query) => check_query(query).map(|()| ReadKind::Query),
         Statement::Explain {
@@ -108,6 +112,11 @@ pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
         [] => return Err("there is no statement".into()),
         _ => return Err("only one statement at a time".into()),
     };
+    setup_statement(engine, statement)
+}
+
+/// [`classify_session_setup`] of one statement sqlparser has already read.
+fn setup_statement(engine: &str, statement: &Statement) -> Result<(), String> {
     let set = match statement {
         Statement::Set(set) => set,
         Statement::Use(_) => {
@@ -117,7 +126,7 @@ pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
             };
         }
         _ => {
-            return classify_read_only(engine, sql)
+            return read_statement(engine, statement)
                 .map(|_| ())
                 .map_err(|reason| {
                     format!("{reason}: only reads and session settings may run here")
@@ -188,6 +197,92 @@ pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
         | Set::SetSessionAuthorization(_)
         | Set::SetNames { .. }
         | Set::SetNamesDefault {} => Err(refused()),
+    }
+}
+
+/// May `sql` (one statement, or one T-SQL batch) run on a read-only connection (ADR-053)?
+/// The editor's scripts, query pages and plans all go through it before anything runs. Only:
+/// - a read, as [`classify_read_only`] decides;
+/// - a session setting or `USE`, as [`classify_session_setup`] allows;
+/// - plain transaction control: `BEGIN` / `START TRANSACTION` with at most an isolation level
+///   and `READ ONLY`, `COMMIT`, `ROLLBACK` (to a savepoint too), `SAVEPOINT`, `RELEASE` and
+///   `SET TRANSACTION` with an isolation level or `READ ONLY`.
+///
+/// Anything else, `READ WRITE` in any form, MySQL's executable comments and whatever does not
+/// parse are refused. A T-SQL batch may hold several statements, and each must pass; elsewhere
+/// a span is one statement, as for agents. `Err` explains why.
+pub fn classify_read_only_connection(engine: &str, sql: &str) -> Result<(), String> {
+    if reject_mysql_executable_comments(engine, sql).is_err() {
+        return Err(
+            "it has a MySQL executable comment (/*! … */), which the server runs as SQL".into(),
+        );
+    }
+    let dialect = sql_dialect(engine);
+    let statements = Parser::parse_sql(dialect.as_ref(), sql)
+        .map_err(|e| format!("could not parse the statement: {e}"))?;
+    match (engine, statements.as_slice()) {
+        // Only comments: nothing runs.
+        (_, []) => Ok(()),
+        (_, [one]) => read_only_connection_statement(engine, one),
+        ("sqlserver", batch) => batch
+            .iter()
+            .try_for_each(|statement| read_only_connection_statement(engine, statement)),
+        _ => Err("only one statement at a time".into()),
+    }
+}
+
+/// [`classify_read_only_connection`] of one statement sqlparser has already read.
+fn read_only_connection_statement(engine: &str, statement: &Statement) -> Result<(), String> {
+    if plain_transaction_control(statement) {
+        return Ok(());
+    }
+    match statement {
+        Statement::Set(_) | Statement::Use(_) => setup_statement(engine, statement).map_err(|_| {
+            format!(
+                "{} could change more than this session's settings",
+                kind_name(statement)
+            )
+        }),
+        _ => read_statement(engine, statement).map(|_| ()),
+    }
+}
+
+/// `BEGIN`, `COMMIT`, `ROLLBACK`, savepoints and `SET TRANSACTION`, never asking for `READ
+/// WRITE`, another transaction's snapshot or a block of statements (T-SQL's `BEGIN … END`,
+/// `BEGIN TRY`).
+fn plain_transaction_control(statement: &Statement) -> bool {
+    let read_only_modes = |modes: &[TransactionMode]| {
+        modes.iter().all(|mode| {
+            matches!(
+                mode,
+                TransactionMode::IsolationLevel(_)
+                    | TransactionMode::AccessMode(TransactionAccessMode::ReadOnly)
+            )
+        })
+    };
+    match statement {
+        Statement::StartTransaction {
+            modes,
+            modifier,
+            statements,
+            exception,
+            has_end_keyword,
+            ..
+        } => {
+            modifier.is_none()
+                && statements.is_empty()
+                && exception.is_none()
+                && !has_end_keyword
+                && read_only_modes(modes)
+        }
+        Statement::Commit { end, modifier, .. } => !end && modifier.is_none(),
+        Statement::Rollback { .. }
+        | Statement::Savepoint { .. }
+        | Statement::ReleaseSavepoint { .. } => true,
+        Statement::Set(Set::SetTransaction {
+            modes, snapshot, ..
+        }) => !modes.is_empty() && snapshot.is_none() && read_only_modes(modes),
+        _ => false,
     }
 }
 
@@ -861,5 +956,250 @@ mod tests {
         let err = classify_session_setup("postgres", "SET default_transaction_read_only = off")
             .unwrap_err();
         assert!(err.contains("allow list"), "{err}");
+    }
+
+    #[test]
+    fn read_only_connections_run_reads_settings_and_transaction_control() {
+        for (engine, sql) in [
+            ("postgres", "select 1"),
+            ("postgres", "  SeLeCt * FROM orders -- the rest"),
+            ("postgres", "/* a comment */ select 1"),
+            ("postgres", "-- only a comment"),
+            (
+                "postgres",
+                "with recent as (select * from orders) select count(*) from recent",
+            ),
+            ("postgres", "explain select * from orders"),
+            ("postgres", "show search_path"),
+            ("postgres", "set search_path to app, public"),
+            ("postgres", "SET statement_timeout = 5000"),
+            ("postgres", "SET ROLE reporting"),
+            ("postgres", "begin"),
+            ("postgres", "BEGIN READ ONLY"),
+            ("postgres", "begin isolation level serializable"),
+            (
+                "postgres",
+                "start transaction isolation level repeatable read, read only",
+            ),
+            ("postgres", "commit"),
+            ("postgres", "COMMIT AND CHAIN"),
+            ("postgres", "rollback"),
+            ("postgres", "savepoint before_reads"),
+            ("postgres", "rollback to savepoint before_reads"),
+            ("postgres", "release savepoint before_reads"),
+            ("postgres", "set transaction read only"),
+            ("postgres", "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"),
+            ("mysql", "select * from orders limit 5"),
+            ("mysql", "show tables"),
+            ("mysql", "use shop"),
+            ("mysql", "set time_zone = '+00:00'"),
+            (
+                "mysql",
+                "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            ),
+            ("mysql", "start transaction"),
+            ("mysql", "START TRANSACTION READ ONLY"),
+            ("mysql", "commit"),
+            ("mysql", "rollback"),
+            ("sqlserver", "SELECT TOP 5 * FROM dbo.orders"),
+            ("sqlserver", "SELECT 1; SELECT 2"),
+            ("sqlserver", "USE master"),
+            ("sqlserver", "SET NOCOUNT ON"),
+            ("sqlserver", "BEGIN TRANSACTION"),
+            ("sqlserver", "COMMIT"),
+            ("sqlserver", "ROLLBACK TRANSACTION"),
+            ("duckdb", "select 42"),
+            ("duckdb", "use memory"),
+            ("duckdb", "begin transaction"),
+            ("sqlite", "select * from t"),
+            ("sqlite", "begin"),
+            ("sqlite", "commit"),
+        ] {
+            assert_eq!(
+                classify_read_only_connection(engine, sql),
+                Ok(()),
+                "{engine}: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_connections_refuse_writes_however_they_are_written() {
+        for (engine, sql) in [
+            // Writes, in odd casing and behind comments.
+            ("postgres", "insert into t values (1)"),
+            ("postgres", "DeLeTe FrOm t WhErE id = 1"),
+            ("postgres", "/* select */ delete from t where id = 1"),
+            ("postgres", "-- select 1\nupdate t set a = 1 where id = 1"),
+            (
+                "postgres",
+                "merge into t using s on t.id = s.id when matched then delete",
+            ),
+            ("postgres", "create temp table t (a int)"),
+            ("postgres", "create table t (a int)"),
+            ("postgres", "alter table t add column b int"),
+            ("postgres", "drop table t"),
+            ("postgres", "truncate t"),
+            ("postgres", "grant all on t to public"),
+            ("postgres", "comment on table t is 'x'"),
+            // Data-modifying CTEs, SELECT … INTO and locking reads.
+            (
+                "postgres",
+                "with d as (delete from t returning *) select * from d",
+            ),
+            (
+                "postgres",
+                "WITH u AS (UPDATE t SET a = 1 RETURNING *) SELECT 1",
+            ),
+            (
+                "postgres",
+                "with i as (insert into t values (1) returning *) select * from i",
+            ),
+            ("postgres", "select * into t2 from t"),
+            ("postgres", "select * from t for update"),
+            ("postgres", "explain analyze delete from t"),
+            ("postgres", "EXPLAIN (ANALYZE) SELECT 1"),
+            ("postgres", "explain delete from t"),
+            // Statements that run other statements, or write elsewhere.
+            ("postgres", "do $$ begin delete from t; end $$"),
+            ("postgres", "call purge()"),
+            ("postgres", "prepare p as delete from t"),
+            ("postgres", "execute p"),
+            ("postgres", "copy t from stdin"),
+            ("postgres", "copy t to '/tmp/x'"),
+            ("postgres", "lock table t"),
+            ("postgres", "vacuum t"),
+            ("postgres", "notify channel"),
+            ("postgres", "select pg_terminate_backend(1)"),
+            (
+                "postgres",
+                "select dblink_exec('dbname=x', 'delete from t')",
+            ),
+            ("postgres", "select lo_import('/etc/passwd')"),
+            ("postgres", "select pg_advisory_lock(1)"),
+            // Turning read-only mode off, in every spelling.
+            ("postgres", "begin read write"),
+            ("postgres", "START TRANSACTION READ WRITE"),
+            ("postgres", "begin isolation level serializable, read write"),
+            (
+                "postgres",
+                "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE",
+            ),
+            ("postgres", "set transaction read write"),
+            ("postgres", "SET TRANSACTION SNAPSHOT '00000003-0000001B-1'"),
+            ("postgres", "SET default_transaction_read_only = off"),
+            ("postgres", "set default_transaction_read_only to default"),
+            (
+                "postgres",
+                "SET SESSION default_transaction_read_only TO false",
+            ),
+            ("postgres", "set transaction_read_only = off"),
+            ("postgres", "RESET ALL"),
+            ("postgres", "reset default_transaction_read_only"),
+            ("postgres", "DISCARD ALL"),
+            (
+                "postgres",
+                "select set_config('default_transaction_read_only', 'off', false)",
+            ),
+            ("postgres", "SET SESSION AUTHORIZATION admin"),
+            ("postgres", "prepare transaction 'x'"),
+            ("postgres", "commit prepared 'x'"),
+            // Several statements in one span, or one that does not parse.
+            ("postgres", "select 1; delete from t"),
+            ("postgres", "begin; delete from t; commit"),
+            ("postgres", "this is not sql"),
+            ("postgres", "TABLE t"),
+            // MySQL: executable comments, files, locks and READ WRITE.
+            ("mysql", "/*!50000 DELETE FROM t */"),
+            ("mysql", "select 1 /*!, (select sleep(1)) */"),
+            ("mysql", "select 1 /*M!100000 , 2 */"),
+            ("mysql", "SELECT * FROM t INTO OUTFILE '/tmp/x'"),
+            ("mysql", "select 1 into @x"),
+            ("mysql", "select * from t for update"),
+            ("mysql", "replace into t values (1)"),
+            (
+                "mysql",
+                "insert into t values (1) on duplicate key update a = 1",
+            ),
+            ("mysql", "load data infile '/tmp/x' into table t"),
+            ("mysql", "lock tables t write"),
+            ("mysql", "START TRANSACTION READ WRITE"),
+            ("mysql", "SET SESSION TRANSACTION READ WRITE"),
+            ("mysql", "set transaction read write"),
+            ("mysql", "SET transaction_read_only = 0"),
+            ("mysql", "SET @@session.transaction_read_only = OFF"),
+            ("mysql", "set session tx_read_only = 0"),
+            ("mysql", "SET GLOBAL read_only = 0"),
+            ("mysql", "SET sql_mode = ''"),
+            ("mysql", "set autocommit = 0"),
+            ("mysql", "select get_lock('x', 1)"),
+            ("mysql", "call purge()"),
+            ("mysql", "xa start 'x'"),
+            // SQL Server: a write hidden in a batch after a read, blocks and dynamic SQL.
+            ("sqlserver", "SELECT 1; DELETE FROM t"),
+            ("sqlserver", "SELECT 1\nDELETE FROM t"),
+            ("sqlserver", "SELECT * FROM t DELETE FROM t WHERE id = 1"),
+            ("sqlserver", "SELECT 1\nUPDATE t SET a = 1 WHERE id = 1"),
+            ("sqlserver", "SET NOCOUNT ON DELETE FROM t"),
+            ("sqlserver", "BEGIN DELETE FROM t END"),
+            (
+                "sqlserver",
+                "BEGIN TRY DELETE FROM t END TRY BEGIN CATCH SELECT 1 END CATCH",
+            ),
+            ("sqlserver", "IF 1 = 1 DELETE FROM t"),
+            ("sqlserver", "exec sp_who"),
+            ("sqlserver", "EXEC('DELETE FROM t')"),
+            ("sqlserver", "EXECUTE AS USER = 'dbo'"),
+            ("sqlserver", "SELECT * INTO #copy FROM t"),
+            ("sqlserver", "select * from srv.shop.dbo.t"),
+            (
+                "sqlserver",
+                "select * from openrowset('SQLNCLI', 'x', 'select 1')",
+            ),
+            (
+                "sqlserver",
+                "update t set a = 1 output inserted.* where id = 1",
+            ),
+            ("sqlserver", "SET IMPLICIT_TRANSACTIONS ON"),
+            ("sqlserver", "SET QUOTED_IDENTIFIER OFF"),
+            ("sqlserver", "SET IDENTITY_INSERT dbo.t ON"),
+            ("sqlserver", "TRUNCATE TABLE t"),
+            ("sqlserver", "drop table t"),
+            ("sqlserver", "BEGIN DISTRIBUTED TRANSACTION"),
+            ("sqlserver", "bulk insert t from 'c:/x.csv'"),
+            // DuckDB and SQLite: files, attachments, pragmas.
+            ("duckdb", "attach 'x.db' as x"),
+            ("duckdb", "copy t to 'x.csv'"),
+            ("duckdb", "install httpfs"),
+            ("duckdb", "SET enable_external_access = true"),
+            ("duckdb", "checkpoint"),
+            ("duckdb", "create table t (a int)"),
+            ("sqlite", "pragma query_only = 0"),
+            ("sqlite", "attach 'x.db' as x"),
+            ("sqlite", "vacuum"),
+            ("sqlite", "begin exclusive"),
+            ("sqlite", "insert or replace into t values (1)"),
+        ] {
+            assert!(
+                classify_read_only_connection(engine, sql).is_err(),
+                "{engine}: {sql} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_connection_refusals_say_why() {
+        let err = classify_read_only_connection("postgres", "delete from t").unwrap_err();
+        assert!(err.contains("DELETE is not a read"), "{err}");
+        let err = classify_read_only_connection(
+            "postgres",
+            "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE",
+        )
+        .unwrap_err();
+        assert!(err.contains("more than this session's settings"), "{err}");
+        let err = classify_read_only_connection("mysql", "/*!50000 DELETE FROM t */").unwrap_err();
+        assert!(err.contains("executable comment"), "{err}");
+        let err = classify_read_only_connection("postgres", "this is not sql").unwrap_err();
+        assert!(err.contains("could not parse"), "{err}");
     }
 }

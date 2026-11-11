@@ -155,7 +155,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
   connection's type asks for: data changes on Production, every run where it confirms
   execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
-  decides it. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  decides it. A read-only connection runs only reads, session settings and transaction control
+  (ADR-053, `classify_read_only_connection`): `check_run` refuses anything else before the guard
+  asks and whatever was confirmed, the session refuses it again (`Session::with_read_only`, set
+  by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's
+  own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
   closes the ones a connection type says are idle too long, never with a transaction open
   (ADR-029): every use goes through its `Tracked` connection, and
   nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's
