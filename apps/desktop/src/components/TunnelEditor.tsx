@@ -163,6 +163,9 @@ export function TunnelEditor(props: {
   const [kubernetes, setKubernetes] = useState<KubernetesDraftItem>(EMPTY_KUBERNETES);
   const [ssm, setSsm] = useState<SsmDraftItem>(EMPTY_SSM);
   const [revision, setRevision] = useState<string | null>(null);
+  // An edited profile is shown only once its file is read: until then the route would be the
+  // default one (SSH, with no hops) and a save would write that over the file.
+  const loaded = !editing || revision !== null;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "idle" } | { kind: "error"; message: string }>({ kind: "idle" });
   const log = useConnectionTest();
@@ -361,6 +364,9 @@ export function TunnelEditor(props: {
         >
           <div className="form-scroll">
             {loadError && <p className="error" role="alert">{loadError}</p>}
+            {!loaded && !loadError && <p className="muted" role="status">{t("tunnel.loading")}</p>}
+            {loaded && (
+            <>
             <fieldset>
               <legend>{t("sections.general")}</legend>
               <div className="form-pair">
@@ -671,12 +677,14 @@ export function TunnelEditor(props: {
             </fieldset>
               </>
             )}
+            </>
+            )}
           </div>
 
           {log.steps && <ConnectionTestLog steps={log.steps} report={log.report} running={log.running} onStop={log.stop} onClose={log.clear} />}
           <div className="wizard-footer">
             {!kube && (
-              <button type="button" onClick={() => void test()} disabled={busy || log.running}>
+              <button type="button" onClick={() => void test()} disabled={busy || log.running || !loaded}>
                 {t("tunnel.test")}
               </button>
             )}
@@ -697,7 +705,7 @@ export function TunnelEditor(props: {
             <button type="button" onClick={props.onClose} disabled={busy}>
               {t("cancel")}
             </button>
-            <button type="submit" className="primary" disabled={busy || Boolean(loadError)}>
+            <button type="submit" className="primary" disabled={busy || !loaded || Boolean(loadError)}>
               {editing ? t("saveChanges") : t("save")}
             </button>
           </div>
