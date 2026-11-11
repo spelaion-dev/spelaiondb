@@ -92,7 +92,8 @@ after a change and only what changed is rebuilt.
 ### The smoke test
 Both drive the release build in `target/release` with `examples/demo` and a temporary personal
 folder, so they never touch your configuration, AI clients, kubeconfig or keychain. Both need
-`python examples/demo/make-shop-db.py` run once and the Docker services up
+`python examples/demo/make-shop-db.py` run once (the Windows one runs it again at the start of
+every run, since the run changes that database) and the Docker services up
 (`docker compose -f testing/docker/compose.yaml up -d --wait`).
 
 - **Windows**: `node e2e/smoke.mjs` (from `apps/desktop`). The whole test: Playwright over

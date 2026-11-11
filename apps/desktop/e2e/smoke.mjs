@@ -4,8 +4,8 @@
 //
 // Requirements: the app and the CLI (for the MCP activity steps) built in one command, so DuckDB
 // is compiled once (CONTRIBUTING.md): npx tauri build --no-bundle -- -p spelaion-desktop
-// -p spelaion-cli; examples/demo/make-shop-db.py run and, for the PostgreSQL steps,
-// testing/docker up.
+// -p spelaion-cli; Python, to make examples/demo/data/shop.db again at the start of every run
+// (examples/demo/make-shop-db.py), and, for the PostgreSQL steps, testing/docker up.
 //   node e2e/smoke.mjs [screenshots-dir]
 // On Linux (WebKitGTK has no CDP port) run the Linux pass instead: node e2e/smoke-linux.mjs.
 
@@ -132,6 +132,9 @@ function startApp() {
   });
 }
 
+// The run changes the demo's shop.db (the column editor rebuilds product, among others), so
+// every run starts from a fresh one: a later run would otherwise find nothing to change.
+execFileSync(process.platform === "win32" ? "python" : "python3", [join(demo, "make-shop-db.py")], { stdio: "inherit" });
 let app = startApp();
 
 /** Runs `spelaiondb mcp` as an AI client would (stdio, JSON-RPC): `list_connections`, then each
