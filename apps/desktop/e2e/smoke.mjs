@@ -6388,11 +6388,26 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.waitForTimeout(2_000);
   }
   step("history, theme and per-connection preference survive an app restart");
+  if (process.env.SPELAION_TEST_K8S && process.platform === "win32") {
+    // Closing the tabs above closed the Kubernetes session, and its kubectl with it. The
+    // connection is opened again in the explorer (no tab, so the three tabs stay the only
+    // ones), so the app below is closed with a port-forward running.
+    await page.locator('.connection-row:has-text("PG in Kubernetes") .twisty').click();
+    const asked = page.getByRole("dialog").getByText("Password for PG in Kubernetes");
+    const schema = page.getByRole("button", { name: "Expand or collapse schema public" });
+    await asked.or(schema).first().waitFor();
+    if (await asked.isVisible()) {
+      await page.getByLabel("Password", { exact: true }).fill("spelaion");
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+    }
+    await schema.waitFor();
+    assert.equal(await page.locator(".tabbar .tab").count(), 3);
+  }
   await setLanguage("es");
   await setTheme("dark", "dark");
   await browser.close();
   if (process.env.SPELAION_TEST_K8S && process.platform === "win32") {
-    // The Kubernetes connection is still open: closing the app stops its kubectl.
+    // The Kubernetes connection is open in the explorer: closing the app stops its kubectl.
     assert.ok(testKubectls().length > 0, "the port-forward is running");
     await closeApp();
     assert.deepEqual(testKubectls(), [], "kubectl outlived the app");
