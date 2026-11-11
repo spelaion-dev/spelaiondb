@@ -105,8 +105,9 @@ every run, since the run changes that database) and the Docker services up
   dialog taking the system clipboard's text, PostgreSQL behind the two SSH bastions, and quitting
   with a transaction open. It needs:
   - `tauri-driver` (`cargo install tauri-driver --locked`, or set `TAURI_DRIVER`) and
-    WebKitWebDriver (`webkitgtk-6.0` on Arch, `webkit2gtk-driver` on Debian and Ubuntu; set
-    `WEBKIT_WEBDRIVER` if it is not on the `PATH`);
+    WebKitWebDriver (`webkitgtk-6.0` on Arch, `webkitgtk-webdriver` on Ubuntu 26.04 and later,
+    `webkit2gtk-driver` on Debian and older Ubuntu; set `WEBKIT_WEBDRIVER` if it is not on the
+    `PATH`);
   - a desktop session: Wayland with `wl-clipboard`, or X11 with `xclip`;
   - a way to ask the window to close like its close button: Hyprland (`hyprctl`), Sway
     (`swaymsg`) or an X11 window manager with `wmctrl`.
