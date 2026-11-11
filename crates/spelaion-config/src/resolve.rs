@@ -121,6 +121,18 @@ pub struct ResolvedTunnel {
     pub options: TunnelSettings,
     /// The first hop is reached through it; with no hops, it reaches the database (ADR-027).
     pub proxy: Option<ResolvedProxy>,
+    /// AWS SSM, like the proxy: to the first hop, or to the database (ADR-050).
+    pub ssm: Option<ResolvedSsm>,
+}
+
+/// A network profile's AWS SSM, variables substituted (ADR-050). It holds no secret.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResolvedSsm {
+    pub target: String,
+    pub region: Option<String>,
+    pub profile: Option<String>,
+    /// `None`: the AWS CLI found on the PATH or in its installer's folder.
+    pub aws: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -799,12 +811,30 @@ impl<'a> Resolver<'a> {
                 )?,
             }),
         };
+        let ssm = match &file.ssm {
+            None => None,
+            Some(ssm) => {
+                let text = |v: &Option<String>| -> Result<Option<String>, ResolveError> {
+                    v.as_deref()
+                        .map(|v| self.expand(errors_at, v))
+                        .transpose()
+                        .map(|v| v.filter(|v| !v.trim().is_empty()))
+                };
+                Some(ResolvedSsm {
+                    target: self.expand(errors_at, &ssm.target)?,
+                    region: text(&ssm.region)?,
+                    profile: text(&ssm.profile)?,
+                    aws: text(&ssm.aws)?,
+                })
+            }
+        };
         Ok(ResolvedTunnel {
             name: name.to_string(),
             hops,
             known_hosts: None,
             options: TunnelSettings::of(file),
             proxy,
+            ssm,
         })
     }
 

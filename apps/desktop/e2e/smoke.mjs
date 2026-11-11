@@ -5840,8 +5840,48 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await editSpare.getByRole("button", { name: "Click again to delete" }).click();
     await editSpare.waitFor({ state: "detached" });
     await row.waitFor({ state: "detached" });
+
+    // AWS SSM (ADR-050): the managed node, region and profile, with no hops. Nothing is run
+    // here: there is no AWS account in the smoke test.
+    await settings.getByRole("button", { name: "New network profile…" }).click();
+    const aws = page.getByRole("dialog", { name: "New network profile" });
+    await aws.getByLabel("Profile name").fill("AWS route");
+    await aws.getByRole("radio", { name: "Personal", exact: true }).check();
+    await aws.getByRole("radio", { name: "AWS SSM", exact: true }).check();
+    assert.equal(await aws.locator("fieldset.hop").count(), 0, "SSM alone needs no hop");
+    assert.equal(await aws.getByRole("group", { name: "Proxy" }).count(), 0);
+    await aws.getByLabel("Managed node").fill("i-0123456789abcdef0");
+    await aws.getByLabel("Region").fill("eu-west-1");
+    await aws.getByLabel("AWS profile").fill("prod");
+    await shot("15c-ssm-profile");
+    {
+      const theme = await page.evaluate(() => document.documentElement.dataset.theme);
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+      await shot("15c-ssm-profile-dark");
+      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    }
+    await aws.getByRole("button", { name: "Save", exact: true }).click();
+    await aws.waitFor({ state: "detached" });
+    const awsFile = readFileSync(join(userDir, "tunnels", "aws-route.toml"), "utf8");
+    assert.match(awsFile, /\[ssm\]/);
+    assert.match(awsFile, /target = "i-0123456789abcdef0"/);
+    assert.match(awsFile, /region = "eu-west-1"/);
+    assert.match(awsFile, /profile = "prod"/);
+    assert.doesNotMatch(awsFile, /hops|proxy/);
+    const awsRow = settings.getByRole("listitem", { name: "aws-route" });
+    await awsRow.waitFor();
+    assert.match(await awsRow.innerText(), /AWS SSM i-0123456789abcdef0 \(eu-west-1, prod\)/);
+    await awsRow.getByRole("button", { name: "Edit…" }).click();
+    const editAws = page.getByRole("dialog", { name: "Edit network profile aws-route" });
+    assert.equal(await editAws.getByRole("radio", { name: "AWS SSM", exact: true }).isChecked(), true);
+    assert.equal(await editAws.getByLabel("Managed node").inputValue(), "i-0123456789abcdef0");
+    await editAws.getByRole("button", { name: "Delete profile" }).click();
+    await editAws.getByRole("button", { name: "Click again to delete" }).click();
+    await editAws.waitFor({ state: "detached" });
+    await awsRow.waitFor({ state: "detached" });
   });
   assert.ok(!existsSync(join(userDir, "tunnels", "spare-route.toml")));
+  assert.ok(!existsSync(join(userDir, "tunnels", "aws-route.toml")));
 
   step("SQLite on a server: the server's sqlite3 through two hops, nothing copied");
   await page.getByRole("button", { name: "Add connection", exact: true }).first().click();

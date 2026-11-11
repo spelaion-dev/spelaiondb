@@ -509,6 +509,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
         options: Default::default(),
         proxy: None,
         kubernetes: None,
+        ssm: None,
     };
     let known_hosts = KnownHosts {
         team_file: None,

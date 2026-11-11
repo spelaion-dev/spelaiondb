@@ -1437,6 +1437,7 @@ fn two_hop_tunnel() -> TunnelDraft {
         options: TunnelDraftOptions::default(),
         proxy: None,
         kubernetes: None,
+        ssm: None,
     }
 }
 
@@ -2374,6 +2375,7 @@ fn proxies_are_written_without_their_password_and_resolved() {
         options: TunnelDraftOptions::default(),
         proxy: Some(proxy_draft("proxy.corp.example")),
         kubernetes: None,
+        ssm: None,
     };
     let passwords = TunnelPasswords {
         hops: Vec::new(),
@@ -2494,6 +2496,7 @@ fn invalid_proxies_explain_what_is_wrong() {
         options: TunnelDraftOptions::default(),
         proxy,
         kubernetes: None,
+        ssm: None,
     };
     assert!(error(alone(None)).contains("[proxy]"));
     assert!(error(alone(Some(proxy_draft(" ")))).contains("host"));

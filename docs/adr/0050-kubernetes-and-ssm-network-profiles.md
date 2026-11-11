@@ -82,7 +82,7 @@ the personal directory, pinned by trust. Both cases fit there.
    - **With hops**, SSM reaches the first hop's SSH port and the hops go on from there (SSH
      over SSM, without `AWS-StartSSHSession` or a `command`). A proxy, a first hop `command`
      and Kubernetes are refused together with SSM.
-   - **How it runs:** the core starts `aws ssm start-session --target=… --document-name=…
+   - **How it runs:** SpelaionDB starts `aws ssm start-session --target=… --document-name=…
      --parameters=…` (plus `--region=…` and `--profile=…` when set) as an argument list, never
      through a shell, with a local port it chose on 127.0.0.1, and waits for the Session
      Manager plugin to say it is waiting for connections. Each value is checked before it
@@ -95,7 +95,7 @@ the personal directory, pinned by trust. Both cases fit there.
    - **Nothing secret goes to it.** SSM uses the user's AWS credentials as the AWS CLI finds
      them (profiles, SSO, environment); the profile file holds no secret, and no database or
      SSH password is ever an argument, an environment variable of the process, or a log line.
-   - **Detected, explained:** before starting, the core looks for `aws` (the named one, the
+   - **Detected, explained:** before starting, SpelaionDB looks for `aws` (the named one, the
      PATH, then the AWS CLI installer's folders) and for `session-manager-plugin` (the PATH,
      its installer's folders, and next to `aws`). What is missing is said by name, with what
      to install; a plugin found outside the PATH is put on the process's PATH.
@@ -112,7 +112,23 @@ the personal directory, pinned by trust. Both cases fit there.
   `Resolver::kubernetes_profile_for_editor` and `check_tunnel_editor_access` guard the editors'
   `kubectl` lists. Tested in `spelaion-config/tests/network_profiles.rs` (trust included) and
   against the kind cluster of `testing/k8s` (`spelaion-core/tests/kube.rs`, the smoke test).
-- Part 2 (SSM) follows in its own change.
+- Part 2 (AWS SSM, 2026-11-11): `SsmConfig` in `TunnelFile` (`[ssm]`), `ResolvedSsm` and
+  `spelaion-ssh::SsmSpec`. `spelaion-ssh/src/ssm.rs` finds the tools, writes the arguments
+  (`ssm_arguments`) and runs the session; `tunnel.rs` uses it like the proxy: the first hop's TCP
+  connection goes to the session's local end (the host key still checked against the hop's
+  name), or, with no hops, each forward or probe gets a session to its target. The plugin is
+  stopped with the CLI by stopping the process tree with the system's own tool (`taskkill /T`
+  on Windows, the process group on Unix), so nothing needs `unsafe`. The connection test shows
+  the session as its own step (`FailureKind::Ssm`).
+- Tests: `spelaion-ssh/tests/ssm.rs` runs a stand-in for `aws` and the plugin
+  (`tests/support/fake_aws.rs`, built as `spelaion-test-fake-aws`, never shipped) that records
+  its arguments and environment and forwards the port: the exact arguments, a remote host, AWS's
+  error reaching the user, the plugin stopped on close and on drop, missing tools and refused
+  values before anything runs, and SSH hops through the session to PostgreSQL in
+  `testing/docker` with no secret in the CLI's arguments or environment. The arguments and the
+  values that must be refused are also unit tests of `ssm.rs`; trust and the editor in
+  `spelaion-config/tests/network_profiles.rs`. **Not tested against a real AWS account**: that
+  is a manual test.
 
 ## Alternatives
 - **Kubernetes profiles as a new file type** (`kubernetes/<name>.toml`): a second kind of

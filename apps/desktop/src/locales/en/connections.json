@@ -164,7 +164,9 @@
       "target": "Reach {{host}}:{{port}}",
       "database": "Log in to {{engine}} database {{database}} as {{user}}",
       "databaseNoName": "Log in to {{engine}} as {{user}}",
-      "file": "Open the {{engine}} file {{database}}"
+      "file": "Open the {{engine}} file {{database}}",
+      "ssm": "AWS SSM session through {{target}}",
+      "ssmRegion": "AWS SSM session through {{target}} ({{region}})"
     },
     "kinds": {
       "config": "Configuration",
@@ -181,7 +183,8 @@
       "tls": "TLS",
       "timeout": "Timeout",
       "kubernetes": "Kubernetes",
-      "other": "Error"
+      "other": "Error",
+      "ssm": "AWS SSM"
     },
     "hints": {
       "config": "The connection or its network profile could not be read: fix what the message names (a variable, a secret reference, a file path).",
@@ -198,7 +201,8 @@
       "tls": "The encrypted connection failed: check the SSL/TLS mode, the CA certificate, and that the host name matches the server's certificate (through a tunnel the real server name is still checked).",
       "timeout": "No answer in time: the server may be down, or a firewall may be dropping packets. Check the address, or raise the connect timeout if the network is only slow.",
       "kubernetes": "kubectl could not forward the port: check the context, namespace, resource and port in the Kubernetes tab, and that kubectl works from a terminal.",
-      "other": "See the message. Copy the diagnostics to share them: secrets are left out."
+      "other": "See the message. Copy the diagnostics to share them: secrets are left out.",
+      "ssm": "AWS SSM could not start the session: check that the AWS CLI v2 and the Session Manager plugin are installed (the message names what is missing), that you are signed in (aws sso login for SSO profiles), and that the target is a managed node you may start sessions on."
     }
   },
   "browse": "Browse…",
@@ -320,7 +324,18 @@
     "confirmDelete": "Click again to delete",
     "route": "Route",
     "routeSsh": "SSH hops and proxy",
-    "routeKubernetes": "Kubernetes"
+    "routeKubernetes": "Kubernetes",
+    "routeSsm": "AWS SSM",
+    "ssm": "AWS SSM Session Manager",
+    "ssmTarget": "Managed node",
+    "ssmRegion": "Region",
+    "ssmRegionPlaceholder": "The AWS CLI's default",
+    "ssmProfile": "AWS profile",
+    "ssmProfilePlaceholder": "The AWS CLI's default",
+    "ssmAws": "AWS CLI program",
+    "ssmHint": "SpelaionDB runs aws ssm start-session with your AWS credentials (sign in first, for example with aws sso login). It needs the AWS CLI v2 and the Session Manager plugin. Without hops, the connection's host is reached from the managed node: localhost is the node itself, any other host (an RDS endpoint) is reached through it.",
+    "ssmHopsHint": "Hops after AWS SSM are reached through its session: the first hop is a host the managed node can reach (or localhost, the node itself).",
+    "okSsm": "AWS SSM is ready"
   },
   "newDatabase": "New database…",
   "url": {

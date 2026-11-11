@@ -1,6 +1,7 @@
 // Network profile editor (ADR-027), opened from the connection form and Settings → Network.
 // An SSH profile has hops in order (the last one reaches the database), each with its server
-// and authentication, and a proxy; a Kubernetes profile (ADR-050) has a cluster's settings,
+// and authentication, after a proxy or an AWS SSM session (ADR-050), or one of those alone; a
+// Kubernetes profile (ADR-050) has a cluster's settings,
 // shared by the connections that use it. The core validates and writes the file; passwords
 // go to the keychain, never to the file.
 
@@ -8,7 +9,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { chooseOpenFile } from "../dialogs";
 import { useKeychainAvailable } from "../keychain";
-import { call, commands, type HopDraft, type KubernetesDraftItem, type PasswordMode, type ProxyDraft, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
+import { call, commands, type HopDraft, type KubernetesDraftItem, type PasswordMode, type ProxyDraft, type SshAuthItem, type SsmDraftItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
@@ -16,7 +17,9 @@ import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
 /** `kubernetes` starts a new profile as a Kubernetes one (from the Kubernetes tab). */
 export type TunnelEditorMode = { kind: "add"; personal: boolean; kubernetes?: boolean } | { kind: "edit"; name: string; personal: boolean };
 
-type Route = "ssh" | "kubernetes";
+type Route = "ssh" | "ssm" | "kubernetes";
+
+const EMPTY_SSM: SsmDraftItem = { target: "", region: "", profile: "", aws: "" };
 
 type Method = SshAuthItem | "custom";
 
@@ -158,6 +161,7 @@ export function TunnelEditor(props: {
   const [proxy, setProxy] = useState<ProxyState>(noProxy);
   const [route, setRoute] = useState<Route>(mode.kind === "add" && mode.kubernetes ? "kubernetes" : "ssh");
   const [kubernetes, setKubernetes] = useState<KubernetesDraftItem>(EMPTY_KUBERNETES);
+  const [ssm, setSsm] = useState<SsmDraftItem>(EMPTY_SSM);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "idle" } | { kind: "error"; message: string }>({ kind: "idle" });
@@ -187,6 +191,10 @@ export function TunnelEditor(props: {
         setKeepaliveCount(loaded.keepaliveCount ?? null);
         setConnectTimeout(loaded.connectTimeout ?? null);
         setProxy(proxyFromDraft(loaded.proxy, edited.proxyPasswordStored));
+        if (loaded.ssm) {
+          setRoute("ssm");
+          setSsm(loaded.ssm);
+        }
         if (loaded.kubernetes) {
           setRoute("kubernetes");
           setKubernetes(loaded.kubernetes);
@@ -223,10 +231,25 @@ export function TunnelEditor(props: {
   };
 
   const kube = route === "kubernetes";
+  const viaSsm = route === "ssm";
   const draft: TunnelDraft = kube
-    ? { personal, name, hops: [], keepaliveInterval: null, keepaliveCount: null, connectTimeout: null, proxy: null, kubernetes }
-    : { personal, name, hops: hops.map(toDraft), keepaliveInterval, keepaliveCount, connectTimeout, proxy: proxyToDraft(proxy), kubernetes: null };
-  const proxyPassword = !kube && proxy.enabled && proxy.password ? proxy.password : null;
+    ? { personal, name, hops: [], keepaliveInterval: null, keepaliveCount: null, connectTimeout: null, proxy: null, ssm: null, kubernetes }
+    : {
+        personal,
+        name,
+        hops: hops.map(toDraft),
+        keepaliveInterval,
+        keepaliveCount,
+        connectTimeout,
+        proxy: viaSsm ? null : proxyToDraft(proxy),
+        ssm: viaSsm ? ssm : null,
+        kubernetes: null,
+      };
+  const proxyPassword = route === "ssh" && proxy.enabled && proxy.password ? proxy.password : null;
+  const updateSsm = (patch: Partial<SsmDraftItem>) => {
+    setSsm((current) => ({ ...current, ...patch }));
+    setStatus({ kind: "idle" });
+  };
 
   /** A repository's kubectl settings are only used once it is trusted (ADR-022). */
   async function chooseRoute(next: Route) {
@@ -242,6 +265,8 @@ export function TunnelEditor(props: {
     }
     setRoute(next);
     if (next === "ssh" && hops.length === 0 && !proxy.enabled) setHops([emptyHop()]);
+    // AWS SSM may reach the database alone: a new profile starts without hops.
+    if (next === "ssm" && hops.length === 1 && !hops[0]?.host && !hops[0]?.user) setHops([]);
     setStatus({ kind: "idle" });
   }
   const updateProxy = (patch: Partial<ProxyState>) => {
@@ -359,8 +384,12 @@ export function TunnelEditor(props: {
               <div className="form-row" role="radiogroup" aria-label={t("tunnel.route")}>
                 <span>{t("tunnel.route")}</span>
                 <label className="check">
-                  <input type="radio" name="tunnel-route" checked={!kube} onChange={() => void chooseRoute("ssh")} />
+                  <input type="radio" name="tunnel-route" checked={route === "ssh"} onChange={() => void chooseRoute("ssh")} />
                   {t("tunnel.routeSsh")}
+                </label>
+                <label className="check">
+                  <input type="radio" name="tunnel-route" checked={viaSsm} onChange={() => void chooseRoute("ssm")} />
+                  {t("tunnel.routeSsm")}
                 </label>
                 <label className="check">
                   <input type="radio" name="tunnel-route" checked={kube} onChange={() => void chooseRoute("kubernetes")} />
@@ -382,6 +411,33 @@ export function TunnelEditor(props: {
                 }}
               />
             )}
+            {viaSsm && (
+              <fieldset aria-label={t("tunnel.ssm")}>
+                <legend>{t("tunnel.ssm")}</legend>
+                <div className="form-pair">
+                  <label className="field grow">
+                    <span>{t("tunnel.ssmTarget")}</span>
+                    <input type="text" value={ssm.target} autoComplete="off" spellCheck={false} placeholder="i-0123456789abcdef0" onChange={(e) => updateSsm({ target: e.target.value })} />
+                  </label>
+                  <label className="field">
+                    <span>{t("tunnel.ssmRegion")}</span>
+                    <input type="text" value={ssm.region} autoComplete="off" spellCheck={false} placeholder={t("tunnel.ssmRegionPlaceholder")} onChange={(e) => updateSsm({ region: e.target.value })} />
+                  </label>
+                </div>
+                <div className="form-pair">
+                  <label className="field grow">
+                    <span>{t("tunnel.ssmProfile")}</span>
+                    <input type="text" value={ssm.profile} autoComplete="off" spellCheck={false} placeholder={t("tunnel.ssmProfilePlaceholder")} onChange={(e) => updateSsm({ profile: e.target.value })} />
+                  </label>
+                  <label className="field grow">
+                    <span>{t("tunnel.ssmAws")}</span>
+                    <input type="text" value={ssm.aws} autoComplete="off" spellCheck={false} placeholder="aws" onChange={(e) => updateSsm({ aws: e.target.value })} />
+                  </label>
+                </div>
+                <p className="muted small">{t("tunnel.ssmHint")}</p>
+                {hops.length > 0 && <p className="muted small">{t("tunnel.ssmHopsHint")}</p>}
+              </fieldset>
+            )}
             {!kube && (
               <>
 
@@ -401,7 +457,7 @@ export function TunnelEditor(props: {
                     <button type="button" className="ghost small" disabled={i === hops.length - 1} aria-label={t("tunnel.moveDown", { hop: label })} onClick={() => moveHop(i, 1)}>
                       ↓
                     </button>
-                    <button type="button" className="ghost small" disabled={hops.length === 1 && !proxy.enabled} aria-label={t("tunnel.removeHop", { hop: label })} onClick={() => setHops((list) => list.filter((_, j) => j !== i))}>
+                    <button type="button" className="ghost small" disabled={hops.length === 1 && !proxy.enabled && !viaSsm} aria-label={t("tunnel.removeHop", { hop: label })} onClick={() => setHops((list) => list.filter((_, j) => j !== i))}>
                       ✕
                     </button>
                   </div>
@@ -495,6 +551,7 @@ export function TunnelEditor(props: {
               {t("tunnel.addHop")}
             </button>
 
+            {!viaSsm && (
             <fieldset aria-label={t("tunnel.proxy")}>
               <legend>{t("tunnel.proxy")}</legend>
               <label className="check">
@@ -561,6 +618,7 @@ export function TunnelEditor(props: {
                 </>
               )}
             </fieldset>
+            )}
 
             <fieldset>
               <legend>{t("tunnel.network")}</legend>
@@ -627,7 +685,7 @@ export function TunnelEditor(props: {
                 steps={log.steps}
                 report={log.report}
                 running={log.running}
-                okText={() => (hops.length === 0 ? t("tunnel.okProxy") : t("tunnel.ok", { count: hops.length }))}
+                okText={() => (hops.length === 0 ? (viaSsm ? t("tunnel.okSsm") : t("tunnel.okProxy")) : t("tunnel.ok", { count: hops.length }))}
               />
               {status.kind === "error" && <span className="error">{status.message}</span>}
             </div>

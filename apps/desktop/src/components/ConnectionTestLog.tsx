@@ -89,6 +89,8 @@ function useStepTitle() {
         return t(kind.command ? "testLog.steps.hopCommand" : "testLog.steps.hop", { hop: kind.hop, user: kind.user, host: kind.host, port: kind.port });
       case "kubernetes":
         return t("testLog.steps.kubernetes", { resource: kind.resource });
+      case "ssm":
+        return kind.region ? t("testLog.steps.ssmRegion", { target: kind.target, region: kind.region }) : t("testLog.steps.ssm", { target: kind.target });
       case "target":
         return t("testLog.steps.target", { host: kind.host, port: kind.port });
       case "database":
