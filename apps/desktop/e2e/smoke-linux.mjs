@@ -47,12 +47,12 @@ const wayland = !!process.env.WAYLAND_DISPLAY;
 const clipboard = {
   // wl-copy and xclip stay in the background to serve the clipboard: they must not keep this
   // process's output open, or whatever reads it never sees the end.
-  // On X11, xclip offers the text as text/plain;charset=utf-8, as GTK and Qt apps and browsers
-  // do (and wl-copy on Wayland). Its default, UTF8_STRING alone (xterm, xsel), is never read by
-  // WebKitGTK's navigator.clipboard.readText(): it gives "" (SDB-242; back to the default then).
+  // On X11, xclip's default offers the text as UTF8_STRING alone, as xterm and xsel do (GTK and
+  // Qt apps and browsers also offer text/plain;charset=utf-8, the only target WebKitGTK's own
+  // navigator.clipboard.readText() reads): the app must read it with non-ASCII text intact.
   set(text) {
     if (wayland) execFileSync("wl-copy", [], { input: text, stdio: ["pipe", "ignore", "ignore"] });
-    else execFileSync("xclip", ["-selection", "clipboard", "-in", "-t", "text/plain;charset=utf-8"], { input: text, stdio: ["pipe", "ignore", "ignore"] });
+    else execFileSync("xclip", ["-selection", "clipboard", "-in"], { input: text, stdio: ["pipe", "ignore", "ignore"] });
   },
   get() {
     return wayland
@@ -278,12 +278,12 @@ try {
     await shot("04-duckdb");
   });
 
-  await step("import: the dialog takes the system clipboard's text (Ctrl+Alt+V, then Paste from clipboard) into a new table", async () => {
-    clipboard.set("first_id,first_name\n1,Ann\n");
+  await step("import: the dialog takes the system clipboard's text (Ctrl+Alt+V, then Paste from clipboard) into a new table; Ctrl+V pastes into the editor", async () => {
+    clipboard.set("first_id,first_name\n1,Begoña\n");
     await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
     await wd.press("Control+Alt+v");
     const d = await dialog("Import data");
-    await visibleText('[role="dialog"] [role="region"]', "first_name");
+    await visibleText('[role="dialog"] [role="region"]', "Begoña");
     clipboard.set("city,visits\nMadrid,3\nA Coruña,5\nLisboa,8\n");
     await wd.click(await button("Paste from clipboard", '[role="dialog"]'));
     await visibleText('[role="dialog"] [role="region"]', "A Coruña");
@@ -297,7 +297,13 @@ try {
     await visibleText('[role="dialog"]', "Imported 3 rows into visits_from_clipboard");
     await wd.press("Escape");
     await wd.waitDetached(d, { what: "the import dialog to close" });
-    await replaceQuery("select city from visits_from_clipboard where visits = 5;");
+    // The editor's own paste (the paste event), with the text another program copied: the row
+    // is only found if "ñ" arrived intact.
+    clipboard.set("select city from visits_from_clipboard where city = 'A Coruña';");
+    await wd.click(await wd.element((p) => document.querySelector(`${p} .cm-content`), [P]));
+    await wd.press("Control+a");
+    await wd.press("Control+v");
+    await visibleText(`${P} .cm-content`, "where city = 'A Coruña'");
     await run();
     await statusline("1 row");
     await shot("06-import-done");

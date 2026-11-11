@@ -3,6 +3,7 @@
 // ever passes through here or the clipboard: the clipboard text has none.
 
 import { call, commands, type ConnectionItem } from "./api";
+import { readClipboardText } from "./clipboardText";
 import { fieldList } from "./fieldNames";
 import i18n from "./i18n";
 import { refreshConnections } from "./components/Sidebar";
@@ -72,7 +73,7 @@ export async function pasteConnection(text: string): Promise<void> {
 export async function pasteFromClipboard(): Promise<void> {
   let text: string;
   try {
-    text = await navigator.clipboard.readText();
+    text = await readClipboardText();
   } catch {
     throw new Error(i18n.t("connections:copies.clipboardUnavailable"));
   }

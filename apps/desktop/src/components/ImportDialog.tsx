@@ -23,6 +23,7 @@ import type {
 } from "../bindings";
 import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase } from "../connect";
 import { isTextField, useFocusedPaste } from "../focusedPaste";
+import { readClipboardText } from "../clipboardText";
 import { chooseOpenFile } from "../dialogs";
 import { Icon } from "./Icons";
 import { useApp, useDialogs } from "../store";
@@ -247,7 +248,7 @@ function ImportForm({ request }: { request: ImportRequest }) {
   async function paste() {
     let text: string;
     try {
-      text = await navigator.clipboard.readText();
+      text = await readClipboardText();
     } catch {
       setSourceError(t("import.clipboardUnavailable"));
       return;

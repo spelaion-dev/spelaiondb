@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
+import { readClipboardText } from "../clipboardText";
 import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
@@ -469,7 +470,7 @@ export function ResultGrid({
   async function pasteFromMenu() {
     setMenu(null);
     try {
-      pasteText(await navigator.clipboard.readText());
+      pasteText(await readClipboardText());
     } catch (e) {
       setNotice({ text: t("edit.pasteUnavailable", { detail: e instanceof Error ? e.message : String(e) }), error: true });
     }

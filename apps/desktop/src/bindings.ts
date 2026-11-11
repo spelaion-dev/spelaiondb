@@ -143,6 +143,8 @@ export const commands = {
 	 *  the user cancelled. Only on Linux.
 	 */
 	choosePath: (request: PathDialogRequest_Deserialize) => typedError<string | null, string>(__TAURI_INVOKE("choose_path", { request })),
+	/**  The clipboard's text, `None` when it holds none (empty, an image, no owner). */
+	readClipboardText: () => typedError<string | null, string>(__TAURI_INVOKE("read_clipboard_text")),
 	/**
 	 *  Reads a `.sql` file the user picked (or one from the recent files or a kept tab) and puts
 	 *  it first in the recent files.

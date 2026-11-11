@@ -2,6 +2,7 @@
 //! database or security logic here: only translation between UI commands and the core.
 
 mod backup;
+mod clipboard_text;
 mod connection_import;
 mod diagram;
 mod dto;
@@ -5067,6 +5068,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             get_script_preferences,
             set_script_preferences,
             file_dialog::choose_path,
+            clipboard_text::read_clipboard_text,
             files::open_sql_file,
             files::save_sql_file,
             files::recent_files,
@@ -5283,12 +5285,13 @@ pub fn export_bindings(path: &std::path::Path) -> Result<(), String> {
 
 /// The main window, from `tauri.conf.json` (where `create` is false so it is built here).
 ///
-/// On Linux, WebKitGTK refuses `navigator.clipboard.readText()` for text another program
-/// copied unless the page may access the clipboard, so "Paste from clipboard", "Import data
-/// from the clipboard" and "Paste connection" could never read it. With access on, WebKitGTK
-/// still reads only while handling a click or a key, which is when the app reads it; the text
-/// stays untrusted input that the core checks (ADR-030, ADR-038). WebView2 and WKWebView keep
-/// their own behaviour: on Windows this switch would also grant every read without asking.
+/// On Linux, WebKitGTK refuses the page's clipboard API for text another program copied
+/// unless the page may access the clipboard. The app reads the clipboard's text there through
+/// `read_clipboard_text` (`clipboard_text.rs`: WebKitGTK's `readText()` misses text offered
+/// only as X11's `UTF8_STRING`); with access on, `navigator.clipboard.readText()` still reads
+/// only while handling a click or a key. The text stays untrusted input that the core checks
+/// (ADR-030, ADR-038). WebView2 and WKWebView keep their own behaviour: on Windows this switch
+/// would also grant every read without asking.
 fn open_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let config = app
         .config()
