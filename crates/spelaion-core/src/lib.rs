@@ -63,7 +63,9 @@ pub use chart::{
     ChartRequest, ChartSeries, MAX_CHART_IMAGE_BYTES, MAX_CHART_POINTS, MAX_CHART_SERIES,
     MAX_LABEL_CHARS, MAX_PIE_GROUPS, MAX_PIE_SLICES, save_chart_image,
 };
-pub use classify::{ReadKind, classify_read_only, classify_session_setup};
+pub use classify::{
+    ReadKind, classify_read_only, classify_read_only_connection, classify_session_setup,
+};
 pub use column_stats::{
     ColumnStats, ColumnStatsError, ColumnStatsRequest, ColumnStatsSql, STATS_SAMPLE_ROWS,
     STATS_TEXT_CHARS, Stat, TOP_VALUES, TopValue, column_stats, column_stats_sql,
@@ -108,7 +110,10 @@ pub use geometry::{
     Bounds, ColumnMap, Dimensions, GeoFormat, GeoValue, Geometry, MAP_MAX_POINTS, MAP_MAX_SHAPES,
     MapCrs, MapError, MapShape, Position, column_map, is_geometry_type, map_crs, read_geometry,
 };
-pub use guard::{NeedsConfirmation, Risk, RiskyStatement, check_script, script_risks};
+pub use guard::{
+    NeedsConfirmation, ReadOnlyRefusal, Risk, RiskyStatement, RunRefused, check_read_only,
+    check_run, check_script, run_risks, script_risks,
+};
 pub use health::{KEEPALIVE_ANSWER_TIMEOUT, SessionHealth};
 pub use history::{HistoryError, HistoryScope, QueryHistory};
 pub use import::{
@@ -166,7 +171,7 @@ pub use session::{
 };
 pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
-    isolation_statement, setup_is_restricted,
+    isolation_statement, read_only_statement, setup_is_restricted,
 };
 pub use sort::{SortKey, ViewError};
 pub use spelaion_store::{

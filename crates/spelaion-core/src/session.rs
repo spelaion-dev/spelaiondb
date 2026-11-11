@@ -152,6 +152,9 @@ pub struct Session {
     /// The connection's column masking (ADR-051), applied to every result this session stores
     /// from a run, and by the core's own reads that do not go through the result store.
     masking: Arc<MaskPolicy>,
+    /// The connection is read-only (ADR-053): a run refuses, before anything is sent, a script
+    /// with a statement that is not a read, a session setting or transaction control.
+    read_only: bool,
 }
 
 /// All paths share session serialization and state observation. Only editor SQL manages
@@ -200,7 +203,20 @@ impl Session {
             pause: Arc::new(Pause::default()),
             cancels: Arc::new(AtomicU64::new(0)),
             masking: Arc::new(MaskPolicy::none()),
+            read_only: false,
         }
+    }
+
+    /// Makes the session refuse every script a read-only connection does not run (ADR-053).
+    /// [`crate::open_connection`] sets it from the connection.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// The session belongs to a read-only connection (ADR-053).
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Masks these columns in every result the session stores (ADR-051).
@@ -503,6 +519,14 @@ impl Session {
             RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
         };
         let script = script.to_string();
+        // A read-only connection refuses the whole run before anything is sent (ADR-053),
+        // whatever the caller checked: the user's scripts, query pages and plans all come here.
+        let refusal = match kind {
+            RunKind::User if self.read_only => {
+                crate::guard::check_read_only(self.dialect.as_ref(), &script).err()
+            }
+            RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
+        };
         let spans = self.dialect.split_statements(&script);
         let engine = self.dialect.name();
         let connection = self.connection.clone();
@@ -517,6 +541,34 @@ impl Session {
         let mut health = self.health.subscribe();
 
         Box::pin(async_stream::stream! {
+            if let Some(refusal) = refusal {
+                let index = refusal.index;
+                let total = spans.len();
+                yield CoreEvent::StatementStarted { index, span: refusal.span };
+                yield CoreEvent::StatementFailed {
+                    index,
+                    error: StatementError {
+                        message: refusal.to_string(),
+                        code: None,
+                        detail: None,
+                        hint: None,
+                        script_offset: Some(refusal.span.start),
+                        cancelled: false,
+                        timed_out: false,
+                    },
+                };
+                yield CoreEvent::ScriptFinished {
+                    executed: 0,
+                    failed: true,
+                    summary: ScriptSummary {
+                        statements: total,
+                        failed: 1,
+                        stop: (index + 1 < total).then_some(ScriptStop::Failed { index }),
+                        ..Default::default()
+                    },
+                };
+                return;
+            }
             // One script at a time; Commit, Rollback and the toggle wait for none.
             let _running = control.lock_owned().await;
             let cancelled = || cancels.load(Ordering::SeqCst) != cancels_at_start;

@@ -4,6 +4,10 @@
 //! confirms execution (ADR-029). It is a safety net against slips, not a permission barrier
 //! (that is read-only mode, ADR-008): whatever the parser cannot read only asks when it starts
 //! like a write that could hurt.
+//!
+//! The barrier of a read-only connection is here too (ADR-053): [`check_run`] refuses, before
+//! anything runs and whatever was confirmed, a script with a statement that is not a read, a
+//! session setting or transaction control. The session refuses it again when it runs.
 
 use std::ops::ControlFlow;
 
@@ -16,7 +20,8 @@ use sqlparser::dialect::{
 };
 use sqlparser::parser::Parser;
 
-use crate::classify::classify_read_only;
+use crate::Session;
+use crate::classify::{classify_read_only, classify_read_only_connection};
 
 /// Why a statement asks for confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +101,88 @@ pub fn check_script(
     } else {
         Err(NeedsConfirmation { risks })
     }
+}
+
+/// A script a read-only connection refuses (ADR-053): nothing of it runs, whatever was
+/// confirmed. It names the first statement refused and why.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the connection is read-only, so nothing was run: statement {}, \"{statement}\", is refused ({reason}). Only reads, session settings and transaction control run on a read-only connection",
+    .index + 1
+)]
+pub struct ReadOnlyRefusal {
+    /// Position among the script's statements.
+    pub index: usize,
+    pub span: StatementSpan,
+    /// The start of the statement, to recognize it.
+    pub statement: String,
+    pub reason: String,
+}
+
+/// Whether every statement of `script`, split like a run, may run on a read-only connection
+/// ([`classify_read_only_connection`]). The first one that may not is the refusal.
+pub fn check_read_only(dialect: &dyn Dialect, script: &str) -> Result<(), ReadOnlyRefusal> {
+    for (index, span) in dialect.split_statements(script).into_iter().enumerate() {
+        let text = span.text(script);
+        if let Err(reason) = classify_read_only_connection(dialect.name(), text) {
+            return Err(ReadOnlyRefusal {
+                index,
+                span,
+                statement: start_of(text),
+                reason,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Why a script from the editor may not run on its session yet.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RunRefused {
+    /// The connection is read-only and the script is not: no confirmation changes that.
+    #[error(transparent)]
+    ReadOnly(ReadOnlyRefusal),
+    #[error(transparent)]
+    NeedsConfirmation(NeedsConfirmation),
+}
+
+/// Whether `script` may run on `session` from the editor: never when the session is read-only
+/// and refuses it (ADR-053), whatever was confirmed; then [`check_script`] under the
+/// connection type's safeguards.
+pub fn check_run(
+    session: &Session,
+    script: &str,
+    safeguards: &Safeguards,
+    confirmed: bool,
+) -> Result<(), RunRefused> {
+    let dialect = session.dialect();
+    if session.is_read_only() {
+        check_read_only(dialect.as_ref(), script).map_err(RunRefused::ReadOnly)?;
+    }
+    check_script(dialect.as_ref(), script, safeguards, confirmed)
+        .map_err(RunRefused::NeedsConfirmation)
+}
+
+/// What the app asks to confirm before running `script` on `session`: nothing when a read-only
+/// session refuses it anyway (the run fails at once, so there is nothing to confirm),
+/// otherwise [`script_risks`].
+pub fn run_risks(session: &Session, script: &str, safeguards: &Safeguards) -> Vec<RiskyStatement> {
+    let dialect = session.dialect();
+    if session.is_read_only() && check_read_only(dialect.as_ref(), script).is_err() {
+        return Vec::new();
+    }
+    script_risks(dialect.as_ref(), script, safeguards)
+}
+
+/// The first line of a statement, at most 80 characters.
+fn start_of(statement: &str) -> String {
+    let trimmed = statement.trim();
+    let line = trimmed.lines().next().unwrap_or_default().trim_end();
+    let mut out: String = line.chars().take(80).collect();
+    if out.len() < trimmed.len() {
+        out.push('…');
+    }
+    out
 }
 
 pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {

@@ -16,7 +16,7 @@ use spelaion_core::{
     CoreEvent, Engines, OpenConnection, OpenError, OpenOptions, ResultStore, TunnelPool,
     open_connection, test_tunnel,
 };
-use spelaion_driver_api::{Secret, Value};
+use spelaion_driver_api::{ExecOptions, Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, NonInteractive, SecretRequest, TunnelState};
 
 /// Temporary, trusted repository with `.spelaion/` and a user directory.
@@ -976,8 +976,32 @@ async fn sqlite_on_a_server_says_what_is_wrong() {
         .open("readonly", None, Arc::new(AcceptHosts))
         .await
         .unwrap();
+    // The core refuses the write before it reaches the server (ADR-053)…
     let (_, error) = script(&conn, "insert into product (name) values ('x')").await;
     let message = error.unwrap().message;
+    assert!(message.contains("the connection is read-only"), "{message}");
+    // …and sent around the core, the server's `sqlite3 -readonly` refuses it too.
+    let mut failure = None;
+    match conn
+        .session
+        .connection()
+        .execute(
+            "insert into product (name) values ('x')",
+            &ExecOptions::default(),
+        )
+        .await
+    {
+        Err(e) => failure = Some(e.to_string()),
+        Ok(mut events) => {
+            while let Some(event) = events.next().await {
+                if let Err(e) = event {
+                    failure = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+    }
+    let message = failure.expect("the server's sqlite3 let a write through");
     assert!(message.to_lowercase().contains("readonly"), "{message}");
 
     // A last hop that only forwards ports (bastion2 runs no commands).

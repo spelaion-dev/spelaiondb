@@ -3995,7 +3995,7 @@ try {
     await runDialog.waitFor({ state: "detached" });
   }
 
-  step("session setup: a default schema and setup statements open tabs in that schema, and a write in it is refused on a read-only connection");
+  step("session setup: a default schema and setup statements open tabs in that schema, and a write in it or in the editor is refused on a read-only connection");
   // ADR-037. A schema of its own on the Docker PostgreSQL, made from the tab still open there.
   await replaceQuery(
     panel,
@@ -4085,6 +4085,48 @@ try {
     await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
     await wizard.waitFor({ state: "detached" });
     assert.doesNotMatch(readFileSync(join(userDir, "connections", "pg-session-setup.toml"), "utf8"), /insert into/);
+
+    // A read-only connection refuses a write typed in the editor (ADR-053): before anything
+    // runs, without asking first (it could not run anyway), naming the statement.
+    await (await connectionMenu("PG session setup")).getByRole("menuitem", { name: "Edit…" }).click();
+    wizard = page.locator(".modal.wizard");
+    await wizard.getByRole("heading", { name: "Edit PG session setup" }).waitFor();
+    await wizard.getByRole("tab", { name: "Options" }).click();
+    await wizard.getByRole("checkbox", { name: "Read-only", exact: true }).check();
+    await wizard.getByRole("button", { name: "Save changes" }).click();
+    await wizard.waitFor({ state: "detached" });
+    assert.match(readFileSync(join(userDir, "connections", "pg-session-setup.toml"), "utf8"), /read_only = true/);
+    const readOnlyPanel = await newQuery("PG session setup", "select id from only_here;\ndelete from only_here;");
+    await run(readOnlyPanel);
+    const readOnlyPassword = page.getByRole("dialog").getByText("Password for PG session setup");
+    const refusal = readOnlyPanel.locator(".error-box", { hasText: "the connection is read-only, so nothing was run" });
+    await Promise.race([readOnlyPassword.waitFor(), refusal.waitFor()]);
+    if (await readOnlyPassword.isVisible()) {
+      await page.getByLabel("Password", { exact: true }).fill("spelaion");
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+    }
+    await refusal.waitFor();
+    await readOnlyPanel.locator(".error-box", { hasText: 'statement 2, "delete from only_here"' }).waitFor();
+    assert.equal(await page.getByRole("dialog", { name: "Run these statements?" }).count(), 0);
+    await shot("sdb-131-write-refused");
+    await setTheme("dark", "dark");
+    await refusal.waitFor();
+    await shot("sdb-131-write-refused-dark");
+    await setTheme("light", "light");
+    // Nothing ran: the row is still there, and reads still run.
+    await replaceQuery(readOnlyPanel, "select id from only_here;");
+    await run(readOnlyPanel);
+    await readOnlyPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await page.locator(".tabbar .tab.active .close").click();
+    // Writable again, so the cleanup below can drop the schema.
+    await (await connectionMenu("PG session setup")).getByRole("menuitem", { name: "Edit…" }).click();
+    wizard = page.locator(".modal.wizard");
+    await wizard.getByRole("heading", { name: "Edit PG session setup" }).waitFor();
+    await wizard.getByRole("tab", { name: "Options" }).click();
+    await wizard.getByRole("checkbox", { name: "Read-only", exact: true }).uncheck();
+    await wizard.getByRole("button", { name: "Save changes" }).click();
+    await wizard.waitFor({ state: "detached" });
+    assert.doesNotMatch(readFileSync(join(userDir, "connections", "pg-session-setup.toml"), "utf8"), /read_only = true/);
 
     // Leave the run as it was: the schema, the tab and the connection go.
     await replaceQuery(setupPanel, "drop schema smoke_setup cascade;");

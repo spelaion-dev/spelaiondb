@@ -324,7 +324,7 @@
       ]
     },
     "read_only": {
-      "description": "Open read-only (native in SQLite).",
+      "description": "Read-only (ADR-053): only reads, session settings and transaction control run, and the\nengine's own read-only mode is set where it has one (the file opened read-only on SQLite\nand DuckDB, read-only transactions on PostgreSQL, MySQL and MariaDB).",
       "type": "boolean"
     },
     "schema_version": {
