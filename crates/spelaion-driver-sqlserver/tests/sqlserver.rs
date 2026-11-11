@@ -245,10 +245,16 @@ async fn connect() -> Option<Box<dyn Connection>> {
 }
 
 async fn run(conn: &dyn Connection, sql: &str) -> Result<Vec<ExecEvent>, DriverError> {
-    conn.execute(sql, &ExecOptions { batch_size: 10_000 })
-        .await?
-        .try_collect()
-        .await
+    conn.execute(
+        sql,
+        &ExecOptions {
+            batch_size: 10_000,
+            ..Default::default()
+        },
+    )
+    .await?
+    .try_collect()
+    .await
 }
 
 /// A result set: its header (name, logical type, native type) and its rows as text.
@@ -683,7 +689,7 @@ async fn cancel_while_rows_stream() {
     let mut events = conn
         .execute(
             "select a.object_id, a.name, b.name as other from sys.all_objects a cross join sys.all_objects b",
-            &ExecOptions { batch_size: 500 },
+            &ExecOptions { batch_size: 500, ..Default::default() },
         )
         .await
         .unwrap();
@@ -1349,7 +1355,7 @@ async fn keep_alive_pauses_after_a_dropped_batch_with_a_transaction() {
     let Some(conn) = connect().await else { return };
     let events = conn.execute(
         "begin transaction; select top (1000) a.object_id from sys.all_objects a cross join sys.all_objects b",
-        &ExecOptions { batch_size: 1 },
+        &ExecOptions { batch_size: 1, ..Default::default() },
     ).await.unwrap();
     drop(events);
     assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::InTransaction);

@@ -14,7 +14,7 @@ use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::{ErrorCode, Statement};
 use spelaion_driver_api::thread_cancel::Work;
 use spelaion_driver_api::{
-    ColumnMeta, DriverError, ExecEvent, LogicalType, Result, ResultSchema, Value,
+    ColumnMeta, ColumnOrigin, DriverError, ExecEvent, LogicalType, Result, ResultSchema, Value,
 };
 use tokio::sync::mpsc;
 
@@ -370,6 +370,20 @@ fn stream_rows(
         .map(|c| c.decl_type().map(str::to_string))
         .collect();
     let ncols = names.len();
+    // The table column each one reads (ADR-052), from SQLite's column metadata; an expression
+    // has none. Names that are not UTF-8 give no origin rather than a panic.
+    let origins: Vec<Option<ColumnOrigin>> = (0..ncols)
+        .map(|i| match stmt.column_metadata(i) {
+            Ok(Some((_, table, column, ..))) => match (table.to_str(), column.to_str()) {
+                (Ok(table), Ok(column)) => Some(ColumnOrigin {
+                    table: table.to_string(),
+                    column: column.to_string(),
+                }),
+                _ => None,
+            },
+            Ok(None) | Err(_) => None,
+        })
+        .collect();
     let mut rows = stmt.raw_query();
 
     // First batch in memory to decide the types.
@@ -399,6 +413,7 @@ fn stream_rows(
                 .clone()
                 .unwrap_or_else(|| seen[i].storage_class().to_string()),
             native_id: None,
+            origin: origins[i].clone(),
         })
         .collect();
     let schema = Arc::new(ResultSchema::new(columns));

@@ -1004,6 +1004,7 @@ mod tests {
             logical,
             native_type: logical.as_str().into(),
             native_id: None,
+            origin: None,
         };
         let schema = Arc::new(ResultSchema::new(vec![
             meta("id", LogicalType::Int),
@@ -1230,6 +1231,7 @@ mod tests {
             logical: LogicalType::Int,
             native_type: "int".into(),
             native_id: None,
+            origin: None,
         }]));
         let store = ResultStore::new();
         let id = store.create(schema.clone());
@@ -1289,6 +1291,7 @@ mod tests {
             logical: LogicalType::Int,
             native_type: "integer".into(),
             native_id: None,
+            origin: None,
         }]));
         let store = ResultStore::new();
         let id = store.create(schema.clone());
@@ -1421,6 +1424,7 @@ mod tests {
             logical: LogicalType::Int,
             native_type: "int8".into(),
             native_id: None,
+            origin: None,
         }]));
         let store = ResultStore::new();
         let id = store.create(schema.clone());
@@ -1669,6 +1673,7 @@ mod tests {
             logical,
             native_type: logical.as_str().into(),
             native_id: None,
+            origin: None,
         };
         let schema = Arc::new(ResultSchema::new(vec![
             meta("=total", LogicalType::Text),

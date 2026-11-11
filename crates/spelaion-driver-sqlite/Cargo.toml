@@ -12,7 +12,7 @@ arrow.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 # bundled: SQLite compiled in, same version on all three platforms.
-rusqlite = { version = "0.41", features = ["bundled", "column_decltype"] }
+rusqlite = { version = "0.41", features = ["bundled", "column_decltype", "column_metadata"] }
 # io-util: talking to sqlite3 on a server (remote.rs).
 tokio = { workspace = true, features = ["io-util"] }
 

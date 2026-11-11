@@ -66,10 +66,16 @@ async fn run_with(
     sql: &str,
     batch_size: usize,
 ) -> Result<Vec<ExecEvent>, DriverError> {
-    conn.execute(sql, &ExecOptions { batch_size })
-        .await?
-        .try_collect()
-        .await
+    conn.execute(
+        sql,
+        &ExecOptions {
+            batch_size,
+            ..Default::default()
+        },
+    )
+    .await?
+    .try_collect()
+    .await
 }
 
 async fn exec_all(conn: &dyn Connection, script: &str) {
@@ -522,7 +528,10 @@ async fn cancel_stops_a_result_being_read() {
     let mut events = conn
         .execute(
             "select * from range(1000000000)",
-            &ExecOptions { batch_size: 100 },
+            &ExecOptions {
+                batch_size: 100,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

@@ -257,6 +257,8 @@ impl Session {
     ) -> Result<(Vec<ColumnMeta>, Vec<Vec<Value>>, bool), ReadError> {
         let options = ExecOptions {
             batch_size: (max_rows + 1).clamp(1, 10_000),
+            // Masking matches each column's origin too (ADR-052).
+            origins: !self.masking().is_empty(),
         };
         let events = self.connection().execute(sql, &options).await?;
         self.collect_events(events, max_rows).await

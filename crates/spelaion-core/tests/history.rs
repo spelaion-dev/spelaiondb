@@ -30,8 +30,12 @@ async fn session() -> Session {
         })
         .await
         .unwrap();
-    Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()))
-        .with_options(ExecOptions { batch_size: 2 })
+    Session::new(connection, driver.dialect(), Arc::new(ResultStore::new())).with_options(
+        ExecOptions {
+            batch_size: 2,
+            ..Default::default()
+        },
+    )
 }
 
 async fn entries(history: &QueryHistory) -> Vec<HistoryEntry> {

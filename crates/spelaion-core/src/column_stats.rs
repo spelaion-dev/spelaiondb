@@ -336,7 +336,9 @@ pub async fn column_stats(
     cancel: &ExportCancel,
 ) -> Result<ColumnStats, ColumnStatsError> {
     let dialect = session.dialect().clone();
-    let masked = session.masking().masks(&request.column);
+    let masked = session
+        .masking()
+        .masks_table_column(&request.table, &request.column);
     let probe = column_stats_sql(dialect.as_ref(), request, false)?.probe;
     let mut statements = vec![probe.clone()];
     let seen = count(

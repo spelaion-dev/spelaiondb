@@ -315,7 +315,10 @@ async fn batches_and_rows_affected() {
     let events = run_with(
         &*conn,
         "select g from generate_series(1, 25000) g",
-        &ExecOptions { batch_size: 10_000 },
+        &ExecOptions {
+            batch_size: 10_000,
+            ..Default::default()
+        },
     )
     .await
     .unwrap();

@@ -299,6 +299,7 @@ pub fn execute(
             logical: logical(*conversion),
             native_type: field_native_type(field),
             native_id: None,
+            origin: None,
         })
         .collect();
     let result = Arc::new(ResultSchema::new(columns));

@@ -507,7 +507,9 @@ impl Session {
         let engine = self.dialect.name();
         let connection = self.connection.clone();
         let results = self.results.clone();
-        let options = self.options.clone();
+        let mut options = self.options.clone();
+        // Masking matches each column's origin too (ADR-052): ask the driver for it.
+        options.origins |= masking.is_some() && !self.masking.is_empty();
         let control = self.control.clone();
         let transaction = self.transaction.clone();
         let pause = self.pause.clone();

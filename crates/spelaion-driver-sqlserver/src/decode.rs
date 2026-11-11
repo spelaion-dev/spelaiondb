@@ -61,6 +61,7 @@ pub fn column_meta(name: &str, column_type: ColumnType) -> ColumnMeta {
         logical,
         native_type: native.to_string(),
         native_id: None,
+        origin: None,
     }
 }
 

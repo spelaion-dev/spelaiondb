@@ -793,6 +793,7 @@ mod tests {
             logical,
             native_type: logical.as_str().into(),
             native_id: None,
+            origin: None,
         }
     }
 

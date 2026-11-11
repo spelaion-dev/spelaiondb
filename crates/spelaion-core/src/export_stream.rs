@@ -533,6 +533,8 @@ async fn write_stream(
     }
     let options = ExecOptions {
         batch_size: export.batch_size.max(1),
+        // Masking matches each column's origin too (ADR-052).
+        origins: !session.masking().is_empty(),
     };
     let mut events = match session.connection().execute(sql, &options).await {
         Ok(events) => events,

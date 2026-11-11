@@ -328,6 +328,7 @@ impl PlanDocument {
                 },
                 native_type: "plan".into(),
                 native_id: None,
+                origin: None,
             })
             .collect();
         let mut writer = crate::export::RowWriter::new(

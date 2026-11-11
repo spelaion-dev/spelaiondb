@@ -13,7 +13,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{Field, Schema};
 use spelaion_config::MaskingRules;
-use spelaion_driver_api::{ColumnMeta, LogicalType, ResultSchema, Value};
+use spelaion_driver_api::{ColumnMeta, ColumnOrigin, LogicalType, ResultSchema, Value};
 
 /// What a masked value shows: always six characters, so its length tells nothing.
 pub const MASK: &str = "••••••";
@@ -21,11 +21,11 @@ pub const MASK: &str = "••••••";
 /// Arrow field metadata of a masked column (`"true"`).
 pub const META_MASKED: &str = "spelaion.masked";
 
-/// One masking pattern, compiled: case-insensitive, `*` any characters, `?` one.
+/// A glob over one name, compiled: case-insensitive, `*` any characters, `?` one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Pattern(Vec<char>);
+struct Glob(Vec<char>);
 
-impl Pattern {
+impl Glob {
     fn new(pattern: &str) -> Self {
         Self(fold(pattern.trim()))
     }
@@ -56,6 +56,77 @@ impl Pattern {
             }
         }
         pattern[p..].iter().all(|&c| c == '*')
+    }
+}
+
+/// One masking pattern (ADR-051, ADR-052): `column`, or `table.column` (split at the last dot).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Pattern {
+    table: Option<Glob>,
+    column: Glob,
+}
+
+/// A result column as masking sees it: its name in the result and, where the engine reports
+/// it, the table column it reads.
+struct Named<'a> {
+    name: Vec<char>,
+    origin: Option<(Vec<char>, Vec<char>)>,
+    _lifetime: std::marker::PhantomData<&'a ()>,
+}
+
+impl Named<'_> {
+    fn new(name: &str, origin: Option<&ColumnOrigin>) -> Self {
+        Self {
+            name: fold(name),
+            origin: origin.map(|o| (fold(&o.table), fold(&o.column))),
+            _lifetime: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Pattern {
+    fn new(pattern: &str) -> Self {
+        let pattern = pattern.trim();
+        match pattern.rsplit_once('.') {
+            Some((table, column)) if !table.is_empty() && !column.is_empty() => Self {
+                table: Some(Glob::new(table)),
+                column: Glob::new(column),
+            },
+            _ => Self {
+                table: None,
+                column: Glob::new(pattern),
+            },
+        }
+    }
+
+    /// Whether a pattern that masks takes this column. It errs towards masking: a column
+    /// pattern matches the result's name or the origin's column (so an alias does not unmask
+    /// it), and a `table.column` pattern on a column whose origin is unknown matches by the
+    /// column part alone.
+    fn masks(&self, column: &Named<'_>) -> bool {
+        match (&self.table, &column.origin) {
+            (None, Some((_, origin))) => {
+                self.column.matches(&column.name) || self.column.matches(origin)
+            }
+            (None, None) | (Some(_), None) => self.column.matches(&column.name),
+            (Some(table), Some((origin_table, origin))) => {
+                table.matches(origin_table) && self.column.matches(origin)
+            }
+        }
+    }
+
+    /// Whether a `never` pattern exempts this column. It errs towards masking too: where the
+    /// origin is known only the origin counts (renaming a masked column to an exempted name
+    /// does not unmask it), and a `table.column` pattern needs a known origin.
+    fn exempts(&self, column: &Named<'_>) -> bool {
+        match (&self.table, &column.origin) {
+            (None, Some((_, origin))) => self.column.matches(origin),
+            (None, None) => self.column.matches(&column.name),
+            (Some(_), None) => false,
+            (Some(table), Some((origin_table, origin))) => {
+                table.matches(origin_table) && self.column.matches(origin)
+            }
+        }
     }
 }
 
@@ -97,14 +168,33 @@ impl MaskPolicy {
         self.required.is_empty() && self.exemptible.is_empty()
     }
 
-    /// Whether a column with this name is masked.
+    /// Whether a result column with this name, and no known origin, is masked.
     pub fn masks(&self, column: &str) -> bool {
+        self.masks_column(column, None)
+    }
+
+    /// Whether a result column is masked, by its name and, where known, the table column it
+    /// reads (ADR-052).
+    pub fn masks_column(&self, name: &str, origin: Option<&ColumnOrigin>) -> bool {
         if self.is_empty() {
             return false;
         }
-        let name = fold(column);
-        let any = |patterns: &[Pattern]| patterns.iter().any(|p| p.matches(&name));
-        any(&self.required) || (any(&self.exemptible) && !any(&self.never))
+        let column = Named::new(name, origin);
+        let masked = |patterns: &[Pattern]| patterns.iter().any(|p| p.masks(&column));
+        masked(&self.required)
+            || (masked(&self.exemptible) && !self.never.iter().any(|p| p.exempts(&column)))
+    }
+
+    /// Whether a column of `table` is masked where the core read it by its own name (table data
+    /// tabs, statistics, the data search): its origin is that table column.
+    pub fn masks_table_column(&self, table: &str, column: &str) -> bool {
+        self.masks_column(
+            column,
+            Some(&ColumnOrigin {
+                table: table.to_string(),
+                column: column.to_string(),
+            }),
+        )
     }
 
     /// The positions of the masked columns of a result.
@@ -112,14 +202,14 @@ impl MaskPolicy {
         columns
             .iter()
             .enumerate()
-            .filter(|(_, c)| self.masks(&c.name))
+            .filter(|(_, c)| self.masks_column(&c.name, c.origin.as_ref()))
             .map(|(i, _)| i)
             .collect()
     }
 
-    /// A value of `column` as it may be shown: the mask, unless NULL or not masked.
-    pub fn shown_value(&self, column: &str, value: Value) -> Value {
-        if matches!(value, Value::Null) || !self.masks(column) {
+    /// A value of a column of `table` as it may be shown: the mask, unless NULL or not masked.
+    pub fn shown_table_value(&self, table: &str, column: &str, value: Value) -> Value {
+        if matches!(value, Value::Null) || !self.masks_table_column(table, column) {
             value
         } else {
             Value::Text(MASK.into())
@@ -273,8 +363,50 @@ mod tests {
     #[test]
     fn nulls_stay_null() {
         let p = policy(&["x"], &[], &[]);
-        assert_eq!(p.shown_value("x", Value::Null), Value::Null);
-        assert_eq!(p.shown_value("x", Value::Int(1)), Value::Text(MASK.into()));
-        assert_eq!(p.shown_value("y", Value::Int(1)), Value::Int(1));
+        assert_eq!(p.shown_table_value("t", "x", Value::Null), Value::Null);
+        assert_eq!(
+            p.shown_table_value("t", "x", Value::Int(1)),
+            Value::Text(MASK.into())
+        );
+        assert_eq!(p.shown_table_value("t", "y", Value::Int(1)), Value::Int(1));
+    }
+
+    fn origin(table: &str, column: &str) -> ColumnOrigin {
+        ColumnOrigin {
+            table: table.into(),
+            column: column.into(),
+        }
+    }
+
+    #[test]
+    fn an_alias_does_not_unmask_a_column_whose_origin_is_known() {
+        let p = policy(&[], &["*email*", "users.phone"], &["email_verified"]);
+        let users_email = origin("users", "email");
+        // `SELECT email AS e`, `SELECT email AS email_verified`.
+        assert!(p.masks_column("e", Some(&users_email)));
+        assert!(p.masks_column("email_verified", Some(&users_email)));
+        // `SELECT email_verified AS email`: the value is email_verified's, which is exempt.
+        assert!(!p.masks_column("email", Some(&origin("users", "email_verified"))));
+        // A `table.column` pattern: by origin, and by the column part when it is unknown.
+        assert!(p.masks_column("p", Some(&origin("USERS", "Phone"))));
+        assert!(!p.masks_column("phone", Some(&origin("suppliers", "phone"))));
+        assert!(p.masks_column("phone", None));
+        assert!(!p.masks_column("p", None));
+    }
+
+    #[test]
+    fn a_qualified_never_needs_a_known_origin() {
+        let p = policy(&[], &["*email*"], &["audit.email"]);
+        assert!(!p.masks_column("email", Some(&origin("audit", "email"))));
+        assert!(p.masks_column("email", Some(&origin("users", "email"))));
+        // Without an origin the exemption cannot be checked: still masked.
+        assert!(p.masks_column("email", None));
+    }
+
+    #[test]
+    fn required_patterns_follow_the_origin_too() {
+        let p = policy(&["ssn"], &[], &["*"]);
+        assert!(p.masks_column("x", Some(&origin("people", "ssn"))));
+        assert!(p.masks_table_column("people", "ssn"));
     }
 }
