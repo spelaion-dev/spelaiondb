@@ -2571,6 +2571,78 @@ fn shared_key_paths_work_on_every_machine() {
     );
 }
 
+const KEYED_TUNNEL: &str = r#"
+schema_version = 1
+
+[[hops]]
+host = "jump.example.com"
+user = "deploy"
+auth = ["key"]
+identity_file = "../keys/id_ed25519"
+"#;
+
+/// Postgres through `tunnel`, with a relative CA certificate.
+fn through(tunnel: &str) -> String {
+    format!(
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"db.internal\"\ndatabase = \"app\"\n\
+         user = \"app\"\ntunnel = \"{tunnel}\"\n\n[tls]\nmode = \"verify-full\"\nca = \"certs/ca.pem\"\n"
+    )
+}
+
+/// A connection may use a tunnel from the other layer (`Config::tunnel_for`): the tunnel's
+/// relative paths stay relative to its own folder, the connection's to the connection's.
+#[test]
+fn tunnel_paths_are_relative_to_the_tunnels_layer() {
+    // A personal connection through a repository tunnel.
+    let fx = Fixture::new("cross-layer-repo-tunnel");
+    fx.write("repo/.spelaion/tunnels/shared.toml", KEYED_TUNNEL);
+    fx.write("user/connections/mine.toml", &through("shared"));
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let id = ConnectionId {
+        source: Source::User,
+        path: "mine".into(),
+    };
+    let backend = FakeBackend::default();
+    // The repository's tunnel still needs the repository trusted.
+    let untrusted = TrustStore::load(&fx.user()).unwrap();
+    assert!(matches!(
+        Resolver::new(&config, &untrusted, &backend).resolve(&id),
+        Err(ResolveError::Untrusted { .. })
+    ));
+    let trust = fx.trusted();
+    let r = Resolver::new(&config, &trust, &backend)
+        .resolve(&id)
+        .unwrap();
+    assert_eq!(
+        r.tunnel.unwrap().hops[0].identity_file.as_deref(),
+        Some(fx.repo().join("../keys/id_ed25519").as_path())
+    );
+    assert_eq!(
+        r.params.ca_certificate.as_deref(),
+        Some(fx.user().join("certs/ca.pem").as_path())
+    );
+
+    // A repository connection through a personal tunnel (the repository has none of that name).
+    let fx = Fixture::new("cross-layer-user-tunnel");
+    fx.write("user/tunnels/mine.toml", KEYED_TUNNEL);
+    fx.write("repo/.spelaion/connections/app.toml", &through("mine"));
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let trust = fx.trusted();
+    let r = Resolver::new(&config, &trust, &backend)
+        .resolve(&ws("app"))
+        .unwrap();
+    assert_eq!(
+        r.tunnel.unwrap().hops[0].identity_file.as_deref(),
+        Some(fx.user().join("../keys/id_ed25519").as_path())
+    );
+    assert_eq!(
+        r.params.ca_certificate.as_deref(),
+        Some(fx.repo().join("certs/ca.pem").as_path())
+    );
+}
+
 /// Two projects with a connection of the same name used to share its keychain entry, so the
 /// password of one project's server could be sent to the other's. Now each repository has
 /// its own entries, named after its path (which its files cannot choose).
