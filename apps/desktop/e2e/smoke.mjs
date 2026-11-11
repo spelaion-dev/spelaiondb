@@ -301,7 +301,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, history: 6, network: 7, scripts: 9, editor: 10, map: 11 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, scripts: 10, editor: 11, map: 12 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -5608,9 +5608,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   }
   await page.mouse.click(maskedCell.x, maskedCell.y);
   await shot("sdb-27-masked-grid-light");
-  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
   await shot("sdb-27-masked-grid-dark");
-  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; window.dispatchEvent(new Event("spelaion-themechange")); });
   // The header cannot sort a masked column.
   await page.mouse.click(maskedCell.x, maskedBox.y + 12, { button: "right" });
   assert.ok(await panel.getByRole("menuitem", { name: "Sort ascending" }).isDisabled());
@@ -5622,15 +5622,32 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await revealed.waitFor();
   assert.equal(await revealed.getByTestId("revealed-value").innerText(), "customer1@example.com");
   await shot("sdb-27-reveal-light");
-  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; window.dispatchEvent(new Event("spelaion-themechange")); });
   await shot("sdb-27-reveal-dark");
-  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; window.dispatchEvent(new Event("spelaion-themechange")); });
   await page.keyboard.press("Escape");
   await revealed.waitFor({ state: "detached" });
   // Revealing changed nothing else: a new copy is still the mask.
   await page.mouse.click(maskedCell.x, maskedCell.y);
   await page.keyboard.press("Control+c");
   assert.equal((await copied(copiesBefore + 2)).trimEnd(), "••••••");
+  // Settings › Masking: the user's own patterns for every connection, saved in user.toml when
+  // the box loses focus; clearing it removes them.
+  await withSettings("masking", async (settings) => {
+    const box = settings.locator('textarea[name="userMasking"]');
+    const heading = settings.getByRole("heading", { name: "Masking", exact: true });
+    await box.fill("*secret*\n  *token*  ");
+    await heading.click();
+    await settings.getByRole("status").filter({ hasText: "Saved" }).waitFor();
+    assert.equal(await box.inputValue(), "*secret*\n*token*");
+    assert.match(readFileSync(join(userDir, "user.toml"), "utf8"), /always = \["\*secret\*", "\*token\*"\]/);
+    await shot("sdb-27-settings-masking");
+    await box.fill("");
+    await settings.getByRole("status").waitFor({ state: "detached" });
+    await heading.click();
+    await settings.getByRole("status").filter({ hasText: "Saved" }).waitFor();
+    assert.doesNotMatch(readFileSync(join(userDir, "user.toml"), "utf8"), /masking/);
+  });
   await (await connectionMenu("Masked shop")).getByRole("menuitem", { name: "Delete…" }).click();
   const confirmMaskedDelete = page.getByRole("dialog", { name: "Delete connection?" });
   await confirmMaskedDelete.getByRole("button", { name: "Delete", exact: true }).click();

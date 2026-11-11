@@ -125,6 +125,50 @@ pub fn set_tunnel_ports(user_dir: &Path, range: Option<(u16, u16)>) -> Result<()
     write_doc(&path, &doc, NewFileMode::OwnerOnly)
 }
 
+/// Sets the user's own masking patterns (ADR-051), `[masking] always` in `user.toml`, for every
+/// connection on this computer: trimmed, blank ones left out, each once; an empty list removes
+/// the table. The rest of the file stays as it was. Each pattern is checked as when it loads.
+pub fn set_user_masking(user_dir: &Path, patterns: &[String]) -> Result<(), ConfigError> {
+    let path = user_dir.join("user.toml");
+    let mut tidy: Vec<String> = Vec::new();
+    for pattern in patterns.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        if !tidy.iter().any(|p| p == pattern) {
+            tidy.push(pattern.to_string());
+        }
+    }
+    crate::masking::check_patterns("masking.always", &tidy)
+        .map_err(|message| ConfigError::new(&path, message))?;
+    let mut doc = if path.is_file() {
+        std::fs::read_to_string(&path)
+            .map_err(|e| ConfigError::new(&path, e.to_string()))?
+            .parse::<DocumentMut>()
+            .map_err(|e| ConfigError::new(&path, e.to_string()))?
+    } else {
+        let mut doc = DocumentMut::new();
+        doc["schema_version"] = toml_edit::value(i64::from(crate::model::SCHEMA_VERSION));
+        doc
+    };
+    if tidy.is_empty() {
+        doc.as_table_mut().remove("masking");
+    } else {
+        if !doc.contains_table("masking") {
+            doc["masking"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        let masking = doc["masking"]
+            .as_table_mut()
+            .ok_or_else(|| ConfigError::new(&path, "[masking] is not a table"))?;
+        masking["always"] =
+            toml_edit::value(toml_edit::Array::from_iter(tidy.iter().map(String::as_str)));
+    }
+    let edited = doc.to_string();
+    toml::from_str::<crate::model::UserFile>(&edited)
+        .map_err(|e| ConfigError::new(&path, format!("the edited file is not valid: {e}")))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
+    }
+    write_doc(&path, &doc, NewFileMode::OwnerOnly)
+}
+
 /// Replaces `path` with `doc` through [`atomic_file::replace`]: an interruption never leaves a
 /// broken file, two writes never share a temporary file, the file keeps its mode and a
 /// symbolic link stays a link (its target gets the edit). A file that did not exist gets

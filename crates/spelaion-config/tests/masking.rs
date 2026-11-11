@@ -302,3 +302,32 @@ fn the_form_keeps_the_rules_when_a_connection_is_edited() {
         v(&["card_*", "*email*"])
     );
 }
+
+#[test]
+fn the_users_patterns_are_saved_keeping_the_rest_of_the_file() {
+    let fx = Fixture::new("user-file");
+    let user = fx.write(
+        "user/user.toml",
+        "schema_version = 1\n# my variables\n[vars]\nregion = \"eu\"\n",
+    );
+    spelaion_config::set_user_masking(
+        &fx.user(),
+        &v(&[" *password* ", "", "*email*", "*password*"]),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&user).unwrap();
+    assert!(text.contains("# my variables"), "{text}");
+    assert!(text.contains("region = \"eu\""), "{text}");
+    let config = load(None, &fx.user());
+    assert_eq!(config.user.masking.always, v(&["*password*", "*email*"]));
+    // A pattern that would not load is refused, and the file stays as it was.
+    for bad in [v(&["e\u{202E}mail"]), v(&[&"x".repeat(129)])] {
+        assert!(spelaion_config::set_user_masking(&fx.user(), &bad).is_err());
+    }
+    assert_eq!(std::fs::read_to_string(&user).unwrap(), text);
+    // An empty list removes the table.
+    spelaion_config::set_user_masking(&fx.user(), &[]).unwrap();
+    let text = std::fs::read_to_string(&user).unwrap();
+    assert!(!text.contains("masking"), "{text}");
+    assert!(text.contains("region = \"eu\""), "{text}");
+}

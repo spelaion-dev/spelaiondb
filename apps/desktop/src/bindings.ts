@@ -709,6 +709,10 @@ export const commands = {
 	 *  to tunnels opened from then on.
 	 */
 	setTunnelPorts: (range: TunnelPortsItem | null) => typedError<null, string>(__TAURI_INVOKE("set_tunnel_ports", { range })),
+	/**  The user's own column masking patterns (`[masking] always` in `user.toml`, ADR-051). */
+	userMasking: () => typedError<UserMaskingItem, string>(__TAURI_INVOKE("user_masking")),
+	/**  Sets the user's own column masking patterns. They apply to sessions opened from then on. */
+	setUserMasking: (patterns: string[]) => typedError<null, string>(__TAURI_INVOKE("set_user_masking", { patterns })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
@@ -5275,6 +5279,13 @@ export type UrlFields_Serialize = {
 	user: string,
 	password: string | null,
 	tlsMode: TlsModeItem | null,
+};
+
+/**  The user's own column masking patterns (ADR-051). */
+export type UserMaskingItem = {
+	patterns: string[],
+	/**  `user.toml` does not load: every column of every connection is masked until it is fixed. */
+	unreadable: boolean,
 };
 
 /**

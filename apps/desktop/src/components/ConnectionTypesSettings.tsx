@@ -112,6 +112,7 @@ function safeguardsText(type: ConnectionTypeItem, t: (key: string, options?: Rec
     s.manualCommit ? t("types.manualCommit") : null,
     s.smartCommit ? t("types.smartCommit") : null,
     s.closeIdleAfter ? t("types.closesAfter", { minutes: Math.max(1, Math.round(s.closeIdleAfter / 60)) }) : null,
+    type.maskColumns.length > 0 ? t("types.masks", { patterns: type.maskColumns.join(", ") }) : null,
   ].filter((p): p is string => p !== null);
   return parts.length > 0 ? parts.join(" · ") : t("types.noSafeguards");
 }
@@ -248,6 +249,26 @@ function TypeEditor({ editing, onCancel, onSaved }: { editing: Editing; onCancel
           {(inherited?.confirmExecution || inherited?.confirmDataChanges || inherited?.closeIdleAfter || inherited?.manualCommit || inherited?.smartCommit) && (
             <p className="muted small">{t("types.inheritedHint")}</p>
           )}
+        </fieldset>
+        <fieldset>
+          <legend>{t("types.masking")}</legend>
+          {/* ADR-051: one pattern per line; every layer's patterns add up. */}
+          <label className="field">
+            <span>{t("types.maskColumns")}</span>
+            <textarea
+              className="masking-patterns"
+              name="maskColumns"
+              rows={3}
+              spellCheck={false}
+              value={(draft.maskColumns ?? []).join("\n")}
+              placeholder={"*password*\n*email*"}
+              onChange={(e) => update({ maskColumns: e.target.value.split("\n") })}
+            />
+          </label>
+          {(base?.inheritedMaskColumns.length ?? 0) > 0 && (
+            <p className="muted small">{t("types.maskInherited", { patterns: base?.inheritedMaskColumns.join(", ") ?? "" })}</p>
+          )}
+          <p className="muted small">{t("types.maskHint")}</p>
         </fieldset>
         {error && <p className="error small" role="alert">{error}</p>}
         <div className="modal-actions">

@@ -103,7 +103,21 @@
     "noSafeguards": "Sin salvaguardas",
     "inheritedHint": "Las salvaguardas en gris las activa el proyecto o Producción y no se pueden desactivar.",
     "cancel": "Cancelar",
-    "save": "Guardar"
+    "save": "Guardar",
+    "masking": "Enmascarado de columnas",
+    "maskColumns": "Enmascarar estas columnas en todas las conexiones de este tipo",
+    "maskInherited": "La definición del equipo siempre enmascara: {{patterns}}. Las tuyas se suman.",
+    "maskHint": "Un patrón por línea (* es cualquier texto y ? un carácter). Los patrones se suman entre las definiciones integrada, del equipo y personal, y ninguna conexión puede dejarlos visibles.",
+    "masks": "enmascara {{patterns}}"
+  },
+  "masking": {
+    "title": "Enmascarado",
+    "intro": "Columnas cuyos valores se muestran como •••••• en todas las conexiones de este equipo: en la cuadrícula, las copias, las exportaciones, las estadísticas y las respuestas a los agentes. Se puede mostrar una celda cada vez.",
+    "patterns": "Enmascarar estas columnas en todas partes",
+    "placeholder": "*password*\n*email*\ncard_*",
+    "saved": "Guardado. Se aplica a las conexiones que se abran a partir de ahora.",
+    "unreadable": "No se pudo leer user.toml, así que todas las columnas de todas las conexiones se enmascaran hasta que se arregle.",
+    "hint": "Un patrón por línea, comparado con los nombres de columna sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Una conexión tuya puede dejar visible una columna en su formulario; una conexión del repositorio no puede desenmascarar estas, y los tipos de conexión pueden añadir las suyas. El enmascarado aparta los valores de la pantalla, no del SQL: un alias lo salta."
   },
   "history": {
     "title": "Historial",
