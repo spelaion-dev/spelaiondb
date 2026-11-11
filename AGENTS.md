@@ -243,7 +243,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   argument list (never the password: it goes in `PGPASSWORD` / `MYSQL_PWD`), `process.rs` starts
   the tool without a shell, writes its output to `<name>.part` (renamed when it succeeds), feeds
   a restore's file to it and passes every log line through the connection test's `Redactor`.
-  A restore is refused on a read-only connection and unless confirmed. `tests/backup.rs` dumps
+  A restore is refused on a read-only connection and unless confirmed. `embedded.rs` is SQLite's
+  `VACUUM INTO` and DuckDB's `EXPORT` / `IMPORT DATABASE` in a session of their own, and
+  `run_file.rs` runs an `.sql` file there (ADR-036's decoding, the engine's splitter, statements
+  done of the total, cancel; refused read-only or unconfirmed), tested in `tests/backup_files.rs`.
+  `tests/backup.rs` dumps
   and restores PostgreSQL, MySQL and MariaDB through the two hops of `testing/docker` with the
   tools of the official images (`docker run`), or those in `SPELAION_TEST_DB_TOOLS`; any change
   there needs tests that try to leak the password.

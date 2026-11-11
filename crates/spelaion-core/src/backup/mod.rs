@@ -4,13 +4,16 @@
 //! never through a shell, and the password only in their environment; every line they print is
 //! redacted before it leaves the core. A dump is written to `<name>.part` and renamed when the
 //! tool succeeds; a restore is a write that read-only connections refuse and that runs only
-//! confirmed.
+//! confirmed. SQLite and DuckDB use their own commands (`embedded.rs`), and an `.sql` file runs
+//! through a session of ours (`run_file.rs`).
 
 mod args;
 mod definer;
+mod embedded;
 mod name;
 mod options;
 mod process;
+mod run_file;
 pub mod tools;
 
 use std::path::{Path, PathBuf};
@@ -22,6 +25,10 @@ use spelaion_config::{Engine, Password, ResolvedConnection};
 use spelaion_driver_api::{ObjectKind, Secret};
 
 pub use args::split_extra_args;
+pub use embedded::{
+    DuckdbExportFormat, EmbeddedDumpRequest, EmbeddedSummary, duckdb_import, embedded_dump,
+    embedded_dump_path,
+};
 pub use name::{DEFAULT_NAME_PATTERN, render_file_name};
 pub use options::{
     ColumnStatistics, DumpContent, DumpOptions, DumpRequest, MysqlConsistency, MysqlDumpOptions,
@@ -29,6 +36,7 @@ pub use options::{
     RestoreRequest,
 };
 pub use process::{BackupCancel, BackupEvent};
+pub use run_file::{FilePlan, FileRunSummary, RUN_FILE_MAX_BYTES, plan_sql_file, run_sql_file};
 pub use tools::{Tool, ToolError, ToolFlavor, ToolName, ToolSource, ToolVersion, locate};
 
 use crate::conn_test::{Recording, learn_connection_secrets};

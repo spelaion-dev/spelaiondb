@@ -1930,6 +1930,7 @@ try {
     assert.deepEqual(await labels(), [
       "New query", "Open object by name…", "Refresh all schemas",
       "Edit…", "Configure filters…",
+      "Back up…", "Run SQL file…",
       "Duplicate", "Copy", "Paste connection", "Move to folder…",
       "Delete…",
     ]);
@@ -3794,10 +3795,10 @@ try {
       await restoreDialog.getByText("psql (PostgreSQL)", { exact: false }).waitFor();
       await restoreDialog.getByRole("button", { name: "Restore…", exact: true }).click();
       // The confirmation names the file and the tool, and Cancel has the focus.
-      const confirm = page.getByRole("alertdialog", { name: /^Restore into / });
+      const confirm = page.getByRole("dialog", { name: /^Restore into .*\?$/ });
       await confirm.waitFor();
       await confirm.getByText("psql runs the file's backslash commands", { exact: false }).waitFor();
-      assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Cancel");
+      await page.waitForFunction(() => document.activeElement?.textContent === "Cancel");
       await shot("sdb-20-restore-confirm-light");
       await setThemeKeepingDialog("dark");
       await shot("sdb-20-restore-confirm-dark");
@@ -3808,6 +3809,60 @@ try {
     }
     await restoreDialog.getByRole("button", { name: "Close", exact: true }).click();
     await restoreDialog.waitFor({ state: "detached" });
+  }
+
+  step("SQLite copy with VACUUM INTO, and an .sql file run with its confirmation and progress (ADR-049)");
+  {
+    const setThemeKeepingDialog = (theme) => page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    const copies = join(userDir, "sqlite-copies");
+    mkdirSync(copies, { recursive: true });
+    await (await connectionMenu("Shop (SQLite)")).getByRole("menuitem", { name: "Back up…" }).click();
+    const copyDialog = page.getByRole("dialog", { name: "Back up Shop (SQLite)" });
+    await copyDialog.waitFor();
+    assert.equal(await copyDialog.getByRole("list", { name: "Client tools" }).count(), 0, "SQLite needs no client tools");
+    await copyDialog.getByLabel("Folder", { exact: true }).fill(copies);
+    await copyDialog.locator(".backup-path").filter({ hasText: ".sqlite" }).waitFor();
+    await copyDialog.getByRole("button", { name: "Back up", exact: true }).click();
+    await copyDialog.getByText(/^Backed up /).waitFor({ timeout: 60_000 });
+    assert.ok((await copyDialog.getByRole("log", { name: "Tool output" }).textContent()).includes("VACUUM INTO"));
+    assert.ok(readdirSync(copies).some((name) => name.endsWith(".sqlite")), "the copy was written");
+    assert.ok(!readdirSync(copies).some((name) => name.endsWith(".part")));
+    await shot("sdb-20-sqlite-copy-light");
+    await copyDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await copyDialog.waitFor({ state: "detached" });
+    // A SQLite copy is a database of its own: there is no Restore… for it.
+    const shopMenu = await connectionMenu("Shop (SQLite)");
+    assert.equal(await shopMenu.getByRole("menuitem", { name: "Restore…" }).count(), 0);
+    await shopMenu.getByRole("menuitem", { name: "Run SQL file…" }).click();
+    const runDialog = page.getByRole("dialog", { name: "Run a SQL file on Shop (SQLite)" });
+    await runDialog.waitFor();
+    const sqlFile = join(userDir, "smoke-run.sql");
+    const lines = ["create table smoke_run (id integer primary key, name text);"];
+    for (let i = 1; i <= 200; i++) lines.push(`insert into smoke_run (name) values ('row ${i}');`);
+    lines.push("drop table smoke_run;");
+    writeFileSync(sqlFile, lines.join("\n") + "\n");
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, sqlFile);
+    await runDialog.getByRole("button", { name: "Choose file…" }).click();
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    await runDialog.getByText("202 statements,", { exact: false }).waitFor();
+    await runDialog.getByRole("button", { name: "Run…", exact: true }).click();
+    const confirmRun = page.getByRole("dialog", { name: "Run smoke-run.sql?" });
+    await confirmRun.waitFor();
+    // The editor's guard would ask about the DROP: the confirmation says so; Cancel has the focus.
+    await confirmRun.getByRole("list", { name: "Statements the editor would ask about" }).getByText("DROP", { exact: false }).waitFor();
+    await page.waitForFunction(() => document.activeElement?.textContent === "Cancel");
+    await shot("sdb-20-run-file-confirm-light");
+    await setThemeKeepingDialog("dark");
+    await shot("sdb-20-run-file-confirm-dark");
+    await setThemeKeepingDialog("light");
+    await confirmRun.getByRole("button", { name: "Run file", exact: true }).click();
+    await runDialog.getByText(/^Ran 202 statements in /).waitFor({ timeout: 60_000 });
+    await shot("sdb-20-run-file-done-light");
+    await setThemeKeepingDialog("dark");
+    await shot("sdb-20-run-file-done-dark");
+    await setThemeKeepingDialog("light");
+    await runDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await runDialog.waitFor({ state: "detached" });
   }
 
   step("session setup: a default schema and setup statements open tabs in that schema, and a write in it is refused on a read-only connection");

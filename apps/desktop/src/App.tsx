@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ExportDialog } from "./components/ExportDialog";
 import { BackupDialog } from "./components/BackupDialog";
 import { ImportDialog } from "./components/ImportDialog";
+import { RunFileDialog } from "./components/RunFileDialog";
 import { ActivityBar } from "./components/ActivityBar";
 import { McpPage } from "./components/McpPage";
 import { AddConnection } from "./components/AddConnection";
@@ -248,6 +249,7 @@ export default function App() {
       <ExportDialog />
       <ImportDialog />
       <BackupDialog />
+      <RunFileDialog />
       <Dialogs />
     </div>
   );

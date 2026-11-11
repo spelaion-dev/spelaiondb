@@ -16,6 +16,8 @@ import type {
   BackupPreviewItem,
   BackupRequestItem,
   ColumnStatisticsItem,
+  DuckdbFormatItem,
+  EmbeddedBackupItem,
   DumpContentItem,
   MysqlConsistencyItem,
   PgFormatItem,
@@ -27,13 +29,20 @@ import type {
 import { chooseFolder, chooseOpenFile, openFilters } from "../dialogs";
 import { formatBytes } from "./ServerObservation";
 
-export type BackupFamily = "postgres" | "mysql";
+export type BackupFamily = "postgres" | "mysql" | "sqlite" | "duckdb";
 
-/** The engines whose backups use a client tool. */
+/** How an engine is backed up: its client tools, or its own commands (SQLite, DuckDB). */
 export function backupFamily(engine: string): BackupFamily | null {
   if (engine === "postgres") return "postgres";
   if (engine === "mysql" || engine === "mariadb") return "mysql";
+  if (engine === "sqlite") return "sqlite";
+  if (engine === "duckdb") return "duckdb";
   return null;
+}
+
+/** Whether the family restores from this dialog: a SQLite copy is a database file of its own. */
+export function familyRestores(family: BackupFamily): boolean {
+  return family !== "sqlite";
 }
 
 export interface BackupRequest {
@@ -51,11 +60,7 @@ export const useBackup = create<{ request: BackupRequest | null; open(request: B
   close: () => set({ request: null }),
 }));
 
-type Phase =
-  | { kind: "idle" }
-  | { kind: "running"; bytes: number; total: number | null }
-  | { kind: "done"; text: string }
-  | { kind: "failed"; text: string };
+type Phase = { kind: "idle" } | { kind: "running"; bytes: number; total: number | null } | { kind: "done"; text: string } | { kind: "failed"; text: string };
 
 /** The log lines kept: the newest. */
 const LOG_LINES = 2000;
@@ -108,6 +113,9 @@ function BackupForm({ request }: { request: BackupRequest }) {
   const { t, i18n } = useTranslation("editor");
   const close = useBackup((s) => s.close);
   const restoring = request.mode === "restore";
+  /** SQLite and DuckDB: their own commands, no client tools. */
+  const embedded = request.family === "sqlite" || request.family === "duckdb";
+  const [duckdbFormat, setDuckdbFormat] = useState<DuckdbFormatItem>("parquet");
   const [prefs, setPrefs] = useState<BackupPreferencesItem | null>(null);
   const [toolsFolder, setToolsFolder] = useState("");
   const [tools, setTools] = useState<ToolItem[] | null>(null);
@@ -180,7 +188,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
     void call(commands.backupPreferences())
       .then((p) => {
         setPrefs(p);
-        setToolsFolder(request.family === "postgres" ? p.postgresTools : p.mysqlTools);
+        setToolsFolder(request.family === "postgres" ? p.postgresTools : request.family === "mysql" ? p.mysqlTools : "");
         setFolder(p.folder);
         setPattern(p.namePattern);
       })
@@ -189,6 +197,10 @@ function BackupForm({ request }: { request: BackupRequest }) {
 
   // The tools the core finds in the chosen folder, or by itself.
   useEffect(() => {
+    if (embedded) {
+      setTools([]);
+      return;
+    }
     let current = true;
     setTools(null);
     const timer = window.setTimeout(() => {
@@ -210,11 +222,11 @@ function BackupForm({ request }: { request: BackupRequest }) {
       current = false;
       window.clearTimeout(timer);
     };
-  }, [request.session, toolsFolder]);
+  }, [request.session, toolsFolder, embedded]);
 
   // Schemas (PostgreSQL) or databases (MySQL) to choose from.
   useEffect(() => {
-    if (restoring && request.family === "postgres") return;
+    if (embedded || (restoring && request.family === "postgres")) return;
     let current = true;
     void call(commands.listSchemas(request.session, null, false))
       .then((list) => current && setSchemas(list.filter((s) => !s.system).map((s) => s.name)))
@@ -222,7 +234,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
     return () => {
       current = false;
     };
-  }, [request.session, request.family, restoring]);
+  }, [request.session, request.family, restoring, embedded]);
 
   // Tables, when exactly one schema or database is chosen.
   const tableSchema = chosenSchemas.length === 1 ? chosenSchemas[0] : null;
@@ -283,8 +295,10 @@ function BackupForm({ request }: { request: BackupRequest }) {
     options: request.family === "postgres" ? { kind: "postgres", ...pgRestore } : { kind: "mysql", ...myRestore },
   });
 
+  const embeddedRequest = (): EmbeddedBackupItem => ({ folder, namePattern: pattern, duckdbFormat });
+
   // The file the backup will write, and the core's notes, as the choices change.
-  const previewKey = JSON.stringify(restoring ? null : backupRequest());
+  const previewKey = JSON.stringify(restoring ? null : embedded ? embeddedRequest() : backupRequest());
   useEffect(() => {
     if (restoring || !folder.trim()) {
       setPreview(null);
@@ -293,7 +307,15 @@ function BackupForm({ request }: { request: BackupRequest }) {
     }
     let current = true;
     const timer = window.setTimeout(() => {
-      void call(commands.previewBackup(request.session, JSON.parse(previewKey) as BackupRequestItem))
+      const asked = embedded
+        ? call(commands.previewEmbeddedBackup(request.session, JSON.parse(previewKey) as EmbeddedBackupItem)).then((path): BackupPreviewItem => ({
+            tool: "",
+            version: "",
+            path,
+            notes: [],
+          }))
+        : call(commands.previewBackup(request.session, JSON.parse(previewKey) as BackupRequestItem));
+      void asked
         .then((p) => {
           if (!current) return;
           setPreview(p);
@@ -309,7 +331,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
       current = false;
       window.clearTimeout(timer);
     };
-  }, [previewKey, folder, restoring, request.session]);
+  }, [previewKey, folder, restoring, embedded, request.session]);
 
   function remember() {
     if (!prefs) return;
@@ -349,7 +371,9 @@ function BackupForm({ request }: { request: BackupRequest }) {
     const channel = new Channel<BackupEventItem>();
     channel.onmessage = onEvent;
     try {
-      const outcome = await call(commands.runBackup(request.session, id, backupRequest(), channel));
+      const outcome = await call(
+        embedded ? commands.runEmbeddedBackup(request.session, id, embeddedRequest(), channel) : commands.runBackup(request.session, id, backupRequest(), channel),
+      );
       switch (outcome.kind) {
         case "done":
           setPhase({
@@ -376,6 +400,11 @@ function BackupForm({ request }: { request: BackupRequest }) {
 
   async function askRestore() {
     setConfirmError(null);
+    if (request.family === "duckdb") {
+      // DuckDB's own IMPORT DATABASE: no tool to find; the core still refuses a read-only connection.
+      setConfirm({ tool: "DuckDB", version: "DuckDB IMPORT DATABASE", format: "directory", notes: [], readOnly: false });
+      return;
+    }
     try {
       setConfirm(await call(commands.previewRestore(request.session, restoreRequest())));
     } catch (e) {
@@ -393,7 +422,11 @@ function BackupForm({ request }: { request: BackupRequest }) {
     const channel = new Channel<BackupEventItem>();
     channel.onmessage = onEvent;
     try {
-      const outcome = await call(commands.runRestore(request.session, id, restoreRequest(), true, channel));
+      const outcome = await call(
+        request.family === "duckdb"
+          ? commands.runDuckdbImport(request.session, id, input, true, channel)
+          : commands.runRestore(request.session, id, restoreRequest(), true, channel),
+      );
       switch (outcome.kind) {
         case "done":
           setPhase({ kind: "done", text: t("restoreDb.done", { seconds: numbers.format((outcome.millis ?? 0) / 1000) }) });
@@ -444,7 +477,9 @@ function BackupForm({ request }: { request: BackupRequest }) {
 
   const toggle = (list: string[], name: string, on: boolean) => (on ? [...list, name] : list.filter((n) => n !== name));
   const title = restoring ? t("restoreDb.title", { name: request.connectionName }) : t("backup.title", { name: request.connectionName });
-  const missingTool = tools?.some((tool) => tool.error && (restoring ? tool.name !== "pg_dump" && tool.name !== "mysqldump" : tool.name === "pg_dump" || tool.name === "mysqldump"));
+  const missingTool = tools?.some(
+    (tool) => tool.error && (restoring ? tool.name !== "pg_dump" && tool.name !== "mysqldump" : tool.name === "pg_dump" || tool.name === "mysqldump"),
+  );
   const canBackup = !running && !!folder.trim() && !!preview && !previewError;
   const canRestore = !running && !!input.trim();
 
@@ -452,177 +487,205 @@ function BackupForm({ request }: { request: BackupRequest }) {
     <div className="modal-backdrop">
       <div className="modal backup-dialog" role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
-        <p className="muted small">{restoring ? t("restoreDb.intro") : t("backup.intro")}</p>
+        <p className="muted small">
+          {restoring
+            ? request.family === "duckdb"
+              ? t("restoreDb.introDuckdb")
+              : t("restoreDb.intro")
+            : request.family === "sqlite"
+              ? t("backup.introSqlite")
+              : request.family === "duckdb"
+                ? t("backup.introDuckdb")
+                : t("backup.intro")}
+        </p>
 
-        <fieldset disabled={running}>
-          <legend>{t("backup.tools")}</legend>
-          <div className="backup-row">
-            <input
-              type="text"
-              aria-label={t("backup.toolsFolder")}
-              placeholder={t("backup.toolsAuto")}
-              value={toolsFolder}
-              onChange={(e) => setToolsFolder(e.target.value)}
-            />
-            <button type="button" onClick={() => void pickToolsFolder()}>
-              {t("backup.chooseFolderButton")}
-            </button>
-            {toolsFolder && (
-              <button type="button" className="ghost" onClick={() => setToolsFolder("")}>
-                {t("backup.findAutomatically")}
+        {!embedded && (
+          <fieldset disabled={running}>
+            <legend>{t("backup.tools")}</legend>
+            <div className="backup-row">
+              <input type="text" aria-label={t("backup.toolsFolder")} placeholder={t("backup.toolsAuto")} value={toolsFolder} onChange={(e) => setToolsFolder(e.target.value)} />
+              <button type="button" onClick={() => void pickToolsFolder()}>
+                {t("backup.chooseFolderButton")}
               </button>
+              {toolsFolder && (
+                <button type="button" className="ghost" onClick={() => setToolsFolder("")}>
+                  {t("backup.findAutomatically")}
+                </button>
+              )}
+            </div>
+            {tools === null ? (
+              <p className="muted small" role="status">
+                {t("backup.lookingForTools")}
+              </p>
+            ) : (
+              <ul className="backup-tools" aria-label={t("backup.tools")}>
+                {tools.map((tool, i) => (
+                  <li key={i} className={tool.error ? "missing" : undefined}>
+                    <span className="backup-tool-name">{tool.name}</span>
+                    {tool.error ? (
+                      <span className="error">{tool.error}</span>
+                    ) : (
+                      <span className="muted code" title={tool.path}>
+                        {tool.version}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
             )}
-          </div>
-          {tools === null ? (
-            <p className="muted small" role="status">
-              {t("backup.lookingForTools")}
-            </p>
-          ) : (
-            <ul className="backup-tools" aria-label={t("backup.tools")}>
-              {tools.map((tool, i) => (
-                <li key={i} className={tool.error ? "missing" : undefined}>
-                  <span className="backup-tool-name">{tool.name}</span>
-                  {tool.error ? <span className="error">{tool.error}</span> : <span className="muted code" title={tool.path}>{tool.version}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </fieldset>
+          </fieldset>
+        )}
 
         {!restoring && (
           <>
-            <fieldset disabled={running}>
-              <legend>{request.family === "postgres" ? t("backup.schemas") : t("backup.databases")}</legend>
-              <p className="muted small">{request.family === "postgres" ? t("backup.schemasHint") : t("backup.databasesHint")}</p>
-              <div className="backup-choices">
-                {schemas.map((name) => (
-                  <label key={name} className="check">
-                    <input type="checkbox" checked={chosenSchemas.includes(name)} onChange={(e) => setChosenSchemas((now) => toggle(now, name, e.target.checked))} />
-                    {name}
-                  </label>
-                ))}
-              </div>
-              {tableSchema && tables.length > 0 && (
-                <details className="backup-tables">
-                  <summary>{t("backup.tables", { schema: tableSchema, count: chosenTables.length })}</summary>
-                  <div className="backup-choices">
-                    {tables.map((name) => (
-                      <label key={name} className="check">
-                        <input type="checkbox" checked={chosenTables.includes(name)} onChange={(e) => setChosenTables((now) => toggle(now, name, e.target.checked))} />
-                        {name}
-                      </label>
-                    ))}
-                  </div>
-                </details>
-              )}
-            </fieldset>
+            {request.family === "duckdb" && (
+              <fieldset disabled={running}>
+                <legend>{t("backup.options")}</legend>
+                <label className="field">
+                  {t("backup.duckdbFormat")}
+                  <select value={duckdbFormat} onChange={(e) => setDuckdbFormat(e.target.value as DuckdbFormatItem)}>
+                    <option value="parquet">{t("backup.duckdbFormats.parquet")}</option>
+                    <option value="csv">{t("backup.duckdbFormats.csv")}</option>
+                  </select>
+                </label>
+              </fieldset>
+            )}
+            {!embedded && (
+              <fieldset disabled={running}>
+                <legend>{request.family === "postgres" ? t("backup.schemas") : t("backup.databases")}</legend>
+                <p className="muted small">{request.family === "postgres" ? t("backup.schemasHint") : t("backup.databasesHint")}</p>
+                <div className="backup-choices">
+                  {schemas.map((name) => (
+                    <label key={name} className="check">
+                      <input type="checkbox" checked={chosenSchemas.includes(name)} onChange={(e) => setChosenSchemas((now) => toggle(now, name, e.target.checked))} />
+                      {name}
+                    </label>
+                  ))}
+                </div>
+                {tableSchema && tables.length > 0 && (
+                  <details className="backup-tables">
+                    <summary>{t("backup.tables", { schema: tableSchema, count: chosenTables.length })}</summary>
+                    <div className="backup-choices">
+                      {tables.map((name) => (
+                        <label key={name} className="check">
+                          <input type="checkbox" checked={chosenTables.includes(name)} onChange={(e) => setChosenTables((now) => toggle(now, name, e.target.checked))} />
+                          {name}
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </fieldset>
+            )}
 
-            <fieldset disabled={running}>
-              <legend>{t("backup.options")}</legend>
-              {request.family === "postgres" ? (
-                <>
-                  <div className="backup-grid">
-                    <label className="field">
-                      {t("backup.format")}
-                      <select value={pg.format} onChange={(e) => setPg({ ...pg, format: e.target.value as PgFormatItem })}>
-                        {PG_FORMATS.map((f) => (
-                          <option key={f} value={f}>
-                            {t(`backup.formats.${f}`)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      {t("backup.compression")}
-                      <select value={pg.compression} disabled={pg.format === "tar"} onChange={(e) => setPg({ ...pg, compression: e.target.value })}>
-                        <option value="">{t("backup.compressionDefault")}</option>
-                        {Array.from({ length: 10 }, (_, i) => (
-                          <option key={i} value={String(i)}>
-                            {i}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      {t("backup.content")}
-                      <select value={pg.content} onChange={(e) => setPg({ ...pg, content: e.target.value as DumpContentItem })}>
-                        {CONTENTS.map((c) => (
-                          <option key={c} value={c}>
-                            {t(`backup.contents.${c}`)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      {t("backup.encoding")}
-                      <input type="text" value={pg.encoding} placeholder={t("backup.encodingDefault")} onChange={(e) => setPg({ ...pg, encoding: e.target.value })} />
-                    </label>
-                  </div>
-                  <div className="backup-checks">
-                    {(
-                      [
-                        ["inserts", "pgInserts"],
-                        ["noPrivileges", "pgNoPrivileges"],
-                        ["noOwner", "pgNoOwner"],
-                        ["clean", "pgClean"],
-                        ["create", "pgCreate"],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <label key={key} className="check">
-                        <input type="checkbox" checked={pg[key]} onChange={(e) => setPg({ ...pg, [key]: e.target.checked })} />
-                        {t(`backup.${label}`)}
+            {!embedded && (
+              <fieldset disabled={running}>
+                <legend>{t("backup.options")}</legend>
+                {request.family === "postgres" ? (
+                  <>
+                    <div className="backup-grid">
+                      <label className="field">
+                        {t("backup.format")}
+                        <select value={pg.format} onChange={(e) => setPg({ ...pg, format: e.target.value as PgFormatItem })}>
+                          {PG_FORMATS.map((f) => (
+                            <option key={f} value={f}>
+                              {t(`backup.formats.${f}`)}
+                            </option>
+                          ))}
+                        </select>
                       </label>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="backup-grid">
-                    <label className="field">
-                      {t("backup.consistency")}
-                      <select value={my.consistency} onChange={(e) => setMy({ ...my, consistency: e.target.value as MysqlConsistencyItem })}>
-                        {CONSISTENCY.map((c) => (
-                          <option key={c} value={c}>
-                            {t(`backup.consistencies.${c}`)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      {t("backup.columnStatistics")}
-                      <select value={my.columnStatistics} onChange={(e) => setMy({ ...my, columnStatistics: e.target.value as ColumnStatisticsItem })}>
-                        {STATISTICS.map((c) => (
-                          <option key={c} value={c}>
-                            {t(`backup.statistics.${c}`)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="backup-checks">
-                    {(
-                      [
-                        ["addDrop", "myAddDrop"],
-                        ["noCreate", "myNoCreate"],
-                        ["noData", "myNoData"],
-                        ["extendedInsert", "myExtendedInsert"],
-                        ["routines", "myRoutines"],
-                        ["events", "myEvents"],
-                        ["triggers", "myTriggers"],
-                        ["includeViews", "myIncludeViews"],
-                        ["stripDefiner", "myStripDefiner"],
-                        ["hexBlob", "myHexBlob"],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <label key={key} className="check">
-                        <input type="checkbox" checked={my[key]} onChange={(e) => setMy({ ...my, [key]: e.target.checked })} />
-                        {t(`backup.${label}`)}
+                      <label className="field">
+                        {t("backup.compression")}
+                        <select value={pg.compression} disabled={pg.format === "tar"} onChange={(e) => setPg({ ...pg, compression: e.target.value })}>
+                          <option value="">{t("backup.compressionDefault")}</option>
+                          {Array.from({ length: 10 }, (_, i) => (
+                            <option key={i} value={String(i)}>
+                              {i}
+                            </option>
+                          ))}
+                        </select>
                       </label>
-                    ))}
-                  </div>
-                </>
-              )}
-            </fieldset>
+                      <label className="field">
+                        {t("backup.content")}
+                        <select value={pg.content} onChange={(e) => setPg({ ...pg, content: e.target.value as DumpContentItem })}>
+                          {CONTENTS.map((c) => (
+                            <option key={c} value={c}>
+                              {t(`backup.contents.${c}`)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        {t("backup.encoding")}
+                        <input type="text" value={pg.encoding} placeholder={t("backup.encodingDefault")} onChange={(e) => setPg({ ...pg, encoding: e.target.value })} />
+                      </label>
+                    </div>
+                    <div className="backup-checks">
+                      {(
+                        [
+                          ["inserts", "pgInserts"],
+                          ["noPrivileges", "pgNoPrivileges"],
+                          ["noOwner", "pgNoOwner"],
+                          ["clean", "pgClean"],
+                          ["create", "pgCreate"],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <label key={key} className="check">
+                          <input type="checkbox" checked={pg[key]} onChange={(e) => setPg({ ...pg, [key]: e.target.checked })} />
+                          {t(`backup.${label}`)}
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="backup-grid">
+                      <label className="field">
+                        {t("backup.consistency")}
+                        <select value={my.consistency} onChange={(e) => setMy({ ...my, consistency: e.target.value as MysqlConsistencyItem })}>
+                          {CONSISTENCY.map((c) => (
+                            <option key={c} value={c}>
+                              {t(`backup.consistencies.${c}`)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        {t("backup.columnStatistics")}
+                        <select value={my.columnStatistics} onChange={(e) => setMy({ ...my, columnStatistics: e.target.value as ColumnStatisticsItem })}>
+                          {STATISTICS.map((c) => (
+                            <option key={c} value={c}>
+                              {t(`backup.statistics.${c}`)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="backup-checks">
+                      {(
+                        [
+                          ["addDrop", "myAddDrop"],
+                          ["noCreate", "myNoCreate"],
+                          ["noData", "myNoData"],
+                          ["extendedInsert", "myExtendedInsert"],
+                          ["routines", "myRoutines"],
+                          ["events", "myEvents"],
+                          ["triggers", "myTriggers"],
+                          ["includeViews", "myIncludeViews"],
+                          ["stripDefiner", "myStripDefiner"],
+                          ["hexBlob", "myHexBlob"],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <label key={key} className="check">
+                          <input type="checkbox" checked={my[key]} onChange={(e) => setMy({ ...my, [key]: e.target.checked })} />
+                          {t(`backup.${label}`)}
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </fieldset>
+            )}
 
             <fieldset disabled={running}>
               <legend>{t("backup.output")}</legend>
@@ -652,10 +715,12 @@ function BackupForm({ request }: { request: BackupRequest }) {
               <legend>{t("restoreDb.input")}</legend>
               <div className="backup-row">
                 <input type="text" aria-label={t("restoreDb.file")} placeholder={t("restoreDb.file")} value={input} onChange={(e) => setInput(e.target.value)} />
-                <button type="button" onClick={() => void pickInput(false)}>
-                  {t("restoreDb.chooseFileButton")}
-                </button>
-                {request.family === "postgres" && (
+                {request.family !== "duckdb" && (
+                  <button type="button" onClick={() => void pickInput(false)}>
+                    {t("restoreDb.chooseFileButton")}
+                  </button>
+                )}
+                {(request.family === "postgres" || request.family === "duckdb") && (
                   <button type="button" onClick={() => void pickInput(true)}>
                     {t("restoreDb.chooseArchiveFolderButton")}
                   </button>
@@ -674,54 +739,58 @@ function BackupForm({ request }: { request: BackupRequest }) {
                 </label>
               )}
             </fieldset>
-            <fieldset disabled={running}>
-              <legend>{t("backup.options")}</legend>
-              {request.family === "postgres" ? (
-                <div className="backup-checks">
-                  {(
-                    [
-                      ["clean", "pgRestoreClean"],
-                      ["noOwner", "pgRestoreNoOwner"],
-                      ["create", "pgRestoreCreate"],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <label key={key} className="check">
-                      <input type="checkbox" checked={pgRestore[key]} onChange={(e) => setPgRestore({ ...pgRestore, [key]: e.target.checked })} />
-                      {t(`restoreDb.${label}`)}
+            {request.family !== "duckdb" && (
+              <fieldset disabled={running}>
+                <legend>{t("backup.options")}</legend>
+                {request.family === "postgres" ? (
+                  <div className="backup-checks">
+                    {(
+                      [
+                        ["clean", "pgRestoreClean"],
+                        ["noOwner", "pgRestoreNoOwner"],
+                        ["create", "pgRestoreCreate"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <label key={key} className="check">
+                        <input type="checkbox" checked={pgRestore[key]} onChange={(e) => setPgRestore({ ...pgRestore, [key]: e.target.checked })} />
+                        {t(`restoreDb.${label}`)}
+                      </label>
+                    ))}
+                    <p className="muted small">{t("restoreDb.plainHint")}</p>
+                  </div>
+                ) : (
+                  <>
+                    <label className="field">
+                      {t("restoreDb.database")}
+                      <select value={myRestore.database} onChange={(e) => setMyRestore({ ...myRestore, database: e.target.value })}>
+                        {[...new Set([database, ...schemas])].filter(Boolean).map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
                     </label>
-                  ))}
-                  <p className="muted small">{t("restoreDb.plainHint")}</p>
-                </div>
-              ) : (
-                <>
-                  <label className="field">
-                    {t("restoreDb.database")}
-                    <select value={myRestore.database} onChange={(e) => setMyRestore({ ...myRestore, database: e.target.value })}>
-                      {[...new Set([database, ...schemas])].filter(Boolean).map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="check">
-                    <input type="checkbox" checked={myRestore.disableForeignKeys} onChange={(e) => setMyRestore({ ...myRestore, disableForeignKeys: e.target.checked })} />
-                    {t("restoreDb.disableForeignKeys")}
-                  </label>
-                </>
-              )}
-            </fieldset>
+                    <label className="check">
+                      <input type="checkbox" checked={myRestore.disableForeignKeys} onChange={(e) => setMyRestore({ ...myRestore, disableForeignKeys: e.target.checked })} />
+                      {t("restoreDb.disableForeignKeys")}
+                    </label>
+                  </>
+                )}
+              </fieldset>
+            )}
           </>
         )}
 
-        <details className="backup-advanced">
-          <summary>{t("backup.advanced")}</summary>
-          <label className="field">
-            {t("backup.extraArgs")}
-            <input type="text" className="code" value={extraArgs} disabled={running} onChange={(e) => setExtraArgs(e.target.value)} />
-          </label>
-          <p className="muted small">{t("backup.extraArgsHint")}</p>
-        </details>
+        {!embedded && (
+          <details className="backup-advanced">
+            <summary>{t("backup.advanced")}</summary>
+            <label className="field">
+              {t("backup.extraArgs")}
+              <input type="text" className="code" value={extraArgs} disabled={running} onChange={(e) => setExtraArgs(e.target.value)} />
+            </label>
+            <p className="muted small">{t("backup.extraArgsHint")}</p>
+          </details>
+        )}
 
         {preview?.notes.map((note, i) => (
           <p key={i} className="banner" role="status">
@@ -795,14 +864,14 @@ function BackupForm({ request }: { request: BackupRequest }) {
 
       {confirm && (
         <div className="modal-backdrop">
-          <div className="modal backup-confirm" role="alertdialog" aria-modal="true" aria-label={t("restoreDb.confirmTitle", { database: database || request.connectionName })}>
+          <div className="modal backup-confirm" role="dialog" aria-modal="true" aria-label={t("restoreDb.confirmTitle", { database: database || request.connectionName })}>
             <h2>{t("restoreDb.confirmTitle", { database: database || request.connectionName })}</h2>
             <p>
               {t("restoreDb.confirmBody", {
                 file: input,
                 connection: request.connectionName,
                 tool: confirm.version || confirm.tool,
-                format: t(`restoreDb.formats.${confirm.format}`),
+                format: request.family === "duckdb" ? t("restoreDb.duckdbExport") : t(`restoreDb.formats.${confirm.format}`),
               })}
             </p>
             {request.family === "postgres" && pgRestore.clean && <p>{t("restoreDb.confirmClean")}</p>}
@@ -817,7 +886,7 @@ function BackupForm({ request }: { request: BackupRequest }) {
               </p>
             )}
             <div className="modal-actions">
-              <button ref={confirmRef} onClick={() => setConfirm(null)}>
+              <button ref={confirmRef} autoFocus onClick={() => setConfirm(null)}>
                 {t("restoreDb.keep")}
               </button>
               <button className="danger" disabled={confirm.readOnly} onClick={() => void startRestore()}>
