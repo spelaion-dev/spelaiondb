@@ -25,10 +25,10 @@ import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
 import { ErDiagramView } from "./components/ErDiagram";
-import { EXPLORER_SESSION_CLOSED_EVENT, tabName } from "./connect";
+import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest } from "./connect";
 import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./commandRegistry";
 import { activeContext, isCommandId, runCommand } from "./commands";
-import { call, commands, events } from "./api";
+import { commands, events } from "./api";
 import { usePreferences } from "./preferences";
 import { manualUpdateKey, useUpdate } from "./update";
 import { useApp, useDialogs } from "./store";
@@ -122,12 +122,8 @@ export default function App() {
     const unlistenTransaction = events.transactionChanged.listen((e) => {
       useApp.getState().updateTab(e.payload.session, { transaction: e.payload.status });
     });
-    // Quitting with transactions open: the core held the window; the user decides.
-    const unlistenQuit = events.quitBlocked.listen((e) => {
-      void useDialogs.getState().askOpenTransactions(e.payload.sessions.map(tabName), "quit").then((quit) => {
-        if (quit) void call(commands.quitApp()).catch(() => undefined);
-      });
-    });
+    // Closing the window with sessions open: the core held it; the UI quits or asks (SDB-140).
+    const unlistenQuit = events.quitRequested.listen(() => void answerQuitRequest());
     // Global shortcuts: the registry's (commandRegistry.ts), the same commands as the menus and
     // the command palette. Ctrl+Tab is the tab bar's switcher (TabBar.tsx).
     const onKey = (e: KeyboardEvent) => {

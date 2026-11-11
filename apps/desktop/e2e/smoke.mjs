@@ -7176,6 +7176,89 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await settings.getByRole("checkbox", { name: "Reconnect the last connections at startup" }).check();
     await page.waitForFunction(() => document.querySelector('input[name="reconnectOnStart"]')?.checked && !document.querySelector('input[name="reconnectOnStart"]').disabled);
   });
+  step("quitting or opening another folder with unapplied row edits or a running query asks first; Cancel keeps everything");
+  {
+    const shown = page.locator(".tab-panel:not([hidden])");
+    const activeTab = page.locator(".tabbar .tab.active");
+    const setThemeKeepingDialog = (theme) => page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    const shotBoth = async (name) => {
+      await shot(`${name}-light`);
+      await setThemeKeepingDialog("dark");
+      await shot(`${name}-dark`);
+      await setThemeKeepingDialog("light");
+    };
+    // A row edit typed in a query's results and not applied.
+    await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 5;");
+    await run(shown);
+    await shown.locator(".statusline", { hasText: "5 rows" }).waitFor();
+    await shown.getByRole("button", { name: "Add row" }).waitFor();
+    const box = await shown.locator(".grid-scroller").boundingBox();
+    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
+    const cell = shown.locator("input.cell-editor").and(shown.getByRole("textbox", { name: "New value for name" }));
+    await cell.fill("quit_pending_edit");
+    await cell.press("Enter");
+    await shown.getByText("Updated: 1", { exact: false }).waitFor();
+    const editTab = await activeTab.locator(".tab-label").innerText();
+    // The window's close button: the UI asks. Another close request while it asks keeps the app.
+    requestClose(app.pid);
+    const quitEdits = page.getByRole("dialog", { name: "Quit with unsaved row changes?" });
+    await quitEdits.waitFor();
+    assert.deepEqual(await quitEdits.locator(".unsaved-edits-list li").allInnerTexts(), [editTab]);
+    await quitEdits.getByRole("button", { name: "Quit and discard" }).waitFor();
+    await shotBoth("11c-quit-unsaved-edits");
+    requestClose(app.pid);
+    await page.waitForTimeout(1_000);
+    assert.equal(app.exitCode, null, "a second close request while the UI asks keeps the app");
+    await quitEdits.getByRole("button", { name: "Cancel", exact: true }).click();
+    await quitEdits.waitFor({ state: "detached" });
+    assert.equal(app.exitCode, null, "Cancel keeps the app open");
+    await shown.getByText("Updated: 1", { exact: false }).waitFor();
+    // Opening another folder asks the same before changing anything; Cancel keeps this one.
+    const otherFolder = join(userDir, "other-folder");
+    mkdirSync(otherFolder, { recursive: true });
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), otherFolder);
+    await page.getByTitle("Open another folder").click();
+    const folderEdits = page.getByRole("dialog", { name: "Open another folder with unsaved row changes?" });
+    await folderEdits.waitFor();
+    assert.deepEqual(await folderEdits.locator(".unsaved-edits-list li").allInnerTexts(), [editTab]);
+    await folderEdits.getByRole("button", { name: "Open and discard" }).waitFor();
+    await shotBoth("11d-open-folder-unsaved-edits");
+    await folderEdits.getByRole("button", { name: "Cancel", exact: true }).click();
+    await folderEdits.waitFor({ state: "detached" });
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+    await shown.getByText("Updated: 1", { exact: false }).waitFor();
+    await activeTab.locator(".dot-connected").waitFor();
+    await page.locator('.connection-row:has-text("Shop (SQLite)")').waitFor();
+    // A query running in another tab: one question names both tabs, and Cancel stops nothing.
+    await newQuery("Shop (SQLite)", "with recursive quit_spin(i) as (select 1 union all select i + 1 from quit_spin) select count(*) from quit_spin;");
+    await run(shown);
+    await activeTab.locator(".tab-running").waitFor();
+    const runTab = await activeTab.locator(".tab-label").innerText();
+    requestClose(app.pid);
+    const quitRunning = page.getByRole("dialog", { name: "Quit while a query runs?" });
+    await quitRunning.waitFor();
+    assert.deepEqual(await quitRunning.locator(".running-list li").allInnerTexts(), [runTab]);
+    assert.deepEqual(await quitRunning.locator(".unsaved-edits-list li").allInnerTexts(), [editTab]);
+    await quitRunning.getByRole("button", { name: "Quit and cancel" }).waitFor();
+    await shotBoth("11e-quit-running-and-unsaved");
+    await quitRunning.getByRole("button", { name: "Cancel", exact: true }).click();
+    await quitRunning.waitFor({ state: "detached" });
+    assert.equal(app.exitCode, null, "Cancel keeps the app open");
+    await page.waitForTimeout(300);
+    await activeTab.locator(".tab-running").waitFor();
+    // Leave nothing pending: cancel the query, discard the edit and close both tabs.
+    await shown.getByRole("button", { name: "Cancel", exact: true }).click();
+    await activeTab.locator(".tab-running").waitFor({ state: "detached" });
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab", { hasText: editTab }).click();
+    await page.locator(".tabbar .tab.active", { hasText: editTab }).waitFor();
+    await shown.getByText("Updated: 1", { exact: false }).waitFor();
+    await shown.getByRole("button", { name: "Discard" }).click();
+    await shown.getByText("Updated: 1", { exact: false }).waitFor({ state: "detached" });
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
+  }
+
   step("quitting with a transaction open asks first: Cancel keeps the app, the dialog quits");
   const quitPanel = await newQuery("Shop (SQLite)", "create temp table quit_tx (x);");
   await run(quitPanel);
@@ -7212,6 +7295,32 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   assert.equal(await reconnected.locator(".grid-host").count(), 0, "connecting ran nothing");
   assert.equal(await page.locator(".tabbar .tab-tx").count(), 0, "no transaction was opened");
   assert.equal(await reconnected.getByText("Statement 1", { exact: false }).count(), 0);
+
+  step("quitting with nothing pending closes at once; with the UI frozen, a second close request quits");
+  {
+    const quitWithin = (exited, ms, what) =>
+      Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error(what)), ms))]);
+    // A connected tab and nothing to lose: no question, the app exits.
+    const exitedAtOnce = once(app, "exit");
+    requestClose(app.pid);
+    await quitWithin(exitedAtOnce, 10_000, "the app did not quit with nothing pending");
+    await browser.close().catch(() => {});
+    app = startApp();
+    browser = await connect();
+    page = browser.contexts()[0].pages()[0];
+    page.setDefaultTimeout(30_000);
+    await page.locator(".tabbar .tab .dot-connected").waitFor();
+    // A page script that never yields: the UI cannot answer. The first request waits for it,
+    // the second quits.
+    void page.evaluate(() => { for (;;) {} }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 500));
+    const exitedFrozen = once(app, "exit");
+    requestClose(app.pid);
+    await new Promise((r) => setTimeout(r, 2_000));
+    assert.equal(app.exitCode, null, "the first close request waits for the UI");
+    requestClose(app.pid);
+    await quitWithin(exitedFrozen, 15_000, "a second close request did not quit a frozen UI");
+  }
 
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {

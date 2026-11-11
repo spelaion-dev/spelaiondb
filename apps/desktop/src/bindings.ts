@@ -832,7 +832,22 @@ export const commands = {
 	 *  disconnecting; the core decides who needs the question.
 	 */
 	sessionsToConfirm: (sessions: string[]) => typedError<string[], string>(__TAURI_INVOKE("sessions_to_confirm", { sessions })),
-	/**  Quits after the user confirmed closing tabs with open transactions (`QuitBlocked`). */
+	/**
+	 *  The editor tabs with an open transaction, for the quit question: from what each session
+	 *  last read, with no round trip, so a server that does not answer cannot hold quitting.
+	 */
+	quitOpenTransactions: () => typedError<string[], string>(__TAURI_INVOKE("quit_open_transactions")),
+	/**
+	 *  The UI got `QuitRequested` and is deciding: a later close request asks it again instead of
+	 *  quitting.
+	 */
+	quitAsking: () => typedError<null, string>(__TAURI_INVOKE("quit_asking")),
+	/**  The user went back from the quit question: the next close request asks again. */
+	quitCancelled: () => typedError<null, string>(__TAURI_INVOKE("quit_cancelled")),
+	/**
+	 *  Quits: the UI found nothing to ask, or the user confirmed (`QuitRequested`). Nothing is
+	 *  committed, applied or saved; the servers roll back open transactions.
+	 */
 	quitApp: () => typedError<null, string>(__TAURI_INVOKE("quit_app")),
 };
 
@@ -840,7 +855,7 @@ export const commands = {
 export const events = {
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
-	quitBlocked: makeEvent<QuitBlocked, QuitBlocked>("quit-blocked"),
+	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
 	transactionChanged: makeEvent<TransactionChanged_Serialize, TransactionChanged_Deserialize>("transaction-changed"),
 };
@@ -4141,12 +4156,10 @@ export type ProxyDraftItem_Serialize = {
 export type ProxyTypeItem = "socks5" | "http";
 
 /**
- *  The window was asked to close while these tabs have a transaction open: the UI asks, then
- *  calls `quit_app` (ADR-031).
+ *  The window was asked to close while sessions are open: the UI calls `quit_asking`, looks for
+ *  work that quitting would lose and calls `quit_app` or `quit_cancelled` (ADR-031).
  */
-export type QuitBlocked = {
-	sessions: string[],
-};
+export type QuitRequested = Record<string, never>;
 
 /**  A bounded raw-text window. Offsets are UTF-8 bytes and always returned on boundaries. */
 export type RawWindow = RawWindow_Serialize | RawWindow_Deserialize;

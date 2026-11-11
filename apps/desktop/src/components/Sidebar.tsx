@@ -30,7 +30,7 @@ import {
   type TableKeyItem,
 } from "../api";
 import {
-  confirmOpenTransactions,
+  confirmLeaving,
   connectTabFromExplorer,
   explorerDatabase,
   EXPLORER_REFRESH_EVENT,
@@ -1283,13 +1283,19 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     const app = useApp.getState();
     // A connection ID can refer to a different server in the next folder: the tabs on screen
     // are kept under this folder and the next folder's own tabs come back (ADR-036).
-    if (
-      app.tabs.some((t) => t.status === "connecting" || t.run?.running) ||
-      app.historySaving.length > 0
-    )
-      return;
-    // Changing folder closes every tab's session (ADR-031): ask first if a transaction is open.
-    if (!(await confirmOpenTransactions(app.tabs.map((t) => t.id), "disconnect"))) return;
+    if (app.tabs.some((t) => t.status === "connecting") || app.historySaving.length > 0) return;
+    // Changing folder closes every tab's session (ADR-031): ask first, as before closing tabs,
+    // about open transactions, running queries and row edits not applied (SDB-140).
+    let open: string[] = [];
+    try {
+      open = await call(commands.sessionsToConfirm(app.tabs.map((t) => t.id)));
+    } catch {
+      // The sessions are gone: nothing is left to roll back.
+    }
+    if (!(await confirmLeaving("folder", open))) return;
+    // Saving started while the question was open, or a tab began connecting: nothing changes.
+    const now = useApp.getState();
+    if (now.tabs.some((t) => t.savingEdits || t.status === "connecting") || now.historySaving.length > 0) return;
     app.setWorkspaceChanging(true);
     setFolderError(null);
     // Tabs belong to the folder they were opened in (ADR-036): the old folder's are written
@@ -1298,16 +1304,19 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     detachTabs();
     try {
       const sessions = [
-        ...app.tabs.map((t) => t.id),
-        ...app.connections.map((c) => `meta:${c.id}`),
+        ...now.tabs.map((t) => t.id),
+        ...now.connections.map((c) => `meta:${c.id}`),
       ];
+      // The core stops the runs the user agreed to cancel, then the sessions close.
+      const running = now.tabs.filter((t) => t.run?.running).map((t) => t.id);
       app.clearTabConnections();
       app.setConnections([]);
+      await Promise.all(running.map((id) => call(commands.cancel(id)).catch(() => undefined)));
       await Promise.all(
         sessions.map((session) => call(commands.disconnect(session))),
       );
       await Promise.all(
-        app.tabs.flatMap((tab) =>
+        now.tabs.flatMap((tab) =>
           (tab.run?.results ?? []).map((r) =>
             call(commands.releaseResult(r.id)),
           ),
