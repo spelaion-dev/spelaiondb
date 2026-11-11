@@ -2925,8 +2925,21 @@ pub struct TunnelDraftItem {
     pub connect_timeout: Option<u32>,
     /// A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027).
     pub proxy: Option<ProxyDraftItem>,
+    /// AWS SSM in front of the first hop, or instead of hops (ADR-050).
+    pub ssm: Option<SsmDraftItem>,
     /// A Kubernetes profile (ADR-050): then no hops, proxy or SSH settings are saved.
     pub kubernetes: Option<KubernetesDraftItem>,
+}
+
+/// The AWS SSM section of the network profile editor (ADR-050); empty fields mean the AWS
+/// CLI's defaults. It holds no secret.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SsmDraftItem {
+    pub target: String,
+    pub region: String,
+    pub profile: String,
+    pub aws: String,
 }
 
 /// A connection opened in the editor.
@@ -3065,6 +3078,8 @@ pub struct NetworkProfileItem {
     pub proxy: Option<String>,
     /// `user@host:port` per hop, in order.
     pub hops: Vec<String>,
+    /// AWS SSM (ADR-050): `target (region, profile)`, before the hops.
+    pub ssm: Option<String>,
     /// A Kubernetes profile (ADR-050): `context / namespace / resource`, with `…` where the
     /// profile leaves it out.
     pub kubernetes: Option<String>,
@@ -3090,6 +3105,17 @@ impl NetworkProfileItem {
                 .iter()
                 .map(|hop| format!("{}@{}:{}", hop.user, hop.host, hop.port.unwrap_or(22)))
                 .collect(),
+            ssm: entry.file.ssm.as_ref().map(|ssm| {
+                let details: Vec<&str> = [ssm.region.as_deref(), ssm.profile.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                if details.is_empty() {
+                    ssm.target.clone()
+                } else {
+                    format!("{} ({})", ssm.target, details.join(", "))
+                }
+            }),
             kubernetes: entry.file.kubernetes.as_ref().map(|k| {
                 let part = |v: &Option<String>| v.clone().unwrap_or_else(|| "…".into());
                 format!(
@@ -3221,6 +3247,12 @@ impl From<TunnelDraftItem> for spelaion_config::TunnelDraft {
                     proxy.password_other,
                 ),
             }),
+            ssm: item.ssm.map(|ssm| spelaion_config::SsmDraft {
+                target: ssm.target,
+                region: ssm.region,
+                profile: ssm.profile,
+                aws: ssm.aws,
+            }),
             kubernetes: item
                 .kubernetes
                 .map(|k| spelaion_config::KubernetesProfileDraft {
@@ -3277,6 +3309,12 @@ impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
                     password_env,
                     password_other,
                 }
+            }),
+            ssm: draft.ssm.map(|ssm| SsmDraftItem {
+                target: ssm.target,
+                region: ssm.region,
+                profile: ssm.profile,
+                aws: ssm.aws,
             }),
             kubernetes: draft.kubernetes.map(|k| KubernetesDraftItem {
                 context: k.context,
@@ -4119,6 +4157,10 @@ impl From<&spelaion_core::TestStep> for TestStepItem {
                     port: *port,
                     command: *command,
                 },
+                StepKind::Ssm { target, region } => TestStepKindItem::Ssm {
+                    target: target.clone(),
+                    region: region.clone(),
+                },
                 StepKind::Kubernetes {
                     resource,
                     context,
@@ -4191,6 +4233,10 @@ pub enum TestStepKindItem {
         context: Option<String>,
         namespace: Option<String>,
     },
+    Ssm {
+        target: String,
+        region: Option<String>,
+    },
     Target {
         host: String,
         port: u16,
@@ -4240,6 +4286,7 @@ pub enum FailureKindItem {
     Tls,
     Timeout,
     Kubernetes,
+    Ssm,
     Other,
 }
 
@@ -4261,6 +4308,7 @@ impl From<spelaion_core::FailureKind> for FailureKindItem {
             FailureKind::Tls => Self::Tls,
             FailureKind::Timeout => Self::Timeout,
             FailureKind::Kubernetes => Self::Kubernetes,
+            FailureKind::Ssm => Self::Ssm,
             FailureKind::Other => Self::Other,
         }
     }

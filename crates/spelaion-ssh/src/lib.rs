@@ -14,6 +14,7 @@
 mod auth;
 mod hostkeys;
 mod proxy;
+mod ssm;
 mod tunnel;
 
 use std::path::PathBuf;
@@ -23,16 +24,48 @@ use async_trait::async_trait;
 use spelaion_driver_api::Secret;
 
 pub use hostkeys::KnownHosts;
+pub use ssm::{SsmTools, find_tools as find_ssm_tools, ssm_arguments};
 pub use tunnel::{RemoteExec, RemoteSignals, Tunnel, TunnelState};
 
 /// A tunnel: hops in order. The last one is the one that reaches the target. With a proxy,
 /// the first hop is reached through it; with a proxy and no hops, the proxy alone reaches the
-/// target (ADR-027).
+/// target (ADR-027). AWS SSM works the same way as a proxy does (ADR-050).
 #[derive(Debug, Clone, Default)]
 pub struct TunnelSpec {
     pub hops: Vec<HopSpec>,
     pub proxy: Option<ProxySpec>,
+    /// An AWS SSM session to the first hop, or, with no hops, to the target (ADR-050).
+    pub ssm: Option<SsmSpec>,
     pub options: TunnelOptions,
+}
+
+/// AWS SSM Session Manager port forwarding through a managed node (ADR-050), run with the
+/// user's AWS CLI and credentials. It holds no secret.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SsmSpec {
+    /// The managed node: an instance (`i-…`), on-premises (`mi-…`) or ECS target.
+    pub target: String,
+    /// The AWS CLI's default when `None`.
+    pub region: Option<String>,
+    /// The AWS CLI's profile; its default when `None`.
+    pub profile: Option<String>,
+    /// The AWS CLI to run; `aws` on the PATH or in its installer's folder when `None`.
+    pub aws: Option<String>,
+}
+
+/// What went wrong with an SSM session, for the connection test's hints (ADR-032).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SsmFailure {
+    /// The AWS CLI is not installed (or not where the profile says).
+    MissingCli,
+    /// The Session Manager plugin for the AWS CLI is not installed.
+    MissingPlugin,
+    /// A value of the profile cannot be passed to the AWS CLI.
+    Invalid,
+    /// The AWS CLI refused or ended the session (credentials, permissions, the node…).
+    Exited,
+    /// The session was not ready in time.
+    Timeout,
 }
 
 /// A SOCKS5 or HTTP proxy (ADR-027).
@@ -207,6 +240,8 @@ pub enum ProxyFailure {
 pub enum TunnelStage {
     /// Connecting through the proxy (to the first hop, or checking it when it is alone).
     Proxy,
+    /// Starting the AWS SSM session (to the first hop, or checking the tools when it is alone).
+    Ssm,
     /// Connecting to and authenticating on a hop (0-based).
     Hop(usize),
 }
@@ -267,6 +302,12 @@ pub enum SshError {
         hop: usize,
         host: String,
         after: Duration,
+    },
+
+    #[error("AWS SSM: {message}")]
+    Ssm {
+        message: String,
+        failure: SsmFailure,
     },
 
     #[error("proxy {proxy}: {message}")]

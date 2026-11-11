@@ -67,6 +67,24 @@ port, database, user, SSL mode and the password field (which is saved like a typ
   resource = "svc/orders"
   ```
 
+- **AWS SSM:** a network profile can start with an **AWS SSM** Session Manager session
+  instead of a bastion: in the network profile editor choose the **AWS SSM** route and give the
+  managed node (`i-…` or `mi-…`), and optionally the region, the AWS profile and the AWS CLI
+  program. SpelaionDB runs `aws ssm start-session` with your AWS credentials (sign in first,
+  for example with `aws sso login`); it needs the AWS CLI v2 and the Session Manager plugin, and
+  says which is missing. Without hops, the connection's host is reached from the managed node:
+  `localhost` is a port on the node itself, and any other host (an RDS or ElastiCache endpoint)
+  is reached through it. With hops, the first hop is reached through the session (SSH over SSM).
+  In the file:
+
+  ```toml
+  # .spelaion/tunnels/aws-prod.toml
+  [ssm]
+  target = "i-0123456789abcdef0"
+  region = "eu-west-1"
+  profile = "${user.aws_profile}"
+  ```
+
 Testing a connection writes nothing. Saving never overwrites an existing connection.
 
 The **⋯** menu next to each connection has **Edit…** and **Delete…**. Editing keeps the same

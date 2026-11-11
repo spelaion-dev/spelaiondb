@@ -5,8 +5,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use spelaion_config::{
-    Engine, Password, ProxyType, ResolvedConnection, ResolvedHop, ResolvedProxy, ResolvedTunnel,
-    SshAuth, TunnelPasswords,
+    Engine, Password, ProxyType, ResolvedConnection, ResolvedHop, ResolvedProxy, ResolvedSsm,
+    ResolvedTunnel, SshAuth, TunnelPasswords,
 };
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
@@ -19,7 +19,7 @@ use spelaion_driver_sqlite::SqliteDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
 use spelaion_ssh::{
     AuthMethod, HopSpec, Interaction, KnownHosts, LocalPort, ProxyKind, ProxySpec, RemoteSignals,
-    SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
+    SshError, SsmSpec, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
 };
 use tokio::sync::watch;
 
@@ -338,14 +338,15 @@ async fn start_tunnel(
         }
         (Some(resolved_tunnel), None) => {
             let spec = tunnel_spec(resolved_tunnel);
-            // Same layer, name, settings, proxy and hops = same tunnel. Secrets are not part of
-            // the key (their Debug is `***`).
+            // Same layer, name, settings, proxy, SSM and hops = same tunnel. Secrets are not
+            // part of the key (their Debug is `***`).
             let key = format!(
-                "{:?}|{}|{:?}|{:?}|{:?}",
+                "{:?}|{}|{:?}|{:?}|{:?}|{:?}",
                 resolved.id.source,
                 resolved_tunnel.name,
                 resolved_tunnel.options,
                 resolved_tunnel.proxy,
+                resolved_tunnel.ssm,
                 resolved_tunnel.hops
             );
             let known_hosts = team_known_hosts(resolved_tunnel, known_hosts);
@@ -488,6 +489,7 @@ pub(crate) fn typed_tunnel_spec(tunnel: &ResolvedTunnel, passwords: TunnelPasswo
             })
             .collect(),
         proxy,
+        ssm: tunnel.ssm.as_ref().map(ssm_spec),
         options: tunnel_options(tunnel),
     }
 }
@@ -497,6 +499,7 @@ pub(crate) fn tunnel_spec(tunnel: &ResolvedTunnel) -> TunnelSpec {
     TunnelSpec {
         hops: tunnel.hops.iter().map(hop_spec).collect(),
         proxy: tunnel.proxy.as_ref().map(proxy_spec),
+        ssm: tunnel.ssm.as_ref().map(ssm_spec),
         options: tunnel_options(tunnel),
     }
 }
@@ -556,6 +559,16 @@ fn proxy_spec(proxy: &ResolvedProxy) -> ProxySpec {
             Password::Value(secret) => Some(secret.clone()),
             Password::Prompt { .. } | Password::None => None,
         },
+    }
+}
+
+/// AWS SSM holds no secret: what the profile says, for the AWS CLI (ADR-050).
+fn ssm_spec(ssm: &ResolvedSsm) -> SsmSpec {
+    SsmSpec {
+        target: ssm.target.clone(),
+        region: ssm.region.clone(),
+        profile: ssm.profile.clone(),
+        aws: ssm.aws.clone(),
     }
 }
 

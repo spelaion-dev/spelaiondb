@@ -15,7 +15,7 @@ use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, Source, TunnelEntry, validate_tunnel, workspace_dir};
 use crate::model::{
     HopConfig, KubernetesProfileConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec,
-    SshAuth, TunnelFile,
+    SshAuth, SsmConfig, TunnelFile,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 
@@ -48,8 +48,19 @@ pub struct TunnelDraft {
     pub options: TunnelDraftOptions,
     /// A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027).
     pub proxy: Option<ProxyDraft>,
+    /// AWS SSM in front of the first hop, or instead of hops (ADR-050).
+    pub ssm: Option<SsmDraft>,
     /// A Kubernetes profile (ADR-050): then there are no hops, proxy or SSH settings.
     pub kubernetes: Option<KubernetesProfileDraft>,
+}
+
+/// AWS SSM as typed in the form. Empty strings mean "not set": the AWS CLI's defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SsmDraft {
+    pub target: String,
+    pub region: String,
+    pub profile: String,
+    pub aws: String,
 }
 
 /// A Kubernetes network profile as typed in the form. Empty strings mean "not set": the
@@ -315,10 +326,10 @@ impl TunnelDraft {
             }
         };
         if let Some(kubernetes) = &self.kubernetes {
-            if !self.hops.is_empty() || self.proxy.is_some() {
+            if !self.hops.is_empty() || self.proxy.is_some() || self.ssm.is_some() {
                 return Err(ConfigError::new(
                     path,
-                    "a Kubernetes profile reaches the database through kubectl: it has no hops or proxy",
+                    "a Kubernetes profile reaches the database through kubectl: it has no hops, proxy or AWS SSM",
                 ));
             }
             // The form's SSH settings do not apply: they are left out.
@@ -330,6 +341,7 @@ impl TunnelDraft {
                     keepalive_count: None,
                     connect_timeout: None,
                     proxy: None,
+                    ssm: None,
                     kubernetes: Some(KubernetesProfileConfig {
                         context: non_empty(&kubernetes.context),
                         namespace: non_empty(&kubernetes.namespace),
@@ -342,6 +354,20 @@ impl TunnelDraft {
                 },
             );
         }
+        let ssm = match &self.ssm {
+            None => None,
+            Some(ssm) => Some(SsmConfig {
+                target: non_empty(&ssm.target).ok_or_else(|| {
+                    ConfigError::new(
+                        path,
+                        "the AWS SSM target (the managed node, i-… or mi-…) cannot be empty",
+                    )
+                })?,
+                region: non_empty(&ssm.region),
+                profile: non_empty(&ssm.profile),
+                aws: non_empty(&ssm.aws),
+            }),
+        };
         let options = &self.options;
         validate_tunnel(
             path,
@@ -357,6 +383,7 @@ impl TunnelDraft {
                     .connect_timeout
                     .filter(|s| *s != TunnelFile::DEFAULT_CONNECT_TIMEOUT),
                 proxy,
+                ssm,
                 kubernetes: None,
                 hops,
             },
@@ -397,6 +424,12 @@ impl TunnelDraft {
                 port: Some(proxy.port),
                 user: proxy.user.clone().unwrap_or_default(),
                 password: choice_of(proxy.password.as_ref()),
+            }),
+            ssm: entry.file.ssm.as_ref().map(|ssm| SsmDraft {
+                target: ssm.target.clone(),
+                region: ssm.region.clone().unwrap_or_default(),
+                profile: ssm.profile.clone().unwrap_or_default(),
+                aws: ssm.aws.clone().unwrap_or_default(),
             }),
             kubernetes: entry
                 .file
@@ -600,6 +633,25 @@ fn write_options(table: &mut Table, old: &TunnelFile, new: &TunnelFile) {
                     put(section, "port", Some(Value::from(i64::from(proxy.port))));
                     put(section, "user", text(&proxy.user));
                     put(section, "password", secret_value(&proxy.password));
+                }
+            }
+        }
+    }
+    if old.ssm != new.ssm {
+        match &new.ssm {
+            None => {
+                table.remove("ssm");
+            }
+            Some(ssm) => {
+                let item = table
+                    .entry("ssm")
+                    .or_insert_with(|| Item::Table(Table::new()));
+                if let Some(section) = item.as_table_mut() {
+                    let text = |v: &Option<String>| v.clone().map(Value::from);
+                    put(section, "target", Some(Value::from(ssm.target.as_str())));
+                    put(section, "region", text(&ssm.region));
+                    put(section, "profile", text(&ssm.profile));
+                    put(section, "aws", text(&ssm.aws));
                 }
             }
         }

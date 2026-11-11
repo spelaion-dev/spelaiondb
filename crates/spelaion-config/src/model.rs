@@ -333,8 +333,8 @@ pub enum WritePolicy {
     Allow,
 }
 
-/// A network profile (ADR-027): `.spelaion/tunnels/<name>.toml`. SSH hops, a proxy, or both;
-/// or a Kubernetes cluster (ADR-050).
+/// A network profile (ADR-027): `.spelaion/tunnels/<name>.toml`. SSH hops, after a proxy or an
+/// AWS SSM session, or one of those alone; or a Kubernetes cluster (ADR-050).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TunnelFile {
@@ -356,6 +356,10 @@ pub struct TunnelFile {
     /// hops, it reaches the database itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    /// AWS SSM Session Manager port forwarding through a managed node (ADR-050): the first hop
+    /// is reached through it or, with no hops, it reaches the database itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssm: Option<SsmConfig>,
     /// `kubectl port-forward` through a cluster, shared by every connection that names this
     /// profile (ADR-050). It has no hops or proxy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -364,6 +368,24 @@ pub struct TunnelFile {
     /// that reaches the database alone, or with Kubernetes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hops: Vec<HopConfig>,
+}
+
+/// AWS SSM in a network profile (ADR-050). It holds no secret: the AWS CLI uses the user's own
+/// credentials.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SsmConfig {
+    /// The managed node: an instance (`i-…`), on-premises (`mi-…`) or ECS target.
+    pub target: String,
+    /// The AWS region; the AWS CLI's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// The AWS CLI profile; its default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The AWS CLI executable; `aws` on the PATH (or in its installer's folder) when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws: Option<String>,
 }
 
 /// A Kubernetes network profile (ADR-050): the settings of `[kubernetes]` in a connection

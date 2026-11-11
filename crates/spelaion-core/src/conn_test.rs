@@ -18,7 +18,8 @@ use spelaion_config::{
 };
 use spelaion_driver_api::{DriverError, Secret};
 use spelaion_ssh::{
-    HostInfo, Interaction, KnownHosts, ProxyFailure, SecretRequest, SshError, Tunnel, TunnelStage,
+    HostInfo, Interaction, KnownHosts, ProxyFailure, SecretRequest, SshError, SsmFailure, Tunnel,
+    TunnelStage,
 };
 
 use crate::Engines;
@@ -48,6 +49,11 @@ pub enum StepKind {
         proxy_type: String,
         host: String,
         port: u16,
+    },
+    /// The network profile's AWS SSM session (ADR-050).
+    Ssm {
+        target: String,
+        region: Option<String>,
     },
     /// An SSH hop (0-based `hop`).
     Hop {
@@ -112,6 +118,8 @@ pub enum FailureKind {
     Tls,
     Timeout,
     Kubernetes,
+    /// AWS SSM could not start: a missing AWS CLI or plugin, credentials, the managed node.
+    Ssm,
     Other,
 }
 
@@ -133,6 +141,7 @@ impl FailureKind {
             FailureKind::Tls => "TLS",
             FailureKind::Timeout => "timeout",
             FailureKind::Kubernetes => "Kubernetes",
+            FailureKind::Ssm => "AWS SSM",
             FailureKind::Other => "error",
         }
     }
@@ -181,6 +190,9 @@ impl FailureKind {
             }
             FailureKind::Kubernetes => {
                 "kubectl could not forward the port: check the context, namespace, resource and port in the Kubernetes tab, and that kubectl works from a terminal."
+            }
+            FailureKind::Ssm => {
+                "AWS SSM could not start the session: check that the AWS CLI v2 and the Session Manager plugin are installed (the message names what is missing), that you are signed in (aws sso login for SSO profiles), and that the target is a managed node you may start sessions on."
             }
             FailureKind::Other => {
                 "See the message. Copy the diagnostics to share them: secrets are left out."
@@ -235,6 +247,10 @@ impl TestStep {
                 hop + 1,
                 if *command { " (through a command)" } else { "" }
             ),
+            StepKind::Ssm { target, region } => match region {
+                Some(region) => format!("AWS SSM session through {target} ({region})"),
+                None => format!("AWS SSM session through {target}"),
+            },
             StepKind::Kubernetes {
                 resource,
                 context,
@@ -470,6 +486,7 @@ struct Plan {
 /// Where a tunnel's proxy and hops are in the list.
 struct TunnelLayout {
     proxy: Option<usize>,
+    ssm: Option<usize>,
     /// The first hop's step; the others follow it.
     first_hop: usize,
     hops: usize,
@@ -488,6 +505,13 @@ impl TunnelLayout {
             });
             steps.len() - 1
         });
+        let ssm = tunnel.ssm.as_ref().map(|ssm| {
+            steps.push(StepKind::Ssm {
+                target: ssm.target.clone(),
+                region: ssm.region.clone(),
+            });
+            steps.len() - 1
+        });
         let first_hop = steps.len();
         for (hop, spec) in tunnel.hops.iter().enumerate() {
             steps.push(StepKind::Hop {
@@ -500,6 +524,7 @@ impl TunnelLayout {
         }
         Self {
             proxy,
+            ssm,
             first_hop,
             hops: tunnel.hops.len(),
         }
@@ -507,12 +532,13 @@ impl TunnelLayout {
 
     /// The first step the tunnel runs.
     fn first(&self) -> usize {
-        self.proxy.unwrap_or(self.first_hop)
+        self.proxy.or(self.ssm).unwrap_or(self.first_hop)
     }
 
     fn step_of(&self, stage: TunnelStage) -> usize {
         match stage {
             TunnelStage::Proxy => self.first(),
+            TunnelStage::Ssm => self.ssm.unwrap_or(self.first()),
             TunnelStage::Hop(hop) => self.first_hop + hop.min(self.hops.saturating_sub(1)),
         }
     }
@@ -700,6 +726,13 @@ pub fn classify_ssh(error: &SshError) -> FailureKind {
         SshError::HostKeyRejected { .. } => FailureKind::HostKeyRejected,
         SshError::Auth { .. } => FailureKind::SshAuth,
         SshError::Cancelled => FailureKind::Cancelled,
+        SshError::Ssm { failure, .. } => match failure {
+            SsmFailure::Timeout => FailureKind::Timeout,
+            SsmFailure::MissingCli
+            | SsmFailure::MissingPlugin
+            | SsmFailure::Invalid
+            | SsmFailure::Exited => FailureKind::Ssm,
+        },
         SshError::Proxy { failure, .. } => match failure {
             ProxyFailure::Unreachable | ProxyFailure::Target => FailureKind::HostUnreachable,
             ProxyFailure::Rejected => FailureKind::ProxyAuth,
@@ -1162,6 +1195,10 @@ impl Redactor {
                 host: text(host),
                 port: *port,
                 command: *command,
+            },
+            StepKind::Ssm { target, region } => StepKind::Ssm {
+                target: text(target),
+                region: region.as_ref().map(text),
             },
             StepKind::Kubernetes {
                 resource,

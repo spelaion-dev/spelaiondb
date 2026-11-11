@@ -428,6 +428,7 @@ fn k8s_draft(source: Source) -> TunnelDraft {
             kubeconfig: String::new(),
             kubectl: "/opt/bin/kubectl".into(),
         }),
+        ssm: None,
     }
 }
 
@@ -566,4 +567,186 @@ fn the_connection_form_keeps_the_profile_and_writes_only_its_own_fields() {
         draft("", "").to_file(&config).is_err(),
         "no resource anywhere"
     );
+}
+
+const SSM: &str = "schema_version = 1\n\n[ssm]\ntarget = \"i-0123456789abcdef0\"\nregion = \"eu-west-1\"\nprofile = \"${user.aws_profile}\"\naws = \"/opt/aws/bin/aws\"\n";
+
+/// AWS SSM in a network profile (ADR-050): alone, or before hops; variables expanded; nothing
+/// of it is a secret.
+#[test]
+fn ssm_profiles_resolve_alone_or_before_hops() {
+    let fx = Fixture::new("ssm-profile");
+    fx.write(
+        "user/user.toml",
+        "schema_version = 1\n[vars]\naws_profile = \"prod-admin\"\n",
+    );
+    fx.write("repo/.spelaion/tunnels/cluster.toml", SSM);
+    fx.write(
+        "repo/.spelaion/connections/rds.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"orders.abc.eu-west-1.rds.amazonaws.com\"\ndatabase = \"app\"\nuser = \"app\"\ntunnel = \"cluster\"\n",
+    );
+    let trust = fx.trusted();
+    let rds = resolve(&fx, &trust, &repo_id("rds")).unwrap();
+    let tunnel = rds.tunnel.expect("an SSM tunnel");
+    assert!(tunnel.hops.is_empty() && tunnel.proxy.is_none());
+    let ssm = tunnel.ssm.expect("ssm");
+    assert_eq!(ssm.target, "i-0123456789abcdef0");
+    assert_eq!(ssm.region.as_deref(), Some("eu-west-1"));
+    assert_eq!(ssm.profile.as_deref(), Some("prod-admin"));
+    assert_eq!(ssm.aws.as_deref(), Some("/opt/aws/bin/aws"));
+    assert_eq!(rds.params.host, "orders.abc.eu-west-1.rds.amazonaws.com");
+
+    // Before hops: SSH over SSM.
+    fx.write(
+        "user/tunnels/ssh-over-ssm.toml",
+        "schema_version = 1\n[ssm]\ntarget = \"i-1\"\n[[hops]]\nhost = \"localhost\"\nuser = \"ec2-user\"\n",
+    );
+    fx.write(
+        "user/connections/via-hop.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"a\"\nuser = \"a\"\ntunnel = \"ssh-over-ssm\"\n",
+    );
+    let via = resolve(&fx, &trust, &user_id("via-hop")).unwrap();
+    let tunnel = via.tunnel.unwrap();
+    assert_eq!(tunnel.hops.len(), 1);
+    assert_eq!(tunnel.ssm.unwrap().region, None);
+}
+
+#[test]
+fn ssm_profiles_refuse_what_cannot_go_with_them() {
+    let fx = Fixture::new("ssm-invalid");
+    for body in [
+        // SSM and a proxy both before the first hop.
+        "[ssm]\ntarget = \"i-1\"\n[proxy]\ntype = \"socks5\"\nhost = \"p\"\nport = 1080\n",
+        // The first hop's command already is the way to it.
+        "[ssm]\ntarget = \"i-1\"\n[[hops]]\nhost = \"h\"\nuser = \"u\"\ncommand = \"nc %h %p\"\n",
+        // Kubernetes has no SSM.
+        "[ssm]\ntarget = \"i-1\"\n[kubernetes]\nresource = \"svc/a\"\n",
+        // Empty or hidden values.
+        "[ssm]\ntarget = \" \"\n",
+        "[ssm]\ntarget = \"i-1\"\nregion = \"\"\n",
+        "[ssm]\ntarget = \"i-1\u{202E}\"\n",
+        "[ssm]\ntarget = \"i-1\"\naws = \"aws\u{200B}\"\n",
+        // Unknown keys are refused, as everywhere.
+        "[ssm]\ntarget = \"i-1\"\ndocument = \"AWS-StartInteractiveCommand\"\n",
+    ] {
+        fx.write(
+            "user/tunnels/bad.toml",
+            &format!("schema_version = 1\n{body}"),
+        );
+        assert_eq!(fx.config().problems.len(), 1, "{body}");
+    }
+}
+
+/// The `[ssm]` table is pinned with the rest of the file (ADR-022): a pull that changes which
+/// node, account, region or program is used, or adds SSM to an SSH profile, is reviewed first.
+#[test]
+fn a_changed_repository_ssm_profile_waits_for_review() {
+    let fx = Fixture::new("ssm-trust");
+    fx.write(
+        "user/user.toml",
+        "schema_version = 1\n[vars]\naws_profile = \"prod-admin\"\n",
+    );
+    fx.write("repo/.spelaion/tunnels/cluster.toml", SSM);
+    fx.write(
+        "repo/.spelaion/connections/rds.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"app\"\nuser = \"app\"\ntunnel = \"cluster\"\n",
+    );
+    let trust = fx.trusted();
+    resolve(&fx, &trust, &repo_id("rds")).unwrap();
+    for (field, changed) in [
+        (
+            "ssm.target",
+            SSM.replace("i-0123456789abcdef0", "i-0fffffffffffffff0"),
+        ),
+        ("ssm.region", SSM.replace("eu-west-1", "us-east-1")),
+        ("ssm.profile", SSM.replace("${user.aws_profile}", "other")),
+        ("ssm.aws", SSM.replace("/opt/aws/bin/aws", "./evil")),
+        ("ssm.aws", SSM.replace("aws = \"/opt/aws/bin/aws\"\n", "")),
+        (
+            "hops.0.host",
+            format!("{SSM}[[hops]]\nhost = \"attacker\"\nuser = \"u\"\n"),
+        ),
+    ] {
+        fx.write("repo/.spelaion/tunnels/cluster.toml", &changed);
+        match resolve_loaded(&fx, &trust, &repo_id("rds")) {
+            Err(ResolveError::Changed { change, .. }) => assert!(
+                change.fields.iter().any(|f| f.field == field),
+                "{field}: {:?}",
+                change.fields
+            ),
+            other => panic!("{field}: {:?}", other.map(|r| r.tunnel.map(|t| t.ssm))),
+        }
+    }
+    // An SSH profile that gains SSM in front of its hops.
+    fx.write(
+        "repo/.spelaion/tunnels/cluster.toml",
+        "schema_version = 1\n[[hops]]\nhost = \"bastion\"\nuser = \"ops\"\n",
+    );
+    let trust = fx.trusted();
+    resolve(&fx, &trust, &repo_id("rds")).unwrap();
+    fx.write(
+        "repo/.spelaion/tunnels/cluster.toml",
+        "schema_version = 1\n[ssm]\ntarget = \"i-1\"\naws = \"./evil\"\n[[hops]]\nhost = \"bastion\"\nuser = \"ops\"\n",
+    );
+    assert!(matches!(
+        resolve_loaded(&fx, &trust, &repo_id("rds")),
+        Err(ResolveError::Changed { .. })
+    ));
+}
+
+#[test]
+fn ssm_profiles_are_written_from_the_editor() {
+    let fx = Fixture::new("ssm-draft");
+    let backend = FakeBackend::default();
+    let draft = TunnelDraft {
+        source: Source::User,
+        name: "AWS route".into(),
+        hops: Vec::new(),
+        options: TunnelDraftOptions::default(),
+        proxy: None,
+        ssm: Some(spelaion_config::SsmDraft {
+            target: " i-0123456789abcdef0 ".into(),
+            region: "eu-west-1".into(),
+            profile: String::new(),
+            aws: String::new(),
+        }),
+        kubernetes: None,
+    };
+    add_tunnel(&fx.config(), &draft, &TunnelPasswords::default(), &backend).unwrap();
+    let written = fx.read("user/tunnels/aws-route.toml");
+    assert!(
+        written.contains("[ssm]") && written.contains("target = \"i-0123456789abcdef0\""),
+        "{written}"
+    );
+    assert!(
+        !written.contains("profile") && !written.contains("aws ="),
+        "{written}"
+    );
+    let config = fx.config();
+    let entry = config
+        .tunnels
+        .iter()
+        .find(|t| t.name == "aws-route")
+        .unwrap();
+    let mut back = TunnelDraft::from_entry(entry);
+    assert_eq!(back.ssm.as_ref().unwrap().region, "eu-west-1");
+    back.ssm.as_mut().unwrap().profile = "prod".into();
+    update_tunnel(
+        &config,
+        Source::User,
+        "aws-route",
+        &back,
+        &TunnelPasswords::default(),
+        &backend,
+    )
+    .unwrap();
+    assert!(
+        fx.read("user/tunnels/aws-route.toml")
+            .contains("profile = \"prod\"")
+    );
+    // An empty target is refused with what it should be.
+    let mut empty = draft.clone();
+    empty.ssm.as_mut().unwrap().target = " ".into();
+    let error = empty.to_file(&fx.config()).unwrap_err().message;
+    assert!(error.contains("managed node"), "{error}");
 }

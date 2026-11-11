@@ -505,7 +505,9 @@ function NetworkProfiles() {
       {profiles && profiles.length > 0 && (
         <ul className="profile-list">
           {profiles.map((profile) => {
-            const route = profile.kubernetes ? `Kubernetes: ${profile.kubernetes}` : [...(profile.proxy ? [profile.proxy] : []), ...profile.hops].join(" → ");
+            const route = profile.kubernetes
+              ? `Kubernetes: ${profile.kubernetes}`
+              : [...(profile.proxy ? [profile.proxy] : []), ...(profile.ssm ? [`AWS SSM ${profile.ssm}`] : []), ...profile.hops].join(" → ");
             return (
               <li key={`${profile.personal}:${profile.name}`} className="profile-row" aria-label={profile.name}>
                 <div className="grow">

@@ -2349,7 +2349,7 @@ export type ExportedFileItem = {
 	summary: ExportSummaryItem,
 };
 
-export type FailureKindItem = "config" | "passwordRequired" | "keychainEmpty" | "cancelled" | "proxyAuth" | "sshAuth" | "hostUnreachable" | "hostKeyChanged" | "hostKeyRejected" | "dbAuth" | "dbNotFound" | "tls" | "timeout" | "kubernetes" | "other";
+export type FailureKindItem = "config" | "passwordRequired" | "keychainEmpty" | "cancelled" | "proxyAuth" | "sshAuth" | "hostUnreachable" | "hostKeyChanged" | "hostKeyRejected" | "dbAuth" | "dbNotFound" | "tls" | "timeout" | "kubernetes" | "ssm" | "other";
 
 /**
  *  One field of a changed repository item. Repository files hold secret references, never
@@ -3277,6 +3277,8 @@ export type NetworkProfileItem_Deserialize = {
 	proxy?: string | null,
 	/**  `user@host:port` per hop, in order. */
 	hops: string[],
+	/**  AWS SSM (ADR-050): `target (region, profile)`, before the hops. */
+	ssm?: string | null,
 	/**
 	 *  A Kubernetes profile (ADR-050): `context / namespace / resource`, with `…` where the
 	 *  profile leaves it out.
@@ -3297,6 +3299,8 @@ export type NetworkProfileItem_Serialize = {
 	proxy: string | null,
 	/**  `user@host:port` per hop, in order. */
 	hops: string[],
+	/**  AWS SSM (ADR-050): `target (region, profile)`, before the hops. */
+	ssm: string | null,
 	/**
 	 *  A Kubernetes profile (ADR-050): `context / namespace / resource`, with `…` where the
 	 *  profile leaves it out.
@@ -4686,6 +4690,17 @@ export type SqlTemplateItem = "preview" | "select" | "selectByKey" | "selectIn" 
 
 export type SshAuthItem = "agent" | "key" | "password" | "keyboard-interactive";
 
+/**
+ *  The AWS SSM section of the network profile editor (ADR-050); empty fields mean the AWS
+ *  CLI's defaults. It holds no secret.
+ */
+export type SsmDraftItem = {
+	target: string,
+	region: string,
+	profile: string,
+	aws: string,
+};
+
 /**  Whether a statistic could be computed. */
 export type StatStateItem = { kind: "done" } | 
 /**  The column's type has no such number (booleans have no minimum). */
@@ -4897,11 +4912,11 @@ export type TestStepKindItem = TestStepKindItem_Serialize | TestStepKindItem_Des
 
 export type TestStepKindItem_Deserialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
 /**  `hop` counts from 1. */
-{ kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context?: string | null; namespace?: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
+{ kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context?: string | null; namespace?: string | null } | { kind: "ssm"; target: string; region?: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
 
 export type TestStepKindItem_Serialize = { kind: "resolve" } | { kind: "proxy"; proxyType: string; host: string; port: number } | 
 /**  `hop` counts from 1. */
-{ kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context: string | null; namespace: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
+{ kind: "hop"; hop: number; user: string; host: string; port: number; command: boolean } | { kind: "kubernetes"; resource: string; context: string | null; namespace: string | null } | { kind: "ssm"; target: string; region: string | null } | { kind: "target"; host: string; port: number } | { kind: "database"; engine: string; database: string; user: string; file: boolean };
 
 export type TestStepStatusItem = "pending" | "running" | "ok" | "failed" | "skipped" | "stopped";
 
@@ -5065,6 +5080,8 @@ export type TunnelDraftItem_Deserialize = {
 	connectTimeout?: number | null,
 	/**  A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027). */
 	proxy?: ProxyDraftItem_Deserialize | null,
+	/**  AWS SSM in front of the first hop, or instead of hops (ADR-050). */
+	ssm?: SsmDraftItem | null,
 	/**  A Kubernetes profile (ADR-050): then no hops, proxy or SSH settings are saved. */
 	kubernetes?: KubernetesDraftItem | null,
 };
@@ -5081,6 +5098,8 @@ export type TunnelDraftItem_Serialize = {
 	connectTimeout: number | null,
 	/**  A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027). */
 	proxy: ProxyDraftItem_Serialize | null,
+	/**  AWS SSM in front of the first hop, or instead of hops (ADR-050). */
+	ssm: SsmDraftItem | null,
 	/**  A Kubernetes profile (ADR-050): then no hops, proxy or SSH settings are saved. */
 	kubernetes: KubernetesDraftItem | null,
 };

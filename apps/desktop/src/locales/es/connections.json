@@ -164,7 +164,9 @@
       "target": "Llegar a {{host}}:{{port}}",
       "database": "Iniciar sesión en la base de datos {{database}} de {{engine}} como {{user}}",
       "databaseNoName": "Iniciar sesión en {{engine}} como {{user}}",
-      "file": "Abrir el archivo de {{engine}} {{database}}"
+      "file": "Abrir el archivo de {{engine}} {{database}}",
+      "ssm": "Sesión de AWS SSM a través de {{target}}",
+      "ssmRegion": "Sesión de AWS SSM a través de {{target}} ({{region}})"
     },
     "kinds": {
       "config": "Configuración",
@@ -181,7 +183,8 @@
       "tls": "TLS",
       "timeout": "Tiempo agotado",
       "kubernetes": "Kubernetes",
-      "other": "Error"
+      "other": "Error",
+      "ssm": "AWS SSM"
     },
     "hints": {
       "config": "No se pudo leer la conexión o su perfil de red: corrige lo que indica el mensaje (una variable, una referencia a un secreto, la ruta de un archivo).",
@@ -198,7 +201,8 @@
       "tls": "Falló la conexión cifrada: revisa el modo SSL/TLS, el certificado de la autoridad y que el nombre del servidor coincida con su certificado (a través de un túnel se sigue comprobando el nombre real del servidor).",
       "timeout": "No hubo respuesta a tiempo: puede que el servidor esté caído o que un cortafuegos descarte los paquetes. Revisa la dirección, o sube el tiempo máximo de conexión si la red solo es lenta.",
       "kubernetes": "kubectl no pudo redirigir el puerto: revisa el contexto, el espacio de nombres, el recurso y el puerto en la pestaña Kubernetes, y que kubectl funcione desde un terminal.",
-      "other": "Mira el mensaje. Copia el diagnóstico para compartirlo: no incluye secretos."
+      "other": "Mira el mensaje. Copia el diagnóstico para compartirlo: no incluye secretos.",
+      "ssm": "AWS SSM no pudo iniciar la sesión: comprueba que la AWS CLI v2 y el plugin de Session Manager están instalados (el mensaje dice qué falta), que has iniciado sesión (aws sso login con perfiles SSO) y que el destino es un nodo administrado en el que puedes abrir sesiones."
     }
   },
   "browse": "Examinar…",
@@ -320,7 +324,18 @@
     "confirmDelete": "Pulsa otra vez para borrar",
     "route": "Ruta",
     "routeSsh": "Saltos SSH y proxy",
-    "routeKubernetes": "Kubernetes"
+    "routeKubernetes": "Kubernetes",
+    "routeSsm": "AWS SSM",
+    "ssm": "AWS SSM Session Manager",
+    "ssmTarget": "Nodo administrado",
+    "ssmRegion": "Región",
+    "ssmRegionPlaceholder": "La predeterminada de la AWS CLI",
+    "ssmProfile": "Perfil de AWS",
+    "ssmProfilePlaceholder": "El predeterminado de la AWS CLI",
+    "ssmAws": "Programa de la AWS CLI",
+    "ssmHint": "SpelaionDB ejecuta aws ssm start-session con tus credenciales de AWS (inicia sesión antes, por ejemplo con aws sso login). Necesita la AWS CLI v2 y el plugin de Session Manager. Sin saltos, el host de la conexión se alcanza desde el nodo administrado: localhost es el propio nodo, y cualquier otro host (un endpoint de RDS) se alcanza a través de él.",
+    "ssmHopsHint": "Los saltos después de AWS SSM se alcanzan por su sesión: el primero es un host al que llega el nodo administrado (o localhost, el propio nodo).",
+    "okSsm": "AWS SSM está listo"
   },
   "newDatabase": "Nueva base de datos…",
   "url": {

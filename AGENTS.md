@@ -129,6 +129,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   SOCKS5 or HTTP proxy (`proxy.rs`, ADR-027): its first hop, or the database itself with no
   hops; tests against `testing/docker/proxy` with `SPELAION_TEST_SOCKS=127.0.0.1:11080` and
   `SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128`.
+  AWS SSM (ADR-050) is a tunnel file's `[ssm]` table: `ssm.rs` runs `aws ssm start-session` with
+  an argument list (values checked, options as `--name=value`) and stops the CLI and its plugin
+  together; `tunnel.rs` uses it like the proxy. Its tests run the stand-in
+  `tests/support/fake_aws.rs` (the `spelaion-test-fake-aws` binary); a real AWS account is only
+  tested by hand.
   Kubernetes (ADR-015) is a connection's `[kubernetes]` section, or a tunnel file's (a
   Kubernetes network profile, ADR-050: the resolver merges the two, each setting from one
   place, into the connection's `ResolvedKubernetes`):

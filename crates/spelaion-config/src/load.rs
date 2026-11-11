@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use crate::error::ConfigError;
 use crate::model::{
     ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, KubernetesProfileConfig,
-    SCHEMA_VERSION, SessionConfig, TunnelFile, UserFile,
+    SCHEMA_VERSION, SessionConfig, SsmConfig, TunnelFile, UserFile,
 };
 
 /// Configuration directory inside a repository.
@@ -611,11 +611,14 @@ pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFil
         check_kubernetes_profile(&file, kubernetes).map_err(|m| ConfigError::new(path, m))?;
         return Ok(file);
     }
-    if file.hops.is_empty() && file.proxy.is_none() {
+    if file.hops.is_empty() && file.proxy.is_none() && file.ssm.is_none() {
         return Err(ConfigError::new(
             path,
-            "a tunnel needs at least one hop in [[hops]], a [proxy] or [kubernetes]",
+            "a tunnel needs at least one hop in [[hops]], a [proxy], [ssm] or [kubernetes]",
         ));
+    }
+    if let Some(ssm) = &file.ssm {
+        check_ssm(&file, ssm).map_err(|m| ConfigError::new(path, m))?;
     }
     if let Some(proxy) = &file.proxy {
         if proxy.host.trim().is_empty() {
@@ -820,15 +823,49 @@ fn check_tags(tags: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// AWS SSM in a network profile (ADR-050): never with a proxy or a first hop command (each is
+/// already the way to the first hop), and only plain values. Whether a value can be passed to
+/// the AWS CLI is checked again by `spelaion-ssh` before it runs.
+fn check_ssm(file: &TunnelFile, ssm: &SsmConfig) -> Result<(), String> {
+    if file.proxy.is_some() {
+        return Err("AWS SSM and a [proxy] cannot both lead to the first hop: keep one".into());
+    }
+    if file.hops.first().is_some_and(|hop| hop.command.is_some()) {
+        return Err(
+            "the first hop's command already is the way to it: it cannot go through AWS SSM too"
+                .into(),
+        );
+    }
+    if ssm.target.trim().is_empty() {
+        return Err("ssm.target needs the managed node (i-…, mi-… or an ECS target)".into());
+    }
+    for (name, value) in [
+        ("target", Some(&ssm.target)),
+        ("region", ssm.region.as_ref()),
+        ("profile", ssm.profile.as_ref()),
+        ("aws", ssm.aws.as_ref()),
+    ] {
+        if let Some(value) = value {
+            if value.trim().is_empty() {
+                return Err(format!("ssm.{name} is empty: leave it out instead"));
+            }
+            if value.chars().any(is_hidden_char) {
+                return Err(format!("ssm.{name} has hidden characters"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A Kubernetes network profile (ADR-050): the cluster alone, never with hops, a proxy or the
 /// SSH settings, and with a valid resource when it names one.
 fn check_kubernetes_profile(
     file: &TunnelFile,
     kubernetes: &KubernetesProfileConfig,
 ) -> Result<(), String> {
-    if !file.hops.is_empty() || file.proxy.is_some() {
+    if !file.hops.is_empty() || file.proxy.is_some() || file.ssm.is_some() {
         return Err(
-            "a Kubernetes profile reaches the database through kubectl: it has no [[hops]] or [proxy]"
+            "a Kubernetes profile reaches the database through kubectl: it has no [[hops]], [proxy] or [ssm]"
                 .into(),
         );
     }

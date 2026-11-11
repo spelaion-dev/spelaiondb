@@ -16,9 +16,10 @@ use tokio::task::JoinHandle;
 
 use crate::auth::authenticate;
 use crate::hostkeys::{self, KnownHosts};
+use crate::ssm::SsmSession;
 use crate::{
-    HopSpec, Interaction, LocalPort, ProxySpec, SecretRequest, SshError, Target, TunnelSpec,
-    TunnelStage,
+    HopSpec, Interaction, LocalPort, ProxySpec, SecretRequest, SshError, SsmSpec, Target,
+    TunnelSpec, TunnelStage,
 };
 
 /// A command running on a tunnel's last hop ([`Tunnel::exec`]).
@@ -116,6 +117,11 @@ pub struct Tunnel {
     /// A tunnel without hops: the proxy reaches the targets (ADR-027), its password already
     /// asked if it needed one.
     proxy_only: Option<(Arc<ProxySpec>, Duration)>,
+    /// A tunnel without hops: AWS SSM reaches the targets, one session per target (ADR-050).
+    ssm_only: Option<(Arc<SsmSpec>, Duration)>,
+    /// The AWS SSM sessions it started (to the first hop, or to each target), and where each
+    /// leads. Stopped with the tunnel.
+    ssm_sessions: Mutex<Vec<(Target, SsmSession)>>,
     /// Local ports and the target each leads to. Usually one per target; a connection that
     /// asks for a fixed port may add another.
     forwards: Mutex<Vec<(Target, SocketAddr, JoinHandle<()>)>>,
@@ -155,8 +161,23 @@ impl Tunnel {
         ui: Arc<dyn Interaction>,
         observe: &(dyn Fn(TunnelStage) + Send + Sync),
     ) -> Result<Tunnel, SshError> {
-        if spec.hops.is_empty() && spec.proxy.is_none() {
+        if spec.hops.is_empty() && spec.proxy.is_none() && spec.ssm.is_none() {
             return Err(SshError::Other("the tunnel has no hops".into()));
+        }
+        if spec.ssm.is_some() && spec.proxy.is_some() {
+            return Err(SshError::Other(
+                "AWS SSM and a proxy cannot both lead to the first hop".into(),
+            ));
+        }
+        if spec.ssm.is_some() && spec.hops.first().is_some_and(|h| h.command.is_some()) {
+            return Err(SshError::Other(
+                "the first hop's command already is the way to it: it cannot go through AWS SSM too"
+                    .into(),
+            ));
+        }
+        if spec.hops.is_empty() && spec.ssm.is_some() {
+            observe(TunnelStage::Ssm);
+            return Self::ssm_only(spec);
         }
         if spec.proxy.is_some() && spec.hops.first().is_some_and(|h| h.command.is_some()) {
             return Err(SshError::Other(
@@ -202,10 +223,31 @@ impl Tunnel {
         }));
         let mut sessions: Vec<Arc<Handle<HopHandler>>> = Vec::new();
         let mut child = None;
+        // AWS SSM to the first hop (ADR-050): its session leads there from a local port.
+        let mut ssm_sessions = Vec::new();
+        let mut ssm_first: Option<SocketAddr> = None;
+        if let (Some(ssm), Some(first)) = (&spec.ssm, spec.hops.first()) {
+            observe(TunnelStage::Ssm);
+            let to = Target {
+                host: first.host.clone(),
+                port: first.port,
+            };
+            let down = state.clone();
+            let session = SsmSession::start(
+                ssm,
+                &to.host,
+                to.port,
+                spec.options.connect_timeout,
+                move |reason| ssm_ended(&down, reason),
+            )
+            .await?;
+            ssm_first = Some(session.local);
+            ssm_sessions.push((to, session));
+        }
 
         for (hop, hop_spec) in spec.hops.iter().enumerate() {
             // The first hop behind a proxy starts once the proxy has let us through.
-            if hop > 0 || proxy.is_none() {
+            if hop > 0 || proxy.is_none() || ssm_first.is_some() {
                 observe(TunnelStage::Hop(hop));
             }
             let outcome = Arc::new(Mutex::new(None));
@@ -257,13 +299,20 @@ impl Tunnel {
                                 .await
                                 .map_err(|e| e.to_string()))
                         }
-                        None => Ok(client::connect(
-                            config.clone(),
-                            (hop_spec.host.as_str(), hop_spec.port),
-                            handler,
-                        )
-                        .await
-                        .map_err(|e| e.to_string())),
+                        None => match ssm_first {
+                            // Through the AWS SSM session's local end; the host key is still
+                            // checked against the hop's own name (ADR-050).
+                            Some(local) => Ok(client::connect(config.clone(), local, handler)
+                                .await
+                                .map_err(|e| e.to_string())),
+                            None => Ok(client::connect(
+                                config.clone(),
+                                (hop_spec.host.as_str(), hop_spec.port),
+                                handler,
+                            )
+                            .await
+                            .map_err(|e| e.to_string())),
+                        },
                     },
                     (Some(previous), _) => Ok(
                         match previous
@@ -320,6 +369,8 @@ impl Tunnel {
             state,
             sessions,
             proxy_only: None,
+            ssm_only: None,
+            ssm_sessions: Mutex::new(ssm_sessions),
             forwards: Mutex::new(Vec::new()),
             forward_gate: Semaphore::new(1),
             primary: std::sync::OnceLock::new(),
@@ -347,11 +398,63 @@ impl Tunnel {
             state: Arc::new(watch::Sender::new(TunnelState::Up)),
             sessions: Vec::new(),
             proxy_only: Some((Arc::new(proxy), timeout)),
+            ssm_only: None,
+            ssm_sessions: Mutex::new(Vec::new()),
             forwards: Mutex::new(Vec::new()),
             forward_gate: Semaphore::new(1),
             primary: std::sync::OnceLock::new(),
             child: Mutex::new(None),
         })
+    }
+
+    /// A tunnel that is only AWS SSM (ADR-050): each target gets its own session when it is
+    /// first forwarded or probed. The tools and the profile's values are checked now, so what
+    /// is missing shows here rather than in the driver.
+    fn ssm_only(spec: &TunnelSpec) -> Result<Tunnel, SshError> {
+        let ssm = spec.ssm.clone().expect("an SSM-only tunnel has SSM");
+        crate::ssm::find_tools(&ssm)?;
+        crate::ssm::ssm_arguments(&ssm, "localhost", 1, 1)?;
+        Ok(Tunnel {
+            state: Arc::new(watch::Sender::new(TunnelState::Up)),
+            sessions: Vec::new(),
+            proxy_only: None,
+            ssm_only: Some((Arc::new(ssm), spec.options.connect_timeout)),
+            ssm_sessions: Mutex::new(Vec::new()),
+            forwards: Mutex::new(Vec::new()),
+            forward_gate: Semaphore::new(1),
+            primary: std::sync::OnceLock::new(),
+            child: Mutex::new(None),
+        })
+    }
+
+    /// The local end of this SSM-only tunnel's session to `target`, starting it the first time.
+    async fn ssm_session(
+        &self,
+        ssm: &SsmSpec,
+        timeout: Duration,
+        target: &Target,
+    ) -> Result<SocketAddr, SshError> {
+        if let Some(local) = self
+            .ssm_sessions
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .find(|(t, _)| t == target)
+            .map(|(_, s)| s.local)
+        {
+            return Ok(local);
+        }
+        let down = self.state.clone();
+        let session = SsmSession::start(ssm, &target.host, target.port, timeout, move |reason| {
+            ssm_ended(&down, reason)
+        })
+        .await?;
+        let local = session.local;
+        self.ssm_sessions
+            .lock()
+            .expect("lock poisoned")
+            .push((target.clone(), session));
+        Ok(local)
     }
 
     /// Runs `command` on the last hop, in an SSH session channel of its own, for programs
@@ -424,6 +527,16 @@ the server refused to run a command (it may allow only port forwarding)
             message,
             timed_out,
         };
+        if let Some((ssm, start)) = &self.ssm_only {
+            // The session itself is the check: AWS accepted it and the node forwards.
+            let local = self.ssm_session(ssm, *start, target).await?;
+            return match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(local)).await
+            {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(e)) => Err(failed(e.to_string(), false)),
+                Err(_) => Err(failed(format!("no answer in {}", seconds(timeout)), true)),
+            };
+        }
         match (&self.proxy_only, self.sessions.last()) {
             (Some((proxy, _)), _) => {
                 // Its password was asked when the tunnel opened.
@@ -480,10 +593,13 @@ the server refused to run a command (it may allow only port forwarding)
         let addr = listener
             .local_addr()
             .map_err(|e| SshError::Other(e.to_string()))?;
-        let route = match (&self.proxy_only, self.sessions.last()) {
-            (Some((proxy, timeout)), _) => Route::Proxy(proxy.clone(), *timeout),
-            (None, Some(last)) => Route::Ssh(last.clone()),
-            (None, None) => return Err(SshError::Other("the tunnel has no hops".into())),
+        let route = match (&self.ssm_only, &self.proxy_only, self.sessions.last()) {
+            (Some((ssm, timeout)), _, _) => {
+                Route::Local(self.ssm_session(ssm, *timeout, &target).await?)
+            }
+            (None, Some((proxy, timeout)), _) => Route::Proxy(proxy.clone(), *timeout),
+            (None, None, Some(last)) => Route::Ssh(last.clone()),
+            (None, None, None) => return Err(SshError::Other("the tunnel has no hops".into())),
         };
         // A proxy-only HTTP profile cannot authenticate until CONNECT has a target. Check it
         // here, where its error can reach the caller, rather than losing it in the relay task.
@@ -545,6 +661,15 @@ the server refused to run a command (it may allow only port forwarding)
         if let Some(mut child) = child {
             let _ = child.kill().await;
         }
+        let ssm: Vec<(Target, SsmSession)> = self
+            .ssm_sessions
+            .lock()
+            .expect("lock poisoned")
+            .drain(..)
+            .collect();
+        for (_, mut session) in ssm {
+            session.close().await;
+        }
     }
 
     fn abort_forwards(&self) {
@@ -600,6 +725,8 @@ enum Route {
     Ssh(Arc<Handle<HopHandler>>),
     /// Through the proxy alone (ADR-027).
     Proxy(Arc<ProxySpec>, Duration),
+    /// To a local port that leads there: an AWS SSM session's (ADR-050).
+    Local(SocketAddr),
 }
 
 async fn forward(
@@ -635,6 +762,11 @@ async fn forward(
                         let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
                     }
                 }
+                Route::Local(local) => {
+                    if let Ok(mut stream) = tokio::net::TcpStream::connect(local).await {
+                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                    }
+                }
                 Route::Proxy(proxy, timeout) => {
                     // The password was asked when the tunnel opened: nothing to ask here.
                     let ui: Arc<dyn Interaction> = Arc::new(crate::NonInteractive);
@@ -648,6 +780,20 @@ async fn forward(
             // If the target refuses the connection, the local one is closed and the driver sees the error.
         });
     }
+}
+
+/// An SSM session that ended on its own takes the tunnel down with the AWS CLI's message; it
+/// is never restarted (ADR-007).
+fn ssm_ended(state: &watch::Sender<TunnelState>, reason: String) {
+    state.send_if_modified(|current| match current {
+        TunnelState::Up => {
+            *current = TunnelState::Down {
+                reason: format!("the AWS SSM session ended: {reason}"),
+            };
+            true
+        }
+        TunnelState::Down { .. } => false,
+    });
 }
 
 /// `15 s`, or `1.5 s` for a fraction.

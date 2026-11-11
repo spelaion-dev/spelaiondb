@@ -1081,6 +1081,7 @@ async fn proxy_password_prompt_is_not_subject_to_connect_timeout() {
             connect_timeout: Duration::from_secs(1),
             ..Default::default()
         },
+        ssm: None,
     };
     let tunnel = Tunnel::connect(&spec, &known.known(), Arc::new(SlowProxyPassword))
         .await
