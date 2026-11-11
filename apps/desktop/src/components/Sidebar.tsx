@@ -49,7 +49,8 @@ import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from ".
 import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
-import { backupFamily, useBackup } from "./BackupDialog";
+import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
+import { useRunFile } from "./RunFileDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
 import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard } from "../connectionCopies";
 import { isTextField, useFocusedPaste } from "../focusedPaste";
@@ -1908,9 +1909,11 @@ function ConnectionNode({
             backup: backupFamily(connection.engine)
               ? () => openBackup(connection, session, "backup")
               : undefined,
-            restore: backupFamily(connection.engine)
-              ? () => openBackup(connection, session, "restore")
-              : undefined,
+            restore: (() => {
+              const family = backupFamily(connection.engine);
+              return family && familyRestores(family) ? () => openBackup(connection, session, "restore") : undefined;
+            })(),
+            runFile: () => useRunFile.getState().open({ session, connectionName: connection.name }),
             duplicate,
             copy,
             paste: () => {

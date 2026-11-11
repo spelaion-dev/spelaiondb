@@ -95,6 +95,22 @@ export const commands = {
 	runRestore: (session: string, runId: number, request: RestoreRequestItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<RestoreOutcome, string>(__TAURI_INVOKE("run_restore", { session, runId, request, confirmed, onEvent })),
 	/**  Stops a running backup or restore: the tool is killed and a partial backup removed. */
 	cancelBackup: (runId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_backup", { runId })),
+	/**  The file (SQLite) or folder (DuckDB) a copy will be. */
+	previewEmbeddedBackup: (session: string, request: EmbeddedBackupItem) => typedError<string, string>(__TAURI_INVOKE("preview_embedded_backup", { session, request })),
+	/**  Copies a SQLite database with `VACUUM INTO`, or exports a DuckDB one, in a session of its own. */
+	runEmbeddedBackup: (session: string, runId: number, request: EmbeddedBackupItem, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<BackupOutcome, string>(__TAURI_INVOKE("run_embedded_backup", { session, runId, request, onEvent })),
+	/**
+	 *  Loads a DuckDB export folder into the connection's database. The core refuses a read-only
+	 *  connection and an unconfirmed import.
+	 */
+	runDuckdbImport: (session: string, runId: number, folder: string, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<RestoreOutcome, string>(__TAURI_INVOKE("run_duckdb_import", { session, runId, folder, confirmed, onEvent })),
+	/**  Reads an `.sql` file and counts its statements and what the guard would ask about. */
+	planSqlFile: (session: string, path: string) => typedError<FilePlanItem, string>(__TAURI_INVOKE("plan_sql_file", { session, path })),
+	/**
+	 *  Runs an `.sql` file in a session of its own, statement by statement. The core refuses a
+	 *  read-only connection and an unconfirmed run.
+	 */
+	runSqlFile: (session: string, runId: number, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<FileRunOutcome, string>(__TAURI_INVOKE("run_sql_file", { session, runId, path, onError, confirmed, onEvent })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -1984,6 +2000,8 @@ export type Dimensions = "xy" | "xyz" | "xym" | "xyzm";
 /**  A constraint a structure form drops, by its name in the catalog. */
 export type DroppedConstraintItem = { kind: "constraint"; name: string } | { kind: "foreignKey"; name: string };
 
+export type DuckdbFormatItem = "parquet" | "csv";
+
 export type DumpContentItem = "schemaAndData" | "schemaOnly" | "dataOnly";
 
 /**  A connection made by "Duplicate" (ADR-030). */
@@ -2097,6 +2115,13 @@ export type EditorPreferencesItem = {
 	keywordCase: string,
 	indent: number,
 	commaPosition: string,
+};
+
+export type EmbeddedBackupItem = {
+	folder: string,
+	namePattern: string,
+	/**  DuckDB only. */
+	duckdbFormat: DuckdbFormatItem,
 };
 
 /**
@@ -2359,6 +2384,22 @@ export type FileFormatItem = {
 	encoding: FileEncodingItem,
 	lineEnding: LineEndingItem,
 };
+
+/**  What the confirmation of a file run shows. */
+export type FilePlanItem = {
+	bytes: number | null,
+	statements: number | null,
+	risks: FileRiskItem[],
+	/**  The connection is read-only: the core will refuse the run. */
+	readOnly: boolean,
+};
+
+export type FileRiskItem = {
+	risk: RiskKind,
+	count: number | null,
+};
+
+export type FileRunOutcome = { kind: "done"; done: number | null; failed: number | null; total: number | null; millis: number | null } | { kind: "needsConfirmation" } | { kind: "cancelled" } | { kind: "failed"; message: string };
 
 /**  What "Hide" and "Show only" in the explorer do with one name. */
 export type FilterActionItem = "hide" | "showOnly";

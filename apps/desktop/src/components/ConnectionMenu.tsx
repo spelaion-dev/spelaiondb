@@ -18,6 +18,8 @@ export interface ConnectionMenuActions {
   /** Absent when the engine's backups have no client tool (ADR-049). */
   backup?: () => void;
   restore?: () => void;
+  /** Runs an .sql file through a session of its own (ADR-049). */
+  runFile?: () => void;
   duplicate(): void;
   copy(): void;
   paste(): void;
@@ -128,6 +130,13 @@ export function ConnectionMenu({
           {/* Backup and restore with the engine's own tools, through the tunnel (ADR-049). */}
           {item(t("editor:backup.menu"), actions.backup)}
           {actions.restore && item(t("editor:restoreDb.menu"), actions.restore)}
+          {actions.runFile && item(t("editor:runFile.menu"), actions.runFile)}
+        </>
+      )}
+      {connected && !actions.backup && actions.runFile && (
+        <>
+          <hr />
+          {item(t("editor:runFile.menu"), actions.runFile)}
         </>
       )}
       <hr />

@@ -1197,7 +1197,14 @@
     "cancel": "Cancel backup",
     "close": "Close",
     "start": "Back up",
-    "again": "Back up again"
+    "again": "Back up again",
+    "introSqlite": "SQLite copies the whole database into a new file with VACUUM INTO, in a session of its own. Read-only connections can make one too.",
+    "introDuckdb": "DuckDB exports the database to a folder with EXPORT DATABASE: its schema, and every table as Parquet or CSV files. Import it with Restore….",
+    "duckdbFormat": "Table files",
+    "duckdbFormats": {
+      "parquet": "Parquet",
+      "csv": "CSV"
+    }
   },
   "restoreDb": {
     "menu": "Restore…",
@@ -1239,6 +1246,54 @@
     "confirmClean": "Objects in the backup are dropped first: their current data is lost.",
     "readOnly": "This connection is read-only: restoring writes to the database.",
     "keep": "Cancel",
-    "confirm": "Restore"
+    "confirm": "Restore",
+    "introDuckdb": "DuckDB loads a folder made by its EXPORT DATABASE with IMPORT DATABASE. Importing writes to the database.",
+    "duckdbExport": "a DuckDB export folder"
+  },
+  "runFile": {
+    "menu": "Run SQL file…",
+    "title": "Run a SQL file on {{name}}",
+    "intro": "The file runs statement by statement in a session of its own, not in a tab. Its statements are not saved to the query history.",
+    "file": "SQL file",
+    "chooseFile": "SQL file to run",
+    "sqlFiles": "SQL files",
+    "onError": "On an error",
+    "onErrorStop": "Stop the run",
+    "onErrorContinue": "Go on with the next statement",
+    "plan_one": "{{formattedCount}} statement, {{size}}.",
+    "plan_other": "{{formattedCount}} statements, {{size}}.",
+    "cannotRead": "Could not read the file: {{reason}}",
+    "log": "Failed statements and server messages",
+    "progressLabel": "Statements run",
+    "progress": "Statement {{done}} of {{total}} · {{seconds}} s",
+    "done": "Ran {{done}} statements in {{seconds}} s.",
+    "doneWithFailures": "Ran {{done}} statements in {{seconds}} s; {{failed}} failed and were skipped.",
+    "cancelled": "Run cancelled: the statements already run stay in the database.",
+    "failed": "Could not run the file: {{reason}}",
+    "notConfirmed": "the run was not confirmed.",
+    "cancel": "Cancel run",
+    "start": "Run…",
+    "confirmTitle": "Run {{file}}?",
+    "confirmBody_one": "{{formattedCount}} statement will run on {{connection}}, in a session of its own, and may change the database.",
+    "confirmBody_other": "{{formattedCount}} statements will run on {{connection}}, one by one in a session of their own, and may change the database.",
+    "risks": "Statements the editor would ask about",
+    "riskKinds": {
+      "deleteAll_one": "{{formattedCount}} DELETE without WHERE",
+      "deleteAll_other": "{{formattedCount}} × DELETE without WHERE",
+      "updateAll_one": "{{formattedCount}} UPDATE without WHERE",
+      "updateAll_other": "{{formattedCount}} × UPDATE without WHERE",
+      "drop_one": "{{formattedCount}} DROP",
+      "drop_other": "{{formattedCount}} × DROP",
+      "truncate_one": "{{formattedCount}} TRUNCATE",
+      "truncate_other": "{{formattedCount}} × TRUNCATE",
+      "uncheckedWrite_one": "{{formattedCount}} DELETE or UPDATE that could not be checked",
+      "uncheckedWrite_other": "{{formattedCount}} × DELETE or UPDATE that could not be checked",
+      "dataChange_one": "{{formattedCount}} data change on this connection's type",
+      "dataChange_other": "{{formattedCount}} × data change on this connection's type",
+      "execution_one": "{{formattedCount}} statement this connection's type confirms",
+      "execution_other": "{{formattedCount}} × statement this connection's type confirms"
+    },
+    "readOnly": "This connection is read-only: running a file is refused.",
+    "confirm": "Run file"
   }
 }

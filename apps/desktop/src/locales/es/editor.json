@@ -1197,7 +1197,14 @@
     "cancel": "Cancelar copia",
     "close": "Cerrar",
     "start": "Hacer copia",
-    "again": "Hacer otra copia"
+    "again": "Hacer otra copia",
+    "introSqlite": "SQLite copia toda la base de datos en un archivo nuevo con VACUUM INTO, en una sesión propia. También las conexiones de solo lectura pueden hacerla.",
+    "introDuckdb": "DuckDB exporta la base de datos a una carpeta con EXPORT DATABASE: su esquema y cada tabla en archivos Parquet o CSV. Se importa con Restaurar….",
+    "duckdbFormat": "Archivos de tablas",
+    "duckdbFormats": {
+      "parquet": "Parquet",
+      "csv": "CSV"
+    }
   },
   "restoreDb": {
     "menu": "Restaurar…",
@@ -1239,6 +1246,54 @@
     "confirmClean": "Los objetos de la copia se eliminan antes: se pierden sus datos actuales.",
     "readOnly": "Esta conexión es de solo lectura: restaurar escribe en la base de datos.",
     "keep": "Cancelar",
-    "confirm": "Restaurar"
+    "confirm": "Restaurar",
+    "introDuckdb": "DuckDB carga con IMPORT DATABASE una carpeta hecha con su EXPORT DATABASE. Importar escribe en la base de datos.",
+    "duckdbExport": "una carpeta exportada por DuckDB"
+  },
+  "runFile": {
+    "menu": "Ejecutar archivo SQL…",
+    "title": "Ejecutar un archivo SQL en {{name}}",
+    "intro": "El archivo se ejecuta sentencia a sentencia en una sesión propia, no en una pestaña. Sus sentencias no se guardan en el historial de consultas.",
+    "file": "Archivo SQL",
+    "chooseFile": "Archivo SQL a ejecutar",
+    "sqlFiles": "Archivos SQL",
+    "onError": "Ante un error",
+    "onErrorStop": "Detener la ejecución",
+    "onErrorContinue": "Seguir con la siguiente sentencia",
+    "plan_one": "{{formattedCount}} sentencia, {{size}}.",
+    "plan_other": "{{formattedCount}} sentencias, {{size}}.",
+    "cannotRead": "No se pudo leer el archivo: {{reason}}",
+    "log": "Sentencias fallidas y mensajes del servidor",
+    "progressLabel": "Sentencias ejecutadas",
+    "progress": "Sentencia {{done}} de {{total}} · {{seconds}} s",
+    "done": "{{done}} sentencias ejecutadas en {{seconds}} s.",
+    "doneWithFailures": "{{done}} sentencias ejecutadas en {{seconds}} s; {{failed}} fallaron y se saltaron.",
+    "cancelled": "Ejecución cancelada: las sentencias ya ejecutadas quedan en la base de datos.",
+    "failed": "No se pudo ejecutar el archivo: {{reason}}",
+    "notConfirmed": "la ejecución no se confirmó.",
+    "cancel": "Cancelar ejecución",
+    "start": "Ejecutar…",
+    "confirmTitle": "¿Ejecutar {{file}}?",
+    "confirmBody_one": "Se ejecutará {{formattedCount}} sentencia en {{connection}}, en una sesión propia, y puede cambiar la base de datos.",
+    "confirmBody_other": "Se ejecutarán {{formattedCount}} sentencias en {{connection}}, una a una en una sesión propia, y pueden cambiar la base de datos.",
+    "risks": "Sentencias por las que el editor preguntaría",
+    "riskKinds": {
+      "deleteAll_one": "{{formattedCount}} DELETE sin WHERE",
+      "deleteAll_other": "{{formattedCount}} × DELETE sin WHERE",
+      "updateAll_one": "{{formattedCount}} UPDATE sin WHERE",
+      "updateAll_other": "{{formattedCount}} × UPDATE sin WHERE",
+      "drop_one": "{{formattedCount}} DROP",
+      "drop_other": "{{formattedCount}} × DROP",
+      "truncate_one": "{{formattedCount}} TRUNCATE",
+      "truncate_other": "{{formattedCount}} × TRUNCATE",
+      "uncheckedWrite_one": "{{formattedCount}} DELETE o UPDATE que no se pudo comprobar",
+      "uncheckedWrite_other": "{{formattedCount}} × DELETE o UPDATE que no se pudo comprobar",
+      "dataChange_one": "{{formattedCount}} cambio de datos en este tipo de conexión",
+      "dataChange_other": "{{formattedCount}} × cambio de datos en este tipo de conexión",
+      "execution_one": "{{formattedCount}} sentencia que confirma este tipo de conexión",
+      "execution_other": "{{formattedCount}} × sentencia que confirma este tipo de conexión"
+    },
+    "readOnly": "Esta conexión es de solo lectura: se rechaza ejecutar un archivo.",
+    "confirm": "Ejecutar archivo"
   }
 }

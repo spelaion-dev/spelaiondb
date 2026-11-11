@@ -695,3 +695,284 @@ pub async fn cancel_backup(run_id: u32, state: State<'_, AppState>) -> CmdResult
     }
     Ok(())
 }
+
+// ------------------------------------------------------------------ SQLite, DuckDB, .sql files
+
+/// A new session of the `source` connection for a copy, an import or a file run, never a
+/// tab's own (ADR-031). `reads_only`: its session setup goes through the read barrier.
+async fn open_run_session(
+    state: &AppState,
+    app: &AppHandle,
+    source: &str,
+    reads_only: bool,
+) -> CmdResult<spelaion_core::OpenConnection> {
+    let (open, password) = self::source(state, source).await?;
+    spelaion_core::open_connection(
+        open.resolved.clone(),
+        &state.engines,
+        spelaion_core::OpenOptions {
+            tunnels: state.tunnels.clone(),
+            known_hosts: KnownHosts::for_user(&state.user_dir),
+            interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+            password,
+            read_only_session: reads_only,
+        },
+        state.results.clone(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum DuckdbFormatItem {
+    Parquet,
+    Csv,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBackupItem {
+    pub folder: String,
+    pub name_pattern: String,
+    /// DuckDB only.
+    pub duckdb_format: DuckdbFormatItem,
+}
+
+impl From<EmbeddedBackupItem> for backup::EmbeddedDumpRequest {
+    fn from(item: EmbeddedBackupItem) -> Self {
+        backup::EmbeddedDumpRequest {
+            folder: PathBuf::from(item.folder.trim()),
+            name_pattern: if item.name_pattern.trim().is_empty() {
+                backup::DEFAULT_NAME_PATTERN.to_string()
+            } else {
+                item.name_pattern
+            },
+            duckdb_format: match item.duckdb_format {
+                DuckdbFormatItem::Parquet => backup::DuckdbExportFormat::Parquet,
+                DuckdbFormatItem::Csv => backup::DuckdbExportFormat::Csv,
+            },
+        }
+    }
+}
+
+/// The file (SQLite) or folder (DuckDB) a copy will be.
+#[tauri::command]
+#[specta::specta]
+pub async fn preview_embedded_backup(
+    session: String,
+    request: EmbeddedBackupItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    backup::embedded_dump_path(&open.resolved, &request.into())
+        .map(|p| p.display().to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Copies a SQLite database with `VACUUM INTO`, or exports a DuckDB one, in a session of its own.
+#[tauri::command]
+#[specta::specta]
+pub async fn run_embedded_backup(
+    session: String,
+    run_id: u32,
+    request: EmbeddedBackupItem,
+    on_event: Channel<BackupEventItem>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<BackupOutcome> {
+    let cancel = register(&state, run_id)?;
+    let outcome = match open_run_session(&state, &app, &session, true).await {
+        Ok(open) => {
+            let events = move |e: BackupEvent| {
+                let _ = on_event.send(e.into());
+            };
+            let result = backup::embedded_dump(
+                &open.session,
+                &open.resolved,
+                &request.into(),
+                &cancel,
+                &events,
+            )
+            .await;
+            open.close().await;
+            match result {
+                Ok(summary) => BackupOutcome::Done {
+                    path: summary.path.display().to_string(),
+                    bytes: summary.bytes as f64,
+                    millis: summary.elapsed.as_millis() as f64,
+                },
+                Err(e) => outcome_error(e),
+            }
+        }
+        Err(message) => BackupOutcome::Failed { message },
+    };
+    state.backups.lock().expect("lock poisoned").remove(&run_id);
+    Ok(outcome)
+}
+
+/// Loads a DuckDB export folder into the connection's database. The core refuses a read-only
+/// connection and an unconfirmed import.
+#[tauri::command]
+#[specta::specta]
+pub async fn run_duckdb_import(
+    session: String,
+    run_id: u32,
+    folder: String,
+    confirmed: bool,
+    on_event: Channel<BackupEventItem>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<RestoreOutcome> {
+    let cancel = register(&state, run_id)?;
+    let outcome = match open_run_session(&state, &app, &session, false).await {
+        Ok(open) => {
+            let events = move |e: BackupEvent| {
+                let _ = on_event.send(e.into());
+            };
+            let result = backup::duckdb_import(
+                &open.session,
+                &open.resolved,
+                &PathBuf::from(folder.trim()),
+                confirmed,
+                &cancel,
+                &events,
+            )
+            .await;
+            open.close().await;
+            match result {
+                Ok(elapsed) => RestoreOutcome::Done {
+                    bytes: 0.0,
+                    millis: elapsed.as_millis() as f64,
+                },
+                Err(BackupError::NeedsConfirmation) => RestoreOutcome::NeedsConfirmation,
+                Err(BackupError::Cancelled) => RestoreOutcome::Cancelled,
+                Err(e) => RestoreOutcome::Failed {
+                    message: e.to_string(),
+                },
+            }
+        }
+        Err(message) => RestoreOutcome::Failed { message },
+    };
+    state.backups.lock().expect("lock poisoned").remove(&run_id);
+    Ok(outcome)
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRiskItem {
+    pub risk: crate::dto::RiskKind,
+    pub count: f64,
+}
+
+/// What the confirmation of a file run shows.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePlanItem {
+    pub bytes: f64,
+    pub statements: f64,
+    pub risks: Vec<FileRiskItem>,
+    /// The connection is read-only: the core will refuse the run.
+    pub read_only: bool,
+}
+
+/// Reads an `.sql` file and counts its statements and what the guard would ask about.
+#[tauri::command]
+#[specta::specta]
+pub async fn plan_sql_file(
+    session: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<FilePlanItem> {
+    let open = state.session(&session).await?;
+    let path = PathBuf::from(path.trim());
+    let safeguards = open.resolved.safeguards();
+    let read_only = open.resolved.params.read_only;
+    let plan =
+        backup::plan_sql_file(&open.session, &path, &safeguards).map_err(|e| e.to_string())?;
+    Ok(FilePlanItem {
+        bytes: plan.bytes as f64,
+        statements: plan.statements as f64,
+        risks: plan
+            .risks
+            .into_iter()
+            .map(|(risk, count)| FileRiskItem {
+                risk: risk.into(),
+                count: count as f64,
+            })
+            .collect(),
+        read_only,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FileRunOutcome {
+    Done {
+        done: f64,
+        failed: f64,
+        total: f64,
+        millis: f64,
+    },
+    NeedsConfirmation,
+    Cancelled,
+    Failed {
+        message: String,
+    },
+}
+
+/// Runs an `.sql` file in a session of its own, statement by statement. The core refuses a
+/// read-only connection and an unconfirmed run.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_sql_file(
+    session: String,
+    run_id: u32,
+    path: String,
+    on_error: crate::dto::OnErrorItem,
+    confirmed: bool,
+    on_event: Channel<BackupEventItem>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<FileRunOutcome> {
+    let cancel = register(&state, run_id)?;
+    let outcome = match open_run_session(&state, &app, &session, false).await {
+        Ok(open) => {
+            let events = move |e: BackupEvent| {
+                let _ = on_event.send(e.into());
+            };
+            let result = backup::run_sql_file(
+                &open.session,
+                &PathBuf::from(path.trim()),
+                open.resolved.params.read_only,
+                confirmed,
+                on_error.into(),
+                &cancel,
+                &events,
+            )
+            .await;
+            open.close().await;
+            match result {
+                Ok(summary) => FileRunOutcome::Done {
+                    done: summary.done as f64,
+                    failed: summary.failed as f64,
+                    total: summary.total as f64,
+                    millis: summary.elapsed.as_millis() as f64,
+                },
+                Err(BackupError::NeedsConfirmation) => FileRunOutcome::NeedsConfirmation,
+                Err(BackupError::Cancelled) => FileRunOutcome::Cancelled,
+                Err(e) => FileRunOutcome::Failed {
+                    message: e.to_string(),
+                },
+            }
+        }
+        Err(message) => FileRunOutcome::Failed { message },
+    };
+    state.backups.lock().expect("lock poisoned").remove(&run_id);
+    Ok(outcome)
+}

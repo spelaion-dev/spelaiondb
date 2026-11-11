@@ -32,6 +32,8 @@ pub(crate) fn no_window(command: &mut Command) {
 pub struct BackupCancel {
     cancelled: AtomicBool,
     notify: Notify,
+    /// The session whose statement a cancel also stops (SQLite, DuckDB and file runs).
+    session: std::sync::Mutex<Option<std::sync::Arc<dyn spelaion_driver_api::CancelHandle>>>,
 }
 
 impl BackupCancel {
@@ -42,6 +44,15 @@ impl BackupCancel {
     pub async fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
         self.notify.notify_waiters();
+        let handle = self.session.lock().expect("lock poisoned").clone();
+        if let Some(handle) = handle {
+            let _ = handle.cancel().await;
+        }
+    }
+
+    /// The session whose statement a cancel also stops.
+    pub(crate) fn attach(&self, session: &crate::Session) {
+        *self.session.lock().expect("lock poisoned") = Some(session.connection().cancel_handle());
     }
 
     pub fn is_cancelled(&self) -> bool {

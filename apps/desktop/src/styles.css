@@ -4156,6 +4156,16 @@ button.value-picker-row.selected { background: var(--accent-soft); }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.backup-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+.backup-progress progress {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
 .backup-progress,
 .backup-result {
   font-variant-numeric: tabular-nums;
