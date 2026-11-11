@@ -56,7 +56,8 @@ pub struct NewPrincipal {
     pub default_database: String,
     /// SQL Server logins: `CHECK_POLICY = OFF` when false.
     pub check_policy: bool,
-    /// SQL Server users: the login it is for (`WITHOUT LOGIN` when empty).
+    /// SQL Server users: the login it is for (`WITHOUT LOGIN` when empty, or a contained
+    /// database's user `WITH PASSWORD` when a password is set).
     pub login: String,
     /// SQL Server users: `DEFAULT_SCHEMA` (none when empty).
     pub default_schema: String,
@@ -113,7 +114,8 @@ pub fn principal_actions(dialect: &dyn Dialect) -> PrincipalActions {
         },
         "sqlserver" => PrincipalActions {
             create: vec![Login, User, Role],
-            password: vec![Login],
+            // A user's password: a contained database's user (`CREATE USER … WITH PASSWORD`).
+            password: vec![Login, User],
             lock: vec![Login],
             drop: vec![Login, User, Role],
             privileges: vec![Login, User, Role],
@@ -341,17 +343,27 @@ fn statement(
                 ("sqlserver", PrincipalKind::User) => {
                     let mut sql = format!("CREATE USER {}", q(name));
                     let login = new.login.trim();
-                    if login.is_empty() {
-                        sql.push_str(" WITHOUT LOGIN");
-                    } else {
-                        sql.push_str(&format!(" FOR LOGIN {}", q(checked_name(login)?)));
+                    let mut with = Vec::new();
+                    match (login.is_empty(), new.with_password) {
+                        // A contained database's user logs in with its own password.
+                        (true, true) => with.push(format!("PASSWORD = {pass}")),
+                        (true, false) => sql.push_str(" WITHOUT LOGIN"),
+                        (false, false) => {
+                            sql.push_str(&format!(" FOR LOGIN {}", q(checked_name(login)?)))
+                        }
+                        (false, true) => {
+                            return Err(ObjectError::Unsupported(
+                                "a user for a login logs in with the login's password".into(),
+                            ));
+                        }
                     }
                     let schema = new.default_schema.trim();
                     if !schema.is_empty() {
-                        sql.push_str(&format!(
-                            " WITH DEFAULT_SCHEMA = {}",
-                            q(checked_name(schema)?)
-                        ));
+                        with.push(format!("DEFAULT_SCHEMA = {}", q(checked_name(schema)?)));
+                    }
+                    if !with.is_empty() {
+                        sql.push_str(" WITH ");
+                        sql.push_str(&with.join(", "));
                     }
                     Ok(sql)
                 }
@@ -371,7 +383,12 @@ fn statement(
                     mysql_account(dialect, target)?
                 )),
                 "sqlserver" => Ok(format!(
-                    "ALTER LOGIN {} WITH PASSWORD = {pass}",
+                    "ALTER {} {} WITH PASSWORD = {pass}",
+                    if target.kind == PrincipalKind::User {
+                        "USER"
+                    } else {
+                        "LOGIN"
+                    },
                     q(checked_name(&target.name)?)
                 )),
                 _ => Err(unsupported(dialect, "set passwords")),
@@ -768,6 +785,81 @@ mod tests {
         assert_eq!(
             script(&ms, PrincipalChange::Unlock(target(Login, "a]b"))),
             "ALTER LOGIN [a]]b] ENABLE;\n"
+        );
+        // A contained database's user, with its own password.
+        assert_eq!(
+            script(
+                &ms,
+                PrincipalChange::Create(NewPrincipal {
+                    kind: Some(User),
+                    name: "app".into(),
+                    with_password: true,
+                    default_schema: "sales".into(),
+                    ..Default::default()
+                })
+            ),
+            "CREATE USER app WITH PASSWORD = N'***', DEFAULT_SCHEMA = sales;\n"
+        );
+        assert_eq!(
+            script(&ms, PrincipalChange::SetPassword(target(User, "app"))),
+            "ALTER USER app WITH PASSWORD = N'***';\n"
+        );
+        assert_eq!(
+            script(
+                &ms,
+                PrincipalChange::Create(NewPrincipal {
+                    kind: Some(User),
+                    name: "app".into(),
+                    ..Default::default()
+                })
+            ),
+            "CREATE USER app WITHOUT LOGIN;\n"
+        );
+    }
+
+    #[test]
+    fn a_contained_user_s_real_password_is_one_literal() {
+        let nasty = "it's; a\\' DROP USER x; --";
+        let change = PrincipalChange::Create(NewPrincipal {
+            kind: Some(PrincipalKind::User),
+            name: "app".into(),
+            with_password: true,
+            ..Default::default()
+        });
+        let real = plan(
+            &SqlServerDialect,
+            &change,
+            Password::Real {
+                text: nasty,
+                backslashes: false,
+            },
+        )
+        .unwrap();
+        let sql = real.statements()[0];
+        assert_eq!(
+            sql,
+            "CREATE USER app WITH PASSWORD = N'it''s; a\\'' DROP USER x; --'"
+        );
+        assert_eq!(SqlServerDialect.split_statements(sql).len(), 1);
+        assert!(
+            !principal_plan(&SqlServerDialect, &change)
+                .unwrap()
+                .script()
+                .contains("it''s")
+        );
+        // A user for a login has no password of its own.
+        assert!(
+            principal_plan(
+                &SqlServerDialect,
+                &PrincipalChange::Create(NewPrincipal {
+                    kind: Some(PrincipalKind::User),
+                    name: "app".into(),
+                    login: "app".into(),
+                    with_password: true,
+                    ..Default::default()
+                })
+            )
+            .is_err()
         );
     }
 

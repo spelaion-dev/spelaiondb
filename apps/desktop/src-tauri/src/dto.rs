@@ -6058,9 +6058,14 @@ pub enum PrivilegeScopeItem {
     Schema,
     AllTablesInSchema,
     Table,
+    Column,
     Sequence,
     Function,
     Procedure,
+    DefaultTables,
+    DefaultSequences,
+    DefaultFunctions,
+    DefaultTypes,
     Role,
 }
 
@@ -6072,9 +6077,14 @@ impl From<PrivilegeScopeItem> for spelaion_core::PrivilegeScope {
             PrivilegeScopeItem::Schema => Self::Schema,
             PrivilegeScopeItem::AllTablesInSchema => Self::AllTablesInSchema,
             PrivilegeScopeItem::Table => Self::Table,
+            PrivilegeScopeItem::Column => Self::Column,
             PrivilegeScopeItem::Sequence => Self::Sequence,
             PrivilegeScopeItem::Function => Self::Function,
             PrivilegeScopeItem::Procedure => Self::Procedure,
+            PrivilegeScopeItem::DefaultTables => Self::DefaultTables,
+            PrivilegeScopeItem::DefaultSequences => Self::DefaultSequences,
+            PrivilegeScopeItem::DefaultFunctions => Self::DefaultFunctions,
+            PrivilegeScopeItem::DefaultTypes => Self::DefaultTypes,
             PrivilegeScopeItem::Role => Self::Role,
         }
     }
@@ -6089,9 +6099,14 @@ impl From<spelaion_core::PrivilegeScope> for PrivilegeScopeItem {
             S::Schema => Self::Schema,
             S::AllTablesInSchema => Self::AllTablesInSchema,
             S::Table => Self::Table,
+            S::Column => Self::Column,
             S::Sequence => Self::Sequence,
             S::Function => Self::Function,
             S::Procedure => Self::Procedure,
+            S::DefaultTables => Self::DefaultTables,
+            S::DefaultSequences => Self::DefaultSequences,
+            S::DefaultFunctions => Self::DefaultFunctions,
+            S::DefaultTypes => Self::DefaultTypes,
             S::Role => Self::Role,
         }
     }
@@ -6105,6 +6120,12 @@ pub struct PrivilegeScopeInfoItem {
     pub needs_database: bool,
     pub needs_schema: bool,
     pub needs_name: bool,
+    /// The schema may be left empty (PostgreSQL's default privileges: every schema).
+    pub schema_optional: bool,
+    /// The name may be left empty (default privileges: the session's own role).
+    pub name_optional: bool,
+    /// A column privilege: the form asks for its columns.
+    pub needs_columns: bool,
     pub privileges: Vec<String>,
 }
 
@@ -6115,7 +6136,10 @@ pub struct PrivilegeTargetItem {
     pub scope: PrivilegeScopeItem,
     pub database: String,
     pub schema: String,
+    /// An object's or role's name; default privileges: the role whose new objects get them.
     pub name: String,
+    /// A column privilege's columns.
+    pub columns: Vec<String>,
 }
 
 impl From<PrivilegeTargetItem> for spelaion_core::PrivilegeTarget {
@@ -6125,6 +6149,7 @@ impl From<PrivilegeTargetItem> for spelaion_core::PrivilegeTarget {
             database: item.database,
             schema: item.schema,
             name: item.name,
+            columns: item.columns,
         }
     }
 }
@@ -6170,6 +6195,7 @@ impl GrantedPrivilegeItem {
                 database: granted.target.database,
                 schema: granted.target.schema,
                 name: granted.target.name,
+                columns: granted.target.columns,
             },
             privilege: granted.privilege,
             grantable: granted.grantable,

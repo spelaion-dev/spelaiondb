@@ -392,6 +392,161 @@ fn store_bytes(path: &Path) -> String {
     text
 }
 
+/// The history recorded the session's `SELECT 1` but nothing with "Leak" (every test password
+/// holds it), and neither do the audit or the store's file on disk.
+async fn assert_nothing_leaked(history: QueryHistory, path: &Path, label: &str, secrets: &[&str]) {
+    let recorded = history
+        .list("/repo".into(), "".into(), 100, 0)
+        .await
+        .unwrap();
+    assert!(
+        recorded.iter().any(|e| e.statement == "SELECT 1"),
+        "{label}: the history records this session"
+    );
+    for entry in &recorded {
+        assert!(
+            !entry.statement.contains("Leak")
+                && !entry.error.as_deref().unwrap_or("").contains("Leak"),
+            "{label}: {entry:?}"
+        );
+    }
+    drop(history);
+    let store = Store::open(path).unwrap();
+    for record in store
+        .audit_events(&AuditFilter::default(), 1000, 0)
+        .unwrap()
+    {
+        assert!(
+            !record.entry.statement.contains("Leak")
+                && !record
+                    .entry
+                    .detail
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("Leak"),
+            "{label}: {record:?}"
+        );
+    }
+    drop(store);
+    let bytes = store_bytes(path);
+    for secret in secrets.iter().copied().chain(["Leak'me", "Leak''me"]) {
+        assert!(!bytes.contains(secret), "{label}: {secret} in the store");
+    }
+    assert!(bytes.contains("SELECT 1"), "{label}: the store was read");
+}
+
+/// SQL Server's contained database users (`CREATE USER … WITH PASSWORD`): created in a
+/// database with `CONTAINMENT = PARTIAL`, logged in to it with their own password, given a new
+/// one and dropped; the passwords never reach the history, the audit, the store or an error.
+#[tokio::test]
+async fn a_contained_database_user_logs_in_with_its_own_password_and_it_never_leaks() {
+    let Some(engine) = engines().into_iter().find(|e| e.label == "sqlserver") else {
+        return;
+    };
+    let label = "sqlserver contained";
+    let database = "spelaion_contained";
+    tolerate(
+        &engine.session().await,
+        &[
+            "EXEC sp_configure 'contained database authentication', 1".into(),
+            "RECONFIGURE".into(),
+            format!(
+                "IF DB_ID(N'{database}') IS NULL CREATE DATABASE {database} CONTAINMENT = PARTIAL"
+            ),
+        ],
+    )
+    .await;
+    let contained = Engine {
+        label: "sqlserver",
+        driver: Box::new(spelaion_driver_sqlserver::SqlServerDriver),
+        admin: ConnectParams {
+            database: database.into(),
+            ..engine.admin.clone()
+        },
+        database,
+    };
+    let admin = contained.session().await;
+    let name = "spelaion_contained_user";
+    tolerate(&admin, &[format!("DROP USER IF EXISTS {name}")]).await;
+    let path = temp_store("contained");
+    let history = QueryHistory::open(path.clone()).unwrap();
+    let events: Vec<CoreEvent> = history
+        .run_script(&admin, "SELECT 1", "/repo".into(), "shop".into())
+        .collect()
+        .await;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, CoreEvent::StatementFailed { .. })),
+        "{label}"
+    );
+
+    let first = "Leak'me;Contained\\1-x";
+    let second = "Leak'me;Contained\\2-y";
+    let user = PrincipalTarget {
+        kind: PrincipalKind::User,
+        name: name.into(),
+    };
+    assert!(
+        principal_actions(admin.dialect().as_ref())
+            .password
+            .contains(&PrincipalKind::User)
+    );
+    let create = PrincipalChange::Create(NewPrincipal {
+        kind: Some(PrincipalKind::User),
+        name: name.into(),
+        with_password: true,
+        default_schema: "dbo".into(),
+        ..Default::default()
+    });
+    let shown = principal_plan(admin.dialect().as_ref(), &create)
+        .unwrap()
+        .script();
+    assert!(shown.contains("PASSWORD = N'***'"), "{shown}");
+    apply(&admin, &create, Some(first))
+        .await
+        .unwrap_or_else(|e| panic!("{label}: create: {e}"));
+    assert!(contained.logs_in(name, first).await, "{label}: first login");
+    // Its password is the database's, not a server login's.
+    assert!(!engine.logs_in(name, first).await, "{label}: not a login");
+
+    apply(
+        &admin,
+        &PrincipalChange::SetPassword(user.clone()),
+        Some(second),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{label}: password: {e}"));
+    assert!(
+        !contained.logs_in(name, first).await,
+        "{label}: old password"
+    );
+    assert!(
+        contained.logs_in(name, second).await,
+        "{label}: new password"
+    );
+
+    // A user that is not there fails, and the error does not carry the password.
+    let error = apply(
+        &admin,
+        &PrincipalChange::SetPassword(PrincipalTarget {
+            kind: PrincipalKind::User,
+            name: "spelaion_missing_contained".into(),
+        }),
+        Some(second),
+    )
+    .await
+    .expect_err("no such user");
+    assert!(!error.to_string().contains("Leak"), "{label}: {error}");
+    assert_nothing_leaked(history, &path, label, &[first, second]).await;
+
+    apply(&admin, &PrincipalChange::Drop(user), None)
+        .await
+        .unwrap_or_else(|e| panic!("{label}: drop: {e}"));
+    assert!(!contained.logs_in(name, second).await, "{label}: dropped");
+    let _ = std::fs::remove_file(&path);
+}
+
 #[tokio::test]
 async fn a_new_password_never_reaches_the_history_the_audit_or_an_error() {
     for engine in engines() {
@@ -447,44 +602,7 @@ async fn a_new_password_never_reaches_the_history_the_audit_or_an_error() {
         let error = apply(&admin, &create, None).await.expect_err("no password");
         assert!(!error.to_string().contains("Leak"), "{label}");
 
-        let recorded = history
-            .list("/repo".into(), "".into(), 100, 0)
-            .await
-            .unwrap();
-        assert!(
-            recorded.iter().any(|e| e.statement == "SELECT 1"),
-            "{label}: the history records this session"
-        );
-        for entry in &recorded {
-            assert!(
-                !entry.statement.contains("Leak")
-                    && !entry.error.as_deref().unwrap_or("").contains("Leak"),
-                "{label}: {entry:?}"
-            );
-        }
-        drop(history);
-        let store = Store::open(&path).unwrap();
-        for record in store
-            .audit_events(&AuditFilter::default(), 1000, 0)
-            .unwrap()
-        {
-            assert!(
-                !record.entry.statement.contains("Leak")
-                    && !record
-                        .entry
-                        .detail
-                        .as_deref()
-                        .unwrap_or("")
-                        .contains("Leak"),
-                "{label}: {record:?}"
-            );
-        }
-        drop(store);
-        let bytes = store_bytes(&path);
-        for secret in [first, second, "Leak'me", "Leak''me"] {
-            assert!(!bytes.contains(secret), "{label}: {secret} in the store");
-        }
-        assert!(bytes.contains("SELECT 1"), "{label}: the store was read");
+        assert_nothing_leaked(history, &path, label, &[first, second]).await;
 
         assert!(engine.logs_in(&name, second).await, "{label}");
         tolerate(&admin, &[drop_statement(label, &name)]).await;

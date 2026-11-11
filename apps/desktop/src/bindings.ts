@@ -3991,18 +3991,27 @@ export type PrivilegeScopeInfoItem = {
 	needsDatabase: boolean,
 	needsSchema: boolean,
 	needsName: boolean,
+	/**  The schema may be left empty (PostgreSQL's default privileges: every schema). */
+	schemaOptional: boolean,
+	/**  The name may be left empty (default privileges: the session's own role). */
+	nameOptional: boolean,
+	/**  A column privilege: the form asks for its columns. */
+	needsColumns: boolean,
 	privileges: string[],
 };
 
 /**  What a privilege is on (ADR-048). */
-export type PrivilegeScopeItem = "global" | "database" | "schema" | "all_tables_in_schema" | "table" | "sequence" | "function" | "procedure" | "role";
+export type PrivilegeScopeItem = "global" | "database" | "schema" | "all_tables_in_schema" | "table" | "column" | "sequence" | "function" | "procedure" | "default_tables" | "default_sequences" | "default_functions" | "default_types" | "role";
 
 /**  Where a privilege applies. */
 export type PrivilegeTargetItem = {
 	scope: PrivilegeScopeItem,
 	database: string,
 	schema: string,
+	/**  An object's or role's name; default privileges: the role whose new objects get them. */
 	name: string,
+	/**  A column privilege's columns. */
+	columns: string[],
 };
 
 export type ProcessItem = ProcessItem_Serialize | ProcessItem_Deserialize;

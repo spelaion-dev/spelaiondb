@@ -93,11 +93,14 @@ export function AccountDialog({ session, connectionId, request, logins, onClose,
     return () => { current = false; };
   }, [session, request]);
 
-  /** What needs a password: a login always, a PostgreSQL role or MySQL user when one is typed. */
+  /** A SQL Server user without a login may have its own password: a contained database's user. */
+  const containedUser = engine === "sqlserver" && kind === "user" && login.trim() === "";
+  /** What needs a password: a login always, a PostgreSQL role, MySQL user or SQL Server
+   *  contained user when one is typed. */
   const asksPassword =
     request.action === "password" ||
     (request.action === "create" &&
-      ((engine === "postgres") || (engine === "mysql" && kind === "user") || (engine === "sqlserver" && kind === "login")));
+      ((engine === "postgres") || (engine === "mysql" && kind === "user") || (engine === "sqlserver" && kind === "login") || containedUser));
   /** A password change, and a SQL Server login, cannot go without one. */
   const required = request.action === "password" || (request.action === "create" && engine === "sqlserver" && kind === "login");
   const withPassword = asksPassword && (required || password !== "");
@@ -226,7 +229,7 @@ export function AccountDialog({ session, connectionId, request, logins, onClose,
               <label htmlFor={`${ids}-password`}>{request.action === "password" ? t("accounts.newPassword") : t("accounts.password")}</label>
               <input id={`${ids}-password`} type="password" value={password} autoComplete="new-password" autoFocus={request.action === "password"}
                 aria-describedby={required ? undefined : `${ids}-password-hint`} onChange={(e) => setPassword(e.target.value)} />
-              {!required && <span id={`${ids}-password-hint`} className="muted small">{t("accounts.passwordOptional")}</span>}
+              {!required && <span id={`${ids}-password-hint`} className="muted small">{containedUser && request.action === "create" ? t("accounts.containedPasswordOptional") : t("accounts.passwordOptional")}</span>}
             </div>
             <div className="field">
               <label htmlFor={`${ids}-repeat`}>{t("accounts.repeatPassword")}</label>

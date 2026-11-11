@@ -22,9 +22,9 @@ pub use create::{
     NewColumn, NewForeignKey, NewIndex, NewTable, apply_create_table, create_table_plan,
 };
 pub use privileges::{
-    GrantedPrivilege, PrivilegeChange, PrivilegeScope, PrivilegeTarget, apply_privilege_change,
-    principal_privileges, privilege_options, privilege_plan, privilege_scope_fields,
-    privilege_scopes,
+    GrantedPrivilege, PrivilegeChange, PrivilegeScope, PrivilegeScopeFields, PrivilegeTarget,
+    apply_privilege_change, principal_privileges, privilege_options, privilege_plan,
+    privilege_scope_fields, privilege_scopes,
 };
 pub use source::{SourceTarget, editable_source};
 pub use users::{

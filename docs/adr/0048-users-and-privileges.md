@@ -32,7 +32,10 @@ password cannot simply be part of the shown script.
      `ACCOUNT UNLOCK`) and roles (`CREATE ROLE`).
    - SQL Server: logins (`CREATE LOGIN … WITH PASSWORD = N'…'`, default database,
      `CHECK_POLICY`; locking is `DISABLE`, unlocking `ENABLE`), users of the connection's
-     database (`FOR LOGIN` or `WITHOUT LOGIN`, default schema) and database roles.
+     database (`FOR LOGIN` or `WITHOUT LOGIN`, default schema) and database roles. *(Extended
+     later: a contained database's user, `CREATE USER … WITH PASSWORD = N'…'` and `ALTER USER …
+     WITH PASSWORD`, whose password follows every rule below. Windows logins, `CREATE LOGIN …
+     FROM WINDOWS`, are not offered: the Linux test server cannot resolve a Windows account.)*
 2. **The shown script never holds the password.** The core writes it with `'***'` in place of
    the password literal (`N'***'` on SQL Server). The form says only whether a password is set;
    its value is sent once, on Apply, as its own argument, never as part of the form, and the core
@@ -57,7 +60,10 @@ password cannot simply be part of the shown script.
    `GRANT` / `REVOKE` with the engine's names for each level and only the privileges that level
    has. What an account has is read from the catalog by the core (PostgreSQL's ACLs and role
    memberships, MySQL's `SHOW GRANTS`, SQL Server's permissions and role memberships) and shown
-   in the same dialog.
+   in the same dialog. *(Extended later: some columns of a table, `GRANT SELECT (a, b) ON t`, on
+   every engine, with only the privileges each has on columns; and PostgreSQL's default
+   privileges, `ALTER DEFAULT PRIVILEGES [FOR ROLE r] [IN SCHEMA s] GRANT … ON TABLES`, for
+   tables, sequences, functions and types created later, read back from `pg_default_acl`.)*
 6. **Where they are:** the explorer's Roles, Users and Logins folders have "New role…", "New
    user…" and "New login…" in their menu, and each account has "Change password…", "Lock or
    unlock…", "Privileges…" and "Drop…" where its engine has them. Those folders show on
