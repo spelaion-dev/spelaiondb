@@ -5,6 +5,7 @@
 use std::io::Write;
 use std::path::Path;
 
+use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
 use spelaion_store::{AuditEntry, Decision};
 
 /// What replaces a secret.
@@ -235,26 +236,18 @@ pub fn write_audit(
     Ok(())
 }
 
-/// Writes `entries` to the file at `path`, through a file beside it moved over it at the end.
+/// Writes `entries` to the file at `path`, through a uniquely named file beside it renamed over
+/// it at the end (`atomic_file::AtomicWriter`: the old file's mode is kept and a symbolic
+/// link stays a link).
 pub fn export_audit(
     entries: &[AuditEntry],
     format: AuditFormat,
     path: &Path,
 ) -> std::io::Result<()> {
-    let mut temp = path.as_os_str().to_owned();
-    temp.push(".spelaion-tmp");
-    let temp = std::path::PathBuf::from(temp);
-    let result = (|| {
-        let mut file = std::io::BufWriter::new(std::fs::File::create(&temp)?);
-        write_audit(entries, format, &mut file)?;
-        file.flush()?;
-        drop(file);
-        std::fs::rename(&temp, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result
+    let file = AtomicWriter::create(path, NewFileMode::Default)?;
+    let mut out = std::io::BufWriter::new(file);
+    write_audit(entries, format, &mut out)?;
+    out.into_inner().map_err(|e| e.into_error())?.commit()
 }
 
 #[cfg(test)]
@@ -376,5 +369,49 @@ mod tests {
     fn times_are_utc() {
         assert_eq!(iso_time(0), "1970-01-01T00:00:00.000Z");
         assert_eq!(iso_time(951_782_400_000), "2000-02-29T00:00:00.000Z");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_export_keeps_the_files_mode_and_writes_through_a_link() {
+        let entries = [entry("select 1", Decision::Executed)];
+        crate::test_files::assert_keeps_mode_and_links("audit", |path| {
+            export_audit(&entries, AuditFormat::Csv, path).unwrap();
+        });
+    }
+
+    // Unix: Windows may refuse a rename onto a file another rename is replacing that moment.
+    #[cfg(unix)]
+    #[test]
+    fn two_exports_to_one_file_at_once_both_succeed() {
+        let dir = std::env::temp_dir().join(format!("spelaion-audit-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit.json");
+        let entries: Vec<AuditEntry> = (0..2_000)
+            .map(|n| entry(&format!("select {n}"), Decision::Executed))
+            .collect();
+        let mut expected = Vec::new();
+        write_audit(&entries, AuditFormat::Json, &mut expected).unwrap();
+        for _ in 0..10 {
+            let start = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                let runs: Vec<_> = (0..2)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            export_audit(&entries, AuditFormat::Json, &path)
+                        })
+                    })
+                    .collect();
+                for run in runs {
+                    run.join().unwrap().unwrap();
+                }
+            });
+            assert_eq!(std::fs::read(&path).unwrap(), expected);
+            let names: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+            assert_eq!(names.len(), 1, "a temporary file was left behind");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

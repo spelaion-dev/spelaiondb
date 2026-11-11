@@ -49,6 +49,8 @@ mod sort;
 mod sql_file;
 mod table_data;
 mod table_stats;
+#[cfg(all(test, unix))]
+mod test_files;
 mod transaction;
 mod value_pick;
 mod value_view;

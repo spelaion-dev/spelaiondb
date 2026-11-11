@@ -392,13 +392,26 @@ async fn plan_store_file_io_is_bounded_atomic_and_escapes_csv() {
             .save_raw(summary.id, &impossible, &crate::ExportCancel::new())
             .is_err()
     );
-    assert!(
-        !std::fs::read_dir(&dir).unwrap().any(|e| e
-            .unwrap()
+    assert!(!std::fs::read_dir(&dir).unwrap().any(|e| {
+        e.unwrap()
             .file_name()
             .to_string_lossy()
-            .contains(".tmp"))
-    );
+            .contains("spelaion-tmp")
+    }));
+    #[cfg(unix)]
+    crate::test_files::assert_keeps_mode_and_links("plan", |path| {
+        store
+            .save_raw(summary.id, path, &crate::ExportCancel::new())
+            .unwrap();
+        store
+            .export_csv(
+                summary.id,
+                &PlanView::default(),
+                path,
+                &crate::ExportCancel::new(),
+            )
+            .unwrap();
+    });
     store.release(summary.id);
     assert!(store.summary(summary.id).is_err());
     std::fs::remove_dir_all(&dir).unwrap();
