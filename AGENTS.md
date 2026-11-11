@@ -75,6 +75,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   Every file the configuration writes goes through `atomic_file` (temporary file + rename, the
   old mode kept, a symbolic link stays a link; new files owner-only in the personal folder and
   the umask's in the repository, `edit::new_file_mode`); never `std::fs::write` over a user's file.
+  The core's exports (audit, history, plans, data files) stream through its `AtomicWriter`
+  (a uniquely named temporary file, the same guarantees).
   Importing connections from other clients (ADR-039): `import.rs` is the flow every client
   shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
   they reach, replace in place, target folder, what was not mapped, passwords read from another

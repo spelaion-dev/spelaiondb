@@ -1354,64 +1354,45 @@ fn export_history(
     path: &std::path::Path,
     cancel: &crate::ExportCancel,
 ) -> Result<usize, StoreError> {
+    use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
     use std::io::Write;
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(format!(
-        ".spelaion-history-{}-{}.tmp",
-        std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let temporary = PathBuf::from(temporary);
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    let result = (|| {
-        let mut writer = std::io::BufWriter::new(file);
-        let count = store.visit_history(workspace, filter, |entries| {
-            for entry in entries {
-                if cancel.is_cancelled() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Interrupted,
-                        "History export cancelled: no file was written",
-                    )
-                    .into());
-                }
-                // Do not turn a connection/database/error containing a newline into SQL.
-                // Only the fixed timestamp and numbers appear in generated comments.
-                writeln!(
-                    writer,
-                    "-- {} · {} ms · {} rows",
-                    crate::audit::iso_time(entry.at_ms),
-                    entry.duration_ms,
-                    entry.rows
-                )?;
-                writeln!(
-                    writer,
-                    "{}\n;\n",
-                    crate::audit::redact_secrets(&entry.statement)
-                )?;
+    // Dropped on any error or cancel, which deletes the temporary file.
+    let mut writer = std::io::BufWriter::new(AtomicWriter::create(path, NewFileMode::Default)?);
+    let count = store.visit_history(workspace, filter, |entries| {
+        for entry in entries {
+            if cancel.is_cancelled() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "History export cancelled: no file was written",
+                )
+                .into());
             }
-            Ok(())
-        })?;
-        if cancel.is_cancelled() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "History export cancelled: no file was written",
-            )
-            .into());
+            // Do not turn a connection/database/error containing a newline into SQL.
+            // Only the fixed timestamp and numbers appear in generated comments.
+            writeln!(
+                writer,
+                "-- {} · {} ms · {} rows",
+                crate::audit::iso_time(entry.at_ms),
+                entry.duration_ms,
+                entry.rows
+            )?;
+            writeln!(
+                writer,
+                "{}\n;\n",
+                crate::audit::redact_secrets(&entry.statement)
+            )?;
         }
-        writer.flush()?;
-        writer.get_ref().sync_all()?;
-        drop(writer);
-        std::fs::rename(&temporary, path)?;
-        Ok(count)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        Ok(())
+    })?;
+    if cancel.is_cancelled() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "History export cancelled: no file was written",
+        )
+        .into());
     }
-    result
+    writer.into_inner().map_err(|e| e.into_error())?.commit()?;
+    Ok(count)
 }
 
 fn millis(duration: Duration) -> i64 {
@@ -2294,7 +2275,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    // Several threads: the mode and link check blocks on exports in place.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn history_redaction_and_atomic_paged_export_preserve_scope_and_cancelled_destination() {
         let (history, _, _, path) = context_history("export");
         let entry = |workspace: &str, sql: &str| NewHistoryEntry {
@@ -2380,8 +2362,24 @@ mod tests {
                     .unwrap()
                     .file_name()
                     .to_string_lossy()
-                    .ends_with(".tmp"))
+                    .ends_with(".spelaion-tmp"))
         );
+        #[cfg(unix)]
+        {
+            let handle = tokio::runtime::Handle::current();
+            crate::test_files::assert_keeps_mode_and_links("history", |path| {
+                let count = tokio::task::block_in_place(|| {
+                    handle.block_on(history.export_history(
+                        "/repo".into(),
+                        HistoryFilter::default(),
+                        path.to_path_buf(),
+                        Arc::new(crate::ExportCancel::new()),
+                    ))
+                })
+                .unwrap();
+                assert_eq!(count, 2);
+            });
+        }
     }
 
     #[tokio::test]

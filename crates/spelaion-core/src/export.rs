@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
 use spelaion_driver_api::{ColumnMeta, Dialect, LogicalType, Value};
 
 use crate::results::StoredResult;
@@ -465,76 +466,50 @@ pub fn export_to_file(
 
 /// A file written as `<path>.part` and renamed to `path` only when complete (ADR-034): an
 /// error, a cancel or a crash never leaves a partial file under the final name, and whatever
-/// was at `path` stays until the new file is whole. Dropped without [`PartFile::commit`], it
-/// deletes the temporary file.
+/// was at `path` stays until the new file is whole. It is `spelaion-config`'s
+/// [`AtomicWriter`]: the `.part` file sits beside the file a symbolic link points to (the link
+/// stays a link), the old file's mode is kept, and a second export to the same path writes
+/// `<path>.<pid>-<n>.part` instead of sharing the first one's. Dropped without
+/// [`PartFile::commit`], it deletes the temporary file.
 pub(crate) struct PartFile {
-    path: PathBuf,
-    temporary: PathBuf,
-    out: Option<Encoder<io::BufWriter<std::fs::File>>>,
+    out: Encoder<io::BufWriter<AtomicWriter>>,
 }
 
 impl PartFile {
     pub(crate) fn create(path: &Path, encoding: TextEncoding) -> io::Result<Self> {
-        let temporary = part_path(path);
-        let file = std::fs::File::create(&temporary)?;
+        let file = AtomicWriter::create_with_suffix(path, ".part", NewFileMode::Default)?;
         let mut part = Self {
-            path: path.to_path_buf(),
-            temporary,
-            out: Some(Encoder::new(
-                io::BufWriter::with_capacity(1 << 20, file),
-                encoding,
-            )),
+            out: Encoder::new(io::BufWriter::with_capacity(1 << 20, file), encoding),
         };
-        if let Err(e) = part.writer().write_bom() {
-            part.discard();
-            return Err(e);
-        }
+        // On an error `part` is dropped, which deletes the temporary file.
+        part.writer().write_bom()?;
         Ok(part)
     }
 
-    pub(crate) fn writer(&mut self) -> &mut Encoder<io::BufWriter<std::fs::File>> {
-        self.out
-            .as_mut()
-            .expect("the file is open until commit or discard")
+    pub(crate) fn writer(&mut self) -> &mut Encoder<io::BufWriter<AtomicWriter>> {
+        &mut self.out
     }
 
     /// Flushes, renames to the final name and says what was written.
-    pub(crate) fn commit(mut self, rows: u64) -> io::Result<FileSummary> {
-        let mut out = self.out.take().expect("the file is open until commit");
-        let finished = (|| {
-            out.flush()?;
-            let summary = FileSummary {
-                rows,
-                bytes: out.bytes(),
-                replaced: out.replaced(),
-                peak_rows: 0,
-            };
-            out.into_inner().into_inner().map_err(|e| e.into_error())?;
-            std::fs::rename(&self.temporary, &self.path)?;
-            Ok(summary)
-        })();
-        if finished.is_err() {
-            let _ = std::fs::remove_file(&self.temporary);
-        }
-        finished
+    pub(crate) fn commit(self, rows: u64) -> io::Result<FileSummary> {
+        let mut out = self.out;
+        out.flush()?;
+        let summary = FileSummary {
+            rows,
+            bytes: out.bytes(),
+            replaced: out.replaced(),
+            peak_rows: 0,
+        };
+        out.into_inner()
+            .into_inner()
+            .map_err(|e| e.into_error())?
+            .commit()?;
+        Ok(summary)
     }
 
     /// Deletes the temporary file.
-    pub(crate) fn discard(mut self) {
-        self.close_and_remove();
-    }
-
-    fn close_and_remove(&mut self) {
-        if let Some(out) = self.out.take() {
-            drop(out);
-            let _ = std::fs::remove_file(&self.temporary);
-        }
-    }
-}
-
-impl Drop for PartFile {
-    fn drop(&mut self) {
-        self.close_and_remove();
+    pub(crate) fn discard(self) {
+        drop(self);
     }
 }
 
@@ -1534,6 +1509,58 @@ mod tests {
             .is_err()
         );
         assert!(!missing.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_export_keeps_the_files_mode_and_writes_through_a_link() {
+        let result = sample();
+        let result = result.read().unwrap();
+        let options = ExportOptions {
+            format: ExportFormat::Csv,
+            rows: 0..usize::MAX,
+            columns: vec![0, 1],
+            header: true,
+            csv: CsvOptions::default(),
+        };
+        crate::test_files::assert_keeps_mode_and_links("data", |path| {
+            export_to_file(
+                &result,
+                &options,
+                TextEncoding::Utf8,
+                &Quoted("postgres"),
+                path,
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn two_file_exports_to_one_path_never_share_the_part_file() {
+        let dir =
+            std::env::temp_dir().join(format!("spelaion-export-parts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out.csv");
+        let mut first = PartFile::create(&path, TextEncoding::Utf8).unwrap();
+        let mut second = PartFile::create(&path, TextEncoding::Utf8).unwrap();
+        assert!(
+            dir.join("out.csv.part").exists(),
+            "the first is <name>.part (ADR-034)"
+        );
+        first.writer().write_all(b"first").unwrap();
+        second.writer().write_all(b"second").unwrap();
+        first.commit(1).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+        second.commit(1).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        // A cancelled one leaves nothing and the file as it was.
+        let mut cancelled = PartFile::create(&path, TextEncoding::Utf8).unwrap();
+        cancelled.writer().write_all(b"partial").unwrap();
+        cancelled.discard();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

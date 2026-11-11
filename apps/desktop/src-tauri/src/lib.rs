@@ -440,7 +440,13 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
         state.workspace_version.fetch_add(2, Ordering::AcqRel);
     }
     let _ = std::fs::create_dir_all(&state.user_dir);
-    let _ = std::fs::write(last_workspace_file(&state.user_dir), &path);
+    // App state in the personal folder: replaced whole (a crash never leaves half a path) and
+    // owner-only when new, like the folder's other files.
+    let _ = spelaion_config::atomic_file::replace(
+        &last_workspace_file(&state.user_dir),
+        path.as_bytes(),
+        spelaion_config::atomic_file::NewFileMode::OwnerOnly,
+    );
     state.reload().await;
     state.workspace_version.fetch_add(1, Ordering::Release);
     state.info().await

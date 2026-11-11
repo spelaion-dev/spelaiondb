@@ -8,12 +8,13 @@
 //! the old one, so a crash leaves the old file or the new one, never part of one. On Unix the
 //! new file keeps the old one's mode, and it is never readable by anyone else while it is
 //! written: the temporary file is created owner-only and only then given the old mode. A
-//! symbolic link is followed and its target replaced, so the link stays a link.
+//! symbolic link is followed and its target replaced, so the link stays a link. Files written
+//! in pieces (the core's exports) use [`AtomicWriter`], the streaming form of [`replace`].
 //!
 //! Every function here blocks on the file system.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write as _};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -56,22 +57,55 @@ pub fn follow_link(path: &Path) -> io::Result<PathBuf> {
 /// temporary file in the same folder, flushed and renamed over it. On Unix it keeps the old
 /// file's mode; a file that did not exist gets `new_file`'s.
 pub fn replace(path: &Path, bytes: &[u8], new_file: NewFileMode) -> io::Result<()> {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let target = follow_link(path)?;
-    let name = target
-        .file_name()
-        .ok_or_else(|| io::Error::other("the path has no file name"))?;
-    let dir = folder_of(&target);
-    let temporary = dir.join(format!(
-        ".{}.{}-{}.spelaion-tmp",
-        name.to_string_lossy(),
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    let written = (|| -> io::Result<()> {
-        // Only Unix keeps the old mode; Windows has nothing to carry over.
-        #[cfg(unix)]
-        let existing = fs::metadata(&target).ok();
+    let mut file = AtomicWriter::create(path, new_file)?;
+    file.write_all(bytes)?;
+    file.commit()
+}
+
+/// A file written in pieces (an export) that replaces `path` only once it is complete: the
+/// streaming form of [`replace`], with the same guarantees. The bytes go to a uniquely named
+/// temporary file beside the file `path` names (following symbolic links), so two writers
+/// to one path never share it; [`AtomicWriter::commit`] flushes it, gives it the old file's
+/// mode (Unix), renames it over the old file and makes the rename durable. Dropped without a
+/// commit (an error, a cancel), it deletes the temporary file and `path` is untouched.
+///
+/// Writes go straight to the file: wrap it in a [`io::BufWriter`] for small writes.
+#[derive(Debug)]
+pub struct AtomicWriter {
+    target: PathBuf,
+    temporary: PathBuf,
+    /// `None` once committed.
+    file: Option<fs::File>,
+}
+
+impl AtomicWriter {
+    /// Starts replacing `path`. The temporary file is hidden (`.<name>.<pid>-<n>.spelaion-tmp`).
+    /// On Unix it is owner-only while it is written if the file exists or `new_file` is
+    /// [`NewFileMode::OwnerOnly`].
+    pub fn create(path: &Path, new_file: NewFileMode) -> io::Result<Self> {
+        Self::open(path, None, new_file)
+    }
+
+    /// [`AtomicWriter::create`], with the temporary file named `<name><suffix>` (an export's
+    /// `.part`, ADR-034, which the user may see while it is written), or
+    /// `<name>.<pid>-<n><suffix>` if another writer (or a crash) left that one.
+    pub fn create_with_suffix(
+        path: &Path,
+        suffix: &str,
+        new_file: NewFileMode,
+    ) -> io::Result<Self> {
+        Self::open(path, Some(suffix), new_file)
+    }
+
+    fn open(path: &Path, suffix: Option<&str>, new_file: NewFileMode) -> io::Result<Self> {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        const ATTEMPTS: usize = 100;
+        let target = follow_link(path)?;
+        let name = target
+            .file_name()
+            .ok_or_else(|| io::Error::other("the path has no file name"))?
+            .to_owned();
+        let dir = folder_of(&target);
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -79,31 +113,116 @@ pub fn replace(path: &Path, bytes: &[u8], new_file: NewFileMode) -> io::Result<(
             use std::os::unix::fs::OpenOptionsExt as _;
             // Owner-only while the bytes go in, whatever the umask; the old file's mode is
             // given only once it is complete.
-            options.mode(match (&existing, new_file) {
-                (Some(_), _) | (None, NewFileMode::OwnerOnly) => 0o600,
-                (None, NewFileMode::Default) => 0o666,
+            let exists = fs::metadata(&target).is_ok();
+            options.mode(match (exists, new_file) {
+                (true, _) | (false, NewFileMode::OwnerOnly) => 0o600,
+                (false, NewFileMode::Default) => 0o666,
             });
         }
         #[cfg(not(unix))]
         let _ = new_file;
-        let mut file = options.open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        // Not on Windows, where the only permission is "read-only" and the rename must fail
-        // on such a file.
-        #[cfg(unix)]
-        if let Some(meta) = &existing {
-            fs::set_permissions(&temporary, meta.permissions())?;
+        for attempt in 0..ATTEMPTS {
+            let mut temporary_name = std::ffi::OsString::new();
+            let unique = || {
+                format!(
+                    "{}-{}",
+                    std::process::id(),
+                    COUNTER.fetch_add(1, Ordering::Relaxed)
+                )
+            };
+            match suffix {
+                Some(suffix) if attempt == 0 => {
+                    temporary_name.push(&name);
+                    temporary_name.push(suffix);
+                }
+                Some(suffix) => {
+                    temporary_name.push(&name);
+                    temporary_name.push(format!(".{}{suffix}", unique()));
+                }
+                None => {
+                    temporary_name.push(".");
+                    temporary_name.push(&name);
+                    temporary_name.push(format!(".{}.spelaion-tmp", unique()));
+                }
+            }
+            let temporary = dir.join(temporary_name);
+            match options.open(&temporary) {
+                Ok(file) => {
+                    return Ok(Self {
+                        target,
+                        temporary,
+                        file: Some(file),
+                    });
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e),
+            }
         }
-        fs::rename(&temporary, &target)
-    })();
-    if let Err(e) = written {
-        let _ = fs::remove_file(&temporary);
-        return Err(e);
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("no free temporary file name beside {}", target.display()),
+        ))
     }
-    sync_folder(&dir);
-    Ok(())
+
+    /// The file that is replaced: `path`, or the file its symbolic link points to.
+    pub fn target(&self) -> &Path {
+        &self.target
+    }
+
+    /// Flushes the file to disk, gives it the old file's mode (Unix; a file that did not exist
+    /// keeps the mode it was created with) and renames it over the old one.
+    pub fn commit(mut self) -> io::Result<()> {
+        let file = self
+            .file
+            .take()
+            .expect("the file is open until it is committed");
+        let finished = (|| -> io::Result<()> {
+            file.sync_all()?;
+            drop(file);
+            // Not on Windows, where the only permission is "read-only" and the rename must
+            // fail on such a file.
+            #[cfg(unix)]
+            if let Ok(meta) = fs::metadata(&self.target) {
+                fs::set_permissions(&self.temporary, meta.permissions())?;
+            }
+            fs::rename(&self.temporary, &self.target)
+        })();
+        if let Err(e) = finished {
+            let _ = fs::remove_file(&self.temporary);
+            return Err(e);
+        }
+        sync_folder(&folder_of(&self.target));
+        Ok(())
+    }
+
+    fn file(&mut self) -> &mut fs::File {
+        self.file
+            .as_mut()
+            .expect("the file is open until it is committed")
+    }
+}
+
+impl Write for AtomicWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.file().write(buf)
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        self.file().write_all(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file().flush()
+    }
+}
+
+impl Drop for AtomicWriter {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            drop(file);
+            let _ = fs::remove_file(&self.temporary);
+        }
+    }
 }
 
 /// Writes `bytes` to `path`, which must not exist yet, with `like`'s mode on Unix (a backup of
@@ -201,6 +320,54 @@ mod tests {
         replace(&path, b"two", NewFileMode::Default).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"two");
         assert_eq!(names(&dir), ["a.txt"]);
+    }
+
+    #[test]
+    fn an_unfinished_writer_leaves_the_file_as_it_was() {
+        let dir = folder("unfinished");
+        let path = dir.join("a.txt");
+        fs::write(&path, "old").unwrap();
+        let mut file = AtomicWriter::create(&path, NewFileMode::Default).unwrap();
+        file.write_all(b"partial").unwrap();
+        drop(file);
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        assert_eq!(names(&dir), ["a.txt"]);
+    }
+
+    #[test]
+    fn two_writers_to_one_path_never_share_a_temporary_file() {
+        let dir = folder("two-writers");
+        let path = dir.join("a.txt");
+        for suffix in [None, Some(".part")] {
+            let open = || match suffix {
+                None => AtomicWriter::create(&path, NewFileMode::Default),
+                Some(suffix) => {
+                    AtomicWriter::create_with_suffix(&path, suffix, NewFileMode::Default)
+                }
+            };
+            let mut first = open().unwrap();
+            let mut second = open().unwrap();
+            assert_ne!(first.temporary, second.temporary);
+            first.write_all(b"first").unwrap();
+            second.write_all(b"second").unwrap();
+            first.commit().unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"first");
+            second.commit().unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"second");
+            assert_eq!(names(&dir), ["a.txt"]);
+        }
+        // The visible name first, then a unique one beside it.
+        let first = AtomicWriter::create_with_suffix(&path, ".part", NewFileMode::Default).unwrap();
+        let second =
+            AtomicWriter::create_with_suffix(&path, ".part", NewFileMode::Default).unwrap();
+        assert_eq!(first.temporary, dir.join("a.txt.part"));
+        let second_name = second
+            .temporary
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(second_name.starts_with("a.txt.") && second_name.ends_with(".part"));
     }
 
     #[test]
