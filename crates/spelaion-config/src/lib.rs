@@ -58,8 +58,8 @@ pub use draft::{
     normalize_tags, slug, update_connection, update_connection_at_revision,
 };
 pub use edit::{
-    CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_vars,
-    set_value,
+    CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_masking,
+    set_user_vars, set_value,
 };
 pub use engine_change::EngineChange;
 pub use error::{ConfigError, ResolveError};

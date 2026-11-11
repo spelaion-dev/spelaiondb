@@ -3974,6 +3974,15 @@ impl PendingEditsItem {
     }
 }
 
+/// The user's own column masking patterns (ADR-051).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct UserMaskingItem {
+    pub patterns: Vec<String>,
+    /// `user.toml` does not load: every column of every connection is masked until it is fixed.
+    pub unreadable: bool,
+}
+
 /// A masked cell's value, revealed on the user's request (ADR-051).
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

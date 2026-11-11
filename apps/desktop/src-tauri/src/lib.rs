@@ -552,6 +552,26 @@ async fn set_tunnel_ports(
     Ok(())
 }
 
+/// The user's own column masking patterns (`[masking] always` in `user.toml`, ADR-051).
+#[tauri::command]
+#[specta::specta]
+async fn user_masking(state: State<'_, AppState>) -> CmdResult<UserMaskingItem> {
+    let config = state.config.read().await;
+    Ok(UserMaskingItem {
+        patterns: config.user.masking.always.clone(),
+        unreadable: config.user_unreadable,
+    })
+}
+
+/// Sets the user's own column masking patterns. They apply to sessions opened from then on.
+#[tauri::command]
+#[specta::specta]
+async fn set_user_masking(patterns: Vec<String>, state: State<'_, AppState>) -> CmdResult<()> {
+    spelaion_config::set_user_masking(&state.user_dir, &patterns).map_err(|e| e.to_string())?;
+    state.reload().await;
+    Ok(())
+}
+
 /// Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
 /// as it is now, and connecting can go on.
 #[tauri::command]
@@ -5229,6 +5249,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             tunnel_ports,
             network_profiles,
             set_tunnel_ports,
+            user_masking,
+            set_user_masking,
             list_connections,
             list_history,
             library::history_page,

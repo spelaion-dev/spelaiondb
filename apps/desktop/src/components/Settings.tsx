@@ -13,8 +13,8 @@ import { call, commands, type NamePatternPreview, type NetworkProfileItem } from
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates" | "scripts" | "editor" | "map";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates", "scripts", "editor", "map"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "scripts" | "editor" | "map";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "scripts", "editor", "map"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -63,6 +63,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "explorer" && <ExplorerSettings />}
         {category === "connections" && <ConnectionSettings />}
         {category === "types" && <ConnectionTypesSettings />}
+        {category === "masking" && <MaskingSettings />}
         {category === "history" && <HistorySettings />}
         {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}
@@ -641,6 +642,68 @@ function ConnectionSettings() {
       {status.kind === "saved" && <p className="small" role="status">{t("connections.saved")}</p>}
       {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
       <p className="muted small">{t("connections.hint")}</p>
+    </section>
+  );
+}
+
+/** The user's own masking patterns (ADR-051), `[masking] always` in user.toml: saved when the
+ *  box loses focus, for sessions opened from then on. The core checks every pattern. */
+function MaskingSettings() {
+  const { t } = useTranslation("settings");
+  const [text, setText] = useState("");
+  const [saved, setSaved] = useState<string | null>(null);
+  const [unreadable, setUnreadable] = useState(false);
+  const [status, setStatus] = useState<{ kind: "idle" | "saved" } | { kind: "error"; message: string }>({ kind: "idle" });
+
+  useEffect(() => {
+    call(commands.userMasking())
+      .then((masking) => {
+        const joined = masking.patterns.join("\n");
+        setText(joined);
+        setSaved(joined);
+        setUnreadable(masking.unreadable);
+      })
+      .catch((e: unknown) => setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) }));
+  }, []);
+
+  async function save() {
+    if (saved === null || text === saved) return;
+    try {
+      await call(commands.setUserMasking(text.split("\n")));
+      const masking = await call(commands.userMasking());
+      const joined = masking.patterns.join("\n");
+      setText(joined);
+      setSaved(joined);
+      setUnreadable(masking.unreadable);
+      setStatus({ kind: "saved" });
+    } catch (e) {
+      setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return (
+    <section aria-label={t("masking.patterns")}>
+      <p>{t("masking.intro")}</p>
+      {unreadable && <p className="banner" role="alert">{t("masking.unreadable")}</p>}
+      <label className="field">
+        <span>{t("masking.patterns")}</span>
+        <textarea
+          className="masking-patterns"
+          name="userMasking"
+          rows={5}
+          spellCheck={false}
+          value={text}
+          placeholder={t("masking.placeholder")}
+          onChange={(e) => {
+            setText(e.target.value);
+            setStatus({ kind: "idle" });
+          }}
+          onBlur={() => void save()}
+        />
+      </label>
+      {status.kind === "saved" && <p className="small" role="status">{t("masking.saved")}</p>}
+      {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
+      <p className="muted small">{t("masking.hint")}</p>
     </section>
   );
 }

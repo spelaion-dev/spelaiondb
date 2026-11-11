@@ -2405,7 +2405,9 @@ select {
   border-radius: 6px;
 }
 .connection-form textarea.session-setup,
-.connection-form textarea.masking-patterns {
+.connection-form textarea.masking-patterns,
+.settings textarea.masking-patterns,
+.type-editor textarea.masking-patterns {
   width: 100%;
   min-height: 112px;
   resize: vertical;
