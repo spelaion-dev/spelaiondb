@@ -197,7 +197,7 @@ export const commands = {
 	 */
 	keychainAvailable: () => __TAURI_INVOKE<boolean>("keychain_available"),
 	/**  Tunnels a new connection can use (from the repository and the personal directory). */
-	listTunnels: () => typedError<TunnelItem[], string>(__TAURI_INVOKE("list_tunnels")),
+	listTunnels: () => typedError<TunnelItem_Serialize[], string>(__TAURI_INVOKE("list_tunnels")),
 	/**
 	 *  Tests a connection that may not be saved yet, step by step (ADR-032): every change to its
 	 *  steps goes through `on_step`, and `stop_connection_test(test)` stops it. Nothing is
@@ -269,7 +269,7 @@ export const commands = {
 	 */
 	testTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, test: number, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<TunnelTestOutcome_Serialize, string>(__TAURI_INVOKE("test_tunnel", { draft, passwords, proxyPassword, test, onStep })),
 	/**  Saves a new tunnel (and its `keychain` passwords) and reloads the configuration. */
-	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelItem, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords, proxyPassword })),
+	addTunnel: (draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null) => typedError<TunnelItem_Serialize, string>(__TAURI_INVOKE("add_tunnel", { draft, passwords, proxyPassword })),
 	/**  Saves an edited tunnel (same file and name) and reloads the configuration. */
 	updateTunnel: (name: string, personal: boolean, draft: TunnelDraftItem_Deserialize, passwords: (string | null)[], proxyPassword: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_tunnel", { name, personal, draft, passwords, proxyPassword, revision })),
 	/**  Deletes a tunnel that no connection uses, with its stored passwords. */
@@ -650,13 +650,13 @@ export const commands = {
 	 */
 	scanConnections: (client: string, path: string | null, filePassword: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword })),
 	/**  The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015). */
-	kubeContexts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form, personal, editing })),
+	kubeContexts: (form: KubernetesDraftItem, editor: KubeEditor_Deserialize) => typedError<string[], string>(__TAURI_INVOKE("kube_contexts", { form, editor })),
 	/**  The namespaces of the chosen context. */
-	kubeNamespaces: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_namespaces", { form, personal, editing })),
+	kubeNamespaces: (form: KubernetesDraftItem, editor: KubeEditor_Deserialize) => typedError<string[], string>(__TAURI_INVOKE("kube_namespaces", { form, editor })),
 	/**  Names of one kind of resource (`svc`, `pod`, `deployment`) in the chosen namespace. */
-	kubeNames: (form: KubernetesDraftItem, kind: string, personal: boolean, editing: string | null) => typedError<string[], string>(__TAURI_INVOKE("kube_names", { form, kind, personal, editing })),
+	kubeNames: (form: KubernetesDraftItem, kind: string, editor: KubeEditor_Deserialize) => typedError<string[], string>(__TAURI_INVOKE("kube_names", { form, kind, editor })),
 	/**  The ports of the chosen resource: a service's ports or its containers' ports. */
-	kubePorts: (form: KubernetesDraftItem, personal: boolean, editing: string | null) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form, personal, editing })),
+	kubePorts: (form: KubernetesDraftItem, editor: KubeEditor_Deserialize) => typedError<KubePortItem_Serialize[], string>(__TAURI_INVOKE("kube_ports", { form, editor })),
 	/**
 	 *  Imports the chosen connections (and their SSH tunnels) as SpelaionDB files. The client's
 	 *  files are read again here, so passwords never leave Rust: with `save_passwords` the ones
@@ -2928,6 +2928,38 @@ export type KeyTargetItem = {
 	filter: string,
 };
 
+/**
+ *  Which editor asks `kubectl` for its lists, so its values are checked against trust before
+ *  a process starts (ADR-015, ADR-050).
+ */
+export type KubeEditor = KubeEditor_Serialize | KubeEditor_Deserialize;
+
+/**
+ *  Which editor asks `kubectl` for its lists, so its values are checked against trust before
+ *  a process starts (ADR-015, ADR-050).
+ */
+export type KubeEditor_Deserialize = 
+/**
+ *  The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
+ *  the Kubernetes network profile it uses, whose settings come first.
+ */
+{ kind: "connection"; personal: boolean; editing?: string | null; profile?: string | null } | 
+/**  The network profile editor; `editing` is the profile's name. */
+{ kind: "profile"; personal: boolean; editing?: string | null };
+
+/**
+ *  Which editor asks `kubectl` for its lists, so its values are checked against trust before
+ *  a process starts (ADR-015, ADR-050).
+ */
+export type KubeEditor_Serialize = 
+/**
+ *  The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
+ *  the Kubernetes network profile it uses, whose settings come first.
+ */
+{ kind: "connection"; personal: boolean; editing: string | null; profile: string | null } | 
+/**  The network profile editor; `editing` is the profile's name. */
+{ kind: "profile"; personal: boolean; editing: string | null };
+
 /**  A port of a Kubernetes resource, for the port picker. */
 export type KubePortItem = KubePortItem_Serialize | KubePortItem_Deserialize;
 
@@ -3245,6 +3277,11 @@ export type NetworkProfileItem_Deserialize = {
 	proxy?: string | null,
 	/**  `user@host:port` per hop, in order. */
 	hops: string[],
+	/**
+	 *  A Kubernetes profile (ADR-050): `context / namespace / resource`, with `…` where the
+	 *  profile leaves it out.
+	 */
+	kubernetes?: string | null,
 	/**  Display names of the connections that use it. */
 	usedBy: string[],
 };
@@ -3260,6 +3297,11 @@ export type NetworkProfileItem_Serialize = {
 	proxy: string | null,
 	/**  `user@host:port` per hop, in order. */
 	hops: string[],
+	/**
+	 *  A Kubernetes profile (ADR-050): `context / namespace / resource`, with `…` where the
+	 *  profile leaves it out.
+	 */
+	kubernetes: string | null,
 	/**  Display names of the connections that use it. */
 	usedBy: string[],
 };
@@ -5023,6 +5065,8 @@ export type TunnelDraftItem_Deserialize = {
 	connectTimeout?: number | null,
 	/**  A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027). */
 	proxy?: ProxyDraftItem_Deserialize | null,
+	/**  A Kubernetes profile (ADR-050): then no hops, proxy or SSH settings are saved. */
+	kubernetes?: KubernetesDraftItem | null,
 };
 
 export type TunnelDraftItem_Serialize = {
@@ -5037,12 +5081,33 @@ export type TunnelDraftItem_Serialize = {
 	connectTimeout: number | null,
 	/**  A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027). */
 	proxy: ProxyDraftItem_Serialize | null,
+	/**  A Kubernetes profile (ADR-050): then no hops, proxy or SSH settings are saved. */
+	kubernetes: KubernetesDraftItem | null,
 };
 
-/**  A tunnel that a new connection can use. */
-export type TunnelItem = {
+/**  A tunnel (a network profile) that a new connection can use. */
+export type TunnelItem = TunnelItem_Serialize | TunnelItem_Deserialize;
+
+/**  A tunnel (a network profile) that a new connection can use. */
+export type TunnelItem_Deserialize = {
 	name: string,
 	personal: boolean,
+	/**
+	 *  A Kubernetes profile (ADR-050): what it sets, for the Kubernetes tab to show; `None`
+	 *  for an SSH one (hops, a proxy, or both).
+	 */
+	kubernetes?: KubernetesDraftItem | null,
+};
+
+/**  A tunnel (a network profile) that a new connection can use. */
+export type TunnelItem_Serialize = {
+	name: string,
+	personal: boolean,
+	/**
+	 *  A Kubernetes profile (ADR-050): what it sets, for the Kubernetes tab to show; `None`
+	 *  for an SSH one (hops, a proxy, or both).
+	 */
+	kubernetes: KubernetesDraftItem | null,
 };
 
 /**  The personal range of local ports for SSH tunnels, both ends included. */

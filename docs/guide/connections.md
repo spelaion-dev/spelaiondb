@@ -47,6 +47,26 @@ port, database, user, SSL mode and the password field (which is saved like a typ
   resource = "svc/postgres" # svc/…, pod/… or deployment/…; `port` is its port
   ```
 
+  Several databases behind one cluster can share a **Kubernetes network profile**: in the
+  Kubernetes tab, **New profile…** saves the context, namespace, kubeconfig file and `kubectl`
+  program once (and the resource too, if you want), and every connection that picks the profile
+  only chooses what it leaves empty, usually the resource. A setting comes from the profile or
+  from the connection, never both. In the files, the profile is a tunnel file with a
+  `[kubernetes]` table, and the connection names it with `tunnel = "…"`:
+
+  ```toml
+  # .spelaion/tunnels/prod-cluster.toml
+  [kubernetes]
+  context = "prod-eks"
+  namespace = "shop"
+  kubeconfig = "${user.kubeconfig}" # each person's own path
+
+  # .spelaion/connections/orders.toml
+  tunnel = "prod-cluster"
+  [kubernetes]
+  resource = "svc/orders"
+  ```
+
 Testing a connection writes nothing. Saving never overwrites an existing connection.
 
 The **⋯** menu next to each connection has **Edit…** and **Delete…**. Editing keeps the same

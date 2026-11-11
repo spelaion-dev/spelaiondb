@@ -45,7 +45,8 @@ pub struct ConnectionFile {
     /// Reference to the secret, never the value: `{ secret = "keychain" }`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<SecretSpec>,
-    /// Name of a tunnel in `.spelaion/tunnels/`.
+    /// Name of a tunnel (a network profile) in `.spelaion/tunnels/`. With a Kubernetes profile
+    /// (ADR-050), `[kubernetes]` may set what the profile leaves out, such as the resource.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tunnel: Option<String>,
     /// A fixed port on 127.0.0.1 for this connection's end of its SSH tunnel, so other tools
@@ -53,7 +54,8 @@ pub struct ConnectionFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_port: Option<u16>,
     /// Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):
-    /// `port` is then the resource's port and `host` is only the name TLS checks.
+    /// `port` is then the resource's port and `host` is only the name TLS checks. With a
+    /// Kubernetes network profile in `tunnel` (ADR-050), only what the profile leaves out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kubernetes: Option<KubernetesConfig>,
     /// SQLite with a tunnel: the file is on the tunnel's last hop, opened by its `sqlite3`
@@ -331,7 +333,8 @@ pub enum WritePolicy {
     Allow,
 }
 
-/// An SSH tunnel: `.spelaion/tunnels/<name>.toml`.
+/// A network profile (ADR-027): `.spelaion/tunnels/<name>.toml`. SSH hops, a proxy, or both;
+/// or a Kubernetes cluster (ADR-050).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TunnelFile {
@@ -353,10 +356,38 @@ pub struct TunnelFile {
     /// hops, it reaches the database itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    /// `kubectl port-forward` through a cluster, shared by every connection that names this
+    /// profile (ADR-050). It has no hops or proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubernetes: Option<KubernetesProfileConfig>,
     /// Hops in order; the last one is the one that reaches the database. None with a proxy
-    /// that reaches the database alone.
+    /// that reaches the database alone, or with Kubernetes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hops: Vec<HopConfig>,
+}
+
+/// A Kubernetes network profile (ADR-050): the settings of `[kubernetes]` in a connection
+/// (ADR-015), shared. Each one is set here or in the connection that uses the profile, never
+/// in both; the resource may be left to each connection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KubernetesProfileConfig {
+    /// Context of the kubeconfig; its current context when absent here and in the connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// The context's namespace when absent here and in the connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// `svc/<name>`, `pod/<name>` or `deployment/<name>`; when absent, each connection names
+    /// its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubeconfig: Option<String>,
+    /// The `kubectl` executable; `kubectl` on the PATH when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubectl: Option<String>,
 }
 
 /// A tunnel's proxy (ADR-027).
@@ -403,7 +434,9 @@ pub struct KubernetesConfig {
     /// The context's namespace when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
-    /// `svc/<name>`, `pod/<name>` or `deployment/<name>`.
+    /// `svc/<name>`, `pod/<name>` or `deployment/<name>`. Left out only when the connection's
+    /// Kubernetes network profile names it (ADR-050).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub resource: String,
     /// A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).
     #[serde(default, skip_serializing_if = "Option::is_none")]

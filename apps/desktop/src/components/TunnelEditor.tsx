@@ -1,16 +1,22 @@
-// SSH tunnel editor, opened from the SSH tab of the connection form: the hops in order
-// (the last one reaches the database), each with its server and authentication. The core
-// validates and writes the file; passwords go to the keychain, never to the file.
+// Network profile editor (ADR-027), opened from the connection form and Settings → Network.
+// An SSH profile has hops in order (the last one reaches the database), each with its server
+// and authentication, and a proxy; a Kubernetes profile (ADR-050) has a cluster's settings,
+// shared by the connections that use it. The core validates and writes the file; passwords
+// go to the keychain, never to the file.
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { chooseOpenFile } from "../dialogs";
 import { useKeychainAvailable } from "../keychain";
-import { call, commands, type HopDraft, type PasswordMode, type ProxyDraft, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
+import { call, commands, type HopDraft, type KubernetesDraftItem, type PasswordMode, type ProxyDraft, type SshAuthItem, type TunnelDraft, type TunnelItem } from "../api";
 import { useApp, useDialogs } from "../store";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
+import { EMPTY_KUBERNETES, KubernetesTab } from "./KubernetesTab";
 
-export type TunnelEditorMode = { kind: "add"; personal: boolean } | { kind: "edit"; name: string; personal: boolean };
+/** `kubernetes` starts a new profile as a Kubernetes one (from the Kubernetes tab). */
+export type TunnelEditorMode = { kind: "add"; personal: boolean; kubernetes?: boolean } | { kind: "edit"; name: string; personal: boolean };
+
+type Route = "ssh" | "kubernetes";
 
 type Method = SshAuthItem | "custom";
 
@@ -150,6 +156,8 @@ export function TunnelEditor(props: {
   const [keepaliveCount, setKeepaliveCount] = useState<number | null>(null);
   const [connectTimeout, setConnectTimeout] = useState<number | null>(null);
   const [proxy, setProxy] = useState<ProxyState>(noProxy);
+  const [route, setRoute] = useState<Route>(mode.kind === "add" && mode.kubernetes ? "kubernetes" : "ssh");
+  const [kubernetes, setKubernetes] = useState<KubernetesDraftItem>(EMPTY_KUBERNETES);
   const [revision, setRevision] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "idle" } | { kind: "error"; message: string }>({ kind: "idle" });
@@ -179,6 +187,11 @@ export function TunnelEditor(props: {
         setKeepaliveCount(loaded.keepaliveCount ?? null);
         setConnectTimeout(loaded.connectTimeout ?? null);
         setProxy(proxyFromDraft(loaded.proxy, edited.proxyPasswordStored));
+        if (loaded.kubernetes) {
+          setRoute("kubernetes");
+          setKubernetes(loaded.kubernetes);
+          setHops([emptyHop()]);
+        }
       })
       .catch((e: unknown) => setLoadError(errorText(e)));
   }, [mode]);
@@ -209,15 +222,35 @@ export function TunnelEditor(props: {
     setStatus({ kind: "idle" });
   };
 
-  const draft: TunnelDraft = { personal, name, hops: hops.map(toDraft), keepaliveInterval, keepaliveCount, connectTimeout, proxy: proxyToDraft(proxy) };
-  const proxyPassword = proxy.enabled && proxy.password ? proxy.password : null;
+  const kube = route === "kubernetes";
+  const draft: TunnelDraft = kube
+    ? { personal, name, hops: [], keepaliveInterval: null, keepaliveCount: null, connectTimeout: null, proxy: null, kubernetes }
+    : { personal, name, hops: hops.map(toDraft), keepaliveInterval, keepaliveCount, connectTimeout, proxy: proxyToDraft(proxy), kubernetes: null };
+  const proxyPassword = !kube && proxy.enabled && proxy.password ? proxy.password : null;
+
+  /** A repository's kubectl settings are only used once it is trusted (ADR-022). */
+  async function chooseRoute(next: Route) {
+    if (next === "kubernetes" && !personal && !useApp.getState().workspace?.trusted) {
+      const shown = useApp.getState().workspace?.workspace ?? null;
+      try {
+        if (!(await useDialogs.getState().askTrust(shown))) return;
+        useApp.getState().setWorkspace(await call(commands.trustWorkspace(shown ?? "")));
+      } catch (e) {
+        setStatus({ kind: "error", message: errorText(e) });
+        return;
+      }
+    }
+    setRoute(next);
+    if (next === "ssh" && hops.length === 0 && !proxy.enabled) setHops([emptyHop()]);
+    setStatus({ kind: "idle" });
+  }
   const updateProxy = (patch: Partial<ProxyState>) => {
     setProxy((current) => ({ ...current, ...patch }));
     setStatus({ kind: "idle" });
   };
   /** A whole number typed in a field, or null when it is empty. */
   const numberOrNull = (text: string) => (text.trim() === "" ? null : Math.max(0, Math.trunc(Number(text))));
-  const passwords = hops.map((hop) => hop.password || null);
+  const passwords = kube ? [] : hops.map((hop) => hop.password || null);
   // Any change to the profile makes the last test's log stale (and stops a running one).
   const testedKey = JSON.stringify([draft, passwords, proxyPassword]);
   useEffect(() => log.clear(), [testedKey]);
@@ -254,7 +287,7 @@ export function TunnelEditor(props: {
     try {
       if (mode.kind === "edit") {
         await call(commands.updateTunnel(mode.name, mode.personal, draft, passwords, proxyPassword, revision ?? ""));
-        props.onSaved({ name: mode.name, personal: mode.personal });
+        props.onSaved({ name: mode.name, personal: mode.personal, kubernetes: kube ? kubernetes : null });
       } else {
         props.onSaved(await call(commands.addTunnel(draft, passwords, proxyPassword)));
       }
@@ -323,7 +356,34 @@ export function TunnelEditor(props: {
                 </div>
               </div>
               <p className="muted small">{editing ? t("tunnel.fixedHint") : t("tunnel.nameHint")}</p>
+              <div className="form-row" role="radiogroup" aria-label={t("tunnel.route")}>
+                <span>{t("tunnel.route")}</span>
+                <label className="check">
+                  <input type="radio" name="tunnel-route" checked={!kube} onChange={() => void chooseRoute("ssh")} />
+                  {t("tunnel.routeSsh")}
+                </label>
+                <label className="check">
+                  <input type="radio" name="tunnel-route" checked={kube} onChange={() => void chooseRoute("kubernetes")} />
+                  {t("tunnel.routeKubernetes")}
+                </label>
+              </div>
             </fieldset>
+
+            {kube && (
+              <KubernetesTab
+                mode="profile"
+                personal={personal}
+                editing={editing ? mode.name : null}
+                trusted={Boolean(workspace?.trusted)}
+                value={kubernetes}
+                onChange={(next) => {
+                  setKubernetes(next);
+                  setStatus({ kind: "idle" });
+                }}
+              />
+            )}
+            {!kube && (
+              <>
 
             {hops.map((hop, i) => {
               const label = t("tunnel.hop", { number: i + 1 });
@@ -551,13 +611,17 @@ export function TunnelEditor(props: {
               <p className="muted small">{t("tunnel.keepaliveHint")}</p>
               <p className="muted small">{t("tunnel.connectTimeoutHint")}</p>
             </fieldset>
+              </>
+            )}
           </div>
 
           {log.steps && <ConnectionTestLog steps={log.steps} report={log.report} running={log.running} onStop={log.stop} onClose={log.clear} />}
           <div className="wizard-footer">
-            <button type="button" onClick={() => void test()} disabled={busy || log.running}>
-              {t("tunnel.test")}
-            </button>
+            {!kube && (
+              <button type="button" onClick={() => void test()} disabled={busy || log.running}>
+                {t("tunnel.test")}
+              </button>
+            )}
             <div className="test-result" role="status">
               <TestSummary
                 steps={log.steps}

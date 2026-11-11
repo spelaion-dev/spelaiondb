@@ -76,8 +76,9 @@ pub use load::{
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{
     ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, HopConfig, IsolationLevel,
-    KubernetesConfig, McpConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec, SessionConfig,
-    SshAuth, TlsConfig, TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile, WritePolicy,
+    KubernetesConfig, KubernetesProfileConfig, McpConfig, ProxyConfig, ProxyType, SCHEMA_VERSION,
+    SecretSpec, SessionConfig, SshAuth, TlsConfig, TlsModeConfig, Tone, TunnelFile,
+    TunnelPreferences, UserFile, WritePolicy,
 };
 pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
@@ -99,9 +100,10 @@ pub use trust::{
     team_known_hosts, tunnel_item,
 };
 pub use tunnel_draft::{
-    HopDraft, ProxyDraft, StoredTunnelPasswords, TUNNEL_SCHEMA_URL, TunnelDraft,
-    TunnelDraftOptions, TunnelPasswords, add_tunnel, delete_tunnel, tunnel_passwords_stored,
-    tunnel_revision, tunnel_users, tunnels_dir, update_tunnel, update_tunnel_at_revision,
+    HopDraft, KubernetesProfileDraft, ProxyDraft, StoredTunnelPasswords, TUNNEL_SCHEMA_URL,
+    TunnelDraft, TunnelDraftOptions, TunnelPasswords, add_tunnel, delete_tunnel,
+    tunnel_passwords_stored, tunnel_revision, tunnel_users, tunnels_dir, update_tunnel,
+    update_tunnel_at_revision,
 };
 pub use types::{ConnectionType, ConnectionTypes, PRODUCTION, Safeguards, type_id};
 pub use types_edit::{remove_personal_type, set_personal_type};

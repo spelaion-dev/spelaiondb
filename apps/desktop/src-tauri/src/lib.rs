@@ -874,14 +874,7 @@ fn engine_catalog() -> Vec<EngineItem> {
 #[specta::specta]
 async fn list_tunnels(state: State<'_, AppState>) -> CmdResult<Vec<TunnelItem>> {
     let config = state.config.read().await;
-    Ok(config
-        .tunnels
-        .iter()
-        .map(|t| TunnelItem {
-            name: t.name.clone(),
-            personal: t.source == Source::User,
-        })
-        .collect())
+    Ok(config.tunnels.iter().map(TunnelItem::of).collect())
 }
 
 /// Every tunnel file as a network profile (ADR-027), for Settings → Network.
@@ -1479,21 +1472,61 @@ fn kube_spec(k: KubernetesDraftItem) -> spelaion_config::ResolvedKubernetes {
 
 async fn check_kube_editor(
     form: KubernetesDraftItem,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: &AppState,
 ) -> CmdResult<spelaion_config::ResolvedKubernetes> {
-    let id = editing.as_deref().map(parse_id);
     let config = state.config.read().await;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    spelaion_core::kube::editor_spec(
-        &config,
-        &trust,
-        source_of(personal),
-        id.as_ref(),
-        kube_spec(form),
-    )
-    .map_err(|e| e.to_string())
+    match editor {
+        KubeEditor::Connection {
+            personal,
+            editing,
+            profile: Some(profile),
+        } => {
+            let id = editing.as_deref().map(parse_id);
+            let resolver = spelaion_config::Resolver::new(&config, &trust, &SystemBackend);
+            resolver
+                .check_editor_access(source_of(personal), id.as_ref())
+                .map_err(|e| e.to_string())?;
+            let source = id.as_ref().map_or(source_of(personal), |id| id.source);
+            let draft = spelaion_config::KubernetesDraft::from(form);
+            let text = |v: String| Some(v).filter(|v| !v.trim().is_empty());
+            resolver
+                .kubernetes_profile_for_editor(
+                    source,
+                    &profile,
+                    &spelaion_config::KubernetesConfig {
+                        context: text(draft.context),
+                        namespace: text(draft.namespace),
+                        resource: draft.resource,
+                        kubeconfig: text(draft.kubeconfig),
+                        kubectl: text(draft.kubectl),
+                    },
+                )
+                .map_err(|e| e.to_string())
+        }
+        KubeEditor::Connection {
+            personal,
+            editing,
+            profile: None,
+        } => {
+            let id = editing.as_deref().map(parse_id);
+            spelaion_core::kube::editor_spec(
+                &config,
+                &trust,
+                source_of(personal),
+                id.as_ref(),
+                kube_spec(form),
+            )
+            .map_err(|e| e.to_string())
+        }
+        KubeEditor::Profile { personal, editing } => {
+            spelaion_config::Resolver::new(&config, &trust, &SystemBackend)
+                .check_tunnel_editor_access(source_of(personal), editing.as_deref())
+                .map_err(|e| e.to_string())?;
+            Ok(kube_spec(form))
+        }
+    }
 }
 
 /// The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015).
@@ -1501,11 +1534,10 @@ async fn check_kube_editor(
 #[specta::specta]
 async fn kube_contexts(
     form: KubernetesDraftItem,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
-    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    let spec = check_kube_editor(form, editor, &state).await?;
     spelaion_core::kube::contexts(&spec)
         .await
         .map_err(|e| e.to_string())
@@ -1516,11 +1548,10 @@ async fn kube_contexts(
 #[specta::specta]
 async fn kube_namespaces(
     form: KubernetesDraftItem,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
-    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    let spec = check_kube_editor(form, editor, &state).await?;
     spelaion_core::kube::namespaces(&spec)
         .await
         .map_err(|e| e.to_string())
@@ -1532,11 +1563,10 @@ async fn kube_namespaces(
 async fn kube_names(
     form: KubernetesDraftItem,
     kind: String,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
-    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    let spec = check_kube_editor(form, editor, &state).await?;
     spelaion_core::kube::names(&spec, &kind)
         .await
         .map_err(|e| e.to_string())
@@ -1547,11 +1577,10 @@ async fn kube_names(
 #[specta::specta]
 async fn kube_ports(
     form: KubernetesDraftItem,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<KubePortItem>> {
-    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    let spec = check_kube_editor(form, editor, &state).await?;
     spelaion_core::kube::ports(&spec)
         .await
         .map(|ports| ports.into_iter().map(Into::into).collect())
@@ -1587,7 +1616,14 @@ async fn add_tunnel(
         name
     };
     state.reload().await;
-    Ok(TunnelItem { name, personal })
+    let config = state.config.read().await;
+    let source = source_of(personal);
+    config
+        .tunnels
+        .iter()
+        .find(|t| t.source == source && t.name == name)
+        .map(TunnelItem::of)
+        .ok_or_else(|| format!("the network profile {name:?} was not found after saving"))
 }
 
 /// Saves an edited tunnel (same file and name) and reloads the configuration.
