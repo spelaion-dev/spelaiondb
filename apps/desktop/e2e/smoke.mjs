@@ -241,6 +241,18 @@ try {
     await page.keyboard.press("Control+A");
     await page.keyboard.insertText(sql);
   }
+  // An element's box once it has stopped moving: the same in two checks a few frames apart.
+  async function settledBox(locator) {
+    const deadline = Date.now() + 10_000;
+    let previous = null;
+    for (;;) {
+      const box = await locator.boundingBox();
+      if (box && previous && ["x", "y", "width", "height"].every((key) => box[key] === previous[key])) return box;
+      if (Date.now() > deadline) throw new Error(`the box of ${locator} kept moving: ${JSON.stringify(previous)} → ${JSON.stringify(box)}`);
+      previous = box;
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    }
+  }
   async function waitForHistoryCount(count) {
     await page.waitForFunction((expected) => document.querySelectorAll(".history-entry").length === expected && document.querySelector(".history-entries")?.getAttribute("aria-busy") === "false", count);
   }
@@ -817,24 +829,45 @@ try {
   assert.ok((await viewerToggle.boundingBox()).x >= (await viewer.boundingBox()).x + (await viewer.boundingBox()).width, "the viewer control stays to the right of the open panel");
   assert.equal(await viewerToggle.getAttribute("aria-pressed"), "true");
   const viewerResize = panel.getByRole("separator", { name: "Resize cell value panel" });
-  const beforeWidth = (await viewer.boundingBox()).width;
-  const resizeBox = await viewerResize.boundingBox();
+  // The panel's width as the separator reports it, once the page shows that width.
+  const viewerWidthNow = async () => {
+    const handle = await page.waitForFunction(() => {
+      const separator = document.querySelector('.tab-panel:not([hidden]) [role="separator"][aria-label="Resize cell value panel"]');
+      const shown = separator && document.getElementById(separator.getAttribute("aria-controls"));
+      const width = Number(separator?.getAttribute("aria-valuenow"));
+      return shown && Math.abs(shown.getBoundingClientRect().width - width) < 1 ? width : false;
+    });
+    return handle.jsonValue();
+  };
+  // Waits for the panel's width to pass a check, and returns it (or the last one, to report it).
+  const viewerWidthWhen = async (check) => {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const width = await viewerWidthNow();
+      if (check(width) || Date.now() > deadline) return width;
+      await page.waitForTimeout(50);
+    }
+  };
+  // Press on the separator only once the panel has opened and stopped moving.
+  const beforeWidth = await viewerWidthNow();
+  const resizeBox = await settledBox(viewerResize);
   await page.mouse.move(resizeBox.x + resizeBox.width / 2, resizeBox.y + resizeBox.height / 2);
   await page.mouse.down();
   await page.mouse.move(resizeBox.x - 80, resizeBox.y + resizeBox.height / 2, { steps: 5 });
   await page.mouse.up();
-  const wider = (await viewer.boundingBox()).width;
+  const wider = await viewerWidthWhen((width) => width > beforeWidth + 50);
   assert.ok(wider > beforeWidth + 50, `drag should widen the viewer: ${beforeWidth} → ${wider}`);
   await viewerResize.focus();
   await page.keyboard.press("ArrowRight");
-  const narrower = (await viewer.boundingBox()).width;
+  const narrower = await viewerWidthWhen((width) => width < wider);
   assert.ok(narrower < wider, `keyboard should resize the viewer: ${wider} → ${narrower}`);
   await viewerToggle.click();
   await viewer.waitFor({ state: "detached" });
   assert.equal(await viewerToggle.getAttribute("aria-pressed"), "false");
   await viewerToggle.click();
   await viewer.getByText("Select a cell to see its value.").waitFor();
-  assert.ok(Math.abs((await viewer.boundingBox()).width - narrower) < 2, "the viewer keeps its width after toggling");
+  const reopenedWidth = await viewerWidthWhen((width) => Math.abs(width - narrower) < 2);
+  assert.ok(Math.abs(reopenedWidth - narrower) < 2, `the viewer keeps its width after toggling: ${narrower} → ${reopenedWidth}`);
   const viewerGrid = await panel.locator(".grid-scroller").boundingBox();
   await page.mouse.click(viewerGrid.x + 80, viewerGrid.y + 34 + 12);
   await viewer.locator(".cell-viewer-json").waitFor();
