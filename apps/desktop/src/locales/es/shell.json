@@ -537,7 +537,8 @@
     "title": {
       "close": "¿Cerrar con una transacción abierta?",
       "disconnect": "¿Desconectar con una transacción abierta?",
-      "quit": "¿Salir con una transacción abierta?"
+      "quit": "¿Salir con una transacción abierta?",
+      "folder": "¿Abrir otra carpeta con una transacción abierta?"
     },
     "explanation_one": "Esta pestaña tiene una transacción abierta. Su sesión terminará y el servidor deshará lo que no se haya confirmado:",
     "explanation_other": "Estas pestañas tienen una transacción abierta. Sus sesiones terminarán y el servidor deshará lo que no se haya confirmado:",
@@ -546,12 +547,38 @@
     "proceed": {
       "close": "Cerrar y deshacer",
       "disconnect": "Desconectar y deshacer",
-      "quit": "Salir y deshacer"
+      "quit": "Salir y deshacer",
+      "folder": "Abrir y deshacer"
     },
-    "titleRunning": "¿Cerrar con una consulta en ejecución?",
-    "running_one": "La consulta de esta pestaña sigue en ejecución. Al cerrar se cancela:",
-    "running_other": "Las consultas de estas pestañas siguen en ejecución. Al cerrar se cancelan:",
-    "proceedRunning": "Cerrar y cancelar"
+    "titleRunning": {
+      "close": "¿Cerrar con una consulta en ejecución?",
+      "disconnect": "¿Desconectar con una consulta en ejecución?",
+      "quit": "¿Salir con una consulta en ejecución?",
+      "folder": "¿Abrir otra carpeta con una consulta en ejecución?"
+    },
+    "running_one": "La consulta de esta pestaña sigue en ejecución. Se cancelará:",
+    "running_other": "Las consultas de estas pestañas siguen en ejecución. Se cancelarán:",
+    "proceedRunning": {
+      "close": "Cerrar y cancelar",
+      "disconnect": "Desconectar y cancelar",
+      "quit": "Salir y cancelar",
+      "folder": "Abrir y cancelar"
+    },
+    "titleUnsaved": {
+      "close": "¿Cerrar con cambios de filas sin aplicar?",
+      "disconnect": "¿Desconectar con cambios de filas sin aplicar?",
+      "quit": "¿Salir con cambios de filas sin aplicar?",
+      "folder": "¿Abrir otra carpeta con cambios de filas sin aplicar?"
+    },
+    "unsaved_one": "Esta pestaña tiene cambios de filas sin aplicar. Se perderán:",
+    "unsaved_other": "Estas pestañas tienen cambios de filas sin aplicar. Se perderán:",
+    "unsavedHint": "Para conservar los cambios de filas, cancela y pulsa Guardar cambios en la pestaña primero.",
+    "proceedUnsaved": {
+      "close": "Cerrar y descartar",
+      "disconnect": "Desconectar y descartar",
+      "quit": "Salir y descartar",
+      "folder": "Abrir y descartar"
+    }
   },
   "exportTable": "Exportar…",
   "importData": "Importar datos…",

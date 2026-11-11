@@ -116,6 +116,44 @@ export async function confirmOpenTransactions(sessions: string[], action: "close
   return useDialogs.getState().askOpenTransactions(open.map(tabName), action);
 }
 
+/**
+ * Asks before quitting or opening another folder (SDB-140), over every tab, as `closeTabs`
+ * asks before closing tabs: row edits not applied (or being applied), queries running and
+ * open transactions (`open`, tab ids) are all lost. True when there is nothing to ask or the
+ * user accepted; nothing is applied, committed or saved either way. Unsaved `.sql` text is not
+ * asked about: tabs come back with it (ADR-036).
+ */
+export async function confirmLeaving(action: "quit" | "folder", open: string[]): Promise<boolean> {
+  const tabs = useApp.getState().tabs;
+  const unsaved = tabs.filter((t) => t.pendingEdits || t.savingEdits).map((t) => t.id);
+  const running = tabs.filter((t) => t.run?.running).map((t) => t.id);
+  if (open.length === 0 && running.length === 0 && unsaved.length === 0) return true;
+  return useDialogs.getState().askOpenTransactions(open.map(tabName), action, running.map(tabName), unsaved.map(tabName));
+}
+
+let answeringQuit = false;
+
+/**
+ * The window was asked to close while sessions are open (`QuitRequested`): the core waits for
+ * the UI. It quits at once when nothing would be lost, else asks. The open transactions come
+ * from what each session last read, so a server that does not answer cannot hold the question.
+ * A second request while the question is open only tells the core the UI is alive.
+ */
+export async function answerQuitRequest() {
+  await call(commands.quitAsking()).catch(() => undefined);
+  if (answeringQuit) return;
+  answeringQuit = true;
+  try {
+    const open = await call(commands.quitOpenTransactions()).catch(() => [] as string[]);
+    if (await confirmLeaving("quit", open)) await call(commands.quitApp());
+    else await call(commands.quitCancelled());
+  } catch {
+    await call(commands.quitCancelled()).catch(() => undefined);
+  } finally {
+    answeringQuit = false;
+  }
+}
+
 /** Returns the server version, or null if the user cancelled. Throws if it fails. */
 export async function openSession(session: string, connectionId: string): Promise<string | null> {
   const version = await openSessionInner(session, connectionId);

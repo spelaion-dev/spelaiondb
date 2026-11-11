@@ -537,7 +537,8 @@
     "title": {
       "close": "Close with an open transaction?",
       "disconnect": "Disconnect with an open transaction?",
-      "quit": "Quit with an open transaction?"
+      "quit": "Quit with an open transaction?",
+      "folder": "Open another folder with an open transaction?"
     },
     "explanation_one": "This tab has a transaction open. Its session will end, and the server rolls back what was not committed:",
     "explanation_other": "These tabs have a transaction open. Their sessions will end, and the server rolls back what was not committed:",
@@ -546,12 +547,38 @@
     "proceed": {
       "close": "Close and roll back",
       "disconnect": "Disconnect and roll back",
-      "quit": "Quit and roll back"
+      "quit": "Quit and roll back",
+      "folder": "Open and roll back"
     },
-    "titleRunning": "Close while a query runs?",
-    "running_one": "This tab's query is still running. Closing cancels it:",
-    "running_other": "These tabs have queries still running. Closing cancels them:",
-    "proceedRunning": "Close and cancel"
+    "titleRunning": {
+      "close": "Close while a query runs?",
+      "disconnect": "Disconnect while a query runs?",
+      "quit": "Quit while a query runs?",
+      "folder": "Open another folder while a query runs?"
+    },
+    "running_one": "This tab's query is still running. It will be cancelled:",
+    "running_other": "These tabs have queries still running. They will be cancelled:",
+    "proceedRunning": {
+      "close": "Close and cancel",
+      "disconnect": "Disconnect and cancel",
+      "quit": "Quit and cancel",
+      "folder": "Open and cancel"
+    },
+    "titleUnsaved": {
+      "close": "Close with unsaved row changes?",
+      "disconnect": "Disconnect with unsaved row changes?",
+      "quit": "Quit with unsaved row changes?",
+      "folder": "Open another folder with unsaved row changes?"
+    },
+    "unsaved_one": "This tab has row changes that were not applied. They will be lost:",
+    "unsaved_other": "These tabs have row changes that were not applied. They will be lost:",
+    "unsavedHint": "To keep the row changes, cancel and press Save changes in the tab first.",
+    "proceedUnsaved": {
+      "close": "Close and discard",
+      "disconnect": "Disconnect and discard",
+      "quit": "Quit and discard",
+      "folder": "Open and discard"
+    }
   },
   "exportTable": "Export…",
   "importData": "Import data…",

@@ -626,14 +626,17 @@ export interface ParamsRequest {
   resolve(values: Record<string, string> | null): void;
 }
 
-/** Tabs with an open transaction about to be closed, disconnected or quit (ADR-031), and tabs
- *  about to be closed while their query runs: asked once for all of them. */
+/** Tabs with an open transaction about to be closed, disconnected or quit (ADR-031), tabs
+ *  whose query runs and tabs with row edits not applied, before closing them, quitting or
+ *  opening another folder: asked once for all of them. */
 export interface OpenTransactionsRequest {
   /** Tabs whose transaction the server rolls back. */
   tabs: string[];
   /** Tabs whose running query is cancelled. */
   running: string[];
-  action: "close" | "disconnect" | "quit";
+  /** Tabs whose row edits not applied yet are discarded. */
+  unsaved: string[];
+  action: "close" | "disconnect" | "quit" | "folder";
   resolve(proceed: boolean): void;
 }
 
@@ -671,7 +674,7 @@ interface DialogStore {
   text: TextRequest | null;
   choice: ChoiceRequest | null;
   interactions: InteractionItem[];
-  askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"], running?: string[]): Promise<boolean>;
+  askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"], running?: string[], unsaved?: string[]): Promise<boolean>;
   askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
   askChoice(request: Omit<ChoiceRequest, "resolve">): Promise<string | null>;
   askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
@@ -809,12 +812,13 @@ export const useDialogs = create<DialogStore>((set) => ({
         },
       }),
     ),
-  askOpenTransactions: (tabs, action, running = []) =>
+  askOpenTransactions: (tabs, action, running = [], unsaved = []) =>
     new Promise((resolve) =>
       set({
         openTransactions: {
           tabs,
           running,
+          unsaved,
           action,
           resolve: (proceed) => {
             set({ openTransactions: null });

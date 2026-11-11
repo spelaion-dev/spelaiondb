@@ -18,7 +18,7 @@ mod update;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -61,8 +61,11 @@ struct AppState {
     /// Writes the open tabs to the local store on a deadline (ADR-036).
     tabs: TabKeeper,
     pending: Pending,
-    /// The user confirmed quitting with transactions open (ADR-031).
+    /// The app is quitting: the user confirmed, or there was nothing to ask (ADR-031).
     quitting: AtomicBool,
+    /// Where the window's last close request stands: `CLOSE_IDLE`, `CLOSE_SENT` or
+    /// `CLOSE_ASKING` (`on_close_requested`).
+    close_request: AtomicU8,
     tests: ConnectionTests,
     /// Streaming exports running, by the id the UI gave them (ADR-034).
     exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
@@ -2090,7 +2093,8 @@ async fn sessions_to_confirm(
     Ok(out)
 }
 
-/// Quits after the user confirmed closing tabs with open transactions (`QuitBlocked`).
+/// Quits: the UI found nothing to ask, or the user confirmed (`QuitRequested`). Nothing is
+/// committed, applied or saved; the servers roll back open transactions.
 #[tauri::command]
 #[specta::specta]
 async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
@@ -2099,8 +2103,39 @@ async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
-/// The editor tabs with an open transaction, from what each session last read (no round trip:
-/// the window's close request cannot wait for servers).
+/// Nobody asked to close the window, or the UI answered the last request by going back.
+const CLOSE_IDLE: u8 = 0;
+/// `QuitRequested` was sent and the UI has not said it got it.
+const CLOSE_SENT: u8 = 1;
+/// The UI got the request and is checking its tabs or asking the user.
+const CLOSE_ASKING: u8 = 2;
+
+/// The UI got `QuitRequested` and is deciding: a later close request asks it again instead of
+/// quitting.
+#[tauri::command]
+#[specta::specta]
+async fn quit_asking(state: State<'_, AppState>) -> CmdResult<()> {
+    state.close_request.store(CLOSE_ASKING, Ordering::SeqCst);
+    Ok(())
+}
+
+/// The user went back from the quit question: the next close request asks again.
+#[tauri::command]
+#[specta::specta]
+async fn quit_cancelled(state: State<'_, AppState>) -> CmdResult<()> {
+    state.close_request.store(CLOSE_IDLE, Ordering::SeqCst);
+    Ok(())
+}
+
+/// The editor tabs with an open transaction, for the quit question: from what each session
+/// last read, with no round trip, so a server that does not answer cannot hold quitting.
+#[tauri::command]
+#[specta::specta]
+async fn quit_open_transactions(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    Ok(open_transactions(&*state.sessions.lock().await))
+}
+
+/// The editor tabs with an open transaction, from what each session last read.
 fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> {
     let mut open: Vec<String> = sessions
         .iter()
@@ -2111,35 +2146,30 @@ fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> 
     open
 }
 
-/// The window was asked to close (ADR-031): with transactions open, the UI asks first and calls
-/// `quit_app`. Nothing is committed or rolled back here; the server rolls back.
+/// The window was asked to close (ADR-031). Without sessions nothing can be lost: it closes.
+/// Otherwise the UI decides, as it does before closing tabs: it looks for row edits not applied,
+/// queries running and open transactions, asks if there are any, and calls `quit_app` (at once
+/// when there is nothing to ask) or `quit_cancelled`. Nothing is committed or rolled back here.
+///
+/// The event loop never waits, not even for the sessions' lock. If a request was sent and the
+/// UI never said it got it (it is frozen), the next close request quits.
 fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     let state = window.state::<AppState>();
     if state.quitting.load(Ordering::SeqCst) {
         return;
     }
-    // The event loop must not block: when a command holds the sessions, decide in a task.
-    let Ok(sessions) = state.sessions.try_lock() else {
-        api.prevent_close();
-        let app = window.app_handle().clone();
-        tauri::async_runtime::spawn(async move {
-            let state = app.state::<AppState>();
-            let open = open_transactions(&*state.sessions.lock().await);
-            if open.is_empty() {
-                state.quitting.store(true, Ordering::SeqCst);
-                app.exit(0);
-            } else {
-                let _ = QuitBlocked { sessions: open }.emit(&app);
-            }
-        });
+    // A command holding the sessions means there are some: the UI decides.
+    let no_sessions = state
+        .sessions
+        .try_lock()
+        .map(|sessions| sessions.is_empty())
+        .unwrap_or(false);
+    if no_sessions || state.close_request.swap(CLOSE_SENT, Ordering::SeqCst) == CLOSE_SENT {
+        state.quitting.store(true, Ordering::SeqCst);
         return;
-    };
-    let open = open_transactions(&sessions);
-    drop(sessions);
-    if !open.is_empty() {
-        api.prevent_close();
-        let _ = QuitBlocked { sessions: open }.emit(window.app_handle());
     }
+    api.prevent_close();
+    let _ = QuitRequested {}.emit(window.app_handle());
 }
 
 #[tauri::command]
@@ -5297,6 +5327,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commit_transaction,
             rollback_transaction,
             sessions_to_confirm,
+            quit_open_transactions,
+            quit_asking,
+            quit_cancelled,
             quit_app,
         ])
         .events(tauri_specta::collect_events![
@@ -5304,7 +5337,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             InteractionClosed,
             SessionLost,
             TransactionChanged,
-            QuitBlocked
+            QuitRequested
         ])
 }
 
@@ -5422,6 +5455,7 @@ pub fn run() {
         tabs,
         pending: Pending::default(),
         quitting: AtomicBool::new(false),
+        close_request: AtomicU8::new(CLOSE_IDLE),
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
         imports: std::sync::Mutex::new(HashMap::new()),

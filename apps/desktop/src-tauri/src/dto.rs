@@ -2496,13 +2496,10 @@ pub struct TransactionChanged {
     pub status: TransactionStatusItem,
 }
 
-/// The window was asked to close while these tabs have a transaction open: the UI asks, then
-/// calls `quit_app` (ADR-031).
+/// The window was asked to close while sessions are open: the UI calls `quit_asking`, looks for
+/// work that quitting would lose and calls `quit_app` or `quit_cancelled` (ADR-031).
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
-#[serde(rename_all = "camelCase")]
-pub struct QuitBlocked {
-    pub sessions: Vec<String>,
-}
+pub struct QuitRequested {}
 
 /// A dialog nobody waits for any more (the connection test that asked was stopped, or
 /// the answer took too long): the UI closes it.
