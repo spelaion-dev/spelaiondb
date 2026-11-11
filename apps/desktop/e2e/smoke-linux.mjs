@@ -47,9 +47,12 @@ const wayland = !!process.env.WAYLAND_DISPLAY;
 const clipboard = {
   // wl-copy and xclip stay in the background to serve the clipboard: they must not keep this
   // process's output open, or whatever reads it never sees the end.
+  // On X11, xclip offers the text as text/plain;charset=utf-8, as GTK and Qt apps and browsers
+  // do (and wl-copy on Wayland). Its default, UTF8_STRING alone (xterm, xsel), is never read by
+  // WebKitGTK's navigator.clipboard.readText(): it gives "" (SDB-242; back to the default then).
   set(text) {
     if (wayland) execFileSync("wl-copy", [], { input: text, stdio: ["pipe", "ignore", "ignore"] });
-    else execFileSync("xclip", ["-selection", "clipboard", "-in"], { input: text, stdio: ["pipe", "ignore", "ignore"] });
+    else execFileSync("xclip", ["-selection", "clipboard", "-in", "-t", "text/plain;charset=utf-8"], { input: text, stdio: ["pipe", "ignore", "ignore"] });
   },
   get() {
     return wayland
