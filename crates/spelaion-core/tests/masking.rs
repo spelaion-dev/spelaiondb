@@ -753,3 +753,89 @@ async fn a_session_without_rules_masks_nothing() {
     assert_eq!(result.reveal(0, 0), Err(RevealError::NotMasked));
     let _ = TableStatus::NoColumns;
 }
+
+/// ADR-052: where the engine says which table column a result column reads, an alias does not
+/// unmask it, and renaming a masked column to an exempted name does not either. Where it does
+/// not (SQL Server, DuckDB), only result names count: a known limit the test pins down, so the
+/// day an engine reports origins this test says so.
+#[tokio::test]
+async fn an_alias_does_not_unmask_a_column_where_the_engine_reports_its_origin() {
+    let _serial = SERIAL.lock().await;
+    let dir = std::env::temp_dir().join(format!("spelaion-masking-alias-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sql = "SELECT id, email AS e, salary AS pay, card_number AS c, email_verified AS email, email AS email_verified, name AS n FROM mask_customers ORDER BY id";
+    for (label, session, _, _) in engines().await {
+        setup(label, &session).await;
+        let reports_origin = matches!(label, "sqlite" | "postgres" | "mysql" | "mariadb");
+        let id = run(label, &session, sql, false).await.unwrap();
+        {
+            let result = stored(&session, id);
+            let result = result.read().unwrap();
+            let names: Vec<String> = result
+                .masked_columns()
+                .iter()
+                .map(|n| n.to_lowercase())
+                .collect();
+            if reports_origin {
+                // `email` here is email_verified's value (exempt); `email_verified` is email's.
+                assert_eq!(names, ["e", "pay", "c", "email_verified"], "{label}");
+                assert_no_secret(label, "the grid", &grid_text(&result));
+                for format in [ExportFormat::Csv, ExportFormat::Json, ExportFormat::InList] {
+                    let text = export(&result, format.clone());
+                    assert_no_secret(label, &format!("{format:?}"), &text);
+                }
+                let schema = result.schema();
+                let e = schema
+                    .columns
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case("e"))
+                    .unwrap();
+                let origin = e.origin.as_ref().expect("the origin of `e`");
+                assert!(
+                    origin.table.eq_ignore_ascii_case("mask_customers"),
+                    "{label}"
+                );
+                assert!(origin.column.eq_ignore_ascii_case("email"), "{label}");
+            } else {
+                // Known limit (ADR-052): no origin, so only the result name `email` matches.
+                assert_eq!(names, ["email"], "{label}");
+                assert!(result.schema().columns.iter().all(|c| c.origin.is_none()));
+            }
+        }
+        if !reports_origin {
+            continue;
+        }
+        // A streaming export of the same statement.
+        let path = dir.join(format!("{label}.csv"));
+        export_query(
+            &session,
+            sql,
+            &Default::default(),
+            false,
+            &path,
+            &StreamExport {
+                format: ExportFormat::Csv,
+                header: true,
+                csv: CsvOptions::default(),
+                encoding: TextEncoding::Utf8,
+                columns: None,
+                batch_size: 1,
+            },
+            &ExportCancel::new(),
+            &|_| {},
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_no_secret(label, "a streaming export", &text);
+        assert!(text.contains(MASK), "{label}: {text}");
+        // An agent's read (the MCP's `run_query`).
+        let read = session
+            .run_read_only(sql, &ReadLimits::default())
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(read.masked, vec![1, 2, 3, 5], "{label}");
+        assert_no_secret(label, "an agent's read", &format!("{:?}", read.rows));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

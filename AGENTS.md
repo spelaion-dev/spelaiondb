@@ -217,6 +217,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   store (streaming exports, column statistics, the data search, `run_read_only`) apply
   `Session::masking` themselves; core reads it parses go through `run_parsed`. Like
   `classify.rs`, any change there needs tests that try to get around it (`tests/masking.rs`).
+  Rules also match each column's origin (`ColumnMeta::origin`, ADR-052): PostgreSQL resolves
+  it in the catalog when `ExecOptions::origins` asks, MySQL/MariaDB and SQLite report it
+  directly; SQL Server, DuckDB and remote SQLite do not (a known limit).
   `value_view.rs` is the cell viewer's value, read from the stored result when the viewer opens
   (past `VIEW_LIMIT` only with "load anyway"): images recognised by their bytes (PNG, JPEG, GIF,
   WebP only, handed over as a `data:` URL; never SVG or HTML), XML pretty-printed as text, a value

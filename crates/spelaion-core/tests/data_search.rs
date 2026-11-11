@@ -637,6 +637,7 @@ mod statements {
             logical,
             native_type: native.into(),
             native_id: None,
+            origin: None,
         }
     }
 

@@ -581,9 +581,13 @@ fn hits(
     dialect: &dyn spelaion_driver_api::Dialect,
     search: &TableSearchSql,
     rows: &[Vec<Value>],
+    table: &str,
     masking: &MaskPolicy,
 ) -> Vec<SearchHit> {
-    let key_masked = search.key.iter().any(|(name, _)| masking.masks(name));
+    let key_masked = search
+        .key
+        .iter()
+        .any(|(name, _)| masking.masks_table_column(table, name));
     let keys = search.key.len();
     let per_column = if keys == 0 { 3 } else { 2 };
     rows.iter()
@@ -604,7 +608,7 @@ fn hits(
                 if !matched {
                     continue;
                 }
-                let masked = masking.masks(&column.name);
+                let masked = masking.masks_table_column(table, &column.name);
                 matches.push(ColumnMatch {
                     column: column.name.clone(),
                     text: match column.kind {
@@ -612,7 +616,7 @@ fn hits(
                         SearchColumnKind::Text
                         | SearchColumnKind::LargeText
                         | SearchColumnKind::Number => {
-                            shown(&masking.shown_value(&column.name, at(base + 1)))
+                            shown(&masking.shown_table_value(table, &column.name, at(base + 1)))
                         }
                     },
                 });
@@ -643,7 +647,7 @@ fn hits(
                 key: key_values
                     .into_iter()
                     .map(|(name, _, value)| {
-                        let value = masking.shown_value(&name, value);
+                        let value = masking.shown_table_value(table, &name, value);
                         (name, value.to_string())
                     })
                     .collect(),
@@ -728,7 +732,13 @@ async fn search_table(
         Ok(TableStatus::Searched {
             columns: u32::try_from(search.columns.len()).unwrap_or(u32::MAX),
             more: rows.len() >= limit as usize,
-            hits: hits(dialect.as_ref(), &search, &rows, session.masking()),
+            hits: hits(
+                dialect.as_ref(),
+                &search,
+                &rows,
+                &table.table,
+                session.masking(),
+            ),
         })
     }
     .await;
@@ -829,6 +839,7 @@ mod tests {
             logical,
             native_type: native.into(),
             native_id: None,
+            origin: None,
         }
     }
 

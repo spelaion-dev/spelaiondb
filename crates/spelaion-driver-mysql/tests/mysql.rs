@@ -166,10 +166,16 @@ async fn run_with(
     sql: &str,
     batch_size: usize,
 ) -> Result<Vec<ExecEvent>, DriverError> {
-    conn.execute(sql, &ExecOptions { batch_size })
-        .await?
-        .try_collect()
-        .await
+    conn.execute(
+        sql,
+        &ExecOptions {
+            batch_size,
+            ..Default::default()
+        },
+    )
+    .await?
+    .try_collect()
+    .await
 }
 
 /// Every row as (logical type, native type, text) per column.

@@ -24,7 +24,7 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 
-pub use column::{ColumnMeta, ResultSchema};
+pub use column::{ColumnMeta, ColumnOrigin, ResultSchema};
 pub use database_context::{ContextDialect, DatabaseContext};
 pub use dialect::{Dialect, StatementSpan};
 pub use error::DriverError;
@@ -122,6 +122,10 @@ pub enum TlsMode {
 pub struct ExecOptions {
     /// Rows per Arrow batch.
     pub batch_size: usize,
+    /// Report each column's origin table and column (`ColumnMeta::origin`, ADR-052) even
+    /// where that costs a catalog read (PostgreSQL). Engines that get it for free always
+    /// report it. The core asks for it when the session masks columns.
+    pub origins: bool,
 }
 
 /// How an engine-specific plan request treats the original statement.
@@ -140,7 +144,10 @@ pub enum PlanMode {
 
 impl Default for ExecOptions {
     fn default() -> Self {
-        Self { batch_size: 10_000 }
+        Self {
+            batch_size: 10_000,
+            origins: false,
+        }
     }
 }
 

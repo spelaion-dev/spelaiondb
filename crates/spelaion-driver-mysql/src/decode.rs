@@ -15,7 +15,7 @@ use arrow::array::{
 };
 use mysql_async::Column;
 use mysql_async::consts::{ColumnFlags, ColumnType};
-use spelaion_driver_api::{ColumnMeta, DriverError, LogicalType};
+use spelaion_driver_api::{ColumnMeta, ColumnOrigin, DriverError, LogicalType};
 
 /// Character set number of binary strings (`BINARY`, `VARBINARY`, `BLOB`).
 const BINARY_CHARSET: u16 = 63;
@@ -118,7 +118,19 @@ pub(crate) fn column_meta(column: &Column, logical: LogicalType) -> ColumnMeta {
         logical,
         native_type: native_type(column),
         native_id: Some(column.column_type() as u32),
+        origin: origin(column),
     }
+}
+
+/// The table column a result column reads (ADR-052): the column definition's original table
+/// and column names, empty for an expression. A view's column names the view.
+fn origin(column: &Column) -> Option<ColumnOrigin> {
+    let table = column.org_table_str();
+    let name = column.org_name_str();
+    (!table.is_empty() && !name.is_empty()).then(|| ColumnOrigin {
+        table: table.into_owned(),
+        column: name.into_owned(),
+    })
 }
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's algorithm).

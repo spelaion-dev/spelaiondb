@@ -18,8 +18,8 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
+    CancelHandle, Capabilities, ColumnMeta, ColumnOrigin, ConnectParams, Connection, Dialect,
+    Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
     NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaColumn, SchemaInfo,
     SchemaObject, ServerObject, TableInfo, TransactionState,
 };
@@ -141,6 +141,56 @@ impl<'a> FromSql<'a> for Raw<'a> {
 }
 
 impl PgConnection {
+    /// The table column each result column reads (ADR-052): the row description gives its
+    /// table's OID and column number, resolved to names in the catalog as it is now (never
+    /// cached, so a rename is seen at once). An expression has none. Read before the
+    /// statement runs; if the catalog cannot be read, no column has an origin.
+    async fn origins(&self, columns: &[tokio_postgres::Column]) -> Vec<Option<ColumnOrigin>> {
+        let keys: Vec<(u32, i16)> = columns
+            .iter()
+            .filter_map(|c| Some((c.table_oid()?, c.column_id()?)))
+            .filter(|(oid, attnum)| *oid != 0 && *attnum > 0)
+            .collect();
+        if keys.is_empty() {
+            return vec![None; columns.len()];
+        }
+        let mut oids: Vec<u32> = keys.iter().map(|(oid, _)| *oid).collect();
+        oids.sort_unstable();
+        oids.dedup();
+        // Only numbers are written into the statement.
+        let list = oids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT a.attrelid::int8, a.attnum::int4, c.relname::text, a.attname::text \
+             FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+             WHERE a.attrelid IN ({list}) AND a.attnum > 0"
+        );
+        let mut names: std::collections::HashMap<(u32, i16), ColumnOrigin> =
+            std::collections::HashMap::new();
+        if let Ok(rows) = self.client.query(sql.as_str(), &[]).await {
+            for row in rows {
+                let (Ok(oid), Ok(attnum), Ok(table), Ok(column)) = (
+                    row.try_get::<_, i64>(0),
+                    row.try_get::<_, i32>(1),
+                    row.try_get::<_, String>(2),
+                    row.try_get::<_, String>(3),
+                ) else {
+                    continue;
+                };
+                if let (Ok(oid), Ok(attnum)) = (u32::try_from(oid), i16::try_from(attnum)) {
+                    names.insert((oid, attnum), ColumnOrigin { table, column });
+                }
+            }
+        }
+        columns
+            .iter()
+            .map(|c| names.get(&(c.table_oid()?, c.column_id()?)).cloned())
+            .collect()
+    }
+
     /// Streams the rows of a prepared statement, with `params` bound to it.
     async fn stream(
         &self,
@@ -154,15 +204,22 @@ impl PgConnection {
             .iter()
             .map(|c| c.type_().clone())
             .collect();
+        let origins = if opts.origins {
+            self.origins(statement.columns()).await
+        } else {
+            vec![None; statement.columns().len()]
+        };
         let schema = Arc::new(ResultSchema::new(
             statement
                 .columns()
                 .iter()
-                .map(|c| ColumnMeta {
+                .zip(origins)
+                .map(|(c, origin)| ColumnMeta {
                     name: c.name().to_string(),
                     logical: decode::logical_type(c.type_()),
                     native_type: c.type_().name().to_string(),
                     native_id: Some(c.type_().oid()),
+                    origin,
                 })
                 .collect(),
         ));

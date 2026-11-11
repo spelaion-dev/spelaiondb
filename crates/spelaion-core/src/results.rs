@@ -660,6 +660,7 @@ mod tests {
             logical: LogicalType::Int,
             native_type: "int8".into(),
             native_id: None,
+            origin: None,
         }]))
     }
 

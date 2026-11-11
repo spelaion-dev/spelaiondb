@@ -556,6 +556,7 @@ fn start(
             logical: exec::decide(Affinity::Blob, *seen),
             native_type: seen.storage_class().to_string(),
             native_id: None,
+            origin: None,
         })
         .collect();
     let schema = Arc::new(ResultSchema::new(columns));

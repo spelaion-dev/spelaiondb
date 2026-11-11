@@ -802,11 +802,16 @@ pub async fn search_referenced(
     let key = column_key(&described, column)
         .ok_or_else(|| PickError::NotAKey(column.to_string()))?
         .clone();
+    let masking = session.masking();
     if let Some(masked) = key
         .referenced_columns
         .iter()
-        .chain(&key.columns)
-        .find(|c| session.masking().masks(c))
+        .find(|c| masking.masks_table_column(&key.referenced_table, c))
+        .or_else(|| {
+            key.columns
+                .iter()
+                .find(|c| masking.masks_table_column(table, c))
+        })
     {
         return Err(PickError::Masked(masked.clone()));
     }

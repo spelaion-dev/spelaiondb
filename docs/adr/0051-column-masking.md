@@ -1,6 +1,7 @@
 # ADR-051: Column masking: values replaced where results enter the core, revealed one cell at a time
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by ADR-052: rules also match the table column a result column
+  reads, and `table.column` rules are allowed)
 - **Date:** 2026-11-11
 - **Builds on:** ADR-010 (results live in the core), ADR-020 (agents' reads), ADR-022 (trust
   pinned to content), ADR-029 (connection types, safeguards only add up), ADR-033 (agents'

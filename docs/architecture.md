@@ -51,7 +51,9 @@ are compiled into the session. Every result the session stores is masked as its 
 arrive: masked columns become `••••••` in the stored batches and their originals are kept
 aside, read only to reveal one cell. Windows, sorting, filters, Ctrl+F, the calc panel,
 copies and exports never see a value; streaming exports, column statistics, the data search
-and agents' reads apply the same rules. It is not access control: aliases get past it.
+and agents' reads apply the same rules. Drivers report the table column each result column
+reads where the engine can (ADR-052), so an alias stays masked; an expression gets past it,
+so masking is not access control.
 
 **Execution plans**
 The core's `plan` module owns the normalized tree, metrics, generic findings, bounded document

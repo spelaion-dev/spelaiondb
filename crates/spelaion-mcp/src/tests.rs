@@ -768,6 +768,8 @@ async fn agents_get_the_mask_never_the_value() {
     for sql in [
         "select * from people order by id",
         "select email as contact_email, card, ssn from people",
+        // ADR-052: SQLite says which table column each result column reads.
+        "select email as e, card as c, ssn as s from people",
         "select id, ssn from people where email = 'ada@example.com'",
     ] {
         for format in [OutputFormat::Json, OutputFormat::Toon] {

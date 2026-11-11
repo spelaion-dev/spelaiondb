@@ -315,6 +315,7 @@ mod tests {
             logical,
             native_type: native_type.into(),
             native_id: None,
+            origin: None,
         }
     }
 
