@@ -1039,7 +1039,7 @@ fn format_elapsed(elapsed: Duration) -> String {
 }
 
 /// Learns every secret the configuration resolved for a connection.
-fn learn_connection_secrets(redactor: &Redactor, resolved: &ResolvedConnection) {
+pub(crate) fn learn_connection_secrets(redactor: &Redactor, resolved: &ResolvedConnection) {
     if let Password::Value(secret) = &resolved.password {
         redactor.add(secret.expose());
     }
@@ -1061,9 +1061,9 @@ fn learn_tunnel_secrets(redactor: &Redactor, tunnel: &ResolvedTunnel) {
 }
 
 /// Passes dialogs through, remembering every answer as a secret to redact.
-struct Recording {
-    inner: Arc<dyn Interaction>,
-    redactor: Arc<Redactor>,
+pub(crate) struct Recording {
+    pub(crate) inner: Arc<dyn Interaction>,
+    pub(crate) redactor: Arc<Redactor>,
 }
 
 #[async_trait]

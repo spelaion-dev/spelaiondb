@@ -236,6 +236,17 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   object or a role's membership (only the privilege names the core lists for that scope, never
   typed SQL), and reads what an account has (PostgreSQL's ACLs, MySQL's `SHOW GRANTS`, SQL
   Server's permissions); `tests/privileges.rs` tries each grant by logging in as the account.
+  `backup/` (ADR-049) runs the vendors' own tools against a connection's route
+  (`open::open_route`: the shared tunnel's or Kubernetes forward's local end, no session):
+  `tools.rs` finds `pg_dump`, `pg_restore`, `psql`, `mysqldump` and `mysql` (a chosen folder,
+  else `PATH` and the installers' places) and reads their version, `args.rs` writes each tool's
+  argument list (never the password: it goes in `PGPASSWORD` / `MYSQL_PWD`), `process.rs` starts
+  the tool without a shell, writes its output to `<name>.part` (renamed when it succeeds), feeds
+  a restore's file to it and passes every log line through the connection test's `Redactor`.
+  A restore is refused on a read-only connection and unless confirmed. `tests/backup.rs` dumps
+  and restores PostgreSQL, MySQL and MariaDB through the two hops of `testing/docker` with the
+  tools of the official images (`docker run`), or those in `SPELAION_TEST_DB_TOOLS`; any change
+  there needs tests that try to leak the password.
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
   hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
   `Tunnel::probe`, login), its own tunnel, Stop that closes what it opened, failures classified

@@ -146,6 +146,13 @@ enum Request {
     GetMap {
         reply: Reply<MapPreferences>,
     },
+    GetBackup {
+        reply: Reply<crate::BackupPreferences>,
+    },
+    SetBackup {
+        preferences: crate::BackupPreferences,
+        reply: Reply<()>,
+    },
     SetMap {
         preferences: MapPreferences,
         reply: Reply<()>,
@@ -350,6 +357,12 @@ impl QueryHistory {
                         }
                         Request::GetMap { reply } => {
                             let _ = reply.send(store.get_map_preferences());
+                        }
+                        Request::GetBackup { reply } => {
+                            let _ = reply.send(store.get_backup_preferences());
+                        }
+                        Request::SetBackup { preferences, reply } => {
+                            let _ = reply.send(store.set_backup_preferences(&preferences));
                         }
                         Request::SetMap { preferences, reply } => {
                             let _ = reply.send(store.set_map_preferences(&preferences));
@@ -734,6 +747,19 @@ impl QueryHistory {
         preferences: MapPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetMap { preferences, reply })
+            .await
+    }
+
+    /// The backup dialog's remembered tool folders, output folder and name pattern (ADR-049).
+    pub async fn backup_preferences(&self) -> Result<crate::BackupPreferences, HistoryError> {
+        self.request(|reply| Request::GetBackup { reply }).await
+    }
+
+    pub async fn set_backup_preferences(
+        &self,
+        preferences: crate::BackupPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetBackup { preferences, reply })
             .await
     }
 

@@ -58,3 +58,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [046](0046-er-diagrams.md) | ER diagrams: laid out in the core from the explorer's catalog, drawn as plain SVG | Accepted |
 | [047](0047-structure-editing-with-forms.md) | Structure editing with forms: one script from the core, applied only as it was shown; SQLite rebuilds the table | Accepted |
 | [048](0048-users-and-privileges.md) | Users and privileges: forms that write reviewed SQL, with the password kept out of everything but the statement | Accepted |
+| [049](0049-backup-and-restore.md) | Backup and restore through the tunnel: the vendors' own tools, started by the core with an argument list and the password in their environment | Accepted |
