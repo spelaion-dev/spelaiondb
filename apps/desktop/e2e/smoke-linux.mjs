@@ -62,17 +62,12 @@ const userDir = mkdtempSync(join(tmpdir(), "spelaion-e2e-"));
 // Personal connections of this run: SQL Server from testing/docker, and the demo's PostgreSQL
 // behind testing/docker's two bastions with its password asked (the demo's own bastion
 // connection reads the keychain). Passwords are asked, never stored. (The DuckDB one is made in
-// the form.)
+// the form.) The tunnel is the demo repository's `docker-bastions`: its relative key paths must
+// be read from the repository, not from this personal folder.
 mkdirSync(join(userDir, "connections"), { recursive: true });
-mkdirSync(join(userDir, "tunnels"), { recursive: true });
-const testKey = JSON.stringify(join(keys, "id_ed25519"));
-writeFileSync(
-  join(userDir, "tunnels", "smoke-bastions.toml"),
-  `schema_version = 1\n\n[[hops]]\nhost = "127.0.0.1"\nport = 2221\nuser = "spelaion"\nauth = ["key"]\nidentity_file = ${testKey}\n\n[[hops]]\nhost = "bastion2"\nuser = "spelaion"\nauth = ["key"]\nidentity_file = ${testKey}\n`,
-);
 const personal = {
   "sql-server-docker.toml": `schema_version = 1\nname = "SQL Server (Docker)"\nengine = "sqlserver"\nhost = "127.0.0.1"\nport = 11433\nuser = "sa"\npassword = { secret = "prompt" }\n`,
-  "bastions.toml": `schema_version = 1\nname = "Postgres through the tunnel"\nengine = "postgres"\nhost = "postgres"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "smoke-bastions"\n\n[tls]\nmode = "verify-full"\nca = ${JSON.stringify(join(keys, "ca.crt"))}\n`,
+  "bastions.toml": `schema_version = 1\nname = "Postgres through the tunnel"\nengine = "postgres"\nhost = "postgres"\ndatabase = "spelaion"\nuser = "spelaion"\npassword = { secret = "prompt" }\ntunnel = "docker-bastions"\n\n[tls]\nmode = "verify-full"\nca = ${JSON.stringify(join(keys, "ca.crt"))}\n`,
 };
 for (const [file, text] of Object.entries(personal)) writeFileSync(join(userDir, "connections", file), text);
 

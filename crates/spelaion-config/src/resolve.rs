@@ -352,19 +352,24 @@ impl<'a> Resolver<'a> {
                             format!("tunnel {name:?} does not exist in .spelaion/tunnels/"),
                         )
                     })?;
+                // The tunnel's relative paths belong to its own layer: a personal connection
+                // may use a repository tunnel and the reverse (`Config::tunnel_for`).
+                let tunnel_base = self.base_dir(tunnel.source)?;
                 // A repository tunnel, even under a draft, must be as the user trusted it.
                 if tunnel.source == Source::Workspace {
-                    let root = self.base_dir(Source::Workspace)?;
                     self.trust
-                        .check_tunnel(&root, tunnel)
-                        .map_err(|change| ResolveError::Changed { root, change })?;
+                        .check_tunnel(&tunnel_base, tunnel)
+                        .map_err(|change| ResolveError::Changed {
+                            root: tunnel_base.clone(),
+                            change,
+                        })?;
                 }
                 let mut resolved = self.resolve_tunnel(
                     name,
                     tunnel.source,
                     &tunnel.file,
-                    &base,
-                    &entry.file_path,
+                    &tunnel_base,
+                    &tunnel.file_path,
                 )?;
                 // A changed shared file stops the connection until it is reviewed.
                 resolved.known_hosts = self.team_known_hosts(true)?;
