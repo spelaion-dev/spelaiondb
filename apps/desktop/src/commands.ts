@@ -7,6 +7,7 @@
 import { call, commands as core, type ConnectionItem, type ObjectItem, type SchemaObjectItem } from "./api";
 import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./commandRegistry";
 import { closeQueryTab, connectTabFromExplorer, explorerDatabase } from "./connect";
+import { readClipboardText } from "./clipboardText";
 import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
@@ -96,7 +97,7 @@ async function importFromClipboard(context: CommandContext) {
   if (!target) return;
   let text: string | null = null;
   try {
-    text = (await navigator.clipboard.readText()) || null;
+    text = (await readClipboardText()) || null;
   } catch {
     // The dialog's own Paste button says why the clipboard could not be read.
   }
