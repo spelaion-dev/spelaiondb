@@ -155,6 +155,14 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'push' }}
+      # libduckdb-sys unpacks DuckDB's sources into target/duckdb-sources/<hash>/ and reuses
+      # them only when its `.complete` marker is there. rust-cache's cleanup deletes every file
+      # in that folder but keeps the folder tree, so when the build script runs again (new
+      # DuckDB version or features) its unpack fails with DirectoryNotEmpty. Nothing reads the
+      # folder unless that build script runs, and then it unpacks it again.
+      - if: steps.scope.outputs.rust != 'false'
+        shell: bash
+        run: rm -rf target/duckdb-sources
       # A real SSH agent with the test key, for the agent authentication test.
       - if: steps.scope.outputs.rust != 'false'
         run: |
@@ -247,6 +255,10 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name == 'push' }}
+      # The DuckDB sources folder rust-cache leaves behind (see the Linux job).
+      - if: steps.scope.outputs.rust != 'false'
+        shell: bash
+        run: rm -rf target/duckdb-sources
       - if: steps.scope.outputs.rust != 'false'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - if: steps.scope.outputs.rust != 'false'
