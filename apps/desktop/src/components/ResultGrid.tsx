@@ -1428,8 +1428,15 @@ export function ResultGrid({
     if (!menu || !menuRef.current) return;
     const position = () => { if (menuRef.current) placeMenu(menuRef.current, menu.x, menu.y); };
     position();
+    // Items can appear while it is open ("Export selection…" once the result is complete):
+    // a taller menu is placed again so it stays inside the window.
+    const resized = new ResizeObserver(position);
+    resized.observe(menuRef.current);
     window.addEventListener("resize", position);
-    return () => window.removeEventListener("resize", position);
+    return () => {
+      resized.disconnect();
+      window.removeEventListener("resize", position);
+    };
   }, [menu]);
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -2628,11 +2635,38 @@ function ColumnChooser(props: {
   );
 }
 
+/** How long the pointer rests on a submenu's item before the submenu opens, and how long an
+ *  open submenu stays once the pointer has left it. A pointer going diagonally into an open
+ *  submenu crosses other items of the menu on the way: they neither close it nor open theirs. */
+const SUBMENU_OPEN_DELAY = 150;
+const SUBMENU_CLOSE_DELAY = 400;
+
+/** The grid submenu open now: opening another one closes it at once. */
+let openSubmenu: { close(): void } | null = null;
+
 /** A context submenu that stays inside the window, even near its edges. */
 function GridSubmenu({ label, children }: { label: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const submenu = useRef<HTMLDivElement>(null);
+  const timer = useRef<number | null>(null);
+  const clearTimer = () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const self = useRef({ close: () => {} });
+  self.current.close = () => {
+    clearTimer();
+    if (openSubmenu === self.current) openSubmenu = null;
+    setOpen(false);
+  };
+  const show = () => {
+    clearTimer();
+    if (openSubmenu !== self.current) openSubmenu?.close();
+    openSubmenu = self.current;
+    setOpen(true);
+  };
+  useEffect(() => () => self.current.close(), []);
   useLayoutEffect(() => {
     if (!open || !trigger.current || !submenu.current) return;
     const position = () => {
@@ -2644,18 +2678,28 @@ function GridSubmenu({ label, children }: { label: string; children: React.React
       placeMenu(submenu.current, x, anchor.top);
     };
     position();
+    // It follows its item when the menu or the submenu changes size (items added while open).
+    const resized = new ResizeObserver(position);
+    resized.observe(submenu.current);
+    const parent = trigger.current.closest(".grid-menu");
+    if (parent) resized.observe(parent);
     window.addEventListener("resize", position);
     window.addEventListener("scroll", position, true);
     return () => {
+      resized.disconnect();
       window.removeEventListener("resize", position);
       window.removeEventListener("scroll", position, true);
     };
   }, [open, children]);
   return (
-    <div className="grid-submenu" onMouseEnter={() => setOpen(true)} onMouseLeave={(e) => {
-      if (!e.currentTarget.contains(document.activeElement)) setOpen(false);
-    }} onFocus={() => setOpen(true)} onBlur={(e) => {
-      if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
+    <div className="grid-submenu" onMouseEnter={() => {
+      clearTimer();
+      if (!open) timer.current = window.setTimeout(show, SUBMENU_OPEN_DELAY);
+    }} onMouseLeave={(e) => {
+      clearTimer();
+      if (open && !e.currentTarget.contains(document.activeElement)) timer.current = window.setTimeout(() => self.current.close(), SUBMENU_CLOSE_DELAY);
+    }} onFocus={show} onBlur={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget)) self.current.close();
     }}>
       <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open}>
         {label} ▸
