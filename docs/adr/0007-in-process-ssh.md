@@ -84,7 +84,10 @@ Rules:
 - Connect timeout (2026-11-05): each hop has 15 s to answer and finish the SSH handshake
   (before, only the first hop's TCP connection and handshake had a limit; a later hop or a
   `command` could wait forever). `connect_timeout` in the tunnel file changes it.
-  Authentication is not counted: it may be waiting for a passphrase or a 2FA code.
+  Authentication is not counted: it may be waiting for a passphrase or a 2FA code. Nor is the
+  time the person takes to answer the unknown-host question, which comes during the handshake
+  (2026-11-12): the hop's clock stops while that question is open and runs for the rest, so a
+  server that never answers still times out, and a changed key is still refused at once.
 - Local ports (2026-11-05): a connection can fix the port its forward listens on
   (`local_port`, for other tools to use the same tunnel), and the personal `user.toml` can
   limit tunnels to a range (`[tunnels] port_min`/`port_max`, for firewalls). Forwards are still

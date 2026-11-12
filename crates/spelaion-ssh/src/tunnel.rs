@@ -19,9 +19,87 @@ use crate::auth::authenticate;
 use crate::hostkeys::{self, KnownHosts};
 use crate::ssm::SsmSession;
 use crate::{
-    HopSpec, Interaction, LocalPort, ProxySpec, SecretRequest, SshError, SsmSpec, Target,
+    HopSpec, HostInfo, Interaction, LocalPort, ProxySpec, SecretRequest, SshError, SsmSpec, Target,
     TunnelSpec, TunnelStage,
 };
+use spelaion_driver_api::Secret;
+
+/// How many questions a hop's handshake is waiting on a person to answer. The hop's connect
+/// timeout only counts the time when there are none (ADR-007): comparing a fingerprint takes
+/// as long as it takes, the network does not.
+#[derive(Clone)]
+struct Asking(Arc<watch::Sender<usize>>);
+
+impl Asking {
+    fn new() -> Self {
+        Self(Arc::new(watch::Sender::new(0)))
+    }
+
+    /// Marks a question as open until the guard is dropped (answered, or the handshake given
+    /// up).
+    fn open(&self) -> AskingGuard {
+        self.0.send_modify(|n| *n += 1);
+        AskingGuard(self.0.clone())
+    }
+}
+
+struct AskingGuard(Arc<watch::Sender<usize>>);
+
+impl Drop for AskingGuard {
+    fn drop(&mut self) {
+        self.0.send_modify(|n| *n = n.saturating_sub(1));
+    }
+}
+
+/// The person, as a hop's handshake sees them: the same questions, with the time spent
+/// answering kept out of the connect timeout.
+struct Timed {
+    inner: Arc<dyn Interaction>,
+    asking: Asking,
+}
+
+#[async_trait::async_trait]
+impl Interaction for Timed {
+    async fn confirm_unknown_host(&self, host: &HostInfo) -> bool {
+        let _open = self.asking.open();
+        self.inner.confirm_unknown_host(host).await
+    }
+
+    async fn ask_secret(&self, request: &SecretRequest) -> Option<Secret> {
+        let _open = self.asking.open();
+        self.inner.ask_secret(request).await
+    }
+}
+
+/// Runs `work` with at most `limit` of the time no person is being asked anything; `None` if
+/// that time ran out first.
+async fn within_network_time<T>(
+    limit: Duration,
+    asking: &Asking,
+    work: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    let mut remaining = limit;
+    let mut questions = asking.0.subscribe();
+    tokio::pin!(work);
+    loop {
+        if *questions.borrow_and_update() > 0 {
+            // The clock is stopped while the person answers. `asking` holds a sender, so
+            // `changed` only ends when the count changes.
+            tokio::select! {
+                done = &mut work => return Some(done),
+                _ = questions.changed() => continue,
+            }
+        }
+        let started = tokio::time::Instant::now();
+        tokio::select! {
+            done = &mut work => return Some(done),
+            () = tokio::time::sleep(remaining) => return None,
+            _ = questions.changed() => {
+                remaining = remaining.saturating_sub(started.elapsed());
+            }
+        }
+    }
+}
 
 /// A command running on a tunnel's last hop ([`Tunnel::exec`]).
 pub struct RemoteExec {
@@ -261,12 +339,19 @@ impl Tunnel {
             }
             let config = hop_config(hop_spec);
             let outcome = Arc::new(Mutex::new(None));
+            // The questions of this hop's handshake (the unknown-host one) wait for the person:
+            // their time is not counted against the connect timeout (ADR-007).
+            let asking = Asking::new();
+            let timed_ui: Arc<dyn Interaction> = Arc::new(Timed {
+                inner: ui.clone(),
+                asking: asking.clone(),
+            });
             let handler = HopHandler {
                 hop,
                 host: hop_spec.host.clone(),
                 port: hop_spec.port,
                 known: known.clone(),
-                ui: ui.clone(),
+                ui: timed_ui.clone(),
                 outcome: outcome.clone(),
                 state: state.clone(),
             };
@@ -301,7 +386,7 @@ impl Tunnel {
                                 &hop_spec.host,
                                 hop_spec.port,
                                 timeout,
-                                &ui,
+                                &timed_ui,
                             )
                             .await?;
                             observe(TunnelStage::Hop(hop));
@@ -348,9 +433,9 @@ impl Tunnel {
                     ),
                 }
             };
-            let connected = match tokio::time::timeout(timeout, handshake).await {
-                Ok(result) => result?,
-                Err(_) => {
+            let connected = match within_network_time(timeout, &asking, handshake).await {
+                Some(result) => result?,
+                None => {
                     return Err(SshError::Timeout {
                         hop,
                         host: hop_spec.host.clone(),
@@ -971,5 +1056,74 @@ mod tests {
         // A pinned type russh does not offer is not added.
         let dsa = preferred_key_types(&[Algorithm::Dsa], defaults);
         assert_eq!(dsa, defaults.to_vec());
+    }
+
+    /// Work that takes `before` of network time, then asks the person for `answer`, then
+    /// takes `after` more.
+    async fn work(asking: &Asking, before: Duration, answer: Duration, after: Duration) {
+        tokio::time::sleep(before).await;
+        {
+            let _open = asking.open();
+            tokio::time::sleep(answer).await;
+        }
+        tokio::time::sleep(after).await;
+    }
+
+    #[tokio::test]
+    async fn the_time_a_person_takes_to_answer_is_not_counted() {
+        let asking = Asking::new();
+        let limit = Duration::from_millis(300);
+        let ms = Duration::from_millis;
+        // 150 ms of network time in all, around an answer that takes much longer than the limit.
+        let done =
+            within_network_time(limit, &asking, work(&asking, ms(100), ms(800), ms(50))).await;
+        assert!(done.is_some());
+        assert_eq!(*asking.0.borrow(), 0);
+    }
+
+    #[tokio::test]
+    async fn network_time_still_runs_out_around_an_answer() {
+        let asking = Asking::new();
+        let limit = Duration::from_millis(300);
+        let ms = Duration::from_millis;
+        // 200 ms before the question and 200 ms after it: more than the limit in all.
+        let started = tokio::time::Instant::now();
+        let done =
+            within_network_time(limit, &asking, work(&asking, ms(200), ms(500), ms(200))).await;
+        assert!(done.is_none());
+        // It ran out after the answer: the question's time was not counted, the rest was.
+        let elapsed = started.elapsed();
+        assert!(elapsed >= ms(800), "{elapsed:?}");
+        assert!(elapsed < ms(1500), "{elapsed:?}");
+    }
+
+    #[tokio::test]
+    async fn work_that_never_ends_times_out_when_nobody_is_asked() {
+        let asking = Asking::new();
+        let started = tokio::time::Instant::now();
+        let done = within_network_time(
+            Duration::from_millis(200),
+            &asking,
+            std::future::pending::<()>(),
+        )
+        .await;
+        assert!(done.is_none());
+        assert!(started.elapsed() < Duration::from_millis(1000));
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_question_does_not_stop_the_clock_for_good() {
+        let asking = Asking::new();
+        // A handshake given up while asking drops its question with it.
+        let open = asking.open();
+        drop(open);
+        assert_eq!(*asking.0.borrow(), 0);
+        let done = within_network_time(
+            Duration::from_millis(200),
+            &asking,
+            std::future::pending::<()>(),
+        )
+        .await;
+        assert!(done.is_none());
     }
 }
