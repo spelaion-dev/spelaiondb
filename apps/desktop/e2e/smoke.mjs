@@ -5087,22 +5087,23 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     }
     const viewer = panel.locator(".cell-viewer");
     const valueText = viewer.getByRole("textbox", { name: "New value for due" });
-    // A date and time: the column keeps 3 digits, written as the grid shows it.
+    // A date and time: the column keeps 3 digits, written as the grid shows it, which for MySQL
+    // is the server's own text, every digit of the column's precision (SDB-122).
     const datePicker = viewer.getByRole("region", { name: "Pick a date and time" });
     await datePicker.waitFor();
     assert.equal(await datePicker.getByLabel("Date").inputValue(), "2026-01-31");
     assert.equal(await datePicker.getByLabel("Time").inputValue(), "10:20:30");
-    assert.equal(await datePicker.getByLabel("Fraction of a second").inputValue(), "12");
+    assert.equal(await datePicker.getByLabel("Fraction of a second").inputValue(), "120");
     await datePicker.getByText("This column keeps 3 digits of a second.").waitFor();
     await datePicker.getByLabel("Date").fill("2026-11-10");
     await datePicker.getByLabel("Time").fill("09:05:07");
     await datePicker.getByLabel("Fraction of a second").fill("5");
-    await page.waitForFunction((el) => el.value === "2026-11-10 09:05:07.5", await valueText.elementHandle());
+    await page.waitForFunction((el) => el.value === "2026-11-10 09:05:07.500", await valueText.elementHandle());
     // More digits than the column keeps are refused by the core, and what was typed stays.
     await datePicker.getByLabel("Fraction of a second").evaluate((el) => el.removeAttribute("maxlength"));
     await datePicker.getByLabel("Fraction of a second").fill("1234");
     await datePicker.getByRole("alert").filter({ hasText: "up to 3 digits" }).waitFor();
-    assert.equal(await valueText.inputValue(), "2026-11-10 09:05:07.5");
+    assert.equal(await valueText.inputValue(), "2026-11-10 09:05:07.500");
     await datePicker.getByLabel("Fraction of a second").fill("5");
     await shot("05j-picker-date");
     // An enum: its values from the catalog.
@@ -5155,7 +5156,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.locator(".cell-viewer .row-field").nth(4).waitFor();
     assert.deepEqual(
       await panel.locator(".cell-viewer .row-field dd").allInnerTexts(),
-      ["1", "2026-11-10 09:05:07.5", "happy", "paid", "77"],
+      ["1", "2026-11-10 09:05:07.500", "happy", "paid", "77"],
     );
     await panel.locator(".cell-viewer").getByRole("button", { name: "Cell", exact: true }).click();
   }
