@@ -150,6 +150,9 @@ pub struct Session {
     pause: Arc<Pause>,
     /// How many times the user asked to cancel: a run that sees it change stops.
     cancels: Arc<AtomicU64>,
+    /// Cancels still on their way to the engine: a new run, or a commit, waits for them before
+    /// it sends anything (SDB-266).
+    cancel_gate: CancelGate,
     /// The connection's column masking (ADR-051), applied to every result this session stores
     /// from a run, and by the core's own reads that do not go through the result store.
     masking: Arc<MaskPolicy>,
@@ -203,6 +206,7 @@ impl Session {
             transaction: Arc::new(tokio::sync::watch::Sender::new(TransactionStatus::default())),
             pause: Arc::new(Pause::default()),
             cancels: Arc::new(AtomicU64::new(0)),
+            cancel_gate: CancelGate::default(),
             masking: Arc::new(MaskPolicy::none()),
             read_only: false,
         }
@@ -286,6 +290,7 @@ impl Session {
     /// statement that names `sql_mode`.
     pub async fn refresh_sql_mode(&self) {
         let _run = self.control.lock().await;
+        self.cancel_gate.settled().await;
         self.dialect.refresh(self.connection.as_ref()).await;
     }
 
@@ -296,7 +301,14 @@ impl Session {
     /// Cancels the running statement, and the run that sent it: a cancelled script always
     /// stops, whatever its [`OnError`]. A run waiting for an answer after an error stops at
     /// once, without asking the engine anything.
+    ///
+    /// The engine's cancel may still be on its way when the run it was meant for has already
+    /// stopped (MySQL's `KILL QUERY` and PostgreSQL's cancel request travel over a connection
+    /// of their own, and stop whatever runs when they arrive). It is counted in flight before
+    /// the run can see it, and a new run, a commit or a rollback waits until it has returned,
+    /// so it never stops them (SDB-266). A cancel never waits for anything.
     pub async fn cancel(&self) -> Result<(), DriverError> {
+        let _in_flight = self.cancel_gate.enter();
         self.cancels.fetch_add(1, Ordering::SeqCst);
         if self.pause.resume(Resume::Cancelled) {
             return Ok(());
@@ -339,6 +351,7 @@ impl Session {
     /// auto-commit and says so ([`TransactionStatus::supported`]).
     pub async fn follow_transactions(&self, safeguards: &Safeguards) -> TransactionStatus {
         let _running = self.control.lock().await;
+        self.cancel_gate.settled().await;
         let status = match self.connection.transaction_state().await {
             Ok(state) => transaction::initial_status(safeguards, state),
             Err(_) => TransactionStatus::default(),
@@ -375,6 +388,7 @@ impl Session {
         let Ok(_running) = self.control.try_lock() else {
             return Err(TransactionError::Busy);
         };
+        self.cancel_gate.settled().await;
         if !self.transaction_status().supported {
             return Err(TransactionError::Unsupported);
         }
@@ -409,6 +423,8 @@ impl Session {
         let Ok(_running) = self.control.try_lock() else {
             return Err(TransactionError::Busy);
         };
+        // A late cancel must not stop the COMMIT or ROLLBACK (SDB-266).
+        self.cancel_gate.settled().await;
         if !self.transaction_status().supported {
             return Err(TransactionError::Unsupported);
         }
@@ -551,6 +567,7 @@ impl Session {
         let transaction = self.transaction.clone();
         let pause = self.pause.clone();
         let cancels = self.cancels.clone();
+        let cancel_gate = self.cancel_gate.clone();
         let mut health = self.health.subscribe();
 
         Box::pin(async_stream::stream! {
@@ -584,6 +601,9 @@ impl Session {
             }
             // One script at a time; Commit, Rollback and the toggle wait for none.
             let _running = control.lock_owned().await;
+            // A cancel still on its way to the engine would stop this run's first statement:
+            // nothing is sent before it has returned (SDB-266).
+            cancel_gate.settled().await;
             let cancelled = || cancels.load(Ordering::SeqCst) != cancels_at_start;
             let follow = transaction.borrow().supported;
             let mut on_error = run_options.on_error;
@@ -911,4 +931,41 @@ async fn run_control(
         }
     }
     Ok(notices)
+}
+
+/// How long a run waits for cancels still on their way before it goes on anyway. Each one is
+/// bounded by its engine's own connect timeout; this only keeps a cancel that never returns
+/// from holding the session.
+const CANCEL_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The cancels of a session still on their way to the engine (SDB-266).
+#[derive(Clone)]
+struct CancelGate(Arc<tokio::sync::watch::Sender<usize>>);
+
+impl Default for CancelGate {
+    fn default() -> Self {
+        Self(Arc::new(tokio::sync::watch::Sender::new(0)))
+    }
+}
+
+impl CancelGate {
+    /// Counts a cancel in flight until the guard is dropped (returned, failed or abandoned).
+    fn enter(&self) -> CancelInFlight {
+        self.0.send_modify(|n| *n += 1);
+        CancelInFlight(self.0.clone())
+    }
+
+    /// Once no cancel is in flight (or [`CANCEL_SETTLE_LIMIT`] has passed).
+    async fn settled(&self) {
+        let mut idle = self.0.subscribe();
+        let _ = tokio::time::timeout(CANCEL_SETTLE_LIMIT, idle.wait_for(|n| *n == 0)).await;
+    }
+}
+
+struct CancelInFlight(Arc<tokio::sync::watch::Sender<usize>>);
+
+impl Drop for CancelInFlight {
+    fn drop(&mut self) {
+        self.0.send_modify(|n| *n = n.saturating_sub(1));
+    }
 }

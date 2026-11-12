@@ -97,6 +97,10 @@ impl Driver for PostgresDriver {
 
         let cancel = Arc::new(PgCancel {
             token: client.cancel_token(),
+            host: params.host.clone(),
+            port: params.port,
+            connect_addr: params.connect_addr,
+            timeout: params.connect_timeout(),
             tls,
         });
         Ok(Box::new(PgConnection {
@@ -575,17 +579,126 @@ fn finish_batch(
 /// Cancellation opens a new connection, which must use the same TLS as the original.
 struct PgCancel {
     token: CancelToken,
+    /// The server's name (TLS checks it) and port, and where the session's connection went
+    /// instead when it goes through a tunnel (its local end).
+    host: String,
+    port: u16,
+    connect_addr: Option<std::net::SocketAddr>,
+    timeout: Duration,
     tls: Option<MakeRustlsConnect>,
 }
 
+/// How long a cancel waits for the server to close its connection once the request is sent.
+const CANCEL_CLOSE_WAIT: Duration = Duration::from_secs(5);
+
 #[async_trait]
 impl CancelHandle for PgCancel {
+    /// Returns once the server has closed the cancel connection, which it does after it has
+    /// signalled the session's backend: a cancel that has returned can no longer stop a
+    /// statement sent after it (SDB-266). tokio-postgres's own `cancel_query` returns as soon
+    /// as the request is written.
     async fn cancel(&self) -> Result<()> {
-        match &self.tls {
-            Some(tls) => self.token.cancel_query(tls.clone()).await,
-            None => self.token.cancel_query(NoTls).await,
+        let failed = |e: String| DriverError::Connection(format!("cancelling: {e}"));
+        let connect = async {
+            match self.connect_addr {
+                Some(addr) => tokio::net::TcpStream::connect(addr).await,
+                None => tokio::net::TcpStream::connect((self.host.as_str(), self.port)).await,
+            }
+        };
+        let socket = tokio::time::timeout(self.timeout, connect)
+            .await
+            .map_err(|_| failed("the server did not answer in time".into()))?
+            .map_err(|e| failed(e.to_string()))?;
+        let socket = UntilClosed {
+            inner: socket,
+            write_closed: false,
+        };
+        let sent = async {
+            match &self.tls {
+                Some(tls) => {
+                    let connector = tokio_postgres::tls::MakeTlsConnect::<
+                        UntilClosed<tokio::net::TcpStream>,
+                    >::make_tls_connect(
+                        &mut tls.clone(), &self.host
+                    )
+                    .map_err(|e| failed(e.to_string()))?;
+                    self.token
+                        .cancel_query_raw(socket, connector)
+                        .await
+                        .map_err(map_error)
+                }
+                None => self
+                    .token
+                    .cancel_query_raw(socket, NoTls)
+                    .await
+                    .map_err(map_error),
+            }
+        };
+        tokio::time::timeout(self.timeout + CANCEL_CLOSE_WAIT, sent)
+            .await
+            .map_err(|_| failed("the server did not close the cancel connection".into()))?
+    }
+}
+
+/// The cancel request's socket. Shutting it down also waits until the server closes it: the
+/// postmaster's child for a cancel request signals the backend, then exits.
+struct UntilClosed<S> {
+    inner: S,
+    write_closed: bool,
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for UntilClosed<S> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite
+    for UntilClosed<S>
+{
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        if !this.write_closed {
+            match std::pin::Pin::new(&mut this.inner).poll_shutdown(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(result) => result?,
+            }
+            this.write_closed = true;
         }
-        .map_err(map_error)
+        let mut chunk = [0u8; 512];
+        loop {
+            let mut buf = tokio::io::ReadBuf::new(&mut chunk);
+            match std::pin::Pin::new(&mut this.inner).poll_read(cx, &mut buf) {
+                Poll::Pending => return Poll::Pending,
+                // Closed (or reset): the server is done with the request.
+                Poll::Ready(Ok(())) if buf.filled().is_empty() => return Poll::Ready(Ok(())),
+                Poll::Ready(Err(_)) => return Poll::Ready(Ok(())),
+                Poll::Ready(Ok(())) => {}
+            }
+        }
     }
 }
 
