@@ -42,11 +42,25 @@ test("every explorer row menu is kept inside the window", () => {
   assert.doesNotMatch(sidebar, /Math\.min\(menu\.[xy]/);
   // The menus are `ObjectMenu`s, which place themselves with `useMenuInWindow`.
   assert.ok((sidebar.match(/<ObjectMenu at=\{menu\}/g) ?? []).length >= 9);
-  assert.match(sidebar, /function ObjectMenu\([^]*?useMenuInWindow\(ref, at\.x, at\.y\)/);
+  const objectMenu = readFileSync(resolve(import.meta.dirname, "../src/components/ObjectMenu.tsx"), "utf8");
+  assert.match(objectMenu, /function ObjectMenu\([^]*?useMenuInWindow\(ref, at\.x, at\.y\)/);
   const raw = sidebar.match(/<div[^>]*className="grid-menu object-menu[^"]*"/g) ?? [];
   assert.deepEqual(
     raw.map((tag) => tag.match(/className="([^"]*)"/)[1]),
     ["grid-menu object-menu explorer-generate-items"],
     "only the Generate SQL submenu (placed next to its item) is a menu of its own",
+  );
+});
+
+test("the ER diagram's table menu is kept inside the window", () => {
+  const diagram = readFileSync(resolve(import.meta.dirname, "../src/components/ErDiagram.tsx"), "utf8");
+  // SDB-255: it was placed at the raw click point, like the explorer's before SDB-246.
+  assert.doesNotMatch(diagram, /left:\s*menu\.x/);
+  assert.match(diagram, /<ObjectMenu at=\{menu\}>/);
+  // The export menu opens under its toolbar button (CSS), not at a click: the only other one.
+  const raw = diagram.match(/<div[^>]*className="grid-menu object-menu[^"]*"/g) ?? [];
+  assert.deepEqual(
+    raw.map((tag) => tag.match(/className="([^"]*)"/)[1]),
+    ["grid-menu object-menu er-export-menu"],
   );
 });
