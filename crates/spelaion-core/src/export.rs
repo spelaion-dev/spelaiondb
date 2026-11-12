@@ -429,6 +429,53 @@ pub fn write_result(
     writer.finish(out)
 }
 
+/// A selection of `result` as clipboard text (the grid's copy). One cell copied as plain text
+/// (TSV without a header) is its value exactly: no quotes and no line break after it, so pasted
+/// into a terminal it does not run and pasted into a search box or a form it does not submit.
+/// A line break that is part of the value is kept. Anything else is [`write_result`]'s text,
+/// byte for byte: rows (one row of several cells too) keep their final line break, which a
+/// spreadsheet expects when pasting rows.
+pub fn copy_text(
+    result: &StoredResult,
+    options: &ExportOptions,
+    dialect: &dyn Dialect,
+) -> io::Result<String> {
+    if let Some((value, numeric)) = single_cell(result, options) {
+        return Ok(match text(&value) {
+            None => options.csv.null_text.clone(),
+            Some(text) if options.csv.escape_formulas && !numeric => formula_escaped(&text),
+            Some(text) => text,
+        });
+    }
+    let mut out = Vec::new();
+    write_result(result, options, dialect, &mut out)?;
+    String::from_utf8(out).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// The value of the one cell `options` selects as plain text (TSV, no header), and whether its
+/// column is numeric; `None` for any other copy.
+fn single_cell(result: &StoredResult, options: &ExportOptions) -> Option<(Value, bool)> {
+    if options.format != ExportFormat::Tsv || options.header {
+        return None;
+    }
+    let schema = result.schema();
+    let columns: Vec<usize> = options
+        .columns
+        .iter()
+        .copied()
+        .filter(|&c| c < schema.columns.len())
+        .collect();
+    let rows = options.rows.start.min(result.rows())..options.rows.end.min(result.rows());
+    let ([column], 1) = (columns.as_slice(), rows.len()) else {
+        return None;
+    };
+    let logical = schema.columns[*column].logical;
+    let batch = result.window(rows.start, 1).into_iter().next()?;
+    let value =
+        Value::from_array(batch.column(*column).as_ref(), 0, logical).unwrap_or(Value::Null);
+    Some((value, is_numeric(logical)))
+}
+
 /// What writing a file did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FileSummary {
@@ -1107,6 +1154,203 @@ mod tests {
         )
         .unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    /// A text column and a number column, one row per pair.
+    fn copy_sample(rows: &[(Option<&str>, Option<i64>)]) -> Arc<std::sync::RwLock<StoredResult>> {
+        let meta = |name: &str, logical| ColumnMeta {
+            name: name.into(),
+            logical,
+            native_type: logical.as_str().into(),
+            native_id: None,
+            origin: None,
+        };
+        let schema = Arc::new(ResultSchema::new(vec![
+            meta("value", LogicalType::Text),
+            meta("n", LogicalType::Int),
+        ]));
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(
+                rows.iter().map(|(text, _)| *text).collect::<Vec<_>>(),
+            )),
+            Arc::new(Int64Array::from(
+                rows.iter().map(|(_, n)| *n).collect::<Vec<_>>(),
+            )),
+        ];
+        let store = ResultStore::new();
+        let id = store.create(schema.clone());
+        store
+            .append(
+                id,
+                RecordBatch::try_new(schema.arrow.clone(), columns).unwrap(),
+            )
+            .unwrap();
+        store.get(id).unwrap()
+    }
+
+    fn copy(
+        result: &StoredResult,
+        format: ExportFormat,
+        rows: Range<usize>,
+        columns: Vec<usize>,
+        header: bool,
+        csv: CsvOptions,
+    ) -> String {
+        let options = ExportOptions {
+            format,
+            rows,
+            columns,
+            header,
+            csv,
+        };
+        copy_text(result, &options, &Quoted("postgres")).unwrap()
+    }
+
+    /// What `write_result` writes for the same options: today's copy, byte for byte.
+    fn written(
+        result: &StoredResult,
+        format: ExportFormat,
+        rows: Range<usize>,
+        columns: Vec<usize>,
+        header: bool,
+    ) -> String {
+        let mut out = Vec::new();
+        let options = ExportOptions {
+            format,
+            rows,
+            columns,
+            header,
+            csv: CsvOptions::default(),
+        };
+        write_result(result, &options, &Quoted("postgres"), &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    const COPY_VALUES: [(Option<&str>, Option<i64>); 6] = [
+        (Some("plain"), Some(1)),
+        (Some("ends with a line break\n"), Some(-2)),
+        (Some("windows line\r\n"), None),
+        (Some("tab\tand \"quote\", comma\nsecond line"), Some(4)),
+        (None, Some(5)),
+        (Some("=1+1"), Some(6)),
+    ];
+
+    #[test]
+    fn one_cell_copies_as_its_value_alone() {
+        let result = copy_sample(&COPY_VALUES);
+        let result = result.read().unwrap();
+        let one = |row: usize, column: usize| {
+            copy(
+                &result,
+                ExportFormat::Tsv,
+                row..row + 1,
+                vec![column],
+                false,
+                CsvOptions::default(),
+            )
+        };
+        // No line break after it, no quotes around it.
+        assert_eq!(one(0, 0), "plain");
+        assert_eq!(one(0, 1), "1");
+        assert_eq!(one(1, 1), "-2");
+        // A line break that is part of the value stays, Windows' too.
+        assert_eq!(one(1, 0), "ends with a line break\n");
+        assert_eq!(one(2, 0), "windows line\r\n");
+        assert_eq!(one(3, 0), "tab\tand \"quote\", comma\nsecond line");
+        // NULL is the null text (empty by default), and nothing else.
+        assert_eq!(one(4, 0), "");
+        assert_eq!(one(2, 1), "");
+        assert_eq!(one(5, 0), "=1+1");
+        // A hidden column left out of the selection, a row past the end: still one cell.
+        let hidden = copy(
+            &result,
+            ExportFormat::Tsv,
+            0..1,
+            vec![1, 99],
+            false,
+            CsvOptions::default(),
+        );
+        assert_eq!(hidden, "1");
+        let past_end = copy(
+            &result,
+            ExportFormat::Tsv,
+            5..9,
+            vec![0],
+            false,
+            CsvOptions::default(),
+        );
+        assert_eq!(past_end, "=1+1");
+        // The copy's own options still apply to its value.
+        let options = CsvOptions {
+            null_text: "NULL".into(),
+            escape_formulas: true,
+            ..CsvOptions::default()
+        };
+        let with = |row: usize, column: usize| {
+            copy(
+                &result,
+                ExportFormat::Tsv,
+                row..row + 1,
+                vec![column],
+                false,
+                options.clone(),
+            )
+        };
+        assert_eq!(with(4, 0), "NULL");
+        assert_eq!(with(5, 0), "'=1+1");
+        assert_eq!(with(1, 1), "-2");
+    }
+
+    #[test]
+    fn every_other_copy_is_written_as_before_byte_for_byte() {
+        let result = copy_sample(&COPY_VALUES);
+        let result = result.read().unwrap();
+        let same = |format: ExportFormat, rows: Range<usize>, columns: Vec<usize>, header: bool| {
+            let copied = copy(
+                &result,
+                format.clone(),
+                rows.clone(),
+                columns.clone(),
+                header,
+                CsvOptions::default(),
+            );
+            assert_eq!(copied, written(&result, format, rows, columns, header));
+            copied
+        };
+        // Two rows of one column: each row ends in its line break, quoted values stay quoted.
+        assert_eq!(
+            same(ExportFormat::Tsv, 0..2, vec![0], false),
+            "plain\n\"ends with a line break\n\"\n"
+        );
+        // One row of several cells keeps its final line break (spreadsheets paste rows so).
+        assert_eq!(
+            same(ExportFormat::Tsv, 0..1, vec![0, 1], false),
+            "plain\t1\n"
+        );
+        // One cell with its column's name is a header and a row.
+        assert_eq!(
+            same(ExportFormat::Tsv, 0..1, vec![0], true),
+            "value\nplain\n"
+        );
+        // Other formats keep theirs, CSV's Windows line endings included.
+        assert_eq!(same(ExportFormat::Csv, 0..1, vec![0], false), "plain\r\n");
+        assert_eq!(
+            same(ExportFormat::Csv, 0..2, vec![0, 1], false),
+            "plain,1\r\n\"ends with a line break\n\",-2\r\n"
+        );
+        same(ExportFormat::Json, 0..1, vec![0], false);
+        same(ExportFormat::Markdown, 0..1, vec![0], false);
+        same(ExportFormat::Html, 0..1, vec![0], false);
+        same(ExportFormat::InList, 0..1, vec![0], false);
+        same(
+            ExportFormat::SqlInsertBatch { table: "t".into() },
+            0..1,
+            vec![0],
+            false,
+        );
+        // Nothing selected is nothing.
+        assert_eq!(same(ExportFormat::Tsv, 9..12, vec![0], false), "");
+        assert_eq!(same(ExportFormat::Tsv, 0..1, vec![99], false), "\n");
     }
 
     #[test]

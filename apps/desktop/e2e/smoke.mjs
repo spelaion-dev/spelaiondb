@@ -1135,7 +1135,8 @@ try {
   {
     const before = await page.evaluate(() => window.__copied.length);
     await page.keyboard.press("Control+c");
-    assert.equal((await copied(before + 1)).trimEnd(), "50000");
+    // One cell copies as its value alone, with no line break after it (SDB-244).
+    assert.equal(await copied(before + 1), "50000");
   }
   await page.keyboard.press("Control+Shift+ArrowUp");
   await selectionText.getByText("1 column selected", { exact: true }).waitFor();
@@ -1146,6 +1147,13 @@ try {
   await selectionText.getByText("1 cell selected", { exact: true }).waitFor();
   await page.keyboard.press("Shift+End");
   await selectionText.getByText("1 row selected", { exact: true }).waitFor();
+  {
+    // A row of several cells keeps its final line break, as spreadsheets paste rows.
+    const before = await page.evaluate(() => window.__copied.length);
+    await page.keyboard.press("Control+c");
+    const row = await copied(before + 1);
+    assert.ok(row.includes("\t") && row.endsWith("\n") && row.indexOf("\n") === row.length - 1, JSON.stringify(row));
+  }
   await page.keyboard.press("Control+a");
   await selectionText.getByText("All 50,000 rows selected", { exact: true }).waitFor();
   // Ctrl+click on a header selects the column instead of sorting.
@@ -1204,7 +1212,7 @@ try {
   {
     const before = await page.evaluate(() => window.__copied.length);
     await page.keyboard.press("Control+c");
-    assert.equal((await copied(before + 1)).trimEnd(), "1", "the frozen id column is still under the pointer");
+    assert.equal(await copied(before + 1), "1", "the frozen id column is still under the pointer");
   }
   await shot("04b4-grid-frozen");
   await page.mouse.click(sortBox.x + ID_X, sortBox.y + 18, { button: "right" });
@@ -1254,7 +1262,7 @@ try {
     // The active cell follows the match.
     const before = await page.evaluate(() => window.__copied.length);
     await page.keyboard.press("Control+c");
-    assert.equal((await copied(before + 1)).trimEnd(), "14999");
+    assert.equal(await copied(before + 1), "14999");
   }
   await page.keyboard.press("F3");
   await findStatus.getByText("3 of 15", { exact: true }).waitFor();
@@ -4697,7 +4705,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const copiedBeforeCall = await page.evaluate(() => window.__copied.length);
   await page.mouse.click(callBox.x + 80, callBox.y + 34 + 12);
   await page.keyboard.press("Control+c");
-  assert.equal((await copied(copiedBeforeCall + 1)).trimEnd(), "42");
+  assert.equal(await copied(copiedBeforeCall + 1), "42");
   // "Edit source": MySQL has no OR REPLACE for a procedure, so it is dropped and created again.
   await page.getByRole("button", { name: "smoke_call: open its definition", exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Edit source" }).click();
@@ -4843,7 +4851,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const before = await page.evaluate(() => window.__copied.length);
     await page.mouse.click(after.x + 52 + 110 + 20, after.y + 34 + 12);
     await page.keyboard.press("Control+c");
-    assert.equal((await copied(before + 1)).trimEnd(), "saved by shortcut");
+    assert.equal(await copied(before + 1), "saved by shortcut");
   }
   // A typed value that does not fit the column is refused by the core; nothing is applied.
   {
@@ -5941,7 +5949,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   // Revealing changed nothing else: a new copy is still the mask.
   await page.mouse.click(maskedCell.x, maskedCell.y);
   await page.keyboard.press("Control+c");
-  assert.equal((await copied(copiesBefore + 2)).trimEnd(), "••••••");
+  assert.equal(await copied(copiesBefore + 2), "••••••");
   // Settings › Masking: the user's own patterns for every connection, saved in user.toml when
   // the box loses focus; clearing it removes them.
   await withSettings("masking", async (settings) => {

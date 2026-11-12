@@ -97,8 +97,8 @@ pub use er::{
 };
 pub use export::{
     CopyError, CsvOptions, ExportFormat, ExportOptions, FileSummary, GenericDialect, MAX_IN_LIST,
-    NameStyle, TextEncoding, column_in_list, column_names, export_to_file, formula_escaped,
-    write_result,
+    NameStyle, TextEncoding, column_in_list, column_names, copy_text, export_to_file,
+    formula_escaped, write_result,
 };
 pub use export_stream::{
     DEFAULT_BATCH_ROWS, ExportCancel, ExportError, ExportProgress, ExportedFile, RerunCheck,

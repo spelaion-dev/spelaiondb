@@ -278,7 +278,8 @@ export const commands = {
 	deleteTunnel: (name: string, personal: boolean) => typedError<null, string>(__TAURI_INVOKE("delete_tunnel", { name, personal })),
 	/**
 	 *  A selection of a result as text (TSV, CSV, JSON or INSERT), formatted by the core from
-	 *  the typed data, for the clipboard.
+	 *  the typed data, for the clipboard. One cell copied as plain text is its value alone,
+	 *  without a line break after it.
 	 */
 	copyRows: (result: number, session: string, range: CellRange, format: TextFormat, header: boolean) => typedError<string, string>(__TAURI_INVOKE("copy_rows", { result, session, range, format, header })),
 	/**
