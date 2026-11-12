@@ -563,6 +563,7 @@
   },
   "scriptError": {
     "title": "La sentencia {{index}} falló",
+    "titleInTab": "La sentencia {{index}} falló en {{tab}}",
     "remaining_one": "Queda {{count}} sentencia detrás sin ejecutar.",
     "remaining_other": "Quedan {{count}} sentencias detrás sin ejecutar.",
     "stop": "Detener",

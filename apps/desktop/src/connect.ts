@@ -296,6 +296,6 @@ async function confirmClose(sessions: string[]): Promise<boolean> {
 
 /** A run of a closing tab that waits for an answer after an error stops: its dialog goes. */
 function stopScriptQuestion(closing: string[]) {
-  const question = useDialogs.getState().scriptError;
-  if (question && closing.includes(question.tab)) question.resolve("stop");
+  // Wherever it waits: a question behind another one's dialog too (SDB-139).
+  useDialogs.getState().stopScriptQuestions(closing);
 }

@@ -4,7 +4,7 @@ import type { EditorActionId } from "./editorActions";
 
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
-import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, ErrorAnswerItem, FieldChangeItem, FileFormatItem, InteractionKind, OnErrorItem, RestoreNoteItem, RiskKind, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
+import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFormatItem, OnErrorItem, RestoreNoteItem, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
 import type { DiagramScopeItem_Deserialize, RestoredTabItem } from "./bindings";
 
 export interface ResultMeta {
@@ -575,258 +575,20 @@ export const useApp = create<AppStore>((set) => ({
 
 // ------------------------------------------------------------------- dialogs
 
-export interface PasswordRequest {
-  connectionName: string;
-  canRemember: boolean;
-  error: string | null;
-  resolve(answer: { password: string; remember: boolean } | null): void;
-}
-
-export interface TrustRequest {
-  workspace: string | null;
-  resolve(accept: boolean): void;
-}
-
-/** Values for the user's personal `${user.…}` variables (ADR-022). */
-export interface VariablesRequest {
-  names: string[];
-  resolve(values: Record<string, string> | null): void;
-}
-
-/** A repository connection or tunnel changed since the repository was trusted (ADR-022). */
-export interface ChangeRequest {
-  item: string;
-  isNew: boolean;
-  fields: FieldChangeItem[];
-  resolve(accept: boolean): void;
-}
-
-/** A line of text, such as the name to save a query under. */
-export interface TextRequest {
-  title: string;
-  label: string;
-  initial: string;
-  confirm: string;
-  resolve(text: string | null): void;
-}
-
-/** A question with a few answers (save, don't save, cancel…); `null` when dismissed. */
-export interface ChoiceRequest {
-  title: string;
-  message: string;
-  choices: { id: string; label: string; primary?: boolean; danger?: boolean }[];
-  resolve(choice: string | null): void;
-}
-
-/** Values for the `:name` placeholders of a script. */
-export interface ParamsRequest {
-  names: string[];
-  /** Values used last time in this tab, to start from. */
-  previous: Record<string, string>;
-  resolve(values: Record<string, string> | null): void;
-}
-
-/** Tabs with an open transaction about to be closed, disconnected or quit (ADR-031), tabs
- *  whose query runs and tabs with row edits not applied, before closing them, quitting or
- *  opening another folder: asked once for all of them. */
-export interface OpenTransactionsRequest {
-  /** Tabs whose transaction the server rolls back. */
-  tabs: string[];
-  /** Tabs whose running query is cancelled. */
-  running: string[];
-  /** Tabs whose row edits not applied yet are discarded. */
-  unsaved: string[];
-  action: "close" | "disconnect" | "quit" | "folder";
-  resolve(proceed: boolean): void;
-}
-
-/** A run paused after an error (ADR-035): the core waits for the answer to its ticket. */
-export interface ScriptErrorRequest {
-  tab: string;
-  /** 1-based. */
-  statement: number;
-  message: string;
-  remaining: number;
-  resolve(answer: ErrorAnswerItem): void;
-}
-
-/** Statements the core wants confirmed before they run. */
-export interface RiskRequest {
-  connection: string;
-  statements: { sql: string; risk: RiskKind }[];
-  resolve(run: boolean): void;
-}
-
-export interface InteractionItem {
-  id: number;
-  request: InteractionKind;
-}
-
-interface DialogStore {
-  password: PasswordRequest | null;
-  trust: TrustRequest | null;
-  change: ChangeRequest | null;
-  variables: VariablesRequest | null;
-  risk: RiskRequest | null;
-  scriptError: ScriptErrorRequest | null;
-  openTransactions: OpenTransactionsRequest | null;
-  params: ParamsRequest | null;
-  text: TextRequest | null;
-  choice: ChoiceRequest | null;
-  interactions: InteractionItem[];
-  askOpenTransactions(tabs: string[], action: OpenTransactionsRequest["action"], running?: string[], unsaved?: string[]): Promise<boolean>;
-  askText(request: Omit<TextRequest, "resolve">): Promise<string | null>;
-  askChoice(request: Omit<ChoiceRequest, "resolve">): Promise<string | null>;
-  askParams(names: string[], previous: Record<string, string>): Promise<Record<string, string> | null>;
-  askRisks(connection: string, statements: RiskRequest["statements"]): Promise<boolean>;
-  askScriptError(request: Omit<ScriptErrorRequest, "resolve">): Promise<ErrorAnswerItem>;
-  askPassword(connectionName: string, canRemember: boolean, error: string | null): Promise<{ password: string; remember: boolean } | null>;
-  askTrust(workspace: string | null): Promise<boolean>;
-  askChange(change: Omit<ChangeRequest, "resolve">): Promise<boolean>;
-  askVariables(names: string[]): Promise<Record<string, string> | null>;
-  pushInteraction(item: InteractionItem): void;
-  popInteraction(id: number): void;
-}
-
-export const useDialogs = create<DialogStore>((set) => ({
-  password: null,
-  trust: null,
-  change: null,
-  variables: null,
-  risk: null,
-  scriptError: null,
-  openTransactions: null,
-  params: null,
-  text: null,
-  choice: null,
-  interactions: [],
-  askText: (request) =>
-    new Promise((resolve) =>
-      set({
-        text: {
-          ...request,
-          resolve: (text) => {
-            set({ text: null });
-            resolve(text);
-          },
-        },
-      }),
-    ),
-  askChoice: (request) =>
-    new Promise((resolve) =>
-      set({
-        choice: {
-          ...request,
-          resolve: (choice) => {
-            set({ choice: null });
-            resolve(choice);
-          },
-        },
-      }),
-    ),
-  askParams: (names, previous) =>
-    new Promise((resolve) =>
-      set({
-        params: {
-          names,
-          previous,
-          resolve: (values) => {
-            set({ params: null });
-            resolve(values);
-          },
-        },
-      }),
-    ),
-  askScriptError: (request) =>
-    new Promise((resolve) =>
-      set({
-        scriptError: {
-          ...request,
-          resolve: (answer) => {
-            set({ scriptError: null });
-            resolve(answer);
-          },
-        },
-      }),
-    ),
-  askRisks: (connection, statements) =>
-    new Promise((resolve) =>
-      set({
-        risk: {
-          connection,
-          statements,
-          resolve: (run) => {
-            set({ risk: null });
-            resolve(run);
-          },
-        },
-      }),
-    ),
-  askPassword: (connectionName, canRemember, error) =>
-    new Promise((resolve) =>
-      set({
-        password: {
-          connectionName,
-          canRemember,
-          error,
-          resolve: (answer) => {
-            set({ password: null });
-            resolve(answer);
-          },
-        },
-      }),
-    ),
-  askTrust: (workspace) =>
-    new Promise((resolve) =>
-      set({
-        trust: {
-          workspace,
-          resolve: (accept) => {
-            set({ trust: null });
-            resolve(accept);
-          },
-        },
-      }),
-    ),
-  askChange: (change) =>
-    new Promise((resolve) =>
-      set({
-        change: {
-          ...change,
-          resolve: (accept) => {
-            set({ change: null });
-            resolve(accept);
-          },
-        },
-      }),
-    ),
-  askVariables: (names) =>
-    new Promise((resolve) =>
-      set({
-        variables: {
-          names,
-          resolve: (values) => {
-            set({ variables: null });
-            resolve(values);
-          },
-        },
-      }),
-    ),
-  askOpenTransactions: (tabs, action, running = [], unsaved = []) =>
-    new Promise((resolve) =>
-      set({
-        openTransactions: {
-          tabs,
-          running,
-          unsaved,
-          action,
-          resolve: (proceed) => {
-            set({ openTransactions: null });
-            resolve(proceed);
-          },
-        },
-      }),
-    ),
-  pushInteraction: (item) => set((s) => ({ interactions: [...s.interactions, item] })),
-  popInteraction: (id) => set((s) => ({ interactions: s.interactions.filter((i) => i.id !== id) })),
-}));
+// The questions live in dialogStore.ts (a queue per kind, SDB-139); re-exported here for the
+// rest of the app.
+export { useDialogs } from "./dialogStore";
+export type {
+  ChangeRequest,
+  ChoiceRequest,
+  InteractionItem,
+  OpenTransactionsRequest,
+  ParamsRequest,
+  PasswordRequest,
+  QuestionKind,
+  RiskRequest,
+  ScriptErrorRequest,
+  TextRequest,
+  TrustRequest,
+  VariablesRequest,
+} from "./dialogStore";
