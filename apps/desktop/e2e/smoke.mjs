@@ -4838,9 +4838,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.waitForFunction((el) => !el.isConnected, previousEditResult);
   await panel.locator(".statusline", { hasText: "4 rows" }).waitFor();
   assert.equal(await panel.getByRole("toolbar", { name: "Row actions" }).count(), 0);
-  const joinPages = panel.getByRole("group", { name: "Query result pages" });
-  await joinPages.getByRole("button", { name: "Count", exact: true }).click();
-  await joinPages.getByText("rows 1–4 of 4").waitFor();
+  // A join is not paged (ADR-054: its pages could not be fetched exactly): it ran as written,
+  // every row at once, with no page controls.
+  assert.equal(await panel.getByRole("group", { name: "Query result pages" }).count(), 0);
 
   step("value viewers: an image BLOB previewed, saved to a file and loaded from one; XML pretty-printed");
   {

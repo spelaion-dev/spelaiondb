@@ -80,6 +80,39 @@ pub fn table_page_sql(dialect: &dyn Dialect, page: &TablePage) -> Result<String,
     Ok(sql)
 }
 
+/// The order of a table data tab's pages (ADR-054): the user's order, then the primary key, so
+/// the numbered pages never depend on the order the server happens to return. Only the key
+/// when the user chose none; the user's order alone for a table without a key.
+pub fn order_with_key(dialect: &dyn Dialect, order_by: &str, key: &[String]) -> String {
+    let key = key
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match (order_by.trim(), key.is_empty()) {
+        (order, true) => order.to_string(),
+        ("", false) => key,
+        (order, false) => format!("{order}, {key}"),
+    }
+}
+
+/// [`table_page_sql`] with the page ordered by [`order_with_key`], the primary key read from
+/// the catalog now.
+pub async fn table_page_sql_by_key(session: &Session, page: &TablePage) -> Result<String, String> {
+    let key = session
+        .connection()
+        .describe_table(&page.schema, &page.name)
+        .await
+        .map(|table| table.primary_key)
+        .unwrap_or_default();
+    let dialect = session.dialect();
+    let page = TablePage {
+        order_by: order_with_key(dialect.as_ref(), &page.order_by, &key),
+        ..page.clone()
+    };
+    table_page_sql(dialect.as_ref(), &page).map_err(|e| e.to_string())
+}
+
 /// `SELECT COUNT(*)` of the rows the filter keeps, checked the same way.
 pub fn table_count_sql(
     dialect: &dyn Dialect,
@@ -711,6 +744,28 @@ mod tests {
         // An injection typed in the filter is still refused once a condition is added.
         let filter = add("1=1) UNION SELECT * FROM t WHERE (1=1").unwrap();
         assert!(table_page_sql(&d, &page(&filter, "")).is_err());
+    }
+
+    #[test]
+    fn table_pages_are_ordered_by_the_key_after_the_users_order() {
+        let d = SqliteDialect;
+        let key = vec!["id".to_string(), "order line".to_string()];
+        assert_eq!(order_with_key(&d, "", &key), "id, \"order line\"");
+        assert_eq!(
+            order_with_key(&d, "\"total\" DESC", &key),
+            "\"total\" DESC, id, \"order line\""
+        );
+        assert_eq!(order_with_key(&d, " total ", &[]), "total");
+        assert_eq!(order_with_key(&d, "", &[]), "");
+        let sql = table_page_sql(
+            &d,
+            &TablePage {
+                order_by: order_with_key(&d, "", &key),
+                ..page("", "")
+            },
+        )
+        .unwrap();
+        assert!(sql.contains("ORDER BY\nid, \"order line\"\n"), "{sql}");
     }
 
     fn page(filter: &str, order_by: &str) -> TablePage {

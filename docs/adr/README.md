@@ -63,3 +63,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [051](0051-column-masking.md) | Column masking: values replaced where results enter the core, revealed one cell at a time; not access control | Accepted (amended by ADR-052) |
 | [052](0052-masking-follows-the-origin-column.md) | Column masking also follows the table column a result column reads, where the engine reports it, so an alias does not unmask it | Accepted |
 | [053](0053-read-only-connections-refuse-writes.md) | A read-only connection refuses writes from the editor: a check in the core before anything runs, and the engine's own read-only mode | Accepted |
+| [054](0054-keyset-query-pages.md) | Query results are paged only when each page can be fetched exactly: keyset pages over the table's primary key | Accepted |
