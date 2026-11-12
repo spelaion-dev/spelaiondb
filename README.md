@@ -15,6 +15,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/spelaion-dev/spelaiondb/releases/latest"><b>Download</b></a> ·
+  <a href="docs/guide/README.md">User guide</a> ·
+  <a href="docs/releases/">Release notes</a> ·
+  <a href="https://ko-fi.com/spelaion">Support the project</a>
+</p>
+
 ![SpelaionDB with a query, its results and connections to several engines](docs/images/app-dark.png)
 
 > **Status:** preview. The drivers (PostgreSQL, MySQL/MariaDB and SQL Server with TLS, SQLite,
@@ -102,6 +109,15 @@ part means following the [code of conduct](CODE_OF_CONDUCT.md).
 
 Most of the code is written by AI coding agents following [`AGENTS.md`](AGENTS.md); the
 compiler, the tests and CI are its reviewers.
+
+## Support the project
+
+SpelaionDB is free and open source. If it is useful to you, a donation on Ko-fi helps keep its
+development going:
+
+<a href="https://ko-fi.com/spelaion"><img src="https://ko-fi.com/img/githubbutton_sm.svg" height="36" alt="Support SpelaionDB on Ko-fi"></a>
+
+Starring the repository, reporting a bug or telling a colleague about it helps just as much.
 
 ## License
 
