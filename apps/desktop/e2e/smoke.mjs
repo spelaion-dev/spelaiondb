@@ -7465,6 +7465,55 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await settings.getByRole("checkbox", { name: "Reconnect the last connections at startup" }).check();
     await page.waitForFunction(() => document.querySelector('input[name="reconnectOnStart"]')?.checked && !document.querySelector('input[name="reconnectOnStart"]').disabled);
   });
+  step("a query result's column filters stay as they are while edits are pending, so the edits stay on their rows");
+  {
+    const shown = page.locator(".tab-panel:not([hidden])");
+    await newQuery("Shop (SQLite)", "select id, name from customer order by id limit 12;");
+    await run(shown);
+    await shown.locator(".statusline", { hasText: /^12 rows/ }).waitFor();
+    await shown.getByRole("button", { name: "Add row" }).waitFor();
+    // The grid's place is read for each click: the filter bar moves it down.
+    const at = async (row, x) => {
+      const box = await shown.locator(".grid-scroller").boundingBox();
+      return [box.x + 52 + x + 20, box.y + 34 + 12 + row * 24];
+    };
+    // A filter before the edits: ids 1, 10, 11 and 12.
+    await page.mouse.click(...(await at(0, 0)), { button: "right" });
+    await shown.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).hover();
+    await shown.getByRole("menuitem", { name: "id contains '1'" }).click();
+    await shown.locator(".statusline", { hasText: /^4 of 12 rows/ }).waitFor();
+    // The name of id 10, the second row shown, changed and not applied.
+    await page.mouse.dblclick(...(await at(1, 110)));
+    const cell = shown.locator("input.cell-editor").and(shown.getByRole("textbox", { name: "New value for name" }));
+    await cell.fill("pending_on_id_10");
+    await cell.press("Enter");
+    await shown.getByText("Updated: 1", { exact: false }).waitFor();
+    // Removing the filter, or another one from the cell menu, would put the edit on another
+    // row: the chip's × and Reset are off, and the cell menu has no Filter item.
+    const remove = shown.getByRole("button", { name: "Remove the filter id contains '1'" });
+    const reset = shown.getByRole("button", { name: "Reset filters" });
+    assert.ok(await remove.isDisabled(), "the filter cannot be removed with an edit pending");
+    assert.ok(await reset.isDisabled(), "the filters cannot be reset with an edit pending");
+    assert.equal(await reset.getAttribute("title"), "Apply or discard the pending changes first");
+    await page.mouse.click(...(await at(2, 0)), { button: "right" });
+    await shown.locator(".result-grid-menu").waitFor();
+    assert.equal(await shown.locator(".result-grid-menu").getByRole("menuitem", { name: "Filter ▸" }).count(), 0);
+    await page.keyboard.press("Escape");
+    await shown.locator(".result-grid-menu").waitFor({ state: "detached" });
+    await shown.locator(".statusline", { hasText: /^4 of 12 rows/ }).waitFor();
+    await shot("12b2-filters-locked-by-pending-edit-light");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("12b2-filters-locked-by-pending-edit-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    // Discarded, the filters can change again.
+    await shown.getByRole("button", { name: "Discard", exact: true }).click();
+    await shown.getByText("Updated: 1", { exact: false }).waitFor({ state: "detached" });
+    await reset.click();
+    await shown.locator(".statusline", { hasText: /^12 rows/ }).waitFor();
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
+  }
+
   step("quitting or opening another folder with unapplied row edits or a running query asks first; Cancel keeps everything");
   {
     const shown = page.locator(".tab-panel:not([hidden])");
