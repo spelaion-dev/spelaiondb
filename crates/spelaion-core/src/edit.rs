@@ -15,7 +15,7 @@ use crate::export::sql_literal;
 use crate::generate::{qualified, scalar_count, scalar_value};
 use crate::guard::sql_dialect;
 use crate::params::is_number;
-use crate::results::{ResultId, StoredResult};
+use crate::results::{ResultId, ResultSource, StoredResult};
 use crate::session::{CoreEvent, Session};
 
 /// Identify only direct columns from one real table. Complex projections, joins and
@@ -104,12 +104,18 @@ pub async fn editable_query_table(
     let Some((schema, name)) = editable_query_source(session.dialect().as_ref(), sql) else {
         return Ok(None);
     };
+    // Rows read through another session or in another database are never editable here
+    // (SDB-137): the table and its key would be this session's, the values the other's.
+    let target = session.edit_target().await.map_err(|e| e.to_string())?;
     let columns: Vec<String> = {
         let stored = session
             .results()
             .get(result)
             .ok_or("the result was freed")?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        if target.check(&stored).is_err() {
+            return Ok(None);
+        }
         stored
             .schema()
             .columns
@@ -302,6 +308,41 @@ pub enum EditError {
     /// The column is masked (ADR-051): the page holds the mask, not its values.
     #[error("{0} is masked: its cells cannot be edited, and rows cannot be changed by it")]
     Masked(String),
+    /// The rows were read through another session, or in another database (SDB-137).
+    #[error("these rows were read from another connection or database: run the query again")]
+    OtherSource,
+    /// The session could not say which database it is in.
+    #[error("could not tell which database this tab is in: {0}")]
+    Source(String),
+}
+
+/// What an edit is written through: a session and the database it is in now (SDB-137), from
+/// [`Session::edit_target`]. Only the core makes one, and [`edit_statements`] writes nothing
+/// for rows read through another session (another connection, or the tab after it
+/// reconnected) or in another database.
+pub struct EditTarget {
+    source: ResultSource,
+    dialect: std::sync::Arc<dyn Dialect>,
+}
+
+impl EditTarget {
+    pub(crate) fn new(source: ResultSource, dialect: std::sync::Arc<dyn Dialect>) -> Self {
+        Self { source, dialect }
+    }
+
+    /// The engine's SQL dialect.
+    pub fn dialect(&self) -> &dyn Dialect {
+        self.dialect.as_ref()
+    }
+
+    /// Whether `result`'s rows were read through this session, in this database.
+    pub fn check(&self, result: &StoredResult) -> Result<(), EditError> {
+        if result.source() == Some(&self.source) {
+            Ok(())
+        } else {
+            Err(EditError::OtherSource)
+        }
+    }
 }
 
 /// Whether changes may be applied on this connection: never when it is read-only, and where
@@ -321,13 +362,16 @@ pub fn check_edit_policy(
     }
 }
 
-/// The statements for `changes` to the table whose page is `result`.
+/// The statements for `changes` to the table whose page is `result`, written through
+/// `target`: refused unless the rows were read through it, in its current database (SDB-137).
 pub fn edit_statements(
-    dialect: &dyn Dialect,
+    target: &EditTarget,
     table: &TableInfo,
     result: &StoredResult,
     changes: &[RowChange],
 ) -> Result<Vec<String>, EditError> {
+    target.check(result)?;
+    let dialect = target.dialect();
     let name = qualified(dialect, &table.object.schema, &table.object.name);
     if table.primary_key.is_empty() {
         return Err(EditError::NoPrimaryKey(table.object.name.clone()));

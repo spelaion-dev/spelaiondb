@@ -481,7 +481,7 @@
     "cellLabel": "Nuevo valor para {{column}}",
     "readOnly": "Solo lectura",
     "readOnlyConnection": "Esta conexión es de solo lectura.",
-    "queryReadOnlyHint": "Para editar resultados, usa una conexión de escritura y selecciona columnas de una tabla, incluida su clave primaria.",
+    "queryReadOnlyHint": "Para editar resultados, usa una conexión de escritura y selecciona columnas de una tabla, incluida su clave primaria. Si la pestaña cambia de conexión o de base de datos, vuelve a ejecutar la consulta.",
     "readOnlyHint": "La tabla no tiene clave primaria: sus filas no se distinguen, así que no se puede editar aquí.",
     "addRow": "Añadir fila",
     "addRowTitle": "Fila nueva",

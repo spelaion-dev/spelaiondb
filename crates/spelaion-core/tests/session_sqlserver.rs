@@ -288,11 +288,12 @@ async fn table_data_pages_and_edits_in_one_transaction() {
         spelaion_core::table_page_sql(session.dialect().as_ref(), &page("id desc", 0)).unwrap();
     let id = results(&run(&session, &sql).await)[0];
     let stored = session.results().get(id).unwrap();
+    let edit_target = session.edit_target().await.unwrap();
     let statements = {
         let stored = stored.read().unwrap();
         // Rows shown: 3, 2, 1 (id desc).
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[
@@ -346,7 +347,7 @@ async fn table_data_pages_and_edits_in_one_transaction() {
     let stale = {
         let stored = stored.read().unwrap();
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[
@@ -398,6 +399,9 @@ async fn query_results_resolve_their_table_as_the_server_does() {
          create synonym dbo.core_eq_syn for dbo.core_eq_orders",
     )
     .await;
+    // After an EXEC the session cannot tell its database, and rows read then are not editable
+    // (SDB-137); the app reads it again after every script, as here.
+    session.connection().current_database().await.unwrap();
     assert_eq!(
         editable(&session, "select * from core_eq_orders").await,
         Some(("dbo".to_string(), "core_eq_orders".to_string()))

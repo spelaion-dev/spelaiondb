@@ -4254,6 +4254,73 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
     await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await database.elementHandle());
   }
+  step("a grid read on one connection is read-only once the tab moves to another, and nothing is written there");
+  {
+    const shown = page.locator(".tab-panel:not([hidden])");
+    const activeTab = page.locator(".tabbar .tab.active");
+    const keptTab = await activeTab.locator(".tab-label").innerText();
+    const asked = (connection) => page.getByRole("dialog").getByText(`Password for ${connection}`);
+    const logIn = async (connection) => {
+      await asked(connection).waitFor();
+      await page.getByLabel("Password", { exact: true }).fill("spelaion");
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await asked(connection).waitFor({ state: "detached" });
+    };
+    // The same table and key on both servers, with different names in row 1.
+    for (const [connection, value] of [["MariaDB (Docker)", "mariadb"], ["MySQL (Docker)", "mysql"]]) {
+      await newQuery(connection, `create table if not exists spelaion.sdb137 (id int primary key, name varchar(20)); delete from spelaion.sdb137 where id = 1; insert into spelaion.sdb137 values (1, '${value}');`);
+      await run(shown);
+      await logIn(connection);
+      await shown.getByText("Statement 3: 1 row", { exact: false }).waitFor();
+      if (connection === "MariaDB (Docker)") await activeTab.locator(".close").click();
+    }
+    const readTab = await activeTab.locator(".tab-label").innerText();
+    await replaceQuery(shown, "select id, name from spelaion.sdb137;");
+    await run(shown);
+    await shown.getByRole("button", { name: "Add row" }).waitFor();
+    // The tab moves to MariaDB. Run asks for a value after connecting there; cancelled, the
+    // rows read on MySQL stay on screen with the tab connected to MariaDB.
+    const connectionList = shown.locator(".toolbar select").first();
+    const mariadb = await connectionList.locator("option", { hasText: "MariaDB (Docker) (" }).first().getAttribute("value");
+    await connectionList.selectOption(mariadb);
+    await shown.getByRole("button", { name: "Add row" }).waitFor({ state: "detached" });
+    await replaceQuery(shown, "select :marker;");
+    await run(shown);
+    await logIn("MariaDB (Docker)");
+    const values = page.getByRole("dialog", { name: "Query parameters" });
+    await values.waitFor();
+    await values.getByRole("button", { name: "Cancel", exact: true }).click();
+    await values.waitFor({ state: "detached" });
+    await activeTab.locator(".dot-connected").waitFor();
+    // The editability check runs again on MariaDB's session: the core says no.
+    await page.waitForTimeout(1_000);
+    assert.equal(await shown.getByRole("button", { name: "Add row" }).count(), 0, "the grid stays read-only");
+    await shown.locator("span.muted", { hasText: /^Read-only$/ }).first().waitFor();
+    const box = await shown.locator(".grid-scroller").boundingBox();
+    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
+    await page.waitForTimeout(300);
+    assert.equal(await shown.locator("input.cell-editor").count(), 0, "a cell of the old rows cannot be edited");
+    await shot("12a3-connection-changed-read-only-light");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("12a3-connection-changed-read-only-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    // Nothing was written on either server.
+    // Two rows only if row 1 still has MariaDB's name (the grid on screen has one row).
+    await replaceQuery(shown, "select n from (select 1 as n union all select 2) v where exists (select 1 from spelaion.sdb137 where id = 1 and name = 'mariadb');");
+    await run(shown);
+    await shown.locator(".statusline", { hasText: "2 rows" }).waitFor();
+    await activeTab.locator(".close").click();
+    await page.locator(".tabbar .tab", { hasText: readTab }).waitFor({ state: "detached" });
+    await page.locator(".tabbar .tab .tab-label", { hasText: keptTab }).first().click();
+    await page.locator(".tabbar .tab.active", { hasText: keptTab }).waitFor();
+    const mysqlCheck = await newQuery("MySQL (Docker)", "select n from (select 1 as n union all select 2) v where exists (select 1 from spelaion.sdb137 where id = 1 and name = 'mysql');");
+    await run(mysqlCheck);
+    await logIn("MySQL (Docker)");
+    await mysqlCheck.locator(".statusline", { hasText: "2 rows" }).waitFor();
+    await activeTab.locator(".close").click();
+    await page.locator(".tabbar .tab .tab-label", { hasText: keptTab }).first().click();
+    await page.locator(".tabbar .tab.active", { hasText: keptTab }).waitFor();
+  }
   step("process monitor: independent connection, filtering and SQL details");
   const currentSqlBeforeMonitor = await panel.locator(".cm-content").innerText();
   await activities.getByRole("button", { name: "Processes", exact: true }).click();
@@ -5363,6 +5430,49 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const sqlServerDatabase = panel.getByLabel("Database", { exact: true });
   await sqlServerDatabase.locator('option[value="tempdb"]').waitFor({ state: "attached" });
   await page.waitForFunction((el) => !el.disabled && el.value === "master", await sqlServerDatabase.elementHandle());
+  await sqlServerDatabase.selectOption("tempdb");
+  await page.waitForFunction((el) => !el.disabled && el.value === "tempdb", await sqlServerDatabase.elementHandle());
+  // A grid read in one database is read-only once the tab picks another, and nothing is
+  // written there: tempdb and spelaion hold the same table and key.
+  await replaceQuery(panel, [
+    "if db_id('spelaion') is null create database spelaion",
+    "go",
+    "if object_id('spelaion.dbo.sdb137') is null create table spelaion.dbo.sdb137 (id int primary key, name varchar(20))",
+    "go",
+    "delete from spelaion.dbo.sdb137 where id = 1",
+    "go",
+    "insert into spelaion.dbo.sdb137 values (1, 'spelaion')",
+    "go",
+    "if object_id('tempdb.dbo.sdb137') is null create table tempdb.dbo.sdb137 (id int primary key, name varchar(20))",
+    "go",
+    "delete from tempdb.dbo.sdb137 where id = 1",
+    "go",
+    "insert into tempdb.dbo.sdb137 values (1, 'tempdb')",
+  ].join("\n"));
+  await run(panel);
+  await panel.getByText("Statement 7:", { exact: false }).waitFor();
+  await page.locator(".tabbar .tab.active .tab-running").waitFor({ state: "detached" });
+  await replaceQuery(panel, "select id, name from sdb137");
+  await run(panel);
+  await panel.getByRole("button", { name: "Add row" }).waitFor();
+  await sqlServerDatabase.selectOption("spelaion");
+  await page.waitForFunction((el) => !el.disabled && el.value === "spelaion", await sqlServerDatabase.elementHandle());
+  await panel.getByRole("button", { name: "Add row" }).waitFor({ state: "detached" });
+  await panel.locator("span.muted", { hasText: /^Read-only$/ }).first().waitFor();
+  {
+    const box = await panel.locator(".grid-scroller").boundingBox();
+    await page.mouse.dblclick(box.x + 52 + 110 + 20, box.y + 34 + 12);
+    await page.waitForTimeout(300);
+    assert.equal(await panel.locator("input.cell-editor").count(), 0, "a cell read in tempdb cannot be edited in spelaion");
+  }
+  await shot("12a4-database-changed-read-only-light");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await shot("12a4-database-changed-read-only-dark");
+  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  // Nothing was written in either database: two rows only if both still hold their names.
+  await replaceQuery(panel, "select n from (values (1), (2)) v(n) where (select name from spelaion.dbo.sdb137 where id = 1) = 'spelaion' and (select name from tempdb.dbo.sdb137 where id = 1) = 'tempdb'");
+  await run(panel);
+  await panel.locator(".statusline", { hasText: "2 rows" }).waitFor();
   await sqlServerDatabase.selectOption("tempdb");
   await page.waitForFunction((el) => !el.disabled && el.value === "tempdb", await sqlServerDatabase.elementHandle());
   // PRINT and low-severity RAISERROR reach the Messages tab (ADR-035).

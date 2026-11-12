@@ -194,6 +194,7 @@ async fn edit_first_row(
         .describe_table(engine.schema, table)
         .await
         .unwrap_or_else(|e| panic!("{label}: describe: {e}"));
+    let edit_target = session.edit_target().await.unwrap();
     let statements = {
         let stored = session.results().get(result).expect("result");
         let stored = stored.read().unwrap();
@@ -211,7 +212,7 @@ async fn edit_first_row(
                 })
                 .collect(),
         };
-        edit_statements(session.dialect().as_ref(), &described, &stored, &[change])
+        edit_statements(&edit_target, &described, &stored, &[change])
             .unwrap_or_else(|e| panic!("{label}: {e}"))
     };
     assert_eq!(

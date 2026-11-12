@@ -362,11 +362,12 @@ async fn table_edits_write_typed_literals_on_postgres() {
             _ => None,
         })
         .unwrap();
+    let edit_target = session.edit_target().await.unwrap();
     let statements = {
         let stored = session.results().get(id).unwrap();
         let stored = stored.read().unwrap();
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[RowChange::Update {

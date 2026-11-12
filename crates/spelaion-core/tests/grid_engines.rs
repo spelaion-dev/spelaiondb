@@ -435,8 +435,9 @@ async fn mysql_and_mariadb_read_backslashes_as_the_sessions_sql_mode_does() {
                 .describe_table(schema, "ge_mode")
                 .await
                 .unwrap();
+            let edit_target = session.edit_target().await.unwrap();
             let statements = spelaion_core::edit_statements(
-                dialect.as_ref(),
+                &edit_target,
                 &table,
                 &stored.read().unwrap(),
                 &[spelaion_core::RowChange::Update {
@@ -598,8 +599,9 @@ async fn sqlserver_date_literals_mean_the_same_under_every_language() {
                 .describe_table(schema, "ge_dates_key")
                 .await
                 .unwrap();
+            let edit_target = session.edit_target().await.unwrap();
             let statements = spelaion_core::edit_statements(
-                dialect.as_ref(),
+                &edit_target,
                 &table,
                 &keys.read().unwrap(),
                 &[spelaion_core::RowChange::Update {
