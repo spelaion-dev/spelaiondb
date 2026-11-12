@@ -13,6 +13,7 @@
   <a href="https://github.com/spelaion-dev/spelaiondb/releases/latest"><img src="https://img.shields.io/github/v/release/spelaion-dev/spelaiondb" alt="Latest release"></a>
   <a href="https://github.com/spelaion-dev/spelaiondb/actions/workflows/ci.yml"><img src="https://github.com/spelaion-dev/spelaiondb/actions/workflows/ci.yml/badge.svg?branch=dev" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+  <a href="https://ko-fi.com/spelaion"><img src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&logoColor=white" alt="Support on Ko-fi"></a>
 </p>
 
 ![SpelaionDB with a query, its results and connections to several engines](docs/images/app-dark.png)
@@ -102,6 +103,11 @@ part means following the [code of conduct](CODE_OF_CONDUCT.md).
 
 Most of the code is written by AI coding agents following [`AGENTS.md`](AGENTS.md); the
 compiler, the tests and CI are its reviewers.
+
+## Support
+
+SpelaionDB is free and always will be. If it saves you time, you can buy me a coffee on
+[Ko-fi](https://ko-fi.com/spelaion): it goes into the next release.
 
 ## License
 
