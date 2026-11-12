@@ -654,8 +654,9 @@ impl Session {
                 };
                 return;
             }
-            // One script at a time; Commit, Rollback and the toggle wait for none.
-            let _running = control.lock_owned().await;
+            // One script at a time; Commit, Rollback and the toggle wait for none. Held until
+            // just before the last event (below), not until the stream is polled once more.
+            let running = control.lock_owned().await;
             // A cancel still on its way to the engine would stop this run's first statement:
             // nothing is sent before it has returned (SDB-266).
             cancel_gate.settled().await;
@@ -954,6 +955,10 @@ impl Session {
                     }
                 }
             }
+            // The session takes the next command before anyone hears the run is over: the app
+            // hands this event to the window before it asks the stream for more, and the switch,
+            // Commit and Rollback it enables again would find the session still busy (SDB-98).
+            drop(running);
             yield CoreEvent::ScriptFinished {
                 executed: summary.executed,
                 failed: summary.failed > 0,

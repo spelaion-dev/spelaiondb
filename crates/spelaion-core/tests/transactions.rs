@@ -220,6 +220,64 @@ async fn count(engine: &Engine, session: &Session, table: &str) -> String {
     .await
 }
 
+/// A run that says it has finished (`ScriptFinished`) has already left its session free: the
+/// auto-commit switch, Commit and Rollback, which the app enables again at that event, are not
+/// refused as busy by a run that is over (SDB-98). The run is read up to that event and no
+/// further, as the app hands it to the window before it asks the stream for more.
+#[tokio::test]
+async fn a_finished_run_leaves_its_session_free_before_its_stream_ends() {
+    for engine in engines().await {
+        let session = &engine.a;
+        let name = engine.name;
+        // As an editor tab's session does (ADR-031).
+        let status = session.follow_transactions(&Safeguards::default()).await;
+        assert!(status.supported, "{name}");
+        let mut events = session.run_script("select 1");
+        loop {
+            match events.next().await {
+                Some(CoreEvent::ScriptFinished { failed, .. }) => {
+                    assert!(!failed, "{name}");
+                    break;
+                }
+                Some(_) => {}
+                None => panic!("{name}: the run ended without ScriptFinished"),
+            }
+        }
+        let off = session.set_auto_commit(false).await;
+        assert!(
+            matches!(&off, Ok(status) if !status.auto_commit),
+            "{name}: {off:?}"
+        );
+        drop(events);
+
+        // In manual commit a run opens a transaction; right after it finishes, Commit is
+        // taken (not refused as busy) and auto-commit can come back.
+        let mut events = session.run_script("select 1");
+        while let Some(event) = events.next().await {
+            if matches!(event, CoreEvent::ScriptFinished { .. }) {
+                break;
+            }
+        }
+        if session.transaction_status().is_open() {
+            let committed = session.commit().await;
+            assert!(committed.is_ok(), "{name}: {:?}", committed.err());
+        }
+        let on = session.set_auto_commit(true).await;
+        assert!(
+            matches!(&on, Ok(status) if status.auto_commit),
+            "{name}: {on:?}"
+        );
+        drop(events);
+        assert!(
+            !matches!(
+                session.set_auto_commit(true).await,
+                Err(TransactionError::Busy)
+            ),
+            "{name}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn manual_commit_commit_and_rollback_on_every_engine() {
     for engine in engines().await {
