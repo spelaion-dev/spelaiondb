@@ -403,15 +403,43 @@ async fn connections_go_through_a_proxy_from_their_tunnel_file() {
     }
 }
 
-/// Two consecutive free local ports.
+/// Two consecutive free local ports that the operating system never hands out on its own.
+///
+/// A port from its ephemeral range can be checked free here and taken before the tunnel binds
+/// it: every outgoing connection (this test's own SSH and database connections included) and
+/// every listener on port 0 that the tests running alongside make gets one. That is how the test
+/// once failed on Linux, where the range is 32768–60999 (SDB-128). So the ports come from below
+/// every system's default range (Linux 32768, Windows and macOS 49152), and on Linux also from
+/// outside the range this machine is configured with.
 fn free_port_pair() -> u16 {
-    (42_000u16..60_000)
+    let ephemeral = ephemeral_ports();
+    (20_000u16..32_000)
         .step_by(41)
         .find(|p| {
-            std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok()
+            !ephemeral.contains(p)
+                && !ephemeral.contains(&(*p + 1))
+                && std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok()
                 && std::net::TcpListener::bind(("127.0.0.1", *p + 1)).is_ok()
         })
-        .expect("two free ports")
+        .expect("two free ports outside the system's ephemeral range")
+}
+
+/// The ports the system gives to outgoing connections and to listeners on port 0.
+fn ephemeral_ports() -> std::ops::RangeInclusive<u16> {
+    if cfg!(target_os = "linux")
+        && let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        && let [Ok(low), Ok(high)] = range
+            .split_whitespace()
+            .map(str::parse::<u16>)
+            .collect::<Vec<_>>()[..]
+    {
+        return low..=high;
+    }
+    if cfg!(target_os = "linux") {
+        32_768..=60_999
+    } else {
+        49_152..=65_535
+    }
 }
 
 /// A connection's `local_port` and the personal `[tunnels]` range decide where the tunnel's
