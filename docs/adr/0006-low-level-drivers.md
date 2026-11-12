@@ -46,6 +46,13 @@ result sets.
   what the literals the core writes use. Every column's type comes from its metadata, so the
   driver no longer holds back a first batch. Consumers that need a date read these columns by
   native type (ADR-005's 2026-11-12 note).
+- **SQL Server `datetime2` and `datetimeoffset` (2026-11-12, SDB-265):** text with their
+  native type, written as the server writes them: every digit of the value's scale
+  (`2024-01-01 10:00:00.1234567`, `10:00:00.500` for `datetime2(3)`) and a `datetimeoffset`
+  where it is with its offset (`2024-01-01 10:00:00.1234567 +02:00`). A microsecond timestamp
+  lost the seventh digit, so a filter or a key written from the cell missed its row, and a
+  `datetimeoffset` was shown in UTC. Both forms are read alike under every language. `time(7)`
+  still travels as a time in microseconds.
 
 ## Revisit if
 Not expected.

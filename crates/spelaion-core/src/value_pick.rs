@@ -51,7 +51,8 @@ pub enum TemporalKind {
     Date,
     Time,
     Timestamp,
-    /// With a time zone: written in UTC with `+00`, as the grid shows it.
+    /// With a time zone: written in UTC with `+00`, as the grid shows it, or where it is with
+    /// its offset when the picker [keeps the offset](TemporalPicker::keeps_offset).
     TimestampTz,
 }
 
@@ -70,13 +71,21 @@ pub enum TemporalStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TemporalPicker {
     pub kind: TemporalKind,
-    /// Fractional digits of a second the column keeps and the grid shows (0 to 6).
+    /// Fractional digits of a second the column keeps and the grid shows (0 to 7: SQL
+    /// Server's `datetime2` and `datetimeoffset` keep 100 ns; the rest at most 6).
     pub digits: u8,
     /// The engine writes every one of `digits` digits (MySQL's `TIME(3)`: `10:20:30.120`);
     /// otherwise trailing zeros are dropped (`10:20:30.12`).
     pub padded: bool,
     pub step: TemporalStep,
+    /// A time zone is written where it is with its offset (`2024-01-01 10:00:00.1234567
+    /// +02:00`), as SQL Server keeps and shows a `datetimeoffset` (SDB-265); otherwise in UTC
+    /// with `+00`, as the grid shows a time zone.
+    pub keeps_offset: bool,
 }
+
+/// The most fractional digits a picker writes: SQL Server's 100 ns.
+const MAX_DIGITS: u8 = 7;
 
 /// Where a column's allowed values come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,6 +280,7 @@ pub fn temporal_picker(engine: &str, native_type: &str) -> Option<TemporalPicker
         digits: digits.min(6),
         padded: false,
         step: TemporalStep::Fraction,
+        keeps_offset: false,
     };
     let p = |default: u8| precision.unwrap_or(default);
     match engine {
@@ -303,8 +313,19 @@ pub fn temporal_picker(engine: &str, native_type: &str) -> Option<TemporalPicker
         "sqlserver" => match base.as_str() {
             "date" => Some(picker(TemporalKind::Date, 0)),
             "time" => Some(picker(TemporalKind::Time, p(7))),
-            "datetime2" => Some(picker(TemporalKind::Timestamp, p(7))),
-            "datetimeoffset" => Some(picker(TemporalKind::TimestampTz, p(7))),
+            // Shown as the server writes them (text with their native type, SDB-265): every
+            // digit of the precision, up to 100 ns, and a `datetimeoffset`'s own offset.
+            "datetime2" => Some(TemporalPicker {
+                digits: p(7).min(MAX_DIGITS),
+                padded: true,
+                ..picker(TemporalKind::Timestamp, 0)
+            }),
+            "datetimeoffset" => Some(TemporalPicker {
+                digits: p(7).min(MAX_DIGITS),
+                padded: true,
+                keeps_offset: true,
+                ..picker(TemporalKind::TimestampTz, 0)
+            }),
             "datetime" => Some(TemporalPicker {
                 step: TemporalStep::SqlServerDatetime,
                 ..picker(TemporalKind::Timestamp, 3)
@@ -373,7 +394,7 @@ pub fn picked_time_text(picker: &TemporalPicker, picked: &PickedTime) -> Result<
     };
     let digits = match picker.step {
         TemporalStep::Minutes => 0,
-        TemporalStep::Fraction | TemporalStep::SqlServerDatetime => picker.digits,
+        TemporalStep::Fraction | TemporalStep::SqlServerDatetime => picker.digits.min(MAX_DIGITS),
     };
     if !fraction.bytes().all(|b| b.is_ascii_digit()) || fraction.len() > usize::from(digits) {
         return Err(PickError::BadFraction(fraction.to_string(), digits));
@@ -400,17 +421,17 @@ pub fn picked_time_text(picker: &TemporalPicker, picked: &PickedTime) -> Result<
             ))
         })
     };
-    // The fraction as microseconds, and as the thousandths SQL Server's datetime keeps.
-    let mut micros: u32 = if fraction.is_empty() {
+    // The fraction in 100 ns steps, and as the thousandths SQL Server's datetime keeps.
+    let mut steps: u32 = if fraction.is_empty() {
         0
     } else {
-        format!("{fraction:0<6}").parse().unwrap_or(0)
+        format!("{fraction:0<7}").parse().unwrap_or(0)
     };
     if picker.step == TemporalStep::SqlServerDatetime {
-        micros = sqlserver_datetime_millis(micros / 1000) * 1000;
+        steps = sqlserver_datetime_millis(steps / 10_000) * 10_000;
     }
-    let fraction_text = |micros: u32| -> String {
-        let all = format!("{micros:06}");
+    let fraction_text = |steps: u32| -> String {
+        let all = format!("{steps:07}");
         let kept = &all[..usize::from(digits)];
         let kept = if picker.padded {
             kept
@@ -426,12 +447,12 @@ pub fn picked_time_text(picker: &TemporalPicker, picked: &PickedTime) -> Result<
     let time_text = |t: NaiveTime| t.format("%H:%M:%S").to_string();
     Ok(match picker.kind {
         TemporalKind::Date => date()?.format("%Y-%m-%d").to_string(),
-        TemporalKind::Time => format!("{}{}", time_text(time()?), fraction_text(micros)),
+        TemporalKind::Time => format!("{}{}", time_text(time()?), fraction_text(steps)),
         TemporalKind::Timestamp => format!(
             "{} {}{}",
             date()?.format("%Y-%m-%d"),
             time_text(time()?),
-            fraction_text(micros)
+            fraction_text(steps)
         ),
         TemporalKind::TimestampTz => {
             if picked.offset_minutes.abs() > MAX_OFFSET_MINUTES {
@@ -442,12 +463,25 @@ pub fn picked_time_text(picker: &TemporalPicker, picked: &PickedTime) -> Result<
                 .checked_sub_signed(Duration::minutes(picked.offset_minutes.into()))
                 .filter(|utc| (1..=9999).contains(&chrono::Datelike::year(&utc.date())))
                 .ok_or_else(|| PickError::BadDate(local.format("%Y-%m-%d %H:%M").to_string()))?;
-            format!(
-                "{} {}{}+00",
-                utc.date().format("%Y-%m-%d"),
-                time_text(utc.time()),
-                fraction_text(micros)
-            )
+            if picker.keeps_offset {
+                let minutes = picked.offset_minutes.unsigned_abs();
+                let sign = if picked.offset_minutes < 0 { "-" } else { "+" };
+                format!(
+                    "{} {}{} {sign}{:02}:{:02}",
+                    local.date().format("%Y-%m-%d"),
+                    time_text(local.time()),
+                    fraction_text(steps),
+                    minutes / 60,
+                    minutes % 60
+                )
+            } else {
+                format!(
+                    "{} {}{}+00",
+                    utc.date().format("%Y-%m-%d"),
+                    time_text(utc.time()),
+                    fraction_text(steps)
+                )
+            }
         }
     })
 }
@@ -1006,6 +1040,7 @@ mod tests {
                 digits,
                 padded: false,
                 step: TemporalStep::Fraction,
+                keeps_offset: false,
             })
         };
         assert_eq!(p("postgres", "date"), t(TemporalKind::Date, 0));
@@ -1047,14 +1082,24 @@ mod tests {
             })
         );
         assert_eq!(p("mysql", "year"), None);
+        // SQL Server's datetime2 and datetimeoffset are the server's text (SDB-265): every
+        // digit, up to the seventh, and a datetimeoffset's own offset.
         assert_eq!(
             p("sqlserver", "datetime2(7)"),
-            t(TemporalKind::Timestamp, 6)
+            padded(TemporalKind::Timestamp, 7)
+        );
+        assert_eq!(
+            p("sqlserver", "datetime2"),
+            padded(TemporalKind::Timestamp, 7)
         );
         assert_eq!(
             p("sqlserver", "datetimeoffset(2)"),
-            t(TemporalKind::TimestampTz, 2)
+            Some(TemporalPicker {
+                keeps_offset: true,
+                ..padded(TemporalKind::TimestampTz, 2).unwrap()
+            })
         );
+        assert_eq!(p("sqlserver", "time(7)"), t(TemporalKind::Time, 6));
         assert_eq!(
             p("sqlserver", "smalldatetime").map(|p| p.step),
             Some(TemporalStep::Minutes)
@@ -1076,6 +1121,7 @@ mod tests {
             digits,
             padded,
             step: TemporalStep::Fraction,
+            keeps_offset: false,
         };
         let at = picked((2026, 2, 28), (9, 5, 7), "12");
         assert_eq!(
@@ -1119,6 +1165,7 @@ mod tests {
             digits: 6,
             padded: false,
             step: TemporalStep::Fraction,
+            keeps_offset: false,
         };
         let mut at = picked((2026, 1, 1), (1, 30, 0), "5");
         at.offset_minutes = 120;
@@ -1140,6 +1187,50 @@ mod tests {
         };
         at.offset_minutes = 120;
         assert_eq!(picked_time_text(&ts, &at).unwrap(), "2026-01-01 01:30:00.5");
+    }
+
+    #[test]
+    fn sqlserver_datetime2_and_datetimeoffset_keep_seven_digits_and_the_offset() {
+        let datetime2 = temporal_picker("sqlserver", "datetime2(7)").unwrap();
+        let at = picked((2024, 1, 1), (10, 0, 0), "1234567");
+        assert_eq!(
+            picked_time_text(&datetime2, &at).unwrap(),
+            "2024-01-01 10:00:00.1234567"
+        );
+        assert_eq!(
+            picked_time_text(&datetime2, &picked((2024, 1, 1), (10, 0, 0), "5")).unwrap(),
+            "2024-01-01 10:00:00.5000000"
+        );
+        assert!(
+            picked_time_text(&datetime2, &picked((2024, 1, 1), (10, 0, 0), "12345678")).is_err()
+        );
+        let offset = temporal_picker("sqlserver", "datetimeoffset").unwrap();
+        let mut at = picked((2026, 1, 1), (1, 30, 0), "0000007");
+        at.offset_minutes = 120;
+        assert_eq!(
+            picked_time_text(&offset, &at).unwrap(),
+            "2026-01-01 01:30:00.0000007 +02:00"
+        );
+        at.offset_minutes = -(5 * 60 + 30);
+        assert_eq!(
+            picked_time_text(&offset, &at).unwrap(),
+            "2026-01-01 01:30:00.0000007 -05:30"
+        );
+        at.offset_minutes = 15 * 60;
+        assert_eq!(picked_time_text(&offset, &at), Err(PickError::BadOffset));
+        // Its instant in UTC must still be a date the server keeps.
+        let mut first = picked((1, 1, 1), (0, 30, 0), "");
+        first.offset_minutes = 60;
+        assert!(picked_time_text(&offset, &first).is_err());
+        // A picker from the app with more digits than any column keeps writes seven at most.
+        let wide = TemporalPicker {
+            digits: 9,
+            ..datetime2
+        };
+        assert_eq!(
+            picked_time_text(&wide, &picked((2024, 1, 1), (10, 0, 0), "1234567")).unwrap(),
+            "2024-01-01 10:00:00.1234567"
+        );
     }
 
     #[test]

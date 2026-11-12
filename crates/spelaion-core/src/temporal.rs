@@ -1,15 +1,18 @@
-//! Text columns that hold dates (SDB-122). MySQL and MariaDB `DATE`, `DATETIME` and `TIMESTAMP`
-//! columns arrive as text with their native type (ADR-006's 2026-11-12 note): their legacy zero
-//! dates (`0000-00-00`) are no date, so a typed column would fail on them. Their text sorts
-//! and compares as the date does, so sorting, filters and literals need nothing more; what
-//! places values on a time line (a chart's X axis) or writes "now" in the column's own form
-//! reads them as dates through here.
+//! Text columns that hold dates (ADR-005's and ADR-006's 2026-11-12 notes). MySQL and MariaDB
+//! `DATE`, `DATETIME` and `TIMESTAMP` columns arrive as text with their native type (SDB-122):
+//! their legacy zero dates (`0000-00-00`) are no date, so a typed column would fail on them.
+//! SQL Server's `datetime2` and `datetimeoffset` do too (SDB-265): they keep 100 ns, past a
+//! timestamp's microseconds, and a `datetimeoffset` keeps the offset it was written with.
+//! Their text sorts and compares as the date does (a `datetimeoffset` sorts by its instant,
+//! [`instant_key`]), so filters and literals need nothing more; what places values on a time
+//! line (a chart's X axis) or writes "now" in the column's own form reads them as dates
+//! through here.
 
 use spelaion_driver_api::{ColumnMeta, LogicalType, Value};
 
 /// The date type a text column's values are, from its native type: `Date` for `date`,
-/// `Timestamp` for `datetime` and `timestamp` (with or without a precision). `None` for any
-/// other column, typed ones included.
+/// `Timestamp` for `datetime`, `timestamp` and `datetime2` (with or without a precision),
+/// `TimestampTz` for `datetimeoffset`. `None` for any other column, typed ones included.
 pub(crate) fn text_temporal(column: &ColumnMeta) -> Option<LogicalType> {
     if column.logical != LogicalType::Text {
         return None;
@@ -21,7 +24,8 @@ pub(crate) fn text_temporal(column: &ColumnMeta) -> Option<LogicalType> {
         .unwrap_or_default();
     match base {
         "date" => Some(LogicalType::Date),
-        "datetime" | "timestamp" => Some(LogicalType::Timestamp),
+        "datetime" | "timestamp" | "datetime2" => Some(LogicalType::Timestamp),
+        "datetimeoffset" => Some(LogicalType::TimestampTz),
         _ => None,
     }
 }
@@ -31,15 +35,46 @@ pub(crate) fn effective_logical(column: &ColumnMeta) -> LogicalType {
     text_temporal(column).unwrap_or(column.logical)
 }
 
-/// A text value of a date column as that date: `YYYY-MM-DD` as a [`Value::Date`] and
-/// `YYYY-MM-DD hh:mm:ss[.ffffff]` as a [`Value::Timestamp`]. `None` for a zero or impossible
-/// date (`0000-00-00`, `2024-00-10`, `2024-02-30`), which is no point in time.
+/// A text value of a date column as that date: `YYYY-MM-DD` as a [`Value::Date`],
+/// `YYYY-MM-DD hh:mm:ss[.fffffff]` as a [`Value::Timestamp`] and the same followed by
+/// ` ±hh:mm` as a [`Value::TimestampTz`] in UTC; digits past the microsecond are dropped.
+/// `None` for a zero or impossible date (`0000-00-00`, `2024-00-10`, `2024-02-30`), which is
+/// no point in time.
 pub(crate) fn parse(text: &str, logical: LogicalType) -> Option<Value> {
     match logical {
         LogicalType::Date => parse_date(text).map(Value::Date),
-        LogicalType::Timestamp => parse_timestamp(text).map(Value::Timestamp),
+        LogicalType::Timestamp => parse_timestamp(text).map(|n| Value::Timestamp(micros(n))),
+        LogicalType::TimestampTz => instant_key(text).map(|n| Value::TimestampTz(micros(n))),
         _ => None,
     }
+}
+
+/// A `datetimeoffset`'s text (`2024-01-01 10:00:00.1234567 +02:00`) as the instant it is, in
+/// nanoseconds since 1970-01-01 UTC: what it sorts by, as the server orders it. `None` for
+/// text that is not one.
+pub(crate) fn instant_key(text: &str) -> Option<i128> {
+    let (local, offset) = text.rsplit_once(' ')?;
+    let sign = match offset.as_bytes().first()? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let (h, m) = offset[1..].split_once(':')?;
+    if h.len() != 2 || m.len() != 2 {
+        return None;
+    }
+    let (h, m): (i128, i128) = (h.parse().ok()?, m.parse().ok()?);
+    if h > 14 || m > 59 {
+        return None;
+    }
+    Some(parse_timestamp(local)? - sign * (h * 60 + m) * 60 * NANOS_PER_SECOND)
+}
+
+const NANOS_PER_SECOND: i128 = 1_000_000_000;
+
+/// Nanoseconds to whole microseconds, rounding down as a timestamp keeps them.
+fn micros(nanos: i128) -> i64 {
+    i64::try_from(nanos.div_euclid(1_000)).unwrap_or(i64::MAX)
 }
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's algorithm).
@@ -73,23 +108,27 @@ fn parse_date(text: &str) -> Option<i32> {
     i32::try_from(days_from_civil(y, m, d)).ok()
 }
 
-fn parse_timestamp(text: &str) -> Option<i64> {
+/// `YYYY-MM-DD hh:mm:ss[.f…]` (up to nine fractional digits) in nanoseconds since 1970.
+fn parse_timestamp(text: &str) -> Option<i128> {
     let (date, time) = text.split_once(' ')?;
-    let days = i64::from(parse_date(date)?);
+    let days = i128::from(parse_date(date)?);
     let (hms, fraction) = time.split_once('.').unwrap_or((time, ""));
     let mut parts = hms.splitn(3, ':');
-    let h: i64 = parts.next()?.parse().ok()?;
-    let mi: i64 = parts.next()?.parse().ok()?;
-    let s: i64 = parts.next()?.parse().ok()?;
-    if h > 23 || mi > 59 || s > 59 || fraction.len() > 6 {
+    let h: i128 = parts.next()?.parse().ok()?;
+    let mi: i128 = parts.next()?.parse().ok()?;
+    let s: i128 = parts.next()?.parse().ok()?;
+    if h > 23 || mi > 59 || s > 59 || fraction.len() > 9 {
         return None;
     }
-    let micros = if fraction.is_empty() {
+    if !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let nanos = if fraction.is_empty() {
         0
     } else {
-        format!("{fraction:0<6}").parse::<i64>().ok()?
+        format!("{fraction:0<9}").parse::<i128>().ok()?
     };
-    Some(((days * 24 + h) * 60 + mi) * 60_000_000 + s * 1_000_000 + micros)
+    Some((((days * 24 + h) * 60 + mi) * 60 + s) * NANOS_PER_SECOND + nanos)
 }
 
 #[cfg(test)]
@@ -120,6 +159,14 @@ mod tests {
             text_temporal(&meta(LogicalType::Text, "timestamp")),
             Some(LogicalType::Timestamp)
         );
+        assert_eq!(
+            text_temporal(&meta(LogicalType::Text, "datetime2")),
+            Some(LogicalType::Timestamp)
+        );
+        assert_eq!(
+            text_temporal(&meta(LogicalType::Text, "datetimeoffset")),
+            Some(LogicalType::TimestampTz)
+        );
         assert_eq!(text_temporal(&meta(LogicalType::Text, "varchar")), None);
         // Typed columns are what they are.
         assert_eq!(text_temporal(&meta(LogicalType::Date, "date")), None);
@@ -148,5 +195,55 @@ mod tests {
         }
         assert_eq!(parse("0000-00-00 00:00:00", LogicalType::Timestamp), None);
         assert_eq!(parse("2026-01-31 24:00:00", LogicalType::Timestamp), None);
+    }
+
+    #[test]
+    fn sql_server_text_reads_to_the_microsecond_and_offsets_to_utc() {
+        assert_eq!(
+            parse("2026-01-31 10:20:30.1234567", LogicalType::Timestamp)
+                .unwrap()
+                .to_string(),
+            "2026-01-31 10:20:30.123456"
+        );
+        let Some(Value::Timestamp(utc)) =
+            parse("2026-01-31 08:20:30.123456", LogicalType::Timestamp)
+        else {
+            panic!("a timestamp")
+        };
+        assert_eq!(
+            parse(
+                "2026-01-31 10:20:30.1234567 +02:00",
+                LogicalType::TimestampTz
+            ),
+            Some(Value::TimestampTz(utc))
+        );
+        for bad in [
+            "2026-01-31 10:20:30",
+            "2026-01-31 10:20:30 02:00",
+            "2026-01-31 10:20:30 +2:00",
+            "2026-01-31 10:20:30 +15:00",
+            "2026-01-31 10:20:30.12x +00:00",
+        ] {
+            assert_eq!(instant_key(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn offsets_sort_by_their_instant_and_the_seventh_digit_counts() {
+        let key = |t| instant_key(t).unwrap();
+        // 10:00 at +02:00 is before 09:00 at +00:00.
+        assert!(
+            key("2026-01-31 10:00:00.0000000 +02:00") < key("2026-01-31 09:00:00.0000000 +00:00")
+        );
+        assert!(
+            key("2026-01-31 09:00:00.0000000 -05:30") > key("2026-01-31 09:00:00.0000000 +00:00")
+        );
+        assert!(
+            key("2026-01-31 09:00:00.1234567 +00:00") < key("2026-01-31 09:00:00.1234568 +00:00")
+        );
+        assert_eq!(
+            key("2026-02-01 01:30:00.0000000 +02:00"),
+            key("2026-01-31 23:30:00.0000000 +00:00")
+        );
     }
 }

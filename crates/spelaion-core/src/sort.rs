@@ -1,7 +1,8 @@
 //! Sorting a stored result by one column (the grid's header click). The order is computed
 //! here from the typed values, never in the UI: numbers sort as numbers, decimals (which
 //! travel as text) by their numeric value, dates by date, text by Unicode code point and
-//! bytes by byte. The sort is stable and NULLs always go last.
+//! bytes by byte. SQL Server's `datetimeoffset` travels as its text and sorts by the instant
+//! it is ([`sorted_instants`]). The sort is stable and NULLs always go last.
 
 use std::cmp::Ordering;
 
@@ -88,6 +89,25 @@ pub(crate) fn sorted_rows(
             Ok(order(a, d, |x, y| a.value(x).cmp(a.value(y))))
         }
     }
+}
+
+/// Row numbers of a text column of `datetimeoffset` values (SDB-265) in the order of their
+/// instants, as the server orders them: `10:00 +02:00` before `09:00 +00:00`. Equal instants
+/// go by their text; text that is no such value goes after every one, by text.
+pub(crate) fn sorted_instants(values: &dyn Array, key: SortKey) -> Result<Vec<u32>, ViewError> {
+    let a = downcast::<StringArray>(values).ok_or(ViewError::UnexpectedArray(key.column))?;
+    let instants: Vec<Option<i128>> = (0..a.len())
+        .map(|i| crate::temporal::instant_key(a.value(i)))
+        .collect();
+    Ok(order(a, key.descending, |x, y| {
+        match (instants[x], instants[y]) {
+            (Some(p), Some(q)) => p.cmp(&q),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
+        .then_with(|| a.value(x).cmp(a.value(y)))
+    }))
 }
 
 fn downcast<T: 'static>(values: &dyn Array) -> Option<&T> {
@@ -237,6 +257,28 @@ mod tests {
             sorted_rows(&a, LogicalType::Int, down).unwrap(),
             [0, 3, 5, 2, 1, 4]
         );
+    }
+
+    #[test]
+    fn datetimeoffsets_sort_by_their_instant() {
+        let key = SortKey {
+            column: 0,
+            descending: false,
+        };
+        let t = StringArray::from(vec![
+            Some("2026-01-31 09:00:00.0000000 +00:00"),
+            None,
+            Some("2026-01-31 10:00:00.0000000 +02:00"),
+            Some("not a date"),
+            Some("2026-01-31 09:00:00.0000001 +00:00"),
+            Some("2026-01-31 04:00:00.0000000 -05:30"),
+        ]);
+        assert_eq!(sorted_instants(&t, key).unwrap(), [2, 0, 4, 5, 3, 1]);
+        let down = SortKey {
+            descending: true,
+            ..key
+        };
+        assert_eq!(sorted_instants(&t, down).unwrap(), [3, 5, 4, 0, 2, 1]);
     }
 
     #[test]

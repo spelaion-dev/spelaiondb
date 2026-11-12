@@ -4931,10 +4931,12 @@ export type TemporalKindItem = "date" | "time" | "timestamp" |
 /**  A date and time picker: what it writes and how precisely. */
 export type TemporalPickerItem = {
 	kind: TemporalKindItem,
-	/**  Fractional digits of a second the column keeps (0 to 6). */
+	/**  Fractional digits of a second the column keeps (0 to 7). */
 	digits: number,
 	padded: boolean,
 	step: TemporalStepItem,
+	/**  A time zone is written with its own offset (SQL Server's `datetimeoffset`), not in UTC. */
+	keepsOffset: boolean,
 };
 
 export type TemporalStepItem = "fraction" | 

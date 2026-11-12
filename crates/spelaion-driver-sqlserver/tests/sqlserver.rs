@@ -451,23 +451,43 @@ async fn type_zoo() {
             "datetime",
             "2024-01-01 10:00:00",
         ),
+        // datetime2 and datetimeoffset are the server's text (SDB-265): every digit of their
+        // scale, and a datetimeoffset's own offset.
         (
             "cast('2024-01-01 10:00:00.5' as datetime2(3))",
-            LogicalType::Timestamp,
+            LogicalType::Text,
             "datetime2",
-            "2024-01-01 10:00:00.5",
+            "2024-01-01 10:00:00.500",
         ),
         (
             "cast('9999-12-31 23:59:59.9999999' as datetime2(7))",
-            LogicalType::Timestamp,
+            LogicalType::Text,
             "datetime2",
-            "9999-12-31 23:59:59.999999",
+            "9999-12-31 23:59:59.9999999",
+        ),
+        (
+            "cast('0001-01-01 00:00:00' as datetime2(0))",
+            LogicalType::Text,
+            "datetime2",
+            "0001-01-01 00:00:00",
         ),
         (
             "cast('2024-01-01 10:00:00 +02:00' as datetimeoffset)",
-            LogicalType::TimestampTz,
+            LogicalType::Text,
             "datetimeoffset",
-            "2024-01-01 08:00:00+00",
+            "2024-01-01 10:00:00.0000000 +02:00",
+        ),
+        (
+            "cast('2024-01-01 01:30:00.1234567 -05:30' as datetimeoffset(7))",
+            LogicalType::Text,
+            "datetimeoffset",
+            "2024-01-01 01:30:00.1234567 -05:30",
+        ),
+        (
+            "cast('9999-12-31 23:59:59.99 +14:00' as datetimeoffset(2))",
+            LogicalType::Text,
+            "datetimeoffset",
+            "9999-12-31 23:59:59.99 +14:00",
         ),
         (
             "cast(42 as sql_variant)",
@@ -492,6 +512,11 @@ async fn type_zoo() {
             "{expr}"
         );
         assert_eq!(rows[0][0], *text, "{expr}");
+        // The server's own text, exactly.
+        if *native == "datetime2" || *native == "datetimeoffset" {
+            let server = tables(&*conn, &format!("select convert(varchar(40), {expr}) as v")).await;
+            assert_eq!(rows[0][0], server[0].1[0][0], "{expr}");
+        }
     }
 }
 

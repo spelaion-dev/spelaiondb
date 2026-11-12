@@ -12,7 +12,7 @@ use arrow::array::{
 };
 use spelaion_driver_api::{ColumnMeta, LogicalType};
 use tiberius::numeric::Numeric;
-use tiberius::time::{Date, DateTime2, Time};
+use tiberius::time::{Date, DateTime2, DateTimeOffset, Time};
 use tiberius::{ColumnData, ColumnType};
 
 /// Days from 0001-01-01 (SQL Server's `date`) to 1970-01-01.
@@ -49,10 +49,13 @@ pub fn column_meta(name: &str, column_type: ColumnType) -> ColumnMeta {
         ColumnType::Udt => (LogicalType::Bytes, "udt"),
         ColumnType::Datetime | ColumnType::Datetimen => (LogicalType::Timestamp, "datetime"),
         ColumnType::Datetime4 => (LogicalType::Timestamp, "smalldatetime"),
-        ColumnType::Datetime2 => (LogicalType::Timestamp, "datetime2"),
+        // 100 ns steps, past what a timestamp keeps (microseconds): the server's own text
+        // with its native type (ADR-006's 2026-11-12 note, SDB-265).
+        ColumnType::Datetime2 => (LogicalType::Text, "datetime2"),
         ColumnType::Daten => (LogicalType::Date, "date"),
         ColumnType::Timen => (LogicalType::Time, "time"),
-        ColumnType::DatetimeOffsetn => (LogicalType::TimestampTz, "datetimeoffset"),
+        // Also keeps the offset it was written with: the server's text, which has both.
+        ColumnType::DatetimeOffsetn => (LogicalType::Text, "datetimeoffset"),
         ColumnType::SSVariant => (LogicalType::Native, "sql_variant"),
         ColumnType::Null => (LogicalType::Text, "null"),
     };
@@ -90,8 +93,58 @@ fn time_micros(time: Time) -> i64 {
     i64::try_from(increments * 1_000_000 / per_second).unwrap_or(0)
 }
 
-fn datetime2_micros(value: DateTime2) -> i64 {
-    date_days(value.date()) * MICROS_PER_DAY + time_micros(value.time())
+/// A day's `increments` of a `scale` as SQL Server writes them: `hh:mm:ss` and exactly
+/// `scale` fractional digits (`10:00:00.1234567`, `10:00:00.500`, `10:00:00`).
+fn clock_text(increments: u64, scale: u8) -> String {
+    let per_second = 10u64.pow(u32::from(scale));
+    let seconds = increments / per_second;
+    let (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if scale == 0 {
+        format!("{h:02}:{m:02}:{s:02}")
+    } else {
+        let fraction = increments % per_second;
+        let width = usize::from(scale);
+        format!("{h:02}:{m:02}:{s:02}.{fraction:0width$}")
+    }
+}
+
+/// Days since 0001-01-01 as `YYYY-MM-DD`.
+fn date_text(days: i64) -> Option<String> {
+    let days = i32::try_from(days - DAYS_0001_TO_1970).ok()?;
+    Some(spelaion_driver_api::Value::Date(days).to_string())
+}
+
+/// A `datetime2` as SQL Server writes it: `2024-01-01 10:00:00.1234567`, every digit of its
+/// scale.
+fn datetime2_text(value: DateTime2) -> Option<String> {
+    let time = value.time();
+    Some(format!(
+        "{} {}",
+        date_text(i64::from(value.date().days()))?,
+        clock_text(time.increments(), time.scale())
+    ))
+}
+
+/// A `datetimeoffset` as SQL Server writes it: its date and time where its offset is, then
+/// the offset (`2024-01-01 10:00:00.1234567 +02:00`). The value travels in UTC.
+fn datetimeoffset_text(value: DateTimeOffset) -> Option<String> {
+    let utc = value.datetime2();
+    let scale = utc.time().scale();
+    let per_day = 86_400i128 * 10i128.pow(u32::from(scale));
+    let offset = i128::from(value.offset());
+    let utc_total = i128::from(utc.date().days()) * per_day + i128::from(utc.time().increments());
+    let local = utc_total + offset * 60 * 10i128.pow(u32::from(scale));
+    let days = i64::try_from(local.div_euclid(per_day)).ok()?;
+    let increments = u64::try_from(local.rem_euclid(per_day)).ok()?;
+    let sign = if offset < 0 { '-' } else { '+' };
+    let minutes = offset.unsigned_abs();
+    Some(format!(
+        "{} {} {sign}{:02}:{:02}",
+        date_text(days)?,
+        clock_text(increments, scale),
+        minutes / 60,
+        minutes % 60
+    ))
 }
 
 /// The value as a timestamp in microseconds, for the date and time types.
@@ -107,9 +160,6 @@ fn timestamp(data: &ColumnData<'static>) -> Option<i64> {
             let days = i64::from(dt.days()) - DAYS_1900_TO_1970;
             Some(days * MICROS_PER_DAY + i64::from(dt.seconds_fragments()) * 60_000_000)
         }
-        ColumnData::DateTime2(Some(dt)) => Some(datetime2_micros(*dt)),
-        // The date and time of a `datetimeoffset` travel in UTC.
-        ColumnData::DateTimeOffset(Some(dto)) => Some(datetime2_micros(dto.datetime2())),
         _ => None,
     }
 }
@@ -140,10 +190,8 @@ pub fn text(data: &ColumnData<'static>) -> Option<String> {
             spelaion_driver_api::Value::Date(i32::try_from(days).ok()?).to_string()
         }
         ColumnData::Time(v) => spelaion_driver_api::Value::Time(time_micros((*v)?)).to_string(),
-        ColumnData::DateTimeOffset(Some(dto)) => {
-            let micros = datetime2_micros(dto.datetime2());
-            spelaion_driver_api::Value::TimestampTz(micros).to_string()
-        }
+        ColumnData::DateTime2(v) => datetime2_text((*v)?)?,
+        ColumnData::DateTimeOffset(v) => datetimeoffset_text((*v)?)?,
         other => spelaion_driver_api::Value::Timestamp(timestamp(other)?).to_string(),
     })
 }
@@ -273,6 +321,36 @@ mod tests {
         assert_eq!(numeric(Numeric::new_with_scale(-5, 1)), "-0.5");
         assert_eq!(numeric(Numeric::new_with_scale(12, 0)), "12");
         assert_eq!(numeric(Numeric::new_with_scale(7, 3)), "0.007");
+    }
+
+    #[test]
+    fn datetime2_and_datetimeoffset_read_as_the_server_writes_them() {
+        // 2024-01-01 is day 738,885 since 0001-01-01.
+        let day = 738_885;
+        let at = |increments, scale| DateTime2::new(Date::new(day), Time::new(increments, scale));
+        let ten = 10 * 3_600;
+        let cases = [
+            (
+                at(ten * 10_000_000 + 1_234_567, 7),
+                "2024-01-01 10:00:00.1234567",
+            ),
+            (at(ten * 1_000 + 500, 3), "2024-01-01 10:00:00.500"),
+            (at(ten, 0), "2024-01-01 10:00:00"),
+            (at(0, 7), "2024-01-01 00:00:00.0000000"),
+        ];
+        for (value, shown) in cases {
+            assert_eq!(text(&ColumnData::DateTime2(Some(value))).unwrap(), shown);
+        }
+        // Travels in UTC; shown where its offset is, which may be another day.
+        let utc = at(23 * 3_600 * 10_000_000 + 30 * 600_000_000 + 7, 7);
+        let offset = |minutes| {
+            text(&ColumnData::DateTimeOffset(Some(DateTimeOffset::new(
+                utc, minutes,
+            ))))
+        };
+        assert_eq!(offset(120).unwrap(), "2024-01-02 01:30:00.0000007 +02:00");
+        assert_eq!(offset(-330).unwrap(), "2024-01-01 18:00:00.0000007 -05:30");
+        assert_eq!(offset(0).unwrap(), "2024-01-01 23:30:00.0000007 +00:00");
     }
 
     #[test]
