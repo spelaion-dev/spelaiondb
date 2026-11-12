@@ -72,7 +72,7 @@ pub enum TemporalStep {
 pub struct TemporalPicker {
     pub kind: TemporalKind,
     /// Fractional digits of a second the column keeps and the grid shows (0 to 7: SQL
-    /// Server's `datetime2` and `datetimeoffset` keep 100 ns; the rest at most 6).
+    /// Server's `datetime2`, `datetimeoffset` and `time` keep 100 ns; the rest at most 6).
     pub digits: u8,
     /// The engine writes every one of `digits` digits (MySQL's `TIME(3)`: `10:20:30.120`);
     /// otherwise trailing zeros are dropped (`10:20:30.12`).
@@ -312,9 +312,14 @@ pub fn temporal_picker(engine: &str, native_type: &str) -> Option<TemporalPicker
         },
         "sqlserver" => match base.as_str() {
             "date" => Some(picker(TemporalKind::Date, 0)),
-            "time" => Some(picker(TemporalKind::Time, p(7))),
-            // Shown as the server writes them (text with their native type, SDB-265): every
-            // digit of the precision, up to 100 ns, and a `datetimeoffset`'s own offset.
+            // Shown as the server writes them (text with their native type, SDB-265 and
+            // SDB-268): every digit of the precision, up to 100 ns, and a `datetimeoffset`'s
+            // own offset.
+            "time" => Some(TemporalPicker {
+                digits: p(7).min(MAX_DIGITS),
+                padded: true,
+                ..picker(TemporalKind::Time, 0)
+            }),
             "datetime2" => Some(TemporalPicker {
                 digits: p(7).min(MAX_DIGITS),
                 padded: true,
@@ -1099,7 +1104,8 @@ mod tests {
                 ..padded(TemporalKind::TimestampTz, 2).unwrap()
             })
         );
-        assert_eq!(p("sqlserver", "time(7)"), t(TemporalKind::Time, 6));
+        assert_eq!(p("sqlserver", "time(7)"), padded(TemporalKind::Time, 7));
+        assert_eq!(p("sqlserver", "time(3)"), padded(TemporalKind::Time, 3));
         assert_eq!(
             p("sqlserver", "smalldatetime").map(|p| p.step),
             Some(TemporalStep::Minutes)
@@ -1203,6 +1209,15 @@ mod tests {
         );
         assert!(
             picked_time_text(&datetime2, &picked((2024, 1, 1), (10, 0, 0), "12345678")).is_err()
+        );
+        let time = temporal_picker("sqlserver", "time").unwrap();
+        assert_eq!(
+            picked_time_text(&time, &picked((2024, 1, 1), (23, 59, 59), "1234567")).unwrap(),
+            "23:59:59.1234567"
+        );
+        assert_eq!(
+            picked_time_text(&time, &picked((2024, 1, 1), (1, 30, 0), "")).unwrap(),
+            "01:30:00.0000000"
         );
         let offset = temporal_picker("sqlserver", "datetimeoffset").unwrap();
         let mut at = picked((2026, 1, 1), (1, 30, 0), "0000007");

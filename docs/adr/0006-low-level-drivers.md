@@ -51,8 +51,8 @@ result sets.
   (`2024-01-01 10:00:00.1234567`, `10:00:00.500` for `datetime2(3)`) and a `datetimeoffset`
   where it is with its offset (`2024-01-01 10:00:00.1234567 +02:00`). A microsecond timestamp
   lost the seventh digit, so a filter or a key written from the cell missed its row, and a
-  `datetimeoffset` was shown in UTC. Both forms are read alike under every language. `time(7)`
-  still travels as a time in microseconds.
+  `datetimeoffset` was shown in UTC. Both forms are read alike under every language. `time`
+  followed (SDB-268): the same clock text without the date (`23:59:59.1234567`).
 
 ## Revisit if
 Not expected.

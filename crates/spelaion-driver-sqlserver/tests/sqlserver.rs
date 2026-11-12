@@ -422,13 +422,19 @@ async fn type_zoo() {
         ),
         (
             "cast('23:59:59.1234567' as time(7))",
-            LogicalType::Time,
+            LogicalType::Text,
             "time",
-            "23:59:59.123456",
+            "23:59:59.1234567",
+        ),
+        (
+            "cast('10:11:12.5' as time(3))",
+            LogicalType::Text,
+            "time",
+            "10:11:12.500",
         ),
         (
             "cast('10:11:12' as time(0))",
-            LogicalType::Time,
+            LogicalType::Text,
             "time",
             "10:11:12",
         ),
@@ -513,7 +519,7 @@ async fn type_zoo() {
         );
         assert_eq!(rows[0][0], *text, "{expr}");
         // The server's own text, exactly.
-        if *native == "datetime2" || *native == "datetimeoffset" {
+        if matches!(*native, "datetime2" | "datetimeoffset" | "time") {
             let server = tables(&*conn, &format!("select convert(varchar(40), {expr}) as v")).await;
             assert_eq!(rows[0][0], server[0].1[0][0], "{expr}");
         }
