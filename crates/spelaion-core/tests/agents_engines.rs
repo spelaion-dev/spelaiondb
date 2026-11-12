@@ -1,5 +1,6 @@
 //! Agents' reads and writes (ADR-020) on MySQL and MariaDB (`SPELAION_TEST_MYSQL`,
-//! `SPELAION_TEST_MARIADB`), SQL Server (`SPELAION_TEST_MSSQL`) and DuckDB (always). Each test
+//! `SPELAION_TEST_MARIADB`), SQL Server (`SPELAION_TEST_MSSQL`), PostgreSQL (`SPELAION_TEST_PG`)
+//! and DuckDB (always). Each test
 //! tries to get around the barriers: what the parser lets through must still be stopped by the
 //! engine, and nothing may be left open after an error or a timeout.
 
@@ -13,6 +14,7 @@ use spelaion_core::{
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
 use spelaion_driver_duckdb::DuckdbDriver;
 use spelaion_driver_mysql::MysqlDriver;
+use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
 
 fn limits(max_rows: usize) -> ReadLimits {
@@ -103,6 +105,98 @@ fn timed_out<T: std::fmt::Debug>(result: Result<T, ReadError>, started: Instant)
         "{:?}",
         started.elapsed()
     );
+}
+
+async fn postgres() -> Option<Session> {
+    let Ok(addr) = std::env::var("SPELAION_TEST_PG") else {
+        eprintln!("SPELAION_TEST_PG not set: test skipped");
+        return None;
+    };
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let params = ConnectParams {
+        host: host.into(),
+        port: port.parse().unwrap(),
+        user: "spelaion".into(),
+        password: Some(Secret::new("spelaion")),
+        database: "spelaion".into(),
+        ..Default::default()
+    };
+    let driver = PostgresDriver;
+    Some(Session::new(
+        driver.connect(&params).await.unwrap(),
+        driver.dialect(),
+        Arc::new(ResultStore::new()),
+    ))
+}
+
+#[tokio::test]
+async fn postgres_unicode_escaped_names_and_sql_given_as_text_do_not_bypass_agent_barriers() {
+    let Some(session) = postgres().await else {
+        return;
+    };
+    // The premise, on a plain session: PostgreSQL reads the escaped name as the function it
+    // spells, and runs the query given as text.
+    let pid = first(&session, "select pg_backend_pid()").await;
+    assert_eq!(
+        first(&session, r#"select U&"pg_backend_p\0069d"()"#).await,
+        pid
+    );
+    assert!(
+        first(
+            &session,
+            "select query_to_xml('select 1 as one', true, true, '')"
+        )
+        .await
+        .contains("<one>1</one>")
+    );
+
+    // Agents' reads refuse both forms, wherever they hide.
+    for sql in [
+        r#"select U&"pg_backend_p\0069d"()"#,
+        r#"select U&"pg_r\0065ad_file"('/etc/passwd')"#,
+        r#"with x as (select U&"set_c\006Fnfig"('search_path', 'evil', false) as v) select * from x"#,
+        "select query_to_xml('select 1', true, true, '')",
+        "select query_to_xml('select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid()', true, true, '')",
+        "select * from ts_stat('select set_config(''search_path'', ''evil'', false)::tsvector')",
+        "select * from orders where id in (select length(query_to_xml('select 1', true, true, '')::text))",
+        "explain (analyse) select 1",
+    ] {
+        rejected(session.run_read_only(sql, &limits(5)).await, sql);
+    }
+    // The search path is untouched.
+    assert!(
+        !first(&session, "show search_path").await.contains("evil"),
+        "a refused read changed the session"
+    );
+
+    // Agents' writes refuse both forms too, and nothing is written.
+    let t = format!("agent_pg_escapes_{}", std::process::id());
+    run(
+        &session,
+        &format!("drop table if exists {t}; create table {t} (id int primary key, v text)"),
+    )
+    .await;
+    for sql in [
+        format!(r#"insert into {t} values (1, U&"pg_backend_p\0069d"()::text)"#),
+        format!(r#"insert into {t} select 2, U&"pg_r\0065ad_file"('/etc/passwd')"#),
+        format!("insert into {t} values (3, query_to_xml('select 1', true, true, '')::text)"),
+        format!(
+            "insert into {t} select 4, v from ts_stat('select set_config(''search_path'', ''evil'', false)::tsvector') as s(v, n1, n2)"
+        ),
+    ] {
+        assert!(
+            matches!(
+                session.run_write(&sql, &write_limits()).await,
+                Err(WriteError::Rejected(_))
+            ),
+            "{sql}"
+        );
+    }
+    assert_eq!(
+        first(&session, &format!("select count(*) from {t}")).await,
+        "0"
+    );
+    run(&session, &format!("drop table {t}")).await;
 }
 
 async fn mysql_sessions() -> Vec<(&'static str, Session)> {
