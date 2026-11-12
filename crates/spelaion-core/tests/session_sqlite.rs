@@ -128,7 +128,9 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
     let session = session().await;
     let _: Vec<CoreEvent> = session.run_script("create table t (id integer primary key, name text); insert into t values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e')").collect().await;
     let original = "select id, name from t where id > 1 order by id";
-    let first = spelaion_core::query_page_sql(session.dialect().as_ref(), original, 2, 0).unwrap();
+    let first = spelaion_core::first_query_page_sql(&session, original, 2)
+        .await
+        .unwrap();
     let id = first_result(&session, &first).await;
     assert_eq!(session.results().get(id).unwrap().read().unwrap().rows(), 2);
     assert_eq!(
@@ -173,10 +175,16 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
     assert_eq!(session.results().len(), 1);
 }
 
-#[test]
-fn a_paged_query_still_requires_execution_confirmation() {
-    let dialect = SqliteDriver::default().dialect();
-    let sql = spelaion_core::query_page_sql(dialect.as_ref(), "select * from orders", 100, 0)
+#[tokio::test]
+async fn a_paged_query_still_requires_execution_confirmation() {
+    let session = session().await;
+    let _: Vec<CoreEvent> = session
+        .run_script("create table orders (id integer primary key)")
+        .collect()
+        .await;
+    let dialect = session.dialect().clone();
+    let sql = spelaion_core::first_query_page_sql(&session, "select * from orders", 100)
+        .await
         .expect("a pageable query");
     let safeguards = spelaion_config::Safeguards {
         confirm_execution: true,

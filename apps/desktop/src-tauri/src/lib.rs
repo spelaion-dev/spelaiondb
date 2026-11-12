@@ -2437,7 +2437,7 @@ async fn query_page_supported(
     state: State<'_, AppState>,
 ) -> CmdResult<bool> {
     let open = state.session(&session).await?;
-    Ok(spelaion_core::query_page_sql(open.session.dialect().as_ref(), &sql, 1, 0).is_some())
+    Ok(spelaion_core::query_pages_exactly(&open.session, &sql).await)
 }
 
 /// Run the first page, keeping the original SQL in the user's query history.
@@ -2453,9 +2453,9 @@ async fn run_query_page(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let open = state.session(&session).await?;
-    let paged =
-        spelaion_core::query_page_sql(open.session.dialect().as_ref(), &sql, limit.into(), 0)
-            .ok_or("this query cannot be paged")?;
+    let paged = spelaion_core::first_query_page_sql(&open.session, &sql, limit.into())
+        .await
+        .ok_or("this query cannot be paged")?;
     start_script(
         &state,
         &session,
@@ -4149,8 +4149,8 @@ async fn table_page_sql(
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let open = state.session(&session).await?;
-    spelaion_core::table_page_sql(open.session.dialect().as_ref(), &page.into())
-        .map_err(|e| e.to_string())
+    // Ordered by the primary key after the user's order (ADR-054).
+    spelaion_core::table_page_sql_by_key(&open.session, &page.into()).await
 }
 
 /// How many rows of a table the filter keeps (the table data tab's "Count").

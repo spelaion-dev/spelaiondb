@@ -152,7 +152,9 @@ pub use pending::{
 };
 pub use processes::{Process, ProcessSnapshot, ProcessTarget, control_process, list_processes};
 pub use progress::{ROWS_PROGRESS_INTERVAL, coalesce_rows};
-pub use query_page::{append_query_page, count_query_rows, query_count_sql, query_page_sql};
+pub use query_page::{
+    append_query_page, count_query_rows, first_query_page_sql, query_count_sql, query_pages_exactly,
+};
 pub use readonly::{ReadError, ReadLimits, ReadResult};
 pub use references::{
     FollowError, KeyDirection, KeyRef, KeyRows, KeyTarget, MAX_PREVIEW_ROWS, PREVIEW_CHARS,
@@ -190,8 +192,8 @@ pub use sql_file::{
 };
 pub use table_data::{
     ConditionError, MAX_PAGE_ROWS, PageError, TablePage, add_condition, cell_filter_value,
-    count_table_rows, key_filter, table_count_sql, table_export_sql, table_page_sql, typed_value,
-    value_condition,
+    count_table_rows, key_filter, order_with_key, table_count_sql, table_export_sql,
+    table_page_sql, table_page_sql_by_key, typed_value, value_condition,
 };
 pub use table_stats::{TableStats, table_stats};
 pub use transaction::{TransactionError, TransactionOutcome, TransactionState, TransactionStatus};
