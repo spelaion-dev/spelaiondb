@@ -274,6 +274,16 @@ impl Session {
         let sql = sql.trim().trim_end_matches(';').trim();
         check_write(self.dialect().as_ref(), sql).map_err(WriteError::Rejected)?;
         let started = Instant::now();
+        // Strings are read by the server as `check_write` read them (SDB-116).
+        if engine == "mysql" {
+            match tokio::time::timeout(limits.timeout, self.mysql_default_quoting()).await {
+                Ok(checked) => checked.map_err(WriteError::Rejected)?,
+                Err(_) => {
+                    let _ = self.cancel().await;
+                    return Err(WriteError::Timeout(limits.timeout));
+                }
+            }
+        }
         let run = async {
             if engine == "duckdb" {
                 self.control(DUCKDB_NO_EXTERNAL_ACCESS).await?;
