@@ -462,10 +462,12 @@ async fn a_search_over_fifty_tables_stops_when_cancelled() {
         cancel.attach(&session);
         let started = Arc::new(Mutex::new(0usize));
         let finished = Arc::new(Mutex::new(Vec::new()));
+        let cancelling = Arc::new(Mutex::new(None));
         let progress = {
             let cancel = cancel.clone();
             let started = started.clone();
             let finished = finished.clone();
+            let cancelling = cancelling.clone();
             move |event: DataSearchEvent| match event {
                 DataSearchEvent::Started { index, total, .. } => {
                     assert_eq!(total, 50);
@@ -473,7 +475,8 @@ async fn a_search_over_fifty_tables_stops_when_cancelled() {
                     // Cancel while the eleventh table is being searched.
                     if index == 10 {
                         let cancel = cancel.clone();
-                        tokio::spawn(async move { cancel.cancel().await });
+                        *cancelling.lock().unwrap() =
+                            Some(tokio::spawn(async move { cancel.cancel().await }));
                     }
                 }
                 DataSearchEvent::Finished(outcome) => finished.lock().unwrap().push(outcome),
@@ -498,7 +501,17 @@ async fn a_search_over_fifty_tables_stops_when_cancelled() {
                 other => panic!("{label}: {other:?}"),
             }
         }
-        // The session is still usable afterwards.
+        // The session is still usable afterwards, once the cancel has reached the server, as
+        // the app's cancel command waits for. The search stops as soon as it sees the request,
+        // but MySQL's cancel opens a second connection to send `KILL QUERY`, which stops
+        // whatever that session is running when it arrives: sent later than the search's last
+        // statement, it used to stop the count below instead (SDB-227). Arriving on an idle
+        // session, it is ignored. The app never reuses a search's session: it closes it.
+        let cancelling = cancelling.lock().unwrap().take();
+        cancelling
+            .expect("the cancel was sent")
+            .await
+            .expect("the cancel task ends");
         assert_eq!(
             count_table_rows(&session, schema, &names[0], "").await,
             Ok(2),
