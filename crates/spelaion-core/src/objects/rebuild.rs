@@ -197,6 +197,8 @@ pub(crate) async fn plan(
             element,
             &def,
             &rewrite.cloned().unwrap_or_default(),
+            // SQLite: no COMMENT is written, and no `sql_mode`.
+            true,
         ));
     }
     if let Some(i) = found.iter().position(|f| !f) {

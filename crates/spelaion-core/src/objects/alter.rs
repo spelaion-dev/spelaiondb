@@ -451,7 +451,13 @@ pub async fn alteration_plan(
     }
     match engine {
         "postgres" => postgres(dialect, &target, schema, table, &changes, &mut steps),
-        "mysql" => mysql(&current, &target, &changes, &mut steps)?,
+        "mysql" => mysql(
+            &current,
+            &target,
+            &changes,
+            crate::sql_mode::backslash_escapes(dialect),
+            &mut steps,
+        )?,
         "sqlserver" => sqlserver(session, &target, schema, table, &changes, &mut steps).await?,
         _ => duckdb(dialect, &target, schema, table, &changes, &mut steps),
     }
@@ -636,6 +642,7 @@ fn mysql(
     current: &Current,
     target: &str,
     changes: &[ColumnDiff<'_>],
+    backslash_escapes: bool,
     steps: &mut Vec<Step>,
 ) -> Result<(), ObjectError> {
     let sql = current.ddl.as_deref().unwrap_or_default();
@@ -657,7 +664,7 @@ fn mysql(
         // MODIFY restates the whole column, so every attribute it had is written again.
         modify.push(format!(
             "MODIFY COLUMN {}",
-            ddl::rewrite_column(element, &def, &rewrite(change, true))
+            ddl::rewrite_column(element, &def, &rewrite(change, true), backslash_escapes)
         ));
     }
     if !modify.is_empty() {

@@ -142,7 +142,7 @@ impl Password<'_> {
         };
         match engine {
             "sqlserver" => nstring(text),
-            "mysql" if backslashes => mysql_string(text),
+            "mysql" if backslashes => mysql_string(text, true),
             _ => quoted(text),
         }
     }
@@ -551,6 +551,9 @@ async fn run_change(
     if read_only {
         return Err(ObjectError::ReadOnly);
     }
+    // The splitter and the password literal follow the session's sql_mode as it is now
+    // (SDB-262).
+    session.refresh_sql_mode().await;
     let dialect = session.dialect();
     let masked = principal_plan(dialect.as_ref(), change)?;
     if masked.script() != shown {
@@ -579,10 +582,11 @@ async fn run_change(
             }
             let engine = dialect.name();
             let escapes = backslash_escapes(session).await?;
-            // MySQL with NO_BACKSLASH_ESCAPES, PostgreSQL with standard_conforming_strings
-            // off: the core's splitter would read the literal otherwise than the engine.
+            // The core's splitter must read the literal as the engine does. MySQL's follows
+            // the session's sql_mode (NO_BACKSLASH_ESCAPES), read just above; PostgreSQL's
+            // never reads standard_conforming_strings = off.
             let disagree = match engine {
-                "mysql" => !escapes,
+                "mysql" => crate::sql_mode::backslash_escapes(dialect.as_ref()) != escapes,
                 "postgres" => escapes,
                 _ => false,
             };
@@ -637,7 +641,9 @@ pub async fn principal_locked(
                 return Ok(None);
             };
             // MariaDB keeps it in `global_priv`'s JSON, MySQL in `mysql.user`.
-            let (user, host) = (mysql_string(&user), mysql_string(&host));
+            // Compared as expressions: a literal every sql_mode reads alike (SDB-262).
+            let literal = |text: String| crate::export::sql_literal(&Value::Text(text), "mysql");
+            let (user, host) = (literal(user), literal(host));
             if session_is_mariadb(session).await {
                 format!(
                     "SELECT CASE WHEN JSON_VALUE(Priv, '$.account_locked') IN ('1', 'true') THEN 1 ELSE 0 END \

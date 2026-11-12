@@ -31,4 +31,10 @@ pub trait Dialect: Send + Sync {
     fn with_sql_mode(&self, _sql_mode: &str) -> Option<std::sync::Arc<dyn Dialect>> {
         None
     }
+
+    /// The `sql_mode` this dialect reads text with, when [`Dialect::with_sql_mode`] made it for
+    /// a mode that reads text otherwise than the default. `None`: the engine's default reading.
+    fn sql_mode(&self) -> Option<String> {
+        None
+    }
 }

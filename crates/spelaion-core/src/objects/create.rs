@@ -123,7 +123,10 @@ pub fn create_table_plan(
             return invalid("SQLite columns have no comments".into());
         }
         if let (Some(comment), "mysql") = (comment, engine) {
-            element.push_str(&format!(" COMMENT {}", ddl::mysql_string(comment)));
+            element.push_str(&format!(
+                " COMMENT {}",
+                ddl::mysql_string(comment, crate::sql_mode::backslash_escapes(dialect))
+            ));
         }
         elements.push(element);
     }

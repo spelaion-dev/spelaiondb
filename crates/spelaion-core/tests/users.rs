@@ -549,12 +549,40 @@ async fn a_contained_database_user_logs_in_with_its_own_password_and_it_never_le
 
 #[tokio::test]
 async fn a_new_password_never_reaches_the_history_the_audit_or_an_error() {
-    for engine in engines() {
+    // MySQL and MariaDB also under NO_BACKSLASH_ESCAPES, where the password's literal is
+    // written another way (SDB-262).
+    let runs = engines().into_iter().flat_map(|engine| {
+        let modes: &[bool] = match engine.label {
+            "mysql" | "mariadb" => &[false, true],
+            _ => &[false],
+        };
+        let engine = std::rc::Rc::new(engine);
+        modes
+            .iter()
+            .map(move |no_backslash_escapes| (engine.clone(), *no_backslash_escapes))
+            .collect::<Vec<_>>()
+    });
+    for (engine, no_backslash_escapes) in runs {
         let label = engine.label;
         let admin = engine.session().await;
-        let path = temp_store(label);
+        let mode = if no_backslash_escapes {
+            "nbe"
+        } else {
+            "default"
+        };
+        if no_backslash_escapes {
+            tolerate(
+                &admin,
+                &[
+                    "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')"
+                        .to_string(),
+                ],
+            )
+            .await;
+        }
+        let path = temp_store(&format!("{label}_{mode}"));
         let history = QueryHistory::open(path.clone()).unwrap();
-        let name = format!("spelaion_secret_{label}");
+        let name = format!("spelaion_secret_{label}_{mode}");
         tolerate(&admin, &[drop_statement(label, &name)]).await;
 
         // The history records what the user runs on this session…
@@ -610,8 +638,13 @@ async fn a_new_password_never_reaches_the_history_the_audit_or_an_error() {
     }
 }
 
+/// MySQL and MariaDB under NO_BACKSLASH_ESCAPES: the session's splitter reads strings as the
+/// server does (SDB-161), so a password with a backslash is written as that mode reads it, and
+/// the account logs in with it (SDB-262); the account's lock state is read for a name with a
+/// backslash too. PostgreSQL with standard_conforming_strings off: its splitter does not follow
+/// that setting, so such a password is still refused before anything runs.
 #[tokio::test]
-async fn a_backslash_the_server_would_read_otherwise_is_refused_before_anything_runs() {
+async fn a_backslash_in_a_password_is_written_as_the_sessions_mode_reads_it() {
     for engine in engines() {
         let label = engine.label;
         let setting = match label {
@@ -625,6 +658,46 @@ async fn a_backslash_the_server_would_read_otherwise_is_refused_before_anything_
         let name = format!("spelaion_slash_{label}");
         tolerate(&admin, &[drop_statement(label, &name), setting.into()]).await;
         let create = PrincipalChange::Create(new_login(label, &name));
+        if label != "postgres" {
+            apply(&admin, &create, Some(FIRST))
+                .await
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+            assert!(engine.logs_in(&name, FIRST).await, "{label}: {FIRST}");
+            assert!(
+                !engine.logs_in(&name, "Fir'st;Pass\\\\word-1").await,
+                "{label}"
+            );
+            // A user named with a backslash: its lock state is still read.
+            let slash = format!("spelaion\\sl_{label}");
+            tolerate(&admin, &[format!("DROP USER IF EXISTS `{slash}`@`%`")]).await;
+            apply(
+                &admin,
+                &PrincipalChange::Create(new_login(label, &slash)),
+                Some(SECOND),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+            let slash_target = PrincipalTarget {
+                kind: PrincipalKind::User,
+                name: format!("'{}'@'%'", slash.replace('\\', "\\\\")),
+            };
+            assert_eq!(
+                spelaion_core::principal_locked(&admin, &slash_target)
+                    .await
+                    .unwrap_or_else(|e| panic!("{label}: {e}")),
+                Some(false),
+                "{label}"
+            );
+            tolerate(
+                &admin,
+                &[
+                    drop_statement(label, &name),
+                    format!("DROP USER IF EXISTS `{slash}`@`%`"),
+                ],
+            )
+            .await;
+            continue;
+        }
         assert!(
             matches!(
                 apply(&admin, &create, Some(FIRST)).await,
