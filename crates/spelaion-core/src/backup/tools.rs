@@ -65,14 +65,17 @@ impl ToolVersion {
     /// Reads `--version`'s first line, as each vendor writes it:
     /// `pg_dump (PostgreSQL) 17.11`, `mysqldump  Ver 8.4.13 for Linux on x86_64 (MySQL
     /// Community Server - GPL)`, `mariadb-dump from 11.4.13-MariaDB, client 10.19 for …` or
-    /// `mysqldump  Ver 10.19 Distrib 10.11.6-MariaDB, for …`.
+    /// `mysqldump  Ver 10.19 Distrib 10.11.6-MariaDB, for …`. A client that starts the line with
+    /// the path it was started by (Windows' `mysql.exe`: `C:\Program Files\MySQL\MySQL Server
+    /// 8.4\bin\mysql.exe  Ver 8.4.9 …`) is read by its name alone, so the folder's numbers are
+    /// never taken for its version.
     pub fn parse(name: ToolName, output: &str) -> Self {
-        let text = output
+        let first = output
             .lines()
             .map(str::trim)
             .find(|l| !l.is_empty())
-            .unwrap_or("")
-            .to_string();
+            .unwrap_or("");
+        let text = without_program_path(name, first);
         let numbers = version_tokens(&text);
         let (flavor, number) = match name {
             ToolName::PgDump | ToolName::PgRestore | ToolName::Psql => (
@@ -106,6 +109,36 @@ impl ToolVersion {
     pub fn at_least(&self, major: u32, minor: u32, patch: u32) -> bool {
         self.number >= (major, minor, patch)
     }
+}
+
+/// The line with a leading path to one of the tool's programs (`…\bin\mysql.exe  Ver …`)
+/// replaced by the program's name (`mysql  Ver …`); any other line as it is. The program is
+/// the name that follows a separator and comes right before the vendors' `Ver` or `from`, so a
+/// folder named like it (`/opt/mysql 9.1/…`) is never taken for it.
+fn without_program_path(name: ToolName, line: &str) -> String {
+    // ASCII lowercasing keeps every byte where it was, so offsets apply to `line` too.
+    let lower = line.to_ascii_lowercase();
+    for program in name.programs() {
+        for file in [format!("{program}.exe"), (*program).to_string()] {
+            let mut from = 0;
+            while let Some(at) = lower[from..].find(&file) {
+                let start = from + at;
+                let end = start + file.len();
+                let after_path = start > 0 && matches!(lower.as_bytes()[start - 1], b'\\' | b'/');
+                let rest = &lower[end..];
+                let then_version = rest.starts_with(char::is_whitespace) && {
+                    let word = rest.trim_start();
+                    word.starts_with("ver ") || word.starts_with("from ")
+                };
+                if after_path && then_version {
+                    return format!("{program}{}", &line[end..]);
+                }
+                // The match starts with an ASCII letter, so the next byte is a char boundary.
+                from = start + 1;
+            }
+        }
+    }
+    line.to_string()
 }
 
 /// Every `a.b[.c]` in the text, and whether `-MariaDB` follows it.
@@ -485,6 +518,72 @@ mod tests {
         assert_eq!(old.number, (10, 11, 6));
         let unknown = ToolVersion::parse(ToolName::Mysql, "");
         assert_eq!(unknown.number, (0, 0, 0));
+    }
+
+    #[test]
+    fn a_client_that_prints_its_own_path_is_read_by_its_name() {
+        // What MySQL 8.4.9's `mysql.exe --version` prints when started from its install folder
+        // (its `mysqldump.exe` prints only its name).
+        let windows = ToolVersion::parse(
+            ToolName::Mysql,
+            r"C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe  Ver 8.4.9 for Win64 on x86_64 (MySQL Community Server - GPL)",
+        );
+        assert_eq!(windows.flavor, ToolFlavor::Mysql);
+        assert_eq!(windows.number, (8, 4, 9));
+        assert_eq!(
+            windows.text,
+            "mysql  Ver 8.4.9 for Win64 on x86_64 (MySQL Community Server - GPL)"
+        );
+        // Any case, either separator, MariaDB's names, a folder with the program's name in it.
+        let maria = ToolVersion::parse(
+            ToolName::Mysqldump,
+            r"c:\program files\MariaDB 11.4\bin\MARIADB-DUMP.EXE from 11.4.5-MariaDB, client 10.19 for Win64 (AMD64)",
+        );
+        assert_eq!(maria.flavor, ToolFlavor::Mariadb);
+        assert_eq!(maria.number, (11, 4, 5));
+        assert!(maria.text.starts_with("mariadb-dump from 11.4.5-MariaDB"));
+        let unix = ToolVersion::parse(
+            ToolName::Mysql,
+            "/opt/mysql 9.1/mysql/bin/mysql  Ver 9.4.0 for Linux on x86_64",
+        );
+        assert_eq!(unix.number, (9, 4, 0));
+        assert_eq!(unix.text, "mysql  Ver 9.4.0 for Linux on x86_64");
+        // Nothing to strip: a name without a path, or a path that is not the program's.
+        let plain = ToolVersion::parse(ToolName::Mysql, "mysql  Ver 8.4.13 for Linux");
+        assert_eq!(plain.text, "mysql  Ver 8.4.13 for Linux");
+        let other = ToolVersion::parse(ToolName::Psql, "psql (PostgreSQL) 17.11");
+        assert_eq!(other.text, "psql (PostgreSQL) 17.11");
+    }
+
+    #[test]
+    fn installer_folders_with_spaces_expand() {
+        // `MySQL\MySQL Server *\bin`: the `*` follows a fixed prefix with a space in it.
+        let dir = std::env::temp_dir().join(format!("spelaion-installs-{}", std::process::id()));
+        for v in [
+            "MySQL Server 8.0",
+            "MySQL Server 8.4",
+            "MySQL Workbench 8.0",
+        ] {
+            std::fs::create_dir_all(dir.join("MySQL").join(v).join("bin")).unwrap();
+        }
+        let pattern = format!("{}/MySQL/MySQL Server */bin", dir.display());
+        let found: Vec<PathBuf> = expand(&pattern);
+        assert_eq!(
+            found,
+            [
+                dir.join("MySQL").join("MySQL Server 8.4").join("bin"),
+                dir.join("MySQL").join("MySQL Server 8.0").join("bin"),
+            ]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_searches_the_installers_default_folders() {
+        let root = std::env::var("ProgramFiles").unwrap();
+        assert!(install_patterns(true).contains(&format!(r"{root}\PostgreSQL\*\bin")));
+        assert!(install_patterns(false).contains(&format!(r"{root}\MySQL\MySQL Server *\bin")));
     }
 
     #[test]
