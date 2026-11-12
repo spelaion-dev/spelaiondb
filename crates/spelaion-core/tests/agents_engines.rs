@@ -2,7 +2,8 @@
 //! `SPELAION_TEST_MARIADB`), SQL Server (`SPELAION_TEST_MSSQL`), PostgreSQL (`SPELAION_TEST_PG`)
 //! and DuckDB (always). Each test
 //! tries to get around the barriers: what the parser lets through must still be stopped by the
-//! engine, and nothing may be left open after an error or a timeout.
+//! engine, and nothing may be left open after an error or a timeout. What a test creates on
+//! the shared servers is dropped even when one of its assertions fails (`support`).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,6 +17,9 @@ use spelaion_driver_duckdb::DuckdbDriver;
 use spelaion_driver_mysql::MysqlDriver;
 use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
+
+mod support;
+use support::{cleaning_up, run_cleanup};
 
 fn limits(max_rows: usize) -> ReadLimits {
     ReadLimits {
@@ -171,32 +175,38 @@ async fn postgres_unicode_escaped_names_and_sql_given_as_text_do_not_bypass_agen
 
     // Agents' writes refuse both forms too, and nothing is written.
     let t = format!("agent_pg_escapes_{}", std::process::id());
-    run(
-        &session,
-        &format!("drop table if exists {t}; create table {t} (id int primary key, v text)"),
-    )
-    .await;
-    for sql in [
-        format!(r#"insert into {t} values (1, U&"pg_backend_p\0069d"()::text)"#),
-        format!(r#"insert into {t} select 2, U&"pg_r\0065ad_file"('/etc/passwd')"#),
-        format!("insert into {t} values (3, query_to_xml('select 1', true, true, '')::text)"),
-        format!(
-            "insert into {t} select 4, v from ts_stat('select set_config(''search_path'', ''evil'', false)::tsvector') as s(v, n1, n2)"
-        ),
-    ] {
-        assert!(
-            matches!(
-                session.run_write(&sql, &write_limits()).await,
-                Err(WriteError::Rejected(_))
+    let drops = [format!("drop table if exists {t}")];
+    let body = async {
+        run(
+            &session,
+            &format!("drop table if exists {t}; create table {t} (id int primary key, v text)"),
+        )
+        .await;
+        for sql in [
+            format!(r#"insert into {t} values (1, U&"pg_backend_p\0069d"()::text)"#),
+            format!(r#"insert into {t} select 2, U&"pg_r\0065ad_file"('/etc/passwd')"#),
+            format!("insert into {t} values (3, query_to_xml('select 1', true, true, '')::text)"),
+            format!(
+                "insert into {t} select 4, v from ts_stat('select set_config(''search_path'', ''evil'', false)::tsvector') as s(v, n1, n2)"
             ),
-            "{sql}"
+        ] {
+            assert!(
+                matches!(
+                    session.run_write(&sql, &write_limits()).await,
+                    Err(WriteError::Rejected(_))
+                ),
+                "{sql}"
+            );
+        }
+        assert_eq!(
+            first(&session, &format!("select count(*) from {t}")).await,
+            "0"
         );
-    }
-    assert_eq!(
-        first(&session, &format!("select count(*) from {t}")).await,
-        "0"
-    );
-    run(&session, &format!("drop table {t}")).await;
+    };
+    cleaning_up(body, |panicked| {
+        run_cleanup("postgres", &session, &drops, panicked)
+    })
+    .await;
 }
 
 /// A MySQL or MariaDB session as `user`, straight from the driver.
@@ -290,77 +300,81 @@ async fn mysql_sql_modes_that_move_string_ends_do_not_bypass_agent_barriers() {
             .unwrap();
         let t = format!("agent_sql_mode_{}", std::process::id());
         let lock = format!("agent_sql_mode_{}", std::process::id());
-        run(
+        // Dropped from the admin session, which keeps the server's default mode.
+        let drops = [format!("drop table if exists {t}")];
+        let body = async {
+            run(
             &session,
             &format!("drop table if exists {t}; create table {t} (id int primary key, a varchar(40)); insert into {t} values (1, 'x'), (2, 'y')"),
         )
         .await;
-        for mode in ["NO_BACKSLASH_ESCAPES", "ANSI_QUOTES"] {
-            // The session's own mode, set again before each trick: the barrier takes it away.
-            for (write, sql) in sql_mode_tricks(&t, &lock) {
-                run(&session, &format!("set session sql_mode = '{mode}'")).await;
-                assert!(
-                    first(&session, "select @@session.sql_mode")
-                        .await
-                        .contains(mode),
-                    "{var}"
-                );
-                if mode == "NO_BACKSLASH_ESCAPES" {
-                    // The premise: here a backslash is a plain character.
-                    assert_eq!(first(&session, r"select length('\')").await, "1", "{var}");
-                }
-                sql_mode_trick_did_no_harm(var, &session, &t, &lock, write, &sql).await;
-                // The writes pass `check_write` (each has its WHERE as the checks read it), so
-                // the barrier ran them, after turning the mode off. The reads are refused by
-                // the classifier before the session is touched.
-                if write {
+            for mode in ["NO_BACKSLASH_ESCAPES", "ANSI_QUOTES"] {
+                // The session's own mode, set again before each trick: the barrier takes it away.
+                for (write, sql) in sql_mode_tricks(&t, &lock) {
+                    run(&session, &format!("set session sql_mode = '{mode}'")).await;
                     assert!(
-                        !first(&session, "select @@session.sql_mode")
+                        first(&session, "select @@session.sql_mode")
                             .await
                             .contains(mode),
-                        "{var}: {mode} was left on"
+                        "{var}"
                     );
+                    if mode == "NO_BACKSLASH_ESCAPES" {
+                        // The premise: here a backslash is a plain character.
+                        assert_eq!(first(&session, r"select length('\')").await, "1", "{var}");
+                    }
+                    sql_mode_trick_did_no_harm(var, &session, &t, &lock, write, &sql).await;
+                    // The writes pass `check_write` (each has its WHERE as the checks read it), so
+                    // the barrier ran them, after turning the mode off. The reads are refused by
+                    // the classifier before the session is touched.
+                    if write {
+                        assert!(
+                            !first(&session, "select @@session.sql_mode")
+                                .await
+                                .contains(mode),
+                            "{var}: {mode} was left on"
+                        );
+                    }
                 }
+                // The server's default, which every new session starts with.
+                let saved = first(&admin, "select @@global.sql_mode").await;
+                for (write, sql) in sql_mode_tricks(&t, &lock) {
+                    run(&admin, &format!("set global sql_mode = '{mode}'")).await;
+                    let fresh = mysql_session_as(&driver, &addr, "spelaion", "spelaion").await;
+                    // Back to what it was before anything can fail: other tests share the server.
+                    run(&admin, &format!("set global sql_mode = '{saved}'")).await;
+                    let fresh = fresh.unwrap();
+                    assert!(
+                        first(&fresh, "select @@session.sql_mode")
+                            .await
+                            .contains(mode),
+                        "{var}: the new session did not start in {mode}"
+                    );
+                    sql_mode_trick_did_no_harm(var, &fresh, &t, &lock, write, &sql).await;
+                }
+                assert_eq!(first(&admin, "select @@global.sql_mode").await, saved);
             }
-            // The server's default, which every new session starts with.
-            let saved = first(&admin, "select @@global.sql_mode").await;
-            for (write, sql) in sql_mode_tricks(&t, &lock) {
-                run(&admin, &format!("set global sql_mode = '{mode}'")).await;
-                let fresh = mysql_session_as(&driver, &addr, "spelaion", "spelaion").await;
-                // Back to what it was before anything can fail: other tests share the server.
-                run(&admin, &format!("set global sql_mode = '{saved}'")).await;
-                let fresh = fresh.unwrap();
-                assert!(
-                    first(&fresh, "select @@session.sql_mode")
-                        .await
-                        .contains(mode),
-                    "{var}: the new session did not start in {mode}"
-                );
-                sql_mode_trick_did_no_harm(var, &fresh, &t, &lock, write, &sql).await;
-            }
-            assert_eq!(first(&admin, "select @@global.sql_mode").await, saved);
-        }
-        // Without those modes nothing changes: an ordinary write still runs.
-        run(&session, "set session sql_mode = 'STRICT_TRANS_TABLES'").await;
-        let result = session
-            .run_write(
-                &format!(r"update {t} set a = 'it\'s' where id = 1"),
-                &write_limits(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.rows_affected, Some(1), "{var}");
-        assert_eq!(
-            first(&session, "select @@session.sql_mode").await,
-            "STRICT_TRANS_TABLES",
-            "{var}"
-        );
-        assert_eq!(
-            first(&session, &format!("select a from {t} where id = 1")).await,
-            "it's",
-            "{var}"
-        );
-        run(&session, &format!("drop table {t}")).await;
+            // Without those modes nothing changes: an ordinary write still runs.
+            run(&session, "set session sql_mode = 'STRICT_TRANS_TABLES'").await;
+            let result = session
+                .run_write(
+                    &format!(r"update {t} set a = 'it\'s' where id = 1"),
+                    &write_limits(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.rows_affected, Some(1), "{var}");
+            assert_eq!(
+                first(&session, "select @@session.sql_mode").await,
+                "STRICT_TRANS_TABLES",
+                "{var}"
+            );
+            assert_eq!(
+                first(&session, &format!("select a from {t} where id = 1")).await,
+                "it's",
+                "{var}"
+            );
+        };
+        cleaning_up(body, |panicked| run_cleanup(var, &admin, &drops, panicked)).await;
     }
 }
 
@@ -397,45 +411,51 @@ async fn mysql_sessions() -> Vec<(&'static str, Session)> {
 async fn mysql_executable_comments_do_not_bypass_agent_barriers() {
     for (server, session) in mysql_sessions().await {
         let t = format!("agent_comments_{}", std::process::id());
-        run(&session, &format!("create table {t} (id int primary key, n int); insert into {t} values (1, 1), (2, 2)")).await;
-        for sql in [
-            format!("delete from {t} /*!99999 where id = 1 */"),
-            format!("update {t} set n = 0 /*!99999 where id = 1 */"),
-            format!("delete from {t} /*M!999999 where id = 1 */"),
-        ] {
-            assert!(
-                matches!(
-                    session.run_write(&sql, &write_limits()).await,
-                    Err(WriteError::Rejected(_))
-                ),
-                "{server}: {sql}"
+        let drops = [format!("drop table if exists {t}")];
+        let body = async {
+            run(&session, &format!("drop table if exists {t}; create table {t} (id int primary key, n int); insert into {t} values (1, 1), (2, 2)")).await;
+            for sql in [
+                format!("delete from {t} /*!99999 where id = 1 */"),
+                format!("update {t} set n = 0 /*!99999 where id = 1 */"),
+                format!("delete from {t} /*M!999999 where id = 1 */"),
+            ] {
+                assert!(
+                    matches!(
+                        session.run_write(&sql, &write_limits()).await,
+                        Err(WriteError::Rejected(_))
+                    ),
+                    "{server}: {sql}"
+                );
+            }
+            for sql in [
+                format!("select * from {t} /*!99999 where id = 1 */"),
+                format!("explain select * from {t} /*M!100000 where id = 1 */"),
+                "select 1 /*M! , get_lock('agent_comment_test', 0) */".to_string(),
+            ] {
+                rejected(session.run_read_only(&sql, &limits(5)).await, &sql);
+            }
+            assert_eq!(
+                first(&session, &format!("select count(*) from {t} where n = id")).await,
+                "2",
+                "{server}"
             );
-        }
-        for sql in [
-            format!("select * from {t} /*!99999 where id = 1 */"),
-            format!("explain select * from {t} /*M!100000 where id = 1 */"),
-            "select 1 /*M! , get_lock('agent_comment_test', 0) */".to_string(),
-        ] {
-            rejected(session.run_read_only(&sql, &limits(5)).await, &sql);
-        }
-        assert_eq!(
-            first(&session, &format!("select count(*) from {t} where n = id")).await,
-            "2",
-            "{server}"
-        );
-        session
-            .run_write(
-                &format!("update {t} set n = 3 /* ordinary comment */ where id = 1"),
-                &write_limits(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            first(&session, &format!("select n from {t} where id = 1")).await,
-            "3",
-            "{server}"
-        );
-        run(&session, &format!("drop table {t}")).await;
+            session
+                .run_write(
+                    &format!("update {t} set n = 3 /* ordinary comment */ where id = 1"),
+                    &write_limits(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                first(&session, &format!("select n from {t} where id = 1")).await,
+                "3",
+                "{server}"
+            );
+        };
+        cleaning_up(body, |panicked| {
+            run_cleanup(server, &session, &drops, panicked)
+        })
+        .await;
     }
 }
 
@@ -443,88 +463,96 @@ async fn mysql_executable_comments_do_not_bypass_agent_barriers() {
 async fn mysql_reads_are_read_only_capped_and_leave_nothing_open() {
     for (server, session) in mysql_sessions().await {
         let t = format!("agent_read_{}", std::process::id());
-        run(
-            &session,
-            &format!(
-                "drop table if exists {t}; create table {t} (id int primary key); \
-                 insert into {t} values (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
-            ),
-        )
-        .await;
-
-        // 100,000 rows from a cross join: only the first ones are read.
-        let started = Instant::now();
-        let r = session
-            .run_read_only(
-                &format!("select a.id from {t} a, {t} b, {t} c, {t} d, {t} e"),
-                &limits(5),
-            )
-            .await
-            .unwrap();
-        assert_eq!((r.rows.len(), r.truncated), (5, true), "{server}");
-        assert!(started.elapsed() < Duration::from_secs(5), "{server}");
-        let r = session
-            .run_read_only("show tables", &limits(500))
-            .await
-            .unwrap();
-        assert_eq!(r.kind, ReadKind::Show, "{server}");
-        let r = session
-            .run_read_only(
-                &format!("explain select * from {t} where id = 1"),
-                &limits(5),
-            )
-            .await
-            .unwrap();
-        assert_eq!(r.kind, ReadKind::Explain, "{server}");
-
-        for sql in [
-            format!("delete from {t}"),
-            format!("select * from {t} for update"),
-            format!("select * into outfile '/tmp/x' from {t}"),
-            "select load_file('/etc/passwd')".into(),
-            "select get_lock('agents', 1)".into(),
-            format!("explain analyze select * from {t}"),
-        ] {
-            rejected(session.run_read_only(&sql, &limits(5)).await, &sql);
-        }
-
-        // A function that writes looks like a read: the READ ONLY transaction stops it.
         let f = format!("agent_writes_{}", std::process::id());
-        run(&session, &format!("drop function if exists {f}")).await;
-        raw(
-            &session,
-            &format!(
-                "create function {f}() returns int modifies sql data \
-                 begin insert into {t} values (100); return 1; end"
-            ),
-        )
-        .await;
-        let result = session
-            .run_read_only(&format!("select {f}()"), &limits(1))
+        let drops = [
+            format!("drop function if exists {f}"),
+            format!("drop table if exists {t}"),
+        ];
+        let body = async {
+            run(
+                &session,
+                &format!(
+                    "drop table if exists {t}; create table {t} (id int primary key); \
+                 insert into {t} values (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
+                ),
+            )
             .await;
-        assert!(
-            matches!(result, Err(ReadError::Database(_))),
-            "{server}: {result:?}"
-        );
-        assert_eq!(
-            first(&session, &format!("select count(*) from {t}")).await,
-            "10",
-            "{server}"
-        );
 
-        // A timeout cancels the query and the session is still usable.
-        let started = Instant::now();
-        timed_out(
-            session.run_read_only("select sleep(10)", &short()).await,
-            started,
-        );
-        let r = session
-            .run_read_only("select 1 as one", &limits(1))
-            .await
-            .unwrap();
-        assert_eq!(r.rows, [[Value::Int(1)]], "{server}");
+            // 100,000 rows from a cross join: only the first ones are read.
+            let started = Instant::now();
+            let r = session
+                .run_read_only(
+                    &format!("select a.id from {t} a, {t} b, {t} c, {t} d, {t} e"),
+                    &limits(5),
+                )
+                .await
+                .unwrap();
+            assert_eq!((r.rows.len(), r.truncated), (5, true), "{server}");
+            assert!(started.elapsed() < Duration::from_secs(5), "{server}");
+            let r = session
+                .run_read_only("show tables", &limits(500))
+                .await
+                .unwrap();
+            assert_eq!(r.kind, ReadKind::Show, "{server}");
+            let r = session
+                .run_read_only(
+                    &format!("explain select * from {t} where id = 1"),
+                    &limits(5),
+                )
+                .await
+                .unwrap();
+            assert_eq!(r.kind, ReadKind::Explain, "{server}");
 
-        run(&session, &format!("drop function {f}; drop table {t}")).await;
+            for sql in [
+                format!("delete from {t}"),
+                format!("select * from {t} for update"),
+                format!("select * into outfile '/tmp/x' from {t}"),
+                "select load_file('/etc/passwd')".into(),
+                "select get_lock('agents', 1)".into(),
+                format!("explain analyze select * from {t}"),
+            ] {
+                rejected(session.run_read_only(&sql, &limits(5)).await, &sql);
+            }
+
+            // A function that writes looks like a read: the READ ONLY transaction stops it.
+            run(&session, &format!("drop function if exists {f}")).await;
+            raw(
+                &session,
+                &format!(
+                    "create function {f}() returns int modifies sql data \
+                 begin insert into {t} values (100); return 1; end"
+                ),
+            )
+            .await;
+            let result = session
+                .run_read_only(&format!("select {f}()"), &limits(1))
+                .await;
+            assert!(
+                matches!(result, Err(ReadError::Database(_))),
+                "{server}: {result:?}"
+            );
+            assert_eq!(
+                first(&session, &format!("select count(*) from {t}")).await,
+                "10",
+                "{server}"
+            );
+
+            // A timeout cancels the query and the session is still usable.
+            let started = Instant::now();
+            timed_out(
+                session.run_read_only("select sleep(10)", &short()).await,
+                started,
+            );
+            let r = session
+                .run_read_only("select 1 as one", &limits(1))
+                .await
+                .unwrap();
+            assert_eq!(r.rows, [[Value::Int(1)]], "{server}");
+        };
+        cleaning_up(body, |panicked| {
+            run_cleanup(server, &session, &drops, panicked)
+        })
+        .await;
     }
 }
 
@@ -532,65 +560,71 @@ async fn mysql_reads_are_read_only_capped_and_leave_nothing_open() {
 async fn mysql_writes_commit_roll_back_and_time_out() {
     for (server, session) in mysql_sessions().await {
         let t = format!("agent_write_{}", std::process::id());
-        run(
-            &session,
-            &format!(
-                "drop table if exists {t}; \
-                 create table {t} (id int primary key, body varchar(20) not null)"
-            ),
-        )
-        .await;
-        let done = session
-            .run_write(
-                &format!("insert into {t} values (1, 'a'), (2, 'b')"),
-                &write_limits(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(done.rows_affected, Some(2), "{server}");
-        let err = session
-            .run_write(
-                &format!("insert into {t} values (3, 'c'), (1, 'duplicate')"),
-                &write_limits(),
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(err, WriteError::Database(_)), "{server}: {err:?}");
-        for sql in [
-            format!("drop table {t}"),
-            format!("delete from {t}"),
-            format!("lock tables {t} write"),
-            format!("insert into {t} select 9, load_file('/etc/passwd')"),
-        ] {
-            assert!(
-                matches!(
-                    session.run_write(&sql, &write_limits()).await,
-                    Err(WriteError::Rejected(_))
-                ),
-                "{server}: {sql}"
-            );
-        }
-        // Too slow: cancelled and rolled back.
-        let started = Instant::now();
-        let err = session
-            .run_write(
-                &format!("update {t} set body = concat(body, sleep(10)) where id = 1"),
-                &write_limits(),
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(err, WriteError::Timeout(_)), "{server}: {err:?}");
-        assert!(started.elapsed() < Duration::from_secs(6), "{server}");
-        assert_eq!(
-            first(
+        let drops = [format!("drop table if exists {t}")];
+        let body = async {
+            run(
                 &session,
-                &format!("select group_concat(body order by id) from {t}")
+                &format!(
+                    "drop table if exists {t}; \
+                 create table {t} (id int primary key, body varchar(20) not null)"
+                ),
             )
-            .await,
-            "a,b",
-            "{server}"
-        );
-        run(&session, &format!("drop table {t}")).await;
+            .await;
+            let done = session
+                .run_write(
+                    &format!("insert into {t} values (1, 'a'), (2, 'b')"),
+                    &write_limits(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(done.rows_affected, Some(2), "{server}");
+            let err = session
+                .run_write(
+                    &format!("insert into {t} values (3, 'c'), (1, 'duplicate')"),
+                    &write_limits(),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(err, WriteError::Database(_)), "{server}: {err:?}");
+            for sql in [
+                format!("drop table {t}"),
+                format!("delete from {t}"),
+                format!("lock tables {t} write"),
+                format!("insert into {t} select 9, load_file('/etc/passwd')"),
+            ] {
+                assert!(
+                    matches!(
+                        session.run_write(&sql, &write_limits()).await,
+                        Err(WriteError::Rejected(_))
+                    ),
+                    "{server}: {sql}"
+                );
+            }
+            // Too slow: cancelled and rolled back.
+            let started = Instant::now();
+            let err = session
+                .run_write(
+                    &format!("update {t} set body = concat(body, sleep(10)) where id = 1"),
+                    &write_limits(),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(err, WriteError::Timeout(_)), "{server}: {err:?}");
+            assert!(started.elapsed() < Duration::from_secs(6), "{server}");
+            assert_eq!(
+                first(
+                    &session,
+                    &format!("select group_concat(body order by id) from {t}")
+                )
+                .await,
+                "a,b",
+                "{server}"
+            );
+        };
+        cleaning_up(body, |panicked| {
+            run_cleanup(server, &session, &drops, panicked)
+        })
+        .await;
     }
 }
 
@@ -668,83 +702,93 @@ async fn sqlserver_reads_roll_back_explain_without_running_and_time_out() {
         return;
     };
     let t = format!("agent_read_{}", std::process::id());
-    run(
-        &session,
-        &format!(
-            "if object_id('{t}') is not null drop table {t}; \
+    let drops = [
+        format!("if object_id('{t}_copy') is not null drop table {t}_copy"),
+        format!("if object_id('{t}') is not null drop table {t}"),
+    ];
+    let body = async {
+        run(
+            &session,
+            &format!(
+                "if object_id('{t}') is not null drop table {t}; \
              create table {t} (id int primary key); \
              insert into {t} values (1), (2), (3)"
-        ),
-    )
-    .await;
-
-    let started = Instant::now();
-    let r = session
-        .run_read_only(
-            concat!(
-                "select a.x from ",
-                mssql_digits!(),
-                " a(x) cross join ",
-                mssql_digits!(),
-                " b(x)"
             ),
-            &limits(5),
         )
-        .await
-        .unwrap();
-    assert_eq!((r.rows.len(), r.truncated), (5, true));
-    assert!(started.elapsed() < Duration::from_secs(5));
-    assert_eq!(first(&session, "select @@trancount").await, "0");
+        .await;
 
-    // The plan, compiled under SHOWPLAN_XML: nothing runs.
-    let r = session
-        .run_read_only(
-            &format!("explain select * from {t} where id = 1"),
-            &limits(5),
-        )
-        .await
-        .unwrap();
-    assert_eq!(r.kind, ReadKind::Explain);
-    assert!(
-        matches!(&r.rows[0][0], Value::Text(plan) if plan.contains("ShowPlanXML")),
-        "{:?}",
-        r.rows
-    );
-    assert_eq!(
-        first(
-            &session,
-            "select cast(sessionproperty('ansi_nulls') as int)"
-        )
-        .await,
-        "1",
-        "SHOWPLAN is off again"
-    );
-    let r = session
-        .run_read_only(&format!("select count(*) from {t}"), &limits(5))
-        .await
-        .unwrap();
-    assert_eq!(r.rows, [[Value::Int(3)]]);
+        let started = Instant::now();
+        let r = session
+            .run_read_only(
+                concat!(
+                    "select a.x from ",
+                    mssql_digits!(),
+                    " a(x) cross join ",
+                    mssql_digits!(),
+                    " b(x)"
+                ),
+                &limits(5),
+            )
+            .await
+            .unwrap();
+        assert_eq!((r.rows.len(), r.truncated), (5, true));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(first(&session, "select @@trancount").await, "0");
 
-    for sql in [
-        format!("delete from {t}"),
-        format!("select * into {t}_copy from {t}"),
-        "exec sp_who".into(),
-        "select * from openrowset('SQLNCLI', 'Server=x;Trusted_Connection=yes', 'select 1')".into(),
-        format!("select * from other.spelaion.dbo.{t}"),
-    ] {
-        rejected(session.run_read_only(&sql, &limits(5)).await, &sql);
-    }
+        // The plan, compiled under SHOWPLAN_XML: nothing runs.
+        let r = session
+            .run_read_only(
+                &format!("explain select * from {t} where id = 1"),
+                &limits(5),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.kind, ReadKind::Explain);
+        assert!(
+            matches!(&r.rows[0][0], Value::Text(plan) if plan.contains("ShowPlanXML")),
+            "{:?}",
+            r.rows
+        );
+        assert_eq!(
+            first(
+                &session,
+                "select cast(sessionproperty('ansi_nulls') as int)"
+            )
+            .await,
+            "1",
+            "SHOWPLAN is off again"
+        );
+        let r = session
+            .run_read_only(&format!("select count(*) from {t}"), &limits(5))
+            .await
+            .unwrap();
+        assert_eq!(r.rows, [[Value::Int(3)]]);
 
-    // A failed read and a timeout leave no transaction open.
-    assert!(matches!(
-        session.run_read_only("select 1 / 0", &limits(1)).await,
-        Err(ReadError::Database(_))
-    ));
-    assert_eq!(first(&session, "select @@trancount").await, "0");
-    let started = Instant::now();
-    timed_out(session.run_read_only(MSSQL_SLOW, &short()).await, started);
-    assert_eq!(first(&session, "select @@trancount").await, "0");
-    run(&session, &format!("drop table {t}")).await;
+        for sql in [
+            format!("delete from {t}"),
+            format!("select * into {t}_copy from {t}"),
+            "exec sp_who".into(),
+            "select * from openrowset('SQLNCLI', 'Server=x;Trusted_Connection=yes', 'select 1')"
+                .into(),
+            format!("select * from other.spelaion.dbo.{t}"),
+        ] {
+            rejected(session.run_read_only(&sql, &limits(5)).await, &sql);
+        }
+
+        // A failed read and a timeout leave no transaction open.
+        assert!(matches!(
+            session.run_read_only("select 1 / 0", &limits(1)).await,
+            Err(ReadError::Database(_))
+        ));
+        assert_eq!(first(&session, "select @@trancount").await, "0");
+        let started = Instant::now();
+        timed_out(session.run_read_only(MSSQL_SLOW, &short()).await, started);
+        assert_eq!(first(&session, "select @@trancount").await, "0");
+    };
+    cleaning_up(body, |panicked| {
+        run_cleanup("sqlserver", &session, &drops, panicked)
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -753,61 +797,67 @@ async fn sqlserver_writes_commit_roll_back_and_time_out() {
         return;
     };
     let t = format!("agent_write_{}", std::process::id());
-    run(
-        &session,
-        &format!(
-            "if object_id('{t}') is not null drop table {t}; \
+    let drops = [format!("if object_id('{t}') is not null drop table {t}")];
+    let body = async {
+        run(
+            &session,
+            &format!(
+                "if object_id('{t}') is not null drop table {t}; \
              create table {t} (id int primary key, n bigint not null)"
-        ),
-    )
-    .await;
-    let done = session
-        .run_write(
-            &format!("insert into {t} values (1, 10), (2, 20)"),
-            &write_limits(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(done.rows_affected, Some(2));
-    let err = session
-        .run_write(
-            &format!("insert into {t} values (3, 30), (1, 0)"),
-            &write_limits(),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(err, WriteError::Database(_)), "{err:?}");
-    assert_eq!(first(&session, "select @@trancount").await, "0");
-    for sql in [
-        format!("drop table {t}"),
-        format!("truncate table {t}"),
-        "exec sp_configure 'show advanced options', 1".into(),
-        format!("insert into {t} select * from other.spelaion.dbo.{t}"),
-    ] {
-        assert!(
-            matches!(
-                session.run_write(&sql, &write_limits()).await,
-                Err(WriteError::Rejected(_))
             ),
-            "{sql}"
-        );
-    }
-    let started = Instant::now();
-    let err = session
-        .run_write(
-            &format!("update {t} set n = ({MSSQL_SLOW}) where id = 1"),
-            &write_limits(),
         )
-        .await
-        .unwrap_err();
-    assert!(matches!(err, WriteError::Timeout(_)), "{err:?}");
-    assert!(started.elapsed() < Duration::from_secs(6));
-    assert_eq!(first(&session, "select @@trancount").await, "0");
-    assert_eq!(
-        first(&session, &format!("select sum(n) from {t}")).await,
-        "30"
-    );
-    run(&session, &format!("drop table {t}")).await;
+        .await;
+        let done = session
+            .run_write(
+                &format!("insert into {t} values (1, 10), (2, 20)"),
+                &write_limits(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(done.rows_affected, Some(2));
+        let err = session
+            .run_write(
+                &format!("insert into {t} values (3, 30), (1, 0)"),
+                &write_limits(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WriteError::Database(_)), "{err:?}");
+        assert_eq!(first(&session, "select @@trancount").await, "0");
+        for sql in [
+            format!("drop table {t}"),
+            format!("truncate table {t}"),
+            "exec sp_configure 'show advanced options', 1".into(),
+            format!("insert into {t} select * from other.spelaion.dbo.{t}"),
+        ] {
+            assert!(
+                matches!(
+                    session.run_write(&sql, &write_limits()).await,
+                    Err(WriteError::Rejected(_))
+                ),
+                "{sql}"
+            );
+        }
+        let started = Instant::now();
+        let err = session
+            .run_write(
+                &format!("update {t} set n = ({MSSQL_SLOW}) where id = 1"),
+                &write_limits(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WriteError::Timeout(_)), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(6));
+        assert_eq!(first(&session, "select @@trancount").await, "0");
+        assert_eq!(
+            first(&session, &format!("select sum(n) from {t}")).await,
+            "30"
+        );
+    };
+    cleaning_up(body, |panicked| {
+        run_cleanup("sqlserver", &session, &drops, panicked)
+    })
+    .await;
 }
 
 async fn duckdb(database: &str, read_only: bool) -> Session {
@@ -831,45 +881,51 @@ async fn destructive_table_ddl_preserves_existing_data() {
     sessions.push(("duckdb", duckdb(":memory:", false).await));
     for (server, session) in sessions {
         let table = format!("agent_ddl_{}", std::process::id());
-        run(&session, &format!("create table {table} (id int, body varchar(20)); insert into {table} values (1, 'kept'), (2, 'safe')")).await;
-        for sql in [
-            format!("create or replace table {table} (id int)"),
-            format!("alter table {table} drop column body"),
-        ] {
-            assert!(
-                matches!(
-                    session.run_write(&sql, &write_limits()).await,
-                    Err(WriteError::Rejected(_))
-                ),
-                "{server}: {sql}"
+        let drops = [format!("drop table if exists {table}")];
+        let body = async {
+            run(&session, &format!("drop table if exists {table}; create table {table} (id int, body varchar(20)); insert into {table} values (1, 'kept'), (2, 'safe')")).await;
+            for sql in [
+                format!("create or replace table {table} (id int)"),
+                format!("alter table {table} drop column body"),
+            ] {
+                assert!(
+                    matches!(
+                        session.run_write(&sql, &write_limits()).await,
+                        Err(WriteError::Rejected(_))
+                    ),
+                    "{server}: {sql}"
+                );
+            }
+            assert_eq!(
+                first(
+                    &session,
+                    &format!("select count(*) from {table} where body in ('kept', 'safe')")
+                )
+                .await,
+                "2",
+                "{server}"
             );
-        }
-        assert_eq!(
-            first(
-                &session,
-                &format!("select count(*) from {table} where body in ('kept', 'safe')")
-            )
-            .await,
-            "2",
-            "{server}"
-        );
-        session
-            .run_write(
-                &format!("alter table {table} add column extra int"),
-                &write_limits(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            first(
-                &session,
-                &format!("select count(*) from {table} where extra is null")
-            )
-            .await,
-            "2",
-            "{server}"
-        );
-        run(&session, &format!("drop table {table}")).await;
+            session
+                .run_write(
+                    &format!("alter table {table} add column extra int"),
+                    &write_limits(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                first(
+                    &session,
+                    &format!("select count(*) from {table} where extra is null")
+                )
+                .await,
+                "2",
+                "{server}"
+            );
+        };
+        cleaning_up(body, |panicked| {
+            run_cleanup(server, &session, &drops, panicked)
+        })
+        .await;
     }
 }
 
@@ -894,24 +950,30 @@ async fn mariadb_schema_replacement_preserves_tables() {
         .unwrap();
     let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
     let schema = format!("agent_ddl_schema_{}", std::process::id());
-    run(&session, &format!("create database {schema}; create table {schema}.t (id int); insert into {schema}.t values (1)")).await;
-    for sql in [
-        format!("create or replace schema {schema}"),
-        format!("create or replace database {schema}"),
-    ] {
-        assert!(
-            matches!(
-                session.run_write(&sql, &write_limits()).await,
-                Err(WriteError::Rejected(_))
-            ),
-            "{sql}"
+    let drops = [format!("drop database if exists {schema}")];
+    let body = async {
+        run(&session, &format!("drop database if exists {schema}; create database {schema}; create table {schema}.t (id int); insert into {schema}.t values (1)")).await;
+        for sql in [
+            format!("create or replace schema {schema}"),
+            format!("create or replace database {schema}"),
+        ] {
+            assert!(
+                matches!(
+                    session.run_write(&sql, &write_limits()).await,
+                    Err(WriteError::Rejected(_))
+                ),
+                "{sql}"
+            );
+        }
+        assert_eq!(
+            first(&session, &format!("select count(*) from {schema}.t")).await,
+            "1"
         );
-    }
-    assert_eq!(
-        first(&session, &format!("select count(*) from {schema}.t")).await,
-        "1"
-    );
-    run(&session, &format!("drop database {schema}")).await;
+    };
+    cleaning_up(body, |panicked| {
+        run_cleanup("mariadb", &session, &drops, panicked)
+    })
+    .await;
 }
 
 #[tokio::test]
