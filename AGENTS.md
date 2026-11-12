@@ -365,7 +365,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
-  text). Our own canvas grid (`ResultGrid.tsx`). App commands (name, shortcut, menus) are
+  text). Our own canvas grid (`ResultGrid.tsx`): past the browsers' 33,554,428 px height cap
+  its spacer stops at `MAX_SPACER_H` and the scroll is scaled to the rows (`src/grid/scroll.ts`),
+  so a row position is always read with `contentTop` and set with `scrollToContent`, never with
+  the container's `scrollTop`. App commands (name, shortcut, menus) are
   registered once in `src/commandRegistry.ts` and run through `src/commands.ts`: the tab and
   file menus, the activity bar, the global shortcuts and the command palette
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
