@@ -24,6 +24,7 @@ use sqlparser::tokenizer::{Token, Tokenizer};
 
 use crate::Session;
 use crate::classify::{classify_read_only, classify_read_only_connection};
+use crate::sql_mode::{ModeQuoting, as_default_mode};
 
 /// Why a statement asks for confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,19 +59,25 @@ pub fn script_risks(
     script: &str,
     safeguards: &Safeguards,
 ) -> Vec<RiskyStatement> {
+    let mode = ModeQuoting::of(dialect);
     dialect
         .split_statements(script)
         .into_iter()
         .enumerate()
         .filter_map(|(index, span)| {
-            statement_risk(dialect.name(), span.text(script), safeguards)
+            statement_risk(dialect.name(), span.text(script), mode, safeguards)
                 .map(|risk| RiskyStatement { index, span, risk })
         })
         .collect()
 }
 
-fn statement_risk(engine: &str, sql: &str, safeguards: &Safeguards) -> Option<Risk> {
-    let readings = readings(engine, sql);
+fn statement_risk(
+    engine: &str,
+    sql: &str,
+    mode: Option<ModeQuoting>,
+    safeguards: &Safeguards,
+) -> Option<Risk> {
+    let readings = readings(engine, sql, mode);
     readings
         .iter()
         .find_map(|reading| destructive(engine, reading))
@@ -91,16 +98,57 @@ fn statement_risk(engine: &str, sql: &str, safeguards: &Safeguards) -> Option<Ri
 /// the statement is also read with every such body run and with none run, so the guard asks
 /// about what any server may run (and never less than sqlparser's reading alone). Other
 /// engines' statements are read as they are.
-fn readings(engine: &str, sql: &str) -> Vec<String> {
-    if !matches!(engine, "mysql" | "mariadb") || executable_comment(sql).is_none() {
-        return vec![sql.to_string()];
+///
+/// The session's own `sql_mode` may read quotes otherwise (SDB-262): under
+/// `NO_BACKSLASH_ESCAPES` a string ends at a `'` the default mode reads as an escaped quote,
+/// and under `ANSI_QUOTES` `"…"` is a name. Then the statement is also read as the session's
+/// mode reads it, rewritten as the same statement in the default mode
+/// ([`as_default_mode`]): the default reading is always one of the readings, so the guard
+/// never asks less than it did, and the user's own mode is never changed.
+fn readings(engine: &str, sql: &str, mode: Option<ModeQuoting>) -> Vec<String> {
+    let mut bases = vec![sql.to_string()];
+    if let Some(mode) = mode {
+        let session = as_default_mode(sql, mode);
+        if session != sql {
+            bases.push(session);
+        }
     }
-    vec![
-        sql.to_string(),
-        executable_bodies_as_code(sql),
-        // `/*!` becomes a plain comment; `/*M!` already is one for sqlparser.
-        sql.replace("/*!", "/* "),
-    ]
+    if !matches!(engine, "mysql" | "mariadb") {
+        return bases;
+    }
+    let mut out: Vec<String> = Vec::new();
+    for base in bases {
+        let variants = if executable_comment(&base).is_none() {
+            vec![base]
+        } else {
+            vec![
+                base.clone(),
+                executable_bodies_as_code(&base),
+                // `/*!` becomes a plain comment; `/*M!` already is one for sqlparser.
+                base.replace("/*!", "/* "),
+            ]
+        };
+        for variant in variants {
+            if !out.contains(&variant) {
+                out.push(variant);
+            }
+        }
+    }
+    out
+}
+
+/// The texts a read-only connection checks for one statement: as written, and as the
+/// session's own `sql_mode` reads it when that reads quotes otherwise (SDB-262). Every one must
+/// pass.
+fn read_only_readings(dialect: &dyn Dialect, sql: &str) -> Vec<String> {
+    let mut out = vec![sql.to_string()];
+    if let Some(mode) = ModeQuoting::of(dialect) {
+        let session = as_default_mode(sql, mode);
+        if session != sql {
+            out.push(session);
+        }
+    }
+    out
 }
 
 /// Where the next executable comment's marker starts in `sql`, and where its body starts
@@ -200,7 +248,10 @@ pub struct ReadOnlyRefusal {
 pub fn check_read_only(dialect: &dyn Dialect, script: &str) -> Result<(), ReadOnlyRefusal> {
     for (index, span) in dialect.split_statements(script).into_iter().enumerate() {
         let text = span.text(script);
-        if let Err(reason) = classify_read_only_connection(dialect.name(), text) {
+        let refused = read_only_readings(dialect, text)
+            .iter()
+            .find_map(|reading| classify_read_only_connection(dialect.name(), reading).err());
+        if let Some(reason) = refused {
             return Err(ReadOnlyRefusal {
                 index,
                 span,
@@ -642,7 +693,7 @@ mod tests {
 
     /// The MySQL and MariaDB statement's risk, from every reading.
     fn mysql_risk(sql: &str, safeguards: &Safeguards) -> Option<Risk> {
-        statement_risk("mysql", sql, safeguards)
+        statement_risk("mysql", sql, None, safeguards)
     }
 
     #[test]
@@ -687,7 +738,7 @@ mod tests {
         assert_eq!(mysql_risk("select 1 /*!50000 , 2 */", &PRODUCTION), None);
         // Other engines keep them as comments.
         assert_eq!(
-            statement_risk("postgres", "/*!50000 drop table t */", &NONE),
+            statement_risk("postgres", "/*!50000 drop table t */", None, &NONE),
             None
         );
     }

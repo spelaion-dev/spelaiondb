@@ -441,8 +441,14 @@ pub(crate) struct ColumnRewrite {
 
 /// Writes a column definition again with `change`: the clauses it does not touch keep their
 /// text and order; a new `NOT NULL` goes after the type, a new default after the nullability,
-/// a new comment last.
-pub(crate) fn rewrite_column(sql: &str, column: &ColumnDef, change: &ColumnRewrite) -> String {
+/// a new comment last. `backslash_escapes`: the session reads `\` in a string as an escape
+/// (see [`mysql_string`]).
+pub(crate) fn rewrite_column(
+    sql: &str,
+    column: &ColumnDef,
+    change: &ColumnRewrite,
+    backslash_escapes: bool,
+) -> String {
     let mut parts: Vec<String> = vec![sql[column.name_range.clone()].to_string()];
     let data_type = change
         .data_type
@@ -493,16 +499,24 @@ pub(crate) fn rewrite_column(sql: &str, column: &ColumnDef, change: &ColumnRewri
     if let Some(Some(comment)) = &change.comment {
         kept.push((
             ClauseKind::Comment,
-            format!("COMMENT {}", mysql_string(comment)),
+            format!("COMMENT {}", mysql_string(comment, backslash_escapes)),
         ));
     }
     parts.extend(kept.into_iter().map(|(_, text)| text));
     parts.join(" ")
 }
 
-/// A MySQL string literal: quotes doubled, backslashes escaped.
-pub(crate) fn mysql_string(text: &str) -> String {
-    format!("'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
+/// A MySQL string literal where only a plain string may go (`COMMENT '…'`, `IDENTIFIED BY
+/// '…'`): quotes doubled, and backslashes escaped when the session reads them as escapes,
+/// which its `sql_mode` decides (`NO_BACKSLASH_ESCAPES`, SDB-262). Where an expression may go,
+/// `export::sql_literal` writes a literal every mode reads alike.
+pub(crate) fn mysql_string(text: &str, backslash_escapes: bool) -> String {
+    let text = text.replace('\'', "''");
+    if backslash_escapes {
+        format!("'{}'", text.replace('\\', "\\\\"))
+    } else {
+        format!("'{text}'")
+    }
 }
 
 /// A `CREATE TABLE` statement split into what comes before its body, the body's elements and
@@ -801,7 +815,7 @@ mod tests {
     fn a_rewrite_touches_only_what_changes() {
         let sql = "qty INTEGER CONSTRAINT nn NOT NULL DEFAULT 0 CHECK (qty >= 0)";
         let def = parse_column(sql, Flavor::Sqlite).unwrap();
-        let rewrite = |change: ColumnRewrite| rewrite_column(sql, &def, &change);
+        let rewrite = |change: ColumnRewrite| rewrite_column(sql, &def, &change, true);
         assert_eq!(
             rewrite(ColumnRewrite {
                 data_type: Some("REAL".into()),
@@ -836,9 +850,23 @@ mod tests {
                     comment: Some(Some("it's".into())),
                     drop_charset: true,
                     ..Default::default()
-                }
+                },
+                true
             ),
             "`a` int NOT NULL COMMENT 'it''s'"
+        );
+        // A backslash is escaped only where the session reads it as an escape (SDB-262).
+        let comment = ColumnRewrite {
+            comment: Some(Some(r"C:\dir".into())),
+            ..Default::default()
+        };
+        assert_eq!(
+            rewrite_column(sql, &def, &comment, true),
+            r"`a` varchar(5) COLLATE utf8mb4_bin DEFAULT NULL COMMENT 'C:\\dir'"
+        );
+        assert_eq!(
+            rewrite_column(sql, &def, &comment, false),
+            r"`a` varchar(5) COLLATE utf8mb4_bin DEFAULT NULL COMMENT 'C:\dir'"
         );
     }
 

@@ -857,16 +857,19 @@ fn postgres_privileges_sql(role: &str) -> String {
     )
 }
 
-/// A backquoted MySQL name at the start of `text` (`` `a``b` `` → ``a`b``), and what follows.
+/// A quoted MySQL name at the start of `text` (`` `a``b` `` → ``a`b``), and what follows. The
+/// server quotes names in `SHOW GRANTS` with backquotes, or with double quotes when the
+/// session's `sql_mode` has `ANSI_QUOTES` (SDB-262); strings there use single quotes.
 fn backquoted(text: &str) -> Option<(String, &str)> {
-    let rest = text.strip_prefix('`')?;
+    let quote = text.chars().next().filter(|c| *c == '`' || *c == '"')?;
+    let rest = &text[1..];
     let mut out = String::new();
     let mut chars = rest.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
-        if c == '`' {
-            if matches!(chars.peek(), Some((_, '`'))) {
+        if c == quote {
+            if matches!(chars.peek(), Some((_, next)) if *next == quote) {
                 chars.next();
-                out.push('`');
+                out.push(quote);
                 continue;
             }
             return Some((out, &rest[i + 1..]));
@@ -911,7 +914,7 @@ fn parse_mysql_grant(grant: &str) -> Vec<GrantedPrivilege> {
             Some(q) if c == q => quote = None,
             Some(_) => {}
             None => match c {
-                b'`' | b'\'' => quote = Some(c),
+                b'`' | b'\'' | b'"' => quote = Some(c),
                 b'(' => depth += 1,
                 b')' => depth = depth.saturating_sub(1),
                 b',' if depth == 0 => {

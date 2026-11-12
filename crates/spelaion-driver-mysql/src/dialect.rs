@@ -34,11 +34,15 @@ impl Quoting {
         }
     }
 
-    fn dialect(self) -> Arc<dyn Dialect> {
+    /// The dialect for `sql_mode`, which this quoting was read from.
+    fn dialect(self, sql_mode: &str) -> Arc<dyn Dialect> {
         if self == Quoting::DEFAULT {
             Arc::new(MysqlDialect)
         } else {
-            Arc::new(MysqlModeDialect(self))
+            Arc::new(MysqlModeDialect {
+                quoting: self,
+                sql_mode: sql_mode.to_string(),
+            })
         }
     }
 }
@@ -57,13 +61,16 @@ impl Dialect for MysqlDialect {
     }
 
     fn with_sql_mode(&self, sql_mode: &str) -> Option<Arc<dyn Dialect>> {
-        Some(Quoting::of(sql_mode).dialect())
+        Some(Quoting::of(sql_mode).dialect(sql_mode))
     }
 }
 
 /// The dialect of a session whose `sql_mode` reads quoted text another way
 /// (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`).
-struct MysqlModeDialect(Quoting);
+struct MysqlModeDialect {
+    quoting: Quoting,
+    sql_mode: String,
+}
 
 impl Dialect for MysqlModeDialect {
     fn name(&self) -> &'static str {
@@ -71,7 +78,7 @@ impl Dialect for MysqlModeDialect {
     }
 
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
-        split(script, self.0)
+        split(script, self.quoting)
     }
 
     fn quote_identifier(&self, ident: &str) -> String {
@@ -79,7 +86,11 @@ impl Dialect for MysqlModeDialect {
     }
 
     fn with_sql_mode(&self, sql_mode: &str) -> Option<Arc<dyn Dialect>> {
-        Some(Quoting::of(sql_mode).dialect())
+        Some(Quoting::of(sql_mode).dialect(sql_mode))
+    }
+
+    fn sql_mode(&self) -> Option<String> {
+        Some(self.sql_mode.clone())
     }
 }
 

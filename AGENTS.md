@@ -43,7 +43,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   session's `sql_mode` does (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`): `Dialect::with_sql_mode`
   gives the session's dialect, which `spelaion-core`'s `sql_mode.rs` reads when the session
   opens and after a statement that names `sql_mode`. The core writes a MySQL string that holds
-  a backslash as `_utf8mb4 X'…'` (`export::sql_literal`), which every mode reads the same. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
+  a backslash as `_utf8mb4 X'…'` (`export::sql_literal`), which every mode reads the same. Where only a plain string
+  may go (`COMMENT`, `IDENTIFIED BY`), `objects::ddl::mysql_string` escapes a backslash only when
+  the session's mode reads it as an escape. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
   name check (read its `PATCHED.md` before upgrading). Its type zoo (`tests/mysql.rs`) compares every type with the server's
   text, on both servers.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
@@ -168,6 +170,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine.
   A MySQL/MariaDB statement with executable comments (`/*!50001 … */`, `/*M! … */`) is
   checked by the guard with their bodies both run and skipped, as the server's version decides.
+  A MySQL/MariaDB session whose `sql_mode` reads quotes otherwise (`NO_BACKSLASH_ESCAPES`,
+  `ANSI_QUOTES`) has each statement also read as that mode reads it (`sql_mode::as_default_mode`,
+  from `Dialect::sql_mode`): the guard asks if any reading is risky and a read-only connection
+  refuses unless every reading passes; the default reading is always one of them.
   A SQL Server batch the parser cannot read (T-SQL needs no `;`) is read token by token: a
   `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word in it asks. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
   closes the ones a connection type says are idle too long, never with a transaction open
