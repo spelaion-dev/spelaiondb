@@ -3,7 +3,8 @@
 //! connection's type confirms data changes (Production), and every statement where it
 //! confirms execution (ADR-029). It is a safety net against slips, not a permission barrier
 //! (that is read-only mode, ADR-008): whatever the parser cannot read only asks when it starts
-//! like a write that could hurt.
+//! like a write that could hurt, or, in a SQL Server batch (statements need no `;` there), when
+//! such a write's keyword is in it outside texts, names and comments.
 //!
 //! The barrier of a read-only connection is here too (ADR-053): [`check_run`] refuses, before
 //! anything runs and whatever was confirmed, a script with a statement that is not a read, a
@@ -268,19 +269,14 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
     }
     let parser = sql_dialect(engine);
     let Ok(statements) = Parser::parse_sql(parser.as_ref(), sql) else {
-        return match first.as_str() {
+        let by_first_word = match first.as_str() {
             "truncate" => Some(Risk::Truncate),
             "delete" | "update" => Some(Risk::UncheckedWrite),
-            // A T-SQL batch that starts with DECLARE is one span (its variables live for the
-            // batch): one statement the parser cannot read must not hide the others.
-            "declare" if engine == "sqlserver" => tsql_statements(sql)
-                .filter(|statements| statements.len() > 1)
-                .and_then(|statements| {
-                    statements
-                        .iter()
-                        .find_map(|statement| destructive(engine, statement))
-                }),
             _ => None,
+        };
+        return match engine {
+            "sqlserver" => by_first_word.or_else(|| tsql_unparsed_risk(sql)),
+            _ => by_first_word,
         };
     };
     let mut found = None;
@@ -302,22 +298,127 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
     found
 }
 
+/// The risk of a T-SQL batch sqlparser cannot read. T-SQL needs no `;` between statements and
+/// one batch often holds several (the splitter keeps them together, and a `DECLARE` keeps the
+/// rest of its batch), so a risky statement may follow one the parser cannot read. The batch
+/// is read with sqlparser's tokenizer, which knows strings, `[…]` names and comments without
+/// needing the batch to parse: split at its `;` into statements, each checked again; and in a
+/// statement that still does not parse, a `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word
+/// anywhere asks (its `WHERE` could not be checked). It may ask once too often (`ALTER TABLE …
+/// DROP COLUMN`), the right side for a safety net. The body of a procedure, function, trigger
+/// or view does not run when it is created: its definition asks nothing, as before. `None`
+/// when the tokenizer cannot read the batch either (an open quote).
+fn tsql_unparsed_risk(sql: &str) -> Option<Risk> {
+    let tokens = Tokenizer::new(&MsSqlDialect {}, sql).tokenize().ok()?;
+    if defines_module(&tokens) {
+        return None;
+    }
+    let statements = tsql_statements(&tokens);
+    if statements.len() > 1 {
+        return statements
+            .iter()
+            .find_map(|statement| destructive("sqlserver", statement));
+    }
+    risky_words(&tokens)
+}
+
+/// A word token outside quotes (`[drop]` and `"drop"` are names), in lower case.
+fn plain_word(token: &Token) -> Option<String> {
+    match token {
+        Token::Word(word) if word.quote_style.is_none() => Some(word.value.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+/// `CREATE [OR ALTER] | ALTER` of a procedure, function, trigger or view: the rest of the
+/// batch is its body.
+fn defines_module(tokens: &[Token]) -> bool {
+    let words: Vec<String> = tokens
+        .iter()
+        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .take(4)
+        .map(|token| plain_word(token).unwrap_or_default())
+        .collect();
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    let kind = match words.as_slice() {
+        ["create", "or", "alter", kind, ..] | ["create" | "alter", kind, ..] => *kind,
+        _ => return false,
+    };
+    matches!(kind, "procedure" | "proc" | "function" | "trigger" | "view")
+}
+
+/// The most serious risky word of a statement the parser cannot read. A few uses change no
+/// rows and do not count, each only where nothing else can be meant: a foreign key's `ON
+/// DELETE` / `ON UPDATE` action (after `REFERENCES`, followed by `CASCADE`, `RESTRICT`, `SET
+/// NULL`, `SET DEFAULT` or `NO ACTION`: `SET NOCOUNT ON` followed by a `DELETE` still asks), a cursor's `FOR UPDATE`
+/// (after `CURSOR`), `UPDATE STATISTICS` (`STATISTICS` is reserved: a table of that name is
+/// written `[statistics]`), privilege names in `GRANT`, `REVOKE` and `DENY` (up to their `ON`,
+/// `TO` or `FROM`) and a role's `DROP MEMBER`. A statement that hides a write behind one of
+/// these does not compile, and a batch that does not compile runs nothing.
+fn risky_words(tokens: &[Token]) -> Option<Risk> {
+    let words: Vec<String> = tokens
+        .iter()
+        .filter(|token| !matches!(token, Token::Whitespace(_)))
+        .map(|token| plain_word(token).unwrap_or_default())
+        .collect();
+    let mut found = None;
+    // Inside `GRANT` / `REVOKE` / `DENY`, up to its `ON`, `TO` or `FROM`: privilege names.
+    let mut privileges = false;
+    for (i, word) in words.iter().enumerate() {
+        match word.as_str() {
+            "grant" | "revoke" | "deny" => privileges = true,
+            "on" | "to" | "from" => privileges = false,
+            _ => {}
+        }
+        if privileges {
+            continue;
+        }
+        let before = i.checked_sub(1).map(|j| words[j].as_str());
+        let after = words.get(i + 1).map(String::as_str);
+        let earlier = |w: &str| words[..i].iter().any(|seen| seen == w);
+        let then = words.get(i + 2).map(String::as_str);
+        let referential_action = before == Some("on")
+            && earlier("references")
+            && match after {
+                Some("cascade" | "restrict") => true,
+                Some("set") => matches!(then, Some("null" | "default")),
+                Some("no") => then == Some("action"),
+                _ => false,
+            };
+        let cursor_option = word == "update" && before == Some("for") && earlier("cursor");
+        let statistics = word == "update" && after == Some("statistics");
+        let risk = match word.as_str() {
+            // `ALTER [SERVER] ROLE … DROP MEMBER`: a role membership, not an object.
+            "drop" if after == Some("member") && earlier("role") => continue,
+            "drop" => Risk::Drop,
+            "truncate" => Risk::Truncate,
+            "delete" | "update" if !(referential_action || cursor_option || statistics) => {
+                Risk::UncheckedWrite
+            }
+            _ => continue,
+        };
+        let serious = |risk: Risk| match risk {
+            Risk::Drop => 3,
+            Risk::Truncate => 2,
+            _ => 1,
+        };
+        if found.is_none_or(|current| serious(risk) > serious(current)) {
+            found = Some(risk);
+        }
+    }
+    found
+}
+
 /// The statements of a T-SQL batch, split where the SQL Server splitter splits outside a
 /// `DECLARE`: at `;` outside quotes, comments and `BEGIN … END` / `CASE … END` blocks (`BEGIN
-/// TRAN` and the like are not blocks). Read with sqlparser's tokenizer; `None` when it cannot
-/// read the text.
-fn tsql_statements(sql: &str) -> Option<Vec<String>> {
-    let tokens = Tokenizer::new(&MsSqlDialect {}, sql).tokenize().ok()?;
-    let word = |token: &Token| match token {
-        Token::Word(word) => Some(word.value.to_ascii_lowercase()),
-        _ => None,
-    };
-    let next_word = |from: usize| tokens[from + 1..].iter().find_map(word);
+/// TRAN` and the like are not blocks).
+fn tsql_statements(tokens: &[Token]) -> Vec<String> {
+    let next_word = |from: usize| tokens[from + 1..].iter().find_map(plain_word);
     let mut statements = Vec::new();
     let mut current = String::new();
     let mut depth = 0usize;
     for (i, token) in tokens.iter().enumerate() {
-        match (token, word(token).as_deref()) {
+        match (token, plain_word(token).as_deref()) {
             (Token::SemiColon, _) if depth == 0 => {
                 statements.push(std::mem::take(&mut current));
                 continue;
@@ -340,7 +441,7 @@ fn tsql_statements(sql: &str) -> Option<Vec<String>> {
     }
     statements.push(current);
     statements.retain(|statement| !statement.trim().is_empty());
-    Some(statements)
+    statements
 }
 
 /// sqlparser's dialect for one of our engines (by `Dialect::name`).
@@ -381,6 +482,7 @@ fn first_word(sql: &str) -> String {
 mod tests {
     use super::*;
     use spelaion_driver_sqlite::SqliteDialect;
+    use spelaion_driver_sqlserver::SqlServerDialect;
 
     const NONE: Safeguards = Safeguards {
         confirm_execution: false,
@@ -602,10 +704,13 @@ mod tests {
 
     #[test]
     fn tsql_batches_split_like_the_sqlserver_splitter() {
-        let parts = tsql_statements(
+        let tokens = Tokenizer::new(
+            &MsSqlDialect {},
             "declare @n int = 0; while @n < 3 begin set @n += 1; end;              select case when 1 = 1 then 'a;b' end; begin tran; /* c; */ delete from t",
         )
+        .tokenize()
         .unwrap();
+        let parts = tsql_statements(&tokens);
         let parts: Vec<&str> = parts.iter().map(|p| p.trim()).collect();
         assert_eq!(
             parts,
@@ -624,5 +729,116 @@ mod tests {
             ),
             Some(Risk::DeleteAll)
         );
+    }
+
+    fn tsql_risk(sql: &str) -> Option<Risk> {
+        destructive("sqlserver", sql)
+    }
+
+    #[test]
+    fn tsql_batches_without_semicolons_still_ask() {
+        // The card's three batches: each runs a risky statement after another one.
+        for (sql, risk) in [
+            ("SELECT * FROM orders\nDROP TABLE orders", Risk::Drop),
+            ("SET NOCOUNT ON\nDELETE FROM orders", Risk::UncheckedWrite),
+            ("USE shop\nTRUNCATE TABLE orders", Risk::Truncate),
+        ] {
+            assert_eq!(tsql_risk(sql), Some(risk), "{sql}");
+            let refused =
+                check_script(&SqlServerDialect, sql, &NONE, false).expect_err("not confirmed");
+            assert_eq!(refused.risks[0].risk, risk, "{sql}");
+            assert!(check_script(&SqlServerDialect, sql, &NONE, true).is_ok());
+        }
+        // In a DECLARE's batch (SDB-112), with and without semicolons.
+        assert_eq!(
+            tsql_risk("declare @x int = 1; delete from t"),
+            Some(Risk::DeleteAll)
+        );
+        assert_eq!(
+            tsql_risk("DECLARE @x int = 0\nWHILE @x < 3 BEGIN SET @x += 1 END\nDELETE FROM t"),
+            Some(Risk::UncheckedWrite)
+        );
+        assert_eq!(
+            tsql_risk("declare @x int = 0;\nraiserror('x', 0, 1)\nupdate t set a = 1"),
+            Some(Risk::UncheckedWrite)
+        );
+        // The most serious word decides; any case, any spacing.
+        assert_eq!(
+            tsql_risk("print 'x'\n\tUpDaTe t SET a = 1\nDrOp TABLE t"),
+            Some(Risk::Drop)
+        );
+        assert_eq!(
+            tsql_risk("select 1 /* note */ drop table t"),
+            Some(Risk::Drop)
+        );
+        assert_eq!(tsql_risk("select 1 -- x\ndrop table t"), Some(Risk::Drop));
+        // A backslash escapes nothing in T-SQL: the string ends at the second quote.
+        assert_eq!(tsql_risk(r"select 'a\' drop table t --'"), Some(Risk::Drop));
+        assert_eq!(tsql_risk("select 'it''s' drop table t"), Some(Risk::Drop));
+        assert_eq!(
+            tsql_risk("select N'x' truncate table t"),
+            Some(Risk::Truncate)
+        );
+        // What looks like a word that changes no rows, used to hide a write.
+        for sql in [
+            "SET NOCOUNT ON\nUPDATE t SET a = 1",
+            "set ansi_nulls on\ndelete t",
+            "select a from t for\nupdate t set a = 1",
+            "print 'x'\ncreate table c (p int references p)\nset xact_abort on\ndelete from t",
+            "print 'references cursor'\nset nocount on update t set a = 1",
+            "print 'x'\ncreate table c (p int references p)\nset nocount on\nupdate no set a = 1",
+            "grant select on t to u\nupdate t set a = 1",
+            "revoke select on t from u delete from t",
+            "print 'role'\nselect 1\ndelete from t",
+        ] {
+            assert_eq!(tsql_risk(sql), Some(Risk::UncheckedWrite), "{sql}");
+        }
+        assert_eq!(
+            tsql_risk("alter role r drop member u\ndrop table t"),
+            Some(Risk::Drop)
+        );
+        // The fallback may ask once too often (a column dropped from a table).
+        assert_eq!(
+            tsql_risk("select 1\nalter table t drop column c"),
+            Some(Risk::Drop)
+        );
+    }
+
+    #[test]
+    fn tsql_words_in_texts_names_and_comments_do_not_ask() {
+        for sql in [
+            "select 'drop table t'",
+            "select [drop] from t",
+            "select 1 -- drop table t",
+            "print 'x'\nselect [delete], [update] from t",
+            "print 'x'\nselect \"drop\" from t",
+            "print 'x'\nselect 'a; drop table t; ''b'''",
+            "print 'x'\nselect [a]]drop table t]",
+            // T-SQL block comments nest: all of this is one comment.
+            "print 'x'\n/* a /* b */ drop table t */ select 1",
+            "print 'x'\nselect @delete, @update from t",
+            // Words that change no rows.
+            "print 'x'\ncreate table c (p int references p on delete cascade on update no action)",
+            "print 'x'\nupdate statistics t",
+            "ALTER SERVER ROLE dbcreator DROP MEMBER priv_login",
+            "print 'x'\nalter role r drop member u",
+            "print 'x'\ngrant select, update, delete on t to u",
+            "print 'x'\ndeny update (a) on t to u\nrevoke delete on schema::s from u",
+            "declare c cursor for select a from t for update\nopen c",
+            // A procedure's body runs later, not when it is created.
+            "create procedure p as\nselect 1\ndelete from t",
+            "create or alter trigger tr on t after insert as\nprint 'x'\ndrop table u",
+            "alter procedure p as select 1 truncate table t",
+        ] {
+            assert_eq!(tsql_risk(sql), None, "{sql}");
+        }
+        // An open quote: the tokenizer cannot read it, the first word decides as before.
+        assert_eq!(tsql_risk("print 'x\ndrop table t"), None);
+        assert_eq!(
+            tsql_risk("delete from t where a = 'x"),
+            Some(Risk::UncheckedWrite)
+        );
+        // Other engines keep their first-word fallback.
+        assert_eq!(destructive("sqlite", "select 1 drop table t"), None);
     }
 }
