@@ -491,3 +491,84 @@ async fn query_results_resolve_their_table_as_the_server_does() {
         public
     );
 }
+
+/// The first cell of every result `script` returned, in order; panics on a failed statement.
+async fn first_cells(session: &Session, script: &str) -> Vec<String> {
+    let events: Vec<CoreEvent> = session.run_script(script).collect().await;
+    let mut cells = Vec::new();
+    for event in &events {
+        match event {
+            CoreEvent::StatementFailed { error, .. } => panic!("{script}: {error:?}"),
+            CoreEvent::ResultStarted { result, .. } => {
+                let stored = session.results().get(*result).unwrap();
+                let stored = stored.read().unwrap();
+                let batch = &stored.window(0, 1)[0];
+                cells.push(
+                    spelaion_driver_api::Value::from_array(
+                        batch.column(0).as_ref(),
+                        0,
+                        stored.schema().columns[0].logical,
+                    )
+                    .unwrap()
+                    .to_string(),
+                );
+            }
+            _ => {}
+        }
+    }
+    cells
+}
+
+/// SQL-standard routine bodies (`BEGIN ATOMIC … END`, as `pg_dump` writes them) hold
+/// semicolons: the editor runs each routine as one statement, so it is created and works, and
+/// its `END` never reaches the server alone (where it would mean `COMMIT`).
+#[tokio::test]
+async fn begin_atomic_routines_run_as_one_statement() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let clean = "drop function if exists sdb114_add(int, int); \
+                 drop procedure if exists sdb114_log(); \
+                 drop table if exists sdb114_t";
+    first_cells(&session, clean).await;
+    let cells = first_cells(
+        &session,
+        "CREATE TABLE sdb114_t (n int);\n\
+         CREATE OR REPLACE FUNCTION sdb114_add(a int, b int) RETURNS int\n\
+         LANGUAGE sql\n\
+         BEGIN ATOMIC\n\
+           SELECT 1;\n\
+           SELECT CASE WHEN a + b > 0 THEN a + b ELSE 0 END;\n\
+         END;\n\
+         CREATE PROCEDURE sdb114_log() LANGUAGE sql\n\
+         BEGIN ATOMIC\n\
+           INSERT INTO sdb114_t VALUES (1);\n\
+           INSERT INTO sdb114_t VALUES (2);\n\
+         END;\n\
+         CALL sdb114_log();\n\
+         SELECT sdb114_add(2, 3);\n\
+         SELECT sdb114_add(-2, 1);\n\
+         SELECT count(*) FROM sdb114_t;",
+    )
+    .await;
+    assert_eq!(cells, ["5", "0", "2"]);
+
+    // Inside a transaction: the routine's END is not a COMMIT, so a rollback undoes it all.
+    first_cells(
+        &session,
+        "begin;\n\
+         create function sdb114_gone() returns int language sql\n\
+         begin atomic\n  select 1;\nend;\n\
+         rollback;",
+    )
+    .await;
+    assert_eq!(
+        first_cells(
+            &session,
+            "select count(*) from pg_proc where proname = 'sdb114_gone'"
+        )
+        .await,
+        ["0"]
+    );
+    first_cells(&session, clean).await;
+}
