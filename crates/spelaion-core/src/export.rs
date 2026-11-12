@@ -970,8 +970,33 @@ pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
                 _ => format!("X'{hex}'"),
             }
         }
+        Value::Date(_) | Value::Timestamp(_) | Value::TimestampTz(_) if dialect == "sqlserver" => {
+            tsql_date_literal(value).unwrap_or_else(|| quoted(&value.to_string()))
+        }
         other => quoted(&other.to_string()),
     }
+}
+
+/// A SQL Server date or time literal that means the same under every language (SDB-123).
+/// `'YYYY-MM-DD hh:mm:ss'` is read by the session's DATEFORMAT for `datetime` and
+/// `smalldatetime` (the 4th of March is the 3rd of April under `dmy`), and a `datetimeoffset`
+/// needs `+hh:mm`. ISO 8601 with `T` (`'2024-03-04T10:00:00.5'`, `+00:00` for a time zone) and
+/// an unseparated date (`'20240304'`) are read alike by every type and language. `None` for
+/// what SQL Server never has (infinity, BC): the generic text.
+fn tsql_date_literal(value: &Value) -> Option<String> {
+    let text = value.to_string();
+    if text.contains("infinity") || text.ends_with(" BC") {
+        return None;
+    }
+    let iso = match value {
+        Value::Date(_) => text.replace('-', ""),
+        Value::Timestamp(_) => text.replacen(' ', "T", 1),
+        Value::TimestampTz(_) => {
+            format!("{}+00:00", text.strip_suffix("+00")?.replacen(' ', "T", 1))
+        }
+        _ => return None,
+    };
+    Some(format!("'{iso}'"))
 }
 
 #[cfg(test)]
@@ -1830,5 +1855,38 @@ mod tests {
         assert!(refused.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sqlserver_date_literals_do_not_depend_on_the_language() {
+        // 2024-03-04 and 2024-03-04 10:00:00.5 (days since 1970, microseconds).
+        let day = 19_786;
+        let micros = i64::from(day) * 86_400_000_000 + 36_000_500_000;
+        assert_eq!(sql_literal(&Value::Date(day), "sqlserver"), "'20240304'");
+        assert_eq!(
+            sql_literal(&Value::Timestamp(micros), "sqlserver"),
+            "'2024-03-04T10:00:00.5'"
+        );
+        assert_eq!(
+            sql_literal(&Value::TimestampTz(micros), "sqlserver"),
+            "'2024-03-04T10:00:00.5+00:00'"
+        );
+        // What SQL Server never has keeps the generic text; other engines are unchanged.
+        assert_eq!(
+            sql_literal(
+                // i64::MAX is the driver API's infinity.
+                &Value::Timestamp(i64::MAX),
+                "sqlserver"
+            ),
+            "N'infinity'"
+        );
+        assert_eq!(
+            sql_literal(&Value::Timestamp(micros), "postgres"),
+            "'2024-03-04 10:00:00.5'"
+        );
+        assert_eq!(
+            sql_literal(&Value::TimestampTz(micros), "mysql"),
+            "'2024-03-04 10:00:00.5+00'"
+        );
     }
 }

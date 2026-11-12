@@ -498,3 +498,180 @@ async fn mysql_and_mariadb_read_backslashes_as_the_sessions_sql_mode_does() {
         .await;
     }
 }
+
+/// SQL Server reads `'YYYY-MM-DD hh:mm:ss'` by the session's DATEFORMAT (the login's language)
+/// for `datetime` and `smalldatetime`, and wants `+hh:mm` in a `datetimeoffset` (SDB-123). The
+/// literals the core writes are read the same under any language: "filter by this value"
+/// finds the row it was written from, an edit keyed by a `datetime` applies, and an INSERT
+/// copied under one language loads the same values under the other.
+#[tokio::test]
+async fn sqlserver_date_literals_mean_the_same_under_every_language() {
+    for (label, session, schema) in engines().await {
+        if label != "sqlserver" {
+            continue;
+        }
+        run(label, &session, &["SET LANGUAGE us_english"], false).await;
+        run(label, &session, &["DROP TABLE ge_dates"], true).await;
+        run(label, &session, &["DROP TABLE ge_dates_key"], true).await;
+        // Written in ISO 8601 with `T`, which every language reads alike: days 4 and 13.
+        run(
+            label,
+            &session,
+            &[
+                "CREATE TABLE ge_dates (id INT PRIMARY KEY, dt DATETIME, sdt SMALLDATETIME, \
+                 dt2 DATETIME2, d DATE, dto DATETIMEOFFSET)",
+                "INSERT INTO ge_dates VALUES \
+                 (1, '2024-03-04T10:00:00.123', '2024-03-04T10:00:00', '2024-03-04T10:00:00.123456', \
+                  '2024-03-04', '2024-03-04T10:00:00.5+02:00'), \
+                 (2, '2024-01-13T23:59:59.997', '2024-01-13T08:30:00', '2024-01-13T00:00:00', \
+                  '2024-01-13', '2024-01-13T08:00:00-05:30')",
+                "CREATE TABLE ge_dates_key (k DATETIME PRIMARY KEY, n INT)",
+                "INSERT INTO ge_dates_key VALUES ('2024-03-04T10:00:00', 1), ('2024-01-13T10:00:00', 2)",
+            ],
+            false,
+        )
+        .await;
+        let select = "SELECT id, dt, sdt, dt2, d, dto FROM ge_dates ORDER BY id";
+        let original: Vec<Vec<String>> = {
+            let id = run(label, &session, &[select], false).await.unwrap();
+            let stored = session.results().get(id).unwrap();
+            let r = stored.read().unwrap();
+            (0..r.rows())
+                .map(|row| {
+                    (0..6)
+                        .map(|c| r.value_at(row, c).unwrap().to_string())
+                        .collect()
+                })
+                .collect()
+        };
+        for language in ["us_english", "Spanish"] {
+            let case = format!("{label} ({language})");
+            run(
+                &case,
+                &session,
+                &[&format!("SET LANGUAGE {language}")],
+                false,
+            )
+            .await;
+            let dialect = session.dialect();
+            let id = run(&case, &session, &[select], false).await.unwrap();
+            let stored = session.results().get(id).unwrap();
+
+            // "Filter by this value" on every date column, both rows.
+            for row in 0..2 {
+                for column in 1..6 {
+                    let (meta, value) = {
+                        let r = stored.read().unwrap();
+                        (
+                            r.schema().columns[column].clone(),
+                            r.value_at(row, column).unwrap(),
+                        )
+                    };
+                    let condition = value_condition(
+                        dialect.as_ref(),
+                        &meta.name,
+                        meta.logical,
+                        FilterOp::Eq,
+                        &value,
+                    )
+                    .unwrap();
+                    let filter = add_condition(dialect.as_ref(), "", &condition).unwrap();
+                    let rows = count_table_rows(&session, schema, "ge_dates", &filter)
+                        .await
+                        .unwrap_or_else(|e| panic!("{case}: {filter}\n→ {e}"));
+                    assert_eq!(rows, 1, "{case}: {filter}");
+                }
+            }
+
+            // An edit of the row keyed by a datetime on the 13th.
+            let key_id = run(
+                &case,
+                &session,
+                &["SELECT k, n FROM ge_dates_key ORDER BY k"],
+                false,
+            )
+            .await
+            .unwrap();
+            let keys = session.results().get(key_id).unwrap();
+            let table = session
+                .connection()
+                .describe_table(schema, "ge_dates_key")
+                .await
+                .unwrap();
+            let statements = spelaion_core::edit_statements(
+                dialect.as_ref(),
+                &table,
+                &keys.read().unwrap(),
+                &[spelaion_core::RowChange::Update {
+                    row: 0,
+                    values: vec![(1, spelaion_core::CellInput::Text("20".into()))],
+                }],
+            )
+            .unwrap();
+            assert_eq!(
+                spelaion_core::apply_edits(&session, &statements).await,
+                Ok(1),
+                "{case}"
+            );
+
+            // The INSERT copied under this language, loaded under the other one.
+            let mut copied = Vec::new();
+            spelaion_core::write_result(
+                &stored.read().unwrap(),
+                &spelaion_core::ExportOptions {
+                    format: spelaion_core::ExportFormat::SqlInsert {
+                        table: "ge_dates".into(),
+                    },
+                    rows: 0..2,
+                    columns: (0..6).collect(),
+                    header: false,
+                    csv: spelaion_core::CsvOptions::default(),
+                },
+                dialect.as_ref(),
+                &mut copied,
+            )
+            .unwrap();
+            let copied = String::from_utf8(copied).unwrap();
+            let other = if language == "us_english" {
+                "Spanish"
+            } else {
+                "us_english"
+            };
+            run(
+                &case,
+                &session,
+                &[&format!("SET LANGUAGE {other}"), "DELETE FROM ge_dates"],
+                false,
+            )
+            .await;
+            let events: Vec<CoreEvent> = session.run_script(&copied).collect().await;
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| matches!(e, CoreEvent::StatementFailed { .. })),
+                "{case}: {copied}\n{events:?}"
+            );
+            let loaded: Vec<Vec<String>> = {
+                let id = run(&case, &session, &[select], false).await.unwrap();
+                let stored = session.results().get(id).unwrap();
+                let r = stored.read().unwrap();
+                (0..r.rows())
+                    .map(|row| {
+                        (0..6)
+                            .map(|c| r.value_at(row, c).unwrap().to_string())
+                            .collect()
+                    })
+                    .collect()
+            };
+            assert_eq!(loaded, original, "{case}: {copied}");
+        }
+        run(label, &session, &["SET LANGUAGE us_english"], false).await;
+        run(
+            label,
+            &session,
+            &["DROP TABLE ge_dates", "DROP TABLE ge_dates_key"],
+            true,
+        )
+        .await;
+    }
+}
