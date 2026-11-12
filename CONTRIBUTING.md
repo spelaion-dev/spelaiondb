@@ -97,7 +97,13 @@ every run, since the run changes that database) and the Docker services up
 (`docker compose -f testing/docker/compose.yaml up -d --wait`).
 
 - **Windows**: `node e2e/smoke.mjs` (from `apps/desktop`). The whole test: Playwright over
-  WebView2's debugging port.
+  WebView2's debugging port. It stays out of your way, so you can keep using the computer: the
+  app's window never takes the foreground and is moved left of every monitor as it opens, at its usual size
+  (the test sets `SPELAION_E2E_OFFSCREEN`, which only the main window's placement reads), so your
+  mouse and keyboard cannot reach it. A real pointer crossing the window used to cancel hover
+  delays and clicks mid-run. The test keeps the hidden window drawing with Chromium's occlusion
+  flags, and tells the page it has the focus. Set `SPELAION_E2E_SHOW_WINDOW=1` to open the window
+  on screen and watch a run. Like the Linux pass, it replaces your clipboard while it runs.
 - **Linux**: `node e2e/smoke-linux.mjs` (from `apps/desktop`). WebKitGTK has no debugging port,
   so this pass speaks WebDriver to `tauri-driver` (which it starts itself), in front of
   WebKitWebDriver. It is shorter: start, repository trust, a query on SQLite, DuckDB, PostgreSQL,

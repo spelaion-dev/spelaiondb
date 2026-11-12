@@ -380,7 +380,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
   bundled DuckDB is compiled once: `npx tauri build --no-bundle -- -p spelaion-desktop -p
   spelaion-cli`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`, see `CONTRIBUTING.md`).
-  It drives WebView2 over CDP, so the whole test runs on **Windows** only. On **Linux**,
+  It drives WebView2 over CDP, so the whole test runs on **Windows** only. Its window is moved
+  left of every monitor as it opens and never takes the foreground (`SPELAION_E2E_OFFSCREEN`, read only by
+  `open_main_window`), so the user's real mouse and keyboard cannot reach it; never make a step
+  depend on the window being visible or focused (`SPELAION_E2E_SHOW_WINDOW=1` shows it). On **Linux**,
   `node apps/desktop/e2e/smoke-linux.mjs` drives the same release build through
   `tauri-driver` and WebKitWebDriver (`e2e/webdriver.mjs`, no dependencies): a shorter pass
   (start, trust, a query on every engine, the real clipboard both ways, an SSH tunnel, quitting
