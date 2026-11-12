@@ -1318,3 +1318,64 @@ async fn a_session_the_server_ended_is_a_connection_error() {
     }
     assert!(closed);
 }
+
+/// `COPY … FROM STDIN` and `COPY … TO STDOUT` need data sent or read apart from the statement,
+/// which the editor does not do: they are refused before anything is sent, with what to use
+/// instead, and the session goes on (tokio-postgres's query path would otherwise lose the
+/// connection on COPY FROM STDIN's `CopyInResponse`).
+#[tokio::test]
+async fn copy_from_stdin_and_to_stdout_are_refused_and_the_session_survives() {
+    let Some(conn) = connect().await else {
+        return;
+    };
+    run(&*conn, "create temp table copy_probe (a int, b text)")
+        .await
+        .unwrap();
+    run(&*conn, "insert into copy_probe values (1, 'x')")
+        .await
+        .unwrap();
+    for (sql, says) in [
+        ("COPY copy_probe FROM STDIN", "Import data"),
+        (
+            "copy copy_probe (a, b) from stdin with (format csv)",
+            "Import data",
+        ),
+        ("-- the rows\nCoPy copy_probe FROM stdin;", "Import data"),
+        ("COPY copy_probe TO STDOUT", "Export"),
+        ("copy (select 1) to stdout", "Export"),
+        (
+            "/* x */ copy copy_probe to stdout with csv header",
+            "Export",
+        ),
+    ] {
+        let error = run(&*conn, sql).await.expect_err(sql).to_string();
+        assert!(error.contains(says), "{sql}: {error}");
+        let bound = conn
+            .execute_bound(sql, Vec::new(), &ExecOptions::default())
+            .await
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(bound.contains(says), "{sql} (bound): {bound}");
+        // The same session goes on.
+        assert_eq!(
+            first_row(&*conn, "select 1 as one").await[0].3,
+            "1",
+            "{sql}"
+        );
+    }
+    assert_eq!(
+        first_row(&*conn, "select count(*) from copy_probe").await[0].3,
+        "1"
+    );
+    // Other COPY forms and look-alikes are not refused by this check.
+    let error = run(&*conn, "COPY copy_probe FROM '/tmp/spelaion-no-such-file'")
+        .await
+        .expect_err("no such file, or no right to read server files")
+        .to_string();
+    assert!(!error.contains("Import data"), "{error}");
+    assert_eq!(
+        first_row(&*conn, "select 'copy t from stdin' as s").await[0].3,
+        "copy t from stdin"
+    );
+}
