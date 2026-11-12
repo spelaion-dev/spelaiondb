@@ -3366,14 +3366,25 @@ try {
     assert.equal(await mapHost.locator(".map-feature").count(), 4);
     // Keyboard zoom: the points move apart, and 0 fits them again.
     const spread = async () => { const [ax, ay] = await pointBox(2); const [bx, by] = await pointBox(3); return Math.hypot(ax - bx, ay - by); };
+    // Measured only when the view is the automatic fit for the map's size and that size has
+    // settled (the same over two frames): the map fits again when its size changes (SDB-280).
+    const fittedToItsSize = async () =>
+      page.waitForFunction((host) => {
+        const key = `${host.clientWidth}x${host.clientHeight} ${host.dataset.size} ${host.dataset.fit}`;
+        const settled = host.dataset.fit !== undefined && host.dataset.fit === host.dataset.size && host.__lastFitKey === key;
+        host.__lastFitKey = key;
+        return settled;
+      }, await mapHost.elementHandle());
+    await fittedToItsSize();
     const before = await spread();
     await mapHost.focus();
     await page.keyboard.press("+");
+    await page.waitForFunction((host) => host.dataset.fit === undefined, await mapHost.elementHandle());
     await page.waitForTimeout(300);
     const zoomed = await spread();
     assert.ok(zoomed > before * 1.3, `zooming in should spread the points: ${before} → ${zoomed}`);
     await page.keyboard.press("0");
-    await page.waitForTimeout(300);
+    await fittedToItsSize();
     assert.ok(Math.abs((await spread()) - before) < 2, "0 fits the shapes again");
     await setTheme("dark", "dark");
     await mapHost.locator(".map-feature").first().waitFor();
