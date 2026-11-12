@@ -99,14 +99,15 @@ struct Snapshot {
 type Access = Result<Arc<Snapshot>, Arc<str>>;
 
 impl Snapshot {
-    /// Reads the configuration and the trust store, as at start-up. Any problem in them fails
-    /// closed: no connection is exposed until the user fixes it.
+    /// Reads the configuration and the trust store, as at start-up. A problem that may change
+    /// what connections resolve to (a file that does not load, a value dropped) fails closed:
+    /// no connection is exposed until the user fixes it. Notices that only inform do not.
     fn load(options: &ServerOptions) -> Access {
         let config = spelaion_config::load(options.workspace.as_deref(), &options.user_dir);
-        if !config.problems.is_empty() {
-            let files = config
-                .problems
-                .iter()
+        let blocking: Vec<&ConfigError> = config.problems.iter().filter(|p| p.blocks()).collect();
+        if !blocking.is_empty() {
+            let files = blocking
+                .into_iter()
                 .map(position)
                 .collect::<Vec<_>>()
                 .join("; ");

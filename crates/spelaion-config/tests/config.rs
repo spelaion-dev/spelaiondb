@@ -3854,6 +3854,8 @@ fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
             .any(|p| p.contains("git mv .spelunk .spelaion")),
         "{problems:?}"
     );
+    // It only informs: what loaded is what the folder says.
+    assert!(config.problems.iter().all(|p| !p.blocks()));
     // A new connection saved from the app goes into the folder that exists.
     let id = add_connection(
         &config,
@@ -3884,6 +3886,11 @@ fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
             .iter()
             .any(|p| p.to_string().contains("both .spelaion/ and .spelunk/"))
     );
+    assert!(config.problems.iter().all(|p| !p.blocks()));
+    // A file that does not load is an error, never a notice.
+    std::fs::write(repo.join(".spelaion/connections/broken.toml"), "name = = 1").unwrap();
+    let config = load(Some(&repo), &fx.user());
+    assert!(config.problems.iter().any(|p| p.blocks()));
 }
 
 #[cfg(unix)]
