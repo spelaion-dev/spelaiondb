@@ -19,6 +19,7 @@ use sqlparser::dialect::{
     PostgreSqlDialect, SQLiteDialect,
 };
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 
 use crate::Session;
 use crate::classify::{classify_read_only, classify_read_only_connection};
@@ -270,6 +271,15 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
         return match first.as_str() {
             "truncate" => Some(Risk::Truncate),
             "delete" | "update" => Some(Risk::UncheckedWrite),
+            // A T-SQL batch that starts with DECLARE is one span (its variables live for the
+            // batch): one statement the parser cannot read must not hide the others.
+            "declare" if engine == "sqlserver" => tsql_statements(sql)
+                .filter(|statements| statements.len() > 1)
+                .and_then(|statements| {
+                    statements
+                        .iter()
+                        .find_map(|statement| destructive(engine, statement))
+                }),
             _ => None,
         };
     };
@@ -290,6 +300,47 @@ pub(crate) fn destructive(engine: &str, sql: &str) -> Option<Risk> {
         }
     });
     found
+}
+
+/// The statements of a T-SQL batch, split where the SQL Server splitter splits outside a
+/// `DECLARE`: at `;` outside quotes, comments and `BEGIN … END` / `CASE … END` blocks (`BEGIN
+/// TRAN` and the like are not blocks). Read with sqlparser's tokenizer; `None` when it cannot
+/// read the text.
+fn tsql_statements(sql: &str) -> Option<Vec<String>> {
+    let tokens = Tokenizer::new(&MsSqlDialect {}, sql).tokenize().ok()?;
+    let word = |token: &Token| match token {
+        Token::Word(word) => Some(word.value.to_ascii_lowercase()),
+        _ => None,
+    };
+    let next_word = |from: usize| tokens[from + 1..].iter().find_map(word);
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    for (i, token) in tokens.iter().enumerate() {
+        match (token, word(token).as_deref()) {
+            (Token::SemiColon, _) if depth == 0 => {
+                statements.push(std::mem::take(&mut current));
+                continue;
+            }
+            (_, Some("begin")) => {
+                if !matches!(
+                    next_word(i).as_deref(),
+                    Some("tran" | "transaction" | "distributed" | "dialog" | "conversation")
+                ) {
+                    depth += 1;
+                }
+            }
+            (_, Some("case")) => depth += 1,
+            (_, Some("end")) if next_word(i).as_deref() != Some("conversation") => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+        current.push_str(&token.to_string());
+    }
+    statements.push(current);
+    statements.retain(|statement| !statement.trim().is_empty());
+    Some(statements)
 }
 
 /// sqlparser's dialect for one of our engines (by `Dialect::name`).
@@ -547,5 +598,31 @@ mod tests {
         );
         assert_eq!(executable_bodies_as_code("no comments"), "no comments");
         assert_eq!(executable_comment("/* M!1 */"), None);
+    }
+
+    #[test]
+    fn tsql_batches_split_like_the_sqlserver_splitter() {
+        let parts = tsql_statements(
+            "declare @n int = 0; while @n < 3 begin set @n += 1; end;              select case when 1 = 1 then 'a;b' end; begin tran; /* c; */ delete from t",
+        )
+        .unwrap();
+        let parts: Vec<&str> = parts.iter().map(|p| p.trim()).collect();
+        assert_eq!(
+            parts,
+            [
+                "declare @n int = 0",
+                "while @n < 3 begin set @n += 1; end",
+                "select case when 1 = 1 then 'a;b' end",
+                "begin tran",
+                "/* c; */ delete from t"
+            ]
+        );
+        assert_eq!(
+            destructive(
+                "sqlserver",
+                "declare @n int = 0; raiserror('x', 0, 1); delete from t"
+            ),
+            Some(Risk::DeleteAll)
+        );
     }
 }

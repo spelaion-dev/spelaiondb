@@ -7,7 +7,9 @@ use spelaion_driver_api::{Dialect, StatementSpan};
 /// - ends a batch at a line that is only `GO` (the line is not sent);
 /// - splits at `;` only outside quotes, comments and `BEGIN … END` / `CASE … END` blocks;
 /// - keeps the rest of the batch as one statement after `CREATE`/`ALTER` of a procedure,
-///   function, trigger or view, which must be alone in their batch anyway.
+///   function, trigger or view, which must be alone in their batch anyway, and after a
+///   `DECLARE`: a variable only lives for its batch, so the statements that use it go with it
+///   (statements before the `DECLARE` still split).
 ///
 /// Several statements without `;` between them go to the server as one batch: SQL Server runs
 /// them in order and each result set is shown.
@@ -269,12 +271,17 @@ fn go_line(b: &[u8], start: usize) -> Option<usize> {
     (first.eq_ignore_ascii_case("go") && count_ok && words.next().is_none()).then_some(end)
 }
 
-/// Statements that must be alone in their batch: the rest of the batch belongs to them.
+/// Statements the rest of the batch belongs to: those that must be alone in their batch, and
+/// `DECLARE`, whose variables (and cursors) only live for the batch, so the statements that use
+/// them must go with it.
 fn takes_rest_of_batch(words: &[String]) -> bool {
     let mut rest = words.iter().map(String::as_str);
     let Some(first) = rest.next() else {
         return false;
     };
+    if first == "declare" {
+        return true;
+    }
     if first != "create" && first != "alter" {
         return false;
     }
@@ -547,6 +554,41 @@ mod tests {
         assert_eq!(
             parts("create table t (a int); select 2"),
             ["create table t (a int)", "select 2"]
+        );
+    }
+
+    #[test]
+    fn variables_keep_the_rest_of_their_batch() {
+        // A variable lives for one batch: the statements that use it go with its DECLARE.
+        assert_eq!(
+            parts("DECLARE @id int = 5;\nSELECT * FROM orders WHERE id = @id;\nSET @id = 6;"),
+            ["DECLARE @id int = 5;\nSELECT * FROM orders WHERE id = @id;\nSET @id = 6;"]
+        );
+        // A table variable too, and statements before the DECLARE still split.
+        assert_eq!(
+            parts(
+                "select 1;\nset nocount on;\n-- the rows\ndeclare @t table (id int);\ninsert into @t values (1);\nselect * from @t;"
+            ),
+            [
+                "select 1",
+                "set nocount on",
+                "-- the rows\ndeclare @t table (id int);\ninsert into @t values (1);\nselect * from @t;"
+            ]
+        );
+        // A GO line ends it: the next batch splits as usual.
+        assert_eq!(
+            parts("declare @x int = 1; select @x;\nGO\nselect 2; select 3"),
+            ["declare @x int = 1; select @x;", "select 2", "select 3"]
+        );
+        // A DECLARE inside a block is the block's: the block ends at its `;` as before.
+        assert_eq!(
+            parts("if 1 = 1 begin declare @y int; set @y = 1; end; select 4"),
+            ["if 1 = 1 begin declare @y int; set @y = 1; end", "select 4"]
+        );
+        // `declare` as a later word does not count.
+        assert_eq!(
+            parts("select 1 as [declare]; select 2"),
+            ["select 1 as [declare]", "select 2"]
         );
     }
 

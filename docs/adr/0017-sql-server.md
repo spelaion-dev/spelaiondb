@@ -20,7 +20,8 @@ without quoting, and a batch can return several result sets.
 - **Batches:** the dialect ends a batch at a `GO` line and splits at `;` outside quotes,
   `[…]`, comments and `BEGIN … END` / `CASE … END` blocks; after `CREATE`/`ALTER` of a
   procedure, function, trigger or view the rest of the batch is one statement (they must be
-  alone in it anyway). Statements without `;` between them go as one batch.
+  alone in it anyway). So is everything after a `DECLARE` up to the next `GO`: its variables
+  only live for the batch (SDB-112). Statements without `;` between them go as one batch.
 - **Several result sets:** the contract allows a statement to repeat `Columns` → `Batch`*
   (ADR-005); the session closes each result when the next one starts.
 - **Row counts:** TDS reports them, tiberius does not expose them for batches: after a
