@@ -3761,6 +3761,9 @@ try {
   await replaceQuery(panel, "delete from tx_smoke where id = 3;");
   await run(panel);
   await panel.locator(".tx-badge", { hasText: "TX open · 1" }).waitFor();
+  // The badge comes with the statement's transaction state, before the run is marked finished:
+  // the run's duration shows once it is (SDB-253). The dialog lists the tab once either way.
+  await panel.locator(".statusline", { hasText: /\d ms$/ }).waitFor();
   await page.locator(".tabbar .tab.active .close").click();
   const closeOpen = page.getByRole("dialog", { name: "Close with an open transaction?" });
   await closeOpen.getByText("the server rolls back what was not committed", { exact: false }).waitFor();

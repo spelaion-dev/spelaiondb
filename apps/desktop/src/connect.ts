@@ -3,6 +3,7 @@
 // backend; they are never kept in the state.
 
 import { call, commands, type ConnectionTestResult, type ConnectResult } from "./api";
+import { runningOutsideTransactions } from "./closeQuestion";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import i18n from "./i18n";
 import { confirmUnsavedFiles } from "./sqlFiles";
@@ -126,7 +127,8 @@ export async function confirmOpenTransactions(sessions: string[], action: "close
 export async function confirmLeaving(action: "quit" | "folder", open: string[]): Promise<boolean> {
   const tabs = useApp.getState().tabs;
   const unsaved = tabs.filter((t) => t.pendingEdits || t.savingEdits).map((t) => t.id);
-  const running = tabs.filter((t) => t.run?.running).map((t) => t.id);
+  // A tab with an open transaction is asked about once, under it (SDB-253).
+  const running = runningOutsideTransactions(tabs.filter((t) => t.run?.running).map((t) => t.id), open);
   if (open.length === 0 && running.length === 0 && unsaved.length === 0) return true;
   return useDialogs.getState().askOpenTransactions(open.map(tabName), action, running.map(tabName), unsaved.map(tabName));
 }
@@ -281,15 +283,22 @@ export function closeQueryTab(id: string) {
   return closeTabs([id]);
 }
 
-/** Running queries and open transactions among the tabs to close: one question for all. */
+/**
+ * Running queries and open transactions among the tabs to close: one question for all. A tab
+ * with an open transaction is listed once, under it: its running statement is inside that
+ * transaction, rolled back with it (SDB-253).
+ */
 async function confirmClose(sessions: string[]): Promise<boolean> {
-  const running = sessions.filter((id) => useApp.getState().tabs.find((t) => t.id === id)?.run?.running);
   let open: string[] = [];
   try {
     open = await call(commands.sessionsToConfirm(sessions));
   } catch {
     // The sessions are gone: nothing is left to roll back.
   }
+  const running = runningOutsideTransactions(
+    sessions.filter((id) => useApp.getState().tabs.find((t) => t.id === id)?.run?.running),
+    open,
+  );
   if (open.length === 0 && running.length === 0) return true;
   return useDialogs.getState().askOpenTransactions(open.map(tabName), "close", running.map(tabName));
 }
