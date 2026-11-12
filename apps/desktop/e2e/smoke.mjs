@@ -3595,13 +3595,18 @@ try {
     } finally {
       // Back to the demo's three tables.
       const drops = [];
-      for (let i = 199; i >= 0; i--) drops.push(`drop table if exists er_t${String(i).padStart(3, "0")};`);
+      // From er_t200, which was never created: one statement more than the create script, so
+      // this run's summary is not its "200 OK", which the status line still shows until this
+      // run starts. The next step's Run must come after this run has ended, or the editor
+      // ignores it while this one is running. (Only drops, as before: a result here changes what
+      // the next step finds in the panel.)
+      for (let i = 200; i >= 0; i--) drops.push(`drop table if exists er_t${String(i).padStart(3, "0")};`);
       await queryTab.click();
       await replaceQuery(panel, drops.join("\n"));
       await run(panel);
       const risk = page.getByRole("dialog", { name: "Run these statements?" });
       await risk.getByRole("button", { name: "Run anyway", exact: true }).click({ timeout: 30_000 });
-      await panel.locator(".statusline", { hasText: "200 OK, 0 failed, 0 not run" }).waitFor({ timeout: 60_000 });
+      await panel.locator(".statusline", { hasText: "201 OK, 0 failed, 0 not run" }).waitFor({ timeout: 60_000 });
     }
   }
 
