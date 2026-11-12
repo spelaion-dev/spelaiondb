@@ -239,6 +239,104 @@ fn split(script: &str) -> Vec<StatementSpan> {
     spans
 }
 
+/// A `COPY` whose data goes through the connection, apart from the statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CopyStdio {
+    /// `COPY … FROM STDIN`: the client sends the rows.
+    FromStdin,
+    /// `COPY … TO STDOUT`: the client reads them.
+    ToStdout,
+}
+
+/// Whether `sql` is a `COPY … FROM STDIN` or `COPY … TO STDOUT`: its first word is `COPY` and,
+/// outside quotes, comments, `$tag$` bodies and parentheses (a query or a column list),
+/// `FROM STDIN` or `TO STDOUT` follow. `COPY … FROM` / `TO` a file or a `PROGRAM` is neither.
+pub(crate) fn copy_stdio(sql: &str) -> Option<CopyStdio> {
+    let b = sql.as_bytes();
+    let mut words: Vec<String> = Vec::new();
+    let mut parens = 0usize;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\'' => {
+                let escapes =
+                    i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]));
+                i = skip_quoted(b, i, b'\'', escapes);
+                words.push(String::new());
+            }
+            b'"' => {
+                i = skip_quoted(b, i, b'"', false);
+                words.push(String::new());
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                i = b[i..]
+                    .iter()
+                    .position(|&c| c == b'\n')
+                    .map_or(b.len(), |p| i + p + 1);
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let mut depth = 0usize;
+                while i < b.len() {
+                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'$' if i == 0 || !is_ident_byte(b[i - 1]) => match dollar_tag(b, i) {
+                Some(tag_end) => {
+                    let tag = &sql[i..=tag_end];
+                    i = sql[tag_end + 1..]
+                        .find(tag)
+                        .map_or(b.len(), |p| tag_end + 1 + p + tag.len());
+                    words.push(String::new());
+                }
+                None => i += 1,
+            },
+            b'(' => {
+                parens += 1;
+                i += 1;
+            }
+            b')' => {
+                parens = parens.saturating_sub(1);
+                i += 1;
+            }
+            c if (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
+                && (i == 0 || !is_ident_byte(b[i - 1])) =>
+            {
+                let end = b[i..]
+                    .iter()
+                    .position(|&c| !is_ident_byte(c))
+                    .map_or(b.len(), |p| i + p);
+                if words.is_empty() || parens == 0 {
+                    words.push(sql[i..end].to_ascii_lowercase());
+                }
+                i = end;
+            }
+            b';' => break,
+            _ => i += 1,
+        }
+    }
+    if words.first().map(String::as_str) != Some("copy") {
+        return None;
+    }
+    words
+        .windows(2)
+        .find_map(|pair| match (pair[0].as_str(), pair[1].as_str()) {
+            ("from", "stdin") => Some(CopyStdio::FromStdin),
+            ("to", "stdout") => Some(CopyStdio::ToStdout),
+            _ => None,
+        })
+}
+
 /// Skips a quoted string starting at `i` (the opening quote).
 /// A doubled quote is an escaped quote.
 fn skip_quoted(b: &[u8], i: usize, quote: u8, backslash_escapes: bool) -> usize {
@@ -397,6 +495,38 @@ mod tests {
     #[test]
     fn unterminated_string_keeps_rest_as_one_statement() {
         assert_eq!(parts("select 'abc; select 2"), ["select 'abc; select 2"]);
+    }
+
+    #[test]
+    fn copy_through_the_connection_is_recognised() {
+        for sql in [
+            "COPY t FROM STDIN",
+            "copy public.t (a, b) from stdin with (format csv);",
+            "-- rows\n/* and /* nested */ */ CoPy t FROM stdin",
+            "copy \"T\" from stdin",
+        ] {
+            assert_eq!(copy_stdio(sql), Some(CopyStdio::FromStdin), "{sql}");
+        }
+        for sql in [
+            "COPY t TO STDOUT",
+            "copy (select 'from stdin', $$ to $$) to stdout with csv header",
+            "copy t (a) to stdout",
+        ] {
+            assert_eq!(copy_stdio(sql), Some(CopyStdio::ToStdout), "{sql}");
+        }
+        for sql in [
+            "select 'copy t from stdin'",
+            "COPY t FROM '/tmp/x'",
+            "copy t from 'stdin'",
+            "copy t to program 'cat'",
+            "copy (select * from stdin) to '/tmp/x'",
+            "copy (select 1 as stdout) to '/tmp/x'",
+            "-- copy t from stdin\nselect 1",
+            "do $$ begin copy t from stdin; end $$",
+            "with x as (select 1) select * from x",
+        ] {
+            assert_eq!(copy_stdio(sql), None, "{sql}");
+        }
     }
 
     #[test]

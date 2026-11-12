@@ -272,6 +272,7 @@ impl Connection for PgConnection {
     }
 
     async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
+        refuse_copy_stdio(sql)?;
         let statement = self.client.prepare(sql).await.map_err(map_error)?;
         self.stream(sql, statement, Vec::new(), opts).await
     }
@@ -283,6 +284,7 @@ impl Connection for PgConnection {
         params: Vec<String>,
         opts: &ExecOptions,
     ) -> Result<EventStream> {
+        refuse_copy_stdio(sql)?;
         let types = vec![Type::TEXT; params.len()];
         let statement = self
             .client
@@ -446,6 +448,27 @@ impl Connection for PgConnection {
                 .map_err(map_error)?;
         }
         sink.as_mut().finish().await.map_err(map_error)
+    }
+}
+
+/// `COPY … FROM STDIN` and `COPY … TO STDOUT` move their data through the connection, apart
+/// from the statement, which a statement run from the editor does not do: tokio-postgres's
+/// query path cannot answer the server's `CopyInResponse`, and the connection would be lost.
+/// They are refused before anything is sent, saying what to use instead; nothing is reconnected
+/// or run again. (Importing rows uses `copy_in` on its own path, `insert_rows`.)
+fn refuse_copy_stdio(sql: &str) -> Result<()> {
+    match dialect::copy_stdio(sql) {
+        None => Ok(()),
+        Some(dialect::CopyStdio::FromStdin) => Err(DriverError::Other(
+            "the editor cannot send the data of COPY … FROM STDIN: use Import data to load rows \
+             into a table (or psql's \\copy)"
+                .into(),
+        )),
+        Some(dialect::CopyStdio::ToStdout) => Err(DriverError::Other(
+            "the editor cannot read the data of COPY … TO STDOUT: run the query and use Export, \
+             or COPY … TO a file on the server"
+                .into(),
+        )),
     }
 }
 
