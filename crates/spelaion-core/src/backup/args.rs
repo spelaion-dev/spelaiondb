@@ -624,6 +624,11 @@ mod tests {
         for (text, flag) in [
             ("mysql  Ver 8.4.13 for Linux", Some("--skip-system-command")),
             ("mysql  Ver 8.0.36 for Win64", None),
+            // Windows' client starts with its path, whose folder holds another version number.
+            (
+                r"C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe  Ver 8.4.9 for Win64 on x86_64",
+                Some("--skip-system-command"),
+            ),
             ("mysql  Ver 9.4.0 for Linux", Some("--skip-system-command")),
             (
                 "mariadb from 11.4.13-MariaDB, client 15.2",
