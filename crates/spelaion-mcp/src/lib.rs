@@ -7,6 +7,9 @@
 //!   takes effect at the next call of a server that is already running, never in the middle of
 //!   one. A configuration with problems exposes nothing until it is fixed. A cached session is
 //!   reused only while its connection is exposed and defined as when it was opened.
+//! - A lost session (the server ended it, a connection error, its tunnel went down) is never
+//!   used again: the call that found out fails and is never retried, and the next call opens a
+//!   new session through the same path as the first one (ADR-028).
 //! - Every query goes through the core's read-only mode (classifier, read-only transaction,
 //!   limits) and is recorded in the audit log.
 //! - Writes only through `execute_write`, on connections with `mcp.writes = "allow"`, through
@@ -38,10 +41,11 @@ use spelaion_config::{
 };
 use spelaion_core::{
     AgentAccess, AgentView, Engines, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits,
-    ResultStore, ToolOutput, TunnelPool, WriteError, WriteLimits, agent_access, agent_view,
-    open_connection,
+    ResultStore, SessionHealth, ToolOutput, TunnelPool, WriteError, WriteLimits, agent_access,
+    agent_view, open_connection,
 };
-use spelaion_ssh::{KnownHosts, NonInteractive};
+use spelaion_driver_api::Connection;
+use spelaion_ssh::{KnownHosts, NonInteractive, TunnelState};
 use spelaion_store::{AuditEntry, Decision, Store};
 
 /// Default rows if the connection does not set `mcp.max_rows`.
@@ -83,6 +87,38 @@ type Shared = Arc<tokio::sync::Mutex<OpenConnection>>;
 struct Cached {
     open: Shared,
     definition: Definition,
+    /// Read without locking the session, which a call may be using.
+    health: tokio::sync::watch::Receiver<SessionHealth>,
+    connection: Arc<dyn Connection>,
+    tunnel: Option<tokio::sync::watch::Receiver<TunnelState>>,
+}
+
+impl Cached {
+    fn new(open: OpenConnection, definition: Definition) -> Self {
+        Self {
+            health: open.session.health(),
+            connection: open.session.connection().clone(),
+            tunnel: open.tunnel_state(),
+            open: Arc::new(tokio::sync::Mutex::new(open)),
+            definition,
+        }
+    }
+
+    /// Whether the session can still be used. A lost connection (the server ended it, a
+    /// connection error in an earlier call, the tunnel went down) is never used again: the next
+    /// call opens a new session, as the user does when reconnecting, and nothing that ran on
+    /// the old one is run again (ADR-028).
+    fn usable(&self) -> bool {
+        let alive = match &*self.health.borrow() {
+            SessionHealth::Alive => true,
+            SessionHealth::Lost { .. } | SessionHealth::IdleClosed { .. } => false,
+        };
+        let tunnel_up = self.tunnel.as_ref().is_none_or(|t| match &*t.borrow() {
+            TunnelState::Up => true,
+            TunnelState::Down { .. } => false,
+        });
+        alive && tunnel_up && !self.connection.is_closed()
+    }
 }
 
 /// What agents may see and do during one call: the configuration and the trust store as they
@@ -238,6 +274,17 @@ fn exposed_entry<'a>(
     match access {
         Ok(snapshot) => Ok((snapshot, snapshot.entry(id)?)),
         Err(reason) => Err(reason.to_string()),
+    }
+}
+
+/// Why the session can no longer be used, if it was lost during a call.
+fn lost(open: &OpenConnection) -> Option<String> {
+    match &*open.session.health().borrow() {
+        SessionHealth::Alive => None,
+        SessionHealth::Lost { reason } => Some(reason.clone()),
+        SessionHealth::IdleClosed { after } => {
+            Some(format!("closed after {} s without use", after.as_secs()))
+        }
     }
 }
 
@@ -431,7 +478,8 @@ impl SpelaionMcp {
 
     /// Starts a tool call: reads the configuration and the trust store again, keeps them as
     /// what this call sees from start to end, and closes the cached sessions that this view no
-    /// longer allows (their connection hidden, or defined differently).
+    /// longer allows (their connection hidden, or defined differently) and those whose
+    /// connection was lost.
     async fn begin(&self) -> Access {
         let access = Snapshot::load(&self.state.options);
         *self.state.current.lock().expect("lock poisoned") = access.clone();
@@ -440,7 +488,8 @@ impl SpelaionMcp {
             let keys: Vec<(String, Use)> = sessions
                 .iter()
                 .filter(|((id, _), cached)| {
-                    definition_in(&access, id).as_ref() != Some(&cached.definition)
+                    !cached.usable()
+                        || definition_in(&access, id).as_ref() != Some(&cached.definition)
                 })
                 .map(|(key, _)| key.clone())
                 .collect();
@@ -525,6 +574,7 @@ impl SpelaionMcp {
         let mut sessions = self.state.sessions.lock().await;
         if let Some(cached) = sessions.get(&key)
             && cached.definition == definition
+            && cached.usable()
         {
             return Ok((cached.open.clone(), max_rows));
         }
@@ -558,14 +608,9 @@ impl SpelaionMcp {
                 ),
                 other => other.to_string(),
             })?;
-        let open = Arc::new(tokio::sync::Mutex::new(open));
-        sessions.insert(
-            key,
-            Cached {
-                open: open.clone(),
-                definition,
-            },
-        );
+        let cached = Cached::new(open, definition);
+        let open = cached.open.clone();
+        sessions.insert(key, cached);
         Ok((open, max_rows))
     }
 
@@ -642,7 +687,11 @@ impl SpelaionMcp {
         let limits = WriteLimits {
             timeout: self.state.options.timeout,
         };
-        let result = open.lock().await.session.run_write(sql, &limits).await;
+        let (result, lost) = {
+            let open = open.lock().await;
+            let result = open.session.run_write(sql, &limits).await;
+            (result, lost(&open))
+        };
         match result {
             Ok(done) => {
                 self.audit(client, connection, sql, Decision::Executed, |e| {
@@ -661,9 +710,16 @@ impl SpelaionMcp {
                 self.audit(client, connection, sql, Decision::Failed, |e| {
                     e.detail = Some(format!("write: {message}"))
                 });
-                tool_error(format!(
-                    "{message} (nothing was changed: the transaction was rolled back)"
-                ))
+                // Never retried: with the connection gone, the commit may or may not have
+                // reached the server.
+                tool_error(match lost {
+                    Some(reason) => format!(
+                        "{message} (the connection was lost: {reason}. It is not known whether the write was committed: check before writing again. The next call opens a new session.)"
+                    ),
+                    None => {
+                        format!("{message} (nothing was changed: the transaction was rolled back)")
+                    }
+                })
             }
         }
     }
@@ -701,7 +757,11 @@ impl SpelaionMcp {
             max_rows,
             timeout: self.state.options.timeout,
         };
-        let result = open.lock().await.session.run_read_only(sql, &limits).await;
+        let (result, lost) = {
+            let open = open.lock().await;
+            let result = open.session.run_read_only(sql, &limits).await;
+            (result, lost(&open))
+        };
         match result {
             Ok(result) => {
                 self.audit(client, connection, sql, Decision::Executed, |e| {
@@ -723,7 +783,12 @@ impl SpelaionMcp {
                 self.audit(client, connection, sql, Decision::Failed, |e| {
                     e.detail = Some(message.clone())
                 });
-                tool_error(message)
+                tool_error(match lost {
+                    Some(reason) => format!(
+                        "{message} (the connection was lost: {reason}. The next call opens a new session.)"
+                    ),
+                    None => message,
+                })
             }
         }
     }

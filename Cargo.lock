@@ -5964,6 +5964,8 @@ dependencies = [
 name = "spelaion-mcp"
 version = "0.8.0"
 dependencies = [
+ "async-trait",
+ "futures-util",
  "rmcp",
  "rusqlite",
  "serde",
