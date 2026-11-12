@@ -1,5 +1,8 @@
 // Canvas result grid (ADR-010). Only what is visible is painted; scrolling is native
-// (a container with a "spacer" of the full size) and the canvas is redrawn on top.
+// (a container with a "spacer" of the full size) and the canvas is redrawn on top. Past the
+// browser's height cap the spacer stops growing and its scroll is scaled to the rows
+// (`grid/scroll.ts`, SDB-109): every row position read or set goes through `contentTop` and
+// `scrollToContent`, never the container's `scrollTop`.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -9,6 +12,7 @@ import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
 import { RowCache } from "../grid/rowCache";
+import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
 import { useDialogs, type ResultMeta, type SortState } from "../store";
 import { commandSpec, matchesShortcut } from "../commandRegistry";
 import { useExport } from "./ExportDialog";
@@ -271,6 +275,12 @@ export function ResultGrid({
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  /** The content position shown and the container position it was set at. While the scroll is
+   *  scaled the container's own position is too coarse to keep it, so it is kept here; a
+   *  container position other than `scroll` means the scroll bar was moved. */
+  const scrollPos = useRef({ content: 0, scroll: 0 });
+  /** The content's height (header and rows), for the helpers called outside the render. */
+  const contentH = useRef(0);
   const accessibleCell = useRef<HTMLDivElement>(null);
   const accessibleCellId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -529,6 +539,7 @@ export function ResultGrid({
   const rowNumW = Math.max(52, numbers.format(result.rows).length * 8 + PAD * 2);
   const totalW = rowNumW + (offsets[offsets.length - 1] ?? 0);
   const totalH = HEADER_H + result.rows * ROW_H;
+  contentH.current = totalH;
 
   // The canvas has no accessible cells. Expose the active one without putting result data in
   // React state; stale asynchronous answers must not announce a previously selected cell.
@@ -587,7 +598,7 @@ export function ResultGrid({
       accent: cssVar(style, "--accent"),
     };
     const left = scroller.scrollLeft;
-    const top = scroller.scrollTop;
+    const top = contentTop(scroller);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = c.bg;
     ctx.fillRect(0, 0, size.w, size.h);
@@ -862,13 +873,14 @@ export function ResultGrid({
     setQueryPage(0);
     requestedPageScroll.current = null;
     scrollerRef.current?.scrollTo(0, 0);
+    scrollPos.current = { content: 0, scroll: 0 };
   }, [result.id]);
 
   useEffect(() => {
     const row = requestedPageScroll.current;
     if (row !== null && result.rows > row) {
       requestedPageScroll.current = null;
-      scrollerRef.current?.scrollTo({ top: row * ROW_H });
+      scrollToContent(row * ROW_H);
     }
   }, [result.rows]);
 
@@ -881,8 +893,9 @@ export function ResultGrid({
     const x = clientX - rect.left;
     const y = clientY - rect.top;
     if (!clamp && (y < HEADER_H || x > scroller.clientWidth || y > scroller.clientHeight)) return null;
-    const row = Math.min(result.rows - 1, Math.max(0, Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H)));
-    if (!clamp && Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H) >= result.rows) return null;
+    const top = contentTop(scroller);
+    const row = Math.min(result.rows - 1, Math.max(0, Math.floor((y - HEADER_H + top) / ROW_H)));
+    if (!clamp && Math.floor((y - HEADER_H + top) / ROW_H) >= result.rows) return null;
     const gutter = x < rowNumW;
     let col = columnAtX(x, scroller.scrollLeft);
     if (col < 0) col = x - rowNumW + scroller.scrollLeft < 0 ? firstVisible : lastVisible;
@@ -1250,7 +1263,7 @@ export function ResultGrid({
     widest = Math.max(widest, ctx.measureText(meta.nativeType).width);
     ctx.font = DATA_FONT;
     const scroller = scrollerRef.current;
-    const first = scroller ? Math.floor(scroller.scrollTop / ROW_H) : 0;
+    const first = scroller ? Math.floor(contentTop(scroller) / ROW_H) : 0;
     const last = Math.min(result.rows, first + Math.ceil((size.h || 600) / ROW_H) + 1);
     for (let row = first; row < last; row++) {
       const value = cache.get(row, col);
@@ -1341,13 +1354,67 @@ export function ResultGrid({
     scrollerRef.current?.focus();
   }
 
+  /** The content position at the grid's top (row `r` starts at `r * ROW_H` in it). The
+   *  container's position itself until the result is taller than the spacer can be. */
+  function contentTop(scroller: HTMLDivElement | null = scrollerRef.current): number {
+    if (!scroller) return 0;
+    const map = scrollMap(contentH.current, scroller.clientHeight);
+    if (!isScaled(map)) return scroller.scrollTop;
+    const known = scrollPos.current;
+    if (Math.abs(scroller.scrollTop - known.scroll) < 1) return Math.min(known.content, maxContentTop(map));
+    return toContent(map, scroller.scrollTop);
+  }
+
+  /** Scrolls so that a content position is at the grid's top. */
+  function scrollToContent(top: number) {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const map = scrollMap(contentH.current, scroller.clientHeight);
+    if (!isScaled(map)) {
+      scroller.scrollTop = top;
+      return;
+    }
+    const content = Math.min(Math.max(0, top), maxContentTop(map));
+    const before = scroller.scrollTop;
+    scroller.scrollTop = toScroll(map, content);
+    scrollPos.current = { content, scroll: scroller.scrollTop };
+    // A move smaller than a pixel of the container fires no scroll event: paint it anyway.
+    if (scroller.scrollTop === before) onGridScroll();
+  }
+
+  // While the scroll is scaled a wheel moves the content by its own amount (a pixel of the
+  // container would be many rows); otherwise the browser scrolls as usual.
+  const onScaledWheel = useRef<(e: WheelEvent) => void>(() => {});
+  onScaledWheel.current = (e: WheelEvent) => {
+    const scroller = scrollerRef.current;
+    if (!scroller || e.ctrlKey || !isScaled(scrollMap(contentH.current, scroller.clientHeight))) return;
+    let dy = wheelPixels(e.deltaY, e.deltaMode, ROW_H, scroller.clientHeight - HEADER_H);
+    let dx = wheelPixels(e.deltaX, e.deltaMode, ROW_H, scroller.clientWidth - rowNumW);
+    if (e.shiftKey && dx === 0) {
+      dx = dy;
+      dy = 0;
+    }
+    e.preventDefault();
+    if (dx !== 0) scroller.scrollLeft += dx;
+    if (dy !== 0) scrollToContent(contentTop(scroller) + dy);
+  };
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    // Not passive: a scaled wheel replaces the browser's scroll.
+    const listener = (e: WheelEvent) => onScaledWheel.current(e);
+    scroller.addEventListener("wheel", listener, { passive: false });
+    return () => scroller.removeEventListener("wheel", listener);
+  }, []);
+
   function scrollIntoView(cell: Cell) {
     const scroller = scrollerRef.current;
     if (!scroller) return;
     const y = cell.row * ROW_H;
-    if (y < scroller.scrollTop) scroller.scrollTop = y;
-    else if (y + ROW_H > scroller.scrollTop + scroller.clientHeight - HEADER_H)
-      scroller.scrollTop = y + ROW_H - scroller.clientHeight + HEADER_H;
+    const top = contentTop(scroller);
+    if (y < top) scrollToContent(y);
+    else if (y + ROW_H > top + scroller.clientHeight - HEADER_H)
+      scrollToContent(y + ROW_H - scroller.clientHeight + HEADER_H);
     // The frozen column is always in view; the others scroll into the part it leaves.
     if (cell.col === frozenCol) return;
     const x = offsets[cell.col] ?? 0;
@@ -1583,11 +1650,12 @@ export function ResultGrid({
   const updatedRows = editing?.updatedRows ?? 0;
 
   function onGridScroll() {
+    const scroller = scrollerRef.current;
+    if (scroller) scrollPos.current = { content: contentTop(scroller), scroll: scroller.scrollTop };
     redraw();
     setMenu(null);
-    const scroller = scrollerRef.current;
     if (!paging || !scroller) return;
-    const bottom = Math.max(0, Math.min(result.rows - 1, Math.floor((scroller.scrollTop + scroller.clientHeight - HEADER_H - 1) / ROW_H)));
+    const bottom = Math.max(0, Math.min(result.rows - 1, Math.floor((contentTop(scroller) + scroller.clientHeight - HEADER_H - 1) / ROW_H)));
     setQueryPage(Math.floor(bottom / paging.pageSize));
     if (!pageBusy && !pageViewChanged && pageCanLoad && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) {
       void onLoadMore();
@@ -1603,7 +1671,7 @@ export function ResultGrid({
       if (!(await onLoadMore())) requestedPageScroll.current = null;
       return;
     }
-    scrollerRef.current?.scrollTo({ top: next * ROW_H });
+    scrollToContent(next * ROW_H);
   }
   function onResultShortcut(e: React.KeyboardEvent<HTMLDivElement>) {
     const target = e.target instanceof HTMLElement ? e.target : null;
@@ -1797,7 +1865,7 @@ export function ResultGrid({
             : "")
         }
       >
-        <div aria-hidden="true" style={{ width: totalW, height: totalH }} />
+        <div aria-hidden="true" style={{ width: totalW, height: scrollMap(totalH, 0).spacerH }} />
         {selection && selection.focus.row < result.rows && <div className="sr-only" role="row" aria-rowindex={selection.focus.row + 2}>
           <div ref={accessibleCell} id={accessibleCellId} role="gridcell" aria-colindex={Math.max(1, visibleCols.indexOf(selection.focus.col) + 1)} aria-selected="true" aria-live="polite" aria-atomic="true" />
         </div>}
@@ -2108,7 +2176,7 @@ export function ResultGrid({
           spellCheck={false}
           style={{
             left: cellEditor.col === frozenCol ? rowNumW : rowNumW + (offsets[cellEditor.col] ?? 0) - (scrollerRef.current?.scrollLeft ?? 0),
-            top: HEADER_H + cellEditor.row * ROW_H - (scrollerRef.current?.scrollTop ?? 0),
+            top: HEADER_H + cellEditor.row * ROW_H - contentTop(),
             width: widths[cellEditor.col] ?? MIN_COL,
             height: ROW_H,
           }}
@@ -2261,7 +2329,7 @@ export function ResultGrid({
               <select aria-label={t("table.pageSize")} value={paging.pageSize} disabled={pageBusy} onChange={(e) => onQueryPageSize(Number(e.target.value))}>
                 {PAGE_SIZES.map((size) => <option key={size} value={size}>{t("table.perPage", { count: size, formattedCount: numbers.format(size) })}</option>)}
               </select>
-              <button type="button" className="ghost" aria-label={t("table.previous")} disabled={pageBusy || queryPage === 0} onClick={() => scrollerRef.current?.scrollTo({ top: Math.max(0, queryPage - 1) * paging.pageSize * ROW_H })}>◀</button>
+              <button type="button" className="ghost" aria-label={t("table.previous")} disabled={pageBusy || queryPage === 0} onClick={() => scrollToContent(Math.max(0, queryPage - 1) * paging.pageSize * ROW_H)}>◀</button>
               <span className="small table-range" role="status">
                 {result.rows === 0 ? t("table.noRows") : t("table.range", { from: numbers.format(pageStart + 1), to: numbers.format(Math.min(result.rows, pageStart + paging.pageSize)) })}
                 {paging.total !== undefined && !pageViewChanged ? ` ${t("table.ofTotal", { total: numbers.format(paging.total) })}` : ""}

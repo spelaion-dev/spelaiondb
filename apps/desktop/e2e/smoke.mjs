@@ -5396,6 +5396,67 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     }
     await page.keyboard.press("Control+w");
   }
+
+  step("five million rows, past the browser's height cap: Ctrl+End, the scroll bar and the wheel reach every row (SDB-109)");
+  {
+    const huge = await newQuery("analytics", "select range as id from range(5000000) limit 5000000;");
+    await run(huge);
+    await huge.locator(".statusline", { hasText: "5,000,000 rows" }).waitFor({ timeout: 180_000 });
+    const grid = huge.locator(".grid-scroller");
+    const box = await grid.boundingBox();
+    const viewH = await grid.evaluate((el) => el.clientHeight);
+    const rowNum = 9 * 8 + 12; // "5,000,000" in the row-number gutter
+    // 5,000,000 rows of 24 px are 120,000,034 px: the spacer stays under Chromium's cap.
+    const spacer = await grid.evaluate((el) => el.scrollHeight);
+    assert.ok(spacer < 33_554_428, `the spacer is ${spacer} px`);
+    // The row the grid announces for its selected cell, once its value is read.
+    const cell = grid.getByRole("gridcell");
+    const selectedRow = async () => {
+      await page.waitForFunction((el) => /^Row [\d,]+, id \(.+\): \d+$/.test(el?.textContent ?? ""), await cell.elementHandle());
+      const [, row, value] = (await cell.textContent()).match(/^Row ([\d,]+), id \(.+\): (\d+)$/);
+      const number = Number(row.replace(/,/g, ""));
+      assert.equal(Number(value), number - 1, "the row shows its own value");
+      return number;
+    };
+    // A click on the first and the last row the grid shows.
+    const clickTop = async () => { await page.mouse.click(box.x + rowNum + 20, box.y + 34 + 12); return selectedRow(); };
+    const clickBottom = async () => { await page.mouse.click(box.x + rowNum + 20, box.y + viewH - 12); return selectedRow(); };
+    assert.equal(await clickTop(), 1);
+    // Ctrl+End selects the last row and scrolls it into view, where a click finds it.
+    await page.keyboard.press("Control+End");
+    await cell.getByText(/^Row 5,000,000, id \(.+\): 4999999$/).waitFor();
+    assert.equal(await clickBottom(), 5_000_000);
+    await setTheme("dark", "dark");
+    await shot("12a6-grid-past-height-cap-dark");
+    await setTheme("light", "light");
+    await shot("12a6-grid-past-height-cap-light");
+    // The wheel moves the rows by its own pixels, not by pixels of the shorter spacer (each
+    // one about four rows' worth here): 240 px up is ten rows, whatever delta the page got.
+    await grid.evaluate((el) => {
+      window.__gridWheel = { y: 0, modes: [] };
+      el.addEventListener("wheel", (e) => { window.__gridWheel.y += e.deltaY; window.__gridWheel.modes.push(e.deltaMode); });
+    });
+    await page.mouse.move(box.x + rowNum + 20, box.y + 200);
+    await page.mouse.wheel(0, -240);
+    await page.waitForTimeout(300);
+    const wheel = await page.evaluate(() => window.__gridWheel);
+    assert.ok(wheel.y < 0 && wheel.modes.every((mode) => mode === 0), `wheel ${JSON.stringify(wheel)}`);
+    // The last row ended at the bottom; the row now at the bottom is that many pixels higher.
+    assert.equal(await clickBottom(), Math.floor((5_000_000 * 24 - 12 + wheel.y) / 24) + 1);
+    // The scroll bar: its middle shows the middle rows, its end the last row.
+    await grid.evaluate((el) => (el.scrollTop = (el.scrollHeight - el.clientHeight) / 2));
+    await page.waitForTimeout(300);
+    const middle = await clickTop();
+    assert.ok(Math.abs(middle - 2_500_000) < 1_000, `the middle of the scroll shows row ${middle}`);
+    await grid.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await page.waitForTimeout(300);
+    assert.equal(await clickBottom(), 5_000_000);
+    // Ctrl+Home goes back to the first row.
+    await page.keyboard.press("Control+Home");
+    await cell.getByText(/^Row 1, id \(.+\): 0$/).waitFor();
+    assert.equal(await clickTop(), 1);
+    await page.keyboard.press("Control+w");
+  }
   // A second tab on the same file (DuckDB opens a file once per process: they share it).
   const second = await newQuery("analytics", "select count(*) as n from sales;");
   await run(second);
