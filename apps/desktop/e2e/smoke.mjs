@@ -517,6 +517,10 @@ try {
   await page.getByRole("dialog").getByText("Trust this repository?").waitFor();
   await shot("02-trust");
   await page.getByRole("button", { name: "Trust", exact: true }).click();
+  // Trusted, the banner goes a moment later and the explorer moves up under it: what a person
+  // sees before reaching for a row (a box measured with the banner still there aims at another
+  // row once it goes, SDB-279).
+  await page.getByRole("button", { name: "Review and trust" }).waitFor({ state: "detached" });
 
   step("connection search: a typo in the name, or the type, finds the connection");
   await page.keyboard.press("Control+Shift+F");
@@ -542,11 +546,22 @@ try {
   // the pointer is aimed again at the target's settled box until the explorer marks it.
   async function dragConnection(name, target) {
     const row = page.locator(".connection-row", { hasText: name });
-    const from = await settledBox(row.locator(".label"));
+    // Press where the row is now: the point is checked against the page right before the press,
+    // since anything above the explorer can still move it after its box settled (SDB-279).
+    let from = await settledBox(row.locator(".label"));
+    const pressedRow = (box) => page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest(".connection-row")?.textContent ?? null, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    for (let tries = 0; !(await pressedRow(from))?.includes(name); tries++) {
+      if (tries === 20) throw new Error(`"${name}" is not under its own box: ${JSON.stringify(from)} is over ${JSON.stringify(await pressedRow(from))}`);
+      from = await settledBox(row.locator(".label"));
+    }
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 + 12, { steps: 3 });
-    await row.and(page.locator(".dragged")).waitFor();
+    // The row pressed is the one dragged; another row dragged is a failure now, not in 30 s.
+    const dragged = page.locator(".connection-row.dragged");
+    await dragged.waitFor();
+    const draggedName = await dragged.textContent();
+    assert.ok(draggedName.includes(name), `pressed on "${name}" but "${draggedName}" is dragged`);
     for (let attempt = 0; ; attempt++) {
       const to = await settledBox(target());
       await page.mouse.move(to.x + to.width / 2 + (attempt % 2), to.y + to.height / 2, { steps: attempt === 0 ? 8 : 2 });
