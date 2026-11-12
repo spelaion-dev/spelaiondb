@@ -3807,6 +3807,10 @@ try {
   const lost = panel.locator(".status-lost");
   await lost.waitFor();
   assert.match(await lost.innerText(), /Connection lost/);
+  // The session is marked lost (its own event) as soon as the statement fails, before the run's
+  // last events arrive, and Run does nothing while a run is still going (SDB-82): the run's
+  // duration shows once it has ended (the statement's error follows it with no space between).
+  await panel.locator(".statusline", { hasText: /\d ms/ }).waitFor();
   // Running again does not reconnect on its own: it says why.
   await replaceQuery(panel, "select 'after reconnect' as marker;");
   await run(panel);
