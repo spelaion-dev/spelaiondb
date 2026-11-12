@@ -31,7 +31,7 @@ use spelaion_config::{
 use spelaion_core::{
     Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect, OpenConnection,
     OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth, SortKey,
-    StreamExport, TabKeeper, TunnelPool, open_connection, write_result,
+    StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -2589,7 +2589,8 @@ async fn dialect_for(state: &AppState, session: &str) -> Arc<dyn Dialect> {
 }
 
 /// A selection of a result as text (TSV, CSV, JSON or INSERT), formatted by the core from
-/// the typed data, for the clipboard.
+/// the typed data, for the clipboard. One cell copied as plain text is its value alone,
+/// without a line break after it.
 #[tauri::command]
 #[specta::specta]
 async fn copy_rows(
@@ -2624,9 +2625,7 @@ async fn copy_rows(
         header,
         csv: spelaion_core::CsvOptions::default(),
     };
-    let mut out = Vec::new();
-    write_result(&stored, &options, dialect.as_ref(), &mut out).map_err(|e| e.to_string())?;
-    String::from_utf8(out).map_err(|e| e.to_string())
+    copy_text(&stored, &options, dialect.as_ref()).map_err(|e| e.to_string())
 }
 
 /// Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
