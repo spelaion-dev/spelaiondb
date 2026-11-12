@@ -163,7 +163,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's
   own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine.
   A MySQL/MariaDB statement with executable comments (`/*!50001 … */`, `/*M! … */`) is
-  checked by the guard with their bodies both run and skipped, as the server's version decides. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  checked by the guard with their bodies both run and skipped, as the server's version decides.
+  A SQL Server batch the parser cannot read (T-SQL needs no `;`) is read token by token: a
+  `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word in it asks. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
   closes the ones a connection type says are idle too long, never with a transaction open
   (ADR-029): every use goes through its `Tracked` connection, and
   nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's
