@@ -59,6 +59,12 @@ results still in Arrow and the dialects and barriers kept in the core):
   `datetimeoffset` keeps the offset it was written with; all travel as the server's text with
   their native type (ADR-006), so the grid, "filter by this value", an edit's key and a copied INSERT carry
   every digit. A `datetimeoffset`'s text sorts by the instant it is, not by its text.
+- Note (2026-11-12, SDB-135): `Dialect::code_ranges` gives the byte ranges of a script that
+  are code, outside strings, quoted names and comments, read as that engine's splitter reads
+  them (SQL Server's `[names]`, `E'…'` strings, nested comments, `$tag$` bodies). The core
+  looks for things in the code (the editor's `:name` placeholders) only there, instead of
+  keeping a simpler scanner of its own that disagreed with the engines. It returns owned
+  ranges, so it can travel as a message when engines run as plugins (ADR-041).
 - `Done.rows_affected` is `None` for statements without a count (DDL, `SET`…).
 - Deliberate differences from `psql`: a `bool` cell is shown as `true`/`false`, and `money`
   without symbol or separators (they depend on `lc_monetary`).

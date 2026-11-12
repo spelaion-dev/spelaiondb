@@ -29,6 +29,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one read with text values bound to `bound_placeholder`'s placeholders (MySQL binds them to
   user variables with a prepared `SET`, then reads with the text protocol;
   `Capabilities::bound_params` is false for SQLite over SSH).
+  `Dialect::code_ranges` is what lies outside a script's strings, quoted names and comments, as
+  that engine's splitter reads them (each driver builds it from its splitter's own pieces with
+  `code_ranges`): the editor's `:name` placeholders (`spelaion-core`'s `params.rs`) are looked
+  for only there.
   `thread_cancel` is the cancel of the engines that run on a thread of their own (DuckDB, local
   SQLite): their interrupt only reaches the statement running at that moment, so a cancel is
   remembered for everything sent before it (a queued statement never starts, a running one is

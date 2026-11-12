@@ -24,6 +24,10 @@ impl Dialect for SqlServerDialect {
         split(script)
     }
 
+    fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
+        spelaion_driver_api::code_ranges(script, skip_non_code)
+    }
+
     fn quote_identifier(&self, ident: &str) -> String {
         let simple = ident
             .bytes()
@@ -361,27 +365,8 @@ fn split(script: &str) -> Vec<StatementSpan> {
                     .position(|&c| c == b'\n')
                     .map_or(b.len(), |p| i + p);
             }
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                // Block comments nest in T-SQL.
-                let mut nested = 0usize;
-                while i < b.len() {
-                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
-                        nested += 1;
-                        i += 2;
-                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
-                        nested -= 1;
-                        i += 2;
-                        if nested == 0 {
-                            break;
-                        }
-                    } else {
-                        if b[i] == b'\n' {
-                            at_line_start = false;
-                        }
-                        i += 1;
-                    }
-                }
-            }
+            // Block comments nest in T-SQL; a `GO` line inside one does not end the batch.
+            b'/' if b.get(i + 1) == Some(&b'*') => i = block_comment_end(b, i),
             b';' if depth == 0 && !rest_of_batch => {
                 if has_code {
                     // MERGE is the one statement T-SQL refuses without its `;`: it keeps it.
@@ -452,6 +437,45 @@ fn next_word(script: &str, from: usize) -> String {
         .next()
         .unwrap_or("")
         .to_ascii_lowercase()
+}
+
+/// The byte after a block comment that starts at `i` (`/*`); block comments nest in T-SQL.
+fn block_comment_end(b: &[u8], mut i: usize) -> usize {
+    let mut nested = 0usize;
+    while i < b.len() {
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            nested += 1;
+            i += 2;
+        } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+            nested -= 1;
+            i += 2;
+            if nested == 0 {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    b.len()
+}
+
+/// The byte after the string, bracketed or quoted name, or comment that starts at `i`, read
+/// as the splitter reads it; `None` when none starts there.
+fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+    let b = script.as_bytes();
+    match *b.get(i)? {
+        b'\'' => Some(skip_quoted(b, i, b'\'', b'\'')),
+        b'"' => Some(skip_quoted(b, i, b'"', b'"')),
+        b'[' => Some(skip_quoted(b, i, b'[', b']')),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some(
+            b[i..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(b.len(), |p| i + p + 1),
+        ),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i)),
+        _ => None,
+    }
 }
 
 /// Skips a quoted text starting at `i` (the opening character); a doubled closing character
