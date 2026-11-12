@@ -17,55 +17,15 @@ import {
 } from "../api";
 import { chooseSavePath } from "../dialogs";
 import type { ResultMeta } from "../store";
+import { CHART_SERIES, numericColumns, type ChartSettings } from "../chartDefaults";
 
-/** What a result's chart draws; kept per result while the tab is open. */
-export interface ChartSettings {
-  kind: ChartKindItem;
-  x: number;
-  y: number[];
-  aggregate: ChartAggregateItem;
-}
+export { CHART_SERIES, defaultChart, numericColumns, type ChartSettings } from "../chartDefaults";
 
-/** The colors of the theme's chart palette (styles.css), one per series. */
-export const CHART_SERIES = 8;
-const NUMERIC = new Set(["int", "float", "decimal"]);
-const TEMPORAL = new Set(["date", "time", "timestamp", "timestamptz"]);
 const PIE_AGGREGATES: ChartAggregateItem[] = ["sum", "count"];
 const AGGREGATES: ChartAggregateItem[] = ["sum", "avg", "min", "max", "count"];
 const KINDS: ChartKindItem[] = ["bar", "line", "pie"];
 /** Approximate width of a character of the chart's small text, for layout. */
 const CHAR_PX = 6.5;
-
-export function numericColumns(columns: ColumnItem[]): number[] {
-  return columns.flatMap((c, i) => (NUMERIC.has(c.logical) ? [i] : []));
-}
-
-/** A first chart for a result: `picked` are the columns selected in the grid, if any (the first
- *  is X, the numeric ones after it are Y). `null` when no column holds numbers. */
-export function defaultChart(columns: ColumnItem[], picked: number[] = []): ChartSettings | null {
-  const numeric = numericColumns(columns);
-  if (numeric.length === 0) return null;
-  const looksLikeKey = (i: number) => /^id$|_id$/i.test(columns[i]?.name ?? "");
-  let x: number;
-  let y: number[];
-  const first = picked[0];
-  if (first !== undefined) {
-    x = first;
-    y = picked.slice(1).filter((c) => NUMERIC.has(columns[c]?.logical ?? "")).slice(0, CHART_SERIES);
-  } else {
-    const temporal = columns.findIndex((c) => TEMPORAL.has(c.logical));
-    const label = columns.findIndex((c) => !NUMERIC.has(c.logical));
-    x = temporal >= 0 ? temporal : label >= 0 ? label : 0;
-    y = [];
-  }
-  if (y.length === 0) {
-    const candidates = numeric.filter((c) => c !== x);
-    const value = candidates.find((c) => !looksLikeKey(c)) ?? candidates[0] ?? numeric[0];
-    y = value === undefined ? [] : [value];
-  }
-  const kind: ChartKindItem = TEMPORAL.has(columns[x]?.logical ?? "") ? "line" : "bar";
-  return { kind, x, y, aggregate: "sum" };
-}
 
 /** Settings a pie accepts: one series, added up. */
 function fitKind(settings: ChartSettings, kind: ChartKindItem): ChartSettings {
