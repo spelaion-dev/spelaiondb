@@ -53,6 +53,12 @@ results still in Arrow and the dialects and barriers kept in the core):
   on a time line or writes a date in the column's form (a chart's X axis, the bulk "now")
   reads such a column by its native type (`spelaion-core`'s `temporal.rs`); a zero date is no
   point in time there and is skipped and counted, never dropped from the result or made NULL.
+- Note (2026-11-12, SDB-265): the same applies to a temporal type whose values a timestamp
+  cannot hold exactly. SQL Server's `datetime2` and `datetimeoffset` keep 100 ns (the seventh
+  digit of `SYSDATETIME()`), past a timestamp's microseconds, and a `datetimeoffset` keeps
+  the offset it was written with; both travel as the server's text with their native type
+  (ADR-006), so the grid, "filter by this value", an edit's key and a copied INSERT carry
+  every digit. A `datetimeoffset`'s text sorts by the instant it is, not by its text.
 - `Done.rows_affected` is `None` for statements without a count (DDL, `SET`…).
 - Deliberate differences from `psql`: a `bool` cell is shown as `true`/`false`, and `money`
   without symbol or separators (they depend on `lc_monetary`).

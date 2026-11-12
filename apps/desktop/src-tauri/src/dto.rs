@@ -5828,10 +5828,12 @@ pub enum TemporalStepItem {
 #[serde(rename_all = "camelCase")]
 pub struct TemporalPickerItem {
     pub kind: TemporalKindItem,
-    /// Fractional digits of a second the column keeps (0 to 6).
+    /// Fractional digits of a second the column keeps (0 to 7).
     pub digits: u8,
     pub padded: bool,
     pub step: TemporalStepItem,
+    /// A time zone is written with its own offset (SQL Server's `datetimeoffset`), not in UTC.
+    pub keeps_offset: bool,
 }
 
 impl From<spelaion_core::TemporalPicker> for TemporalPickerItem {
@@ -5851,6 +5853,7 @@ impl From<spelaion_core::TemporalPicker> for TemporalPickerItem {
                 TemporalStep::SqlServerDatetime => TemporalStepItem::SqlServerDatetime,
                 TemporalStep::Minutes => TemporalStepItem::Minutes,
             },
+            keeps_offset: t.keeps_offset,
         }
     }
 }
@@ -5872,6 +5875,7 @@ impl From<TemporalPickerItem> for spelaion_core::TemporalPicker {
                 TemporalStepItem::SqlServerDatetime => TemporalStep::SqlServerDatetime,
                 TemporalStepItem::Minutes => TemporalStep::Minutes,
             },
+            keeps_offset: t.keeps_offset,
         }
     }
 }

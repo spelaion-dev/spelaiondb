@@ -289,7 +289,8 @@ pub fn column_kind(
     options: &DataSearchOptions,
     value_is_number: bool,
 ) -> Option<SearchColumnKind> {
-    // MySQL's dates are text with their native type (SDB-122): searched as the dates they are.
+    // MySQL's dates and SQL Server's `datetime2` and `datetimeoffset` are text with their
+    // native type (SDB-122, SDB-265): searched as the dates they are.
     // SQLite's declared types are decided below.
     let logical = match engine {
         "sqlite" => column.logical,

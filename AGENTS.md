@@ -62,7 +62,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   its batch, where its variables live (the guard still checks each statement in it); a batch may return
   several result sets. Cancel is a TDS Attention through a patched tiberius in
   `vendor/tiberius` (read its `PATCHED.md` before upgrading). Tests against the Docker SQL
-  Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`.
+  Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`. `datetime2` and `datetimeoffset` are
+  text with their native type, exactly as the server writes them (100 ns and the value's own
+  offset; ADR-005 and ADR-006, 2026-11-12 notes): `temporal.rs` reads them as dates, and sorts
+  a `datetimeoffset` by its instant.
 - `crates/spelaion-driver-duckdb`: `duckdb` (bundled) in one thread per connection, one open
   per file shared by clones (ADR-016). Arrow from DuckDB converted in `exec.rs`; nested types
   written as DuckDB's text in `format.rs`. Its type zoo (`tests/duckdb.rs`) compares every
@@ -256,8 +259,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   saved to a file byte for byte, and a file loaded into a cell as one `edit.rs` UPDATE by primary
   key; `tests/value_files.rs` runs it on every engine.
   `value_pick.rs` is the cell panel's value pickers (SDB-58): a date and time written with the
-  column's precision as the grid shows it (UTC `+00` for a time zone; SQL Server's `datetime`
-  and `smalldatetime` rounded as the server does), the allowed values of an enum, a `SET` or a
+  column's precision as the grid shows it (UTC `+00` for a time zone, except SQL Server's
+  `datetimeoffset`, written with its offset and up to seven digits like its `datetime2`; its
+  `datetime` and `smalldatetime` rounded as the server does), the allowed values of an enum, a `SET` or a
   `CHECK (… IN (…))` read from the catalog (SQLite's from its `CREATE TABLE` text) only when
   exactly one list can be read reliably, and a foreign key's search: a checked page of the
   referenced table (never all of it), its filter written like "filter by this value". A pick is

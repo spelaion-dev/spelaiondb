@@ -676,6 +676,218 @@ async fn sqlserver_date_literals_mean_the_same_under_every_language() {
     }
 }
 
+/// SQL Server's `datetime2(7)` and `datetimeoffset(7)` keep 100 ns, and `SYSDATETIME()` fills
+/// all seven digits (SDB-265). The grid shows the server's own text, every digit and the
+/// value's own offset; "filter by this value" finds exactly the row it was written from when
+/// another row differs only in the seventh digit; an edit keyed by such a value applies; and
+/// a copied INSERT loads the same values back.
+#[tokio::test]
+async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
+    for (label, session, schema) in engines().await {
+        if label != "sqlserver" {
+            continue;
+        }
+        let drop = [
+            "DROP TABLE ge_seventh",
+            "DROP TABLE ge_seventh_d2",
+            "DROP TABLE ge_seventh_dto",
+        ];
+        run(label, &session, &drop, true).await;
+        // Now, with its seventh digit set to 3; the second row is 100 ns later, so both are in
+        // the same microsecond.
+        run(
+            label,
+            &session,
+            &[
+                "CREATE TABLE ge_seventh (id INT PRIMARY KEY, d2 DATETIME2(7), dto DATETIMEOFFSET(7))",
+                "DECLARE @d2 DATETIME2(7) = SYSDATETIME(); \
+                 DECLARE @dto DATETIMEOFFSET(7) = SWITCHOFFSET(SYSDATETIMEOFFSET(), '+02:00'); \
+                 SET @d2 = DATEADD(NANOSECOND, (3 - DATEPART(NANOSECOND, @d2) / 100 % 10) * 100, @d2); \
+                 SET @dto = DATEADD(NANOSECOND, (3 - DATEPART(NANOSECOND, @dto) / 100 % 10) * 100, @dto); \
+                 INSERT INTO ge_seventh VALUES (1, @d2, @dto), \
+                 (2, DATEADD(NANOSECOND, 100, @d2), DATEADD(NANOSECOND, 100, @dto))",
+                "CREATE TABLE ge_seventh_d2 (k DATETIME2(7) PRIMARY KEY, n INT)",
+                "INSERT INTO ge_seventh_d2 SELECT d2, id FROM ge_seventh",
+                "CREATE TABLE ge_seventh_dto (k DATETIMEOFFSET(7) PRIMARY KEY, n INT)",
+                "INSERT INTO ge_seventh_dto SELECT dto, id FROM ge_seventh",
+            ],
+            false,
+        )
+        .await;
+        let dialect = session.dialect();
+        let cells = |id: ResultId| -> Vec<Vec<String>> {
+            let stored = session.results().get(id).unwrap();
+            let r = stored.read().unwrap();
+            (0..r.rows())
+                .map(|row| {
+                    (1..3)
+                        .map(|c| r.value_at(row, c).unwrap().to_string())
+                        .collect()
+                })
+                .collect()
+        };
+        let server_text = run(
+            label,
+            &session,
+            &[
+                "SELECT id, CONVERT(VARCHAR(40), d2), CONVERT(VARCHAR(40), dto) \
+               FROM ge_seventh ORDER BY id",
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+        let server_text = cells(server_text);
+        assert!(server_text[0][0].ends_with('3'), "{server_text:?}");
+        assert!(server_text[0][1].ends_with("3 +02:00"), "{server_text:?}");
+        let select = "SELECT id, d2, dto FROM ge_seventh ORDER BY id";
+        let id = run(label, &session, &[select], false).await.unwrap();
+        assert_eq!(cells(id), server_text, "the grid shows the server's text");
+        let stored = session.results().get(id).unwrap();
+
+        // "Filter by this value": exactly the row it was written from.
+        for row in 0..2 {
+            for column in 1..3 {
+                let (meta, value) = {
+                    let r = stored.read().unwrap();
+                    (
+                        r.schema().columns[column].clone(),
+                        r.value_at(row, column).unwrap(),
+                    )
+                };
+                let condition = value_condition(
+                    dialect.as_ref(),
+                    &meta.name,
+                    meta.logical,
+                    FilterOp::Eq,
+                    &value,
+                )
+                .unwrap();
+                let filter = add_condition(dialect.as_ref(), "", &condition).unwrap();
+                let rows = count_table_rows(&session, schema, "ge_seventh", &filter)
+                    .await
+                    .unwrap_or_else(|e| panic!("{label}: {filter}\n→ {e}"));
+                assert_eq!(rows, 1, "{label}: {filter}");
+            }
+        }
+
+        // An edit keyed by each type: the first row, and only it.
+        for table_name in ["ge_seventh_d2", "ge_seventh_dto"] {
+            let key_id = run(
+                label,
+                &session,
+                &[&format!("SELECT k, n FROM {table_name} ORDER BY k")],
+                false,
+            )
+            .await
+            .unwrap();
+            let keys = session.results().get(key_id).unwrap();
+            let table = session
+                .connection()
+                .describe_table(schema, table_name)
+                .await
+                .unwrap();
+            let statements = spelaion_core::edit_statements(
+                dialect.as_ref(),
+                &table,
+                &keys.read().unwrap(),
+                &[spelaion_core::RowChange::Update {
+                    row: 0,
+                    values: vec![(1, spelaion_core::CellInput::Text("20".into()))],
+                }],
+            )
+            .unwrap();
+            assert_eq!(
+                spelaion_core::apply_edits(&session, &statements).await,
+                Ok(1),
+                "{table_name}: {statements:?}"
+            );
+            let edited = count_table_rows(&session, schema, table_name, "n = 20")
+                .await
+                .unwrap();
+            let first = count_table_rows(&session, schema, table_name, "n = 1")
+                .await
+                .unwrap();
+            assert_eq!((edited, first), (1, 0), "{table_name}");
+        }
+
+        // The INSERT copied from the grid loads every digit back.
+        let mut copied = Vec::new();
+        spelaion_core::write_result(
+            &stored.read().unwrap(),
+            &spelaion_core::ExportOptions {
+                format: spelaion_core::ExportFormat::SqlInsert {
+                    table: "ge_seventh".into(),
+                },
+                rows: 0..2,
+                columns: (0..3).collect(),
+                header: false,
+                csv: spelaion_core::CsvOptions::default(),
+            },
+            dialect.as_ref(),
+            &mut copied,
+        )
+        .unwrap();
+        let copied = String::from_utf8(copied).unwrap();
+        run(label, &session, &["DELETE FROM ge_seventh"], false).await;
+        let events: Vec<CoreEvent> = session.run_script(&copied).collect().await;
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, CoreEvent::StatementFailed { .. })),
+            "{copied}\n{events:?}"
+        );
+        let id = run(label, &session, &[select], false).await.unwrap();
+        assert_eq!(cells(id), server_text, "{copied}");
+
+        // The bulk "now" writes a `datetimeoffset` with its offset, which the server reads as
+        // this instant.
+        let stored = session.results().get(id).unwrap();
+        stored
+            .write()
+            .unwrap()
+            .edit_pending(spelaion_core::PendingEdit::Bulk {
+                block: spelaion_core::Block {
+                    first_row: 0,
+                    last_row: 1,
+                    columns: vec![1, 2],
+                },
+                action: spelaion_core::BulkAction::Now,
+            })
+            .unwrap();
+        let table = session
+            .connection()
+            .describe_table(schema, "ge_seventh")
+            .await
+            .unwrap();
+        let statements = {
+            let stored = stored.read().unwrap();
+            spelaion_core::edit_statements(
+                dialect.as_ref(),
+                &table,
+                &stored,
+                &stored.pending().changes(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            spelaion_core::apply_edits(&session, &statements).await,
+            Ok(2),
+            "{statements:?}"
+        );
+        let now = count_table_rows(
+            &session,
+            schema,
+            "ge_seventh",
+            "ABS(DATEDIFF(SECOND, dto, SYSDATETIMEOFFSET())) < 300",
+        )
+        .await
+        .unwrap();
+        assert_eq!(now, 2, "{statements:?}");
+        run(label, &session, &drop, true).await;
+    }
+}
+
 /// MySQL and MariaDB legacy zero dates after the first 10,000 rows (SDB-122): their date
 /// columns are text with their native type, so the whole result arrives; sorting puts the zero
 /// dates first, "filter by this value" finds exactly their rows, and a streaming export

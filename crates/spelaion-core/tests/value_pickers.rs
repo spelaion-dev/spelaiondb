@@ -300,9 +300,10 @@ async fn picked_dates_and_times_read_back_as_written_on_every_engine() {
         )
         .await;
 
-        // Two rounds: a late time with a full fraction, then an early one with a short fraction
-        // and an offset that moves a column with a time zone into the previous day.
-        for (time, fraction, offset) in [((23, 59, 58), "123456", 0), ((1, 30, 0), "5", 120)] {
+        // Two rounds: a late time with a full fraction (seven digits where the column keeps
+        // them), then an early one with a short fraction and an offset that moves a column with
+        // a time zone into the previous day, written in UTC or with its offset.
+        for (time, fraction, offset) in [((23, 59, 58), "1234567", 0), ((1, 30, 0), "5", 120)] {
             let mut picks = Vec::new();
             for (name, native) in columns {
                 let picker = value_picker(session, engine.schema, TABLE, name)
@@ -330,7 +331,14 @@ async fn picked_dates_and_times_read_back_as_written_on_every_engine() {
                 let text = picked_time_text(&picker, &picked)
                     .unwrap_or_else(|e| panic!("{label}: {name}: {e}"));
                 if picker.kind == TemporalKind::TimestampTz && offset == 120 {
-                    assert!(text.starts_with("2025-12-31 23:30:00"), "{label}: {text}");
+                    if picker.keeps_offset {
+                        assert!(
+                            text.starts_with("2026-01-01 01:30:00") && text.ends_with(" +02:00"),
+                            "{label}: {text}"
+                        );
+                    } else {
+                        assert!(text.starts_with("2025-12-31 23:30:00"), "{label}: {text}");
+                    }
                 }
                 picks.push((name.to_string(), text));
             }

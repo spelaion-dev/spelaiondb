@@ -451,6 +451,11 @@ impl PendingEdits {
                     let text = match page.date_logical(column) {
                         LogicalType::Date => local.format("%Y-%m-%d").to_string(),
                         LogicalType::Time => local.format("%H:%M:%S").to_string(),
+                        // SQL Server's `datetimeoffset` is its text (SDB-265): where it is, with
+                        // its offset, as the server writes it (it does not read `+00`).
+                        LogicalType::TimestampTz if page.is_text_date(column) => {
+                            local.format("%Y-%m-%d %H:%M:%S %:z").to_string()
+                        }
                         // As the grid shows a time zone: UTC, `+00`.
                         LogicalType::TimestampTz => utc.format("%Y-%m-%d %H:%M:%S+00").to_string(),
                         LogicalType::Timestamp | LogicalType::Text | LogicalType::Native => {
@@ -637,7 +642,8 @@ impl Page<'_> {
     }
 
     /// The column's logical type, with a text column that holds dates (MySQL's `DATE`,
-    /// `DATETIME`, `TIMESTAMP`, SDB-122) read as its date type: what "now" is written as, and
+    /// `DATETIME`, `TIMESTAMP`, SDB-122; SQL Server's `datetime2` and `datetimeoffset`,
+    /// SDB-265) read as its date type: what "now" is written as, and
     /// which columns are free text. Inputs are still checked against the column's own type.
     fn date_logical(&self, column: usize) -> LogicalType {
         self.result
@@ -645,6 +651,16 @@ impl Page<'_> {
             .columns
             .get(column)
             .map_or(LogicalType::Native, crate::temporal::effective_logical)
+    }
+
+    /// A text column that holds dates (`temporal.rs`).
+    fn is_text_date(&self, column: usize) -> bool {
+        self.result
+            .schema()
+            .columns
+            .get(column)
+            .and_then(crate::temporal::text_temporal)
+            .is_some()
     }
 
     /// Columns whose values are free text: the ones trimming and case changes touch.

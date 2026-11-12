@@ -18,7 +18,7 @@ use crate::find::{FindMatches, FindQuery, FindTicket, search};
 use crate::masking::{MaskPolicy, mask_batch, masked_schema};
 use crate::pending::{EditOutcome, PendingEdit, PendingEdits};
 use crate::selection_stats::{self, CellBlock, SelectionStats, StatsTicket};
-use crate::sort::{SortKey, ViewError, sorted_rows};
+use crate::sort::{SortKey, ViewError, sorted_instants, sorted_rows};
 
 /// Identifier of a result within a [`ResultStore`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -199,7 +199,12 @@ impl StoredResult {
             Vec::new()
         } else {
             let values = concat(&parts).map_err(|_| ViewError::UnexpectedArray(key.column))?;
-            sorted_rows(values.as_ref(), meta.logical, key)?
+            match crate::temporal::text_temporal(meta) {
+                Some(spelaion_driver_api::LogicalType::TimestampTz) => {
+                    sorted_instants(values.as_ref(), key)?
+                }
+                _ => sorted_rows(values.as_ref(), meta.logical, key)?,
+            }
         };
         self.sort = Some((key, rows));
         self.rebuild_view();
