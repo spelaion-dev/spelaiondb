@@ -1,8 +1,9 @@
 //! Text columns that hold dates (ADR-005's and ADR-006's 2026-11-12 notes). MySQL and MariaDB
 //! `DATE`, `DATETIME` and `TIMESTAMP` columns arrive as text with their native type (SDB-122):
 //! their legacy zero dates (`0000-00-00`) are no date, so a typed column would fail on them.
-//! SQL Server's `datetime2` and `datetimeoffset` do too (SDB-265): they keep 100 ns, past a
-//! timestamp's microseconds, and a `datetimeoffset` keeps the offset it was written with.
+//! SQL Server's `datetime2`, `datetimeoffset` (SDB-265) and `time` (SDB-268) do too: they keep
+//! 100 ns, past a timestamp's microseconds, and a `datetimeoffset` keeps the offset it was
+//! written with.
 //! Their text sorts and compares as the date does (a `datetimeoffset` sorts by its instant,
 //! [`instant_key`]), so filters and literals need nothing more; what places values on a time
 //! line (a chart's X axis) or writes "now" in the column's own form reads them as dates
@@ -12,7 +13,8 @@ use spelaion_driver_api::{ColumnMeta, LogicalType, Value};
 
 /// The date type a text column's values are, from its native type: `Date` for `date`,
 /// `Timestamp` for `datetime`, `timestamp` and `datetime2` (with or without a precision),
-/// `TimestampTz` for `datetimeoffset`. `None` for any other column, typed ones included.
+/// `TimestampTz` for `datetimeoffset`, `Time` for `time`. `None` for any other column, typed
+/// ones included (MySQL's `TIME` is an interval).
 pub(crate) fn text_temporal(column: &ColumnMeta) -> Option<LogicalType> {
     if column.logical != LogicalType::Text {
         return None;
@@ -26,6 +28,7 @@ pub(crate) fn text_temporal(column: &ColumnMeta) -> Option<LogicalType> {
         "date" => Some(LogicalType::Date),
         "datetime" | "timestamp" | "datetime2" => Some(LogicalType::Timestamp),
         "datetimeoffset" => Some(LogicalType::TimestampTz),
+        "time" => Some(LogicalType::Time),
         _ => None,
     }
 }
@@ -37,7 +40,8 @@ pub(crate) fn effective_logical(column: &ColumnMeta) -> LogicalType {
 
 /// A text value of a date column as that date: `YYYY-MM-DD` as a [`Value::Date`],
 /// `YYYY-MM-DD hh:mm:ss[.fffffff]` as a [`Value::Timestamp`] and the same followed by
-/// ` ±hh:mm` as a [`Value::TimestampTz`] in UTC; digits past the microsecond are dropped.
+/// ` ±hh:mm` as a [`Value::TimestampTz`] in UTC, and `hh:mm:ss[.fffffff]` as a
+/// [`Value::Time`]; digits past the microsecond are dropped.
 /// `None` for a zero or impossible date (`0000-00-00`, `2024-00-10`, `2024-02-30`), which is
 /// no point in time.
 pub(crate) fn parse(text: &str, logical: LogicalType) -> Option<Value> {
@@ -45,6 +49,7 @@ pub(crate) fn parse(text: &str, logical: LogicalType) -> Option<Value> {
         LogicalType::Date => parse_date(text).map(Value::Date),
         LogicalType::Timestamp => parse_timestamp(text).map(|n| Value::Timestamp(micros(n))),
         LogicalType::TimestampTz => instant_key(text).map(|n| Value::TimestampTz(micros(n))),
+        LogicalType::Time => parse_clock(text).map(|n| Value::Time(micros(n))),
         _ => None,
     }
 }
@@ -112,6 +117,11 @@ fn parse_date(text: &str) -> Option<i32> {
 fn parse_timestamp(text: &str) -> Option<i128> {
     let (date, time) = text.split_once(' ')?;
     let days = i128::from(parse_date(date)?);
+    Some(days * 86_400 * NANOS_PER_SECOND + parse_clock(time)?)
+}
+
+/// `hh:mm:ss[.f…]` (up to nine fractional digits) in nanoseconds since midnight.
+fn parse_clock(time: &str) -> Option<i128> {
     let (hms, fraction) = time.split_once('.').unwrap_or((time, ""));
     let mut parts = hms.splitn(3, ':');
     let h: i128 = parts.next()?.parse().ok()?;
@@ -128,7 +138,7 @@ fn parse_timestamp(text: &str) -> Option<i128> {
     } else {
         format!("{fraction:0<9}").parse::<i128>().ok()?
     };
-    Some((((days * 24 + h) * 60 + mi) * 60 + s) * NANOS_PER_SECOND + nanos)
+    Some(((h * 60 + mi) * 60 + s) * NANOS_PER_SECOND + nanos)
 }
 
 #[cfg(test)]
@@ -167,6 +177,12 @@ mod tests {
             text_temporal(&meta(LogicalType::Text, "datetimeoffset")),
             Some(LogicalType::TimestampTz)
         );
+        assert_eq!(
+            text_temporal(&meta(LogicalType::Text, "time")),
+            Some(LogicalType::Time)
+        );
+        // MySQL's TIME is an interval, not a time of day.
+        assert_eq!(text_temporal(&meta(LogicalType::Interval, "time")), None);
         assert_eq!(text_temporal(&meta(LogicalType::Text, "varchar")), None);
         // Typed columns are what they are.
         assert_eq!(text_temporal(&meta(LogicalType::Date, "date")), None);
@@ -225,6 +241,20 @@ mod tests {
             "2026-01-31 10:20:30.12x +00:00",
         ] {
             assert_eq!(instant_key(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn sql_server_times_read_to_the_microsecond() {
+        for (text, shown) in [
+            ("23:59:59.1234567", "23:59:59.123456"),
+            ("00:00:00", "00:00:00"),
+            ("10:20:30.500", "10:20:30.5"),
+        ] {
+            assert_eq!(parse(text, LogicalType::Time).unwrap().to_string(), shown);
+        }
+        for bad in ["24:00:00", "10:60:00", "10:20", "10:20:30.1x", "838:59:59"] {
+            assert_eq!(parse(bad, LogicalType::Time), None, "{bad}");
         }
     }
 

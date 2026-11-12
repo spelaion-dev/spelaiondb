@@ -676,8 +676,8 @@ async fn sqlserver_date_literals_mean_the_same_under_every_language() {
     }
 }
 
-/// SQL Server's `datetime2(7)` and `datetimeoffset(7)` keep 100 ns, and `SYSDATETIME()` fills
-/// all seven digits (SDB-265). The grid shows the server's own text, every digit and the
+/// SQL Server's `datetime2(7)`, `datetimeoffset(7)` and `time(7)` keep 100 ns, and
+/// `SYSDATETIME()` fills all seven digits (SDB-265, SDB-268). The grid shows the server's own text, every digit and the
 /// value's own offset; "filter by this value" finds exactly the row it was written from when
 /// another row differs only in the seventh digit; an edit keyed by such a value applies; and
 /// a copied INSERT loads the same values back.
@@ -691,6 +691,7 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
             "DROP TABLE ge_seventh",
             "DROP TABLE ge_seventh_d2",
             "DROP TABLE ge_seventh_dto",
+            "DROP TABLE ge_seventh_t",
         ];
         run(label, &session, &drop, true).await;
         // Now, with its seventh digit set to 3; the second row is 100 ns later, so both are in
@@ -699,17 +700,21 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
             label,
             &session,
             &[
-                "CREATE TABLE ge_seventh (id INT PRIMARY KEY, d2 DATETIME2(7), dto DATETIMEOFFSET(7))",
+                "CREATE TABLE ge_seventh (id INT PRIMARY KEY, d2 DATETIME2(7), dto DATETIMEOFFSET(7), \
+                 t TIME(7))",
                 "DECLARE @d2 DATETIME2(7) = SYSDATETIME(); \
                  DECLARE @dto DATETIMEOFFSET(7) = SWITCHOFFSET(SYSDATETIMEOFFSET(), '+02:00'); \
                  SET @d2 = DATEADD(NANOSECOND, (3 - DATEPART(NANOSECOND, @d2) / 100 % 10) * 100, @d2); \
                  SET @dto = DATEADD(NANOSECOND, (3 - DATEPART(NANOSECOND, @dto) / 100 % 10) * 100, @dto); \
-                 INSERT INTO ge_seventh VALUES (1, @d2, @dto), \
-                 (2, DATEADD(NANOSECOND, 100, @d2), DATEADD(NANOSECOND, 100, @dto))",
+                 INSERT INTO ge_seventh VALUES (1, @d2, @dto, CAST(@d2 AS TIME(7))), \
+                 (2, DATEADD(NANOSECOND, 100, @d2), DATEADD(NANOSECOND, 100, @dto), \
+                  CAST(DATEADD(NANOSECOND, 100, @d2) AS TIME(7)))",
                 "CREATE TABLE ge_seventh_d2 (k DATETIME2(7) PRIMARY KEY, n INT)",
                 "INSERT INTO ge_seventh_d2 SELECT d2, id FROM ge_seventh",
                 "CREATE TABLE ge_seventh_dto (k DATETIMEOFFSET(7) PRIMARY KEY, n INT)",
                 "INSERT INTO ge_seventh_dto SELECT dto, id FROM ge_seventh",
+                "CREATE TABLE ge_seventh_t (k TIME(7) PRIMARY KEY, n INT)",
+                "INSERT INTO ge_seventh_t SELECT t, id FROM ge_seventh",
             ],
             false,
         )
@@ -720,7 +725,7 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
             let r = stored.read().unwrap();
             (0..r.rows())
                 .map(|row| {
-                    (1..3)
+                    (1..4)
                         .map(|c| r.value_at(row, c).unwrap().to_string())
                         .collect()
                 })
@@ -730,8 +735,8 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
             label,
             &session,
             &[
-                "SELECT id, CONVERT(VARCHAR(40), d2), CONVERT(VARCHAR(40), dto) \
-               FROM ge_seventh ORDER BY id",
+                "SELECT id, CONVERT(VARCHAR(40), d2), CONVERT(VARCHAR(40), dto), \
+                 CONVERT(VARCHAR(40), t) FROM ge_seventh ORDER BY id",
             ],
             false,
         )
@@ -740,14 +745,15 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
         let server_text = cells(server_text);
         assert!(server_text[0][0].ends_with('3'), "{server_text:?}");
         assert!(server_text[0][1].ends_with("3 +02:00"), "{server_text:?}");
-        let select = "SELECT id, d2, dto FROM ge_seventh ORDER BY id";
+        assert!(server_text[0][2].ends_with('3'), "{server_text:?}");
+        let select = "SELECT id, d2, dto, t FROM ge_seventh ORDER BY id";
         let id = run(label, &session, &[select], false).await.unwrap();
         assert_eq!(cells(id), server_text, "the grid shows the server's text");
         let stored = session.results().get(id).unwrap();
 
         // "Filter by this value": exactly the row it was written from.
         for row in 0..2 {
-            for column in 1..3 {
+            for column in 1..4 {
                 let (meta, value) = {
                     let r = stored.read().unwrap();
                     (
@@ -772,7 +778,7 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
         }
 
         // An edit keyed by each type: the first row, and only it.
-        for table_name in ["ge_seventh_d2", "ge_seventh_dto"] {
+        for table_name in ["ge_seventh_d2", "ge_seventh_dto", "ge_seventh_t"] {
             let key_id = run(
                 label,
                 &session,
@@ -820,7 +826,7 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
                     table: "ge_seventh".into(),
                 },
                 rows: 0..2,
-                columns: (0..3).collect(),
+                columns: (0..4).collect(),
                 header: false,
                 csv: spelaion_core::CsvOptions::default(),
             },
@@ -850,7 +856,7 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
                 block: spelaion_core::Block {
                     first_row: 0,
                     last_row: 1,
-                    columns: vec![1, 2],
+                    columns: vec![1, 2, 3],
                 },
                 action: spelaion_core::BulkAction::Now,
             })

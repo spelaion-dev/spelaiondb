@@ -53,7 +53,8 @@ pub fn column_meta(name: &str, column_type: ColumnType) -> ColumnMeta {
         // with its native type (ADR-006's 2026-11-12 note, SDB-265).
         ColumnType::Datetime2 => (LogicalType::Text, "datetime2"),
         ColumnType::Daten => (LogicalType::Date, "date"),
-        ColumnType::Timen => (LogicalType::Time, "time"),
+        // 100 ns steps too: the server's text with its native type (SDB-268).
+        ColumnType::Timen => (LogicalType::Text, "time"),
         // Also keeps the offset it was written with: the server's text, which has both.
         ColumnType::DatetimeOffsetn => (LogicalType::Text, "datetimeoffset"),
         ColumnType::SSVariant => (LogicalType::Native, "sql_variant"),
@@ -189,7 +190,11 @@ pub fn text(data: &ColumnData<'static>) -> Option<String> {
             let days = date_days((*v)?);
             spelaion_driver_api::Value::Date(i32::try_from(days).ok()?).to_string()
         }
-        ColumnData::Time(v) => spelaion_driver_api::Value::Time(time_micros((*v)?)).to_string(),
+        // As SQL Server writes it: every digit of its scale (`23:59:59.1234567`).
+        ColumnData::Time(v) => {
+            let time = (*v)?;
+            clock_text(time.increments(), time.scale())
+        }
         ColumnData::DateTime2(v) => datetime2_text((*v)?)?,
         ColumnData::DateTimeOffset(v) => datetimeoffset_text((*v)?)?,
         other => spelaion_driver_api::Value::Timestamp(timestamp(other)?).to_string(),
@@ -340,6 +345,12 @@ mod tests {
         ];
         for (value, shown) in cases {
             assert_eq!(text(&ColumnData::DateTime2(Some(value))).unwrap(), shown);
+            // A `time` is the same clock without the date.
+            let time = value.time();
+            assert_eq!(
+                text(&ColumnData::Time(Some(time))).unwrap(),
+                shown["2024-01-01 ".len()..]
+            );
         }
         // Travels in UTC; shown where its offset is, which may be another day.
         let utc = at(23 * 3_600 * 10_000_000 + 30 * 600_000_000 + 7, 7);
