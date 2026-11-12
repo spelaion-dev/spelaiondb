@@ -19,7 +19,8 @@ postgres-protocol.workspace = true
 # ring instead of aws-lc-rs: the latter needs CMake and NASM on Windows.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-native-certs = "0.8"
-tokio.workspace = true
+# `net` and `io-util`: the cancel request opens its own socket and waits for its close.
+tokio = { workspace = true, features = ["net", "io-util"] }
 tokio-postgres.workspace = true
 tokio-postgres-rustls = { version = "0.14", features = ["ring"] }
 
