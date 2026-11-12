@@ -116,13 +116,20 @@ impl ConnectionTests {
 type CmdResult<T> = Result<T, String>;
 
 impl AppState {
+    /// Every change to the trust store goes through `TrustStore::update`, one at a time, so
+    /// none saves over another it did not see (SDB-276).
+    fn change_trust<T, E: From<spelaion_config::ConfigError> + ToString>(
+        &self,
+        change: impl FnOnce(&mut TrustStore) -> Result<T, E>,
+    ) -> CmdResult<T> {
+        TrustStore::update(&self.user_dir, change).map_err(|e| e.to_string())
+    }
+
     async fn reload(&self) {
         let version = self.workspace_version.load(Ordering::Acquire);
         let workspace = self.workspace.read().await.clone();
         let loaded = load(workspace.as_deref(), &self.user_dir);
-        if let Ok(mut trust) = TrustStore::load(&self.user_dir) {
-            let _ = trust.adopt(&loaded);
-        }
+        let _ = self.change_trust(|trust| trust.adopt(&loaded));
         let mut config = self.config.write().await;
         // A reload started in the previous folder must not overwrite the new one.
         if version == self.workspace_version.load(Ordering::Acquire) {
@@ -460,14 +467,11 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
 #[tauri::command]
 #[specta::specta]
 async fn trust_workspace(root: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
-    let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
     if config.workspace_root.as_deref() != Some(Path::new(&root)) {
         return Err("the folder changed; trust it again".into());
     }
-    trust
-        .trust_if_untrusted(&config)
-        .map_err(|e| e.to_string())?;
+    state.change_trust(|trust| trust.trust_if_untrusted(&config))?;
     drop(config);
     state.info().await
 }
@@ -588,7 +592,6 @@ async fn accept_change(
 ) -> CmdResult<()> {
     state.reload().await;
     let config = state.config.read().await;
-    let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let change = spelaion_config::ItemChange {
         item,
         new: is_new,
@@ -601,9 +604,7 @@ async fn accept_change(
             })
             .collect(),
     };
-    trust
-        .accept_reviewed(&config, Path::new(&root), &change)
-        .map_err(|e| e.to_string())
+    state.change_trust(|trust| trust.accept_reviewed(&config, Path::new(&root), &change))
 }
 
 #[tauri::command]
@@ -1005,9 +1006,7 @@ async fn add_connection(
             spelaion_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
                 .map_err(|e| e.to_string())?;
         if id.source == Source::Workspace {
-            TrustStore::load(&state.user_dir)
-                .and_then(|mut trust| trust.accept_connection_write(&config, &id, &file))
-                .map_err(|e| e.to_string())?;
+            state.change_trust(|trust| trust.accept_connection_write(&config, &id, &file))?;
         }
         id
     };
@@ -1121,9 +1120,7 @@ async fn update_connection(
         )
         .map_err(|e| e.to_string())?;
         if id.source == Source::Workspace {
-            TrustStore::load(&state.user_dir)
-                .and_then(|mut trust| trust.accept_connection_edit(&config, &id, &written))
-                .map_err(|e| e.to_string())?;
+            state.change_trust(|trust| trust.accept_connection_edit(&config, &id, &written))?;
         }
     }
     state.reload().await;
@@ -1156,14 +1153,14 @@ async fn duplicate_connection(
 ) -> CmdResult<DuplicatedItem> {
     let duplicated = {
         let config = state.config.read().await;
-        let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-        spelaion_config::duplicate_connection(
-            &config,
-            &mut trust,
-            &parse_id(&connection),
-            &SystemBackend,
-        )
-        .map_err(|e| e.to_string())?
+        state.change_trust(|trust| {
+            spelaion_config::duplicate_connection(
+                &config,
+                trust,
+                &parse_id(&connection),
+                &SystemBackend,
+            )
+        })?
     };
     state.reload().await;
     Ok(DuplicatedItem {
@@ -1198,10 +1195,9 @@ async fn move_connection(
     state.tabs.flush().await.map_err(|e| e.to_string())?;
     let (moved, workspace) = {
         let config = state.config.read().await;
-        let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-        let moved =
-            spelaion_config::move_connection(&config, &mut trust, &id, &folder, &SystemBackend)
-                .map_err(|e| e.to_string())?;
+        let moved = state.change_trust(|trust| {
+            spelaion_config::move_connection(&config, trust, &id, &folder, &SystemBackend)
+        })?;
         let workspace = match id.source {
             Source::User => None,
             Source::Workspace => Some(history_workspace(&config, Source::Workspace)),
@@ -1633,9 +1629,7 @@ async fn add_tunnel(
         )
         .map_err(|e| e.to_string())?;
         if !personal {
-            TrustStore::load(&state.user_dir)
-                .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
-                .map_err(|e| e.to_string())?;
+            state.change_trust(|trust| trust.accept_tunnel_write(&config, &name, &file))?;
         }
         name
     };
@@ -1676,9 +1670,7 @@ async fn update_tunnel(
         )
         .map_err(|e| e.to_string())?;
         if !personal {
-            TrustStore::load(&state.user_dir)
-                .and_then(|mut trust| trust.accept_tunnel_edit(&config, &name, &written))
-                .map_err(|e| e.to_string())?;
+            state.change_trust(|trust| trust.accept_tunnel_edit(&config, &name, &written))?;
         }
     }
     state.reload().await;

@@ -16,7 +16,7 @@ import { createServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import { crc32, deflateSync } from "node:zlib";
 import { createCipheriv } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -145,6 +145,29 @@ function startApp() {
   });
 }
 
+// What a run can leave in the demo repository's connections when it stops halfway (SDB-276):
+// Shop (SQLite) moved into docker/ or docker/eu/, and the duplicated MySQL connection. Every run
+// puts them back before the app starts and again at its end, so a failed run never breaks the
+// next one (two connections named "Shop (SQLite)" fail its first step).
+const demoConnections = join(demo, ".spelaion", "connections");
+const shopFile = join(demoConnections, "shop.toml");
+const movedShops = [join(demoConnections, "docker", "shop.toml"), join(demoConnections, "docker", "eu", "shop.toml")];
+function restoreDemoConnections() {
+  for (const moved of movedShops) {
+    if (!existsSync(moved)) continue;
+    // A moved shop.toml is the same file, byte for byte: it goes back when shop.toml is gone.
+    if (existsSync(shopFile)) rmSync(moved);
+    else renameSync(moved, shopFile);
+  }
+  try {
+    rmdirSync(join(demoConnections, "docker", "eu"));
+  } catch {
+    // Not there, or something else is in it: left as it is.
+  }
+  for (const copy of ["mysql-copy.toml", "mysql-copy-2.toml"]) rmSync(join(demoConnections, "docker", copy), { force: true });
+}
+restoreDemoConnections();
+
 // The run changes the demo's shop.db (the column editor rebuilds product, among others), so
 // every run starts from a fresh one: a later run would otherwise find nothing to change.
 execFileSync(process.platform === "win32" ? "python" : "python3", [join(demo, "make-shop-db.py")], { stdio: "inherit" });
@@ -236,7 +259,6 @@ async function connect() {
 
 let failed = false;
 // The demo's shop.toml is changed during the run (ADR-022) and always put back.
-const shopFile = join(demo, ".spelaion", "connections", "shop.toml");
 const shopOriginal = readFileSync(shopFile, "utf8");
 let browser = await connect();
 try {
@@ -7730,8 +7752,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   }
 } finally {
   writeFileSync(shopFile, shopOriginal);
-  // A copy the run made in the demo repository, if a failure left it behind.
-  for (const copy of ["mysql-copy.toml", "mysql-copy-2.toml"]) rmSync(join(demo, ".spelaion", "connections", "docker", copy), { force: true });
+  restoreDemoConnections();
   await browser.close().catch(() => {});
   await stopApp();
   // WebView2 lets go of its profile (inside userDir) a moment after the app exits.

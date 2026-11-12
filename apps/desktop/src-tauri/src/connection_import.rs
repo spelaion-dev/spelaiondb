@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_config::{
     Config, DuplicateAction, ImportClient, ImportedConnection, Source, SystemBackend,
-    TableplusError, TargetFolder, TrustStore,
+    TableplusError, TargetFolder,
 };
 use spelaion_driver_api::Secret;
 use tauri::State;
@@ -545,9 +545,7 @@ async fn import_one(
             let name = spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
                 .map_err(|e| e.to_string())?;
             if source == Source::Workspace {
-                TrustStore::load(&state.user_dir)
-                    .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
-                    .map_err(|e| e.to_string())?;
+                state.change_trust(|trust| trust.accept_tunnel_write(&config, &name, &file))?;
             }
             created_tunnel = true;
         }
@@ -570,11 +568,9 @@ async fn import_one(
                     )
                     .map_err(|e| e.to_string())?;
                     if source == Source::Workspace {
-                        TrustStore::load(&state.user_dir)
-                            .and_then(|mut trust| {
-                                trust.accept_connection_edit(&config, &id, &written)
-                            })
-                            .map_err(|e| e.to_string())?;
+                        state.change_trust(|trust| {
+                            trust.accept_connection_edit(&config, &id, &written)
+                        })?;
                     }
                     Some(name)
                 }
@@ -607,9 +603,7 @@ async fn import_one(
             if let Ok(id) = &result
                 && source == Source::Workspace
             {
-                TrustStore::load(&state.user_dir)
-                    .and_then(|mut trust| trust.accept_connection_write(&config, id, &file))
-                    .map_err(|e| e.to_string())?;
+                state.change_trust(|trust| trust.accept_connection_write(&config, id, &file))?;
             }
             result
         };
