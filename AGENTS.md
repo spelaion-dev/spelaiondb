@@ -77,7 +77,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
-  change there needs tests that try to get around it). If you change `model.rs`,
+  change there needs tests that try to get around it). Every change to the trust store goes
+  through `TrustStore::update`, one at a time, so none saves over another it did not see
+  (`tests/trust_updates.rs`); `TrustStore::load` is for reading. If you change `model.rs`,
   regenerate the schema: `SPELAION_UPDATE_SCHEMA=1 cargo test -p spelaion-config`.
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
