@@ -3430,6 +3430,32 @@ try {
     assert.equal(await canvas.locator(".er-name").count(), 0);
     await view.getByRole("radio", { name: "All columns" }).click();
     await page.waitForFunction(() => document.querySelector(".tab-panel:not([hidden]) .er-canvas")?.getAttribute("data-layouts") === "4");
+    // A table's menu opened at the window's bottom-right corner stays inside the window, every
+    // item where a click reaches it (SDB-255). The menu opens where the event says the pointer
+    // is, so the event is sent on the table with the corner's coordinates.
+    await canvas.locator(".er-node:not(.focus) .er-box").evaluate((box) => {
+      box.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: window.innerWidth - 4, clientY: window.innerHeight - 4 }));
+    });
+    const edgeMenu = view.getByRole("menu").filter({ has: page.getByRole("menuitem", { name: "Focus on this table" }) });
+    await edgeMenu.waitFor();
+    await page.waitForFunction(() => {
+      const menu = [...document.querySelectorAll(".tab-panel:not([hidden]) .object-menu")].find((m) => m.textContent.includes("Focus on this table"));
+      if (!menu) return false;
+      const box = menu.getBoundingClientRect();
+      const inside = box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight;
+      const reachable = [...menu.querySelectorAll('[role="menuitem"]')].every((item) => {
+        const r = item.getBoundingClientRect();
+        return menu.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+      });
+      return inside && reachable;
+    });
+    const setThemeHere = (theme) => page.evaluate((value) => { document.documentElement.dataset.theme = value; window.dispatchEvent(new Event("spelaion-themechange")); }, theme);
+    await setThemeHere("dark");
+    await shot("sdb-255-er-menu-edge-dark");
+    await setThemeHere("light");
+    await shot("sdb-255-er-menu-edge-light");
+    await page.keyboard.press("Escape");
+    await edgeMenu.waitFor({ state: "detached" });
     // A table's menu focuses on it in a new tab.
     await canvas.locator(".er-node:not(.focus) .er-box").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Focus on this table" }).click();

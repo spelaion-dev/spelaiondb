@@ -23,6 +23,7 @@ import { chooseSavePath } from "../dialogs";
 import { openDiagram } from "../diagramTabs";
 import { useApp, type Tab } from "../store";
 import { Icon } from "./Icons";
+import { ObjectMenu } from "./ObjectMenu";
 
 /** Ids the core keeps each tab's model under. */
 let nextDiagram = 1;
@@ -621,11 +622,12 @@ export function ErDiagramView({ tab }: { tab: Tab }) {
         )}
       </div>
       {menu && menuNode && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        // A table near the bottom or the right edge opens it inside the window too (SDB-255).
+        <ObjectMenu at={menu}>
           <button role="menuitem" onClick={() => { setMenu(null); openFocus(menuNode); }}>{t("diagram.focus")}</button>
           <button role="menuitem" onClick={() => { setMenu(null); openData(menuNode); }}>{t("diagram.openData")}</button>
           <button role="menuitem" onClick={() => { setMenu(null); openStructure(menuNode); }}>{t("diagram.openStructure")}</button>
-        </div>
+        </ObjectMenu>
       )}
     </div>
   );

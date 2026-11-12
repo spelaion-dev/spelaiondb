@@ -67,7 +67,8 @@ import type { PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } fro
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
 import { openDiagram } from "../diagramTabs";
-import { MENU_MARGIN, placeMenu, useMenuInWindow } from "../menuPlacement";
+import { MENU_MARGIN, placeMenu } from "../menuPlacement";
+import { ObjectMenu } from "./ObjectMenu";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -193,18 +194,6 @@ function dropFolderAt(x: number, y: number, personal: boolean): string | null {
 /** Whether a name contains the quick filter's text, ignoring case. An empty filter keeps all. */
 function matchesFilter(name: string, filter: string): boolean {
   return filter === "" || name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
-}
-
-/** An explorer row's context menu: where it was opened when it fits, otherwise moved up or left
- * to stay inside the window (a row at the bottom of a long explorer opens it near the edge). */
-function ObjectMenu({ at, className, children }: { at: { x: number; y: number }; className?: string; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useMenuInWindow(ref, at.x, at.y);
-  return (
-    <div ref={ref} className={className ? `grid-menu object-menu ${className}` : "grid-menu object-menu"} role="menu" style={{ position: "fixed", left: at.x, top: at.y }}>
-      {children}
-    </div>
-  );
 }
 
 /** A separate submenu, positioned outside the scrollable explorer menu. */
