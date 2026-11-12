@@ -1096,6 +1096,9 @@ select {
   line-height: var(--leading-md);
   cursor: pointer;
   white-space: nowrap;
+  /* A tab is dragged, never its text: a press on selected text would start a native drag of
+     the text and cancel the tab's drag (SDB-270), and every drag would select labels. */
+  user-select: none;
   transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 .tab:hover { background: var(--hover); color: var(--fg); }
@@ -1200,6 +1203,7 @@ select {
 .tab.drop-before::before { left: -3px; }
 .tab.drop-after::before { right: -3px; }
 .tab-rename {
+  user-select: text;
   min-width: 0;
   max-width: 260px;
   height: var(--control-sm);

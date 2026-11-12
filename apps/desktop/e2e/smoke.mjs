@@ -87,6 +87,7 @@ writeFileSync(join(workbenchHome, "workbench_user_data.dat"), "not a vault");
 const fakeCli = join(userDir, process.platform === "win32" ? "spelaiondb.exe" : "spelaiondb");
 writeFileSync(fakeCli, "");
 const editSmokeComplete = Symbol("edit smoke complete");
+const untilComplete = Symbol("smoke complete up to SPELAION_E2E_UNTIL");
 mkdirSync(shots, { recursive: true });
 
 /** A local port nothing listens on right now. */
@@ -220,7 +221,14 @@ try {
   let page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(30_000);
   const shot = (name) => page.screenshot({ path: join(shots, `${name}.png`) });
-  const step = (text) => console.log(`· ${text}`);
+  // SPELAION_E2E_UNTIL=<the start of a step's text>: the run stops as a pass when the step
+  // after that one begins, to repeat one step without the whole run.
+  let untilReached = false;
+  const step = (text) => {
+    if (untilReached) throw untilComplete;
+    if (process.env.SPELAION_E2E_UNTIL && text.startsWith(process.env.SPELAION_E2E_UNTIL)) untilReached = true;
+    console.log(`· ${text}`);
+  };
 
   async function newQuery(connection, sql) {
     // Double-clicking a connection opens a new query on it (its row has no buttons, SDB-102).
@@ -1989,25 +1997,43 @@ try {
     assert.equal(await shown.locator("select").first().evaluate((el) => el.selectedOptions[0].text), "Shop (SQLite) (sqlite)");
     await activeTab.locator(".dot-disconnected").waitFor();
     // Drag the copy one place right, then onto the pinned tab: it stays after the pinned ones.
-    const dragTab = async (from, to, end) => {
-      const a = await tabs.nth(from).boundingBox();
-      const b = await tabs.nth(to).boundingBox();
+    // As a person would: press once the tab has stopped moving, see it dragged, and let go only
+    // when the drop marker shows where it lands (`marker`), aiming again if it does not.
+    const dragTab = async (from, to, end, marker) => {
+      const a = await settledBox(tabs.nth(from));
       await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
       await page.mouse.down();
       await page.mouse.move(a.x + a.width / 2 + (end === "right" ? 12 : -12), a.y + a.height / 2, { steps: 3 });
-      await page.mouse.move(end === "right" ? b.x + b.width - 6 : b.x + 6, b.y + b.height / 2, { steps: 8 });
-      await page.locator(".tabbar .tab.dragging").waitFor();
+      await tabs.nth(from).and(page.locator(".dragging")).waitFor();
+      for (let attempt = 0; ; attempt++) {
+        const b = await settledBox(tabs.nth(to));
+        await page.mouse.move((end === "right" ? b.x + b.width - 6 : b.x + 6) + (attempt % 2), b.y + b.height / 2, { steps: attempt === 0 ? 8 : 2 });
+        try {
+          await marker.waitFor({ timeout: 3_000 });
+          return;
+        } catch (error) {
+          if (attempt < 4) continue;
+          throw new Error(`${error.message}\n${JSON.stringify(await page.evaluate(() => [...document.querySelectorAll(".tabbar .tab")].map((tab) => `${tab.textContent} [${tab.className}]`)))}`);
+        }
+      }
     };
-    await dragTab(1, 2, "right");
+    // A drag selects no text: a press on selected text would drag the text, not the tab.
+    const noTextSelected = async () => assert.equal(await page.evaluate(() => window.getSelection().toString()), "");
+    const count = await tabs.count();
+    // One place right: it lands before the tab after the next one, or after the last tab.
+    await dragTab(1, 2, "right", count > 3 ? tabs.nth(3).and(page.locator(".drop-before")) : tabs.nth(2).and(page.locator(".drop-after")));
     await shot("05f-tab-drag");
     await page.mouse.up();
     await page.locator(".tabbar .tab.dragging").waitFor({ state: "detached" });
     assert.equal((await labels())[2], "Orders report (copy)");
     assert.equal(await activeLabel(), "Orders report (copy)");
-    await dragTab(2, 0, "left");
+    await noTextSelected();
+    // Right away, the same tab again: onto the pinned tab, it lands just after it.
+    await dragTab(2, 0, "left", tabs.nth(1).and(page.locator(".drop-before")));
     await page.mouse.up();
     await page.locator(".tabbar .tab.dragging").waitFor({ state: "detached" });
     assert.deepEqual((await labels()).slice(0, 2), ["Orders report", "Orders report (copy)"]);
+    await noTextSelected();
     // Ctrl+Shift+PageDown / PageUp move the active tab by one place.
     await page.keyboard.press("Control+Shift+PageDown");
     assert.equal((await labels())[2], "Orders report (copy)");
@@ -7574,6 +7600,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   console.log(`\nOK. Screenshots in ${shots}`);
 } catch (e) {
   if (e === editSmokeComplete) console.log("\nOK. Editing smoke test passed.");
+  else if (e === untilComplete) console.log(`\nOK. Smoke test passed up to "${process.env.SPELAION_E2E_UNTIL}".`);
   else {
     failed = true;
     console.error("\nFAILED:", e);
