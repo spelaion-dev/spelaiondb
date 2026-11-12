@@ -935,6 +935,102 @@ async fn a_server_that_never_answers_times_out_as_configured() {
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
 }
 
+/// A person who takes `delay` to compare each fingerprint, then accepts it.
+struct SlowToAnswer {
+    delay: Duration,
+    asked: AtomicUsize,
+}
+
+#[async_trait]
+impl Interaction for SlowToAnswer {
+    async fn confirm_unknown_host(&self, _: &HostInfo) -> bool {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
+        true
+    }
+    async fn ask_secret(&self, _: &SecretRequest) -> Option<Secret> {
+        None
+    }
+}
+
+/// ADR-007: the unknown-host question waits for the person, and that wait is not part of the
+/// hop's connect timeout; the network part keeps it.
+#[tokio::test]
+async fn answering_the_unknown_host_question_slowly_is_not_a_timeout() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("slow-fingerprint");
+    let mut spec = two_hops(&host, port);
+    spec.options.connect_timeout = Duration::from_secs(1);
+    let person = Arc::new(SlowToAnswer {
+        delay: Duration::from_secs(3),
+        asked: AtomicUsize::new(0),
+    });
+    let started = std::time::Instant::now();
+    let tunnel = Tunnel::open(&spec, postgres(), &known.known(), person.clone())
+        .await
+        .unwrap();
+    // Both bastions were asked about, each answered after three times the timeout.
+    assert_eq!(person.asked.load(Ordering::SeqCst), 2);
+    assert!(started.elapsed() >= Duration::from_secs(6));
+    assert_eq!(*tunnel.state().borrow(), TunnelState::Up);
+    let conn = pg_through(&tunnel).await;
+    assert_eq!(scalar(&*conn, "select 1").await.unwrap(), "1");
+    drop(conn);
+    tunnel.close().await;
+
+    // A server that never answers still times out as configured: nobody is asked anything,
+    // so the clock never stops, however slow the person would be.
+    let relay = Relay::to(&host, port).await;
+    relay.freeze();
+    let mut spec = two_hops("127.0.0.1", relay.port);
+    spec.options.connect_timeout = Duration::from_secs(1);
+    let started = std::time::Instant::now();
+    let fresh = TempKnownHosts::new("slow-fingerprint-frozen");
+    match Tunnel::connect(&spec, &fresh.known(), person.clone()).await {
+        Err(SshError::Timeout { hop: 0, after, .. }) => {
+            assert_eq!(after, Duration::from_secs(1))
+        }
+        other => panic!("expected a timeout at hop 1: {:?}", other.err()),
+    }
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(person.asked.load(Ordering::SeqCst), 2);
+}
+
+/// A changed key is still refused at once, without asking and without waiting: the pause
+/// only covers a question to the person.
+#[tokio::test]
+async fn a_changed_key_is_still_refused_with_a_slow_person() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("slow-changed");
+    // Another ed25519 key registered for the bastion, as in `a_changed_host_key_blocks_the_tunnel`.
+    let other_key = std::fs::read_to_string(key("id_ed25519_pass.pub")).unwrap();
+    let mut parts = other_key.split_whitespace();
+    std::fs::write(
+        &known.known().app_file,
+        format!(
+            "[{host}]:{port} {} {}\n",
+            parts.next().unwrap(),
+            parts.next().unwrap()
+        ),
+    )
+    .unwrap();
+    let mut spec = two_hops(&host, port);
+    spec.options.connect_timeout = Duration::from_secs(1);
+    let person = Arc::new(SlowToAnswer {
+        delay: Duration::from_secs(3),
+        asked: AtomicUsize::new(0),
+    });
+    match Tunnel::connect(&spec, &known.known(), person.clone()).await {
+        Err(SshError::HostKeyChanged { hop: 0, .. }) => {}
+        other => panic!("expected a changed key at hop 1: {:?}", other.err()),
+    }
+    assert_eq!(person.asked.load(Ordering::SeqCst), 0);
+}
+
 /// Three consecutive free local ports, held open until dropped.
 fn free_ports() -> (u16, Vec<std::net::TcpListener>) {
     for base in (41_000u16..60_000).step_by(37) {
