@@ -1169,7 +1169,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   }, [revealConnection?.nonce, connections]);
   const explorer = usePreferences((s) => s.explorer);
   useEffect(() => setClosedFilteredFolders(new Set()), [filterText, activeTags.join("\u0000"), explorer.connectedOnly]);
-  // A preference being saved takes no other change until it is done (setExplorer ignores it).
+  // A preference being saved takes no other change until it is done (setExplorer ignores it):
+  // the buttons that change one are disabled meanwhile, so a quick second click is not lost.
   const savingPreference = usePreferences((s) => s.saving !== null);
   const explorerConnected = useApp((s) => s.explorerConnected);
   const tabs = useApp((s) => s.tabs);
@@ -1454,6 +1455,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           <button
             className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
             onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: !explorer.connectedOnly })}
+            disabled={savingPreference}
             aria-label={t("connectedOnly")}
             aria-pressed={explorer.connectedOnly}
             title={t("connectedOnly")}
@@ -1582,7 +1584,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         {connections.length > 0 && !filtering && explorer.connectedOnly && !connections.some(shown) && (
           <div className="empty small">
             {t("noneConnected")}{" "}
-            <button className="link" onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: false })}>
+            <button className="link" disabled={savingPreference} onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: false })}>
               {t("showAllConnections")}
             </button>
           </div>
