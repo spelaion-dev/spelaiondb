@@ -1122,6 +1122,56 @@ async fn a_broken_file_exposes_nothing_until_it_is_fixed() {
 }
 
 #[tokio::test]
+async fn a_notice_that_only_informs_hides_nothing() {
+    let user_dir = temp("notice-user");
+    let repo = temp("notice-repo");
+    let db = database(&repo);
+    let connections = repo.join(".spelaion/connections");
+    std::fs::create_dir_all(&connections).unwrap();
+    std::fs::write(
+        connections.join("orders.toml"),
+        writable_connection(&db, ""),
+    )
+    .unwrap();
+    // The old folder is still there: the configuration says so, and nothing else changes.
+    std::fs::create_dir_all(repo.join(".spelunk")).unwrap();
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    std::fs::write(
+        user_dir.join("connections/notes.toml"),
+        writable_connection(&db, ""),
+    )
+    .unwrap();
+    let config = spelaion_config::load(Some(&repo), &user_dir);
+    assert!(!config.problems.is_empty());
+    assert!(
+        config.problems.iter().all(|p| !p.blocks()),
+        "{:?}",
+        config.problems
+    );
+    TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+
+    let server = server(Some(&repo), &user_dir, false);
+    let list = listed(&server).await;
+    assert!(list.contains("- orders"), "{list}");
+    assert!(list.contains("- ~/notes"), "{list}");
+    for id in ["orders", "~/notes"] {
+        let read = query(&server, id, "select count(*) from notes").await;
+        assert!(!refused(&read), "{id}: {}", body(&read));
+    }
+    let done = write(&server, "orders", INSERT).await;
+    assert!(!refused(&done), "{}", body(&done));
+
+    // A file that does not load still exposes nothing, notice or not.
+    std::fs::write(connections.join("half.toml"), "name = = 1").unwrap();
+    let read = query(&server, "~/notes", "select count(*) from notes").await;
+    assert!(refused(&read));
+    let reason = body(&read);
+    assert!(reason.contains("half.toml"), "{reason}");
+    // The notice is not what blocks.
+    assert!(!reason.contains(".spelunk"), "{reason}");
+}
+
+#[tokio::test]
 async fn a_newly_exposed_connection_appears_without_a_restart() {
     let user_dir = temp("expose");
     let db = database(&user_dir);

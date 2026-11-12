@@ -241,8 +241,10 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
     let mut layers = vec![(Source::User, user_dir.to_path_buf())];
     if let Some(root) = &config.workspace_root {
         let legacy = root.join(crate::migrate::LEGACY_WORKSPACE_DIR);
+        // Only informs: `workspace_dir` reads `.spelunk/` when it is the only folder, and
+        // `.spelaion/` (as the app does) when both exist.
         if legacy.is_dir() {
-            config.problems.push(ConfigError::new(
+            config.problems.push(ConfigError::notice(
                 &legacy,
                 if root.join(WORKSPACE_DIR).is_dir() {
                     "both .spelaion/ and .spelunk/ exist: .spelaion/ is used; move what is left in .spelunk/ into it and delete it"

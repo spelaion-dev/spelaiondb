@@ -62,7 +62,7 @@ pub use edit::{
     set_user_vars, set_value,
 };
 pub use engine_change::EngineChange;
-pub use error::{ConfigError, ResolveError};
+pub use error::{ConfigError, ProblemKind, ResolveError};
 pub use heidisql::{HeidiSqlError, heidisql_has_registry, read_heidisql, read_heidisql_registry};
 pub use import::{
     DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedProxy, ImportedSsh,
