@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import { usePreferences } from "../preferences";
-import { useDialogs } from "../store";
+import { tabLabel } from "../connect";
+import { useApp, useDialogs } from "../store";
 
 export function Dialogs() {
   const password = useDialogs((s) => s.password);
@@ -334,11 +335,16 @@ function RiskDialog() {
 function ScriptErrorDialog() {
   const { t } = useTranslation("editor");
   const request = useDialogs((s) => s.scriptError);
+  // Two runs paused at once ask one after the other (SDB-139): the title says which tab.
+  const tab = useApp((s) => s.tabs.find((item) => item.id === request?.tab));
   const stop = useRef<HTMLButtonElement>(null);
   useEffect(() => stop.current?.focus(), []);
   if (!request) return null;
+  const title = tab
+    ? t("scriptError.titleInTab", { index: request.statement, tab: tabLabel(tab) })
+    : t("scriptError.title", { index: request.statement });
   return (
-    <Modal title={t("scriptError.title", { index: request.statement })} onCancel={() => request.resolve("stop")}>
+    <Modal title={title} onCancel={() => request.resolve("stop")}>
       <pre className="error-box">{request.message}</pre>
       <p>{t("scriptError.remaining", { count: request.remaining })}</p>
       <p className="muted small">{t("scriptError.hint")}</p>

@@ -1593,6 +1593,72 @@ try {
     await page.waitForFunction(() => document.querySelector('input[name="scriptOnError"][value="stop"]')?.checked && !document.querySelector('input[name="scriptOnError"]')?.matches(":disabled"));
   });
 
+  // Two runs paused on an error at once ask one after the other (SDB-139): each tab gets its own
+  // question, named after the tab, and answering the first shows the second instead of leaving
+  // a run paused with no question.
+  {
+    const original = await page.locator(".tabbar .tab.active").getAttribute("id");
+    await withSettings("scripts", async (settings) => {
+      await settings.getByRole("radio", { name: "Ask: stop, skip or skip all" }).check();
+      await page.waitForFunction(() => document.querySelector('input[name="scriptOnError"][value="ask"]')?.checked && !document.querySelector('input[name="scriptOnError"]')?.matches(":disabled"));
+    });
+    // Tab A counts for a few seconds before its failing statement; tab B fails at once.
+    const slowA = await newQuery(
+      "Shop (SQLite)",
+      "with recursive r(i) as (select 1 union all select i + 1 from r where i < 10000000) select count(*) from r;\nselect * from no_such_table_a;\nselect 1;",
+    );
+    const tabA = page.locator(".tabbar .tab.active");
+    const idA = await tabA.getAttribute("id");
+    const labelA = await tabA.getAttribute("title");
+    await newQuery("Shop (SQLite)", "select * from no_such_table_b;\nselect 2;");
+    const tabB = page.locator(".tabbar .tab.active");
+    const idB = await tabB.getAttribute("id");
+    const labelB = await tabB.getAttribute("title");
+    await page.locator(`#${idA}`).click();
+    await run(slowA);
+    await page.locator(`#${idB}`).click();
+    await run(page.locator(".tab-panel:not([hidden])"));
+    const askedB = page.getByRole("dialog", { name: `Statement 1 failed in ${labelB}` });
+    await askedB.getByText("no such table: no_such_table_b", { exact: false }).waitFor();
+    // Tab A fails while B's question is open: its question waits behind it.
+    // A paused run still counts as running, so there is nothing to wait for but its count
+    // (a few seconds); whenever it fails, its question can only come after B's is answered.
+    await page.waitForTimeout(15_000);
+    assert.equal(await page.getByRole("dialog", { name: `Statement 2 failed in ${labelA}` }).count(), 0, "A's question waits for its turn");
+    await shot("sdb-139-two-paused-runs-first");
+    await askedB.getByRole("button", { name: "Skip and continue" }).click();
+    const askedA = page.getByRole("dialog", { name: `Statement 2 failed in ${labelA}` });
+    await askedA.getByText("no such table: no_such_table_a", { exact: false }).waitFor();
+    await askedA.getByText("1 statement after it has not run yet.").waitFor();
+    // Settings cannot open over a question: the dark look is put on the page for the
+    // screenshot alone, as the theme setting does (preferences.ts applyTheme: the attribute,
+    // then the event the grid repaints on), and taken off again.
+    const lookOf = (theme) =>
+      page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+        window.dispatchEvent(new Event("spelaion-themechange"));
+      }, theme);
+    await lookOf("dark");
+    await shot("sdb-139-two-paused-runs-second-dark");
+    await lookOf("light");
+    await askedA.getByRole("button", { name: "Stop" }).click();
+    await askedA.waitFor({ state: "detached" });
+    // Both runs ended as answered.
+    await page.locator(".tab-panel:not([hidden]) .statusline", { hasText: "1 OK, 1 failed, 0 not run" }).waitFor();
+    await page.locator(`#${idA}`).click();
+    await page.locator(".tab-panel:not([hidden]) .statusline", { hasText: "1 OK, 1 failed, 1 not run" }).waitFor();
+    for (const id of [idA, idB]) {
+      await page.locator(`#${id}`).click();
+      await page.locator(".tabbar .tab.active .close").click();
+      await page.locator(`#${id}`).waitFor({ state: "detached" });
+    }
+    await page.locator(`#${original}`).click();
+    await withSettings("scripts", async (settings) => {
+      await settings.getByRole("radio", { name: "Stop the script" }).check();
+      await page.waitForFunction(() => document.querySelector('input[name="scriptOnError"][value="stop"]')?.checked && !document.querySelector('input[name="scriptOnError"]')?.matches(":disabled"));
+    });
+  }
+
   step("SQL editor: VS Code line and multi-cursor shortcuts");
   await replaceQuery(panel, "first\nsecond");
   await page.keyboard.press("Control+Home");

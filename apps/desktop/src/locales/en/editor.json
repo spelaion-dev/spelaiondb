@@ -563,6 +563,7 @@
   },
   "scriptError": {
     "title": "Statement {{index}} failed",
+    "titleInTab": "Statement {{index}} failed in {{tab}}",
     "remaining_one": "{{count}} statement after it has not run yet.",
     "remaining_other": "{{count}} statements after it have not run yet.",
     "stop": "Stop",
