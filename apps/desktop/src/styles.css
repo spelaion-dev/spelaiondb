@@ -6,7 +6,7 @@
   --sidebar: #eef0f3;
   --activity-bg: #e6e9ee;
   --fg: #1f2328;
-  --muted: #6b7280;
+  --muted: #626875;
   --line: #dfe2e7;
   --accent: #3b6fd8;
   --accent-text: #ffffff;
@@ -1371,7 +1371,7 @@ select {
   color: var(--muted);
 }
 .status-connected {
-  color: #2ea043;
+  color: var(--success);
 }
 .status-lost {
   color: var(--danger);
@@ -2471,7 +2471,7 @@ select {
   text-overflow: ellipsis;
 }
 .test-result .ok {
-  color: #2f9e44;
+  color: var(--success);
 }
 
 /* The connection test's log (ADR-032): one line per step, above the form's buttons. */
@@ -2493,7 +2493,7 @@ select {
   flex: 1;
 }
 .test-log header .ok {
-  color: #2f9e44;
+  color: var(--success);
 }
 .test-log ol {
   list-style: none;
@@ -2512,7 +2512,7 @@ select {
   font-weight: 600;
 }
 .test-log .step.ok .icon {
-  color: #2f9e44;
+  color: var(--success);
 }
 .test-log .step.failed .icon,
 .test-log .step.failed .title {
