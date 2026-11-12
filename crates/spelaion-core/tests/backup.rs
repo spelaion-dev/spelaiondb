@@ -580,6 +580,18 @@ async fn mysql_round_trip(engine: &str, server_var: &str, host_in_network: &str,
         .await
         .unwrap_or_else(|e| panic!("{engine} restore: {e}\n{:#?}", log.texts()));
         log.assert_no_password(&password);
+        // These clients can keep the file from running shell commands, and the restore says so
+        // (Windows' `mysql.exe` once had its version misread from its install folder).
+        let sandbox = if engine == "mariadb" {
+            "--sandbox"
+        } else {
+            "--skip-system-command"
+        };
+        assert!(
+            log.texts().iter().any(|t| t.contains(sandbox)),
+            "{engine} restore ran without {sandbox}: {:#?}",
+            log.texts()
+        );
         assert_eq!(rows(&admin, &snapshot).await, before);
         assert_eq!(
             rows(&admin, &format!("SELECT name FROM {db}.cheap")).await,
