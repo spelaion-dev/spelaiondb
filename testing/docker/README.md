@@ -59,3 +59,24 @@ Manual check with OpenSSH:
 ```bash
 ssh -i testing/docker/keys/id_ed25519 -J spelaion@127.0.0.1:2221 -p 22 spelaion@bastion2 -N -L 15432:postgres:5432
 ```
+
+## Clearing test leftovers
+
+Tests that create objects on these servers give them a per-run name (`<prefix>_<process id>`,
+sometimes `_<n>` after it) and drop them even when they fail. Runs from before that guard
+(SDB-247, SDB-254), or a run that was killed, can leave some behind. `clean-leftovers.sh`
+lists them, and drops them with `--drop`:
+
+```bash
+bash testing/docker/clean-leftovers.sh
+bash testing/docker/clean-leftovers.sh --drop
+```
+
+- It only reaches the containers of this folder's `compose.yaml`, through `docker compose exec`
+  (never a host and port), and only drops names made of a prefix in its `PREFIXES` list and a
+  numeric suffix: databases, schemas, tables, views, sequences, functions and procedures, roles,
+  users and logins. A test that adds a per-run name adds its prefix there.
+- It prints every statement before running it. What it finds that is neither a leftover, a
+  fixture of the compose file nor an object a test keeps under a fixed name is listed as "not a
+  known test object" and left alone.
+- Run it while no tests use these servers: a test running meanwhile would lose its objects.
