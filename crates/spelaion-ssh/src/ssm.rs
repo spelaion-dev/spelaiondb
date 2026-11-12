@@ -697,15 +697,22 @@ mod tests {
     }
 
     /// A program that starts a child of its own and waits for it, as the CLI does the plugin.
-    fn parent_with_child() -> Command {
+    /// On Windows the child writes its first line to `ready` once it has started.
+    fn parent_with_child(ready: &std::path::Path) -> Command {
         #[cfg(windows)]
         {
+            // `cmd` reads its command line as written: quoted by Rust, the path's quotes would
+            // reach it escaped.
             let mut command = Command::new("cmd");
-            command.args(["/d", "/c", "ping -n 60 127.0.0.1 >nul"]);
+            command.raw_arg(format!(
+                "/d /c ping -n 60 127.0.0.1 > \"{}\"",
+                ready.display()
+            ));
             command
         }
         #[cfg(unix)]
         {
+            let _ = ready;
             // `; true` keeps the shell waiting for `sleep` instead of becoming it.
             let mut command = Command::new("sh");
             command.args(["-c", "sleep 60; true"]).process_group(0);
@@ -717,7 +724,9 @@ mod tests {
     /// it, and waiting ends only once it is gone.
     #[tokio::test]
     async fn a_stopped_tree_is_waited_for_to_the_last_process() {
-        let mut child = parent_with_child()
+        let dir = temp("tree");
+        let ready = dir.join("child-started.txt");
+        let mut child = parent_with_child(&ready)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -744,6 +753,19 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             assert!(both, "the grandchild is in the job");
+            // In the job is not started yet: until the grandchild has attached to the console
+            // it inherits, killing its parent takes that console away and the grandchild dies
+            // while starting (SDB-264). The plugin is long started when a CLI exits, so wait
+            // for the grandchild's first line, which it writes once it has started.
+            let mut started = false;
+            for _ in 0..500 {
+                if std::fs::metadata(&ready).is_ok_and(|m| m.len() > 0) {
+                    started = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(started, "the grandchild has started");
         }
         #[cfg(unix)]
         tokio::time::sleep(Duration::from_millis(200)).await;
