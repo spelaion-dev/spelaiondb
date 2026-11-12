@@ -292,10 +292,11 @@ async fn images_are_fetched_saved_and_loaded_on_every_engine() {
             .describe_table(engine.schema, TABLE)
             .await
             .unwrap_or_else(|e| panic!("{label}: describe: {e}"));
+        let edit_target = session.edit_target().await.unwrap();
         let statements = {
             let stored = stored.read().unwrap();
             let change = file_change(&stored, 1, 1, &file).unwrap();
-            edit_statements(dialect.as_ref(), &table, &stored, &[change]).unwrap()
+            edit_statements(&edit_target, &table, &stored, &[change]).unwrap()
         };
         assert_eq!(statements.len(), 1, "{label}");
         let id = dialect.quote_identifier("id");

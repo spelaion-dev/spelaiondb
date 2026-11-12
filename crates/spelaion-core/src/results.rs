@@ -56,6 +56,19 @@ pub struct StoredResult {
     /// Column masking (ADR-051): the masked columns, their original metadata, and per batch
     /// the original arrays that were replaced by the mask. Read only by [`Self::reveal`].
     masking: Option<Masked>,
+    /// Where the rows were read (SDB-137); `None` when it is not known, and then nothing is
+    /// written from these rows.
+    source: Option<ResultSource>,
+}
+
+/// Where a result's rows were read (SDB-137): the session that ran the statement and that
+/// session's database while it ran (`None` where the engine has no database to change).
+/// Edit statements are written only through the same session, still in the same database
+/// ([`crate::EditTarget`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultSource {
+    pub(crate) session: u64,
+    pub(crate) database: Option<String>,
 }
 
 /// What a masked result keeps aside (ADR-051).
@@ -111,7 +124,13 @@ impl StoredResult {
             stats_latest: Arc::new(AtomicU64::new(0)),
             chart_latest: Arc::new(AtomicU64::new(0)),
             pending: PendingEdits::default(),
+            source: None,
         }
+    }
+
+    /// Where the rows were read (SDB-137), if known.
+    pub fn source(&self) -> Option<&ResultSource> {
+        self.source.as_ref()
     }
 
     /// The edits of this page not yet applied (ADR-044).
@@ -628,6 +647,13 @@ impl ResultStore {
     pub(crate) fn complete(&self, id: ResultId) {
         if let Some(result) = self.get(id) {
             result.write().expect("result lock poisoned").complete = true;
+        }
+    }
+
+    /// Records where a result's rows were read, or that it is not known (SDB-137).
+    pub(crate) fn set_source(&self, id: ResultId, source: Option<ResultSource>) {
+        if let Some(result) = self.get(id) {
+            result.write().expect("result lock poisoned").source = source;
         }
     }
 

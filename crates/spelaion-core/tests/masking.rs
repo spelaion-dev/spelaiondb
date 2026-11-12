@@ -469,6 +469,7 @@ async fn edits_never_write_the_mask_or_read_through_it() {
         )
         .await
         .unwrap();
+        let edit_target = session.edit_target().await.unwrap();
         let result = stored(&session, id);
         let mut result = result.write().unwrap();
         let email = column(&result, "email");
@@ -549,7 +550,7 @@ async fn edits_never_write_the_mask_or_read_through_it() {
         // The statements: updating a masked column is refused even if asked directly.
         assert!(matches!(
             edit_statements(
-                session.dialect().as_ref(),
+                &edit_target,
                 &table,
                 &result,
                 &[RowChange::Update {
@@ -576,7 +577,7 @@ async fn edits_never_write_the_mask_or_read_through_it() {
         ] {
             assert!(
                 matches!(
-                    edit_statements(session.dialect().as_ref(), &table, &accounts, &[change]),
+                    edit_statements(&edit_target, &table, &accounts, &[change]),
                     Err(EditError::Masked(_))
                 ),
                 "{label}"

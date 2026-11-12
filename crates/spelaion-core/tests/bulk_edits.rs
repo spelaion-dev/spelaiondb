@@ -319,15 +319,10 @@ async fn bulk_edits_of_a_thousand_rows_on_every_engine() {
             .describe_table(schema, TABLE)
             .await
             .unwrap();
+        let edit_target = session.edit_target().await.unwrap();
         let statements = {
             let stored = stored.read().unwrap();
-            edit_statements(
-                session.dialect().as_ref(),
-                &table,
-                &stored,
-                &stored.pending().changes(),
-            )
-            .unwrap()
+            edit_statements(&edit_target, &table, &stored, &stored.pending().changes()).unwrap()
         };
         assert_eq!(statements.len(), ROWS, "{label}: statements");
         let id = session.dialect().quote_identifier("id");
@@ -372,15 +367,10 @@ async fn bulk_edits_of_a_thousand_rows_on_every_engine() {
                 }]))
                 .unwrap();
         }
+        let edit_target = session.edit_target().await.unwrap();
         let statements = {
             let stored = stored.read().unwrap();
-            edit_statements(
-                session.dialect().as_ref(),
-                &table,
-                &stored,
-                &stored.pending().changes(),
-            )
-            .unwrap()
+            edit_statements(&edit_target, &table, &stored, &stored.pending().changes()).unwrap()
         };
         assert_eq!(statements.len(), ROWS, "{label}");
         assert_eq!(

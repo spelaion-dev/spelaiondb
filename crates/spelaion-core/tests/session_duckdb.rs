@@ -147,11 +147,12 @@ async fn table_edits_apply_in_one_transaction_by_primary_key() {
     let sql = spelaion_core::table_page_sql(session.dialect().as_ref(), &page).unwrap();
     let id = first_result(&session, &sql).await;
     let stored = session.results().get(id).unwrap();
+    let edit_target = session.edit_target().await.unwrap();
     let statements = {
         let stored = stored.read().unwrap();
         // Rows shown: 3, 2, 1 (id desc).
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[
@@ -204,7 +205,7 @@ async fn table_edits_apply_in_one_transaction_by_primary_key() {
     let stale = {
         let stored = stored.read().unwrap();
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[

@@ -181,6 +181,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
       .catch(() => { if (active) setQueryChecked(result.id); });
     return () => { active = false; };
   }, [tab.id, tab.table, tab.status, tab.run?.running, tab.run?.results]);
+  // Rows read through a session that is gone (lost, disconnected, another connection) are not
+  // editable: the check above asks again once connected, and the core refuses them anyway
+  // (SDB-137).
+  useEffect(() => {
+    if (tab.status !== "connected") setQueryTable(null);
+  }, [tab.status]);
 
   const activeResult = tab.run?.results.find((result) => result.id === tab.run?.activeResult);
   const editTarget = tab.table
@@ -696,6 +702,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
       await call(commands.selectDatabase(tab.id, next));
       setDatabase(next);
       updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
+      // The rows on screen were read in the other database: read-only until run again
+      // (SDB-137; the core refuses their edits too).
+      setQueryTable(null);
+      setQueryChecked(activeResult?.id ?? null);
     } catch (e) {
       setNotice({ text: message(e), error: true });
     } finally {
@@ -777,6 +787,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
     await call(commands.disconnect(tab.id)).catch(() => undefined);
     setPlan(null); setPlanOpen(false); setCapabilities(null); setAnalyzePlan(false);
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
+    // The rows on screen came from the other connection: read-only until run again (SDB-137).
+    setQueryTable(null);
+    setQueryChecked(activeResult?.id ?? null);
     updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
   }
 

@@ -86,7 +86,7 @@ pub use data_search::{
     probe_sql, table_search_sql,
 };
 pub use edit::{
-    CellInput, EditError, RowChange, apply_edits, check_edit_policy, edit_statements,
+    CellInput, EditError, EditTarget, RowChange, apply_edits, check_edit_policy, edit_statements,
     editable_query_source, editable_query_table,
 };
 pub use er::{
@@ -163,7 +163,7 @@ pub use references::{
     ReferenceOutcome, RowReference, TableKey, find_key, follow, key_rows, read_references,
     reference_targets, table_keys,
 };
-pub use results::{ResultId, ResultStore, RevealError, RevealedCell, StoredResult};
+pub use results::{ResultId, ResultSource, ResultStore, RevealError, RevealedCell, StoredResult};
 pub use save_name::{renamed_for_type, type_extension, type_pattern};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,

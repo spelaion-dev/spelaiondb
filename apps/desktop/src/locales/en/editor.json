@@ -481,7 +481,7 @@
     "cellLabel": "New value for {{column}}",
     "readOnly": "Read-only",
     "readOnlyConnection": "This connection is read-only.",
-    "queryReadOnlyHint": "To edit results, use a writable connection and select columns from one table, including its primary key.",
+    "queryReadOnlyHint": "To edit results, use a writable connection and select columns from one table, including its primary key. After the tab changes connection or database, run the query again.",
     "readOnlyHint": "The table has no primary key: its rows cannot be told apart, so it cannot be edited here.",
     "addRow": "Add row",
     "addRowTitle": "New row",

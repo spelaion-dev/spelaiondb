@@ -786,8 +786,9 @@ async fn sqlite_on_a_server_through_two_hops() {
     let sql = spelaion_core::table_page_sql(conn.session.dialect().as_ref(), &page).unwrap();
     let (events, _) = script(&conn, &sql).await;
     let stored = conn.session.results().get(first_result(&events)).unwrap();
+    let edit_target = conn.session.edit_target().await.unwrap();
     let statements = spelaion_core::edit_statements(
-        conn.session.dialect().as_ref(),
+        &edit_target,
         &table,
         &stored.read().unwrap(),
         &[spelaion_core::RowChange::Update {

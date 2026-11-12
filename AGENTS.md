@@ -242,7 +242,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
   tests that try to get around it (`tests/export_stream.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
-  database, one transaction, one row per statement).
+  database, one transaction, one row per statement). Each stored result remembers the session
+  that read it and that session's database (`ResultSource`; a statement that changed database
+  leaves none), and edit statements are written only through an `EditTarget` from
+  `Session::edit_target`, which refuses rows read through another session (another connection,
+  a reconnected tab) or in another database; `tests/edit_source.rs` tries it on every engine.
   `masking.rs` is column masking (ADR-051): the session compiles the connection's rules
   (`spelaion-config::masking` combines its `[masking]`, the user's `user.toml` and its type's
   `mask_columns`; required patterns only add up) and `ResultStore` masks every batch as it

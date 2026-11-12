@@ -14,7 +14,7 @@ use spelaion_driver_api::{
 
 use crate::health::{Health, SessionHealth, Tracked};
 use crate::masking::MaskPolicy;
-use crate::results::{ResultId, ResultStore};
+use crate::results::{ResultId, ResultSource, ResultStore};
 pub use crate::script::{
     AnswerError, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop, ScriptSummary,
 };
@@ -133,6 +133,8 @@ impl StatementError {
 }
 
 pub struct Session {
+    /// Unique in this process: a result read through this session remembers it (SDB-137).
+    id: u64,
     /// Every use goes through [`Tracked`] (ADR-028).
     connection: Arc<dyn Connection>,
     tracked: Arc<Tracked>,
@@ -185,6 +187,31 @@ impl Drop for Session {
     }
 }
 
+/// Whether a session of this engine is always in some database that its edits depend on: SQL
+/// Server and DuckDB write `dbo.t` or `main.t`, which is another table in another database.
+/// There a database the driver cannot name is unknown (after an ambiguous `USE`), and rows
+/// read in it are never editable. PostgreSQL and SQLite sessions stay in the database they
+/// opened; a MySQL session may have no database, and its edits name the table's database.
+fn database_can_change(engine: &str) -> bool {
+    matches!(engine, "sqlserver" | "duckdb")
+}
+
+/// The database a session is in, when it is known: `Some(None)` only for an engine whose
+/// sessions cannot change database (SDB-137).
+fn known_database(
+    snapshot: Result<Option<String>, spelaion_driver_api::DriverError>,
+    can_change: bool,
+) -> Option<Option<String>> {
+    match snapshot {
+        Ok(Some(database)) => Some(Some(database)),
+        Ok(None) if !can_change => Some(None),
+        Ok(None) | Err(_) => None,
+    }
+}
+
+/// The next [`Session`]'s id: sessions are never told apart by anything the UI sends.
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
 impl Session {
     pub fn new(
         connection: Box<dyn Connection>,
@@ -194,6 +221,7 @@ impl Session {
         let tracked = Arc::new(Tracked::new(Arc::from(connection)));
         let health = tracked.health().clone();
         Self {
+            id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             connection: tracked.clone(),
             tracked,
             health,
@@ -296,6 +324,25 @@ impl Session {
 
     pub fn results(&self) -> &Arc<ResultStore> {
         &self.results
+    }
+
+    /// What edits are written through now (SDB-137): this session, in the database it is in
+    /// at this moment. [`crate::edit_statements`] refuses a result read elsewhere. Where the
+    /// engine can change database and the driver cannot name the current one, no stored
+    /// result matches it: nothing is written until the query runs again.
+    pub async fn edit_target(&self) -> Result<crate::EditTarget, crate::EditError> {
+        let database = self
+            .connection
+            .database_context()
+            .await
+            .map_err(|e| crate::EditError::Source(e.to_string()))?;
+        Ok(crate::EditTarget::new(
+            ResultSource {
+                session: self.id,
+                database,
+            },
+            self.dialect(),
+        ))
     }
 
     /// Cancels the running statement, and the run that sent it: a cancelled script always
@@ -560,6 +607,14 @@ impl Session {
         let session_dialect = self.dialect.clone();
         let connection = self.connection.clone();
         let results = self.results.clone();
+        // Results that show rows remember where they were read (SDB-137): edits are written
+        // only through this session, still in the same database.
+        let track_source = match kind {
+            RunKind::User | RunKind::Generated => plan_mode.is_none(),
+            RunKind::Parsed | RunKind::Metadata => false,
+        };
+        let session_id = self.id;
+        let can_change = database_can_change(engine);
         let mut options = self.options.clone();
         // Masking matches each column's origin too (ADR-052): ask the driver for it.
         options.origins |= masking.is_some() && !self.masking.is_empty();
@@ -675,6 +730,14 @@ impl Session {
                 let mut failure = None;
                 let mut rows_affected = None;
                 let mut notices = Vec::new();
+                // The database this statement starts in (a local snapshot, no SQL), and the
+                // results it creates: they keep it only if it is still the same afterwards.
+                let source_before = if track_source {
+                    known_database(connection.database_context().await, can_change)
+                } else {
+                    None
+                };
+                let mut created: Vec<ResultId> = Vec::new();
                 let execute = async {
                     match plan_mode {
                         Some(mode) => connection.execute_plan(text, mode).await,
@@ -719,6 +782,13 @@ impl Session {
                                         Some(policy) => results.create_masked(schema, policy),
                                         None => (results.create(schema.clone()), schema),
                                     };
+                                    if let Some(database) = &source_before {
+                                        results.set_source(result, Some(ResultSource {
+                                            session: session_id,
+                                            database: database.clone(),
+                                        }));
+                                    }
+                                    created.push(result);
                                     current = Some(result);
                                     yield CoreEvent::ResultStarted { index, result, schema };
                                 }
@@ -744,6 +814,17 @@ impl Session {
                                 }
                             }
                         }
+                    }
+                }
+                // The statement changed the database (a `USE` in a batch): its rows cannot be
+                // told to belong to one, so none of its results is editable.
+                if let Some(before) = &source_before
+                    && !created.is_empty()
+                    && known_database(connection.database_context().await, can_change).as_ref()
+                        != Some(before)
+                {
+                    for id in &created {
+                        results.set_source(*id, None);
                     }
                 }
                 let finished = Instant::now();

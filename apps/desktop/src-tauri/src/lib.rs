@@ -4892,14 +4892,19 @@ async fn table_edit_statements(
         .describe_table(schema, name)
         .await
         .map_err(|e| e.to_string())?;
+    // Written only through this session, for rows it read in its current database (SDB-137).
+    let target = open
+        .session
+        .edit_target()
+        .await
+        .map_err(|e| e.to_string())?;
     let stored = state
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
     let stored = stored.read().map_err(|_| "result lock poisoned")?;
     let changes = stored.pending().changes();
-    spelaion_core::edit_statements(open.session.dialect().as_ref(), &table, &stored, &changes)
-        .map_err(|e| e.to_string())
+    spelaion_core::edit_statements(&target, &table, &stored, &changes).map_err(|e| e.to_string())
 }
 
 /// The statement that loading the file at `path` into one cell of a table data page would
@@ -4980,15 +4985,21 @@ async fn load_file_statements(
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
-    let dialect = open.session.dialect().clone();
+    // Written only through this session, for rows it read in its current database (SDB-137).
+    let target = open
+        .session
+        .edit_target()
+        .await
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let stored = stored
             .read()
             .map_err(|_| "result lock poisoned".to_string())?;
+        target.check(&stored).map_err(|e| e.to_string())?;
         let change =
             spelaion_core::file_change(&stored, row as usize, column as usize, Path::new(&path))
                 .map_err(|e| e.to_string())?;
-        spelaion_core::edit_statements(dialect.as_ref(), &table, &stored, &[change])
+        spelaion_core::edit_statements(&target, &table, &stored, &[change])
             .map_err(|e| e.to_string())
     })
     .await
