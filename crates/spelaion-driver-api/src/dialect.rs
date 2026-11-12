@@ -22,4 +22,13 @@ pub trait Dialect: Send + Sync {
 
     /// Quotes an identifier for use in generated SQL.
     fn quote_identifier(&self, ident: &str) -> String;
+
+    /// This dialect for a session whose `sql_mode` (MySQL, MariaDB) changes how SQL text is
+    /// read: under `NO_BACKSLASH_ESCAPES` a `\` is an ordinary character in a string, and under
+    /// `ANSI_QUOTES` `"…"` is a name. `sql_mode` is the server's comma-separated list. `None`
+    /// for a dialect the mode does not concern; a dialect it concerns answers for every mode,
+    /// the default included.
+    fn with_sql_mode(&self, _sql_mode: &str) -> Option<std::sync::Arc<dyn Dialect>> {
+        None
+    }
 }

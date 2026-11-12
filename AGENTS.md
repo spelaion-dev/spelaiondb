@@ -39,7 +39,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`tests/postgres.rs`) checks it. A new type is added there first.
 - `crates/spelaion-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
   per connection). Its splitter counts a statement written only as executable comments
-  (how `mysqldump` writes views and triggers) as a statement. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
+  (how `mysqldump` writes views and triggers) as a statement, and reads quotes as the
+  session's `sql_mode` does (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`): `Dialect::with_sql_mode`
+  gives the session's dialect, which `spelaion-core`'s `sql_mode.rs` reads when the session
+  opens and after a statement that names `sql_mode`. The core writes a MySQL string that holds
+  a backslash as `_utf8mb4 X'…'` (`export::sql_literal`), which every mode reads the same. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
   name check (read its `PATCHED.md` before upgrading). Its type zoo (`tests/mysql.rs`) compares every type with the server's
   text, on both servers.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).

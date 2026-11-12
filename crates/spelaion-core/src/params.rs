@@ -205,7 +205,7 @@ mod tests {
         );
         assert_eq!(
             bind_params(&Named("mysql"), "select :name", &values).unwrap(),
-            "select 'O''Brien \\\\ co'"
+            "select _utf8mb4 X'4F27427269656E205C20636F'"
         );
         assert_eq!(
             bind_params(&SqliteDialect, "select :x", &values),

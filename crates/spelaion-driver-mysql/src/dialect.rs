@@ -1,7 +1,47 @@
+use std::sync::Arc;
+
 use spelaion_driver_api::{Dialect, StatementSpan};
 
-/// MySQL/MariaDB dialect.
+/// MySQL/MariaDB dialect, as the default `sql_mode` reads text.
 pub struct MysqlDialect;
+
+/// How a session's `sql_mode` reads quoted text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Quoting {
+    /// `\` escapes the next character inside `'…'` (and `"…"` when it is a string): off under
+    /// `NO_BACKSLASH_ESCAPES`.
+    backslash_escapes: bool,
+    /// `"…"` is a string: off under `ANSI_QUOTES`, where it is a name.
+    double_quoted_strings: bool,
+}
+
+impl Quoting {
+    const DEFAULT: Quoting = Quoting {
+        backslash_escapes: true,
+        double_quoted_strings: true,
+    };
+
+    /// From the server's comma-separated `sql_mode` (`ANSI` includes `ANSI_QUOTES`).
+    fn of(sql_mode: &str) -> Quoting {
+        let has = |name: &str| {
+            sql_mode
+                .split(',')
+                .any(|mode| mode.trim().eq_ignore_ascii_case(name))
+        };
+        Quoting {
+            backslash_escapes: !has("NO_BACKSLASH_ESCAPES"),
+            double_quoted_strings: !(has("ANSI_QUOTES") || has("ANSI")),
+        }
+    }
+
+    fn dialect(self) -> Arc<dyn Dialect> {
+        if self == Quoting::DEFAULT {
+            Arc::new(MysqlDialect)
+        } else {
+            Arc::new(MysqlModeDialect(self))
+        }
+    }
+}
 
 impl Dialect for MysqlDialect {
     fn name(&self) -> &'static str {
@@ -9,11 +49,37 @@ impl Dialect for MysqlDialect {
     }
 
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
-        split(script)
+        split(script, Quoting::DEFAULT)
     }
 
     fn quote_identifier(&self, ident: &str) -> String {
         format!("`{}`", ident.replace('`', "``"))
+    }
+
+    fn with_sql_mode(&self, sql_mode: &str) -> Option<Arc<dyn Dialect>> {
+        Some(Quoting::of(sql_mode).dialect())
+    }
+}
+
+/// The dialect of a session whose `sql_mode` reads quoted text another way
+/// (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`).
+struct MysqlModeDialect(Quoting);
+
+impl Dialect for MysqlModeDialect {
+    fn name(&self) -> &'static str {
+        "mysql"
+    }
+
+    fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
+        split(script, self.0)
+    }
+
+    fn quote_identifier(&self, ident: &str) -> String {
+        MysqlDialect.quote_identifier(ident)
+    }
+
+    fn with_sql_mode(&self, sql_mode: &str) -> Option<Arc<dyn Dialect>> {
+        Some(Quoting::of(sql_mode).dialect())
     }
 }
 
@@ -66,10 +132,11 @@ fn comment_end(bytes: &[u8], i: usize) -> Option<usize> {
     None
 }
 
-/// Splits on the current delimiter (`;` by default), respecting quotes (`'…'`, `"…"` with
-/// backslash escapes, `` `…` ``) and comments. `DELIMITER $$` lines, as in the `mysql`
-/// client, change the delimiter for procedures and triggers and are not statements.
-fn split(script: &str) -> Vec<StatementSpan> {
+/// Splits on the current delimiter (`;` by default), respecting quotes (`'…'`, `"…"`,
+/// `` `…` ``, read as the session's `sql_mode` reads them) and comments. `DELIMITER $$` lines,
+/// as in the `mysql` client, change the delimiter for procedures and triggers and are not
+/// statements.
+fn split(script: &str, quoting: Quoting) -> Vec<StatementSpan> {
     let bytes = script.as_bytes();
     let mut spans = Vec::new();
     let mut delimiter = String::from(";");
@@ -115,7 +182,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
         match bytes[i] {
             quote @ (b'\'' | b'"' | b'`') => {
                 has_code = true;
-                i = skip_quoted(bytes, i, quote);
+                i = skip_quoted(bytes, i, quote, quoting);
                 continue;
             }
             b if b.is_ascii_whitespace() => {}
@@ -158,13 +225,16 @@ fn starts_with_ci(bytes: &[u8], word: &[u8]) -> bool {
     bytes.len() >= word.len() && bytes[..word.len()].eq_ignore_ascii_case(word)
 }
 
-/// Byte after the closing quote. A doubled quote is an escape; inside `'` and `"` so is a
-/// backslash (MySQL's default `sql_mode`).
-fn skip_quoted(bytes: &[u8], open: usize, quote: u8) -> usize {
+/// Byte after the closing quote. A doubled quote is an escape; so is a backslash inside a
+/// string (`'…'`, and `"…"` unless `ANSI_QUOTES` makes it a name), unless the session's
+/// `sql_mode` has `NO_BACKSLASH_ESCAPES`. Names (`` `…` ``) never take one.
+fn skip_quoted(bytes: &[u8], open: usize, quote: u8, quoting: Quoting) -> usize {
+    let string = quote == b'\'' || (quote == b'"' && quoting.double_quoted_strings);
+    let backslash = string && quoting.backslash_escapes;
     let mut i = open + 1;
     while i < bytes.len() {
         match bytes[i] {
-            b'\\' if quote != b'`' => i += 2,
+            b'\\' if backslash => i += 2,
             b if b == quote => {
                 if bytes.get(i + 1) == Some(&quote) {
                     i += 2;
@@ -183,7 +253,57 @@ mod tests {
     use super::*;
 
     fn parts(script: &str) -> Vec<&str> {
-        split(script).iter().map(|s| s.text(script)).collect()
+        split(script, Quoting::DEFAULT)
+            .iter()
+            .map(|s| s.text(script))
+            .collect()
+    }
+
+    fn parts_in<'a>(sql_mode: &str, script: &'a str) -> Vec<&'a str> {
+        MysqlDialect
+            .with_sql_mode(sql_mode)
+            .unwrap()
+            .split_statements(script)
+            .iter()
+            .map(|s| s.text(script))
+            .collect()
+    }
+
+    #[test]
+    fn quotes_are_read_as_the_sessions_sql_mode_reads_them() {
+        let script = r"insert into t values ('C:\'); select 1;";
+        // Default: `\'` is an escaped quote, the string goes on.
+        assert_eq!(parts_in("STRICT_TRANS_TABLES", script), [script]);
+        // NO_BACKSLASH_ESCAPES: `\` is an ordinary character, the string ends at `'`.
+        for mode in [
+            "NO_BACKSLASH_ESCAPES",
+            "STRICT_TRANS_TABLES, no_backslash_escapes ,NO_ENGINE_SUBSTITUTION",
+        ] {
+            assert_eq!(
+                parts_in(mode, script),
+                [r"insert into t values ('C:\')", "select 1"],
+                "{mode}"
+            );
+        }
+        // ANSI_QUOTES: `"…"` is a name, where `\` escapes nothing; `'…'` still takes it.
+        let names = r#"select "a\" from t; select 'b\';' x; select 2"#;
+        assert_eq!(
+            parts_in("ANSI_QUOTES", names),
+            [r#"select "a\" from t"#, r"select 'b\';' x", "select 2"]
+        );
+        assert_eq!(parts_in("ANSI", names), parts_in("ANSI_QUOTES", names));
+        // By default `"…"` is a string and `\"` escapes its quote: it never closes.
+        assert_eq!(parts_in("", names), [names]);
+        // Both: nothing escapes with a backslash.
+        assert_eq!(
+            parts_in(
+                "ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+                r"select 'a\'; select `b\`; select 3"
+            ),
+            [r"select 'a\'", r"select `b\`", "select 3"]
+        );
+        // The default mode gives back the plain dialect.
+        assert_eq!(parts_in("", script), parts(script));
     }
 
     #[test]

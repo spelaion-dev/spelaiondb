@@ -139,7 +139,8 @@ pub struct Session {
     health: Health,
     keep_alive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     idle_close: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    dialect: Arc<dyn Dialect>,
+    /// The driver's dialect, as the session's `sql_mode` reads text (SDB-161).
+    dialect: Arc<crate::sql_mode::SessionDialect>,
     results: Arc<ResultStore>,
     options: ExecOptions,
     /// Held while a script runs: one at a time, and no Commit or Rollback meanwhile.
@@ -195,7 +196,7 @@ impl Session {
             health,
             keep_alive: std::sync::Mutex::new(None),
             idle_close: std::sync::Mutex::new(None),
-            dialect,
+            dialect: Arc::new(crate::sql_mode::SessionDialect::new(dialect)),
             results,
             options: ExecOptions::default(),
             control: Arc::new(tokio::sync::Mutex::new(())),
@@ -274,8 +275,18 @@ impl Session {
         &self.connection
     }
 
-    pub fn dialect(&self) -> &Arc<dyn Dialect> {
-        &self.dialect
+    /// The dialect the session splits with: the driver's, as the session's `sql_mode` reads
+    /// text (MySQL, MariaDB; SDB-161).
+    pub fn dialect(&self) -> Arc<dyn Dialect> {
+        self.dialect.current()
+    }
+
+    /// Reads the session's `sql_mode` again, so the next run splits as the session reads text.
+    /// [`crate::open_connection`] calls it once the session setup ran; a run calls it after a
+    /// statement that names `sql_mode`.
+    pub async fn refresh_sql_mode(&self) {
+        let _run = self.control.lock().await;
+        self.dialect.refresh(self.connection.as_ref()).await;
     }
 
     pub fn results(&self) -> &Arc<ResultStore> {
@@ -407,7 +418,7 @@ impl Session {
             self.transaction.send_modify(|s| s.observe(before));
             return Err(TransactionError::NotOpen);
         }
-        let engine = self.dialect.name();
+        let engine = self.dialect().name();
         let sql = if commit {
             transaction::commit_statement(engine)
         } else {
@@ -519,16 +530,18 @@ impl Session {
             RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
         };
         let script = script.to_string();
+        let dialect = self.dialect();
         // A read-only connection refuses the whole run before anything is sent (ADR-053),
         // whatever the caller checked: the user's scripts, query pages and plans all come here.
         let refusal = match kind {
             RunKind::User if self.read_only => {
-                crate::guard::check_read_only(self.dialect.as_ref(), &script).err()
+                crate::guard::check_read_only(dialect.as_ref(), &script).err()
             }
             RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
         };
-        let spans = self.dialect.split_statements(&script);
-        let engine = self.dialect.name();
+        let spans = dialect.split_statements(&script);
+        let engine = dialect.name();
+        let session_dialect = self.dialect.clone();
         let connection = self.connection.clone();
         let results = self.results.clone();
         let mut options = self.options.clone();
@@ -765,6 +778,11 @@ impl Session {
                             }
                         }
                     });
+                }
+                // A statement that may change the session's sql_mode: later runs split as the
+                // session now reads text (SDB-161).
+                if session_dialect.follows_sql_mode() && crate::sql_mode::may_change_sql_mode(text) {
+                    session_dialect.refresh(connection.as_ref()).await;
                 }
 
                 let Some(error) = failure else {
