@@ -56,6 +56,10 @@ impl Dialect for MysqlDialect {
         split(script, Quoting::DEFAULT)
     }
 
+    fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
+        code_ranges(script, Quoting::DEFAULT)
+    }
+
     fn quote_identifier(&self, ident: &str) -> String {
         format!("`{}`", ident.replace('`', "``"))
     }
@@ -79,6 +83,10 @@ impl Dialect for MysqlModeDialect {
 
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script, self.quoting)
+    }
+
+    fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
+        code_ranges(script, self.quoting)
     }
 
     fn quote_identifier(&self, ident: &str) -> String {
@@ -212,6 +220,21 @@ fn split(script: &str, quoting: Quoting) -> Vec<StatementSpan> {
     }
     push(&mut spans, start, bytes.len(), has_code);
     spans
+}
+
+/// What lies outside strings, names and comments, read as the splitter reads them. An
+/// executable comment counts as a comment here too: nothing in it is looked for.
+fn code_ranges(script: &str, quoting: Quoting) -> Vec<std::ops::Range<usize>> {
+    spelaion_driver_api::code_ranges(script, |script, i| {
+        let bytes = script.as_bytes();
+        if let Some(end) = comment_end(bytes, i) {
+            return Some(end);
+        }
+        match bytes[i] {
+            quote @ (b'\'' | b'"' | b'`') => Some(skip_quoted(bytes, i, quote, quoting)),
+            _ => None,
+        }
+    })
 }
 
 /// `/*!` (MySQL and MariaDB, optionally with a version) or `/*M!` (MariaDB; `m` too): a

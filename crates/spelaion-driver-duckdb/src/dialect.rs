@@ -13,6 +13,10 @@ impl Dialect for DuckdbDialect {
         split(script)
     }
 
+    fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
+        spelaion_driver_api::code_ranges(script, skip_non_code)
+    }
+
     fn quote_identifier(&self, ident: &str) -> String {
         let simple = ident
             .bytes()
@@ -124,9 +128,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
         match b[i] {
             b'\'' => {
                 // E'…' supports backslash escapes.
-                let escapes =
-                    i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]));
-                i = skip_quoted(b, i, b'\'', escapes);
+                i = skip_quoted(b, i, b'\'', escape_string(b, i));
                 has_code = true;
             }
             b'"' => {
@@ -139,24 +141,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
                     .position(|&c| c == b'\n')
                     .map_or(b.len(), |p| i + p + 1);
             }
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                // Block comments nest, as in PostgreSQL.
-                let mut depth = 0usize;
-                while i < b.len() {
-                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
-                        depth += 1;
-                        i += 2;
-                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
-                        depth -= 1;
-                        i += 2;
-                        if depth == 0 {
-                            break;
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
+            b'/' if b.get(i + 1) == Some(&b'*') => i = block_comment_end(b, i),
             b'$' if i == 0 || !is_ident_byte(b[i - 1]) => match dollar_tag(b, i) {
                 Some(tag_end) => {
                     let tag = &script[i..=tag_end];
@@ -190,6 +175,58 @@ fn split(script: &str) -> Vec<StatementSpan> {
         spans.push(trimmed(script, start, b.len()));
     }
     spans
+}
+
+/// The byte after a block comment that starts at `i` (`/*`); block comments nest.
+fn block_comment_end(b: &[u8], mut i: usize) -> usize {
+    let mut depth = 0usize;
+    while i < b.len() {
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            depth += 1;
+            i += 2;
+        } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    b.len()
+}
+
+/// Whether the `'` at `i` opens an `E'…'` string, where backslashes escape.
+fn escape_string(b: &[u8], i: usize) -> bool {
+    i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]))
+}
+
+/// The byte after the string, quoted name, comment or `$tag$` body that starts at `i`, read as
+/// the splitter reads it; `None` when none starts there.
+fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+    let b = script.as_bytes();
+    match *b.get(i)? {
+        b'\'' => Some(skip_quoted(b, i, b'\'', escape_string(b, i))),
+        b'"' => Some(skip_quoted(b, i, b'"', false)),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some(
+            b[i..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(b.len(), |p| i + p + 1),
+        ),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i)),
+        b'$' if i == 0 || !is_ident_byte(b[i - 1]) => {
+            let tag_end = dollar_tag(b, i)?;
+            let tag = &script[i..=tag_end];
+            Some(
+                script[tag_end + 1..]
+                    .find(tag)
+                    .map_or(b.len(), |p| tag_end + 1 + p + tag.len()),
+            )
+        }
+        _ => None,
+    }
 }
 
 /// Skips a quoted string starting at `i` (the opening quote).

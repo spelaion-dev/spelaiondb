@@ -12,6 +12,14 @@ impl Dialect for SqliteDialect {
         split(script)
     }
 
+    fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
+        spelaion_driver_api::code_ranges(script, |script, i| {
+            match skip_quote_or_comment(script, i)? {
+                Skipped::Quoted(end) | Skipped::Comment(end) => Some(end),
+            }
+        })
+    }
+
     fn quote_identifier(&self, ident: &str) -> String {
         let simple = ident
             .bytes()
