@@ -5383,8 +5383,50 @@ fn open_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> 
     let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
     #[cfg(target_os = "linux")]
     let window = window.enable_clipboard_access();
-    window.build()?;
+    let offscreen = std::env::var_os(OFFSCREEN_SWITCH).is_some();
+    // Without the switch the builder keeps the configuration's visibility and focus.
+    let window = if offscreen {
+        window.visible(false).focused(false).focusable(false)
+    } else {
+        window
+    }
+    .build()?;
+    if offscreen {
+        move_offscreen(&window)?;
+        window.show()?;
+    }
     Ok(())
+}
+
+/// The Windows smoke test (`e2e/smoke.mjs`) sets this so its app stays out of reach of the
+/// user's real mouse and keyboard while they use the computer (SDB-274): the main window is
+/// built hidden, moved left of every monitor at its usual size, and only then shown; it can
+/// never be activated, so it never takes the foreground. The test drives the page over
+/// WebView2's debugging port, which needs neither. Without it nothing changes.
+const OFFSCREEN_SWITCH: &str = "SPELAION_E2E_OFFSCREEN";
+
+/// Moves `window` entirely left of every monitor, keeping its size.
+///
+/// It is moved once built, while still hidden: the window system ignores a starting position
+/// outside every monitor and would open the window at its default place instead.
+fn move_offscreen(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    let left = window
+        .available_monitors()?
+        .iter()
+        .map(|m| m.position().x)
+        .min()
+        .unwrap_or(0);
+    let top = window
+        .available_monitors()?
+        .iter()
+        .map(|m| m.position().y)
+        .min()
+        .unwrap_or(0);
+    let width = i32::try_from(window.outer_size()?.width).unwrap_or(i32::MAX / 2);
+    window.set_position(tauri::PhysicalPosition::new(
+        left.saturating_sub(width).saturating_sub(200),
+        top,
+    ))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

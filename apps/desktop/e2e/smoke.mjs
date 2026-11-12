@@ -106,7 +106,19 @@ function startApp() {
     env: {
       ...process.env,
       SPELAION_USER_DIR: userDir,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
+      // Its window is kept out of the user's way (SDB-274, CONTRIBUTING.md): it opens without
+      // taking the foreground and is moved left of every monitor at once, at its usual size, so the user's real
+      // mouse and keyboard cannot reach it while they use the computer. Chromium would stop
+      // drawing a window it sees as hidden: these flags keep it drawing and its timers running.
+      // SPELAION_E2E_SHOW_WINDOW=1 opens it on screen, to watch a run.
+      ...(process.env.SPELAION_E2E_SHOW_WINDOW === "1" ? {} : { SPELAION_E2E_OFFSCREEN: "1" }),
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: [
+        `--remote-debugging-port=${port}`,
+        "--disable-features=CalculateNativeWinOcclusion",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
+      ].join(" "),
       // Its own WebView2 profile: an installed SpelaionDB that is open (same app identifier)
       // would otherwise share it and the second webview fails to start.
       WEBVIEW2_USER_DATA_FOLDER: join(userDir, "webview2"),
@@ -201,6 +213,16 @@ function testKubectls() {
   return commandLines("kubectl").filter((line) => line.replaceAll("\\", "/").toLowerCase().includes(kubeconfig));
 }
 
+/** The app's page. Its window never has the foreground (SDB-274), so the page is told it has
+ *  the focus, as it would in a window the user is working in: focus and blur events, `:focus`
+ *  and `document.hasFocus()` behave as they do for a user. */
+async function appPage() {
+  const page = browser.contexts()[0].pages()[0];
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+  return page;
+}
+
 async function connect() {
   for (let i = 0; i < 60; i++) {
     try {
@@ -218,7 +240,7 @@ const shopFile = join(demo, ".spelaion", "connections", "shop.toml");
 const shopOriginal = readFileSync(shopFile, "utf8");
 let browser = await connect();
 try {
-  let page = browser.contexts()[0].pages()[0];
+  let page = await appPage();
   page.setDefaultTimeout(30_000);
   const shot = (name) => page.screenshot({ path: join(shots, `${name}.png`) });
   // SPELAION_E2E_UNTIL=<the start of a step's text>: the run stops as a pass when the step
@@ -7118,7 +7140,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   );
   app = startApp();
   browser = await connect();
-  page = browser.contexts()[0].pages()[0];
+  page = await appPage();
   page.setDefaultTimeout(30_000);
   await page.getByRole("button", { name: "Configuración", exact: true }).waitFor();
   assert.equal(await page.locator("html").getAttribute("lang"), "es");
@@ -7649,7 +7671,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await browser.close().catch(() => {});
   app = startApp();
   browser = await connect();
-  page = browser.contexts()[0].pages()[0];
+  page = await appPage();
   page.setDefaultTimeout(30_000);
   await page.locator(".tabbar .tab .dot-connected").waitFor();
   assert.equal(await page.locator(".tabbar .tab").count(), 1);
@@ -7671,7 +7693,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await browser.close().catch(() => {});
     app = startApp();
     browser = await connect();
-    page = browser.contexts()[0].pages()[0];
+    page = await appPage();
     page.setDefaultTimeout(30_000);
     await page.locator(".tabbar .tab .dot-connected").waitFor();
     // A page script that never yields: the UI cannot answer. The first request waits for it,
