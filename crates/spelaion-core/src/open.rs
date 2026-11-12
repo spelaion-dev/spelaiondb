@@ -317,6 +317,8 @@ pub async fn open_connection(
             return Err(error.into());
         }
     }
+    // Scripts split as the session reads text: its sql_mode, setup included (SDB-161).
+    open.session.refresh_sql_mode().await;
     Ok(open)
 }
 

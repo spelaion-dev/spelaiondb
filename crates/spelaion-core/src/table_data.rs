@@ -513,7 +513,7 @@ mod tests {
         );
         assert_eq!(
             condition("mysql", LogicalType::Text, FilterOp::NotEq, text("a\\b")),
-            "`my col` <> 'a\\\\b'"
+            "`my col` <> _utf8mb4 X'615C62'"
         );
         assert_eq!(
             condition("sqlserver", LogicalType::Text, FilterOp::Gt, text("ñ")),

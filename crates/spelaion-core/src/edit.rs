@@ -766,7 +766,8 @@ mod tests {
                 &CellInput::Text("a\\b".into())
             )
             .unwrap(),
-            "'a\\\\b'"
+            // Read the same with and without NO_BACKSLASH_ESCAPES (SDB-161).
+            "_utf8mb4 X'615C62'"
         );
     }
 }

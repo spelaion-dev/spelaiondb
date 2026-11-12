@@ -932,15 +932,20 @@ fn json_is_valid(text: &str) -> bool {
 }
 
 /// A literal for `INSERT`, following the engine (`dialect` is the [`Dialect::name`]).
+///
+/// MySQL and MariaDB read a `\` in a string as an escape, unless the `sql_mode` has
+/// `NO_BACKSLASH_ESCAPES` (SDB-161), and the session the literal runs on (or the server an
+/// exported file is loaded into) may have either. A string that holds a backslash is written
+/// as its UTF-8 bytes with a character set introducer, `_utf8mb4 X'…'`: a string in every mode,
+/// compared with the column's collation like any literal. Strings without one keep `'…'`,
+/// which both modes read the same.
 pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
     let quoted = |text: &str| {
+        if dialect == "mysql" && text.contains('\\') {
+            let hex: String = text.bytes().map(|b| format!("{b:02X}")).collect();
+            return format!("_utf8mb4 X'{hex}'");
+        }
         let text = text.replace('\'', "''");
-        // MySQL treats `\` as an escape inside strings (default `sql_mode`).
-        let text = if dialect == "mysql" {
-            text.replace('\\', "\\\\")
-        } else {
-            text
-        };
         // SQL Server: `N'…'` keeps every character (plain `'…'` goes through a code page).
         if dialect == "sqlserver" {
             format!("N'{text}'")
@@ -1198,7 +1203,9 @@ mod tests {
         let mysql = render(table(), 2..3, 0..2, false, "mysql");
         assert_eq!(
             mysql,
-            "INSERT INTO `items` (`id`, `name`) VALUES (NULL, 'it''s \\\\ x');\n"
+            // `it's \ x` holds a backslash: bytes with an introducer, read alike in every
+            // sql_mode (SDB-161).
+            "INSERT INTO `items` (`id`, `name`) VALUES (NULL, _utf8mb4 X'69742773205C2078');\n"
         );
         let sqlite = render(table(), 0..1, 5..6, false, "sqlite");
         assert_eq!(
@@ -1214,7 +1221,7 @@ mod tests {
         };
         assert_eq!(
             render(batch(), 0..3, 0..2, false, "mysql"),
-            "INSERT INTO `items` (`id`, `name`) VALUES (1, 'plain'),\n  (2, 'a,b \"q\"\tc\nd'),\n  (NULL, 'it''s \\\\ x');\n"
+            "INSERT INTO `items` (`id`, `name`) VALUES (1, 'plain'),\n  (2, 'a,b \"q\"\tc\nd'),\n  (NULL, _utf8mb4 X'69742773205C2078');\n"
         );
         assert_eq!(
             render(batch(), 0..1, 5..6, false, "sqlite"),
@@ -1407,7 +1414,7 @@ mod tests {
         );
         assert_eq!(
             column_in_list(&result, 1, &Quoted("mysql")),
-            Ok("('plain', 'a,b \"q\"\tc\nd', 'it''s \\\\ x')".into())
+            Ok("('plain', 'a,b \"q\"\tc\nd', _utf8mb4 X'69742773205C2078')".into())
         );
         assert_eq!(
             column_in_list(&result, 3, &Quoted("sqlserver")),

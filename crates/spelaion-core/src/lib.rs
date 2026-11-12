@@ -48,6 +48,7 @@ mod session;
 mod session_setup;
 mod sort;
 mod sql_file;
+mod sql_mode;
 mod table_data;
 mod table_stats;
 #[cfg(all(test, unix))]

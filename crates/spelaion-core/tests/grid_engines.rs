@@ -322,3 +322,179 @@ async fn find_searches_the_stored_result_of_every_engine() {
         run(label, &session, &["DROP TABLE ge_find"], true).await;
     }
 }
+
+/// The first cell of a query's result, as text.
+async fn first_cell(label: &str, session: &Session, sql: &str) -> String {
+    let id = run(label, session, &[sql], false)
+        .await
+        .unwrap_or_else(|| panic!("{label}: {sql}: no result"));
+    let stored = session.results().get(id).unwrap();
+    let stored = stored.read().unwrap();
+    match stored.value_at(0, 0).unwrap() {
+        spelaion_driver_api::Value::Null => "NULL".into(),
+        other => other.to_string(),
+    }
+}
+
+/// MySQL and MariaDB read a backslash in a string as an escape, unless the session's sql_mode
+/// has NO_BACKSLASH_ESCAPES (SDB-161). In both modes: the editor splits a script where the
+/// server would, "filter by this value" and an edit keyed by a value that holds a backslash
+/// hit exactly that row, and a copied INSERT loads the value unchanged.
+#[tokio::test]
+async fn mysql_and_mariadb_read_backslashes_as_the_sessions_sql_mode_does() {
+    for (label, session, schema) in engines().await {
+        if label != "mysql" && label != "mariadb" {
+            continue;
+        }
+        let base = first_cell(label, &session, "select @@session.sql_mode").await;
+        let base = if base == "NULL" { String::new() } else { base };
+        for no_backslash_escapes in [false, true] {
+            let mode = if no_backslash_escapes {
+                format!("{base},NO_BACKSLASH_ESCAPES")
+                    .trim_start_matches(',')
+                    .to_string()
+            } else {
+                base.clone()
+            };
+            let case = format!(
+                "{label} ({})",
+                if no_backslash_escapes {
+                    "NO_BACKSLASH_ESCAPES"
+                } else {
+                    "default"
+                }
+            );
+            // The statement names sql_mode: the session reads it again afterwards.
+            run(
+                &case,
+                &session,
+                &[&format!("SET SESSION sql_mode = '{mode}'")],
+                false,
+            )
+            .await;
+            run(&case, &session, &["DROP TABLE IF EXISTS ge_mode"], false).await;
+            run(
+                &case,
+                &session,
+                &["CREATE TABLE ge_mode (k VARCHAR(20) PRIMARY KEY, n INT)"],
+                false,
+            )
+            .await;
+
+            // The script as the server reads it: two statements, the value `C:\`.
+            let script = if no_backslash_escapes {
+                r"insert into ge_mode values ('C:\', 1); insert into ge_mode values ('C:', 2);"
+            } else {
+                r"insert into ge_mode values ('C:\\', 1); insert into ge_mode values ('C:', 2);"
+            };
+            let dialect = session.dialect();
+            assert_eq!(dialect.split_statements(script).len(), 2, "{case}");
+            let events: Vec<CoreEvent> = session.run_script(script).collect().await;
+            let finished = events
+                .iter()
+                .filter(|e| matches!(e, CoreEvent::StatementFinished { .. }))
+                .count();
+            assert_eq!(finished, 2, "{case}: {events:?}");
+            assert_eq!(
+                first_cell(&case, &session, "select k from ge_mode where n = 1").await,
+                r"C:\",
+                "{case}"
+            );
+
+            // "Filter by this value" on the value with a backslash.
+            let id = run(
+                &case,
+                &session,
+                &["select k, n from ge_mode order by n"],
+                false,
+            )
+            .await
+            .unwrap();
+            let stored = session.results().get(id).unwrap();
+            let (meta, value) = {
+                let r = stored.read().unwrap();
+                (r.schema().columns[0].clone(), r.value_at(0, 0).unwrap())
+            };
+            let condition = value_condition(
+                dialect.as_ref(),
+                &meta.name,
+                meta.logical,
+                FilterOp::Eq,
+                &value,
+            )
+            .unwrap();
+            let filter = add_condition(dialect.as_ref(), "", &condition).unwrap();
+            let rows = count_table_rows(&session, schema, "ge_mode", &filter)
+                .await
+                .unwrap_or_else(|e| panic!("{case}: {filter}\n→ {e}"));
+            assert_eq!(rows, 1, "{case}: {filter}");
+
+            // An edit of the row keyed by `C:\` changes that row only.
+            let table = session
+                .connection()
+                .describe_table(schema, "ge_mode")
+                .await
+                .unwrap();
+            let statements = spelaion_core::edit_statements(
+                dialect.as_ref(),
+                &table,
+                &stored.read().unwrap(),
+                &[spelaion_core::RowChange::Update {
+                    row: 0,
+                    values: vec![(1, spelaion_core::CellInput::Text("10".into()))],
+                }],
+            )
+            .unwrap();
+            assert_eq!(
+                spelaion_core::apply_edits(&session, &statements).await,
+                Ok(1),
+                "{case}"
+            );
+            assert_eq!(
+                first_cell(&case, &session, "select sum(n) from ge_mode").await,
+                "12",
+                "{case}"
+            );
+
+            // A copied INSERT of the rows loads them unchanged.
+            let mut copied = Vec::new();
+            spelaion_core::write_result(
+                &stored.read().unwrap(),
+                &spelaion_core::ExportOptions {
+                    format: spelaion_core::ExportFormat::SqlInsert {
+                        table: "ge_mode".into(),
+                    },
+                    rows: 0..2,
+                    columns: vec![0, 1],
+                    header: false,
+                    csv: spelaion_core::CsvOptions::default(),
+                },
+                dialect.as_ref(),
+                &mut copied,
+            )
+            .unwrap();
+            let copied = String::from_utf8(copied).unwrap();
+            run(&case, &session, &["DELETE FROM ge_mode"], false).await;
+            let events: Vec<CoreEvent> = session.run_script(&copied).collect().await;
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| matches!(e, CoreEvent::StatementFailed { .. })),
+                "{case}: {copied}\n{events:?}"
+            );
+            assert_eq!(
+                first_cell(&case, &session, "select k from ge_mode where n = 1").await,
+                r"C:\",
+                "{case}: {copied}"
+            );
+            run(&case, &session, &["DROP TABLE ge_mode"], false).await;
+        }
+        run(
+            label,
+            &session,
+            &[&format!("SET SESSION sql_mode = '{base}'")],
+            false,
+        )
+        .await;
+    }
+}
