@@ -50,7 +50,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   reach the shell. Catalog queries are shared in `catalog.rs`. Tests against
   `testing/docker/sqlitehost` with `SPELAION_TEST_SSH`.
 - `crates/spelaion-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
-  (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a batch may return
+  (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a `DECLARE` keeps the rest of
+  its batch, where its variables live (the guard still checks each statement in it); a batch may return
   several result sets. Cancel is a TDS Attention through a patched tiberius in
   `vendor/tiberius` (read its `PATCHED.md` before upgrading). Tests against the Docker SQL
   Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`.
