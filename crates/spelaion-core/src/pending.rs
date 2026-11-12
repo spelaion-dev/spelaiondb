@@ -810,6 +810,7 @@ mod tests {
 
     use super::*;
     use crate::ResultStore;
+    use crate::filter::{ColumnFilter, FilterOp};
     use crate::results::ResultId;
     use crate::sort::{SortKey, ViewError};
 
@@ -1172,11 +1173,104 @@ mod tests {
         };
         assert_eq!(stored.sort(Some(key)), Err(ViewError::PendingEdits));
         assert_eq!(stored.filter(Some("bob")), Err(ViewError::PendingEdits));
+        let names_with_a = ColumnFilter {
+            column: 1,
+            op: FilterOp::Contains,
+            value: "a".into(),
+        };
+        assert_eq!(
+            stored.filter_columns(vec![names_with_a.clone()]),
+            Err(ViewError::PendingEdits)
+        );
         // Asking for the view it already has is no change.
         assert_eq!(stored.sort(None), Ok(()));
         assert_eq!(stored.filter(Some("  ")), Ok(6));
+        assert_eq!(stored.filter_columns(vec![]), Ok(6));
         stored.edit_pending(PendingEdit::Discard).unwrap();
         assert_eq!(stored.sort(Some(key)), Ok(()));
+        assert_eq!(stored.sort(None), Ok(()));
+
+        // A column filter on before the edits: neither removing it nor adding another moves
+        // the rows the edits name (SDB-138).
+        assert_eq!(stored.filter_columns(vec![names_with_a.clone()]), Ok(2));
+        stored
+            .edit_pending(PendingEdit::SetCells(vec![CellEdit {
+                row: 1,
+                column: 1,
+                value: Some(text("changed")),
+            }]))
+            .unwrap();
+        let ids_above_two = ColumnFilter {
+            column: 0,
+            op: FilterOp::Gt,
+            value: "2".into(),
+        };
+        assert_eq!(stored.filter_columns(vec![]), Err(ViewError::PendingEdits));
+        assert_eq!(
+            stored.filter_columns(vec![names_with_a.clone(), ids_above_two]),
+            Err(ViewError::PendingEdits)
+        );
+        assert_eq!(stored.filter_columns(vec![names_with_a]), Ok(2));
+        // Position 1 of the filtered view is still id 4, `Iñaki`.
+        assert_eq!(stored.value_at(1, 0), Some(Value::Int(4)));
+        assert_eq!(
+            stored.pending().changes(),
+            vec![RowChange::Update {
+                row: 1,
+                values: vec![(1, text("changed"))],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_page_appended_under_pending_edits_leaves_them_on_their_rows() {
+        let (store, id) = page();
+        let stored = store.get(id).unwrap();
+        stored
+            .write()
+            .unwrap()
+            .edit_pending(PendingEdit::SetCells(vec![CellEdit {
+                row: 4,
+                column: 1,
+                value: Some(text("changed")),
+            }]))
+            .unwrap();
+        stored
+            .write()
+            .unwrap()
+            .edit_pending(PendingEdit::Delete(vec![5]))
+            .unwrap();
+        // The next page of the query, rows 7 and 8, comes after the rows on screen.
+        let schema = stored.read().unwrap().schema().clone();
+        let next = store.create(schema.clone());
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![7, 8])),
+            Arc::new(StringArray::from(vec![Some("g"), Some("h")])),
+            Arc::new(StringArray::from(vec![Some("2001-01-01"); 2])),
+        ];
+        store
+            .append(
+                next,
+                RecordBatch::try_new(schema.arrow.clone(), columns).unwrap(),
+            )
+            .unwrap();
+        store.complete(next);
+        assert_eq!(store.append_page(id, next, 6), Ok(2));
+        let stored = stored.read().unwrap();
+        assert_eq!(stored.rows(), 8);
+        // The edits still name ids 5 and 6, the rows they were made on.
+        assert_eq!(
+            stored.pending().changes(),
+            vec![
+                RowChange::Update {
+                    row: 4,
+                    values: vec![(1, text("changed"))],
+                },
+                RowChange::Delete { row: 5 },
+            ]
+        );
+        assert_eq!(stored.value_at(4, 0), Some(Value::Int(5)));
+        assert_eq!(stored.value_at(5, 0), Some(Value::Int(6)));
     }
 
     #[test]

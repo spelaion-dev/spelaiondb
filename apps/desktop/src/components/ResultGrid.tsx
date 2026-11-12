@@ -1216,6 +1216,12 @@ export function ResultGrid({
       setNotice({ text: t("results.filterWhenComplete"), error: true });
       return;
     }
+    // Pending edits name rows by their place in the view (ADR-044): the core refuses to change
+    // it under them, and the grid says so first, as it does for sorting.
+    if (editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) {
+      setNotice({ text: t("edit.applyFirst"), error: true });
+      return;
+    }
     try {
       const outcome = await call(commands.filterColumns(result.id, filters));
       onColumnFiltered(filters, outcome.rows, outcome.total);
@@ -1760,13 +1766,20 @@ export function ResultGrid({
             <button
               className="ghost small"
               aria-label={t("results.removeFilter", { filter: filterLabel(f, result.columns) })}
+              title={hasPendingEdits ? t("edit.applyFirst") : undefined}
+              disabled={hasPendingEdits}
               onClick={() => void applyColumnFilters((result.columnFilters ?? []).filter((_, j) => j !== i))}
             >
               ×
             </button>
           </span>
         ))}
-        <button className="ghost small" onClick={() => void applyColumnFilters([])}>
+        <button
+          className="ghost small"
+          title={hasPendingEdits ? t("edit.applyFirst") : undefined}
+          disabled={hasPendingEdits}
+          onClick={() => void applyColumnFilters([])}
+        >
           {t("results.resetFilters")}
         </button>
       </div>
