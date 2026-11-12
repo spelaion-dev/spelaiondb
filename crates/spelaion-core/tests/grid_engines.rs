@@ -795,8 +795,9 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
                 .describe_table(schema, table_name)
                 .await
                 .unwrap();
+            let edit_target = session.edit_target().await.unwrap();
             let statements = spelaion_core::edit_statements(
-                dialect.as_ref(),
+                &edit_target,
                 &table,
                 &keys.read().unwrap(),
                 &[spelaion_core::RowChange::Update {
@@ -868,10 +869,11 @@ async fn sqlserver_seventh_digit_filters_and_keys_hit_exactly_their_row() {
             .describe_table(schema, "ge_seventh")
             .await
             .unwrap();
+        let edit_target = session.edit_target().await.unwrap();
         let statements = {
             let stored = stored.read().unwrap();
             spelaion_core::edit_statements(
-                dialect.as_ref(),
+                &edit_target,
                 &table,
                 &stored,
                 &stored.pending().changes(),
