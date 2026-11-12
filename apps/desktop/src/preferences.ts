@@ -5,6 +5,7 @@ import { create } from "zustand";
 import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
 import type { EditorPreferencesItem, MapPreferencesItem } from "./bindings";
 import { applyLanguage, type LanguagePreference } from "./i18n";
+import { createSaveQueue, savedSetting } from "./saveQueue";
 
 export type ThemePreference = "system" | "light" | "dark";
 
@@ -56,6 +57,8 @@ interface PreferencesStore {
   /** Connect the restored tabs at startup (ADR-036): connect only, never run. Off by default. */
   reconnectOnStart: boolean;
   loading: boolean;
+  /** The setting being saved, `null` when nothing is. Changes made meanwhile wait for it and
+   *  are saved after it, in order: none is dropped (SDB-83). */
   saving: PreferenceSetting | null;
   error: PreferenceError | null;
   load(): Promise<void>;
@@ -68,14 +71,32 @@ interface PreferencesStore {
   clearError(): void;
 }
 
-export const usePreferences = create<PreferencesStore>((set, get) => ({
+const DEFAULT_EXPLORER: ExplorerPreferences = { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false };
+const DEFAULT_GRID: GridPreferences = { zebra: true, nullText: true, boolCheckboxes: false };
+const DEFAULT_SCRIPT: ScriptPreferencesItem = { onError: "stop", notify: false, notifyAfterSeconds: 30, confirmDelaySeconds: 0 };
+const DEFAULT_EDITOR: EditorPreferencesItem = { font: "system", fontSize: 13, lineHeight: 18, tabSize: 2, lineNumbers: true, wordWrap: false, keywordCase: "preserve", indent: 2, commaPosition: "trailing" };
+const DEFAULT_MAP: MapPreferencesItem = { tiles: false, tileName: "", tileUrl: "", tileAttribution: "" };
+
+// Every save goes through one queue. The settings shown at once keep what was last saved, to go
+// back to it when their newest change fails to save.
+const enqueue = createSaveQueue<PreferenceSetting>((saving) => usePreferences.setState({ saving }));
+const saved = {
+  explorer: savedSetting(DEFAULT_EXPLORER),
+  grid: savedSetting(DEFAULT_GRID),
+  script: savedSetting(DEFAULT_SCRIPT),
+  editor: savedSetting(DEFAULT_EDITOR),
+  map: savedSetting(DEFAULT_MAP),
+  reconnectOnStart: savedSetting(false),
+};
+
+export const usePreferences = create<PreferencesStore>((set) => ({
   language: "system",
   theme: "system",
-  explorer: { showSystem: false, sortAlphabetically: true, sortIgnoreCase: true, foldersFirst: false, connectedOnly: false, serverSideFilters: true, linkWithEditor: false },
-  grid: { zebra: true, nullText: true, boolCheckboxes: false },
-  script: { onError: "stop", notify: false, notifyAfterSeconds: 30, confirmDelaySeconds: 0 },
-  editor: { font: "system", fontSize: 13, lineHeight: 18, tabSize: 2, lineNumbers: true, wordWrap: false, keywordCase: "preserve", indent: 2, commaPosition: "trailing" },
-  map: { tiles: false, tileName: "", tileUrl: "", tileAttribution: "" },
+  explorer: DEFAULT_EXPLORER,
+  grid: DEFAULT_GRID,
+  script: DEFAULT_SCRIPT,
+  editor: DEFAULT_EDITOR,
+  map: DEFAULT_MAP,
   reconnectOnStart: false,
   loading: true,
   saving: null,
@@ -92,17 +113,17 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
       call(commands.getMapPreferences()),
     ]);
     let error: PreferenceError | null = null;
-    if (map.status === "fulfilled") set({ map: map.value });
+    if (map.status === "fulfilled") { saved.map.loaded(map.value); set({ map: map.value }); }
     else error = { setting: "map", phase: "load", detail: errorText(map.reason) };
-    if (editor.status === "fulfilled") set({ editor: editor.value });
+    if (editor.status === "fulfilled") { saved.editor.loaded(editor.value); set({ editor: editor.value }); }
     else error = { setting: "editor", phase: "load", detail: errorText(editor.reason) };
-    if (reconnect.status === "fulfilled") set({ reconnectOnStart: reconnect.value });
+    if (reconnect.status === "fulfilled") { saved.reconnectOnStart.loaded(reconnect.value); set({ reconnectOnStart: reconnect.value }); }
     else error = { setting: "editor", phase: "load", detail: errorText(reconnect.reason) };
-    if (script.status === "fulfilled") set({ script: script.value });
+    if (script.status === "fulfilled") { saved.script.loaded(script.value); set({ script: script.value }); }
     else error = { setting: "script", phase: "load", detail: errorText(script.reason) };
-    if (grid.status === "fulfilled") set({ grid: grid.value });
+    if (grid.status === "fulfilled") { saved.grid.loaded(grid.value); set({ grid: grid.value }); }
     else error = { setting: "grid", phase: "load", detail: errorText(grid.reason) };
-    if (explorer.status === "fulfilled") set({ explorer: explorer.value });
+    if (explorer.status === "fulfilled") { saved.explorer.loaded(explorer.value); set({ explorer: explorer.value }); }
     else error = { setting: "explorer", phase: "load", detail: errorText(explorer.reason) };
     if (theme.status === "fulfilled") {
       const selected: ThemePreference = theme.value === "light" || theme.value === "dark" ? theme.value : "system";
@@ -120,104 +141,116 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
     }
     set({ loading: false, error });
   },
-  async setLanguage(next) {
-    if (get().saving) return;
-    set({ saving: "language", error: null });
-    try {
-      await call(commands.setLanguage(next));
-      set({ language: next });
-      await applyLanguage(next);
-    } catch (e) {
-      set({ error: { setting: "language", phase: "save", detail: errorText(e) } });
-    } finally {
-      set({ saving: null });
-    }
+  // Language and theme apply once saved; the others show at once and go back if saving fails.
+  setLanguage(next) {
+    set({ error: null });
+    return enqueue("language", async () => {
+      try {
+        await call(commands.setLanguage(next));
+        set({ language: next });
+        await applyLanguage(next);
+      } catch (e) {
+        set({ error: { setting: "language", phase: "save", detail: errorText(e) } });
+      }
+    });
   },
-  async setTheme(next) {
-    if (get().saving) return;
-    set({ saving: "theme", error: null });
-    try {
-      await call(commands.setTheme(next));
-      set({ theme: next });
-      applyTheme(next);
-    } catch (e) {
-      set({ error: { setting: "theme", phase: "save", detail: errorText(e) } });
-    } finally {
-      set({ saving: null });
-    }
+  setTheme(next) {
+    set({ error: null });
+    return enqueue("theme", async () => {
+      try {
+        await call(commands.setTheme(next));
+        set({ theme: next });
+        applyTheme(next);
+      } catch (e) {
+        set({ error: { setting: "theme", phase: "save", detail: errorText(e) } });
+      }
+    });
   },
-  async setExplorer(next) {
-    if (get().saving) return;
-    // The tree follows at once; if saving fails it goes back to what was saved.
-    const previous = get().explorer;
-    set({ explorer: next, saving: "explorer", error: null });
-    try {
-      await call(commands.setExplorerPreferences(next));
-    } catch (e) {
-      set({ explorer: previous, error: { setting: "explorer", phase: "save", detail: errorText(e) } });
-    } finally {
-      set({ saving: null });
-    }
+  setExplorer(next) {
+    // The tree follows at once.
+    const ticket = saved.explorer.change();
+    set({ explorer: next, error: null });
+    return enqueue("explorer", async () => {
+      try {
+        await call(commands.setExplorerPreferences(next));
+        saved.explorer.succeeded(next);
+      } catch (e) {
+        const back = saved.explorer.failed(ticket);
+        set({ ...(back ? { explorer: back } : {}), error: { setting: "explorer", phase: "save", detail: errorText(e) } });
+      }
+    });
   },
-  async setScript(next) {
-    if (get().saving) return;
-    const previous = get().script;
-    set({ script: next, saving: "script", error: null });
-    try {
-      await call(commands.setScriptPreferences(next));
-    } catch (e) {
-      set({ script: previous, error: { setting: "script", phase: "save", detail: errorText(e) } });
-    } finally {
-      set({ saving: null });
-    }
+  setScript(next) {
+    const ticket = saved.script.change();
+    set({ script: next, error: null });
+    return enqueue("script", async () => {
+      try {
+        await call(commands.setScriptPreferences(next));
+        saved.script.succeeded(next);
+      } catch (e) {
+        const back = saved.script.failed(ticket);
+        set({ ...(back ? { script: back } : {}), error: { setting: "script", phase: "save", detail: errorText(e) } });
+      }
+    });
   },
-  async setEditor(next) {
-    if (get().saving) return false;
-    const previous = get().editor;
-    set({ editor: next, saving: "editor", error: null });
-    try { await call(commands.setEditorPreferences(next)); return true; }
-    catch (e) { set({ editor: previous, error: { setting: "editor", phase: "save", detail: errorText(e) } }); return false; }
-    finally { set({ saving: null }); }
+  setEditor(next) {
+    const ticket = saved.editor.change();
+    set({ editor: next, error: null });
+    return enqueue("editor", async () => {
+      try {
+        await call(commands.setEditorPreferences(next));
+        saved.editor.succeeded(next);
+        return true;
+      } catch (e) {
+        const back = saved.editor.failed(ticket);
+        set({ ...(back ? { editor: back } : {}), error: { setting: "editor", phase: "save", detail: errorText(e) } });
+        return false;
+      }
+    });
   },
-  async setMap(next, optimistic = false) {
-    if (get().saving) return false;
-    const previous = get().map;
-    set({ saving: "map", error: null, ...(optimistic ? { map: next } : {}) });
-    try {
-      await call(commands.setMapPreferences(next));
-      set({ map: next });
-      return true;
-    } catch (e) {
-      set({ ...(optimistic ? { map: previous } : {}), error: { setting: "map", phase: "save", detail: errorText(e) } });
-      return false;
-    } finally {
-      set({ saving: null });
-    }
+  setMap(next, optimistic = false) {
+    // A form's values show once the core accepted them; a checkbox shows at once.
+    const ticket = saved.map.change();
+    set({ error: null, ...(optimistic ? { map: next } : {}) });
+    return enqueue("map", async () => {
+      try {
+        await call(commands.setMapPreferences(next));
+        saved.map.succeeded(next);
+        set({ map: next });
+        return true;
+      } catch (e) {
+        const back = optimistic ? saved.map.failed(ticket) : undefined;
+        set({ ...(back ? { map: back } : {}), error: { setting: "map", phase: "save", detail: errorText(e) } });
+        return false;
+      }
+    });
   },
-  async setReconnectOnStart(next) {
-    if (get().saving) return;
-    const previous = get().reconnectOnStart;
-    set({ reconnectOnStart: next, saving: "editor", error: null });
-    try {
-      await call(commands.setReconnectOnStart(next));
-    } catch (e) {
-      set({ reconnectOnStart: previous, error: { setting: "editor", phase: "save", detail: errorText(e) } });
-    } finally {
-      set({ saving: null });
-    }
+  setReconnectOnStart(next) {
+    const ticket = saved.reconnectOnStart.change();
+    set({ reconnectOnStart: next, error: null });
+    return enqueue("editor", async () => {
+      try {
+        await call(commands.setReconnectOnStart(next));
+        saved.reconnectOnStart.succeeded(next);
+      } catch (e) {
+        const back = saved.reconnectOnStart.failed(ticket);
+        set({ ...(back !== undefined ? { reconnectOnStart: back } : {}), error: { setting: "editor", phase: "save", detail: errorText(e) } });
+      }
+    });
   },
-  async setGrid(next) {
-    if (get().saving) return;
-    // The grid repaints at once; if saving fails it goes back to what was saved.
-    const previous = get().grid;
-    set({ grid: next, saving: "grid", error: null });
-    try {
-      await call(commands.setGridPreferences(next));
-    } catch (e) {
-      set({ grid: previous, error: { setting: "grid", phase: "save", detail: errorText(e) } });
-    } finally {
-      set({ saving: null });
-    }
+  setGrid(next) {
+    // The grid repaints at once.
+    const ticket = saved.grid.change();
+    set({ grid: next, error: null });
+    return enqueue("grid", async () => {
+      try {
+        await call(commands.setGridPreferences(next));
+        saved.grid.succeeded(next);
+      } catch (e) {
+        const back = saved.grid.failed(ticket);
+        set({ ...(back ? { grid: back } : {}), error: { setting: "grid", phase: "save", detail: errorText(e) } });
+      }
+    });
   },
   clearError: () => set({ error: null }),
 }));
