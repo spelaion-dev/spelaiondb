@@ -115,11 +115,34 @@ fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80
 }
 
+/// `CREATE [OR REPLACE] FUNCTION | PROCEDURE`: its SQL-standard body (`BEGIN ATOMIC … END`,
+/// PostgreSQL 14) is not quoted and holds semicolons.
+fn is_routine(words: &[String]) -> bool {
+    let kind = match words {
+        [create, or, replace, kind, ..]
+            if create == "create" && or == "or" && replace == "replace" =>
+        {
+            kind
+        }
+        [create, kind, ..] if create == "create" => kind,
+        _ => return false,
+    };
+    kind == "function" || kind == "procedure"
+}
+
+/// Splits at `;` outside quotes, comments and `$tag$` bodies. In a `CREATE FUNCTION` or
+/// `PROCEDURE`, as `psql` does, an unquoted `BEGIN` or `CASE` opens a block and `END` closes
+/// one, and a `;` inside a block does not split: a `BEGIN ATOMIC` body stays whole, and its
+/// `END` (a synonym of `COMMIT` on its own) is never sent alone. Elsewhere `BEGIN;` and `END;`
+/// are statements of their own.
 fn split(script: &str) -> Vec<StatementSpan> {
     let b = script.as_bytes();
     let mut spans = Vec::new();
     let mut start = 0;
     let mut has_code = false;
+    // The first words of the current statement, lowercased, and its block depth.
+    let mut words: Vec<String> = Vec::new();
+    let mut depth = 0usize;
     let mut i = 0;
 
     while i < b.len() {
@@ -172,13 +195,35 @@ fn split(script: &str) -> Vec<StatementSpan> {
                     has_code = true;
                 }
             },
-            b';' => {
+            b';' if depth == 0 => {
                 if has_code {
                     spans.push(trimmed(script, start, i));
                 }
                 i += 1;
                 start = i;
                 has_code = false;
+                words.clear();
+            }
+            c if (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
+                && (i == 0 || !is_ident_byte(b[i - 1])) =>
+            {
+                let end = b[i..]
+                    .iter()
+                    .position(|&c| !is_ident_byte(c))
+                    .map_or(b.len(), |p| i + p);
+                let word = script[i..end].to_ascii_lowercase();
+                if words.len() < 4 {
+                    words.push(word.clone());
+                }
+                if is_routine(&words) {
+                    match word.as_str() {
+                        "begin" | "case" => depth += 1,
+                        "end" => depth = depth.saturating_sub(1),
+                        _ => {}
+                    }
+                }
+                has_code = true;
+                i = end;
             }
             c => {
                 if !c.is_ascii_whitespace() {
@@ -289,6 +334,54 @@ mod tests {
             [
                 "create function f() returns int as $body$ begin; return 1; end $body$ language plpgsql",
                 "select $$;$$, $1"
+            ]
+        );
+    }
+
+    #[test]
+    fn begin_atomic_bodies_are_one_statement() {
+        let function = "CREATE OR REPLACE FUNCTION add_one(a int) RETURNS int\nLANGUAGE sql\nBEGIN ATOMIC\n  SELECT a + 1;\n  SELECT CASE WHEN a > 0 THEN a ELSE -a END;\nEND";
+        assert_eq!(
+            parts(&format!("{function};\nselect 1;")),
+            [function, "select 1"]
+        );
+        let procedure =
+            "create procedure p() language sql begin atomic insert into t values (1); end";
+        assert_eq!(
+            parts(&format!("{procedure}; call p()")),
+            [procedure, "call p()"]
+        );
+        // A transaction's BEGIN and END are still statements of their own.
+        assert_eq!(parts("begin; select 1; end;"), ["begin", "select 1", "end"]);
+        assert_eq!(
+            parts("BEGIN WORK; select case when true then 1 end; END WORK;"),
+            ["BEGIN WORK", "select case when true then 1 end", "END WORK"]
+        );
+        // The SQL-standard RETURN form has no block; words in quotes, comments and $$ bodies
+        // do not count.
+        assert_eq!(
+            parts("create function f() returns int language sql return 1; select 2"),
+            [
+                "create function f() returns int language sql return 1",
+                "select 2"
+            ]
+        );
+        assert_eq!(
+            parts(
+                "create function \"begin\"() returns text language sql /* begin */ return 'begin'; select 3"
+            ),
+            [
+                "create function \"begin\"() returns text language sql /* begin */ return 'begin'",
+                "select 3"
+            ]
+        );
+        assert_eq!(
+            parts(
+                "create function g() returns int as $$ begin return 1; end $$ language plpgsql; select 4"
+            ),
+            [
+                "create function g() returns int as $$ begin return 1; end $$ language plpgsql",
+                "select 4"
             ]
         );
     }
