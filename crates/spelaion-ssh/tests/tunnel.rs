@@ -6,7 +6,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1031,9 +1031,30 @@ async fn a_changed_key_is_still_refused_with_a_slow_person() {
     assert_eq!(person.asked.load(Ordering::SeqCst), 0);
 }
 
-/// Three consecutive free local ports, held open until dropped.
+/// Three consecutive free local ports, held open until dropped, that the operating system never
+/// hands out on its own.
+///
+/// The tests release them before a tunnel binds them. A port from the system's ephemeral range
+/// could be taken in between: every outgoing connection and every listener on port 0 made by the
+/// tests running alongside gets one (`spelaion-core`'s `tests/open.rs` once failed that way on
+/// Linux, SDB-128). So they come from below every system's default range (Linux 32768, Windows
+/// and macOS 49152), and on Linux also from outside the range this machine is configured with.
+///
+/// The tests that call it run at the same time, so each call gets ports no other call in this
+/// process got: scanning from the same start, two of them once found the same free ports and
+/// the second to bind lost (SDB-261).
 fn free_ports() -> (u16, Vec<std::net::TcpListener>) {
-    for base in (41_000u16..60_000).step_by(37) {
+    static NEXT: AtomicU16 = AtomicU16::new(20_000);
+    let ephemeral = ephemeral_ports();
+    loop {
+        let base = NEXT.fetch_add(3, Ordering::SeqCst);
+        assert!(
+            base + 3 <= 32_000,
+            "no three consecutive free ports outside the system's ephemeral range"
+        );
+        if (base..base + 3).any(|p| ephemeral.contains(&p)) {
+            continue;
+        }
         let held: Vec<_> = (base..base + 3)
             .map_while(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok())
             .collect();
@@ -1041,7 +1062,24 @@ fn free_ports() -> (u16, Vec<std::net::TcpListener>) {
             return (base, held);
         }
     }
-    panic!("no three consecutive free ports");
+}
+
+/// The ports the system gives to outgoing connections and to listeners on port 0.
+fn ephemeral_ports() -> std::ops::RangeInclusive<u16> {
+    if cfg!(target_os = "linux")
+        && let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        && let [Ok(low), Ok(high)] = range
+            .split_whitespace()
+            .map(str::parse::<u16>)
+            .collect::<Vec<_>>()[..]
+    {
+        return low..=high;
+    }
+    if cfg!(target_os = "linux") {
+        32_768..=60_999
+    } else {
+        49_152..=65_535
+    }
 }
 
 #[tokio::test]
