@@ -116,7 +116,8 @@ function SaveError({ setting }: { setting: PreferenceSetting }) {
 function AppearanceSettings() {
   const { t } = useTranslation("settings");
   const theme = usePreferences((s) => s.theme);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  // Only while loading: a change made while another saves waits for it (SDB-83).
+  const busy = usePreferences((s) => s.loading);
   const setTheme = usePreferences((s) => s.setTheme);
   return (
     <>
@@ -146,7 +147,7 @@ function EditorSettings() {
   const preferences = usePreferences((s) => s.editor);
   const setEditor = usePreferences((s) => s.setEditor);
   const reconnect = usePreferences((s) => s.reconnectOnStart);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setReconnect = usePreferences((s) => s.setReconnectOnStart);
   return (
     <>
@@ -198,7 +199,7 @@ const MAX_CONFIRM_DELAY = 10;
 function ScriptSettings() {
   const { t } = useTranslation("settings");
   const script = usePreferences((s) => s.script);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setScript = usePreferences((s) => s.setScript);
   const [after, setAfter] = useState(String(script.notifyAfterSeconds));
   useEffect(() => setAfter(String(script.notifyAfterSeconds)), [script.notifyAfterSeconds]);
@@ -280,7 +281,7 @@ function ScriptSettings() {
 function MapSettings() {
   const { t } = useTranslation("settings");
   const map = usePreferences((s) => s.map);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setMap = usePreferences((s) => s.setMap);
   const [draft, setDraft] = useState({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution });
   useEffect(() => setDraft({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution }), [map.tileName, map.tileUrl, map.tileAttribution]);
@@ -339,7 +340,7 @@ function MapSettings() {
 function GridSettings() {
   const { t } = useTranslation("settings");
   const grid = usePreferences((s) => s.grid);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setGrid = usePreferences((s) => s.setGrid);
   return (
     <>
@@ -367,7 +368,7 @@ function GridSettings() {
 function LanguageSettings() {
   const { t } = useTranslation("settings");
   const language = usePreferences((s) => s.language);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setLanguage = usePreferences((s) => s.setLanguage);
   return (
     <>
@@ -393,7 +394,7 @@ function LanguageSettings() {
 function ExplorerSettings() {
   const { t } = useTranslation("settings");
   const explorer = usePreferences((s) => s.explorer);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setExplorer = usePreferences((s) => s.setExplorer);
   return (
     <>

@@ -2660,14 +2660,28 @@ try {
   await viewsFolder.click();
   assert.equal(await viewsFolder.getAttribute("aria-expanded"), "false");
   const linkWithEditor = page.getByRole("button", { name: "Link with editor" });
-  // The toggle is a saved preference: its state shows once the save is done, so wait for it.
+  // The toggle is a saved preference: it shows at once, and the core has it once saved.
+  const linkSaved = (value) =>
+    page.waitForFunction(
+      async (expected) => (await window.__TAURI_INTERNALS__.invoke("get_explorer_preferences")).linkWithEditor === expected,
+      value,
+    );
   await linkWithEditor.click();
   await linkWithEditor.and(page.locator('[aria-pressed="true"]')).waitFor();
+  await linkSaved(true);
   await page.waitForFunction(() =>
     document.querySelector('[aria-label="Expand or collapse Views"]')?.getAttribute("aria-expanded") === "true",
   );
+  // Two quick clicks: the second lands while the first is saving and is saved after it, never
+  // dropped (SDB-83), so the toggle ends where it started, shown and saved.
+  await linkWithEditor.dblclick();
+  // The core held `true` before them too: give their two saves (milliseconds each) time to run.
+  await page.waitForTimeout(500);
+  await linkSaved(true);
+  assert.equal(await linkWithEditor.getAttribute("aria-pressed"), "true");
   await linkWithEditor.click();
   await linkWithEditor.and(page.locator('[aria-pressed="false"]')).waitFor();
+  await linkSaved(false);
   // Bookmarks: listed above the connections; a click shows the object in the tree.
   await ordersNode.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Add bookmark" }).click();
