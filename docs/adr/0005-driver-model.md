@@ -45,6 +45,14 @@ results still in Arrow and the dialects and barriers kept in the core):
   timestamp(tz) in microseconds. The rest (decimal, uuid, json, interval, array and
   `Native`) goes as text, identical to what the engine's console shows.
 - ±infinity in dates and timestamps is represented with `i32::MAX/MIN` and `i64::MAX/MIN`.
+- Note (2026-11-12, SDB-122): a column's logical type is decided from its metadata alone,
+  never from the values it holds, so a value far down a result cannot fail it. A temporal
+  native type whose values are not all dates may travel as logical `text`, keeping its native
+  type: MySQL's and MariaDB's `DATE`, `DATETIME` and `TIMESTAMP` do (ADR-006), because of
+  their legacy zero dates. Their text sorts and compares as the date does. What places values
+  on a time line or writes a date in the column's form (a chart's X axis, the bulk "now")
+  reads such a column by its native type (`spelaion-core`'s `temporal.rs`); a zero date is no
+  point in time there and is skipped and counted, never dropped from the result or made NULL.
 - `Done.rows_affected` is `None` for statements without a count (DDL, `SET`…).
 - Deliberate differences from `psql`: a `bool` cell is shown as `true`/`false`, and `money`
   without symbol or separators (they depend on `lc_monetary`).

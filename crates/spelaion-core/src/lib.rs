@@ -51,6 +51,7 @@ mod sql_file;
 mod sql_mode;
 mod table_data;
 mod table_stats;
+mod temporal;
 #[cfg(all(test, unix))]
 mod test_files;
 mod transaction;

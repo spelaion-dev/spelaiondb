@@ -229,9 +229,9 @@ const ZOO_ROW: &str = "insert into zoo values (
 
 /// Deliberate differences from the text the server sends (see ADR-005).
 fn expected_difference(column: &str) -> bool {
-    // Binary values are shown as `\x…` hex (the server sends raw bytes), and timestamps
-    // drop trailing zeros of the fraction (`.120` is shown as `.12`).
-    matches!(column, "bn" | "vb" | "bl" | "bits" | "ts3")
+    // Binary values are shown as `\x…` hex (the server sends raw bytes). Dates and timestamps
+    // are the server's text, fraction digits included (SDB-122).
+    matches!(column, "bn" | "vb" | "bl" | "bits")
 }
 
 #[tokio::test]
@@ -307,14 +307,107 @@ async fn zero_dates_are_kept_as_text_instead_of_lost() {
         assert_eq!(rows[1][0].as_deref(), Some("0000-00-00"));
         assert_eq!(rows[1][1].as_deref(), Some("0000-00-00 00:00:00"));
 
-        // A zero date after the first batch cannot change the column any more: explicit error.
-        match run_with(&*conn, "select d from legacy order by d desc", 1).await {
-            Err(DriverError::Decode { message, .. }) => {
-                assert!(message.contains("CAST"), "{message}")
-            }
-            other => panic!("{}: expected a decode error, got {other:?}", server.label),
-        }
+        // Wherever it comes: dates are text with their native type, never decided by values.
+        let (columns, rows) = table(
+            &run_with(&*conn, "select d, t from legacy order by d desc", 1)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(columns[0].native_type, "date", "{}", server.label);
+        assert_eq!(columns[1].native_type, "datetime", "{}", server.label);
+        assert_eq!(
+            rows[1][0].as_deref(),
+            Some("0000-00-00"),
+            "{}",
+            server.label
+        );
         run(&*conn, "drop table legacy").await.unwrap();
+    }
+}
+
+/// A zero date after the first 10,000 rows (SDB-122): every row comes back with the server's
+/// text; nothing fails, nothing is dropped or turned into NULL.
+#[tokio::test]
+async fn zero_dates_after_the_first_ten_thousand_rows_keep_their_text() {
+    for server in servers() {
+        let label = server.label;
+        let conn = server.connect().await;
+        run(&*conn, "set session sql_mode = ''").await.unwrap();
+        run(&*conn, "drop table if exists zero_far").await.unwrap();
+        run(
+            &*conn,
+            "create table zero_far (id int primary key, d date, dt datetime, ts timestamp null)",
+        )
+        .await
+        .unwrap();
+        // 10,000 dated rows (a cross join of digits), then the zero dates.
+        run(
+            &*conn,
+            "insert into zero_far (id, d, dt, ts) \
+             select a.n + b.n * 10 + c.n * 100 + e.n * 1000 + 1, \
+                    '2024-01-15', '2024-01-15 10:20:30', '2024-01-15 10:20:30' \
+             from (select 0 n union all select 1 union all select 2 union all select 3 union all \
+                   select 4 union all select 5 union all select 6 union all select 7 union all \
+                   select 8 union all select 9) a \
+             cross join (select 0 n union all select 1 union all select 2 union all select 3 union all \
+                   select 4 union all select 5 union all select 6 union all select 7 union all \
+                   select 8 union all select 9) b \
+             cross join (select 0 n union all select 1 union all select 2 union all select 3 union all \
+                   select 4 union all select 5 union all select 6 union all select 7 union all \
+                   select 8 union all select 9) c \
+             cross join (select 0 n union all select 1 union all select 2 union all select 3 union all \
+                   select 4 union all select 5 union all select 6 union all select 7 union all \
+                   select 8 union all select 9) e",
+        )
+        .await
+        .unwrap();
+        run(
+            &*conn,
+            "insert into zero_far values \
+             (10001, '0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00')",
+        )
+        .await
+        .unwrap();
+        for batch in [10_000, 1] {
+            let (columns, rows) = table(
+                &run_with(
+                    &*conn,
+                    "select id, d, dt, ts from zero_far order by id",
+                    batch,
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{label} (batches of {batch}): {e}")),
+            );
+            let natives: Vec<&str> = columns.iter().map(|c| c.native_type.as_str()).collect();
+            assert_eq!(natives[1..], ["date", "datetime", "timestamp"], "{label}");
+            assert!(
+                columns[1..].iter().all(|c| c.logical == LogicalType::Text),
+                "{label}: {columns:?}"
+            );
+            assert_eq!(rows.len(), 10_001, "{label} (batches of {batch})");
+            for row in &rows[..10_000] {
+                assert_eq!(
+                    row[1..],
+                    [
+                        Some("2024-01-15".to_string()),
+                        Some("2024-01-15 10:20:30".to_string()),
+                        Some("2024-01-15 10:20:30".to_string())
+                    ],
+                    "{label}"
+                );
+            }
+            assert_eq!(
+                rows[10_000],
+                [
+                    Some("10001".to_string()),
+                    Some("0000-00-00".to_string()),
+                    Some("0000-00-00 00:00:00".to_string()),
+                    Some("0000-00-00 00:00:00".to_string())
+                ],
+                "{label} (batches of {batch})"
+            );
+        }
+        run(&*conn, "drop table zero_far").await.unwrap();
     }
 }
 

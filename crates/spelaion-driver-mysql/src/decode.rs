@@ -1,18 +1,15 @@
 //! From MySQL/MariaDB text-protocol values to Arrow columns.
 //!
 //! Statements run with the text protocol, so every value arrives exactly as the server
-//! writes it (what the `mysql` client shows). Numbers, dates and timestamps are parsed into
-//! typed Arrow columns; the rest stays as text or bytes. Temporal columns are decided with
-//! the first batch: legacy values such as `0000-00-00` do not fit a date, so a column that
-//! has one is kept as text. A later value that does not fit fails with a clear message:
-//! data is never lost silently.
+//! writes it (what the `mysql` client shows). Numbers are parsed into typed Arrow columns; the
+//! rest stays as text or bytes. `DATE`, `DATETIME` and `TIMESTAMP` columns are text, always,
+//! with their native type (ADR-006's 2026-11-12 note): legacy values such as `0000-00-00`
+//! are no date, and a column's type is never decided by the values it holds, so a value far
+//! down a result cannot fail it. Data is never lost silently.
 
 use std::sync::Arc;
 
-use arrow::array::{
-    ArrayRef, BinaryBuilder, Date32Builder, Float64Builder, Int64Builder, StringBuilder,
-    TimestampMicrosecondBuilder,
-};
+use arrow::array::{ArrayRef, BinaryBuilder, Float64Builder, Int64Builder, StringBuilder};
 use mysql_async::Column;
 use mysql_async::consts::{ColumnFlags, ColumnType};
 use spelaion_driver_api::{ColumnMeta, ColumnOrigin, DriverError, LogicalType};
@@ -98,11 +95,14 @@ pub(crate) fn logical_type(column: &Column) -> LogicalType {
         | ColumnType::MYSQL_TYPE_YEAR => LogicalType::Int,
         ColumnType::MYSQL_TYPE_FLOAT | ColumnType::MYSQL_TYPE_DOUBLE => LogicalType::Float,
         ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => LogicalType::Decimal,
-        ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE => LogicalType::Date,
-        ColumnType::MYSQL_TYPE_DATETIME
+        // Text, with their native type: zero dates (`0000-00-00`, `2024-00-00`) are no date,
+        // and the server's text sorts and compares as its date does (ADR-006, 2026-11-12).
+        ColumnType::MYSQL_TYPE_DATE
+        | ColumnType::MYSQL_TYPE_NEWDATE
+        | ColumnType::MYSQL_TYPE_DATETIME
         | ColumnType::MYSQL_TYPE_DATETIME2
         | ColumnType::MYSQL_TYPE_TIMESTAMP
-        | ColumnType::MYSQL_TYPE_TIMESTAMP2 => LogicalType::Timestamp,
+        | ColumnType::MYSQL_TYPE_TIMESTAMP2 => LogicalType::Text,
         // TIME is a duration (-838:59:59 to 838:59:59), not a time of day.
         ColumnType::MYSQL_TYPE_TIME | ColumnType::MYSQL_TYPE_TIME2 => LogicalType::Interval,
         ColumnType::MYSQL_TYPE_JSON => LogicalType::Json,
@@ -133,80 +133,11 @@ fn origin(column: &Column) -> Option<ColumnOrigin> {
     })
 }
 
-/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's algorithm).
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = i64::from((m + 9) % 12);
-    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-fn days_in_month(y: i64, m: u32) -> u32 {
-    match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        _ if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
-        _ => 28,
-    }
-}
-
-/// `YYYY-MM-DD` → days since 1970-01-01. `None` for zero or impossible dates.
-pub(crate) fn parse_date(text: &str) -> Option<i32> {
-    let mut parts = text.splitn(3, '-');
-    let y: i64 = parts.next()?.parse().ok()?;
-    let m: u32 = parts.next()?.parse().ok()?;
-    let d: u32 = parts.next()?.parse().ok()?;
-    if !(1..=12).contains(&m) || d == 0 || d > days_in_month(y, m) {
-        return None;
-    }
-    i32::try_from(days_from_civil(y, m, d)).ok()
-}
-
-/// `YYYY-MM-DD HH:MM:SS[.ffffff]` → microseconds since 1970-01-01.
-pub(crate) fn parse_timestamp(text: &str) -> Option<i64> {
-    let (date, time) = text.split_once(' ')?;
-    let days = i64::from(parse_date(date)?);
-    let (hms, fraction) = match time.split_once('.') {
-        Some((hms, fraction)) => (hms, fraction),
-        None => (time, ""),
-    };
-    let mut parts = hms.splitn(3, ':');
-    let h: i64 = parts.next()?.parse().ok()?;
-    let mi: i64 = parts.next()?.parse().ok()?;
-    let s: i64 = parts.next()?.parse().ok()?;
-    if h > 23 || mi > 59 || s > 59 || fraction.len() > 6 {
-        return None;
-    }
-    let micros = if fraction.is_empty() {
-        0
-    } else {
-        let padded = format!("{fraction:0<6}");
-        padded.parse::<i64>().ok()?
-    };
-    Some(((days * 24 + h) * 60 + mi) * 60_000_000 + s * 1_000_000 + micros)
-}
-
-/// Whether `raw` fits the column's logical type (to decide temporal columns).
-pub(crate) fn fits(logical: LogicalType, raw: &[u8]) -> bool {
-    let text = || std::str::from_utf8(raw).ok();
-    match logical {
-        LogicalType::Date => text().and_then(parse_date).is_some(),
-        LogicalType::Timestamp => text().and_then(parse_timestamp).is_some(),
-        // Only temporal columns are decided by their values; binary data is never text.
-        _ => true,
-    }
-}
-
 pub(crate) enum ColumnBuilder {
     Int(Int64Builder),
     Float(Float64Builder),
     Text(StringBuilder),
     Bytes(BinaryBuilder),
-    Date(Date32Builder),
-    Timestamp(TimestampMicrosecondBuilder),
 }
 
 /// Why a value could not be appended: the caller adds the column name.
@@ -218,14 +149,12 @@ impl ColumnBuilder {
             LogicalType::Int => Self::Int(Int64Builder::with_capacity(capacity)),
             LogicalType::Float => Self::Float(Float64Builder::with_capacity(capacity)),
             LogicalType::Bytes => Self::Bytes(BinaryBuilder::with_capacity(capacity, 0)),
-            LogicalType::Date => Self::Date(Date32Builder::with_capacity(capacity)),
-            LogicalType::Timestamp => {
-                Self::Timestamp(TimestampMicrosecondBuilder::with_capacity(capacity))
-            }
             LogicalType::Bool
             | LogicalType::Decimal
             | LogicalType::Text
+            | LogicalType::Date
             | LogicalType::Time
+            | LogicalType::Timestamp
             | LogicalType::TimestampTz
             | LogicalType::Uuid
             | LogicalType::Json
@@ -242,8 +171,6 @@ impl ColumnBuilder {
                 Self::Float(b) => b.append_null(),
                 Self::Text(b) => b.append_null(),
                 Self::Bytes(b) => b.append_null(),
-                Self::Date(b) => b.append_null(),
-                Self::Timestamp(b) => b.append_null(),
             }
             return Ok(());
         };
@@ -258,8 +185,6 @@ impl ColumnBuilder {
             Self::Int(b) => b.append_value(text.parse().map_err(|_| bad())?),
             Self::Float(b) => b.append_value(text.parse().map_err(|_| bad())?),
             Self::Text(b) => b.append_value(text),
-            Self::Date(b) => b.append_value(parse_date(text).ok_or_else(bad)?),
-            Self::Timestamp(b) => b.append_value(parse_timestamp(text).ok_or_else(bad)?),
             Self::Bytes(_) => unreachable!("handled above"),
         }
         Ok(())
@@ -271,8 +196,6 @@ impl ColumnBuilder {
             Self::Float(b) => Arc::new(b.finish()),
             Self::Text(b) => Arc::new(b.finish()),
             Self::Bytes(b) => Arc::new(b.finish()),
-            Self::Date(b) => Arc::new(b.finish()),
-            Self::Timestamp(b) => Arc::new(b.finish()),
         }
     }
 }
@@ -288,46 +211,5 @@ pub(crate) fn mismatch_error(meta: &ColumnMeta, row: u64, mismatch: Mismatch) ->
             meta.logical.as_str(),
             meta.name
         ),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use spelaion_driver_api::Value;
-
-    #[test]
-    fn dates_and_timestamps_round_trip_to_the_same_text() {
-        for text in [
-            "1970-01-01",
-            "2026-02-28",
-            "2024-02-29",
-            "0001-01-01",
-            "9999-12-31",
-        ] {
-            assert_eq!(Value::Date(parse_date(text).unwrap()).to_string(), text);
-        }
-        for text in [
-            "2026-01-31 10:20:30",
-            "1999-12-31 23:59:59.5",
-            "2026-01-31 00:00:00.123456",
-        ] {
-            assert_eq!(
-                Value::Timestamp(parse_timestamp(text).unwrap()).to_string(),
-                text
-            );
-        }
-    }
-
-    #[test]
-    fn zero_and_impossible_dates_do_not_fit() {
-        for text in ["0000-00-00", "2026-00-10", "2026-02-30", "2025-02-29", "x"] {
-            assert_eq!(parse_date(text), None, "{text}");
-        }
-        assert_eq!(parse_timestamp("0000-00-00 00:00:00"), None);
-        assert_eq!(parse_timestamp("2026-01-31 24:00:00"), None);
-        assert!(!fits(LogicalType::Date, b"0000-00-00"));
-        assert!(fits(LogicalType::Text, b"0000-00-00"));
-        assert!(fits(LogicalType::Bytes, &[0xde, 0xad, 0xbe, 0xef]));
     }
 }

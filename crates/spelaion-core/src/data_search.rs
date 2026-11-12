@@ -289,7 +289,13 @@ pub fn column_kind(
     options: &DataSearchOptions,
     value_is_number: bool,
 ) -> Option<SearchColumnKind> {
-    let kind = match column.logical {
+    // MySQL's dates are text with their native type (SDB-122): searched as the dates they are.
+    // SQLite's declared types are decided below.
+    let logical = match engine {
+        "sqlite" => column.logical,
+        _ => crate::temporal::effective_logical(column),
+    };
+    let kind = match logical {
         // SQLite types a column by its values, and an empty probe has none: a declared type of
         // NUMERIC affinity (DECIMAL, DATE, BOOLEAN…) reads as text there, so it decides.
         LogicalType::Text if engine == "sqlite" => sqlite_declared(&column.native_type)?,
