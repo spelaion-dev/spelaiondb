@@ -9,6 +9,7 @@
 // zooms (strokes keep their width), then rebuilt when the gesture ends.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { fitted as fittedAt, moved, shouldFit, sizeKey, type FitMemory } from "../mapFit";
 import { useTranslation } from "react-i18next";
 import type { Geometry, MapCrs, MapPreferencesItem } from "../bindings";
 import { Icon } from "./Icons";
@@ -230,21 +231,27 @@ export function MapView(props: {
     return () => observer.disconnect();
   }, []);
 
+  // The last automatic fit (src/mapFit.ts). `autoFit` is its size while the view is still it,
+  // shown on the map as `data-fit` (the smoke test waits for it to match `data-size`).
+  const fitted = useRef<FitMemory | null>(null);
+  const [autoFit, setAutoFit] = useState<string | null>(null);
   const fit = useCallback(() => {
     if (size.width === 0 || size.height === 0) return;
     const next = fitView(box, size.width, size.height, crs);
     setView(next);
     setBase(next);
+    fitted.current = fittedAt(box, size.width, size.height);
+    setAutoFit(sizeKey(size.width, size.height));
   }, [box, size.width, size.height, crs]);
+  /** The user moved the view: it is theirs, and a size change keeps it. */
+  const leaveFit = useCallback(() => {
+    fitted.current = moved(fitted.current);
+    setAutoFit(null);
+  }, []);
 
-  // New shapes, or the first size: fit them.
-  const fitted = useRef<{ box: Box | null; ready: boolean }>({ box: null, ready: false });
+  // New shapes, the first size, or a new size while the view is still the automatic fit.
   useEffect(() => {
-    const ready = size.width > 0 && size.height > 0;
-    if (!ready) return;
-    if (fitted.current.ready && fitted.current.box === box) return;
-    fitted.current = { box, ready };
-    fit();
+    if (shouldFit(fitted.current, box, size.width, size.height)) fit();
   }, [box, fit, size.width, size.height]);
 
   // The paths are rebuilt for the current view a moment after a gesture ends.
@@ -263,6 +270,7 @@ export function MapView(props: {
 
   const zoomAt = useCallback(
     (factor: number, at?: XY) => {
+      leaveFit();
       setView((current) => {
         if (!current) return current;
         const scale = Math.max(1e-12, Math.min(maxScale(crs), current.scale * factor));
@@ -274,7 +282,7 @@ export function MapView(props: {
         return { scale, cx: ux - (ux - current.cx) / applied, cy: uy - (uy - current.cy) / applied };
       });
     },
-    [crs, size.width, size.height],
+    [crs, size.width, size.height, leaveFit],
   );
 
   // The wheel needs a listener that may prevent the page from scrolling.
@@ -290,7 +298,10 @@ export function MapView(props: {
     return () => element.removeEventListener("wheel", onWheel);
   }, [zoomAt]);
 
-  const pan = (dx: number, dy: number) => setView((v) => (v ? { ...v, cx: v.cx - dx / v.scale, cy: v.cy + dy / v.scale } : v));
+  const pan = (dx: number, dy: number) => {
+    leaveFit();
+    setView((v) => (v ? { ...v, cx: v.cx - dx / v.scale, cy: v.cy + dy / v.scale } : v));
+  };
 
   function onKeyDown(e: ReactKeyboardEvent) {
     const step = Math.min(size.width, size.height) / 8;
@@ -333,7 +344,10 @@ export function MapView(props: {
     }
     const d = drag.current;
     if (d) {
-      if (Math.abs(x - d.x) + Math.abs(y - d.y) > 3) d.moved = true;
+      if (!d.moved && Math.abs(x - d.x) + Math.abs(y - d.y) > 3) {
+        d.moved = true;
+        leaveFit();
+      }
       setView({ ...d.view, cx: d.view.cx - (x - d.x) / d.view.scale, cy: d.view.cy + (y - d.y) / d.view.scale });
       return;
     }
@@ -378,6 +392,8 @@ export function MapView(props: {
         role="group"
         aria-label={props.label}
         aria-roledescription={t("viewer.map.roledescription")}
+        data-size={sizeKey(size.width, size.height)}
+        data-fit={autoFit ?? undefined}
         onKeyDown={onKeyDown}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
