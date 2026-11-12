@@ -675,3 +675,140 @@ async fn sqlserver_date_literals_mean_the_same_under_every_language() {
         .await;
     }
 }
+
+/// MySQL and MariaDB legacy zero dates after the first 10,000 rows (SDB-122): their date
+/// columns are text with their native type, so the whole result arrives; sorting puts the zero
+/// dates first, "filter by this value" finds exactly their rows, and a streaming export
+/// finishes with every row and the server's text.
+#[tokio::test]
+async fn mysql_zero_dates_far_down_sort_filter_and_export() {
+    for (label, session, schema) in engines().await {
+        if label != "mysql" && label != "mariadb" {
+            continue;
+        }
+        run(label, &session, &["SET SESSION sql_mode = ''"], false).await;
+        run(label, &session, &["DROP TABLE IF EXISTS ge_zero"], false).await;
+        let digits = "(select 0 n union all select 1 union all select 2 union all select 3 \
+                      union all select 4 union all select 5 union all select 6 union all \
+                      select 7 union all select 8 union all select 9)";
+        run(
+            label,
+            &session,
+            &[
+                "CREATE TABLE ge_zero (id INT PRIMARY KEY, d DATE, dt DATETIME)",
+                &format!(
+                    "INSERT INTO ge_zero (id, d, dt) \
+                     SELECT a.n + b.n * 10 + c.n * 100 + e.n * 1000 + 1, '2024-01-15', \
+                            '2024-01-15 10:20:30' \
+                     FROM {digits} a CROSS JOIN {digits} b CROSS JOIN {digits} c \
+                     CROSS JOIN {digits} e"
+                ),
+                "INSERT INTO ge_zero VALUES (10001, '0000-00-00', '0000-00-00 00:00:00')",
+            ],
+            false,
+        )
+        .await;
+        let id = run(
+            label,
+            &session,
+            &["SELECT id, d, dt FROM ge_zero ORDER BY id"],
+            false,
+        )
+        .await
+        .unwrap_or_else(|| panic!("{label}: no result"));
+        let stored = session.results().get(id).unwrap();
+        let dialect = session.dialect();
+        {
+            let mut r = stored.write().unwrap();
+            assert_eq!(r.rows(), 10_001, "{label}");
+            let last = (
+                r.value_at(10_000, 1).unwrap(),
+                r.value_at(10_000, 2).unwrap(),
+            );
+            assert_eq!(
+                (last.0.to_string(), last.1.to_string()),
+                ("0000-00-00".to_string(), "0000-00-00 00:00:00".to_string()),
+                "{label}"
+            );
+            // Sorting by the date: the zero date comes first, the server's text kept.
+            r.sort(Some(spelaion_core::SortKey {
+                column: 1,
+                descending: false,
+            }))
+            .unwrap();
+            let first = r.value_at(0, 1).unwrap().to_string();
+            assert_eq!(first, "0000-00-00", "{label}");
+            r.sort(None).unwrap();
+        }
+        // "Filter by this value" on the zero date, and on an ordinary date.
+        for (row, expected) in [(10_000, 1), (0, 10_000)] {
+            for column in [1, 2] {
+                let (meta, value) = {
+                    let r = stored.read().unwrap();
+                    (
+                        r.schema().columns[column].clone(),
+                        r.value_at(row, column).unwrap(),
+                    )
+                };
+                let condition = value_condition(
+                    dialect.as_ref(),
+                    &meta.name,
+                    meta.logical,
+                    FilterOp::Eq,
+                    &value,
+                )
+                .unwrap();
+                let filter = add_condition(dialect.as_ref(), "", &condition).unwrap();
+                let rows = count_table_rows(&session, schema, "ge_zero", &filter)
+                    .await
+                    .unwrap_or_else(|e| panic!("{label}: {filter}\n→ {e}"));
+                assert_eq!(rows, expected, "{label}: {filter}");
+            }
+        }
+        // A streaming export of the table finishes, every row with the server's text.
+        let dir =
+            std::env::temp_dir().join(format!("spelaion-ge-zero-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("zero.csv");
+        let export = spelaion_core::StreamExport {
+            format: spelaion_core::ExportFormat::Csv,
+            header: true,
+            csv: spelaion_core::CsvOptions {
+                delimiter: ',',
+                null_text: "NULL".into(),
+                escape_formulas: false,
+            },
+            encoding: spelaion_core::TextEncoding::Utf8,
+            columns: None,
+            batch_size: spelaion_core::DEFAULT_BATCH_ROWS,
+        };
+        let nothing = |_: spelaion_core::ExportProgress| {};
+        let summary = spelaion_core::export_query(
+            &session,
+            "SELECT id, d, dt FROM ge_zero ORDER BY id",
+            &spelaion_config::Safeguards::default(),
+            false,
+            &path,
+            &export,
+            &spelaion_core::ExportCancel::new(),
+            &nothing,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: export: {e}"));
+        assert_eq!(summary.rows, 10_001, "{label}");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 10_002, "{label}");
+        assert_eq!(
+            text.lines().last(),
+            Some("10001,0000-00-00,0000-00-00 00:00:00"),
+            "{label}"
+        );
+        assert_eq!(
+            text.lines().nth(1),
+            Some("1,2024-01-15,2024-01-15 10:20:30"),
+            "{label}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        run(label, &session, &["DROP TABLE ge_zero"], false).await;
+    }
+}

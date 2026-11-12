@@ -448,7 +448,7 @@ impl PendingEdits {
                 let local = chrono::Local::now();
                 let utc = local.with_timezone(&chrono::Utc);
                 for &column in &block.columns {
-                    let text = match page.logical(column) {
+                    let text = match page.date_logical(column) {
                         LogicalType::Date => local.format("%Y-%m-%d").to_string(),
                         LogicalType::Time => local.format("%H:%M:%S").to_string(),
                         // As the grid shows a time zone: UTC, `+00`.
@@ -636,10 +636,21 @@ impl Page<'_> {
             .map_or(LogicalType::Native, |c| c.logical)
     }
 
+    /// The column's logical type, with a text column that holds dates (MySQL's `DATE`,
+    /// `DATETIME`, `TIMESTAMP`, SDB-122) read as its date type: what "now" is written as, and
+    /// which columns are free text. Inputs are still checked against the column's own type.
+    fn date_logical(&self, column: usize) -> LogicalType {
+        self.result
+            .schema()
+            .columns
+            .get(column)
+            .map_or(LogicalType::Native, crate::temporal::effective_logical)
+    }
+
     /// Columns whose values are free text: the ones trimming and case changes touch.
     fn is_text(&self, column: usize) -> bool {
         matches!(
-            self.logical(column),
+            self.date_logical(column),
             LogicalType::Text | LogicalType::Native
         )
     }

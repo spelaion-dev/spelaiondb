@@ -47,7 +47,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   may go (`COMMENT`, `IDENTIFIED BY`), `objects::ddl::mysql_string` escapes a backslash only when
   the session's mode reads it as an escape. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
   name check (read its `PATCHED.md` before upgrading). Its type zoo (`tests/mysql.rs`) compares every type with the server's
-  text, on both servers.
+  text, on both servers. `DATE`, `DATETIME` and `TIMESTAMP` columns are text with their native
+  type (legacy zero dates; ADR-005 and ADR-006, 2026-11-12 notes): what needs them as dates
+  (chart axes, the bulk "now") reads them by native type through `spelaion-core`'s `temporal.rs`.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
   `remote.rs` opens a file on a server (ADR-018) by running that server's `sqlite3 -safe`

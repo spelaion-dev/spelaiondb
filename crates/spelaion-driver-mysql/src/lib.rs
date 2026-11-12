@@ -22,9 +22,9 @@ use mysql_async::{ClientIdentity, Conn, Opts, OptsBuilder, SslOpts};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, ContextDialect,
     DatabaseContext, Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
-    InsertTarget, KeepAlive, LikeFilter, LogicalType, NameFilter, Notice, ObjectInfo,
-    ReferencingKey, Result, ResultSchema, SchemaColumn, SchemaInfo, SchemaObject, ServerObject,
-    TableInfo, TlsMode, TransactionState,
+    InsertTarget, KeepAlive, LikeFilter, NameFilter, Notice, ObjectInfo, ReferencingKey, Result,
+    ResultSchema, SchemaColumn, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
+    TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -374,34 +374,11 @@ async fn execute(
     };
     let columns = result.columns().unwrap_or_else(|| Arc::from(Vec::new()));
     if !columns.is_empty() {
-        // The first batch decides temporal columns (see `decode`).
-        let mut first: Vec<Vec<Option<Vec<u8>>>> = Vec::new();
-        let mut done = false;
-        while first.len() < batch_size {
-            match result.next().await {
-                Ok(Some(row)) => first.push(raw_values(row)),
-                Ok(None) => {
-                    done = true;
-                    break;
-                }
-                Err(e) => {
-                    send(Err(map_error_in(e, sql))).await;
-                    return ExecutionOutcome::Uncertain;
-                }
-            }
-        }
+        // Every column's type comes from its metadata: no value decides it, so a value far down
+        // the result can never fail it (temporal columns are text, see `decode::logical_type`).
         let metas: Vec<ColumnMeta> = columns
             .iter()
-            .enumerate()
-            .map(|(i, column)| {
-                let logical = decode::logical_type(column);
-                let keep = first.iter().all(|row| {
-                    row[i]
-                        .as_deref()
-                        .is_none_or(|raw| decode::fits(logical, raw))
-                });
-                decode::column_meta(column, if keep { logical } else { LogicalType::Text })
-            })
+            .map(|column| decode::column_meta(column, decode::logical_type(column)))
             .collect();
         let schema = Arc::new(ResultSchema::new(metas));
         if !send(Ok(ExecEvent::Columns(schema.clone()))).await {
@@ -417,19 +394,14 @@ async fn execute(
         let mut builders = new_builders();
         let mut row_number: u64 = 0;
         let mut pending = 0usize;
-        let mut buffered = first.into_iter();
         loop {
-            let row = match buffered.next() {
-                Some(row) => row,
-                None if done => break,
-                None => match result.next().await {
-                    Ok(Some(row)) => raw_values(row),
-                    Ok(None) => break,
-                    Err(e) => {
-                        send(Err(map_error_in(e, sql))).await;
-                        return ExecutionOutcome::Uncertain;
-                    }
-                },
+            let row = match result.next().await {
+                Ok(Some(row)) => raw_values(row),
+                Ok(None) => break,
+                Err(e) => {
+                    send(Err(map_error_in(e, sql))).await;
+                    return ExecutionOutcome::Uncertain;
+                }
             };
             row_number += 1;
             for (i, builder) in builders.iter_mut().enumerate() {

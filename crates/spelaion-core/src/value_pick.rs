@@ -287,7 +287,12 @@ pub fn temporal_picker(engine: &str, native_type: &str) -> Option<TemporalPicker
         },
         "mysql" | "mariadb" => match base.as_str() {
             "date" => Some(picker(TemporalKind::Date, 0)),
-            "datetime" | "timestamp" => Some(picker(TemporalKind::Timestamp, p(0))),
+            // Shown as the server writes them (text with their native type, SDB-122): every
+            // digit of the precision (`10:20:30.120`).
+            "datetime" | "timestamp" => Some(TemporalPicker {
+                padded: true,
+                ..picker(TemporalKind::Timestamp, p(0))
+            }),
             // TIME is shown as the server writes it: every digit of its precision.
             "time" => Some(TemporalPicker {
                 padded: true,
@@ -1018,8 +1023,22 @@ mod tests {
         );
         assert_eq!(p("postgres", "time with time zone"), None);
         assert_eq!(p("postgres", "interval"), None);
-        assert_eq!(p("mysql", "datetime(6)"), t(TemporalKind::Timestamp, 6));
-        assert_eq!(p("mysql", "datetime"), t(TemporalKind::Timestamp, 0));
+        // MySQL's dates are the server's text (SDB-122): every digit of the precision.
+        let padded = |kind, digits| {
+            Some(TemporalPicker {
+                padded: true,
+                ..t(kind, digits).unwrap()
+            })
+        };
+        assert_eq!(
+            p("mysql", "datetime(6)"),
+            padded(TemporalKind::Timestamp, 6)
+        );
+        assert_eq!(p("mysql", "datetime"), padded(TemporalKind::Timestamp, 0));
+        assert_eq!(
+            p("mariadb", "timestamp(3)"),
+            padded(TemporalKind::Timestamp, 3)
+        );
         assert_eq!(
             p("mysql", "time(3)"),
             Some(TemporalPicker {

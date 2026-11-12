@@ -329,6 +329,9 @@ fn label(text: &str) -> ChartLabel {
 struct Reader<'a> {
     result: &'a StoredResult,
     x: (usize, LogicalType),
+    /// X is a text column that holds dates (MySQL's, SDB-122) on a time axis: its values are
+    /// read as this date type; a zero date is no point in time, and is skipped like a NULL.
+    x_dates: Option<LogicalType>,
     y: Vec<(usize, LogicalType)>,
     ticket: &'a StatsTicket,
 }
@@ -351,7 +354,7 @@ impl Reader<'_> {
             let (column, logical) = self.x;
             let x = Value::from_array(batch.column(column).as_ref(), row, logical)
                 .ok_or(ViewError::UnexpectedArray(column))?;
-            f(x, &ys);
+            f(self.as_date(x), &ys);
         }
         Ok(!self.ticket.is_stale())
     }
@@ -366,9 +369,19 @@ impl Reader<'_> {
             let (batch, row) = self.result.locate(self.result.original_row(position));
             let x = Value::from_array(batch.column(column).as_ref(), row, logical)
                 .ok_or(ViewError::UnexpectedArray(column))?;
-            f(x);
+            f(self.as_date(x));
         }
         Ok(!self.ticket.is_stale())
+    }
+
+    /// An X value as its date when X is a text column of dates on a time axis.
+    fn as_date(&self, x: Value) -> Value {
+        match (self.x_dates, x) {
+            (Some(logical), Value::Text(text)) => {
+                crate::temporal::parse(&text, logical).unwrap_or(Value::Null)
+            }
+            (_, x) => x,
+        }
     }
 }
 
@@ -424,14 +437,16 @@ pub(crate) fn prepare(
             return Err(ChartError::PieAggregate);
         }
     }
+    let continuous =
+        request.kind != ChartKind::Pie && is_continuous(crate::temporal::effective_logical(x_meta));
     let reader = Reader {
         result,
         x: (request.x, x_meta.logical),
+        x_dates: crate::temporal::text_temporal(x_meta).filter(|_| continuous),
         y: y.clone(),
         ticket,
     };
     let mut empty_values = 0u64;
-    let continuous = request.kind != ChartKind::Pie && is_continuous(x_meta.logical);
     let points = if continuous {
         continuous_points(&reader, &mut empty_values)?
     } else {
@@ -887,6 +902,38 @@ mod tests {
                 ChartLabel::Other => "<other>".into(),
             })
             .collect()
+    }
+
+    /// MySQL's dates are text with their native type (SDB-122): on a time axis like any date,
+    /// with a zero date skipped and counted, never placed.
+    #[test]
+    fn text_dates_by_their_native_type_are_drawn_on_a_time_axis() {
+        let day = ColumnMeta {
+            native_type: "date".into(),
+            ..meta("day", LogicalType::Text)
+        };
+        let days = ["2024-01-02", "0000-00-00", "2024-01-01", "2024-01-02"];
+        let sales = [1.0, 2.0, 3.0, 4.0];
+        let (store, id) = result(vec![day, meta("sales", LogicalType::Float)], 4, 4, |r| {
+            vec![
+                Arc::new(StringArray::from(days[r.clone()].to_vec())),
+                Arc::new(Float64Array::from(sales[r].to_vec())),
+            ]
+        });
+        let r = store.get(id).unwrap();
+        let r = r.read().unwrap();
+        let data = chart(&r, ChartKind::Line, 0, &[1]);
+        assert_eq!(texts(&data), ["2024-01-01", "2024-01-02"]);
+        assert_eq!(data.positions, Some(vec![19_723.0, 19_724.0]));
+        assert_eq!(data.series[0].values, [Some(3.0), Some(5.0)]);
+        assert_eq!(data.skipped_rows, 1);
+        // A pie keeps the column's text as categories, the zero date included.
+        let pie = chart(&r, ChartKind::Pie, 0, &[1]);
+        assert!(
+            texts(&pie).contains(&"0000-00-00".to_string()),
+            "{:?}",
+            texts(&pie)
+        );
     }
 
     #[test]
