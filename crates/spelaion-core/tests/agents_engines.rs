@@ -199,6 +199,171 @@ async fn postgres_unicode_escaped_names_and_sql_given_as_text_do_not_bypass_agen
     run(&session, &format!("drop table {t}")).await;
 }
 
+/// A MySQL or MariaDB session as `user`, straight from the driver.
+async fn mysql_session_as(
+    driver: &MysqlDriver,
+    addr: &str,
+    user: &str,
+    password: &str,
+) -> Result<Session, spelaion_driver_api::DriverError> {
+    let (host, port) = addr.rsplit_once(':').unwrap();
+    let params = ConnectParams {
+        host: host.into(),
+        port: port.parse().unwrap(),
+        user: user.into(),
+        password: Some(Secret::new(password)),
+        database: "spelaion".into(),
+        ..Default::default()
+    };
+    Ok(Session::new(
+        driver.connect(&params).await?,
+        driver.dialect(),
+        Arc::new(ResultStore::new()),
+    ))
+}
+
+/// What an agent sends, and whether it is the write.
+fn sql_mode_tricks(t: &str, lock: &str) -> Vec<(bool, String)> {
+    vec![
+        // NO_BACKSLASH_ESCAPES: the checks see a WHERE, the server a comment after the string.
+        (true, format!(r"update {t} set a = '\' -- ' where id = 1")),
+        // ANSI_QUOTES: the same with double quotes.
+        (true, format!(r#"update {t} set a = "\" -- " where id = 1"#)),
+        // The checks see one string; the server calls the function.
+        (false, format!(r"select '\', get_lock('{lock}', 0) -- '")),
+        (
+            false,
+            format!(r#"select 1 as "\", get_lock('{lock}', 0) -- ""#),
+        ),
+    ]
+}
+
+/// Runs one trick through the agents' paths and checks it did no harm: a write changes row 1
+/// at most, never row 2, and a read never takes the lock.
+async fn sql_mode_trick_did_no_harm(
+    label: &str,
+    session: &Session,
+    t: &str,
+    lock: &str,
+    write: bool,
+    sql: &str,
+) {
+    if write {
+        match session.run_write(sql, &write_limits()).await {
+            Ok(result) => assert!(
+                result.rows_affected.unwrap_or(0) <= 1,
+                "{label}: {sql}: {result:?}"
+            ),
+            Err(WriteError::Rejected(_) | WriteError::Database(_)) => {}
+            Err(other) => panic!("{label}: {sql}: {other:?}"),
+        }
+    } else {
+        let _ = session.run_read_only(sql, &limits(5)).await;
+    }
+    assert_eq!(
+        first(session, &format!("select a from {t} where id = 2")).await,
+        "y",
+        "{label}: {sql} changed another row"
+    );
+    assert_eq!(
+        first(session, &format!("select is_free_lock('{lock}')")).await,
+        "1",
+        "{label}: {sql} called the function"
+    );
+}
+
+#[tokio::test]
+async fn mysql_sql_modes_that_move_string_ends_do_not_bypass_agent_barriers() {
+    for (var, driver) in [
+        ("SPELAION_TEST_MYSQL", MysqlDriver::mysql()),
+        ("SPELAION_TEST_MARIADB", MysqlDriver::mariadb()),
+    ] {
+        let Ok(addr) = std::env::var(var) else {
+            eprintln!("{var} not set: test skipped");
+            continue;
+        };
+        let session = mysql_session_as(&driver, &addr, "spelaion", "spelaion")
+            .await
+            .unwrap();
+        let admin = mysql_session_as(&driver, &addr, "root", "spelaion-root")
+            .await
+            .unwrap();
+        let t = format!("agent_sql_mode_{}", std::process::id());
+        let lock = format!("agent_sql_mode_{}", std::process::id());
+        run(
+            &session,
+            &format!("drop table if exists {t}; create table {t} (id int primary key, a varchar(40)); insert into {t} values (1, 'x'), (2, 'y')"),
+        )
+        .await;
+        for mode in ["NO_BACKSLASH_ESCAPES", "ANSI_QUOTES"] {
+            // The session's own mode, set again before each trick: the barrier takes it away.
+            for (write, sql) in sql_mode_tricks(&t, &lock) {
+                run(&session, &format!("set session sql_mode = '{mode}'")).await;
+                assert!(
+                    first(&session, "select @@session.sql_mode")
+                        .await
+                        .contains(mode),
+                    "{var}"
+                );
+                if mode == "NO_BACKSLASH_ESCAPES" {
+                    // The premise: here a backslash is a plain character.
+                    assert_eq!(first(&session, r"select length('\')").await, "1", "{var}");
+                }
+                sql_mode_trick_did_no_harm(var, &session, &t, &lock, write, &sql).await;
+                // The writes pass `check_write` (each has its WHERE as the checks read it), so
+                // the barrier ran them, after turning the mode off. The reads are refused by
+                // the classifier before the session is touched.
+                if write {
+                    assert!(
+                        !first(&session, "select @@session.sql_mode")
+                            .await
+                            .contains(mode),
+                        "{var}: {mode} was left on"
+                    );
+                }
+            }
+            // The server's default, which every new session starts with.
+            let saved = first(&admin, "select @@global.sql_mode").await;
+            for (write, sql) in sql_mode_tricks(&t, &lock) {
+                run(&admin, &format!("set global sql_mode = '{mode}'")).await;
+                let fresh = mysql_session_as(&driver, &addr, "spelaion", "spelaion").await;
+                // Back to what it was before anything can fail: other tests share the server.
+                run(&admin, &format!("set global sql_mode = '{saved}'")).await;
+                let fresh = fresh.unwrap();
+                assert!(
+                    first(&fresh, "select @@session.sql_mode")
+                        .await
+                        .contains(mode),
+                    "{var}: the new session did not start in {mode}"
+                );
+                sql_mode_trick_did_no_harm(var, &fresh, &t, &lock, write, &sql).await;
+            }
+            assert_eq!(first(&admin, "select @@global.sql_mode").await, saved);
+        }
+        // Without those modes nothing changes: an ordinary write still runs.
+        run(&session, "set session sql_mode = 'STRICT_TRANS_TABLES'").await;
+        let result = session
+            .run_write(
+                &format!(r"update {t} set a = 'it\'s' where id = 1"),
+                &write_limits(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.rows_affected, Some(1), "{var}");
+        assert_eq!(
+            first(&session, "select @@session.sql_mode").await,
+            "STRICT_TRANS_TABLES",
+            "{var}"
+        );
+        assert_eq!(
+            first(&session, &format!("select a from {t} where id = 1")).await,
+            "it's",
+            "{var}"
+        );
+        run(&session, &format!("drop table {t}")).await;
+    }
+}
+
 async fn mysql_sessions() -> Vec<(&'static str, Session)> {
     let mut sessions = Vec::new();
     for (var, driver) in [
