@@ -2,7 +2,7 @@
 // behind shows a new theme at once). Per-connection options (such as saving query history)
 // live with each connection in the sidebar, not here.
 
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
 import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
@@ -12,6 +12,7 @@ import { manualUpdateKey, useUpdate } from "../update";
 import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
+import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 
 type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "scripts" | "editor" | "map";
 const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "scripts", "editor", "map"];
@@ -711,59 +712,60 @@ function MaskingSettings() {
 
 function PortRange() {
   const { t } = useTranslation("settings");
-  const [min, setMin] = useState("");
-  const [max, setMax] = useState("");
-  const [status, setStatus] = useState<{ kind: "idle" | "saved" } | { kind: "error"; message: string }>({ kind: "idle" });
+  const [state, dispatch] = useReducer(portRangeReducer, initialPortRange);
+  const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+  // Reads the stored range when the form opens and on Retry; only the latest read counts, and
+  // it never overwrites what was typed (portRange.ts).
+  const request = state.request;
   useEffect(() => {
     call(commands.tunnelPorts())
-      .then((range) => {
-        setMin(range ? String(range.min) : "");
-        setMax(range ? String(range.max) : "");
-      })
-      .catch((e: unknown) => setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) }));
-  }, []);
+      .then((range) => dispatch({ type: "loaded", request, range }))
+      .catch((e: unknown) => dispatch({ type: "loadFailed", request, message: errorText(e) }));
+  }, [request]);
 
-  async function save(range: { min: number; max: number } | null) {
+  async function save(range: PortRange | null) {
     try {
       await call(commands.setTunnelPorts(range));
-      if (!range) {
-        setMin("");
-        setMax("");
-      }
-      setStatus({ kind: "saved" });
+      dispatch({ type: "saved", range });
     } catch (e) {
-      setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      dispatch({ type: "saveFailed", message: errorText(e) });
     }
   }
 
-  const port = (text: string) => (text.trim() === "" ? null : Math.trunc(Number(text)));
-  const typedMin = port(min);
-  const typedMax = port(max);
+  const ready = portRangeReady(state);
+  const range = typedRange(state);
   return (
     <section aria-label={t("network.ports")}>
       <h3>{t("network.ports")}</h3>
       <p>{t("network.portsIntro")}</p>
+      {state.load.kind === "loading" && <p className="muted small" role="status">{t("network.loading")}</p>}
+      {state.load.kind === "failed" && (
+        <div className="form-row">
+          <p className="error small" role="alert">{t("network.loadFailed", { error: state.load.message })}</p>
+          <button className="ghost" onClick={() => dispatch({ type: "reload" })}>{t("network.retry")}</button>
+        </div>
+      )}
       <div className="form-pair">
         <label className="field port">
           <span>{t("network.portMin")}</span>
-          <input type="number" min={1} max={65535} value={min} onChange={(e) => { setMin(e.target.value); setStatus({ kind: "idle" }); }} />
+          <input type="number" min={1} max={65535} value={state.min} disabled={!ready} onChange={(e) => dispatch({ type: "typed", field: "min", value: e.target.value })} />
         </label>
         <label className="field port">
           <span>{t("network.portMax")}</span>
-          <input type="number" min={1} max={65535} value={max} onChange={(e) => { setMax(e.target.value); setStatus({ kind: "idle" }); }} />
+          <input type="number" min={1} max={65535} value={state.max} disabled={!ready} onChange={(e) => dispatch({ type: "typed", field: "max", value: e.target.value })} />
         </label>
       </div>
       <div className="form-row">
-        <button disabled={typedMin === null || typedMax === null} onClick={() => typedMin !== null && typedMax !== null && void save({ min: typedMin, max: typedMax })}>
+        <button disabled={!ready || range === null} onClick={() => range !== null && void save(range)}>
           {t("network.save")}
         </button>
-        <button className="ghost" onClick={() => void save(null)}>
+        <button className="ghost" disabled={!ready} onClick={() => void save(null)}>
           {t("network.clear")}
         </button>
       </div>
-      {status.kind === "saved" && <p className="small" role="status">{t("network.saved")}</p>}
-      {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
+      {state.status.kind === "saved" && <p className="small" role="status">{t("network.saved")}</p>}
+      {state.status.kind === "error" && <p className="error small" role="alert">{state.status.message}</p>}
       <p className="muted small">{t("network.portsHint")}</p>
     </section>
   );
