@@ -320,7 +320,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   store again (`Snapshot` in `lib.rs`): a change the user makes applies at the next call of a
   running server, never in the middle of one; a configuration with any problem exposes nothing;
   a cached session is reused only while its connection is exposed and its `Definition` (what it
-  is resolved from, secrets aside) is unchanged. Query rows go out as JSON or TOON (`format.rs`); any change there
+  is resolved from, secrets aside) is unchanged, and only while it is not lost (`Cached::usable`:
+  its health, its connection, its tunnel); the call that meets a lost session fails and is never
+  retried, and the next call opens a new one. Query rows go out as JSON or TOON (`format.rs`); any change there
   keeps every cell quoted so data cannot add rows or fields.
   `spelaion-config::mcp_clients` finds each AI client's file and writes our entry there for the
   app's MCP page (ADR-033): only our entry changes, JSON edited as text at the spans it finds,

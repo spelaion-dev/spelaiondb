@@ -189,14 +189,12 @@ async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning()
     .await
     .unwrap();
     // Subsequent pages read PlanStore and create no second execution/audit record.
-    let session = Arc::new(tokio::sync::Mutex::new(open));
-    server.state.sessions.lock().await.insert(
-        ("~/plans".into(), Use::Read),
-        Cached {
-            open: session,
-            definition,
-        },
-    );
+    server
+        .state
+        .sessions
+        .lock()
+        .await
+        .insert(("~/plans".into(), Use::Read), Cached::new(open, definition));
     let arguments = |sql: Option<&str>, id| ExplainArgs {
         connection: "~/plans".into(),
         sql: sql.map(str::to_owned),
@@ -382,13 +380,12 @@ async fn server_plans_return_the_core_tree_and_never_analyze() {
         )
         .await
         .unwrap();
-        server.state.sessions.lock().await.insert(
-            ("~/plans".into(), Use::Read),
-            Cached {
-                open: Arc::new(tokio::sync::Mutex::new(open)),
-                definition,
-            },
-        );
+        server
+            .state
+            .sessions
+            .lock()
+            .await
+            .insert(("~/plans".into(), Use::Read), Cached::new(open, definition));
         let arguments = |sql: &str| ExplainArgs {
             connection: "~/plans".into(),
             sql: Some(sql.into()),
@@ -1196,4 +1193,357 @@ async fn a_newly_exposed_connection_appears_without_a_restart() {
     // Exposed for reading only: writes are still denied by default.
     assert!(refused(&write(&server, "~/notes", INSERT).await));
     assert_eq!(rows(&db), 1);
+}
+
+// A lost database session (SDB-118): the call that finds out fails and is never retried; the
+// next call opens a new session through the same path as the first one (ADR-028).
+
+/// The cached session of `id` for `purpose`.
+async fn cached(server: &SpelaionMcp, id: &str, purpose: Use) -> Shared {
+    server
+        .state
+        .sessions
+        .lock()
+        .await
+        .get(&(id.to_string(), purpose))
+        .expect("a cached session")
+        .open
+        .clone()
+}
+
+#[tokio::test]
+async fn a_lost_session_is_replaced_at_the_next_call() {
+    let p = personal(false);
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    let first = cached(&p.server, "~/notes", Use::Read).await;
+    // What the core does when the server ends the session, a call meets a connection error or
+    // the tunnel goes down.
+    first.lock().await.session.mark_lost("the server ended it");
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    let second = cached(&p.server, "~/notes", Use::Read).await;
+    assert!(!Arc::ptr_eq(&first, &second));
+    // The new read session is opened as the first one was: still read-only.
+    let sneaked = query(&p.server, "~/notes", INSERT).await;
+    assert!(refused(&sneaked));
+    assert_eq!(rows(&p.db), 1);
+
+    let done = write(&p.server, "~/notes", INSERT).await;
+    assert!(!refused(&done), "{}", body(&done));
+    let first = cached(&p.server, "~/notes", Use::Write).await;
+    first.lock().await.session.mark_lost("the server ended it");
+    let done = write(&p.server, "~/notes", INSERT).await;
+    assert!(!refused(&done), "{}", body(&done));
+    assert!(!Arc::ptr_eq(
+        &first,
+        &cached(&p.server, "~/notes", Use::Write).await
+    ));
+    assert_eq!(rows(&p.db), 3);
+}
+
+/// Runs `body`, then `cleanup` whether it finished or failed an assertion, and only then lets
+/// the failure go on (like the core tests' `cleaning_up`).
+async fn cleaning_up<T, C>(
+    body: impl std::future::Future<Output = T>,
+    cleanup: impl FnOnce() -> C,
+) -> T
+where
+    C: std::future::Future<Output = ()>,
+{
+    use futures_util::FutureExt;
+    let outcome = std::panic::AssertUnwindSafe(body).catch_unwind().await;
+    cleanup().await;
+    match outcome {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+/// Runs `sql` on the test's own (not exposed) connection, and fails the test if it fails.
+async fn admin_run(admin: &OpenConnection, sql: &str) {
+    use futures_util::StreamExt;
+    let events: Vec<spelaion_core::CoreEvent> = tokio::time::timeout(
+        Duration::from_secs(20),
+        admin.session.run_script(sql).collect(),
+    )
+    .await
+    .expect("the admin statement answers");
+    for event in &events {
+        if let spelaion_core::CoreEvent::StatementFailed { error, .. } = event {
+            panic!("{sql}: {}", error.message);
+        }
+    }
+}
+
+/// Ends, from the server's side, every session tagged `tag`, and waits until they are gone.
+async fn kill_sessions(admin: &OpenConnection, tag: &str) {
+    admin_run(
+        admin,
+        &format!(
+            "select pg_terminate_backend(pid, 5000) from pg_stat_activity where application_name = '{tag}'"
+        ),
+    )
+    .await;
+}
+
+/// The value of a one-cell query through the server, allowing the one failure of a call that
+/// finds its session lost.
+async fn read_value(server: &SpelaionMcp, id: &str, sql: &str) -> serde_json::Value {
+    let mut result = query(server, id, sql).await;
+    if refused(&result) {
+        assert!(
+            body(&result).contains("next call opens a new session"),
+            "{}",
+            body(&result)
+        );
+        result = query(server, id, sql).await;
+    }
+    assert!(!refused(&result), "{}", body(&result));
+    let json: serde_json::Value = serde_json::from_str(&body(&result)).unwrap();
+    json["rows"][0][0].clone()
+}
+
+/// The card's scenario on a PostgreSQL connection the server already uses: its sessions are
+/// ended by the server, the next call fails (and is recorded as failed) or succeeds, and the
+/// call after that succeeds on a new session. A write is never retried.
+async fn survives_ended_sessions(
+    server: &SpelaionMcp,
+    user_dir: &Path,
+    admin: &OpenConnection,
+    id: &str,
+    tag: &str,
+    table: &str,
+) {
+    let pid = read_value(server, id, "select pg_backend_pid()").await;
+    kill_sessions(admin, tag).await;
+    let next = query(server, id, "select pg_backend_pid()").await;
+    if refused(&next) {
+        let text = body(&next);
+        assert!(text.contains("next call opens a new session"), "{text}");
+        let last = &app_store(user_dir).recent(1).unwrap()[0];
+        assert_eq!(last.decision, Decision::Failed, "{last:?}");
+        assert_eq!(last.statement, "select pg_backend_pid()");
+    }
+    let after = query(server, id, "select pg_backend_pid()").await;
+    assert!(!refused(&after), "{}", body(&after));
+    let json: serde_json::Value = serde_json::from_str(&body(&after)).unwrap();
+    assert_ne!(json["rows"][0][0], pid, "a new session, not the old one");
+    let last = &app_store(user_dir).recent(1).unwrap()[0];
+    assert_eq!(last.decision, Decision::Executed);
+
+    // Writes: the one that finds its session lost is never retried; the next one works.
+    let insert = format!("insert into {table} (v) values ('agent')");
+    let mut answered_done = 0;
+    let done = write(server, id, &insert).await;
+    assert!(!refused(&done), "{}", body(&done));
+    answered_done += 1;
+    kill_sessions(admin, tag).await;
+    let next = write(server, id, &insert).await;
+    if refused(&next) {
+        let text = body(&next);
+        assert!(
+            text.contains("not known whether the write was committed"),
+            "{text}"
+        );
+        let last = &app_store(user_dir).recent(1).unwrap()[0];
+        assert_eq!(last.decision, Decision::Failed, "{last:?}");
+    } else {
+        answered_done += 1;
+    }
+    let done = write(server, id, &insert).await;
+    assert!(!refused(&done), "{}", body(&done));
+    answered_done += 1;
+    let count = read_value(server, id, &format!("select count(*) from {table}")).await;
+    assert_eq!(count, serde_json::json!(answered_done));
+}
+
+/// A PostgreSQL connection file for the test server, tagged so that only its sessions are ended.
+fn postgres_connection(
+    host: &str,
+    port: Option<&str>,
+    tag: &str,
+    extra: &str,
+    exposed: bool,
+) -> String {
+    let port = port.map(|p| format!("port = {p}\n")).unwrap_or_default();
+    format!(
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"{host}\"\n{port}user = \"spelaion\"\ndatabase = \"spelaion\"\npassword = {{ secret = \"cmd:echo spelaion\" }}\n{extra}\n[session]\nsetup = \"set application_name = '{tag}'\"\n\n[mcp]\nexposed = {exposed}\nwrites = \"allow\"\n"
+    )
+}
+
+/// Opens the test's own connection `id` (not exposed to agents) as the app would.
+async fn admin_connection(server: &SpelaionMcp, id: &str, user_dir: &Path) -> OpenConnection {
+    let access = server.begin().await;
+    let snapshot = access.as_ref().unwrap();
+    let id = spelaion_config::ConnectionId {
+        source: Source::User,
+        path: id.into(),
+    };
+    let resolved = Resolver::new(&snapshot.config, &snapshot.trust, &SystemBackend)
+        .resolve(&id)
+        .unwrap();
+    open_connection(
+        resolved,
+        &server.state.engines,
+        OpenOptions {
+            tunnels: server.state.tunnels.clone(),
+            known_hosts: KnownHosts {
+                team_file: None,
+                user_file: None,
+                app_file: user_dir.join("known_hosts"),
+            },
+            interaction: Arc::new(NonInteractive),
+            password: None,
+            read_only_session: false,
+        },
+        Arc::new(ResultStore::new()),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn postgres_sessions_ended_by_the_server_are_replaced() {
+    let Ok(address) = std::env::var("SPELAION_TEST_PG") else {
+        eprintln!("SPELAION_TEST_PG not set: lost MCP sessions not tested on PostgreSQL");
+        return;
+    };
+    let (host, port) = address.rsplit_once(':').unwrap();
+    let user_dir = temp("lost-pg");
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    let n = std::process::id();
+    let tag = format!("spelaion-mcp-lost-{n}");
+    let table = format!("mcp_lost_{n}");
+    std::fs::write(
+        user_dir.join("connections/pg.toml"),
+        postgres_connection(host, Some(port), &tag, "", true),
+    )
+    .unwrap();
+    std::fs::write(
+        user_dir.join("connections/admin.toml"),
+        postgres_connection(host, Some(port), "spelaion-mcp-admin", "", false),
+    )
+    .unwrap();
+    let server = server(None, &user_dir, false);
+    let admin = admin_connection(&server, "admin", &user_dir).await;
+    admin_run(
+        &admin,
+        &format!(
+            "drop table if exists {table}; create table {table} (id serial primary key, v text)"
+        ),
+    )
+    .await;
+    cleaning_up(
+        survives_ended_sessions(&server, &user_dir, &admin, "~/pg", &tag, &table),
+        || async { admin_run(&admin, &format!("drop table if exists {table}")).await },
+    )
+    .await;
+}
+
+/// Accepts the test bastions' host keys once, so the headless server then finds them known.
+struct AcceptHosts;
+
+#[async_trait::async_trait]
+impl spelaion_ssh::Interaction for AcceptHosts {
+    async fn confirm_unknown_host(&self, _host: &spelaion_ssh::HostInfo) -> bool {
+        true
+    }
+
+    async fn ask_secret(
+        &self,
+        _request: &spelaion_ssh::SecretRequest,
+    ) -> Option<spelaion_driver_api::Secret> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn tunnelled_sessions_ended_by_the_server_are_replaced() {
+    let (Ok(ssh), Ok(pg)) = (
+        std::env::var("SPELAION_TEST_SSH"),
+        std::env::var("SPELAION_TEST_PG"),
+    ) else {
+        eprintln!(
+            "SPELAION_TEST_SSH or SPELAION_TEST_PG not set: lost tunnelled MCP sessions not tested"
+        );
+        return;
+    };
+    let (ssh_host, ssh_port) = ssh.rsplit_once(':').unwrap();
+    let (pg_host, pg_port) = pg.rsplit_once(':').unwrap();
+    let user_dir = temp("lost-tunnel");
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    std::fs::create_dir_all(user_dir.join("tunnels")).unwrap();
+    let keys = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testing/docker/keys");
+    let identity = format!("'{}'", keys.join("id_ed25519").display());
+    std::fs::write(
+        user_dir.join("tunnels/bastions.toml"),
+        format!(
+            "schema_version = 1\n\n[[hops]]\nhost = \"{ssh_host}\"\nport = {ssh_port}\nuser = \"spelaion\"\nauth = [\"key\"]\nidentity_file = {identity}\n\n[[hops]]\nhost = \"bastion2\"\nuser = \"spelaion\"\nauth = [\"key\"]\nidentity_file = {identity}\n"
+        ),
+    )
+    .unwrap();
+    let n = std::process::id();
+    let tag = format!("spelaion-mcp-lost-tunnel-{n}");
+    let table = format!("mcp_lost_tunnel_{n}");
+    // Behind the bastions the database is `postgres` on its own port.
+    std::fs::write(
+        user_dir.join("connections/behind.toml"),
+        postgres_connection("postgres", None, &tag, "tunnel = \"bastions\"", true),
+    )
+    .unwrap();
+    std::fs::write(
+        user_dir.join("connections/admin.toml"),
+        postgres_connection(pg_host, Some(pg_port), "spelaion-mcp-admin", "", false),
+    )
+    .unwrap();
+    let server = server(None, &user_dir, false);
+
+    // The user accepted the bastions' keys once, in the app.
+    {
+        let access = server.begin().await;
+        let snapshot = access.as_ref().unwrap();
+        let (_, entry) = exposed_entry(&access, "~/behind").unwrap();
+        let resolved = Resolver::new(&snapshot.config, &snapshot.trust, &SystemBackend)
+            .resolve(&entry.id)
+            .unwrap();
+        let learnt = open_connection(
+            resolved,
+            &server.state.engines,
+            OpenOptions {
+                tunnels: Arc::new(TunnelPool::new()),
+                known_hosts: KnownHosts {
+                    team_file: None,
+                    user_file: None,
+                    app_file: user_dir.join("known_hosts"),
+                },
+                interaction: Arc::new(AcceptHosts),
+                password: None,
+                read_only_session: true,
+            },
+            Arc::new(ResultStore::new()),
+        )
+        .await
+        .unwrap();
+        learnt.close().await;
+    }
+
+    let admin = admin_connection(&server, "admin", &user_dir).await;
+    admin_run(
+        &admin,
+        &format!(
+            "drop table if exists {table}; create table {table} (id serial primary key, v text)"
+        ),
+    )
+    .await;
+    cleaning_up(
+        async {
+            survives_ended_sessions(&server, &user_dir, &admin, "~/behind", &tag, &table).await;
+            // The new sessions still go through the tunnel.
+            let open = cached(&server, "~/behind", Use::Read).await;
+            assert!(open.lock().await.tunnel_state().is_some());
+        },
+        || async { admin_run(&admin, &format!("drop table if exists {table}")).await },
+    )
+    .await;
 }
