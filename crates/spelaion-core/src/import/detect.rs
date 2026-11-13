@@ -2,6 +2,8 @@
 //! the few conversions applied to values on the way in (ADR-038). Everything else is sent as the
 //! text it is and converted by the server, so its own rules (and errors) apply.
 
+use std::borrow::Cow;
+
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone};
 
 /// What a column's sampled values look like.
@@ -342,28 +344,30 @@ impl Normalizer {
         }
     }
 
-    pub fn value(&self, column: usize, value: String) -> Result<String, String> {
+    /// The value as the server reads it. Most values go as they came: those are lent, not
+    /// copied (an import is millions of them).
+    pub fn value<'a>(&self, column: usize, value: &'a str) -> Result<Cow<'a, str>, String> {
         let kind = self.kinds.get(column).copied().unwrap_or(TargetKind::Other);
         if !self.touches(kind) {
-            return Ok(value);
+            return Ok(Cow::Borrowed(value));
         }
         match kind {
-            TargetKind::Other => Ok(value),
-            TargetKind::Boolean => Ok(if value.eq_ignore_ascii_case("true") {
-                "1".into()
+            TargetKind::Other => Ok(Cow::Borrowed(value)),
+            TargetKind::Boolean => Ok(Cow::Borrowed(if value.eq_ignore_ascii_case("true") {
+                "1"
             } else if value.eq_ignore_ascii_case("false") {
-                "0".into()
+                "0"
             } else {
                 value
-            }),
+            })),
             TargetKind::Date => {
                 let format = self.formats.date.as_deref().unwrap_or("%Y-%m-%d");
-                NaiveDate::parse_from_str(&value, format)
-                    .map(|d| d.format("%Y-%m-%d").to_string())
+                NaiveDate::parse_from_str(value, format)
+                    .map(|d| Cow::Owned(d.format("%Y-%m-%d").to_string()))
                     .map_err(|_| format!("\"{value}\" is not a date written as {format}"))
             }
             TargetKind::Timestamp | TargetKind::TimestampTz => {
-                let stamp = match parse_timestamp(&value, self.formats.timestamp.as_deref()) {
+                let stamp = match parse_timestamp(value, self.formats.timestamp.as_deref()) {
                     Some(stamp) => stamp,
                     None if self.formats.timestamp.is_some() => {
                         return Err(format!(
@@ -372,11 +376,11 @@ impl Normalizer {
                         ));
                     }
                     // Not ISO and no format chosen: the server reads it as it can.
-                    None => return Ok(value),
+                    None => return Ok(Cow::Borrowed(value)),
                 };
                 const NAIVE: &str = "%Y-%m-%d %H:%M:%S%.f";
                 const ZONED: &str = "%Y-%m-%d %H:%M:%S%.f%:z";
-                Ok(match (stamp, kind) {
+                Ok(Cow::Owned(match (stamp, kind) {
                     (Stamp::Zoned(zoned), _) if self.mysql => {
                         zoned.naive_utc().format(NAIVE).to_string()
                     }
@@ -394,7 +398,7 @@ impl Normalizer {
                         _ => naive.format(NAIVE).to_string(),
                     },
                     (Stamp::Naive(naive), _) => naive.format(NAIVE).to_string(),
-                })
+                }))
             }
         }
     }
@@ -467,7 +471,7 @@ mod tests {
             mysql: false,
         };
         assert_eq!(
-            normalizer.value(0, "ITEM-Молоко 3.2%".into()).unwrap(),
+            normalizer.value(0, "ITEM-Молоко 3.2%").unwrap(),
             "ITEM-Молоко 3.2%"
         );
     }
@@ -587,26 +591,20 @@ mod tests {
             zone: parse_offset("+02:00"),
             mysql: false,
         };
-        assert_eq!(normalizer.value(0, "TRUE".into()).unwrap(), "1");
-        assert_eq!(normalizer.value(0, "false".into()).unwrap(), "0");
-        assert_eq!(normalizer.value(0, "1".into()).unwrap(), "1");
+        assert_eq!(normalizer.value(0, "TRUE").unwrap(), "1");
+        assert_eq!(normalizer.value(0, "false").unwrap(), "0");
+        assert_eq!(normalizer.value(0, "1").unwrap(), "1");
+        assert_eq!(normalizer.value(1, "31/12/2024").unwrap(), "2024-12-31");
+        assert!(normalizer.value(1, "2024-12-31").is_err());
         assert_eq!(
-            normalizer.value(1, "31/12/2024".into()).unwrap(),
-            "2024-12-31"
-        );
-        assert!(normalizer.value(1, "2024-12-31".into()).is_err());
-        assert_eq!(
-            normalizer.value(2, "31/12/2024 10:30".into()).unwrap(),
+            normalizer.value(2, "31/12/2024 10:30").unwrap(),
             "2024-12-31 10:30:00+02:00"
         );
         assert_eq!(
-            normalizer.value(3, "31/12/2024 10:30".into()).unwrap(),
+            normalizer.value(3, "31/12/2024 10:30").unwrap(),
             "2024-12-31 10:30:00"
         );
-        assert_eq!(
-            normalizer.value(4, "31/12/2024".into()).unwrap(),
-            "31/12/2024"
-        );
+        assert_eq!(normalizer.value(4, "31/12/2024").unwrap(), "31/12/2024");
 
         // ISO timestamps with a time zone go to UTC on MySQL, keep it elsewhere.
         let iso = Normalizer {
@@ -616,7 +614,7 @@ mod tests {
             mysql: true,
         };
         assert_eq!(
-            iso.value(0, "2024-01-01T10:00:00+02:00".into()).unwrap(),
+            iso.value(0, "2024-01-01T10:00:00+02:00").unwrap(),
             "2024-01-01 08:00:00"
         );
         let pg = Normalizer {
@@ -624,15 +622,15 @@ mod tests {
             ..iso
         };
         assert_eq!(
-            pg.value(1, "2024-01-01 10:00:00".into()).unwrap(),
+            pg.value(1, "2024-01-01 10:00:00").unwrap(),
             "2024-01-01 10:00:00+00:00"
         );
         assert_eq!(
-            pg.value(1, "2024-01-01T10:00:00.5-05:30".into()).unwrap(),
+            pg.value(1, "2024-01-01T10:00:00.5-05:30").unwrap(),
             "2024-01-01 10:00:00.500-05:30"
         );
         // Not a timestamp and no format: sent as it is.
-        assert_eq!(pg.value(1, "yesterday".into()).unwrap(), "yesterday");
+        assert_eq!(pg.value(1, "yesterday").unwrap(), "yesterday");
     }
 
     #[test]

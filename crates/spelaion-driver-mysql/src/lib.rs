@@ -23,8 +23,8 @@ use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, ContextDialect,
     DatabaseContext, Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions,
     InsertTarget, KeepAlive, LikeFilter, NameFilter, Notice, ObjectInfo, ReferencingKey, Result,
-    ResultSchema, SchemaColumn, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode,
-    TransactionState,
+    ResultSchema, SchemaColumn, SchemaInfo, SchemaObject, ServerObject, TableInfo, TextRows,
+    TlsMode, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -682,22 +682,21 @@ impl Connection for MysqlConnection {
     /// MySQL calls its databases schemas: the same list as the explorer.
     /// Prepared multi-row INSERTs with `?` placeholders. `LOAD DATA LOCAL INFILE` is not used:
     /// it needs `local_infile` on the server and the client, off by default (ADR-038).
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         target.check_rows(&rows)?;
         let mut inserted = 0;
         for chunk in
-            target.statement_chunks(rows, MAX_PLACEHOLDERS, MAX_INSERT_ROWS, MAX_INSERT_BYTES)
+            target.statement_chunks(&rows, MAX_PLACEHOLDERS, MAX_INSERT_ROWS, MAX_INSERT_BYTES)
         {
             let sql = target.insert_sql(&dialect::MysqlDialect, chunk.len(), |_| "?".into());
             let (reply, response) = oneshot::channel();
             self.requests
                 .send(Request::Insert {
                     sql,
-                    values: chunk.into_iter().flatten().collect(),
+                    values: (0..chunk.len())
+                        .flat_map(|row| chunk.row(row))
+                        .map(|value| value.map(str::to_string))
+                        .collect(),
                     reply,
                 })
                 .await

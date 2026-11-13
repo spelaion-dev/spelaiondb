@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, LargeStringArray, LargeStringBuilder, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::buffer::Buffer;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::ipc::MessageHeader;
 use arrow::ipc::reader::{read_dictionary, read_record_batch};
@@ -188,70 +188,10 @@ pub fn result_schema(arrow: SchemaRef) -> Result<ResultSchema, DriverError> {
     Ok(ResultSchema { columns, arrow })
 }
 
-/// The rows of an import as one batch: a nullable text column per target column.
-pub fn rows_to_batch(
-    columns: usize,
-    rows: &[Vec<Option<String>>],
-) -> Result<RecordBatch, ArrowError> {
-    let schema = Arc::new(Schema::new(
-        (0..columns)
-            .map(|i| Field::new(format!("c{i}"), DataType::LargeUtf8, true))
-            .collect::<Vec<_>>(),
-    ));
-    let mut builders: Vec<LargeStringBuilder> =
-        (0..columns).map(|_| LargeStringBuilder::new()).collect();
-    for row in rows {
-        if row.len() != columns {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "a row has {} values for {columns} columns",
-                row.len()
-            )));
-        }
-        for (builder, value) in builders.iter_mut().zip(row) {
-            builder.append_option(value.as_deref());
-        }
-    }
-    let arrays: Vec<ArrayRef> = builders
-        .into_iter()
-        .map(|mut b| Arc::new(b.finish()) as ArrayRef)
-        .collect();
-    if columns == 0 {
-        return RecordBatch::try_new_with_options(
-            schema,
-            arrays,
-            &arrow::array::RecordBatchOptions::new().with_row_count(Some(rows.len())),
-        );
-    }
-    RecordBatch::try_new(schema, arrays)
-}
-
-/// The rows of a batch made by [`rows_to_batch`]. Anything else is refused.
-pub fn batch_to_rows(batch: &RecordBatch) -> Result<Vec<Vec<Option<String>>>, DriverError> {
-    let columns: Vec<&LargeStringArray> = batch
-        .columns()
-        .iter()
-        .map(|column| {
-            column
-                .as_any()
-                .downcast_ref::<LargeStringArray>()
-                .ok_or_else(|| DriverError::Other("the rows to load are not text".into()))
-        })
-        .collect::<Result<_, _>>()?;
-    let mut rows = Vec::with_capacity(batch.num_rows());
-    for row in 0..batch.num_rows() {
-        rows.push(
-            columns
-                .iter()
-                .map(|column| (!column.is_null(row)).then(|| column.value(row).to_string()))
-                .collect(),
-        );
-    }
-    Ok(rows)
-}
-
 #[cfg(test)]
 mod tests {
     use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field};
     use spelaion_driver_api::{ColumnOrigin, LogicalType};
 
     use super::*;
@@ -361,16 +301,25 @@ mod tests {
 
     #[test]
     fn the_rows_of_an_import_round_trip_with_their_nulls() {
+        use spelaion_driver_api::TextRows;
         let rows = vec![
             vec![Some("1".to_string()), None],
             vec![Some(String::new()), Some("ñ\n'\"".to_string())],
         ];
-        let batch = rows_to_batch(2, &rows).unwrap();
-        assert_eq!(batch_to_rows(&batch).unwrap(), rows);
-        // No columns at all still counts its rows.
-        let empty = rows_to_batch(0, &[vec![], vec![]]).unwrap();
-        assert_eq!(batch_to_rows(&empty).unwrap(), vec![Vec::new(), Vec::new()]);
-        // A row of another width is refused.
-        assert!(rows_to_batch(2, &[vec![None]]).is_err());
+        // As they travel: encoded, cut anywhere, decoded.
+        let batch = TextRows::from_rows(2, &rows).unwrap().to_batch();
+        let (mut encoder, start) = BatchEncoder::new(&batch.schema()).unwrap();
+        let bytes = encoder.encode(&batch).unwrap();
+        let mut decoder = BatchDecoder::new();
+        let mut arrived = Vec::new();
+        for piece in [start.as_slice(), &bytes[..7], &bytes[7..]] {
+            for item in decoder.push(piece.to_vec()).unwrap() {
+                if let Decoded::Batch(batch) = item {
+                    arrived.push(TextRows::from_batch(&batch).unwrap());
+                }
+            }
+        }
+        assert_eq!(arrived.len(), 1);
+        assert_eq!(arrived[0].to_vecs(), rows);
     }
 }

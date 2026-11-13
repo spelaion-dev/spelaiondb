@@ -55,7 +55,34 @@ impl Plugin {
 /// then ends the program: a plugin never outlives the program that started it, whatever its
 /// drivers still have running.
 pub async fn run(plugin: Plugin) -> ! {
-    let code = match serve(plugin, tokio::io::stdin(), tokio::io::stdout()).await {
+    run_inner(plugin).await
+}
+
+/// The program's standard input and output as the files they are: read and written whole,
+/// without the standard library's own buffer for lines of text in between.
+fn pipes() -> std::io::Result<(std::fs::File, std::fs::File)> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsHandle;
+        let input = std::io::stdin().as_handle().try_clone_to_owned()?;
+        let output = std::io::stdout().as_handle().try_clone_to_owned()?;
+        Ok((input.into(), output.into()))
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::fd::AsFd;
+        let input = std::io::stdin().as_fd().try_clone_to_owned()?;
+        let output = std::io::stdout().as_fd().try_clone_to_owned()?;
+        Ok((input.into(), output.into()))
+    }
+}
+
+async fn run_inner(plugin: Plugin) -> ! {
+    let served = match pipes() {
+        Ok((input, output)) => serve(plugin, input, output).await,
+        Err(error) => Err(error.into()),
+    };
+    let code = match served {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("the plugin protocol failed: {error}");

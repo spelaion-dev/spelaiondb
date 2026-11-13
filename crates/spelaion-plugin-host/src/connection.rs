@@ -12,9 +12,9 @@ use serde_json::Value;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, DriverError, EventStream, ExecEvent,
     ExecOptions, InsertTarget, KeepAlive, NameFilter, ObjectInfo, PlanMode, ReferencingKey, Result,
-    SchemaColumn, SchemaInfo, SchemaObject, ServerObject, TableInfo, TransactionState,
+    SchemaColumn, SchemaInfo, SchemaObject, ServerObject, TableInfo, TextRows, TransactionState,
 };
-use spelaion_plugin_protocol::ipc::{BatchEncoder, rows_to_batch};
+use spelaion_plugin_protocol::ipc::BatchEncoder;
 use spelaion_plugin_protocol::{
     CatalogRequest, Connect, ConnectResult, Execute, InsertRows, Run, SessionRequest, StreamId,
     method,
@@ -434,28 +434,27 @@ impl Connection for PluginConnection {
         self.ask(method::PROCEDURE_CALL, request, "sql").await
     }
 
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         target.check_rows(&rows)?;
         let shared = self.process.shared();
         let unreadable = |e: arrow::error::ArrowError| DriverError::Other(e.to_string());
-        let batch = rows_to_batch(target.columns.len(), &rows).map_err(unreadable)?;
+        // The rows are already the columns that travel: nothing is converted.
+        let batch = rows.to_batch();
         drop(rows);
         let (mut encoder, start) = BatchEncoder::new(&batch.schema()).map_err(unreadable)?;
         let bytes = encoder.encode(&batch).map_err(unreadable)?;
         drop(batch);
         // The rows first, then the request that names their stream.
         let stream = shared.next_stream();
-        shared.send_rows(stream, start, bytes);
+        let rows = crate::process::Shared::rows_frames(stream, start, bytes);
         let request = InsertRows {
             session: self.session,
             stream,
             target: target.clone(),
         };
-        let value = shared.request(method::INSERT_ROWS, request).await?;
+        let value = shared
+            .request_after(rows, method::INSERT_ROWS, request)
+            .await?;
         field(value, "rows").ok_or_else(|| unexpected(method::INSERT_ROWS))
     }
 }

@@ -17,7 +17,7 @@ use futures_util::StreamExt;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, Connection, DriverError, EventStream, ExecOptions, InsertTarget,
     KeepAlive, NameFilter, ObjectInfo, ReferencingKey, Result, SchemaColumn, SchemaInfo,
-    SchemaObject, ServerObject, TableInfo, TransactionState,
+    SchemaObject, ServerObject, TableInfo, TextRows, TransactionState,
 };
 use spelaion_ssh::TunnelState;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, watch};
@@ -529,11 +529,7 @@ impl Connection for Tracked {
         self.observe(self.inner.list_columns(schema).await)
     }
 
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         let _busy = self.activity.begin().await;
         self.observe(self.inner.insert_rows(target, rows).await)
     }
