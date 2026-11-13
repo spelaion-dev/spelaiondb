@@ -34,6 +34,7 @@ mod open_tabs;
 mod params;
 mod pending;
 pub mod plan;
+pub mod plugins;
 mod processes;
 mod progress;
 mod query_page;

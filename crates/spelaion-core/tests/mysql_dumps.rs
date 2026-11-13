@@ -36,7 +36,7 @@ async fn session(var: &str, driver: MysqlDriver) -> Option<Session> {
     let conn = driver.connect(&params).await.expect("connecting");
     Some(Session::new(
         conn,
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -149,7 +149,7 @@ async fn dumps_restore_their_views_and_triggers() {
 /// once such a statement is run, the guard must see inside it (MariaDB's `/*M!` too).
 #[test]
 fn the_guard_reads_executable_comments_as_the_server_does() {
-    let dialect = MysqlDriver::mysql().dialect();
+    let dialect = spelaion_dialect::for_engine(MysqlDriver::mysql().engine()).expect("a dialect");
     let risk = |sql: &str| {
         check_script(dialect.as_ref(), sql, &Safeguards::default(), false)
             .err()

@@ -136,10 +136,6 @@ impl Driver for MysqlDriver {
         }
     }
 
-    fn dialect(&self) -> Arc<dyn Dialect> {
-        Arc::new(MysqlDialect)
-    }
-
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
         // mysql_async builds its TLS with the process's rustls provider: ring, like the other
         // drivers (with more than one compiled in, rustls would not choose).

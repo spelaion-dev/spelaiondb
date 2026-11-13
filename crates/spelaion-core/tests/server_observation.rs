@@ -23,7 +23,11 @@ async fn session(driver: &dyn Driver, params: &ConnectParams) -> Session {
         .connect(params)
         .await
         .unwrap_or_else(|e| panic!("connecting: {e}"));
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 fn server(var: &str) -> Option<(String, u16)> {

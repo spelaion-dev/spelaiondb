@@ -44,7 +44,7 @@ pub type Result<T, E = DriverError> = std::result::Result<T, E>;
 pub type EventStream = BoxStream<'static, Result<ExecEvent>>;
 
 /// What an engine can do. The UI and the core adapt to this, never to the engine's name.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Capabilities {
     pub transactions: bool,
     pub cancel: bool,
@@ -102,7 +102,8 @@ impl ConnectParams {
 }
 
 /// Connection encryption. Same names and meaning as libpq's `sslmode`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum TlsMode {
     /// No encryption.
     Disable,
@@ -166,7 +167,7 @@ pub enum ExecEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Notice {
     pub severity: String,
     pub message: String,
@@ -175,8 +176,7 @@ pub struct Notice {
 #[async_trait]
 pub trait Driver: Send + Sync {
     /// Stable engine identifier used in the configuration (`engine = "postgres"`).
-    fn engine(&self) -> &'static str;
-    fn dialect(&self) -> Arc<dyn Dialect>;
+    fn engine(&self) -> &str;
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>>;
 }
 
@@ -364,7 +364,7 @@ pub trait Connection: Send + Sync {
 }
 
 /// The table and columns [`Connection::insert_rows`] writes to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InsertTarget {
     /// Empty for the session's default schema.
     pub schema: String,
@@ -507,7 +507,8 @@ pub fn parameter_placeholder(name: &str, position: usize) -> String {
 }
 
 /// What [`Connection::keep_alive`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum KeepAlive {
     /// The server answered and no transaction is open.
     Alive,
@@ -516,7 +517,8 @@ pub enum KeepAlive {
 }
 
 /// What [`Connection::transaction_state`] found (ADR-031).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransactionState {
     /// No transaction is open: each statement commits as it runs.
     Idle,

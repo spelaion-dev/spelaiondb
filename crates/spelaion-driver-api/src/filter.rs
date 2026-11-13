@@ -71,7 +71,7 @@ pub fn pattern_matches(pattern: &str, name: &str) -> bool {
 }
 
 /// The names the explorer shows of one kind (schemas, objects or columns).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NameFilter {
     /// When not empty, only names matching one of these.
     pub include: Vec<String>,

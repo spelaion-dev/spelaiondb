@@ -23,7 +23,11 @@ async fn sqlite() -> Session {
         })
         .await
         .unwrap();
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 async fn pg() -> Option<Session> {
@@ -45,7 +49,7 @@ async fn pg() -> Option<Session> {
         .unwrap();
     Some(Session::new(
         conn,
-        PostgresDriver.dialect(),
+        spelaion_dialect::for_engine(PostgresDriver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }

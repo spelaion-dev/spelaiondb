@@ -35,7 +35,7 @@ async fn session() -> Option<Session> {
         .expect("connecting to SQL Server");
     Some(Session::new(
         conn,
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }

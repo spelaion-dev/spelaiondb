@@ -42,7 +42,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelaion-dialect`: each engine's `Dialect` (statement splitting, quoting, code
   ranges), one file per engine, with their tests. Only text: no network, no native library.
   They are the core's rules, not the driver's (ADR-041): the core takes an engine's dialect
-  from `for_engine` (`spelaion-core`'s `dialect_of`), never from `Driver::dialect`, and a driver
+  from `for_engine` (`spelaion-core`'s `dialect_of`); a driver has none to give, and
   uses its engine's file only for what it writes itself (the names in its catalog queries,
   the words it must recognise in a statement it sends). A new engine's dialect is added here,
   with its name in `for_engine`. MySQL's splitter (`mysql.rs`) counts a statement written only
@@ -54,6 +54,36 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   where its variables live (the guard still checks each statement in it). SQLite's
   `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
   dot-command away from the server's shell: any change to them needs its tests there too.
+- The plugin protocol (ADR-041, `docs/plugin-protocol.md`: the specification, which the code
+  must match; experimental until 1.0). An engine plugin is a program the core starts and
+  talks to over its standard input and output: JSON-RPC 2.0 messages for control, Arrow IPC
+  for rows (never JSON), in frames. Three crates:
+  - `crates/spelaion-plugin-protocol`: the wire only. `frame.rs` (frames, at most 64 MiB,
+    refused before anything is allocated), `message.rs` (every method's parameters and the
+    driver's error) and `ipc.rs` (`BatchDecoder` reads one IPC message at a time because Arrow's
+    own `StreamDecoder` does not see a schema until a batch follows it). A change that breaks
+    is a new major `VERSION`; within one, changes only add.
+  - `crates/spelaion-plugin-sdk`: the plugin's side. A Rust plugin implements `Driver` and
+    `Connection` and calls `run`. It sends a batch only with credit from the core, reports a
+    connection known to be closed, answers even when a driver panics and ends the program when
+    its input closes. Standard output is the protocol: a plugin never prints to it.
+  - `crates/spelaion-plugin-host`: the core's side. `Plugin` is one process per program,
+    started on the first connection and shared by every session of its engines, its pipes
+    served on a thread of its own (never `tokio::spawn` there: the runtime that connected first
+    may end before the others); `PluginDriver`
+    and its connection are the `Driver` and `Connection` the core already uses. A plugin that
+    stops loses its sessions (`is_closed`, ADR-028) and nothing is re-run. The password goes
+    only in `connect`, and every error, notice and log line of a plugin has the secrets it was
+    given taken out. `conformance.rs` is the set a plugin runs against itself in its own CI
+    (ADR-042).
+  `crates/spelaion-test-plugin` is a made-up engine served as a plugin, never shipped; its
+  `tests/protocol.rs` runs the protocol end to end (results, credit, cancel, a plugin that
+  dies, another version, the password in errors, logs, arguments and environment): any change
+  to the three crates needs its test there. In the core, `plugins.rs` decides which program is
+  started: one `Plugin` per file for the whole program (`plugin_at`), and
+  `SPELAION_DEV_PLUGIN_<ENGINE>` points a development build at a plugin built on this machine;
+  a release build ignores it (`dev_plugin`), and nothing in a setting or a repository file can
+  name a plugin.
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.

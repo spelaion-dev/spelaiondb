@@ -29,7 +29,7 @@ use crate::{ResultStore, Session};
 
 /// Available engines, by the name the configuration uses (`engine = "postgres"`).
 pub struct Engines {
-    drivers: HashMap<&'static str, Arc<dyn Driver>>,
+    drivers: HashMap<String, Arc<dyn Driver>>,
 }
 
 impl Engines {
@@ -43,16 +43,39 @@ impl Engines {
             Arc::new(MysqlDriver::mysql()),
             Arc::new(MysqlDriver::mariadb()),
         ];
-        Self {
-            drivers: drivers.into_iter().map(|d| (d.engine(), d)).collect(),
+        let mut engines = Self {
+            drivers: drivers
+                .into_iter()
+                .map(|d| (d.engine().to_string(), d))
+                .collect(),
+        };
+        // A development build can be pointed at a plugin built on this machine, engine by
+        // engine; a release build cannot (ADR-042).
+        for engine in [
+            Engine::Postgres,
+            Engine::Sqlite,
+            Engine::Mysql,
+            Engine::Mariadb,
+            Engine::Duckdb,
+            Engine::Sqlserver,
+        ] {
+            let variable = crate::plugins::dev_plugin_variable(engine.as_str());
+            let pointed = std::env::var_os(variable);
+            if let Some(program) =
+                crate::plugins::dev_plugin(crate::plugins::RELEASE_BUILD, pointed)
+            {
+                let plugin = crate::plugins::plugin_at(&program);
+                engines = engines.with_driver(Arc::new(plugin.driver(engine.as_str())));
+            }
         }
+        engines
     }
 
     /// These engines with `driver` as the one for its engine, in place of any other: how a
-    /// driver that is not compiled in is used. It brings the wire only: the dialect stays the
-    /// core's ([`dialect_of`]), whatever `driver` reports as its own.
+    /// driver that is not compiled in (a plugin, ADR-041) is used. It brings the wire only:
+    /// the dialect is the core's ([`dialect_of`]).
     pub fn with_driver(mut self, driver: Arc<dyn Driver>) -> Self {
-        self.drivers.insert(driver.engine(), driver);
+        self.drivers.insert(driver.engine().to_string(), driver);
         self
     }
 

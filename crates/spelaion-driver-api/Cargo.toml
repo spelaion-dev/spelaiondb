@@ -10,6 +10,8 @@ publish.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
+# The contract travels as messages to engines that run as their own program (ADR-041).
+serde = { version = "1", features = ["derive"] }
 thiserror.workspace = true
 # AsyncRead/AsyncWrite for remote programs (remote.rs).
 tokio.workspace = true

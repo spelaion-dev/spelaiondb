@@ -42,7 +42,11 @@ async fn session(driver: &dyn Driver, params: &ConnectParams) -> Session {
         .connect(params)
         .await
         .unwrap_or_else(|e| panic!("connecting: {e}"));
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 /// Runs statements written by the test; `tolerate` ignores failures (cleanups).
@@ -68,7 +72,11 @@ async fn can_run(driver: &dyn Driver, params: &ConnectParams, sql: &str) -> bool
     let Ok(conn) = driver.connect(params).await else {
         return false;
     };
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     let events: Vec<CoreEvent> = session.run_script(sql).collect().await;
     !events
         .iter()

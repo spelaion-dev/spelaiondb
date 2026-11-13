@@ -169,7 +169,11 @@ async fn session(pair: &Pair, params: &ConnectParams, store: &Arc<ResultStore>) 
         .connect(params)
         .await
         .unwrap_or_else(|e| panic!("{}: connecting: {e}", pair.label));
-    Session::new(conn, pair.driver.dialect(), store.clone())
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(pair.driver.engine()).expect("a dialect"),
+        store.clone(),
+    )
 }
 
 /// Runs `sql`, panicking on a failure; returns its first result, if any.
@@ -380,7 +384,11 @@ async fn rows_read_across_a_use_are_not_editable() {
         ..login(&host, port, "sa", "Spelaion-test-1", "tempdb")
     };
     let conn = driver.connect(&params).await.unwrap();
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     run(
         "sqlserver",
         &session,

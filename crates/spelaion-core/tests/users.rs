@@ -55,7 +55,11 @@ impl Engine {
         let Ok(conn) = self.driver.connect(&self.params(user, password)).await else {
             return false;
         };
-        let session = Session::new(conn, self.driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            conn,
+            spelaion_dialect::for_engine(self.driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let events: Vec<CoreEvent> = session.run_script("SELECT 1").collect().await;
         !events
             .iter()
@@ -68,7 +72,11 @@ async fn session(driver: &dyn Driver, params: &ConnectParams) -> Session {
         .connect(params)
         .await
         .unwrap_or_else(|e| panic!("connecting: {e}"));
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 fn engines() -> Vec<Engine> {

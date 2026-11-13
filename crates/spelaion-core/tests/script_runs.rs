@@ -52,7 +52,7 @@ fn unique(prefix: &str) -> String {
 async fn connect(driver: &dyn Driver, params: &ConnectParams) -> Session {
     Session::new(
         driver.connect(params).await.expect("connecting"),
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     )
 }

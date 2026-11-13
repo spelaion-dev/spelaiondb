@@ -42,10 +42,6 @@ impl Driver for PostgresDriver {
         "postgres"
     }
 
-    fn dialect(&self) -> Arc<dyn Dialect> {
-        Arc::new(PostgresDialect)
-    }
-
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
         let mut config = tokio_postgres::Config::new();
         config

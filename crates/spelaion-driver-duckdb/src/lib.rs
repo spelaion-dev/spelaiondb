@@ -25,10 +25,10 @@ use async_trait::async_trait;
 use duckdb::{AccessMode, Config};
 use spelaion_driver_api::thread_cancel::{Canceller, Closer, Work};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
-    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter,
-    NameFilter, ObjectInfo, ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject,
-    TableInfo, TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext, Driver,
+    DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter,
+    ObjectInfo, ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo,
+    TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -192,10 +192,6 @@ fn open(
 impl Driver for DuckdbDriver {
     fn engine(&self) -> &'static str {
         "duckdb"
-    }
-
-    fn dialect(&self) -> Arc<dyn Dialect> {
-        Arc::new(DuckdbDialect)
     }
 
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
