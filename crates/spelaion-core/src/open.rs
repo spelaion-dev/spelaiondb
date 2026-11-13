@@ -16,7 +16,6 @@ use spelaion_driver_api::{
 use spelaion_driver_mysql::MysqlDriver;
 use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
-use spelaion_driver_sqlserver::SqlServerDriver;
 use spelaion_ssh::{
     AuthMethod, HopSpec, Interaction, KnownHosts, LocalPort, ProxyKind, ProxySpec, RemoteSignals,
     SshError, SsmSpec, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
@@ -36,10 +35,9 @@ impl Engines {
     /// The engines that ship with SpelaionDB: the drivers still compiled in, and the pinned
     /// plugins next to this program (DuckDB is one, ADR-041).
     pub fn builtin() -> Self {
-        let drivers: [Arc<dyn Driver>; 5] = [
+        let drivers: Vec<Arc<dyn Driver>> = vec![
             Arc::new(PostgresDriver),
             Arc::new(SqliteDriver::default()),
-            Arc::new(SqlServerDriver),
             Arc::new(MysqlDriver::mysql()),
             Arc::new(MysqlDriver::mariadb()),
         ];
