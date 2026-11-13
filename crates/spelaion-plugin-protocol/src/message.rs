@@ -29,6 +29,7 @@ impl std::fmt::Display for Version {
 pub mod method {
     pub const INITIALIZE: &str = "initialize";
     pub const CONNECT: &str = "connect";
+    pub const CREATE_DATABASE: &str = "create_database";
     pub const CLOSE: &str = "close";
     pub const EXECUTE: &str = "execute";
     pub const CANCEL: &str = "cancel";
@@ -368,6 +369,14 @@ pub struct Connect {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectResult {
     pub capabilities: Capabilities,
+}
+
+/// `create_database`: an empty database for an engine whose databases are files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateDatabase {
+    pub engine: String,
+    /// What `connect`'s `database` will be: the file's path.
+    pub database: String,
 }
 
 /// A request that names only its session.

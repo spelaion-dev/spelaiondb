@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 spelaion-driver-api.workspace = true
 spelaion-dialect.workspace = true
+spelaion-plugin-sdk.workspace = true
 arrow.workspace = true
 async-stream = "0.3"
 async-trait.workspace = true

@@ -13,6 +13,8 @@
 //! one. To write them again:
 //! `docker run --rm debian:bookworm-slim sh -c "apt-get update && apt-get install -y spatialite-bin && echo \"SELECT hex(GeomFromText('POINT(1 2)', 4326));\" | spatialite /tmp/x.db"`.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -211,7 +213,7 @@ fn check(
 #[tokio::test]
 async fn spatialite_and_geopackage_blobs_in_sqlite() {
     let label = "sqlite";
-    let session = session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await;
+    let session = session(&*engines::sqlite(), memory()).await;
     // As SpatiaLite's `AddGeometryColumn` declares them.
     statement(
         label,
@@ -355,7 +357,7 @@ async fn spatialite_and_geopackage_blobs_in_sqlite() {
 #[tokio::test]
 async fn wkb_blobs_in_duckdb() {
     let label = "duckdb";
-    let session = session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await;
+    let session = session(&*engines::duckdb(), memory()).await;
     let expressions: Vec<String> = WKB.iter().map(|h| format!("from_hex('{h}')")).collect();
     let result = query(label, &session, &rows_sql(&expressions)).await;
     let expected: Vec<Expected> = SHAPES
@@ -376,7 +378,7 @@ async fn wkb_blobs_in_duckdb() {
 async fn duckdb_spatial() {
     let label = "duckdb spatial";
     let required = std::env::var("SPELAION_TEST_DUCKDB_SPATIAL").is_ok();
-    let session = session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await;
+    let session = session(&*engines::duckdb(), memory()).await;
     let events: Vec<CoreEvent> = session
         .run_script("INSTALL spatial; LOAD spatial")
         .collect()
@@ -444,11 +446,7 @@ async fn postgis() {
         return;
     };
     let label = "postgis";
-    let session = session(
-        &spelaion_driver_postgres::PostgresDriver,
-        login(host, port, "spelaion_gis"),
-    )
-    .await;
+    let session = session(&*engines::postgres(), login(host, port, "spelaion_gis")).await;
     let expressions: Vec<String> = SHAPES
         .iter()
         .map(|(wkt, _)| format!("ST_GeomFromText('{wkt}', 4326)"))
@@ -515,16 +513,8 @@ async fn postgis() {
 #[tokio::test]
 async fn mysql_and_mariadb() {
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         let Some((host, port)) = server(var) else {
             continue;

@@ -5,6 +5,8 @@
 //! connection refuses unless both are reads. The SQL the core writes means the same in the
 //! session's mode. Needs `SPELAION_TEST_MYSQL` and `SPELAION_TEST_MARIADB` (testing/docker).
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -16,14 +18,13 @@ use spelaion_core::{
     privilege_plan,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, Value};
-use spelaion_driver_mysql::MysqlDriver;
 
 /// MySQL and MariaDB as root (accounts and grants), with their labels.
 async fn servers() -> Vec<(&'static str, Session)> {
     let mut out = Vec::new();
     for (label, var, driver) in [
-        ("mysql", "SPELAION_TEST_MYSQL", MysqlDriver::mysql()),
-        ("mariadb", "SPELAION_TEST_MARIADB", MysqlDriver::mariadb()),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         let Ok(addr) = std::env::var(var) else {
             eprintln!("{var} not set: skipped");

@@ -4,6 +4,8 @@
 //! unlocked and dropped; and the password is looked for, and never found, in the history, the
 //! audit, the store's file and the errors the core returned.
 
+mod engines;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,7 +32,7 @@ fn server(var: &str) -> Option<(String, u16)> {
 /// An engine with an administrator's login, and how a new account logs in.
 struct Engine {
     label: &'static str,
-    driver: Box<dyn Driver>,
+    driver: Arc<dyn Driver>,
     admin: ConnectParams,
     /// The database a new account connects to.
     database: &'static str,
@@ -93,7 +95,7 @@ fn engines() -> Vec<Engine> {
     if let Some((host, port)) = server("SPELAION_TEST_PG") {
         out.push(Engine {
             label: "postgres",
-            driver: Box::new(spelaion_driver_postgres::PostgresDriver),
+            driver: engines::postgres(),
             admin: login(host, port, "spelaion", "spelaion", "spelaion"),
             database: "spelaion",
         });
@@ -104,13 +106,13 @@ fn engines() -> Vec<Engine> {
     ] {
         if let Some((host, port)) = server(var) {
             let driver = if label == "mysql" {
-                spelaion_driver_mysql::MysqlDriver::mysql()
+                engines::mysql()
             } else {
-                spelaion_driver_mysql::MysqlDriver::mariadb()
+                engines::mariadb()
             };
             out.push(Engine {
                 label,
-                driver: Box::new(driver),
+                driver,
                 admin: login(host, port, "root", "spelaion-root", "spelaion"),
                 database: "",
             });
@@ -119,7 +121,7 @@ fn engines() -> Vec<Engine> {
     if let Some((host, port)) = server("SPELAION_TEST_MSSQL") {
         out.push(Engine {
             label: "sqlserver",
-            driver: Box::new(spelaion_driver_sqlserver::SqlServerDriver),
+            driver: engines::sqlserver(),
             admin: ConnectParams {
                 tls: TlsMode::Require,
                 ..login(host, port, "sa", "Spelaion-test-1", "tempdb")
@@ -466,7 +468,7 @@ async fn a_contained_database_user_logs_in_with_its_own_password_and_it_never_le
     .await;
     let contained = Engine {
         label: "sqlserver",
-        driver: Box::new(spelaion_driver_sqlserver::SqlServerDriver),
+        driver: engines::sqlserver(),
         admin: ConnectParams {
             database: database.into(),
             ..engine.admin.clone()

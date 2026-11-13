@@ -178,6 +178,34 @@ pub trait Driver: Send + Sync {
     /// Stable engine identifier used in the configuration (`engine = "postgres"`).
     fn engine(&self) -> &str;
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>>;
+
+    /// Creates an empty database for an engine whose databases are files (SQLite, DuckDB).
+    /// `database` is what [`ConnectParams::database`] will be: the file's path. An existing
+    /// file is never touched. Every other engine refuses.
+    async fn create_database(&self, database: &str) -> Result<()> {
+        let _ = database;
+        Err(DriverError::Other(format!(
+            "{} is not a file",
+            self.engine()
+        )))
+    }
+}
+
+/// A shared driver is a driver: what holds an `Arc<dyn Driver>` (the core's engines) can be
+/// used wherever one is asked for.
+#[async_trait]
+impl<D: Driver + ?Sized> Driver for Arc<D> {
+    fn engine(&self) -> &str {
+        (**self).engine()
+    }
+
+    async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
+        (**self).connect(params).await
+    }
+
+    async fn create_database(&self, database: &str) -> Result<()> {
+        (**self).create_database(database).await
+    }
 }
 
 #[async_trait]

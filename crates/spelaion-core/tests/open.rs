@@ -3,6 +3,8 @@
 //! SQLite always runs. PostgreSQL needs `SPELAION_TEST_PG` and the tunnels need
 //! `SPELAION_TEST_SSH` (see `testing/docker`).
 
+mod engines;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -235,11 +237,11 @@ database = \"data/app.db\"
 async fn duckdb_from_config() {
     let ws = Workspace::new("duckdb");
     std::fs::create_dir_all(ws.base.join("repo/data")).unwrap();
-    spelaion_core::create_file_database(
+    engines::create_database(
         spelaion_config::Engine::Duckdb,
         &ws.base.join("repo/data/app.duckdb"),
     )
-    .unwrap();
+    .await;
     ws.write(
         ".spelaion/connections/local.toml",
         "schema_version = 1\nengine = \"duckdb\"\ndatabase = \"data/app.duckdb\"\n",

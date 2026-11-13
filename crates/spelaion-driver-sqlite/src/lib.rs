@@ -71,6 +71,13 @@ impl Driver for SqliteDriver {
         "sqlite"
     }
 
+    async fn create_database(&self, database: &str) -> Result<()> {
+        let path = std::path::PathBuf::from(database);
+        tokio::task::spawn_blocking(move || create_database(&path))
+            .await
+            .map_err(|e| DriverError::Other(e.to_string()))?
+    }
+
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
         // A file on a server: the server's sqlite3, through the tunnel (ADR-018).
         if let Some(remote) = &params.remote {

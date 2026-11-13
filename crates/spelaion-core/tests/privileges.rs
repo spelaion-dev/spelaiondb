@@ -4,6 +4,8 @@
 //! applied as shown, then tried by logging in as the account; what the account has is read back
 //! from the catalog, and each revoke takes the access away again.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -177,7 +179,7 @@ async fn postgres_grants_on_a_database_a_schema_a_table_columns_a_role_and_later
     let Some((host, port)) = server("SPELAION_TEST_PG") else {
         return;
     };
-    let driver = spelaion_driver_postgres::PostgresDriver;
+    let driver = engines::postgres();
     let admin = session(
         &driver,
         &login(&host, port, "spelaion", "spelaion", "spelaion"),
@@ -451,9 +453,9 @@ async fn mysql_and_mariadb_grants_globally_on_a_database_a_table_columns_and_a_r
             continue;
         };
         let driver = if label == "mysql" {
-            spelaion_driver_mysql::MysqlDriver::mysql()
+            engines::mysql()
         } else {
-            spelaion_driver_mysql::MysqlDriver::mariadb()
+            engines::mariadb()
         };
         let admin = session(
             &driver,
@@ -635,7 +637,7 @@ async fn sql_server_grants_on_the_server_a_database_a_schema_an_object_columns_a
     let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
         return;
     };
-    let driver = spelaion_driver_sqlserver::SqlServerDriver;
+    let driver = engines::sqlserver();
     let tls = |params: ConnectParams| ConnectParams {
         tls: TlsMode::Require,
         ..params

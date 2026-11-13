@@ -11,9 +11,10 @@ mod message;
 
 pub use frame::{Frame, FrameError, MAX_FRAME, read_frame, write_frame};
 pub use message::{
-    CatalogRequest, Connect, ConnectResult, ErrorData, Execute, Initialize, InitializeResult,
-    InsertRows, InsertRowsResult, Message, PlanRun, Program, RpcError, Run, SessionRequest,
-    StreamCredit, StreamDone, StreamError, StreamId, StreamNotice, Version, code, method,
+    CatalogRequest, Connect, ConnectResult, CreateDatabase, ErrorData, Execute, Initialize,
+    InitializeResult, InsertRows, InsertRowsResult, Message, PlanRun, Program, RpcError, Run,
+    SessionRequest, StreamCredit, StreamDone, StreamError, StreamId, StreamNotice, Version, code,
+    method,
 };
 
 /// The version this build of the protocol speaks.

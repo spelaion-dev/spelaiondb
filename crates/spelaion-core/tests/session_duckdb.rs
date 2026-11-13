@@ -1,14 +1,15 @@
 //! Sessions over in-memory DuckDB: they always run, with nothing external.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{CellInput, CoreEvent, EditError, ResultStore, RowChange, Session, TablePage};
 use spelaion_driver_api::{ConnectParams, Driver};
-use spelaion_driver_duckdb::DuckdbDriver;
 
 async fn session() -> Session {
-    let driver = DuckdbDriver::default();
+    let driver = engines::duckdb();
     let conn = driver
         .connect(&ConnectParams {
             database: ":memory:".into(),

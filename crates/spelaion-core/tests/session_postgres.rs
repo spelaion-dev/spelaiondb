@@ -1,12 +1,13 @@
 //! Sessions against a real PostgreSQL. Needs `SPELAION_TEST_PG=host:port`
 //! (see `crates/spelaion-driver-postgres/tests/postgres.rs`).
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Secret};
-use spelaion_driver_postgres::PostgresDriver;
 
 async fn session() -> Option<Session> {
     let Ok(addr) = std::env::var("SPELAION_TEST_PG") else {
@@ -22,7 +23,7 @@ async fn session() -> Option<Session> {
         database: "spelaion".into(),
         ..Default::default()
     };
-    let driver = PostgresDriver;
+    let driver = engines::postgres();
     let conn = driver.connect(&params).await.expect("connecting");
     Some(Session::new(
         conn,

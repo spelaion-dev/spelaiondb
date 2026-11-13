@@ -3,6 +3,8 @@
 //! their `SPELAION_TEST_*` variables (without them they are skipped, which does not count as
 //! tested).
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -38,7 +40,7 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         (
             "sqlite",
             session(
-                &spelaion_driver_sqlite::SqliteDriver::default(),
+                &*engines::sqlite(),
                 ConnectParams {
                     database: ":memory:".into(),
                     ..Default::default()
@@ -50,7 +52,7 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         (
             "duckdb",
             session(
-                &spelaion_driver_duckdb::DuckdbDriver::default(),
+                &*engines::duckdb(),
                 ConnectParams {
                     database: ":memory:".into(),
                     ..Default::default()
@@ -73,21 +75,13 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         let params = login(host, port, "spelaion", "spelaion", "spelaion");
         out.push((
             "postgres",
-            session(&spelaion_driver_postgres::PostgresDriver, params).await,
+            session(&*engines::postgres(), params).await,
             "public",
         ));
     }
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         if let Some((host, port)) = server(var) {
             let params = login(host, port, "spelaion", "spelaion", "spelaion");
@@ -102,7 +96,7 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         };
         out.push((
             "sqlserver",
-            session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+            session(&*engines::sqlserver(), params).await,
             "dbo",
         ));
     }

@@ -10,6 +10,8 @@
 //! MariaDB, on the first session once `USE` moved it to the other database. Nothing is written
 //! anywhere until the first session, back in its database, applies the edit to its own table.
 
+mod engines;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -26,7 +28,7 @@ const QUERY: &str = "select id, name from edit_source";
 /// Two sessions of one engine, on two databases holding `TABLE`.
 struct Pair {
     label: &'static str,
-    driver: Box<dyn Driver>,
+    driver: Arc<dyn Driver>,
     first: ConnectParams,
     second: ConnectParams,
     /// The schema `TABLE` is in, in both databases.
@@ -80,18 +82,16 @@ fn login(host: &str, port: u16, user: &str, password: &str, database: &str) -> C
     }
 }
 
-fn pairs() -> Vec<Pair> {
-    let duckdb_file = |name: &str| {
-        let path = scratch(name);
-        spelaion_core::create_file_database(spelaion_config::Engine::Duckdb, &path).unwrap();
-        path
-    };
-    let duck_a = duckdb_file("a.duckdb");
-    let duck_b = duckdb_file("b.duckdb");
+async fn pairs() -> Vec<Pair> {
+    let duck_a = scratch("a.duckdb");
+    let duck_b = scratch("b.duckdb");
+    for path in [&duck_a, &duck_b] {
+        engines::create_database(spelaion_config::Engine::Duckdb, path).await;
+    }
     let mut out = vec![
         Pair {
             label: "sqlite",
-            driver: Box::new(spelaion_driver_sqlite::SqliteDriver::default()),
+            driver: engines::sqlite(),
             first: file(&empty_file("a.sqlite")),
             second: file(&empty_file("b.sqlite")),
             schema: "main",
@@ -100,7 +100,7 @@ fn pairs() -> Vec<Pair> {
         },
         Pair {
             label: "duckdb",
-            driver: Box::new(spelaion_driver_duckdb::DuckdbDriver::default()),
+            driver: engines::duckdb(),
             first: file(&duck_a),
             second: file(&duck_b),
             schema: "main",
@@ -112,7 +112,7 @@ fn pairs() -> Vec<Pair> {
     if let Some((host, port)) = server("SPELAION_TEST_PG") {
         out.push(Pair {
             label: "postgres",
-            driver: Box::new(spelaion_driver_postgres::PostgresDriver),
+            driver: engines::postgres(),
             first: login(&host, port, "spelaion", "spelaion", "spelaion"),
             second: login(&host, port, "spelaion", "spelaion", "spelaion_gis"),
             schema: "public",
@@ -121,21 +121,13 @@ fn pairs() -> Vec<Pair> {
         });
     }
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         if let Some((host, port)) = server(var) {
             out.push(Pair {
                 label,
-                driver: Box::new(driver),
+                driver,
                 // Root, to create the second database.
                 first: login(&host, port, "root", "spelaion-root", "spelaion"),
                 second: login(&host, port, "root", "spelaion-root", "spelaion_edit_source"),
@@ -152,7 +144,7 @@ fn pairs() -> Vec<Pair> {
         };
         out.push(Pair {
             label: "sqlserver",
-            driver: Box::new(spelaion_driver_sqlserver::SqlServerDriver),
+            driver: engines::sqlserver(),
             first: tls(login(&host, port, "sa", "Spelaion-test-1", "tempdb")),
             second: tls(login(&host, port, "sa", "Spelaion-test-1", "spelaion")),
             schema: "dbo",
@@ -262,7 +254,7 @@ async fn refused(
 async fn edits_are_written_only_where_the_rows_were_read() {
     let loaded = scratch("loaded.txt");
     std::fs::write(&loaded, "from a file").unwrap();
-    for pair in pairs() {
+    for pair in pairs().await {
         let label = pair.label;
         let store = Arc::new(ResultStore::new());
         let first = session(&pair, &pair.first, &store).await;
@@ -378,7 +370,7 @@ async fn rows_read_across_a_use_are_not_editable() {
     let Some((host, port)) = server("SPELAION_TEST_MSSQL") else {
         return;
     };
-    let driver = spelaion_driver_sqlserver::SqlServerDriver;
+    let driver = engines::sqlserver();
     let params = ConnectParams {
         tls: TlsMode::Require,
         ..login(&host, port, "sa", "Spelaion-test-1", "tempdb")

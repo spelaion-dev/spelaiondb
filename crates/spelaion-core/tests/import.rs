@@ -6,6 +6,8 @@
 //! committed and its own batch rolled back, and refuses read-only connections and unconfirmed
 //! plans.
 
+mod engines;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,11 +22,6 @@ use spelaion_core::{
     plan_import, preview, run_import,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
-use spelaion_driver_duckdb::DuckdbDriver;
-use spelaion_driver_mysql::MysqlDriver;
-use spelaion_driver_postgres::PostgresDriver;
-use spelaion_driver_sqlite::SqliteDriver;
-use spelaion_driver_sqlserver::SqlServerDriver;
 
 const ROWS: u64 = 1_000_000;
 /// A value that would break out of a statement if it were ever pasted into SQL text.
@@ -571,8 +568,8 @@ async fn postgres_imports() {
         ..Default::default()
     };
     let session = Session::new(
-        PostgresDriver.connect(&params).await.unwrap(),
-        spelaion_dialect::for_engine(PostgresDriver.engine()).expect("a dialect"),
+        engines::postgres().connect(&params).await.unwrap(),
+        spelaion_dialect::for_engine(engines::postgres().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     exercise(Engine {
@@ -587,8 +584,8 @@ async fn postgres_imports() {
 #[tokio::test(flavor = "multi_thread")]
 async fn mysql_and_mariadb_import() {
     for (var, driver, label) in [
-        ("SPELAION_TEST_MYSQL", MysqlDriver::mysql(), "MySQL"),
-        ("SPELAION_TEST_MARIADB", MysqlDriver::mariadb(), "MariaDB"),
+        ("SPELAION_TEST_MYSQL", engines::mysql(), "MySQL"),
+        ("SPELAION_TEST_MARIADB", engines::mariadb(), "MariaDB"),
     ] {
         let Some((host, port)) = server(var) else {
             continue;
@@ -631,8 +628,11 @@ async fn sqlserver_imports() {
         ..Default::default()
     };
     let master = Session::new(
-        SqlServerDriver.connect(&connect("master")).await.unwrap(),
-        spelaion_dialect::for_engine(SqlServerDriver.engine()).expect("a dialect"),
+        engines::sqlserver()
+            .connect(&connect("master"))
+            .await
+            .unwrap(),
+        spelaion_dialect::for_engine(engines::sqlserver().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     run(
@@ -641,8 +641,11 @@ async fn sqlserver_imports() {
     )
     .await;
     let session = Session::new(
-        SqlServerDriver.connect(&connect("spelaion")).await.unwrap(),
-        spelaion_dialect::for_engine(SqlServerDriver.engine()).expect("a dialect"),
+        engines::sqlserver()
+            .connect(&connect("spelaion"))
+            .await
+            .unwrap(),
+        spelaion_dialect::for_engine(engines::sqlserver().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     exercise(Engine {
@@ -664,9 +667,8 @@ fn folder(label: &str) -> PathBuf {
 #[tokio::test(flavor = "multi_thread")]
 async fn duckdb_imports() {
     let path = folder("duckdb").join("import.duckdb");
-    let driver = DuckdbDriver {
-        create_if_missing: true,
-    };
+    engines::create_database(spelaion_config::Engine::Duckdb, &path).await;
+    let driver = engines::duckdb();
     let conn = driver
         .connect(&ConnectParams {
             database: path.display().to_string(),
@@ -691,7 +693,7 @@ async fn duckdb_imports() {
 async fn sqlite_imports() {
     let path = folder("sqlite").join("import.db");
     std::fs::File::create(&path).unwrap();
-    let driver = SqliteDriver::default();
+    let driver = engines::sqlite();
     let conn = driver
         .connect(&ConnectParams {
             database: path.display().to_string(),
@@ -725,7 +727,7 @@ async fn unicode_csv_values_are_previewed_and_imported_unchanged() {
         .map(|(i, value)| format!("{},{value}\n", i + 1))
         .collect::<String>();
     std::fs::write(&csv, format!("id,name\n{rows}")).unwrap();
-    let driver = SqliteDriver::default();
+    let driver = engines::sqlite();
     let session = Session::new(
         driver
             .connect(&ConnectParams {
@@ -787,7 +789,7 @@ async fn unicode_csv_values_are_previewed_and_imported_unchanged() {
 async fn pasted_tables_and_views() {
     let path = folder("paste").join("paste.db");
     std::fs::File::create(&path).unwrap();
-    let driver = SqliteDriver::default();
+    let driver = engines::sqlite();
     let session = Session::new(
         driver
             .connect(&ConnectParams {

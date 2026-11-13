@@ -13,11 +13,8 @@ use spelaion_core::{
     CoreEvent, ReadError, ReadKind, ReadLimits, ResultStore, Session, WriteError, WriteLimits,
 };
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
-use spelaion_driver_duckdb::DuckdbDriver;
-use spelaion_driver_mysql::MysqlDriver;
-use spelaion_driver_postgres::PostgresDriver;
-use spelaion_driver_sqlserver::SqlServerDriver;
 
+mod engines;
 mod support;
 use support::{cleaning_up, run_cleanup};
 
@@ -125,7 +122,7 @@ async fn postgres() -> Option<Session> {
         database: "spelaion".into(),
         ..Default::default()
     };
-    let driver = PostgresDriver;
+    let driver = engines::postgres();
     Some(Session::new(
         driver.connect(&params).await.unwrap(),
         spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
@@ -211,7 +208,7 @@ async fn postgres_unicode_escaped_names_and_sql_given_as_text_do_not_bypass_agen
 
 /// A MySQL or MariaDB session as `user`, straight from the driver.
 async fn mysql_session_as(
-    driver: &MysqlDriver,
+    driver: &dyn Driver,
     addr: &str,
     user: &str,
     password: &str,
@@ -285,8 +282,8 @@ async fn sql_mode_trick_did_no_harm(
 #[tokio::test]
 async fn mysql_sql_modes_that_move_string_ends_do_not_bypass_agent_barriers() {
     for (var, driver) in [
-        ("SPELAION_TEST_MYSQL", MysqlDriver::mysql()),
-        ("SPELAION_TEST_MARIADB", MysqlDriver::mariadb()),
+        ("SPELAION_TEST_MYSQL", engines::mysql()),
+        ("SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         let Ok(addr) = std::env::var(var) else {
             eprintln!("{var} not set: test skipped");
@@ -381,8 +378,8 @@ async fn mysql_sql_modes_that_move_string_ends_do_not_bypass_agent_barriers() {
 async fn mysql_sessions() -> Vec<(&'static str, Session)> {
     let mut sessions = Vec::new();
     for (var, driver) in [
-        ("SPELAION_TEST_MYSQL", MysqlDriver::mysql()),
-        ("SPELAION_TEST_MARIADB", MysqlDriver::mariadb()),
+        ("SPELAION_TEST_MYSQL", engines::mysql()),
+        ("SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         let Ok(addr) = std::env::var(var) else {
             eprintln!("{var} not set: test skipped");
@@ -643,10 +640,13 @@ async fn sqlserver() -> Option<Session> {
         tls: TlsMode::Require,
         ..Default::default()
     };
-    let master = SqlServerDriver.connect(&connect("master")).await.unwrap();
+    let master = engines::sqlserver()
+        .connect(&connect("master"))
+        .await
+        .unwrap();
     let master = Session::new(
         master,
-        spelaion_dialect::for_engine(SqlServerDriver.engine()).expect("a dialect"),
+        spelaion_dialect::for_engine(engines::sqlserver().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     // Two tests may create it at once on a new server: whichever loses finds it there.
@@ -655,8 +655,11 @@ async fn sqlserver() -> Option<Session> {
         .collect()
         .await;
     Some(Session::new(
-        SqlServerDriver.connect(&connect("spelaion")).await.unwrap(),
-        spelaion_dialect::for_engine(SqlServerDriver.engine()).expect("a dialect"),
+        engines::sqlserver()
+            .connect(&connect("spelaion"))
+            .await
+            .unwrap(),
+        spelaion_dialect::for_engine(engines::sqlserver().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -861,9 +864,14 @@ async fn sqlserver_writes_commit_roll_back_and_time_out() {
 }
 
 async fn duckdb(database: &str, read_only: bool) -> Session {
-    let driver = DuckdbDriver {
-        create_if_missing: true,
-    };
+    if database != ":memory:" {
+        engines::ensure_database(
+            spelaion_config::Engine::Duckdb,
+            std::path::Path::new(database),
+        )
+        .await;
+    }
+    let driver = engines::duckdb();
     let conn = driver
         .connect(&ConnectParams {
             database: database.into(),
@@ -940,7 +948,7 @@ async fn mariadb_schema_replacement_preserves_tables() {
         return;
     };
     let (host, port) = addr.rsplit_once(':').unwrap();
-    let driver = MysqlDriver::mariadb();
+    let driver = engines::mariadb();
     let conn = driver
         .connect(&ConnectParams {
             host: host.into(),

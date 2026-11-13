@@ -11,6 +11,8 @@
 //!   Mermaid's and DBML's own parsers (`npm run build`, so CI runs it). A text that changed
 //!   fails here until the fixtures are written again with `SPELAION_UPDATE_ER_FIXTURES=1`.
 
+mod engines;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -69,12 +71,12 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
     let mut out = vec![
         (
             "sqlite",
-            session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+            session(&*engines::sqlite(), memory()).await,
             "main",
         ),
         (
             "duckdb",
-            session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+            session(&*engines::duckdb(), memory()).await,
             "main",
         ),
     ];
@@ -82,21 +84,13 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         let params = login(host, port, "spelaion", "spelaion", "spelaion");
         out.push((
             "postgres",
-            session(&spelaion_driver_postgres::PostgresDriver, params).await,
+            session(&*engines::postgres(), params).await,
             "public",
         ));
     }
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         if let Some((host, port)) = server(var) {
             let params = login(host, port, "spelaion", "spelaion", "spelaion");
@@ -110,7 +104,7 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         };
         out.push((
             "sqlserver",
-            session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+            session(&*engines::sqlserver(), params).await,
             "dbo",
         ));
     }
@@ -417,7 +411,7 @@ fn big_schema() -> Vec<String> {
 
 #[tokio::test]
 async fn a_200_table_schema_is_laid_out_once() {
-    let session = session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await;
+    let session = session(&*engines::sqlite(), memory()).await;
     run("sqlite", &session, &big_schema(), false).await;
     let conn = session.connection();
     let started = Instant::now();

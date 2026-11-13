@@ -5785,7 +5785,6 @@ dependencies = [
  "spelaion-config",
  "spelaion-core",
  "spelaion-driver-api",
- "spelaion-driver-duckdb",
  "spelaion-mcp",
  "spelaion-store",
  "tokio",
@@ -5906,6 +5905,7 @@ dependencies = [
  "futures-util",
  "spelaion-dialect",
  "spelaion-driver-api",
+ "spelaion-plugin-sdk",
  "tokio",
 ]
 
@@ -5921,6 +5921,7 @@ dependencies = [
  "rustls",
  "spelaion-dialect",
  "spelaion-driver-api",
+ "spelaion-plugin-sdk",
  "tokio",
 ]
 
@@ -5940,6 +5941,7 @@ dependencies = [
  "rustls-native-certs",
  "spelaion-dialect",
  "spelaion-driver-api",
+ "spelaion-plugin-sdk",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
@@ -5956,6 +5958,7 @@ dependencies = [
  "rusqlite",
  "spelaion-dialect",
  "spelaion-driver-api",
+ "spelaion-plugin-sdk",
  "tokio",
 ]
 
@@ -5970,6 +5973,7 @@ dependencies = [
  "socket2",
  "spelaion-dialect",
  "spelaion-driver-api",
+ "spelaion-plugin-sdk",
  "tiberius",
  "tokio",
  "tokio-util",
@@ -6043,8 +6047,9 @@ dependencies = [
  "ring",
  "russh",
  "rustix",
+ "spelaion-config",
+ "spelaion-core",
  "spelaion-driver-api",
- "spelaion-driver-postgres",
  "thiserror 2.0.21",
  "tokio",
  "win32job",

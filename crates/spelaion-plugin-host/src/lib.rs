@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use spelaion_driver_api::{ConnectParams, Connection, Driver, DriverError, Result};
+use spelaion_plugin_protocol::{CreateDatabase, method};
 pub use spelaion_plugin_protocol::{InitializeResult, VERSION, Version};
 
 use connection::PluginConnection;
@@ -146,12 +147,38 @@ impl PluginDriver {
     pub fn plugin(&self) -> &Plugin {
         &self.plugin
     }
+
+    /// The plugin's process, started if need be, once it is known to serve this engine.
+    async fn process(&self) -> Result<Arc<Process>> {
+        let process = self.plugin.process().await?;
+        if !process.info().engines.iter().any(|e| e == &self.engine) {
+            return Err(DriverError::Other(format!(
+                "the plugin {} does not serve the engine {:?}",
+                self.plugin.name(),
+                self.engine
+            )));
+        }
+        Ok(process)
+    }
 }
 
 #[async_trait]
 impl Driver for PluginDriver {
     fn engine(&self) -> &str {
         &self.engine
+    }
+
+    async fn create_database(&self, database: &str) -> Result<()> {
+        let process = self.process().await?;
+        let request = CreateDatabase {
+            engine: self.engine.clone(),
+            database: database.to_string(),
+        };
+        process
+            .shared()
+            .request(method::CREATE_DATABASE, request)
+            .await?;
+        Ok(())
     }
 
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
@@ -162,14 +189,7 @@ impl Driver for PluginDriver {
                 "a database on another machine cannot be opened through a plugin".into(),
             ));
         }
-        let process = self.plugin.process().await?;
-        if !process.info().engines.iter().any(|e| e == &self.engine) {
-            return Err(DriverError::Other(format!(
-                "the plugin {} does not serve the engine {:?}",
-                self.plugin.name(),
-                self.engine
-            )));
-        }
+        let process = self.process().await?;
         let session = self
             .plugin
             .inner

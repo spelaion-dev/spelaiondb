@@ -29,6 +29,10 @@ use tokio::sync::Notify;
 static PRODUCED: AtomicU64 = AtomicU64::new(0);
 /// Connections that are open now.
 static OPEN: AtomicU64 = AtomicU64::new(0);
+/// Connections being made now.
+static CONNECTING: AtomicU64 = AtomicU64::new(0);
+/// The databases `create_database` made.
+static CREATED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Every row `insert_rows` was given, with its target.
 static INSERTED: Mutex<Vec<(String, Vec<Option<String>>)>> = Mutex::new(Vec::new());
 
@@ -103,6 +107,21 @@ impl Driver for Made {
         self.0
     }
 
+    async fn create_database(&self, database: &str) -> Result<()> {
+        // Only the first engine's databases are files.
+        if self.0 != "test" {
+            return Err(DriverError::Other(format!("{} is not a file", self.0)));
+        }
+        let mut created = CREATED.lock().expect("lock poisoned");
+        if created.iter().any(|name| name == database) {
+            return Err(DriverError::Other(format!(
+                "{database} already exists: a new database never replaces a file"
+            )));
+        }
+        created.push(database.to_string());
+        Ok(())
+    }
+
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
         let password = params
             .password
@@ -123,7 +142,18 @@ impl Driver for Made {
                     params.user
                 )));
             }
-            "slow" => tokio::time::sleep(Duration::from_secs(600)).await,
+            "slow" => {
+                // Counted for as long as the attempt lives, however it ends.
+                struct Attempt;
+                impl Drop for Attempt {
+                    fn drop(&mut self) {
+                        CONNECTING.fetch_sub(1, Ordering::SeqCst);
+                    }
+                }
+                CONNECTING.fetch_add(1, Ordering::SeqCst);
+                let _attempt = Attempt;
+                tokio::time::sleep(Duration::from_secs(600)).await;
+            }
             _ => {}
         }
         OPEN.fetch_add(1, Ordering::SeqCst);
@@ -371,6 +401,19 @@ impl Connection for MadeConnection {
             ["produced"] => events(texts(
                 "produced",
                 vec![Some(PRODUCED.load(Ordering::SeqCst).to_string())],
+            )),
+            ["created"] => events(texts(
+                "created",
+                CREATED
+                    .lock()
+                    .expect("lock poisoned")
+                    .iter()
+                    .map(|name| Some(name.clone()))
+                    .collect(),
+            )),
+            ["connecting"] => events(texts(
+                "connecting",
+                vec![Some(CONNECTING.load(Ordering::SeqCst).to_string())],
             )),
             ["open"] => events(texts(
                 "open",

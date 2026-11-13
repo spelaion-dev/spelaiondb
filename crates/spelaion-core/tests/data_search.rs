@@ -10,6 +10,8 @@
 //! - The column catalog of metadata search (`list_columns`) lists every table's columns.
 //! - A search over 50 tables stops when cancelled mid-way, and the session is still usable.
 
+mod engines;
+
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
@@ -50,12 +52,12 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
     let mut out = vec![
         (
             "sqlite",
-            session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+            session(&*engines::sqlite(), memory()).await,
             "main",
         ),
         (
             "duckdb",
-            session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+            session(&*engines::duckdb(), memory()).await,
             "main",
         ),
     ];
@@ -72,21 +74,13 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         let params = login(host, port, "spelaion", "spelaion", "spelaion");
         out.push((
             "postgres",
-            session(&spelaion_driver_postgres::PostgresDriver, params).await,
+            session(&*engines::postgres(), params).await,
             "public",
         ));
     }
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         if let Some((host, port)) = server(var) {
             let params = login(host, port, "spelaion", "spelaion", "spelaion");
@@ -100,7 +94,7 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         };
         out.push((
             "sqlserver",
-            session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+            session(&*engines::sqlserver(), params).await,
             "dbo",
         ));
     }
@@ -533,7 +527,7 @@ async fn cancel_stops_the_running_statement() {
         return;
     };
     let session = session(
-        &spelaion_driver_postgres::PostgresDriver,
+        &*engines::postgres(),
         ConnectParams {
             host,
             port,
@@ -585,10 +579,9 @@ async fn a_read_only_connection_can_search() {
     let path = std::env::temp_dir().join(format!("spelaion-data-search-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&path);
     {
+        engines::create_database(spelaion_config::Engine::Sqlite, &path).await;
         let writer = session(
-            &spelaion_driver_sqlite::SqliteDriver {
-                create_if_missing: true,
-            },
+            &*engines::sqlite(),
             ConnectParams {
                 database: path.to_string_lossy().into_owned(),
                 ..Default::default()
@@ -607,7 +600,7 @@ async fn a_read_only_connection_can_search() {
         .await;
     }
     let reader = session(
-        &spelaion_driver_sqlite::SqliteDriver::default(),
+        &*engines::sqlite(),
         ConnectParams {
             database: path.to_string_lossy().into_owned(),
             read_only: true,
@@ -640,11 +633,11 @@ mod statements {
 
     fn d(engine: &str) -> Box<dyn Dialect> {
         match engine {
-            "postgres" => Box::new(spelaion_driver_postgres::PostgresDialect),
-            "mysql" => Box::new(spelaion_driver_mysql::MysqlDialect),
-            "sqlserver" => Box::new(spelaion_driver_sqlserver::SqlServerDialect),
-            "duckdb" => Box::new(spelaion_driver_duckdb::DuckdbDialect),
-            _ => Box::new(spelaion_driver_sqlite::SqliteDialect),
+            "postgres" => Box::new(spelaion_dialect::PostgresDialect),
+            "mysql" => Box::new(spelaion_dialect::MysqlDialect),
+            "sqlserver" => Box::new(spelaion_dialect::SqlServerDialect),
+            "duckdb" => Box::new(spelaion_dialect::DuckdbDialect),
+            _ => Box::new(spelaion_dialect::SqliteDialect),
         }
     }
 

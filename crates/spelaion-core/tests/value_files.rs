@@ -6,6 +6,8 @@
 //! by its bytes and saved to a file byte for byte; a file loaded into a cell becomes exactly
 //! one UPDATE by primary key, and reading the page again gives the file back.
 
+mod engines;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -55,14 +57,14 @@ async fn engines() -> Vec<Engine> {
     let mut out = vec![
         Engine {
             label: "sqlite",
-            session: session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+            session: session(&*engines::sqlite(), memory()).await,
             schema: "main",
             binary: "BLOB",
             xml: "TEXT",
         },
         Engine {
             label: "duckdb",
-            session: session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+            session: session(&*engines::duckdb(), memory()).await,
             schema: "main",
             binary: "BLOB",
             xml: "VARCHAR",
@@ -81,23 +83,15 @@ async fn engines() -> Vec<Engine> {
         let params = login(host, port, "spelaion", "spelaion", "spelaion");
         out.push(Engine {
             label: "postgres",
-            session: session(&spelaion_driver_postgres::PostgresDriver, params).await,
+            session: session(&*engines::postgres(), params).await,
             schema: "public",
             binary: "BYTEA",
             xml: "XML",
         });
     }
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         if let Some((host, port)) = server(var) {
             let params = login(host, port, "spelaion", "spelaion", "spelaion");
@@ -117,7 +111,7 @@ async fn engines() -> Vec<Engine> {
         };
         out.push(Engine {
             label: "sqlserver",
-            session: session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+            session: session(&*engines::sqlserver(), params).await,
             schema: "dbo",
             binary: "VARBINARY(MAX)",
             xml: "XML",
@@ -341,7 +335,7 @@ async fn images_are_fetched_saved_and_loaded_on_every_engine() {
 #[tokio::test(flavor = "multi_thread")]
 async fn big_values_wait_for_load_anyway() {
     let session = &session(
-        &spelaion_driver_sqlite::SqliteDriver::default(),
+        &*engines::sqlite(),
         ConnectParams {
             database: ":memory:".into(),
             ..Default::default()
