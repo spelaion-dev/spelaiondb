@@ -18,7 +18,6 @@ spelaion-plugin-host = { path = "crates/spelaion-plugin-host" }
 spelaion-plugin-sdk = { path = "crates/spelaion-plugin-sdk" }
 spelaion-driver-postgres = { path = "crates/spelaion-driver-postgres" }
 spelaion-driver-sqlite = { path = "crates/spelaion-driver-sqlite" }
-spelaion-driver-mysql = { path = "crates/spelaion-driver-mysql" }
 spelaion-core = { path = "crates/spelaion-core" }
 spelaion-config = { path = "crates/spelaion-config" }
 spelaion-ssh = { path = "crates/spelaion-ssh" }
@@ -51,4 +50,3 @@ debug = false
 
 [patch.crates-io]
 tokio-postgres = { path = "vendor/tokio-postgres" }
-mysql_async = { path = "vendor/mysql_async" }

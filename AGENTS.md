@@ -116,15 +116,17 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
-- `crates/spelaion-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
-  per connection). Its dialect is `spelaion-dialect`'s `mysql.rs`. The core writes a MySQL string that holds
-  a backslash as `_utf8mb4 X'…'` (`export::sql_literal`), which every mode reads the same. Where only a plain string
-  may go (`COMMENT`, `IDENTIFIED BY`), `objects::ddl::mysql_string` escapes a backslash only when
-  the session's mode reads it as an escape. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
-  name check (read its `PATCHED.md` before upgrading). Its type zoo (`tests/mysql.rs`) compares every type with the server's
-  text, on both servers. `DATE`, `DATETIME` and `TIMESTAMP` columns are text with their native
-  type (legacy zero dates; ADR-005 and ADR-006, 2026-11-12 notes): what needs them as dates
-  (chart axes, the bulk "now") reads them by native type through `spelaion-core`'s `temporal.rs`.
+- **MySQL and MariaDB are a plugin** (ADR-041, ADR-042): their driver is not in this
+  workspace. It lives in `spelaion-dev/spelaiondb-plugin-mysql` (one program serves both
+  engines) with its type zoo and the patched `mysql_async` (`verify-ca` skips the name check),
+  and this repository pins the release it ships (`plugins.toml`). What is the core's stays
+  here: the dialect (`spelaion-dialect`'s `mysql.rs`), the session's `sql_mode`
+  (`sql_mode.rs`), and how a MySQL string that holds a backslash is written
+  (`export::sql_literal`, `objects::ddl::mysql_string`). `DATE`, `DATETIME` and `TIMESTAMP`
+  columns arrive as text with their native type (ADR-005 and ADR-006, 2026-11-12 notes): what
+  needs them as dates reads them by native type through `temporal.rs`. Here, their tests run
+  through that plugin, unchanged: the pinned build next to the program, or, in a development
+  build, the one `SPELAION_DEV_PLUGIN_MYSQL` and `SPELAION_DEV_PLUGIN_MARIADB` point at.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
   `remote.rs` opens a file on a server (ADR-018) by running that server's `sqlite3 -safe`

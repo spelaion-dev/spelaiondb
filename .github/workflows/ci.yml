@@ -190,9 +190,6 @@ jobs:
           test "$(cat "$RUNNER_TEMP/services.status" 2> /dev/null)" = ready
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --workspace --locked
-      # The vendored crate is excluded from the workspace; run its protocol regression test.
-      - if: steps.scope.outputs.rust != 'false'
-        run: cargo test --manifest-path vendor/mysql_async/Cargo.toml --lib result_count_tests
       # The app's TS types are generated from Rust: the file in the repo must be up to date.
       - if: steps.scope.outputs.rust != 'false'
         run: cargo run -q --locked -p spelaion-desktop --features bindings --bin export-bindings
