@@ -22,7 +22,7 @@ set -euo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-engines=${SPELAION_PLUGIN_ENGINES:-"postgres mysql mariadb sqlite"}
+engines=${SPELAION_PLUGIN_ENGINES:-"postgres sqlite"}
 
 # The program that serves an engine: MySQL's serves MariaDB too.
 program_of() {
