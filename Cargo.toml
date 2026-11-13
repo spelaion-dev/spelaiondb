@@ -19,7 +19,6 @@ spelaion-plugin-sdk = { path = "crates/spelaion-plugin-sdk" }
 spelaion-driver-postgres = { path = "crates/spelaion-driver-postgres" }
 spelaion-driver-sqlite = { path = "crates/spelaion-driver-sqlite" }
 spelaion-driver-mysql = { path = "crates/spelaion-driver-mysql" }
-spelaion-driver-duckdb = { path = "crates/spelaion-driver-duckdb" }
 spelaion-driver-sqlserver = { path = "crates/spelaion-driver-sqlserver" }
 spelaion-core = { path = "crates/spelaion-core" }
 spelaion-config = { path = "crates/spelaion-config" }

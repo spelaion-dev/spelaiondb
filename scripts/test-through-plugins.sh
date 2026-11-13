@@ -9,9 +9,11 @@
 #   scripts/test-through-plugins.sh --workspace
 #   scripts/test-through-plugins.sh -p spelaion-core --test transactions
 #
-# `SPELAION_PLUGIN_ENGINES` narrows it to some engines (default: all of them):
+# The engines are the ones whose driver is still in this workspace. DuckDB's is not (it is a
+# plugin of its own repository): its tests always go through its plugin.
+# `SPELAION_PLUGIN_ENGINES` narrows it to some engines:
 #
-#   SPELAION_PLUGIN_ENGINES="duckdb sqlite" scripts/test-through-plugins.sh -p spelaion-core
+#   SPELAION_PLUGIN_ENGINES="postgres sqlite" scripts/test-through-plugins.sh -p spelaion-core
 #
 # The servers the tests need are the usual ones (`SPELAION_TEST_PG` and the rest, see
 # `AGENTS.md`); without them those tests are skipped, here as anywhere.
@@ -20,7 +22,7 @@ set -euo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-engines=${SPELAION_PLUGIN_ENGINES:-"postgres mysql mariadb sqlserver sqlite duckdb"}
+engines=${SPELAION_PLUGIN_ENGINES:-"postgres mysql mariadb sqlserver sqlite"}
 
 # The program that serves an engine: MySQL's serves MariaDB too.
 program_of() {

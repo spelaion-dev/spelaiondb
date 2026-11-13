@@ -218,10 +218,23 @@ async fn a_program_that_is_not_pinned_is_never_started() {
         app.install(name);
     }
     let engines = engines_of(&pins, &app.0);
+    // The pinned program is not there, and the engine says so: it is not taken from another.
+    let error = pid_through(&engines).await.unwrap_err();
     assert!(
-        engines.driver("test").is_none(),
-        "an engine was taken from a program that is not pinned"
+        error.to_string().contains("is missing"),
+        "an engine was taken from a program that is not pinned: {error}"
     );
+    for name in [
+        "spelaiondb-plugin-evil",
+        "spelaiondb-plugin-test2",
+        "plugin",
+    ] {
+        let file = app.0.join(program_file_name(name));
+        assert!(
+            !spelaion_core::plugins::is_running(&file).await,
+            "{name} was started"
+        );
+    }
     // With no pins at all, nothing in the folder is a plugin.
     app.install(NAME);
     assert!(engines_of(&Pins::none(), &app.0).driver("test").is_none());
