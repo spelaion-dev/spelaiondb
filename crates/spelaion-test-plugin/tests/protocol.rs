@@ -898,6 +898,18 @@ async fn the_test_plugin_conforms() {
     };
     assert_conforms(&target).await;
 
+    // An engine that answers `execute` only when the statement ends is cancelled too: the
+    // cancel does not wait for that answer.
+    let unanswered = Target {
+        slow: Some("sleep-unanswered".into()),
+        program: PROGRAM.into(),
+        engine: "test".into(),
+        params: params("made"),
+        one_row: "rows 1".into(),
+        refused: "refused".into(),
+    };
+    within(assert_conforms(&unanswered)).await;
+
     // And it does find what is wrong: results that are not one row, statements that are not
     // refused, one that ends by itself instead of waiting to be cancelled.
     let wrong = Target {

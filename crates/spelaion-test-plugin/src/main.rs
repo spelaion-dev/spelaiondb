@@ -349,6 +349,16 @@ impl Connection for MadeConnection {
                     }
                 }))
             }
+            // The same, from an engine that answers only when its first response arrives: the
+            // statement has not "started" until it ends.
+            ["sleep-unanswered"] => {
+                tokio::select! {
+                    _ = self.cancelled.notified() => Err(DriverError::Cancelled),
+                    _ = tokio::time::sleep(Duration::from_secs(600)) => {
+                        Err(other("nobody cancelled"))
+                    }
+                }
+            }
             // The program dies in the middle of a result.
             ["crash"] => {
                 let schema = numbered();

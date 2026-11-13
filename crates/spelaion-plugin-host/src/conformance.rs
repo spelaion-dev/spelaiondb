@@ -197,32 +197,45 @@ async fn one_row(connection: &dyn Connection, target: &Target, failures: &mut Ve
 }
 
 /// A cancel that arrives while the statement runs ends it, with `Cancelled`.
+///
+/// The statement and the cancel run side by side: an engine may answer `execute` only when
+/// its first response arrives (MySQL's text protocol), which for a statement that waits is
+/// when it ends. Waiting for `execute` before cancelling would then wait for ever.
 async fn cancel(connection: &dyn Connection, slow: &str, failures: &mut Vec<String>) {
-    let mut events = match connection.execute(slow, &ExecOptions::default()).await {
-        Ok(events) => events,
-        Err(error) => {
-            failures.push(format!("{slow:?} did not start: {error}"));
-            return;
+    let cancel = connection.cancel_handle();
+    let running = async {
+        // `Cancelled` may be how it fails to start or an event of its stream.
+        let cancelled = |error: &DriverError| matches!(error, DriverError::Cancelled);
+        match connection.execute(slow, &ExecOptions::default()).await {
+            Ok(mut events) => {
+                let mut said = false;
+                while let Some(event) = events.next().await {
+                    said |= event.as_ref().is_err_and(cancelled);
+                }
+                Ok(said)
+            }
+            Err(error) if cancelled(&error) => Ok(true),
+            Err(error) => Err(error),
         }
     };
-    // Let it reach the server.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    match within(connection.cancel_handle().cancel()).await {
+    let cancelling = async {
+        // Let it reach the server.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        within(cancel.cancel()).await
+    };
+    let (ended, answered) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(15), running),
+        cancelling
+    );
+    match answered {
         Some(Ok(())) => {}
         Some(Err(error)) => failures.push(format!("`cancel` failed: {error}")),
         None => failures.push("`cancel` was never answered".into()),
     }
-    let ended = tokio::time::timeout(Duration::from_secs(10), async {
-        let mut cancelled = false;
-        while let Some(event) = events.next().await {
-            cancelled |= matches!(event, Err(DriverError::Cancelled));
-        }
-        cancelled
-    })
-    .await;
     match ended {
-        Ok(true) => {}
-        Ok(false) => failures.push(format!("{slow:?} ended without saying it was cancelled")),
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => failures.push(format!("{slow:?} ended without saying it was cancelled")),
+        Ok(Err(error)) => failures.push(format!("{slow:?} did not start: {error}")),
         Err(_) => failures.push(format!("{slow:?} went on running after `cancel`")),
     }
 }
