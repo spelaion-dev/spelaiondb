@@ -140,10 +140,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   text with their native type, exactly as the server writes them (100 ns and the value's own
   offset; ADR-005 and ADR-006, 2026-11-12 notes): `temporal.rs` reads them as dates, and sorts
   a `datetimeoffset` by its instant.
-- `crates/spelaion-driver-duckdb`: `duckdb` (bundled) in one thread per connection, one open
-  per file shared by clones (ADR-016). Arrow from DuckDB converted in `exec.rs`; nested types
-  written as DuckDB's text in `format.rs`. Its type zoo (`tests/duckdb.rs`) compares every
-  type with `CAST(… AS VARCHAR)`; it needs nothing external.
+- **DuckDB is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives in
+  `spelaion-dev/spelaiondb-plugin-duckdb` with its type zoo, and this repository pins the
+  release it ships (`plugins.toml`). The core does not compile DuckDB. Here, DuckDB's tests
+  run through that plugin, unchanged: the pinned build next to the program, or, in a
+  development build, the one `SPELAION_DEV_PLUGIN_DUCKDB` points at (a build of the plugin's
+  repository). Without either, a DuckDB connection fails saying which file is missing. One
+  open per file shared by every session (ADR-016) holds because one plugin process serves
+  them all.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any

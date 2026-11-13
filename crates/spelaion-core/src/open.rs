@@ -13,7 +13,6 @@ use spelaion_driver_api::{
     ConnectParams, Connection, Dialect, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
     RemoteProcess, Secret,
 };
-use spelaion_driver_duckdb::DuckdbDriver;
 use spelaion_driver_mysql::MysqlDriver;
 use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
@@ -34,12 +33,12 @@ pub struct Engines {
 }
 
 impl Engines {
-    /// The engines that ship with SpelaionDB.
+    /// The engines that ship with SpelaionDB: the drivers still compiled in, and the pinned
+    /// plugins next to this program (DuckDB is one, ADR-041).
     pub fn builtin() -> Self {
-        let drivers: [Arc<dyn Driver>; 6] = [
+        let drivers: [Arc<dyn Driver>; 5] = [
             Arc::new(PostgresDriver),
             Arc::new(SqliteDriver::default()),
-            Arc::new(DuckdbDriver::default()),
             Arc::new(SqlServerDriver),
             Arc::new(MysqlDriver::mysql()),
             Arc::new(MysqlDriver::mariadb()),
@@ -107,6 +106,16 @@ impl Engines {
         for (pinned, build) in pins.for_platform(platform) {
             let program = folder.join(crate::plugins::pins::program_file_name(&pinned.name));
             if !program.is_file() {
+                // Pinned and not here: its engines say so when they are used, unless a driver
+                // compiled in serves them.
+                for engine in &pinned.engines {
+                    if self.driver(engine).is_none() {
+                        self = self.with_driver(Arc::new(MissingPlugin {
+                            engine: engine.clone(),
+                            program: program.clone(),
+                        }));
+                    }
+                }
                 continue;
             }
             let plugin = crate::plugins::pinned_plugin(&program, &build.program_sha256);
@@ -149,6 +158,49 @@ impl Engines {
             )));
         };
         driver.create_database(database).await
+    }
+}
+
+/// An engine whose plugin is pinned and is not where it should be: it says so, with the file
+/// that is missing, instead of "engine not available".
+struct MissingPlugin {
+    engine: String,
+    program: std::path::PathBuf,
+}
+
+impl MissingPlugin {
+    fn error(&self) -> DriverError {
+        // What gets it back depends on who is asking.
+        let how = if crate::plugins::RELEASE_BUILD {
+            "Install SpelaionDB again to get it back.".to_string()
+        } else {
+            format!(
+                "This is a development build: fetch the pinned plugins (cargo run -p \
+                 spelaion-plugin-fetch -- --into <folder>, which prints the variables to set) \
+                 or point {} at a build of the plugin.",
+                crate::plugins::dev_plugin_variable(&self.engine)
+            )
+        };
+        DriverError::Connection(format!(
+            "{} is served by a plugin that is not installed: {} is missing. {how}",
+            self.engine,
+            self.program.display()
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl Driver for MissingPlugin {
+    fn engine(&self) -> &str {
+        &self.engine
+    }
+
+    async fn connect(&self, _params: &ConnectParams) -> Result<Box<dyn Connection>, DriverError> {
+        Err(self.error())
+    }
+
+    async fn create_database(&self, _database: &str) -> Result<(), DriverError> {
+        Err(self.error())
     }
 }
 

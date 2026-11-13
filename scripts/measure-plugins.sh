@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# ADR-041's gate, measured: a million-row result and a million-row import, with the drivers
-# compiled in and with every engine through its plugin. A plugin may take at most 15 % longer.
+# ADR-041's gate, measured: a million-row import with the drivers compiled in and with every
+# engine through its plugin. A plugin may take at most 15 % longer. It measures the engines
+# whose driver is still in this workspace: one that has left (DuckDB) was measured in the pull
+# request that moved it.
 #
 #   scripts/measure-plugins.sh            # three runs each way, then the medians
 #   RUNS=5 scripts/measure-plugins.sh
-#   SPELAION_PLUGIN_ENGINES="duckdb sqlite" scripts/measure-plugins.sh
+#   SPELAION_PLUGIN_ENGINES="postgres sqlite" scripts/measure-plugins.sh
 #
 # Optimised builds, the same one both ways, with debug assertions on: only a build with them
 # follows SPELAION_DEV_PLUGIN_<ENGINE> (a release build ignores it, ADR-042). The servers are
@@ -12,8 +14,7 @@
 # SPELAION_TEST_MSSQL); an engine whose variable is not set is not measured. On a machine with
 # 16 GB, set CARGO_BUILD_JOBS=3 (see CONTRIBUTING.md).
 #
-# What it times is what the tests print: `tests/grid_million.rs` (DuckDB makes a million rows
-# and the core stores them) and `tests/import.rs` (each engine loads a CSV of a million rows
+# What it times is what `tests/import.rs` prints (each engine loads a CSV of a million rows
 # into a new table and into an existing one). Each engine is timed in a process of its own, in
 # process and through its plugin by turns: what one engine leaves behind (a database being
 # closed, a server still writing what it was sent) is not on the next one's clock, and neither
@@ -26,7 +27,7 @@ cd "$root"
 export CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true
 
 runs=${RUNS:-3}
-engines=${SPELAION_PLUGIN_ENGINES:-"postgres mysql mariadb sqlserver sqlite duckdb"}
+engines=${SPELAION_PLUGIN_ENGINES:-"postgres mysql mariadb sqlserver sqlite"}
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 
@@ -48,7 +49,7 @@ for engine in $engines; do
 done
 echo "building (optimised)…" >&2
 cargo build --release --bins "${packages[@]}" >&2
-cargo test --release -p spelaion-core --test grid_million --test import --no-run >&2
+cargo test --release -p spelaion-core --test import --no-run >&2
 
 target=$(cargo metadata --format-version 1 --no-deps | sed -E 's/.*"target_directory":"([^"]*)".*/\1/' | sed 's#\\\\#/#g')
 suffix=""
@@ -70,14 +71,6 @@ import() {
     sed -n "s/^.*\(DuckDB\|SQLite\|PostgreSQL\|MySQL\|MariaDB\|SQL Server\): 1000000 rows into \(a new\|an existing\) table in \(.*\)$/$label|\1: import into \2 table|\3/p" >> "$out"
 }
 
-# The million-row result. $1: the label, then the environment.
-result() {
-  local label=$1
-  shift
-  env "$@" cargo test --release -p spelaion-core --test grid_million -- --ignored --nocapture 2>&1 |
-    sed -n "s/^load 1,000,000 rows × 4 columns: \(.*\)$/$label|DuckDB: a result of 1000000 rows|\1/p" >> "$out"
-}
-
 # The import tests of the engines being measured.
 tests=""
 for engine in $engines; do
@@ -93,14 +86,8 @@ done
 
 for run in $(seq "$runs"); do
   echo "run $run of $runs…" >&2
-  case " $engines " in
-    *" duckdb "*)
-      # `env` needs something to set: a variable nothing reads.
-      result "in process" SPELAION_MEASURING=1
-      result "plugin" "${plugins[@]}"
-      ;;
-  esac
   for test in $tests; do
+    # `env` needs something to set: a variable nothing reads.
     import "in process" "$test" SPELAION_MEASURING=1
     import "plugin" "$test" "${plugins[@]}"
   done
