@@ -783,7 +783,7 @@ mod tests {
                 })
                 .await
                 .unwrap(),
-            driver.dialect(),
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
             std::sync::Arc::new(crate::ResultStore::new()),
         ));
         session.follow_transactions(&safeguards).await;

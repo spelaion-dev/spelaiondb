@@ -29,7 +29,7 @@ async fn session(database: &str) -> Option<Session> {
         .expect("connecting to SQL Server");
     Some(Session::new(
         conn,
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -134,7 +134,11 @@ async fn process_monitor_shows_the_current_sqlserver_session_without_admin_right
         .await;
     let result = match connected {
         Ok(conn) => {
-            let low = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+            let low = Session::new(
+                conn,
+                spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+                Arc::new(ResultStore::new()),
+            );
             let result = spelaion_core::list_processes(&low).await;
             drop(low);
             result

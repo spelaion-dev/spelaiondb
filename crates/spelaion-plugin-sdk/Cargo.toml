@@ -1,0 +1,20 @@
+[package]
+name = "spelaion-plugin-sdk"
+description = "The plugin's side of SpelaionDB's plugin protocol: a driver served over standard input and output (ADR-041)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+spelaion-driver-api.workspace = true
+spelaion-plugin-protocol.workspace = true
+arrow.workspace = true
+futures-util.workspace = true
+serde = "1"
+serde_json = "1"
+# io-std: the protocol is the program's standard input and output.
+tokio = { workspace = true, features = ["rt", "io-std", "io-util", "sync", "time", "macros"] }
+
+[lints]
+workspace = true

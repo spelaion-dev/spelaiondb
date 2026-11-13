@@ -234,7 +234,7 @@ async fn real(var: &str, driver: Box<dyn Driver>) -> Option<Session> {
     let conn = driver.connect(&params).await.expect("connecting");
     Some(Session::new(
         conn,
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }

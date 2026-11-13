@@ -27,7 +27,7 @@ async fn pg() -> Option<Session> {
     let conn = PostgresDriver.connect(&params).await.unwrap();
     Some(Session::new(
         conn,
-        PostgresDriver.dialect(),
+        spelaion_dialect::for_engine(PostgresDriver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -196,7 +196,7 @@ async fn sqlite_read_only_mode() {
         .unwrap();
         let session = Session::new(
             writer,
-            SqliteDriver::default().dialect(),
+            spelaion_dialect::for_engine(SqliteDriver::default().engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         );
         setup(
@@ -213,7 +213,7 @@ async fn sqlite_read_only_mode() {
     let conn = SqliteDriver::default().connect(&params).await.unwrap();
     let session = Session::new(
         conn,
-        SqliteDriver::default().dialect(),
+        spelaion_dialect::for_engine(SqliteDriver::default().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
 

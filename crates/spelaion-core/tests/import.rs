@@ -572,7 +572,7 @@ async fn postgres_imports() {
     };
     let session = Session::new(
         PostgresDriver.connect(&params).await.unwrap(),
-        PostgresDriver.dialect(),
+        spelaion_dialect::for_engine(PostgresDriver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     exercise(Engine {
@@ -603,7 +603,7 @@ async fn mysql_and_mariadb_import() {
         };
         let session = Session::new(
             driver.connect(&params).await.unwrap(),
-            driver.dialect(),
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         );
         exercise(Engine {
@@ -632,7 +632,7 @@ async fn sqlserver_imports() {
     };
     let master = Session::new(
         SqlServerDriver.connect(&connect("master")).await.unwrap(),
-        SqlServerDriver.dialect(),
+        spelaion_dialect::for_engine(SqlServerDriver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     run(
@@ -642,7 +642,7 @@ async fn sqlserver_imports() {
     .await;
     let session = Session::new(
         SqlServerDriver.connect(&connect("spelaion")).await.unwrap(),
-        SqlServerDriver.dialect(),
+        spelaion_dialect::for_engine(SqlServerDriver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     exercise(Engine {
@@ -676,7 +676,11 @@ async fn duckdb_imports() {
         .unwrap();
     exercise(Engine {
         label: "DuckDB",
-        session: Session::new(conn, driver.dialect(), Arc::new(ResultStore::new())),
+        session: Session::new(
+            conn,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        ),
         schema: "main",
         text_type: "varchar",
     })
@@ -697,7 +701,11 @@ async fn sqlite_imports() {
         .unwrap();
     exercise(Engine {
         label: "SQLite",
-        session: Session::new(conn, driver.dialect(), Arc::new(ResultStore::new())),
+        session: Session::new(
+            conn,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        ),
         schema: "main",
         text_type: "text",
     })
@@ -726,7 +734,7 @@ async fn unicode_csv_values_are_previewed_and_imported_unchanged() {
             })
             .await
             .unwrap(),
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     let source = ImportSource::File(csv);
@@ -788,7 +796,7 @@ async fn pasted_tables_and_views() {
             })
             .await
             .unwrap(),
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     let text = "| id | city |\n|---|---|\n| 1 | Zaragoza |\n| 2 | O'Higgins \\| Chile |\n";

@@ -49,7 +49,12 @@ async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
         .connect(&params)
         .await
         .unwrap_or_else(|e| panic!("connecting: {e}"));
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new())).with_masking(policy())
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
+    .with_masking(policy())
 }
 
 fn server(var: &str) -> Option<(String, u16)> {
@@ -737,7 +742,11 @@ async fn a_session_without_rules_masks_nothing() {
         })
         .await
         .unwrap();
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     setup("sqlite", &session).await;
     let id = run(
         "sqlite",

@@ -30,7 +30,7 @@ fn params(var: &str) -> Option<ConnectParams> {
 async fn session(driver: &dyn Driver, params: &ConnectParams) -> Session {
     Session::new(
         driver.connect(params).await.expect("connecting"),
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     )
 }

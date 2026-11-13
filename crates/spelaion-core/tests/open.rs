@@ -16,9 +16,7 @@ use spelaion_core::{
     CoreEvent, Engines, OpenConnection, OpenError, OpenOptions, ResultStore, RunRefused,
     TunnelPool, check_run, open_connection, test_tunnel,
 };
-use spelaion_driver_api::{
-    ConnectParams, Connection, Dialect, Driver, ExecOptions, Secret, StatementSpan, Value,
-};
+use spelaion_driver_api::{ConnectParams, Connection, Driver, ExecOptions, Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, NonInteractive, SecretRequest, TunnelState};
 
 /// Temporary, trusted repository with `.spelaion/` and a user directory.
@@ -166,37 +164,14 @@ async fn sqlite_from_config() {
     );
 }
 
-/// A dialect with no rules: a script is one statement, and nothing is quoted.
-struct NoRules;
-
-impl Dialect for NoRules {
-    fn name(&self) -> &'static str {
-        "postgres"
-    }
-
-    fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
-        vec![StatementSpan {
-            start: 0,
-            end: script.len(),
-        }]
-    }
-
-    fn quote_identifier(&self, ident: &str) -> String {
-        ident.into()
-    }
-}
-
-/// SQLite's own driver, except that it reports [`NoRules`] as its dialect.
-struct OwnRules(Arc<dyn Driver>);
+/// SQLite's own driver behind another value: what a driver that is not compiled in looks like
+/// to the core.
+struct Stand(Arc<dyn Driver>);
 
 #[async_trait]
-impl Driver for OwnRules {
-    fn engine(&self) -> &'static str {
+impl Driver for Stand {
+    fn engine(&self) -> &str {
         self.0.engine()
-    }
-
-    fn dialect(&self) -> Arc<dyn Dialect> {
-        Arc::new(NoRules)
     }
 
     async fn connect(
@@ -207,24 +182,23 @@ impl Driver for OwnRules {
     }
 }
 
-/// ADR-041: a driver is the wire, not the rules. One that reports a dialect of its own (as a
-/// plugin could) changes nothing: the session splits, classifies and guards with the core's
-/// dialect for that engine.
+/// ADR-041: a driver is the wire, not the rules. One put in place of an engine's brings no
+/// dialect: the session splits, classifies and guards with the core's dialect for that engine.
 #[tokio::test]
-async fn a_drivers_own_dialect_is_never_asked_for() {
-    let ws = Workspace::new("own-rules");
+async fn a_driver_put_in_place_brings_only_the_wire() {
+    let ws = Workspace::new("stand-in");
     ws.write("data/app.db", "");
     ws.write(
         ".spelaion/connections/local.toml",
-        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"data/app.db\"\n",
+        "schema_version = 1
+engine = \"sqlite\"
+database = \"data/app.db\"
+",
     );
     let sqlite = Engines::builtin()
         .get(Engine::Sqlite)
         .expect("SQLite is built in");
-    let driver: Arc<dyn Driver> = Arc::new(OwnRules(sqlite));
-    // The driver does answer with its own rules when asked.
-    assert_eq!(driver.dialect().split_statements("a; b").len(), 1);
-    let engines = Engines::builtin().with_driver(driver);
+    let engines = Engines::builtin().with_driver(Arc::new(Stand(sqlite)));
     let conn = ws
         .open_with("local", None, Arc::new(NonInteractive), &engines)
         .await
@@ -234,7 +208,7 @@ async fn a_drivers_own_dialect_is_never_asked_for() {
     assert_eq!(dialect.name(), "sqlite");
     assert_eq!(dialect.quote_identifier("a\"b"), "\"a\"\"b\"");
 
-    // Split by the core: three statements run, not one.
+    // Split by the core: three statements run.
     let script = "create table t (a int); insert into t values (41), (1); select sum(a) from t";
     let events: Vec<CoreEvent> = conn.session.run_script(script).collect().await;
     let finished = events
@@ -243,10 +217,13 @@ async fn a_drivers_own_dialect_is_never_asked_for() {
         .count();
     assert_eq!(finished, 3, "{events:?}");
 
-    // Guarded by the core: with no rules the `DROP` would hide behind the `select`, and the
-    // run would need no confirmation.
-    let hidden = "select 1; drop table t";
-    let refused = check_run(&conn.session, hidden, &Safeguards::default(), false);
+    // Guarded by the core: the `DROP` behind the `select` still asks.
+    let refused = check_run(
+        &conn.session,
+        "select 1; drop table t",
+        &Safeguards::default(),
+        false,
+    );
     assert!(
         matches!(refused, Err(RunRefused::NeedsConfirmation(_))),
         "{refused:?}"

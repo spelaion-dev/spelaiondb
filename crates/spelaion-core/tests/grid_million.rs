@@ -23,7 +23,11 @@ async fn a_million_rows() {
         })
         .await
         .unwrap();
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     let started = Instant::now();
     let events: Vec<CoreEvent> = session
         .run_script(

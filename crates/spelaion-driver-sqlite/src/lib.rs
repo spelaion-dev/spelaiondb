@@ -16,9 +16,9 @@ use async_trait::async_trait;
 use rusqlite::OpenFlags;
 use spelaion_driver_api::thread_cancel::{Canceller, Closer, Work};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
-    EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo,
-    ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo, TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, Driver, DriverError, EventStream,
+    ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo, ReferencingKey,
+    Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -69,10 +69,6 @@ pub struct SqliteDriver {
 impl Driver for SqliteDriver {
     fn engine(&self) -> &'static str {
         "sqlite"
-    }
-
-    fn dialect(&self) -> Arc<dyn Dialect> {
-        Arc::new(SqliteDialect)
     }
 
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {

@@ -19,10 +19,10 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
-    Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive,
-    LikeFilter, NameFilter, Notice, ObjectInfo, PlanMode, ReferencingKey, Result, ResultSchema,
-    SchemaColumn, SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
+    CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext, Driver,
+    DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
+    NameFilter, Notice, ObjectInfo, PlanMode, ReferencingKey, Result, ResultSchema, SchemaColumn,
+    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -124,10 +124,6 @@ async fn open(params: &ConnectParams) -> Result<SqlClient> {
 impl Driver for SqlServerDriver {
     fn engine(&self) -> &'static str {
         "sqlserver"
-    }
-
-    fn dialect(&self) -> Arc<dyn Dialect> {
-        Arc::new(SqlServerDialect)
     }
 
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {

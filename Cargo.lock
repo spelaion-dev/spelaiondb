@@ -5842,6 +5842,7 @@ dependencies = [
  "spelaion-driver-postgres",
  "spelaion-driver-sqlite",
  "spelaion-driver-sqlserver",
+ "spelaion-plugin-host",
  "spelaion-ssh",
  "spelaion-store",
  "sqlparser",
@@ -5890,6 +5891,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "futures-util",
+ "serde",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -5993,6 +5995,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "spelaion-plugin-host"
+version = "0.9.0"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "spelaion-driver-api",
+ "spelaion-plugin-protocol",
+ "tokio",
+]
+
+[[package]]
+name = "spelaion-plugin-protocol"
+version = "0.9.0"
+dependencies = [
+ "arrow",
+ "serde",
+ "serde_json",
+ "spelaion-driver-api",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "spelaion-plugin-sdk"
+version = "0.9.0"
+dependencies = [
+ "arrow",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "spelaion-driver-api",
+ "spelaion-plugin-protocol",
+ "tokio",
+]
+
+[[package]]
 name = "spelaion-ssh"
 version = "0.9.0"
 dependencies = [
@@ -6015,6 +6056,22 @@ version = "0.9.0"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "spelaion-test-plugin"
+version = "0.9.0"
+dependencies = [
+ "arrow",
+ "async-stream",
+ "async-trait",
+ "futures-util",
+ "serde_json",
+ "spelaion-driver-api",
+ "spelaion-plugin-host",
+ "spelaion-plugin-protocol",
+ "spelaion-plugin-sdk",
+ "tokio",
 ]
 
 [[package]]

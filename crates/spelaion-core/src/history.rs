@@ -1529,7 +1529,10 @@ mod tests {
                 state: state.clone(),
                 capabilities: Default::default(),
             }),
-            crate::open::test_driver(spelaion_config::Engine::Sqlite).dialect(),
+            spelaion_dialect::for_engine(
+                crate::open::test_driver(spelaion_config::Engine::Sqlite).engine(),
+            )
+            .expect("a dialect"),
             Arc::new(ResultStore::new()),
         ));
         (history, session, state, path)
@@ -1578,7 +1581,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let session = Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            connection,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let (history, _, _, _) = context_history(variable);
         let sql = |table: &str| {
             format!(
@@ -1746,7 +1753,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let session = Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            connection,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let (history, _, _, _) = context_history("sqlserver-snapshot");
         let setup:Vec<_>=session.run_script("CREATE TABLE #history_context(v int); INSERT INTO #history_context VALUES(1),(3); UPDATE #history_context SET v=v+1;").collect().await;
         assert!(
@@ -1946,7 +1957,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let session = Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            connection,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let events: Vec<_> = history
             .run_script_in_context(
                 &session,
@@ -2574,7 +2589,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let session = Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()));
+        let session = Session::new(
+            connection,
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+            Arc::new(ResultStore::new()),
+        );
         let events: Vec<_> = history
             .run_script(
                 &session,

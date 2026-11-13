@@ -86,7 +86,11 @@ struct Engine {
 }
 
 fn session(driver: &dyn Driver, connection: Box<dyn spelaion_driver_api::Connection>) -> Session {
-    Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        connection,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 async fn connect(driver: &dyn Driver, params: &ConnectParams) -> Session {

@@ -1114,7 +1114,7 @@ mod tests {
     async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
         let session = Session::new(
             driver.connect(&params).await.expect("connecting"),
-            driver.dialect(),
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         );
         // As an editor tab's session does (ADR-031).

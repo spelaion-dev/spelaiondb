@@ -128,7 +128,7 @@ async fn postgres() -> Option<Session> {
     let driver = PostgresDriver;
     Some(Session::new(
         driver.connect(&params).await.unwrap(),
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -227,7 +227,7 @@ async fn mysql_session_as(
     };
     Ok(Session::new(
         driver.connect(&params).await?,
-        driver.dialect(),
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -399,7 +399,7 @@ async fn mysql_sessions() -> Vec<(&'static str, Session)> {
         };
         let session = Session::new(
             driver.connect(&params).await.unwrap(),
-            driver.dialect(),
+            spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         );
         sessions.push((var, session));
@@ -646,7 +646,7 @@ async fn sqlserver() -> Option<Session> {
     let master = SqlServerDriver.connect(&connect("master")).await.unwrap();
     let master = Session::new(
         master,
-        SqlServerDriver.dialect(),
+        spelaion_dialect::for_engine(SqlServerDriver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
     // Two tests may create it at once on a new server: whichever loses finds it there.
@@ -656,7 +656,7 @@ async fn sqlserver() -> Option<Session> {
         .await;
     Some(Session::new(
         SqlServerDriver.connect(&connect("spelaion")).await.unwrap(),
-        SqlServerDriver.dialect(),
+        spelaion_dialect::for_engine(SqlServerDriver.engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -872,7 +872,11 @@ async fn duckdb(database: &str, read_only: bool) -> Session {
         })
         .await
         .unwrap();
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 #[tokio::test]
@@ -948,7 +952,11 @@ async fn mariadb_schema_replacement_preserves_tables() {
         })
         .await
         .unwrap();
-    let session = Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()));
+    let session = Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    );
     let schema = format!("agent_ddl_schema_{}", std::process::id());
     let drops = [format!("drop database if exists {schema}")];
     let body = async {

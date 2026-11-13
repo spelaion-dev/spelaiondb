@@ -127,31 +127,19 @@ mod tests {
         }
     }
 
-    /// ADR-041: the core reads SQL with its own dialect and never asks the driver for one.
-    /// While the drivers are still compiled in, the two must be the same.
+    /// ADR-041: the core reads SQL with its own dialect; a driver has none to give.
     #[test]
-    fn every_supported_engine_has_the_cores_dialect_and_its_driver_agrees() {
-        let engines = Engines::builtin();
-        let script = "select 'a;b'; select \"c;d\" -- e;\n; /* f; */ select [g;h], `i;j`";
-        let name = "a\"b`c]d";
+    fn every_supported_engine_has_the_cores_dialect() {
         for info in engine_catalog() {
             let Some(engine) = info.engine else { continue };
-            let ours =
+            let dialect =
                 crate::dialect_of(engine).unwrap_or_else(|| panic!("{} has no dialect", info.id));
-            let drivers = engines.get(engine).expect("a driver").dialect();
-            assert_eq!(ours.name(), drivers.name(), "{}", info.id);
-            assert_eq!(
-                ours.split_statements(script),
-                drivers.split_statements(script),
-                "{}",
-                info.id
-            );
-            assert_eq!(
-                ours.quote_identifier(name),
-                drivers.quote_identifier(name),
-                "{}",
-                info.id
-            );
+            // MariaDB reads SQL as MySQL does; every other engine's dialect bears its name.
+            let expected = match engine {
+                Engine::Mariadb => "mysql",
+                other => other.as_str(),
+            };
+            assert_eq!(dialect.name(), expected, "{}", info.id);
         }
     }
 }

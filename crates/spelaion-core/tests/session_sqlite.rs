@@ -16,7 +16,11 @@ async fn session() -> Session {
         })
         .await
         .expect("opening :memory:");
-    Session::new(conn, driver.dialect(), Arc::new(ResultStore::new()))
+    Session::new(
+        conn,
+        spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+        Arc::new(ResultStore::new()),
+    )
 }
 
 #[tokio::test]

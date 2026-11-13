@@ -41,7 +41,11 @@ async fn servers() -> Vec<(&'static str, Session)> {
         let conn = driver.connect(&params).await.expect("connecting");
         out.push((
             label,
-            Session::new(conn, driver.dialect(), Arc::new(ResultStore::new())),
+            Session::new(
+                conn,
+                spelaion_dialect::for_engine(driver.engine()).expect("a dialect"),
+                Arc::new(ResultStore::new()),
+            ),
         ));
     }
     out
