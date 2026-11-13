@@ -170,7 +170,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
 
 /// A quoted string or identifier, or a comment, with the offset just past it (the end of the
 /// text when it is not closed).
-pub(crate) enum Skipped {
+pub enum Skipped {
     /// `'…'`, `"…"`, `` `…` `` or `[…]`: part of the statement.
     Quoted(usize),
     /// `--…` up to and with its line break, or `/*…*/`.
@@ -178,7 +178,7 @@ pub(crate) enum Skipped {
 }
 
 /// What starts at byte `i` of `script`, read as the splitter reads it.
-pub(crate) fn skip_quote_or_comment(script: &str, i: usize) -> Option<Skipped> {
+pub fn skip_quote_or_comment(script: &str, i: usize) -> Option<Skipped> {
     let b = script.as_bytes();
     match *b.get(i)? {
         c @ (b'\'' | b'"' | b'`') => Some(Skipped::Quoted(skip_until(b, i + 1, c, true))),
@@ -200,7 +200,7 @@ pub(crate) fn skip_quote_or_comment(script: &str, i: usize) -> Option<Skipped> {
 
 /// The offsets of the lines of `sql` that start outside a quote or a comment (the first
 /// line included).
-pub(crate) fn code_line_starts(sql: &str) -> Vec<usize> {
+pub fn code_line_starts(sql: &str) -> Vec<usize> {
     let b = sql.as_bytes();
     let mut starts = Vec::new();
     let mut i = 0;

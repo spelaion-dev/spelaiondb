@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn keyset_pages_follow_the_order_then_the_key() {
-        let pg = spelaion_driver_postgres::PostgresDialect;
+        let pg = spelaion_dialect::PostgresDialect;
         let k = plan(
             &pg,
             "select * from orders where customer <> 'x' order by customer desc",
@@ -651,7 +651,7 @@ mod tests {
             "SELECT * FROM orders WHERE (customer <> 'x') AND ((orders.customer < 'o''b') OR (orders.customer = 'o''b' AND orders.id > 7)) ORDER BY orders.customer DESC, orders.id\nLIMIT 100"
         );
         // An alias qualifies the columns; SQL Server fetches with OFFSET 0 … FETCH.
-        let ms = spelaion_driver_sqlserver::SqlServerDialect;
+        let ms = spelaion_dialect::SqlServerDialect;
         let k = plan(
             &ms,
             "select o.id, o.customer as who from shop.orders o",
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn only_queries_that_page_exactly_are_paged() {
-        let pg = spelaion_driver_postgres::PostgresDialect;
+        let pg = spelaion_dialect::PostgresDialect;
         let table = orders();
         for sql in [
             // The key is not in the result.
@@ -710,7 +710,7 @@ mod tests {
 
     #[test]
     fn counts_keep_working_for_pageable_queries() {
-        let d = spelaion_driver_sqlite::SqliteDialect;
+        let d = spelaion_dialect::SqliteDialect;
         assert_eq!(
             query_count_sql(&d, "select id from orders order by id;"),
             Some("SELECT COUNT(*) FROM (SELECT 1 FROM orders) AS spelaion_counted".into())

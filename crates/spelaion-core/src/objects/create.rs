@@ -296,9 +296,9 @@ pub async fn apply_create_table(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_mysql::MysqlDialect;
-    use spelaion_driver_postgres::PostgresDialect;
-    use spelaion_driver_sqlite::SqliteDialect;
+    use spelaion_dialect::MysqlDialect;
+    use spelaion_dialect::PostgresDialect;
+    use spelaion_dialect::SqliteDialect;
 
     fn table(columns: &[(&str, &str)]) -> NewTable {
         NewTable {

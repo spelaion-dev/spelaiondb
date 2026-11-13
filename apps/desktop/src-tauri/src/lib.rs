@@ -2996,22 +2996,13 @@ async fn create_database(engine: String, path: String) -> CmdResult<()> {
 /// engine's dialect in the core like a script run, for Ctrl+Enter.
 #[tauri::command]
 #[specta::specta]
-async fn statement_at(
-    engine: String,
-    sql: String,
-    offset: u32,
-    state: State<'_, AppState>,
-) -> CmdResult<Option<TextSpan>> {
-    let driver = state
-        .engines
-        .get(engine_named(&engine)?)
-        .ok_or("no driver for this engine")?;
+async fn statement_at(engine: String, sql: String, offset: u32) -> CmdResult<Option<TextSpan>> {
+    let dialect =
+        spelaion_core::dialect_of(engine_named(&engine)?).ok_or("no driver for this engine")?;
     Ok(
-        spelaion_core::statement_at(driver.dialect().as_ref(), &sql, offset as usize).map(|span| {
-            TextSpan {
-                start: u32::try_from(span.start).unwrap_or(u32::MAX),
-                end: u32::try_from(span.end).unwrap_or(u32::MAX),
-            }
+        spelaion_core::statement_at(dialect.as_ref(), &sql, offset as usize).map(|span| TextSpan {
+            start: u32::try_from(span.start).unwrap_or(u32::MAX),
+            end: u32::try_from(span.end).unwrap_or(u32::MAX),
         }),
     )
 }

@@ -9,14 +9,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use spelaion_config::{
-    ConnectionId, HopDraft, PasswordChoice, Resolver, Source, SshAuth, SystemBackend, TrustStore,
-    TunnelDraft, load,
+    ConnectionId, Engine, HopDraft, PasswordChoice, Resolver, Safeguards, Source, SshAuth,
+    SystemBackend, TrustStore, TunnelDraft, load,
 };
 use spelaion_core::{
-    CoreEvent, Engines, OpenConnection, OpenError, OpenOptions, ResultStore, TunnelPool,
-    open_connection, test_tunnel,
+    CoreEvent, Engines, OpenConnection, OpenError, OpenOptions, ResultStore, RunRefused,
+    TunnelPool, check_run, open_connection, test_tunnel,
 };
-use spelaion_driver_api::{ExecOptions, Secret, Value};
+use spelaion_driver_api::{
+    ConnectParams, Connection, Dialect, Driver, ExecOptions, Secret, StatementSpan, Value,
+};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, NonInteractive, SecretRequest, TunnelState};
 
 /// Temporary, trusted repository with `.spelaion/` and a user directory.
@@ -50,6 +52,16 @@ impl Workspace {
         password: Option<Secret>,
         ui: Arc<dyn Interaction>,
     ) -> Result<OpenConnection, OpenError> {
+        self.open_with(id, password, ui, &Engines::builtin()).await
+    }
+
+    async fn open_with(
+        &self,
+        id: &str,
+        password: Option<Secret>,
+        ui: Arc<dyn Interaction>,
+        engines: &Engines,
+    ) -> Result<OpenConnection, OpenError> {
         let config = load(Some(&self.base.join("repo")), &self.base.join("user"));
         assert!(config.problems.is_empty(), "{:?}", config.problems);
         // The repository is trusted as the test wrote it (ADR-022 pins its content).
@@ -73,13 +85,7 @@ impl Workspace {
             password,
             read_only_session: false,
         };
-        open_connection(
-            resolved,
-            &Engines::builtin(),
-            options,
-            Arc::new(ResultStore::new()),
-        )
-        .await
+        open_connection(resolved, engines, options, Arc::new(ResultStore::new())).await
     }
 }
 
@@ -158,6 +164,94 @@ async fn sqlite_from_config() {
         .await,
         "42"
     );
+}
+
+/// A dialect with no rules: a script is one statement, and nothing is quoted.
+struct NoRules;
+
+impl Dialect for NoRules {
+    fn name(&self) -> &'static str {
+        "postgres"
+    }
+
+    fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
+        vec![StatementSpan {
+            start: 0,
+            end: script.len(),
+        }]
+    }
+
+    fn quote_identifier(&self, ident: &str) -> String {
+        ident.into()
+    }
+}
+
+/// SQLite's own driver, except that it reports [`NoRules`] as its dialect.
+struct OwnRules(Arc<dyn Driver>);
+
+#[async_trait]
+impl Driver for OwnRules {
+    fn engine(&self) -> &'static str {
+        self.0.engine()
+    }
+
+    fn dialect(&self) -> Arc<dyn Dialect> {
+        Arc::new(NoRules)
+    }
+
+    async fn connect(
+        &self,
+        params: &ConnectParams,
+    ) -> spelaion_driver_api::Result<Box<dyn Connection>> {
+        self.0.connect(params).await
+    }
+}
+
+/// ADR-041: a driver is the wire, not the rules. One that reports a dialect of its own (as a
+/// plugin could) changes nothing: the session splits, classifies and guards with the core's
+/// dialect for that engine.
+#[tokio::test]
+async fn a_drivers_own_dialect_is_never_asked_for() {
+    let ws = Workspace::new("own-rules");
+    ws.write("data/app.db", "");
+    ws.write(
+        ".spelaion/connections/local.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"data/app.db\"\n",
+    );
+    let sqlite = Engines::builtin()
+        .get(Engine::Sqlite)
+        .expect("SQLite is built in");
+    let driver: Arc<dyn Driver> = Arc::new(OwnRules(sqlite));
+    // The driver does answer with its own rules when asked.
+    assert_eq!(driver.dialect().split_statements("a; b").len(), 1);
+    let engines = Engines::builtin().with_driver(driver);
+    let conn = ws
+        .open_with("local", None, Arc::new(NonInteractive), &engines)
+        .await
+        .unwrap();
+
+    let dialect = conn.session.dialect();
+    assert_eq!(dialect.name(), "sqlite");
+    assert_eq!(dialect.quote_identifier("a\"b"), "\"a\"\"b\"");
+
+    // Split by the core: three statements run, not one.
+    let script = "create table t (a int); insert into t values (41), (1); select sum(a) from t";
+    let events: Vec<CoreEvent> = conn.session.run_script(script).collect().await;
+    let finished = events
+        .iter()
+        .filter(|e| matches!(e, CoreEvent::StatementFinished { .. }))
+        .count();
+    assert_eq!(finished, 3, "{events:?}");
+
+    // Guarded by the core: with no rules the `DROP` would hide behind the `select`, and the
+    // run would need no confirmation.
+    let hidden = "select 1; drop table t";
+    let refused = check_run(&conn.session, hidden, &Safeguards::default(), false);
+    assert!(
+        matches!(refused, Err(RunRefused::NeedsConfirmation(_))),
+        "{refused:?}"
+    );
+    assert_eq!(first_value(&conn, "select sum(a) from t").await, "42");
 }
 
 #[tokio::test]

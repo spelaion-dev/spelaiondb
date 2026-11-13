@@ -7,7 +7,7 @@
 //! through the SSH tunnel when there is one.
 
 mod decode;
-mod dialect;
+use spelaion_dialect::mysql as dialect;
 mod introspect;
 mod objects;
 

@@ -103,7 +103,7 @@ impl Dialect for MysqlModeDialect {
 }
 
 /// First word of a statement, after comments (to recognise its kind).
-pub(crate) fn first_word(sql: &str) -> &str {
+pub fn first_word(sql: &str) -> &str {
     let bytes = sql.as_bytes();
     let mut i = 0;
     loop {

@@ -8,7 +8,7 @@
 //! explorer). So the first connection to a file opens the database and keeps a root handle;
 //! the others are clones of it. The file is closed when the last connection closes.
 
-mod dialect;
+use spelaion_dialect::duckdb as dialect;
 mod exec;
 mod format;
 mod introspect;

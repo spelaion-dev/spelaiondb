@@ -769,12 +769,12 @@ fn list(items: impl Iterator<Item = impl AsRef<str>>, separator: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spelaion_dialect::SqliteDialect;
     use spelaion_driver_api::{ColumnInfo, ObjectInfo};
-    use spelaion_driver_sqlite::SqliteDialect;
 
     async fn metadata_session(safeguards: spelaion_config::Safeguards) -> std::sync::Arc<Session> {
-        use spelaion_driver_api::{ConnectParams, Driver};
-        let driver = spelaion_driver_sqlite::SqliteDriver::default();
+        use spelaion_driver_api::ConnectParams;
+        let driver = crate::open::test_driver(spelaion_config::Engine::Sqlite);
         let session = std::sync::Arc::new(Session::new(
             driver
                 .connect(&ConnectParams {

@@ -144,7 +144,7 @@ pub use objects::{
 };
 pub use open::{
     Engines, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
-    open_connection, open_route, test_tunnel,
+    create_file_database, dialect_of, open_connection, open_route, test_tunnel,
 };
 pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
 pub use params::{ParamError, bind_params, script_params};
@@ -214,19 +214,3 @@ pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,
     agent_view, check_write,
 };
-
-/// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file
-/// is never touched.
-pub fn create_file_database(
-    engine: spelaion_config::Engine,
-    path: &std::path::Path,
-) -> Result<(), spelaion_driver_api::DriverError> {
-    use spelaion_config::Engine;
-    match engine {
-        Engine::Sqlite => spelaion_driver_sqlite::create_database(path),
-        Engine::Duckdb => spelaion_driver_duckdb::create_database(path),
-        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => Err(
-            spelaion_driver_api::DriverError::Other(format!("{} is not a file", engine.as_str())),
-        ),
-    }
-}

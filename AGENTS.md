@@ -17,8 +17,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelaion-driver-api`: driver contract (ADR-005). Engines are becoming plugins in
   their own processes, each in its own repository (ADR-041, ADR-042, after v0.9): anything
   added to this contract must be able to travel as a message (owned data; no closures, trait
-  objects or streams in parameters), and new core code does not name a driver crate. Results
-  in Arrow with
+  objects or streams in parameters), and `spelaion-core/src` names a driver crate only in
+  `open.rs`, where `Engines` is built (its unit tests take a driver from `open::test_driver`).
+  Results in Arrow with
   `spelaion.logical` / `spelaion.native_type` metadata per column; `Value` for single cells.
   The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
@@ -30,7 +31,7 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   user variables with a prepared `SET`, then reads with the text protocol;
   `Capabilities::bound_params` is false for SQLite over SSH).
   `Dialect::code_ranges` is what lies outside a script's strings, quoted names and comments, as
-  that engine's splitter reads them (each driver builds it from its splitter's own pieces with
+  that engine's splitter reads them (each dialect builds it from its splitter's own pieces with
   `code_ranges`): the editor's `:name` placeholders (`spelaion-core`'s `params.rs`) are looked
   for only there.
   `thread_cancel` is the cancel of the engines that run on a thread of their own (DuckDB, local
@@ -38,15 +39,26 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   remembered for everything sent before it (a queued statement never starts, a running one is
   interrupted again until it ends) and never reaches what is sent after it. Every cancel test
   is bounded with `tokio::time::timeout`, so a lost cancel fails in seconds.
+- `crates/spelaion-dialect`: each engine's `Dialect` (statement splitting, quoting, code
+  ranges), one file per engine, with their tests. Only text: no network, no native library.
+  They are the core's rules, not the driver's (ADR-041): the core takes an engine's dialect
+  from `for_engine` (`spelaion-core`'s `dialect_of`), never from `Driver::dialect`, and a driver
+  uses its engine's file only for what it writes itself (the names in its catalog queries,
+  the words it must recognise in a statement it sends). A new engine's dialect is added here,
+  with its name in `for_engine`. MySQL's splitter (`mysql.rs`) counts a statement written only
+  as executable comments (how `mysqldump` writes views and triggers) as a statement, and reads
+  quotes as the session's `sql_mode` does (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`):
+  `Dialect::with_sql_mode` gives the session's dialect, which `spelaion-core`'s `sql_mode.rs`
+  reads when the session opens and after a statement that names `sql_mode`. T-SQL batches
+  (`GO`, `BEGIN … END`) are split in `sqlserver.rs`; a `DECLARE` keeps the rest of its batch,
+  where its variables live (the guard still checks each statement in it). SQLite's
+  `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
+  dot-command away from the server's shell: any change to them needs its tests there too.
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
 - `crates/spelaion-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
-  per connection). Its splitter counts a statement written only as executable comments
-  (how `mysqldump` writes views and triggers) as a statement, and reads quotes as the
-  session's `sql_mode` does (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`): `Dialect::with_sql_mode`
-  gives the session's dialect, which `spelaion-core`'s `sql_mode.rs` reads when the session
-  opens and after a statement that names `sql_mode`. The core writes a MySQL string that holds
+  per connection). Its dialect is `spelaion-dialect`'s `mysql.rs`. The core writes a MySQL string that holds
   a backslash as `_utf8mb4 X'…'` (`export::sql_literal`), which every mode reads the same. Where only a plain string
   may go (`COMMENT`, `IDENTIFIED BY`), `objects::ddl::mysql_string` escapes a backslash only when
   the session's mode reads it as an escape. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
@@ -62,9 +74,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   reach the shell. Catalog queries are shared in `catalog.rs`. Tests against
   `testing/docker/sqlitehost` with `SPELAION_TEST_SSH`.
 - `crates/spelaion-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
-  (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a `DECLARE` keeps the rest of
-  its batch, where its variables live (the guard still checks each statement in it); a batch may return
-  several result sets. Cancel is a TDS Attention through a patched tiberius in
+  (ADR-017). Its dialect, with the T-SQL batch splitting, is `spelaion-dialect`'s
+  `sqlserver.rs`; a batch may return several result sets. Cancel is a TDS Attention through a patched tiberius in
   `vendor/tiberius` (read its `PATCHED.md` before upgrading). Tests against the Docker SQL
   Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`. `datetime2`, `datetimeoffset` and `time` are
   text with their native type, exactly as the server writes them (100 ns and the value's own

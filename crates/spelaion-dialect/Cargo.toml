@@ -1,0 +1,15 @@
+[package]
+name = "spelaion-dialect"
+description = "Each engine's SQL dialect for SpelaionDB: statement splitting, quoting and code ranges (ADR-041)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Only text: no network, no native library, no engine's client. The core decides what may run
+# with these, whatever program talks to the server (ADR-041).
+[dependencies]
+spelaion-driver-api.workspace = true
+
+[lints]
+workspace = true
