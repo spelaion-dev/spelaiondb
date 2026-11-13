@@ -16,7 +16,9 @@ use sqlparser::ast::{AlterTableOperation, Statement, visit_statements};
 use sqlparser::parser::Parser;
 
 use crate::Session;
-use crate::classify::{classify_read_only, reaches_outside, reject_mysql_executable_comments};
+use crate::classify::{
+    classify_read_only, reaches_outside, reject_mysql_executable_comments, reject_unicode_escapes,
+};
 use crate::guard::{Risk, destructive, sql_dialect};
 use crate::readonly::DUCKDB_NO_EXTERNAL_ACCESS;
 
@@ -147,6 +149,7 @@ const CLIENT_GRACE: Duration = Duration::from_secs(2);
 pub fn check_write(dialect: &dyn Dialect, sql: &str) -> Result<(), String> {
     let engine = dialect.name();
     reject_mysql_executable_comments(engine, sql)?;
+    reject_unicode_escapes(engine, sql)?;
     if dialect.split_statements(sql).len() != 1 {
         return Err("exactly one statement per call".into());
     }
@@ -271,6 +274,16 @@ impl Session {
         let sql = sql.trim().trim_end_matches(';').trim();
         check_write(self.dialect().as_ref(), sql).map_err(WriteError::Rejected)?;
         let started = Instant::now();
+        // Strings are read by the server as `check_write` read them (SDB-116).
+        if engine == "mysql" {
+            match tokio::time::timeout(limits.timeout, self.mysql_default_quoting()).await {
+                Ok(checked) => checked.map_err(WriteError::Rejected)?,
+                Err(_) => {
+                    let _ = self.cancel().await;
+                    return Err(WriteError::Timeout(limits.timeout));
+                }
+            }
+        }
         let run = async {
             if engine == "duckdb" {
                 self.control(DUCKDB_NO_EXTERNAL_ACCESS).await?;
@@ -346,6 +359,39 @@ mod tests {
     use spelaion_driver_postgres::PostgresDialect;
     use spelaion_driver_sqlite::SqliteDialect;
     use spelaion_driver_sqlserver::SqlServerDialect;
+
+    #[test]
+    fn postgres_writes_refuse_unicode_escapes_and_sql_given_as_text() {
+        for (sql, why) in [
+            (
+                r#"insert into log select U&"pg_r\0065ad_file"('/etc/passwd')"#,
+                "Unicode escapes",
+            ),
+            (
+                r#"update t set v = U&"set_c\006Fnfig"('a', 'b', false) where id = 1"#,
+                "Unicode escapes",
+            ),
+            (
+                "insert into log select query_to_xml('select pg_terminate_backend(1)', true, true, '')",
+                "query_to_xml",
+            ),
+            (
+                "update t set v = (select count(*) from ts_stat('select 1::tsvector')) where id = 1",
+                "ts_stat",
+            ),
+            (
+                "insert into log select * from dblink_fetch('c', 1) as f(v text)",
+                "dblink_fetch",
+            ),
+            (
+                "update t set v = pg_advisory_unlock_all()::text where id = 1",
+                "pg_advisory_unlock_all",
+            ),
+        ] {
+            let err = check_write(&PostgresDialect, sql).expect_err(sql);
+            assert!(err.contains(why), "{sql}: {err}");
+        }
+    }
 
     #[test]
     fn writes_that_hurt_or_escape_are_refused() {

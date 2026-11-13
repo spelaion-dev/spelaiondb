@@ -5,16 +5,20 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use arrow::array::{Array, RecordBatch};
+use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::compute::{concat, interleave_record_batch};
 use arrow::error::ArrowError;
 use arrow::ipc::writer::StreamWriter;
 use spelaion_driver_api::{ResultSchema, Value};
 
+use crate::chart::{self, ChartData, ChartError, ChartRequest};
+use crate::edit::EditError;
 use crate::filter::{ColumnFilter, matches, validate};
 use crate::find::{FindMatches, FindQuery, FindTicket, search};
+use crate::masking::{MaskPolicy, mask_batch, masked_schema};
+use crate::pending::{EditOutcome, PendingEdit, PendingEdits};
 use crate::selection_stats::{self, CellBlock, SelectionStats, StatsTicket};
-use crate::sort::{SortKey, ViewError, sorted_rows};
+use crate::sort::{SortKey, ViewError, sorted_instants, sorted_rows};
 
 /// Identifier of a result within a [`ResultStore`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -45,11 +49,66 @@ pub struct StoredResult {
     find_latest: Arc<AtomicU64>,
     /// The number of the latest selection calculation started (or cancelled).
     stats_latest: Arc<AtomicU64>,
+    /// The number of the latest chart started (or cancelled).
+    chart_latest: Arc<AtomicU64>,
+    /// The edits of a table data page not yet applied (ADR-044), by position in the view.
+    pending: PendingEdits,
+    /// Column masking (ADR-051): the masked columns, their original metadata, and per batch
+    /// the original arrays that were replaced by the mask. Read only by [`Self::reveal`].
+    masking: Option<Masked>,
+    /// Where the rows were read (SDB-137); `None` when it is not known, and then nothing is
+    /// written from these rows.
+    source: Option<ResultSource>,
+}
+
+/// Where a result's rows were read (SDB-137): the session that ran the statement and that
+/// session's database while it ran (`None` where the engine has no database to change).
+/// Edit statements are written only through the same session, still in the same database
+/// ([`crate::EditTarget`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultSource {
+    pub(crate) session: u64,
+    pub(crate) database: Option<String>,
+}
+
+/// What a masked result keeps aside (ADR-051).
+#[derive(Debug)]
+struct Masked {
+    /// Positions of the masked columns, in order.
+    columns: Vec<usize>,
+    /// The schema the session reported, before masking.
+    original: Arc<ResultSchema>,
+    /// Per batch (as `batches`), the original arrays of `columns`, in their order.
+    values: Vec<Vec<ArrayRef>>,
+}
+
+/// One cell's original value, revealed on the user's request (ADR-051).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RevealedCell {
+    pub column: String,
+    pub value: Value,
+    /// The column's type before masking.
+    pub logical: spelaion_driver_api::LogicalType,
+    pub native_type: String,
+}
+
+/// Why a cell cannot be revealed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RevealError {
+    #[error("there is no such cell")]
+    NoSuchCell,
+    #[error("the column is not masked")]
+    NotMasked,
 }
 
 impl StoredResult {
     fn new(schema: Arc<ResultSchema>) -> Self {
+        Self::with_masking(schema, None)
+    }
+
+    fn with_masking(schema: Arc<ResultSchema>, masking: Option<Masked>) -> Self {
         Self {
+            masking,
             schema,
             batches: Vec::new(),
             starts: Vec::new(),
@@ -63,6 +122,41 @@ impl StoredResult {
             find: None,
             find_latest: Arc::new(AtomicU64::new(0)),
             stats_latest: Arc::new(AtomicU64::new(0)),
+            chart_latest: Arc::new(AtomicU64::new(0)),
+            pending: PendingEdits::default(),
+            source: None,
+        }
+    }
+
+    /// Where the rows were read (SDB-137), if known.
+    pub fn source(&self) -> Option<&ResultSource> {
+        self.source.as_ref()
+    }
+
+    /// The edits of this page not yet applied (ADR-044).
+    pub fn pending(&self) -> &PendingEdits {
+        &self.pending
+    }
+
+    /// Does one edit to this page's pending edits (or undoes or redoes one).
+    pub fn edit_pending(&mut self, edit: PendingEdit) -> Result<EditOutcome, EditError> {
+        let mut pending = std::mem::take(&mut self.pending);
+        let outcome = pending.edit(self, edit);
+        self.pending = pending;
+        outcome
+    }
+
+    /// Forgets the pending edits and their history (they were applied).
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
+    }
+
+    /// Pending edits name rows by position: the view cannot change under them.
+    fn check_unedited(&self) -> Result<(), ViewError> {
+        if self.pending.is_empty() {
+            Ok(())
+        } else {
+            Err(ViewError::PendingEdits)
         }
     }
 
@@ -98,6 +192,9 @@ impl StoredResult {
     /// Sorts the rows by one column (`None` goes back to the order the server sent). Every
     /// later window, copy and export sees the new order.
     pub fn sort(&mut self, key: Option<SortKey>) -> Result<(), ViewError> {
+        if self.sort_key() != key {
+            self.check_unedited()?;
+        }
         let Some(key) = key else {
             self.sort = None;
             self.rebuild_view();
@@ -109,6 +206,9 @@ impl StoredResult {
             .columns
             .get(key.column)
             .ok_or(ViewError::NoSuchColumn(key.column))?;
+        if self.is_masked(key.column) {
+            return Err(ViewError::Masked(meta.name.clone()));
+        }
         let parts: Vec<&dyn Array> = self
             .batches
             .iter()
@@ -118,7 +218,12 @@ impl StoredResult {
             Vec::new()
         } else {
             let values = concat(&parts).map_err(|_| ViewError::UnexpectedArray(key.column))?;
-            sorted_rows(values.as_ref(), meta.logical, key)?
+            match crate::temporal::text_temporal(meta) {
+                Some(spelaion_driver_api::LogicalType::TimestampTz) => {
+                    sorted_instants(values.as_ref(), key)?
+                }
+                _ => sorted_rows(values.as_ref(), meta.logical, key)?,
+            }
         };
         self.sort = Some((key, rows));
         self.rebuild_view();
@@ -129,6 +234,9 @@ impl StoredResult {
     /// ignoring case; `None` or blank shows every row again. Returns the rows left.
     pub fn filter(&mut self, text: Option<&str>) -> Result<usize, ViewError> {
         let text = text.map(str::trim).filter(|t| !t.is_empty());
+        if self.filter_text() != text {
+            self.check_unedited()?;
+        }
         let Some(text) = text else {
             self.filter = None;
             self.rebuild_view();
@@ -163,6 +271,9 @@ impl StoredResult {
     /// Keeps the rows that pass every column filter (an empty list removes them), on top of
     /// the text filter. Returns the rows left.
     pub fn filter_columns(&mut self, filters: Vec<ColumnFilter>) -> Result<usize, ViewError> {
+        if self.column_filters() != filters.as_slice() {
+            self.check_unedited()?;
+        }
         if filters.is_empty() {
             self.column_filters = None;
             self.rebuild_view();
@@ -227,6 +338,49 @@ impl StoredResult {
             Value::from_array(batch.column(column).as_ref(), row, meta.logical)
                 .unwrap_or(Value::Null),
         )
+    }
+
+    /// Whether a column of this result is masked (ADR-051).
+    pub fn is_masked(&self, column: usize) -> bool {
+        self.masking
+            .as_ref()
+            .is_some_and(|m| m.columns.contains(&column))
+    }
+
+    /// The names of the masked columns, in order.
+    pub fn masked_columns(&self) -> Vec<String> {
+        self.masking.as_ref().map_or_else(Vec::new, |m| {
+            m.columns
+                .iter()
+                .map(|&c| self.schema.columns[c].name.clone())
+                .collect()
+        })
+    }
+
+    /// The original value of one masked cell of the current view (ADR-051): the user's
+    /// explicit, local request to see it. Nothing runs, and the value is never put back into
+    /// the result, so every window, copy and export stays masked.
+    pub fn reveal(&self, position: usize, column: usize) -> Result<RevealedCell, RevealError> {
+        if position >= self.rows() || column >= self.schema.columns.len() {
+            return Err(RevealError::NoSuchCell);
+        }
+        let masking = self.masking.as_ref().ok_or(RevealError::NotMasked)?;
+        let slot = masking
+            .columns
+            .iter()
+            .position(|&c| c == column)
+            .ok_or(RevealError::NotMasked)?;
+        let row = self.original_row(position);
+        let batch = self.starts.partition_point(|&s| s <= row) - 1;
+        let inside = row - self.starts[batch];
+        let meta = &masking.original.columns[column];
+        let array = &masking.values[batch][slot];
+        Ok(RevealedCell {
+            column: meta.name.clone(),
+            value: Value::from_array(array.as_ref(), inside, meta.logical).unwrap_or(Value::Null),
+            logical: meta.logical,
+            native_type: meta.native_type.clone(),
+        })
     }
 
     pub(crate) fn generation(&self) -> u64 {
@@ -297,6 +451,28 @@ impl StoredResult {
     ) -> Result<Option<SelectionStats>, ViewError> {
         self.check_viewable()?;
         selection_stats::compute(self, block, ticket)
+    }
+
+    /// Starts preparing a chart: one still being prepared on this result stops (its
+    /// [`Self::chart`] returns `None`).
+    pub fn chart_ticket(&self) -> StatsTicket {
+        StatsTicket::new(&self.chart_latest)
+    }
+
+    /// Stops the chart being prepared on this result, if any.
+    pub fn cancel_chart(&self) {
+        selection_stats::cancel(&self.chart_latest);
+    }
+
+    /// The points of a chart over the current view (ADR-040), with a read lock only. `None`:
+    /// a newer chart, or a cancel, stopped this one.
+    pub fn chart(
+        &self,
+        request: &ChartRequest,
+        ticket: &StatsTicket,
+    ) -> Result<Option<ChartData>, ChartError> {
+        self.check_viewable()?;
+        chart::prepare(self, request, ticket)
     }
 
     /// The order of the sort (or the server's) keeping only the rows both filters let
@@ -383,10 +559,48 @@ impl ResultStore {
         id
     }
 
-    /// Adds a batch and returns the total number of rows.
+    /// Creates a result whose columns `policy` masks (ADR-051): every batch appended to it is
+    /// masked before it is kept. Returns its id and the schema it shows (masked columns as
+    /// text, marked `spelaion.masked`).
+    pub(crate) fn create_masked(
+        &self,
+        schema: Arc<ResultSchema>,
+        policy: &MaskPolicy,
+    ) -> (ResultId, Arc<ResultSchema>) {
+        let (shown, columns) = masked_schema(policy, &schema);
+        if columns.is_empty() {
+            return (self.create(schema), shown);
+        }
+        let id = ResultId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let masking = Masked {
+            columns,
+            original: schema,
+            values: Vec::new(),
+        };
+        self.lock().insert(
+            id,
+            Arc::new(RwLock::new(StoredResult::with_masking(
+                shown.clone(),
+                Some(masking),
+            ))),
+        );
+        (id, shown)
+    }
+
+    /// Adds a batch and returns the total number of rows. In a masked result the batch is
+    /// masked first, and its original columns are kept aside.
     pub(crate) fn append(&self, id: ResultId, batch: RecordBatch) -> Option<usize> {
         let result = self.get(id)?;
-        let mut r = result.write().expect("result lock poisoned");
+        let mut guard = result.write().expect("result lock poisoned");
+        let r = &mut *guard;
+        let batch = match &mut r.masking {
+            None => batch,
+            Some(masking) => {
+                let (masked, originals) = mask_batch(&batch, &masking.columns, &r.schema);
+                masking.values.push(originals);
+                masked
+            }
+        };
         let start = r.rows;
         r.starts.push(start);
         r.rows += batch.num_rows();
@@ -412,6 +626,13 @@ impl ResultStore {
         if target.schema.columns != page.schema.columns {
             return Err("the result columns changed while fetching more rows".into());
         }
+        if page.masking.as_ref().map(|m| &m.columns) != target.masking.as_ref().map(|m| &m.columns)
+        {
+            return Err("the masked columns changed while fetching more rows".into());
+        }
+        if let (Some(from), Some(to)) = (&page.masking, &mut target.masking) {
+            to.values.extend(from.values.iter().cloned());
+        }
         let added = page.rows;
         for batch in &page.batches {
             let start = target.rows;
@@ -426,6 +647,13 @@ impl ResultStore {
     pub(crate) fn complete(&self, id: ResultId) {
         if let Some(result) = self.get(id) {
             result.write().expect("result lock poisoned").complete = true;
+        }
+    }
+
+    /// Records where a result's rows were read, or that it is not known (SDB-137).
+    pub(crate) fn set_source(&self, id: ResultId, source: Option<ResultSource>) {
+        if let Some(result) = self.get(id) {
+            result.write().expect("result lock poisoned").source = source;
         }
     }
 
@@ -463,6 +691,7 @@ mod tests {
             logical: LogicalType::Int,
             native_type: "int8".into(),
             native_id: None,
+            origin: None,
         }]))
     }
 

@@ -14,6 +14,7 @@ use arrow::datatypes::{
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt64Type,
 };
+use spelaion_driver_api::thread_cancel::Work;
 use spelaion_driver_api::{ColumnMeta, DriverError, ExecEvent, LogicalType, Result, ResultSchema};
 use tokio::sync::mpsc;
 
@@ -107,6 +108,19 @@ fn logical(conversion: Conversion) -> LogicalType {
         Conversion::Utf8 => LogicalType::Text,
         Conversion::Text(logical) => logical,
     }
+}
+
+/// DuckDB's name for a result column's type. The spatial extension's `GEOMETRY` reaches
+/// Arrow as WKB marked `geoarrow.wkb`: named so, the map view knows it (ADR-045).
+fn field_native_type(field: &arrow::datatypes::Field) -> String {
+    if field
+        .metadata()
+        .get("ARROW:extension:name")
+        .is_some_and(|name| name == "geoarrow.wkb")
+    {
+        return "GEOMETRY".into();
+    }
+    native_type(field.data_type())
 }
 
 /// DuckDB's name for the type behind an Arrow type (`INTEGER`, `VARCHAR[]`…).
@@ -241,17 +255,27 @@ fn send(events: &Events, event: ExecEvent) -> bool {
 pub fn execute(
     conn: &duckdb::Connection,
     sql: &str,
+    params: &[String],
     batch_size: usize,
     events: &Events,
+    work: &Work,
 ) -> Result<()> {
     let mut statement = conn.prepare(sql).map_err(map_error)?;
-    let mut stream = statement.stream_arrow([]).map_err(map_error)?;
+    // DuckDB clears an interrupt when a statement starts: a cancel that came meanwhile is
+    // caught here, or by the interrupts `thread_cancel` keeps sending while it runs.
+    work.check()?;
+    // `$1`, `$2`…: every value bound as text, never written into the SQL (ADR-043).
+    let mut stream = statement
+        .stream_arrow(duckdb::params_from_iter(params.iter().map(String::as_str)))
+        .map_err(map_error)?;
     let schema = stream.get_schema();
+    work.check()?;
 
     if let Some(status) = status(sql, &schema) {
         let mut rows_affected = None;
         for batch in stream.by_ref() {
             let batch = batch.map_err(map_error)?;
+            work.check()?;
             if matches!(status, Status::Count) && batch.num_rows() > 0 {
                 let counts = batch.column(0).as_primitive::<Int64Type>();
                 rows_affected = Some(u64::try_from(counts.value(0)).unwrap_or(0));
@@ -273,8 +297,9 @@ pub fn execute(
         .map(|(field, conversion)| ColumnMeta {
             name: field.name().clone(),
             logical: logical(*conversion),
-            native_type: native_type(field.data_type()),
+            native_type: field_native_type(field),
             native_id: None,
+            origin: None,
         })
         .collect();
     let result = Arc::new(ResultSchema::new(columns));
@@ -309,6 +334,7 @@ pub fn execute(
     };
     for batch in stream {
         let batch = batch.map_err(map_error)?;
+        work.check()?;
         let arrays = batch
             .columns()
             .iter()

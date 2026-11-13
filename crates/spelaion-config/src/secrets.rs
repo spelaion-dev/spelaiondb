@@ -3,6 +3,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use spelaion_driver_api::Secret;
+
 /// Service under which secrets are stored in the system keychain.
 /// The brand's: a tunnel password saved once serves every product of the family (ADR-023).
 pub const KEYCHAIN_SERVICE: &str = "Spelaion";
@@ -70,6 +72,7 @@ impl fmt::Display for SecretRef {
 pub trait SecretBackend: Send + Sync {
     /// `Ok(None)` if the entry does not exist.
     fn keychain_get(&self, account: &str) -> Result<Option<String>, String>;
+    /// Writes an entry. Callers go through [`store`], which also reads it back.
     fn keychain_set(&self, account: &str, secret: &str) -> Result<(), String>;
     /// Deletes an entry; does not fail if it does not exist.
     fn keychain_delete(&self, account: &str) -> Result<(), String>;
@@ -108,6 +111,37 @@ pub(crate) fn decode_other_app_secret(bytes: &[u8]) -> Option<String> {
 
 /// Why the keychain cannot be used when there is none, for every message that mentions it.
 pub const KEYCHAIN_UNAVAILABLE: &str = "no system keychain is available (on Linux a Secret Service such as GNOME Keyring, KWallet or KeePassXC must be running); until there is one, passwords are asked when connecting";
+
+/// What a keychain that answered a write with success but does not hold the password
+/// afterwards is told as: the write is reported as failed, never trusted.
+pub const KEYCHAIN_NOT_KEPT: &str = "the system keychain accepted the password but does not have it, so nothing was saved: check the keychain (on Linux, that the Secret Service's default collection exists and is unlocked) and try again";
+
+/// Stores a password in the keychain and reads it back. A store that answers `Ok` and keeps
+/// nothing (or something else) is an error like any other keychain failure, so no caller can
+/// tell the user a password was saved when it was not. Every write of a password goes
+/// through here, never through [`SecretBackend::keychain_set`] directly. The value read back
+/// is only compared in memory and dropped.
+pub(crate) fn store(
+    backend: &dyn SecretBackend,
+    account: &str,
+    secret: &str,
+) -> Result<(), String> {
+    backend.keychain_set(account, secret)?;
+    let stored = backend
+        .keychain_get(account)
+        .map_err(|message| format!("{KEYCHAIN_NOT_KEPT} (reading it back failed: {message})"))?
+        .map(Secret::new);
+    match stored {
+        Some(stored) if stored.expose() == secret => Ok(()),
+        Some(_) | None => Err(KEYCHAIN_NOT_KEPT.to_string()),
+    }
+}
+
+/// Whether the keychain holds an entry for `account`, without its value: for a form to say
+/// whether a password is stored. No keychain, or one that fails, holds nothing it can use.
+pub(crate) fn is_stored(backend: &dyn SecretBackend, account: &str) -> bool {
+    backend.keychain_available() && matches!(backend.keychain_get(account), Ok(Some(_)))
+}
 
 /// Forgets a keychain entry. Without a keychain there is nothing it could reach, so that is
 /// not an error: deleting or editing a connection or a tunnel must not fail because of it.

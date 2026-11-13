@@ -15,7 +15,7 @@ use crate::export::sql_literal;
 use crate::generate::{qualified, scalar_count, scalar_value};
 use crate::guard::sql_dialect;
 use crate::params::is_number;
-use crate::results::{ResultId, StoredResult};
+use crate::results::{ResultId, ResultSource, StoredResult};
 use crate::session::{CoreEvent, Session};
 
 /// Identify only direct columns from one real table. Complex projections, joins and
@@ -104,12 +104,18 @@ pub async fn editable_query_table(
     let Some((schema, name)) = editable_query_source(session.dialect().as_ref(), sql) else {
         return Ok(None);
     };
+    // Rows read through another session or in another database are never editable here
+    // (SDB-137): the table and its key would be this session's, the values the other's.
+    let target = session.edit_target().await.map_err(|e| e.to_string())?;
     let columns: Vec<String> = {
         let stored = session
             .results()
             .get(result)
             .ok_or("the result was freed")?;
         let stored = stored.read().map_err(|_| "result lock poisoned")?;
+        if target.check(&stored).is_err() {
+            return Ok(None);
+        }
         stored
             .schema()
             .columns
@@ -234,11 +240,15 @@ async fn unique_schema(session: &Session, name: &str) -> Result<Option<String>, 
     Ok(found)
 }
 
-/// A value typed in the grid (or NULL).
+/// A value typed in the grid (or NULL), the bytes of a file loaded into a binary cell
+/// (`value_view::read_value_file`), or the column's default (ADR-044).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CellInput {
     Null,
     Text(String),
+    Bytes(Vec<u8>),
+    /// `SET column = DEFAULT`; a new row leaves the column out.
+    Default,
 }
 
 /// One change, by position in the result shown (`row`) and result column (`column`).
@@ -265,6 +275,10 @@ pub enum EditError {
     KeyNotInResult(String),
     #[error("there is no row {0} on this page")]
     NoSuchRow(usize),
+    #[error("there is no new row {0}")]
+    NoSuchNewRow(usize),
+    #[error("the clipboard holds more than {0} bytes: too much to paste into the grid")]
+    TooMuchToPaste(usize),
     #[error("column {0} is not a column of the table")]
     NotATableColumn(String),
     #[error("{column}: \"{value}\" is not {expected}")]
@@ -291,6 +305,44 @@ pub enum EditError {
         "change {index} would affect {rows} rows instead of one (the row changed or vanished meanwhile?), nothing was applied"
     )]
     NotOneRow { index: usize, rows: String },
+    /// The column is masked (ADR-051): the page holds the mask, not its values.
+    #[error("{0} is masked: its cells cannot be edited, and rows cannot be changed by it")]
+    Masked(String),
+    /// The rows were read through another session, or in another database (SDB-137).
+    #[error("these rows were read from another connection or database: run the query again")]
+    OtherSource,
+    /// The session could not say which database it is in.
+    #[error("could not tell which database this tab is in: {0}")]
+    Source(String),
+}
+
+/// What an edit is written through: a session and the database it is in now (SDB-137), from
+/// [`Session::edit_target`]. Only the core makes one, and [`edit_statements`] writes nothing
+/// for rows read through another session (another connection, or the tab after it
+/// reconnected) or in another database.
+pub struct EditTarget {
+    source: ResultSource,
+    dialect: std::sync::Arc<dyn Dialect>,
+}
+
+impl EditTarget {
+    pub(crate) fn new(source: ResultSource, dialect: std::sync::Arc<dyn Dialect>) -> Self {
+        Self { source, dialect }
+    }
+
+    /// The engine's SQL dialect.
+    pub fn dialect(&self) -> &dyn Dialect {
+        self.dialect.as_ref()
+    }
+
+    /// Whether `result`'s rows were read through this session, in this database.
+    pub fn check(&self, result: &StoredResult) -> Result<(), EditError> {
+        if result.source() == Some(&self.source) {
+            Ok(())
+        } else {
+            Err(EditError::OtherSource)
+        }
+    }
 }
 
 /// Whether changes may be applied on this connection: never when it is read-only, and where
@@ -310,13 +362,16 @@ pub fn check_edit_policy(
     }
 }
 
-/// The statements for `changes` to the table whose page is `result`.
+/// The statements for `changes` to the table whose page is `result`, written through
+/// `target`: refused unless the rows were read through it, in its current database (SDB-137).
 pub fn edit_statements(
-    dialect: &dyn Dialect,
+    target: &EditTarget,
     table: &TableInfo,
     result: &StoredResult,
     changes: &[RowChange],
 ) -> Result<Vec<String>, EditError> {
+    target.check(result)?;
+    let dialect = target.dialect();
     let name = qualified(dialect, &table.object.schema, &table.object.name);
     if table.primary_key.is_empty() {
         return Err(EditError::NoPrimaryKey(table.object.name.clone()));
@@ -343,6 +398,10 @@ pub fn edit_statements(
         Ok((meta.name.as_str(), meta.logical))
     };
     let where_key = |row: usize| -> Result<String, EditError> {
+        // A masked key column holds the mask, not the value the row is found by (ADR-051).
+        if let Some((_, key)) = keys.iter().find(|(i, _)| result.is_masked(*i)) {
+            return Err(EditError::Masked((*key).to_string()));
+        }
         let batch = result
             .window(row, 1)
             .into_iter()
@@ -373,11 +432,14 @@ pub fn edit_statements(
                     .iter()
                     .map(|(i, input)| {
                         let (name, logical) = column(*i)?;
-                        Ok(format!(
-                            "{} = {}",
-                            dialect.quote_identifier(name),
-                            literal(dialect.name(), name, logical, input)?
-                        ))
+                        if result.is_masked(*i) {
+                            return Err(EditError::Masked(name.to_string()));
+                        }
+                        let value = match input {
+                            CellInput::Default => default_value(dialect.name(), table, name),
+                            other => literal(dialect.name(), name, logical, other)?,
+                        };
+                        Ok(format!("{} = {value}", dialect.quote_identifier(name)))
                     })
                     .collect::<Result<Vec<_>, EditError>>()?;
                 statements.push(format!(
@@ -394,6 +456,10 @@ pub fn edit_statements(
                 let mut literals = Vec::new();
                 for (i, input) in values {
                     let (column_name, logical) = column(*i)?;
+                    // Left out, the column takes its default.
+                    if *input == CellInput::Default {
+                        continue;
+                    }
                     names.push(dialect.quote_identifier(column_name));
                     literals.push(literal(dialect.name(), column_name, logical, input)?);
                 }
@@ -495,6 +561,37 @@ pub(crate) async fn run_one(session: &Session, sql: &str) -> Result<Option<u64>,
     }
 }
 
+/// The value `SET column = DEFAULT` gives. SQLite has no `DEFAULT` there, so the column's
+/// default expression is written as the catalog holds it (the database's own text, what an
+/// INSERT without the column would evaluate), or NULL without one, as SQLite does.
+fn default_value(dialect: &str, table: &TableInfo, column: &str) -> String {
+    match dialect {
+        "sqlite" => table
+            .columns
+            .iter()
+            .find(|c| c.name == column)
+            .and_then(|c| c.default.as_deref())
+            .map_or_else(
+                || "NULL".to_string(),
+                |expression| format!("({expression})"),
+            ),
+        _ => "DEFAULT".to_string(),
+    }
+}
+
+/// Refuses an input the column's type cannot take (a pending value is checked when it is
+/// given, so a bulk edit or a paste fails at once, not when it is applied).
+pub(crate) fn check_input(
+    column: &str,
+    logical: LogicalType,
+    input: &CellInput,
+) -> Result<(), EditError> {
+    match input {
+        CellInput::Default => Ok(()),
+        other => literal("postgres", column, logical, other).map(|_| ()),
+    }
+}
+
 /// What the user typed, as a literal for a column of this type.
 fn literal(
     dialect: &str,
@@ -502,8 +599,23 @@ fn literal(
     logical: LogicalType,
     input: &CellInput,
 ) -> Result<String, EditError> {
-    let CellInput::Text(text) = input else {
-        return Ok("NULL".into());
+    let text = match input {
+        CellInput::Null => return Ok("NULL".into()),
+        // Written by the caller: `DEFAULT`, or the column left out of an INSERT.
+        CellInput::Default => return Ok("DEFAULT".into()),
+        CellInput::Text(text) => text,
+        // Raw bytes only go to a binary column; anything else takes text.
+        CellInput::Bytes(bytes) => {
+            return if logical == LogicalType::Bytes {
+                Ok(sql_literal(&Value::Bytes(bytes.clone()), dialect))
+            } else {
+                Err(EditError::BadValue {
+                    column: column.to_string(),
+                    value: format!("{} bytes", bytes.len()),
+                    expected: "text",
+                })
+            };
+        }
     };
     let bad = |expected| EditError::BadValue {
         column: column.to_string(),
@@ -538,6 +650,9 @@ fn literal(
                     .collect(),
             )
         }
+        // The grid shows a time zone as `+00` (UTC), which SQL Server does not read back: it
+        // takes `+00:00`.
+        LogicalType::TimestampTz if dialect == "sqlserver" => Value::Text(sqlserver_offset(text)),
         LogicalType::Text
         | LogicalType::Date
         | LogicalType::Time
@@ -550,6 +665,25 @@ fn literal(
         | LogicalType::Native => Value::Text(text.clone()),
     };
     Ok(sql_literal(&value, dialect))
+}
+
+/// `… 08:00:00+02` → `… 08:00:00+02:00`: an offset of whole hours, as the grid writes it, with
+/// the minutes SQL Server needs. Anything else is left as typed.
+fn sqlserver_offset(text: &str) -> String {
+    let trimmed = text.trim_end();
+    let bytes = trimmed.as_bytes();
+    let n = bytes.len();
+    let hours_only = n >= 4
+        && matches!(bytes[n - 3], b'+' | b'-')
+        && bytes[n - 2].is_ascii_digit()
+        && bytes[n - 1].is_ascii_digit()
+        && bytes[n - 4].is_ascii_digit()
+        && trimmed[..n - 3].contains(':');
+    if hours_only {
+        format!("{trimmed}:00")
+    } else {
+        text.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -626,6 +760,48 @@ mod tests {
             literal("postgres", "c", LogicalType::Int, &CellInput::Null).unwrap(),
             "NULL"
         );
+        // A loaded file's bytes: the engine's binary literal, and only for a binary column.
+        let bytes = CellInput::Bytes(vec![0x89, b'P', 0]);
+        assert_eq!(
+            literal("postgres", "c", LogicalType::Bytes, &bytes).unwrap(),
+            "'\\x895000'"
+        );
+        assert_eq!(
+            literal("sqlserver", "c", LogicalType::Bytes, &bytes).unwrap(),
+            "0x895000"
+        );
+        assert_eq!(
+            literal("sqlite", "c", LogicalType::Bytes, &bytes).unwrap(),
+            "X'895000'"
+        );
+        assert!(literal("postgres", "c", LogicalType::Text, &bytes).is_err());
+        // SQL Server reads a time zone written as the grid shows it.
+        let tz = |dialect, text: &str| {
+            literal(
+                dialect,
+                "c",
+                LogicalType::TimestampTz,
+                &CellInput::Text(text.into()),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            tz("sqlserver", "2024-01-01 08:00:00.5+00"),
+            "N'2024-01-01 08:00:00.5+00:00'"
+        );
+        assert_eq!(
+            tz("sqlserver", "2024-01-01 08:00:00-05"),
+            "N'2024-01-01 08:00:00-05:00'"
+        );
+        assert_eq!(
+            tz("sqlserver", "2024-01-01 08:00:00 +05:30"),
+            "N'2024-01-01 08:00:00 +05:30'"
+        );
+        assert_eq!(tz("sqlserver", "2024-01-01"), "N'2024-01-01'");
+        assert_eq!(
+            tz("postgres", "2024-01-01 08:00:00+00"),
+            "'2024-01-01 08:00:00+00'"
+        );
         assert_eq!(
             literal(
                 "mysql",
@@ -634,7 +810,8 @@ mod tests {
                 &CellInput::Text("a\\b".into())
             )
             .unwrap(),
-            "'a\\\\b'"
+            // Read the same with and without NO_BACKSLASH_ESCAPES (SDB-161).
+            "_utf8mb4 X'615C62'"
         );
     }
 }

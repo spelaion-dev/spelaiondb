@@ -127,6 +127,7 @@ export function ColumnStatsPopover(props: {
         {t(table.filter.trim() ? "columnStats.scopeFiltered" : "columnStats.scope")}
         {stats?.sampled && <span className="column-stats-sampled">{t("columnStats.sampled")}</span>}
       </p>
+      {stats?.masked && <p className="column-stats-scope small muted">{t("masking.statsNote")}</p>}
       {state?.kind === "running" && (
         <div className="calc-busy" role="status">
           <span>{t("columnStats.counting")}</span>
@@ -180,7 +181,7 @@ export function ColumnStatsPopover(props: {
                       type="button"
                       className="ghost column-stats-value"
                       disabled={condition === null}
-                      title={condition === null ? t("columnStats.tooLong") : t("columnStats.filterBy", { value: label })}
+                      title={condition === null ? t(stats.masked ? "masking.statsNote" : "columnStats.tooLong") : t("columnStats.filterBy", { value: label })}
                       onClick={() => condition !== null && void filterBy(condition)}
                     >
                       <span className={v.text === null ? "muted column-stats-text" : "column-stats-text"}>{label}</span>

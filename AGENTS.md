@@ -10,25 +10,50 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - Current state: **v0.5**. Done: PostgreSQL (with TLS), MySQL/MariaDB, SQL Server, SQLite
   and DuckDB drivers, configuration, SSH tunnels, core, local store, `spelaiondb mcp` (read-only, writes per connection) and the
   `spelaiondb` binary, and the first version of the desktop app (`apps/desktop`).
-  `spikes/` is throwaway phase 0 code: it is never imported from `crates/`.
 - Everything in the repository is in English: code, comments, docs, UI text, tests and
   commit messages.
 
 ## Workspace map
-- `crates/spelaion-driver-api`: driver contract (ADR-005). Results in Arrow with
+- `crates/spelaion-driver-api`: driver contract (ADR-005). Engines are becoming plugins in
+  their own processes, each in its own repository (ADR-041, ADR-042, after v0.9): anything
+  added to this contract must be able to travel as a message (owned data; no closures, trait
+  objects or streams in parameters), and new core code does not name a driver crate. Results
+  in Arrow with
   `spelaion.logical` / `spelaion.native_type` metadata per column; `Value` for single cells.
   The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
   `list_server_objects` and `object_definition`, the last three in each driver's `objects.rs`
   (SQLite's in `catalog.rs`); each driver's test file checks them against its engine.
   `list_referencing_keys` is `describe_table`'s foreign keys seen from the other side: the keys
-  of every table that point to one (in each driver's `introspect.rs`).
+  of every table that point to one (in each driver's `introspect.rs`). `list_columns` is every
+  column of a schema in one catalog query (metadata search, ADR-043), and `execute_bound` runs
+  one read with text values bound to `bound_placeholder`'s placeholders (MySQL binds them to
+  user variables with a prepared `SET`, then reads with the text protocol;
+  `Capabilities::bound_params` is false for SQLite over SSH).
+  `Dialect::code_ranges` is what lies outside a script's strings, quoted names and comments, as
+  that engine's splitter reads them (each driver builds it from its splitter's own pieces with
+  `code_ranges`): the editor's `:name` placeholders (`spelaion-core`'s `params.rs`) are looked
+  for only there.
+  `thread_cancel` is the cancel of the engines that run on a thread of their own (DuckDB, local
+  SQLite): their interrupt only reaches the statement running at that moment, so a cancel is
+  remembered for everything sent before it (a queued statement never starts, a running one is
+  interrupted again until it ends) and never reaches what is sent after it. Every cancel test
+  is bounded with `tokio::time::timeout`, so a lost cancel fails in seconds.
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.
 - `crates/spelaion-driver-mysql`: MySQL and MariaDB (`mysql_async`, text protocol, one actor
-  per connection). `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
+  per connection). Its splitter counts a statement written only as executable comments
+  (how `mysqldump` writes views and triggers) as a statement, and reads quotes as the
+  session's `sql_mode` does (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`): `Dialect::with_sql_mode`
+  gives the session's dialect, which `spelaion-core`'s `sql_mode.rs` reads when the session
+  opens and after a statement that names `sql_mode`. The core writes a MySQL string that holds
+  a backslash as `_utf8mb4 X'…'` (`export::sql_literal`), which every mode reads the same. Where only a plain string
+  may go (`COMMENT`, `IDENTIFIED BY`), `objects::ddl::mysql_string` escapes a backslash only when
+  the session's mode reads it as an escape. `mysql_async` is patched in `vendor/mysql_async` so `verify-ca` skips the
   name check (read its `PATCHED.md` before upgrading). Its type zoo (`tests/mysql.rs`) compares every type with the server's
-  text, on both servers.
+  text, on both servers. `DATE`, `DATETIME` and `TIMESTAMP` columns are text with their native
+  type (legacy zero dates; ADR-005 and ADR-006, 2026-11-12 notes): what needs them as dates
+  (chart axes, the bulk "now") reads them by native type through `spelaion-core`'s `temporal.rs`.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
   `remote.rs` opens a file on a server (ADR-018) by running that server's `sqlite3 -safe`
@@ -37,10 +62,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   reach the shell. Catalog queries are shared in `catalog.rs`. Tests against
   `testing/docker/sqlitehost` with `SPELAION_TEST_SSH`.
 - `crates/spelaion-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
-  (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a batch may return
+  (ADR-017). T-SQL batches (`GO`, `BEGIN … END`) split in `dialect.rs`; a `DECLARE` keeps the rest of
+  its batch, where its variables live (the guard still checks each statement in it); a batch may return
   several result sets. Cancel is a TDS Attention through a patched tiberius in
   `vendor/tiberius` (read its `PATCHED.md` before upgrading). Tests against the Docker SQL
-  Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`.
+  Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`. `datetime2`, `datetimeoffset` and `time` are
+  text with their native type, exactly as the server writes them (100 ns and the value's own
+  offset; ADR-005 and ADR-006, 2026-11-12 notes): `temporal.rs` reads them as dates, and sorts
+  a `datetimeoffset` by its instant.
 - `crates/spelaion-driver-duckdb`: `duckdb` (bundled) in one thread per connection, one open
   per file shared by clones (ADR-016). Arrow from DuckDB converted in `exec.rs`; nested types
   written as DuckDB's text in `format.rs`. Its type zoo (`tests/duckdb.rs`) compares every
@@ -48,20 +77,33 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
 - `crates/spelaion-config`: TOML files from `.spelaion/` and the personal directory,
   variables, secret references and repository trust (ADR-009; `trust.rs` pins each repository
   connection and tunnel as trusted, and the resolver refuses one that changed, ADR-022: any
-  change there needs tests that try to get around it). If you change `model.rs`,
+  change there needs tests that try to get around it). Every change to the trust store goes
+  through `TrustStore::update`, one at a time, so none saves over another it did not see
+  (`tests/trust_updates.rs`); `TrustStore::load` is for reading. If you change `model.rs`,
   regenerate the schema: `SPELAION_UPDATE_SCHEMA=1 cargo test -p spelaion-config`.
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
+  Every password written to the keychain goes through `secrets::store`, which reads it back
+  (a store that answers `Ok` and keeps nothing is an error); never call `keychain_set` directly.
   A connection's `description` is the user's free text (the explorer's tooltip, and what
   `list_connections` tells agents a database is for) and its `tags` are short labels the
   explorer filters connections by (`normalize_tags` in `draft.rs`): both bounded and without
   hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server).
+  Every file the configuration writes goes through `atomic_file` (temporary file + rename, the
+  old mode kept, a symbolic link stays a link; new files owner-only in the personal folder and
+  the umask's in the repository, `edit::new_file_mode`); never `std::fs::write` over a user's file.
+  The core's exports (audit, history, plans, data files) stream through its `AtomicWriter`
+  (a uniquely named temporary file, the same guarantees).
   Importing connections from other clients (ADR-039): `import.rs` is the flow every client
   shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
   they reach, replace in place, target folder, what was not mapped, passwords read from another
   app's keychain only on import); a client is a reader that returns `ImportedConnection`s.
+  On Linux a reader's default search also looks in the client's Flatpak and Snap folders
+  (`linux_dirs.rs`; native first, each package path citing the manifest it was checked against);
+  HeidiSQL's registry only exists on Windows (`heidisql_has_registry`), elsewhere its import
+  starts by choosing an exported file.
   `dbeaver.rs` reads DBeaver's connections and saved credentials (passwords only as `Secret`,
   to the keychain; its connection types map to the closest built-in type); `datagrip.rs` reads
   DataGrip's (and other JetBrains IDEs') XML data sources and SSH configurations, tested against
@@ -101,12 +143,23 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   the user's types.
 - `crates/spelaion-ssh`: tunnels with `russh` (ADR-007). It does not know the configuration:
   it receives a `TunnelSpec`. `KnownHosts` checks the team's `.spelaion/known_hosts` first
-  (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Dialogs go through the `Interaction` trait. Tests against the
+  (ADR-022; the resolver passes it only when trusted and unchanged), then the user's. Each hop
+  asks its server for the key types pinned for it first (`hostkeys::pinned_algorithms`, as
+  OpenSSH does), so a file that pins only an ECDSA or RSA key still verifies the server; the
+  check never changes. Dialogs go through the `Interaction` trait. Tests against the
   Docker bastions with `SPELAION_TEST_SSH=127.0.0.1:2221`. A tunnel may go through a
   SOCKS5 or HTTP proxy (`proxy.rs`, ADR-027): its first hop, or the database itself with no
   hops; tests against `testing/docker/proxy` with `SPELAION_TEST_SOCKS=127.0.0.1:11080` and
   `SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128`.
-  Kubernetes (ADR-015) is not a tunnel file but a connection's `[kubernetes]` section:
+  AWS SSM (ADR-050) is a tunnel file's `[ssm]` table: `ssm.rs` runs `aws ssm start-session` with
+  an argument list (values checked, options as `--name=value`) and stops the CLI and its plugin
+  together (their process group on Unix, a job object on Windows), a close waiting until both
+  have exited; `tunnel.rs` uses it like the proxy. Its tests run the stand-in
+  `tests/support/fake_aws.rs` (the `spelaion-test-fake-aws` binary); a real AWS account is only
+  tested by hand.
+  Kubernetes (ADR-015) is a connection's `[kubernetes]` section, or a tunnel file's (a
+  Kubernetes network profile, ADR-050: the resolver merges the two, each setting from one
+  place, into the connection's `ResolvedKubernetes`):
   `spelaion-core::kube` runs `kubectl port-forward` and lists contexts, namespaces, names and
   ports for the form's Kubernetes tab; tests against a kind cluster with
   `SPELAION_TEST_K8S=<kubeconfig>` (see `testing/k8s`).
@@ -121,7 +174,19 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   must confirm before running (DELETE/UPDATE without WHERE, DROP, TRUNCATE, and what the
   connection's type asks for: data changes on Production, every run where it confirms
   execution, ADR-029); `check_script` refuses unconfirmed risky scripts, so the UI never
-  decides it. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  decides it. A read-only connection runs only reads, session settings and transaction control
+  (ADR-053, `classify_read_only_connection`): `check_run` refuses anything else before the guard
+  asks and whatever was confirmed, the session refuses it again (`Session::with_read_only`, set
+  by `open_connection`), and `session_setup.rs` first sets PostgreSQL's, MySQL's and MariaDB's
+  own read-only mode; `tests/read_only_connection.rs` tries to get around it on every engine.
+  A MySQL/MariaDB statement with executable comments (`/*!50001 … */`, `/*M! … */`) is
+  checked by the guard with their bodies both run and skipped, as the server's version decides.
+  A MySQL/MariaDB session whose `sql_mode` reads quotes otherwise (`NO_BACKSLASH_ESCAPES`,
+  `ANSI_QUOTES`) has each statement also read as that mode reads it (`sql_mode::as_default_mode`,
+  from `Dialect::sql_mode`): the guard asks if any reading is risky and a read-only connection
+  refuses unless every reading passes; the default reading is always one of them.
+  A SQL Server batch the parser cannot read (T-SQL needs no `;`) is read token by token: a
+  `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word in it asks. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
   closes the ones a connection type says are idle too long, never with a transaction open
   (ADR-029): every use goes through its `Tracked` connection, and
   nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's
@@ -133,18 +198,48 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`results.rs` combines the sort, the text filter and the column filters of `filter.rs` into
   one view; `find.rs` is the grid's Ctrl+F over that view, matches served in windows;
   `selection_stats.rs` is the calc panel's numbers over a block of that view, from its bounds
-  only, stopped by a newer one or a cancel)
-  and `cursor.rs` finds the statement under the editor's cursor. `table_data.rs` writes and checks
-  the paged SELECT of the table data tab (the filter typed by the user cannot change it), and
-  writes "filter by this value" conditions into its WHERE from the typed cell.
+  only, stopped by a newer one or a cancel; `chart.rs` prepares a chart's points from that view,
+  ADR-040: at most `MAX_CHART_POINTS`, rows combined by X, and it writes the saved PNG or SVG;
+  `er/` is the ER diagram, ADR-046: the model read from the explorer's catalog, its layered layout
+  computed once per model and display options, and its Mermaid and DBML text, which must parse
+  with their own tools: `tests/er_diagram.rs` writes `apps/desktop/scripts/fixtures/er` and
+  `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again)
+  and `cursor.rs` finds the statement under the editor's cursor. `progress.rs` thins a run's row
+  counts to a few a second for the app (a big result streams hundreds of batches a second;
+  every other event and the final count go through as they come). `table_data.rs` writes and checks
+  the paged SELECT of the table data tab (the filter typed by the user cannot change it, and the
+  primary key orders it after the user's order, ADR-054), and writes "filter by this value"
+  conditions into its WHERE from the typed cell. `query_page.rs` pages an editor query only when
+  each page can be fetched exactly (ADR-054): one table, its primary key in the result, keyset
+  pages after the last row shown, never OFFSET; anything else runs once as written.
+  `tests/query_pages.rs` writes between pages on every engine.
   `references.rs` follows foreign keys both ways from a row of a table data tab: the keys are
   read from the catalog again each time (the UI only names one), the values come from the
   stored result and the filter is `table_data::key_filter`'s; `tests/references.rs` follows
   composite, multi-level and self-referencing keys on every engine.
+  `data_search.rs` (ADR-043) searches a value in the tables the user chose: one `SELECT` per
+  table written from the catalog and the columns' types, the value always bound as a parameter
+  (`Connection::execute_bound`), each a read in the engine's read-only transaction in a session
+  of its own, bounded (rows per table, total hits) and cancellable; `tests/data_search.rs` runs
+  it on every engine, 50 tables cancelled mid-way included. Metadata search is the app's
+  (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
   `column_stats.rs` counts a table data tab column's statistics on the server: statements
   written from the catalog's names, the tab's filter checked like a page, each one a read in
   the engine's read-only transaction (the export barrier) in a session of its own, sampled past
   100,000 rows; `tests/column_stats.rs` runs it on every engine.
+  Server observation (the process monitor's other views): `observe.rs` runs each statement
+  only after `classify_read_only` accepts it, as session metadata; `locks.rs` reads each
+  engine's locks and waits and builds the blocking tree (ending a blocker always goes through
+  `processes.rs`'s `control_process`), `server_settings.rs` the settings, variables and status,
+  `table_stats.rs` a table's sizes and row estimate from the catalog; `tests/server_observation.rs`
+  makes one session wait for another's row lock on every engine and checks the pair.
+  `geometry.rs` (ADR-045) reads geometry values into GeoJSON for the cell panel's map: PostGIS's
+  EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs and
+  DuckDB's WKB, as untrusted bytes (counts checked before allocating, bounded nesting, read to
+  the last byte); `column_map` puts a column of the current view on one map, bounded.
+  `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
+  PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
+  (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
   `export.rs` formats copies and exports (HTML, IN lists, column names); `tests/grid_engines.rs`
   runs those conditions, lists and names on every engine.
   `export.rs` also holds the CSV options and formula escaping of files;
@@ -153,7 +248,35 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   read-only transaction, one batch held at a time; like `readonly.rs`, any change there needs
   tests that try to get around it (`tests/export_stream.rs`).
   `edit.rs` writes and applies the edits of a table data tab (ADR-014: primary key from the
-  database, one transaction, one row per statement).
+  database, one transaction, one row per statement). Each stored result remembers the session
+  that read it and that session's database (`ResultSource`; a statement that changed database
+  leaves none), and edit statements are written only through an `EditTarget` from
+  `Session::edit_target`, which refuses rows read through another session (another connection,
+  a reconnected tab) or in another database; `tests/edit_source.rs` tries it on every engine.
+  `masking.rs` is column masking (ADR-051): the session compiles the connection's rules
+  (`spelaion-config::masking` combines its `[masking]`, the user's `user.toml` and its type's
+  `mask_columns`; required patterns only add up) and `ResultStore` masks every batch as it
+  arrives, keeping the originals aside for `StoredResult::reveal` only. Paths that skip the
+  store (streaming exports, column statistics, the data search, `run_read_only`) apply
+  `Session::masking` themselves; core reads it parses go through `run_parsed`. Like
+  `classify.rs`, any change there needs tests that try to get around it (`tests/masking.rs`).
+  Rules also match each column's origin (`ColumnMeta::origin`, ADR-052): PostgreSQL resolves
+  it in the catalog when `ExecOptions::origins` asks, MySQL/MariaDB and SQLite report it
+  directly; SQL Server, DuckDB and remote SQLite do not (a known limit).
+  `value_view.rs` is the cell viewer's value, read from the stored result when the viewer opens
+  (past `VIEW_LIMIT` only with "load anyway"): images recognised by their bytes (PNG, JPEG, GIF,
+  WebP only, handed over as a `data:` URL; never SVG or HTML), XML pretty-printed as text, a value
+  saved to a file byte for byte, and a file loaded into a cell as one `edit.rs` UPDATE by primary
+  key; `tests/value_files.rs` runs it on every engine.
+  `value_pick.rs` is the cell panel's value pickers (SDB-58): a date and time written with the
+  column's precision as the grid shows it (UTC `+00` for a time zone, except SQL Server's
+  `datetimeoffset`, written with its offset and up to seven digits like its `datetime2` and
+  `time`; its `datetime` and `smalldatetime` rounded as the server does), the allowed values of an enum, a `SET` or a
+  `CHECK (… IN (…))` read from the catalog (SQLite's from its `CREATE TABLE` text) only when
+  exactly one list can be read reliably, and a foreign key's search: a checked page of the
+  referenced table (never all of it), its filter written like "filter by this value". A pick is
+  only a cell edit's text, applied by `edit.rs`; `tests/value_pickers.rs` reads every pick back
+  on every engine, and searches a million-row table.
   `import/` loads a file or pasted text into a table (ADR-038): `source.rs` reads CSV, TSV, JSON
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
   `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
@@ -162,8 +285,35 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
   `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
   to get around it.
-  `objects.rs` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
-  create, new index…); `tests/object_actions.rs` runs each engine's statements on that engine.
+  `objects/` writes the explorer's object actions (ADR-026: qualified names, rename, drop,
+  create, new index…) and the structure forms (ADR-047): `alter.rs` turns a form's columns into
+  one script from the catalog read again each time, applied only as it was shown; `rebuild.rs`
+  is SQLite's table rebuild; `create.rs` is the create table form; `source.rs` writes a view's or routine's
+  definition as the statement that replaces it; `ddl.rs` edits the `CREATE TABLE` text SQLite and MySQL keep.
+  `tests/object_actions.rs` runs each engine's statements on that engine.
+  `objects/users.rs` (ADR-048) creates roles, users and logins, changes their password, locks
+  and drops them: the script shown and compared has `'***'` for the password, the real one is
+  written only into the statement that runs (never recorded) and scrubbed from its errors; any
+  change there needs tests that try to leak the password (`tests/users.rs`).
+  `objects/privileges.rs` grants and revokes privileges globally, on a database, a schema, an
+  object or a role's membership (only the privilege names the core lists for that scope, never
+  typed SQL), and reads what an account has (PostgreSQL's ACLs, MySQL's `SHOW GRANTS`, SQL
+  Server's permissions); `tests/privileges.rs` tries each grant by logging in as the account.
+  `backup/` (ADR-049) runs the vendors' own tools against a connection's route
+  (`open::open_route`: the shared tunnel's or Kubernetes forward's local end, no session):
+  `tools.rs` finds `pg_dump`, `pg_restore`, `psql`, `mysqldump` and `mysql` (a chosen folder,
+  else `PATH` and the installers' places) and reads their version, `args.rs` writes each tool's
+  argument list (never the password: it goes in `PGPASSWORD` / `MYSQL_PWD`), `process.rs` starts
+  the tool without a shell, writes its output to `<name>.part` (renamed when it succeeds), feeds
+  a restore's file to it and passes every log line through the connection test's `Redactor`.
+  A restore is refused on a read-only connection and unless confirmed. `embedded.rs` is SQLite's
+  `VACUUM INTO` and DuckDB's `EXPORT` / `IMPORT DATABASE` in a session of their own, and
+  `run_file.rs` runs an `.sql` file there (ADR-036's decoding, the engine's splitter, statements
+  done of the total, cancel; refused read-only or unconfirmed), tested in `tests/backup_files.rs`.
+  `tests/backup.rs` dumps
+  and restores PostgreSQL, MySQL and MariaDB through the two hops of `testing/docker` with the
+  tools of the official images (`docker run`), or those in `SPELAION_TEST_DB_TOOLS`; any change
+  there needs tests that try to leak the password.
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
   hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
   `Tunnel::probe`, login), its own tunnel, Stop that closes what it opened, failures classified
@@ -171,8 +321,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   there needs tests that try to leak a secret (`tests/conn_test.rs`). A connection's
   `connect_timeout` is the database's (`ConnectParams::connect_timeout`, held whole by
   `open.rs`); a tunnel file's is per SSH hop.
+  `save_name.rs` keeps a save dialog's file name in step with the chosen file type (Linux's
+  GTK dialogs, `apps/desktop/src-tauri/src/file_dialog.rs`).
   `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a
-  BOM, UTF-16, Windows-1252, the file's line ending, temp file + rename, a content hash that
+  BOM, UTF-16, Windows-1252, the file's line ending, temp file + rename through
+  `spelaion-config::atomic_file`, which keeps the mode and follows links, a content hash that
   refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
   writes them at most a second after a change) and checks them before they come back
   (`restore_tabs`): never results, secrets or session state, and nothing is run.
@@ -195,13 +348,20 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions. What agents may
   do on a connection is `spelaion-core::agent_access` (`write.rs`): the user's read-only mode
   for every agent (ADR-033, `mcp.read_only` in the store, read on every call, failing closed)
-  only takes writes away. Query rows go out as JSON or TOON (`format.rs`); any change there
+  only takes writes away. Every tool call starts by reading the configuration and the trust
+  store again (`Snapshot` in `lib.rs`): a change the user makes applies at the next call of a
+  running server, never in the middle of one; a configuration with any problem exposes nothing;
+  a cached session is reused only while its connection is exposed and its `Definition` (what it
+  is resolved from, secrets aside) is unchanged, and only while it is not lost (`Cached::usable`:
+  its health, its connection, its tunnel); the call that meets a lost session fails and is never
+  retried, and the next call opens a new one. Query rows go out as JSON or TOON (`format.rs`); any change there
   keeps every cell quoted so data cannot add rows or fields.
   `spelaion-config::mcp_clients` finds each AI client's file and writes our entry there for the
   app's MCP page (ADR-033): only our entry changes, JSON edited as text at the spans it finds,
   Codex's TOML with `toml_edit`, a backup first, and only the change the user saw (its
-  fingerprint). Tests and the smoke test point it at `SPELAION_MCP_CLIENTS_HOME`, never at the
-  user's files; `SPELAION_CLI` names the `spelaiondb` it installs. The installers ship the CLI
+  fingerprint); the new file and the backup keep the old file's mode (owner-only when new) and
+  a symbolic link stays a link. Tests and the smoke test point it at
+  `SPELAION_MCP_CLIENTS_HOME`, never at the user's files; `SPELAION_CLI` names the `spelaiondb` it installs. The installers ship the CLI
   next to the app (`externalBin`, only in `tauri.release.conf.json`).
   Every MCP tool call goes to the store's append-only `audit` table with its tool and its
   process's session; the app's Activity tab reads it through `spelaion-core::audit`, which masks
@@ -211,12 +371,31 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   command types are generated into `src/bindings.ts`
   (`cargo run -p spelaion-desktop --features bindings --bin export-bindings`; CI checks it is up to date).
   `fetch_window` is the only command outside tauri-specta (binary Arrow, cells already as
-  text). Our own canvas grid (`ResultGrid.tsx`). App commands (name, shortcut, menus) are
+  text). Our own canvas grid (`ResultGrid.tsx`): past the browsers' 33,554,428 px height cap
+  its spacer stops at `MAX_SPACER_H` and the scroll is scaled to the rows (`src/grid/scroll.ts`),
+  so a row position is always read with `contentTop` and set with `scrollToContent`, never with
+  the container's `scrollTop`. App commands (name, shortcut, menus) are
   registered once in `src/commandRegistry.ts` and run through `src/commands.ts`: the tab and
   file menus, the activity bar, the global shortcuts and the command palette
   (`CommandPalette.tsx`, Ctrl+Shift+P) all read it, and `scripts/commands.test.mjs` checks the
   menus against it. The palette's objects are only what the explorer already read (`catalog.ts`). Smoke test against the real app:
-  `node apps/desktop/e2e/smoke.mjs` (after `npx tauri build --no-bundle`).
+  `node apps/desktop/e2e/smoke.mjs` (after building the app and the CLI in one command, so
+  bundled DuckDB is compiled once: `npx tauri build --no-bundle -- -p spelaion-desktop -p
+  spelaion-cli`; a release build on 16 GB needs `CARGO_BUILD_JOBS=3`, see `CONTRIBUTING.md`).
+  It drives WebView2 over CDP, so the whole test runs on **Windows** only. Its window is moved
+  left of every monitor as it opens and never takes the foreground (`SPELAION_E2E_OFFSCREEN`, read only by
+  `open_main_window`), so the user's real mouse and keyboard cannot reach it; never make a step
+  depend on the window being visible or focused (`SPELAION_E2E_SHOW_WINDOW=1` shows it). On **Linux**,
+  `node apps/desktop/e2e/smoke-linux.mjs` drives the same release build through
+  `tauri-driver` and WebKitWebDriver (`e2e/webdriver.mjs`, no dependencies): a shorter pass
+  (start, trust, a query on every engine, the real clipboard both ways, an SSH tunnel, quitting
+  with a transaction open), with what it needs in `CONTRIBUTING.md`. CI runs this Linux pass
+  (`.github/workflows/smoke-linux.yml`, not a required check) on every pull request and push
+  to `dev` that touches more than documentation: a release build on
+  ubuntu with `testing/docker` up, under Xvfb with Openbox, so it takes the X11 paths (`xclip`
+  for the clipboard, `wmctrl` for the close request). A failure names the step and uploads the
+  screenshots and the log (artifact `smoke-linux`). macOS has neither (no
+  WebDriver for WKWebView). `e2e/processes.mjs` closes windows and lists processes for both.
   Automatic updates (ADR-021): `src-tauri/src/update.rs` (Tauri's updater plugin, reading
   `latest.json` from the latest GitHub release, so releases are never pre-releases;
   `SPELAION_NO_UPDATES` switches them off, as the smoke test does). Update artifacts are signed only in the release workflow
@@ -240,6 +419,10 @@ Several people and agents work at the same time: nobody pushes to `dev` or `main
   and never rewrite `dev` or `main`.
 - Still run the local checks below before each commit: CI confirms them, it does not replace
   them.
+- On a pull request that changes nothing Rust reads (only documentation, or only the frontend
+  outside `src-tauri` and `bindings.ts`), CI's two Rust jobs pass without running; the push to
+  `dev` after the merge runs them. `.github/workflows/needs-rust.sh` has the list: if Rust
+  starts reading a new place outside its crates, name it there in the same pull request.
 - **Pull requests target `dev`** (see `CONTRIBUTING.md`). Merge one when CI is green and it
   follows these rules, with "Rebase and merge" (one commit per change, as written), and delete
   its branch. GitHub's auto-merge can merge it as soon as CI passes.
@@ -311,7 +494,8 @@ outside the team.
   SPELAION_TEST_HTTP_PROXY=127.0.0.1:13128 cargo test --workspace`.
 - `cargo deny check` if dependencies change.
 - Frontend (`apps/desktop`): `npm run build` with no type errors and, if the UI changes,
-  the smoke test `node e2e/smoke.mjs` (drives the real app over WebView2 CDP).
+  the smoke test: `node e2e/smoke.mjs` on Windows (drives the real app over WebView2 CDP),
+  `node e2e/smoke-linux.mjs` on Linux (a shorter pass through WebDriver, see `CONTRIBUTING.md`).
 - If something could not be tested (for example Pageant or WebKitGTK), say so explicitly.
 
 ## Development environment

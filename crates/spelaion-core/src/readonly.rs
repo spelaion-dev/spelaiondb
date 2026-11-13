@@ -7,7 +7,8 @@
 //! 2. The engine's own barrier, always ending in `ROLLBACK`:
 //!    - PostgreSQL: `BEGIN READ ONLY` with `statement_timeout`;
 //!    - SQLite: a connection opened read-only plus `PRAGMA query_only`;
-//!    - MySQL and MariaDB: `START TRANSACTION READ ONLY`;
+//!    - MySQL and MariaDB: `START TRANSACTION READ ONLY`, after making the session read
+//!      strings as the classifier does ([`Session::mysql_default_quoting`]);
 //!    - SQL Server: a transaction that is always rolled back (it has no read-only one);
 //!      `EXPLAIN` becomes `SET SHOWPLAN_XML ON`, under which nothing runs;
 //!    - DuckDB: `enable_external_access = false` (no files, network nor extensions; it
@@ -49,6 +50,9 @@ pub struct ReadResult {
     pub truncated: bool,
     pub kind: ReadKind,
     pub elapsed: Duration,
+    /// Positions of the columns the connection masks (ADR-051): their values in `rows` are
+    /// the mask (NULL stays NULL).
+    pub masked: Vec<usize>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,6 +100,9 @@ impl Session {
                     self.collect(sql, limits.max_rows).await
                 }
                 "mysql" => {
+                    self.mysql_default_quoting()
+                        .await
+                        .map_err(ReadError::Rejected)?;
                     self.rolled_back("start transaction read only", sql, limits)
                         .await
                 }
@@ -121,7 +128,7 @@ impl Session {
             "postgres" => limits.timeout + CLIENT_GRACE,
             _ => limits.timeout,
         };
-        let (columns, rows, truncated) = match tokio::time::timeout(client_timeout, run).await {
+        let (columns, mut rows, truncated) = match tokio::time::timeout(client_timeout, run).await {
             Ok(result) => result?,
             Err(_) => {
                 let _ = self.cancel().await;
@@ -131,12 +138,18 @@ impl Session {
                 return Err(ReadError::Timeout(limits.timeout));
             }
         };
+        // Agents never get a masked column's values (ADR-051). A plan shows the plan, not rows.
+        let masked = match kind {
+            ReadKind::Explain => Vec::new(),
+            ReadKind::Query | ReadKind::Show => self.masking().mask_rows(&columns, &mut rows),
+        };
         Ok(ReadResult {
             columns,
             rows,
             truncated,
             kind,
             elapsed: started.elapsed(),
+            masked,
         })
     }
 
@@ -209,6 +222,75 @@ impl Session {
         self.collect_events(events, limits.max_rows).await
     }
 
+    /// MySQL and MariaDB: makes the session read strings and double quotes as the agents'
+    /// checks do (SDB-116). They parse MySQL with its default `sql_mode`, where `\` escapes a
+    /// quote and `"` starts a string. Under `NO_BACKSLASH_ESCAPES` or `ANSI_QUOTES` the server
+    /// would end a string elsewhere, and text the checks saw inside a string (a `WHERE` hidden
+    /// behind `-- `, a refused function) would run. So, on every call, before the statement and
+    /// on the same session: the session's `sql_mode` is read, and if it has either mode it is
+    /// set to the same list without them, then read again. `Err` names the mode that could not
+    /// be taken away: the statement is then refused, never run.
+    pub(crate) async fn mysql_default_quoting(&self) -> Result<(), String> {
+        const LOOSE: [&str; 2] = ["NO_BACKSLASH_ESCAPES", "ANSI_QUOTES"];
+        let read_mode = || async {
+            let (_, rows, _) = self
+                .collect("select @@session.sql_mode", 1)
+                .await
+                .map_err(|e| format!("could not read the session's sql_mode: {e}"))?;
+            let mode = match rows.first().and_then(|row| row.first()) {
+                Some(Value::Text(text)) => text.clone(),
+                Some(Value::Null) | None => String::new(),
+                Some(other) => other.to_string(),
+            };
+            Ok::<_, String>(
+                mode.split(',')
+                    .map(|m| m.trim().to_ascii_uppercase())
+                    .filter(|m| !m.is_empty())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let modes = read_mode().await?;
+        let loose: Vec<&String> = modes
+            .iter()
+            .filter(|m| LOOSE.contains(&m.as_str()))
+            .collect();
+        if loose.is_empty() {
+            return Ok(());
+        }
+        let named = loose
+            .iter()
+            .map(|m| m.as_str())
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let kept: Vec<&str> = modes
+            .iter()
+            .map(String::as_str)
+            .filter(|m| !LOOSE.contains(m))
+            .collect();
+        // Mode names are words of letters, digits and `_`; anything else is not written into
+        // the statement.
+        if kept
+            .iter()
+            .any(|m| !m.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+        {
+            return Err(format!(
+                "the session's sql_mode has {named}, and its other modes could not be kept"
+            ));
+        }
+        self.drain(&format!("set session sql_mode = '{}'", kept.join(",")))
+            .await
+            .map_err(|e| {
+                format!("the session's sql_mode has {named}, and it could not be turned off: {e}")
+            })?;
+        let now = read_mode().await?;
+        if let Some(still) = now.iter().find(|m| LOOSE.contains(&m.as_str())) {
+            return Err(format!(
+                "the session's sql_mode has {still}, and it could not be turned off"
+            ));
+        }
+        Ok(())
+    }
+
     /// The ROLLBACK that is harmless outside a transaction, in this engine.
     pub(crate) fn rollback_statement(&self) -> &'static str {
         match self.dialect().name() {
@@ -248,6 +330,8 @@ impl Session {
     ) -> Result<(Vec<ColumnMeta>, Vec<Vec<Value>>, bool), ReadError> {
         let options = ExecOptions {
             batch_size: (max_rows + 1).clamp(1, 10_000),
+            // Masking matches each column's origin too (ADR-052).
+            origins: !self.masking().is_empty(),
         };
         let events = self.connection().execute(sql, &options).await?;
         self.collect_events(events, max_rows).await

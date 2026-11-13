@@ -141,10 +141,24 @@ async fn process_monitor_shows_the_current_sqlserver_session_without_admin_right
         }
         Err(error) => Err(error.to_string()),
     };
-    let _: Vec<_> = admin
-        .run_script(&format!("DROP LOGIN [{login}]"))
-        .collect()
-        .await;
+    // The low session closes in the background, and a login still connected cannot be
+    // dropped: try again until it goes, so no login is left behind on the shared server.
+    let mut dropped = false;
+    for _ in 0..50 {
+        let events: Vec<CoreEvent> = admin
+            .run_script(&format!("DROP LOGIN [{login}]"))
+            .collect()
+            .await;
+        if !events
+            .iter()
+            .any(|e| matches!(e, CoreEvent::StatementFailed { .. }))
+        {
+            dropped = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(dropped, "the login {login} could not be dropped");
     let snapshot =
         result.expect("a login can inspect its own process without server-wide permissions");
     assert!(snapshot.limited);
@@ -274,11 +288,12 @@ async fn table_data_pages_and_edits_in_one_transaction() {
         spelaion_core::table_page_sql(session.dialect().as_ref(), &page("id desc", 0)).unwrap();
     let id = results(&run(&session, &sql).await)[0];
     let stored = session.results().get(id).unwrap();
+    let edit_target = session.edit_target().await.unwrap();
     let statements = {
         let stored = stored.read().unwrap();
         // Rows shown: 3, 2, 1 (id desc).
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[
@@ -332,7 +347,7 @@ async fn table_data_pages_and_edits_in_one_transaction() {
     let stale = {
         let stored = stored.read().unwrap();
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[
@@ -384,6 +399,9 @@ async fn query_results_resolve_their_table_as_the_server_does() {
          create synonym dbo.core_eq_syn for dbo.core_eq_orders",
     )
     .await;
+    // After an EXEC the session cannot tell its database, and rows read then are not editable
+    // (SDB-137); the app reads it again after every script, as here.
+    session.connection().current_database().await.unwrap();
     assert_eq!(
         editable(&session, "select * from core_eq_orders").await,
         Some(("dbo".to_string(), "core_eq_orders".to_string()))

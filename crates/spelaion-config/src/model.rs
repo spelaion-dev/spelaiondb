@@ -45,7 +45,8 @@ pub struct ConnectionFile {
     /// Reference to the secret, never the value: `{ secret = "keychain" }`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<SecretSpec>,
-    /// Name of a tunnel in `.spelaion/tunnels/`.
+    /// Name of a tunnel (a network profile) in `.spelaion/tunnels/`. With a Kubernetes profile
+    /// (ADR-050), `[kubernetes]` may set what the profile leaves out, such as the resource.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tunnel: Option<String>,
     /// A fixed port on 127.0.0.1 for this connection's end of its SSH tunnel, so other tools
@@ -53,14 +54,17 @@ pub struct ConnectionFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_port: Option<u16>,
     /// Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):
-    /// `port` is then the resource's port and `host` is only the name TLS checks.
+    /// `port` is then the resource's port and `host` is only the name TLS checks. With a
+    /// Kubernetes network profile in `tunnel` (ADR-050), only what the profile leaves out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kubernetes: Option<KubernetesConfig>,
     /// SQLite with a tunnel: the file is on the tunnel's last hop, opened by its `sqlite3`
     /// (ADR-018); this names that program when it is not `sqlite3` on the PATH.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sqlite3: Option<String>,
-    /// Open read-only (native in SQLite).
+    /// Read-only (ADR-053): only reads, session settings and transaction control run, and the
+    /// engine's own read-only mode is set where it has one (the file opened read-only on SQLite
+    /// and DuckDB, read-only transactions on PostgreSQL, MySQL and MariaDB).
     #[serde(default, skip_serializing_if = "is_false")]
     pub read_only: bool,
     /// Seconds of idleness after which the app sends the server a keep-alive (ADR-028), so a
@@ -86,6 +90,37 @@ pub struct ConnectionFile {
     pub session: SessionConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_default")]
     pub mcp: McpConfig,
+    /// Columns whose values the app shows as `••••••` (ADR-051): in the grid, copies,
+    /// exports, statistics and agents' answers.
+    #[serde(default, skip_serializing_if = "MaskingConfig::is_default")]
+    pub masking: MaskingConfig,
+}
+
+/// A connection's column masking (ADR-051). Patterns match result column names, ignoring
+/// case: `*` is any characters, `?` one character, and a pattern without them is a name.
+/// Masking keeps values off the screen, the clipboard, files and agents' answers in normal
+/// work; it is not access control (an alias such as `SELECT email AS e` gets past it).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskingConfig {
+    /// Columns to mask (`*password*`, `email`, `card_number`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub always: Vec<String>,
+    /// Columns to leave visible although a pattern of `always`, or one of the user's own
+    /// patterns, matches them (`email_verified`). Never a connection type's `mask_columns`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub never: Vec<String>,
+}
+
+impl MaskingConfig {
+    /// Most patterns in one list.
+    pub const MAX_PATTERNS: usize = 100;
+    /// Longest pattern accepted, in characters.
+    pub const MAX_PATTERN: usize = 128;
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -331,7 +366,8 @@ pub enum WritePolicy {
     Allow,
 }
 
-/// An SSH tunnel: `.spelaion/tunnels/<name>.toml`.
+/// A network profile (ADR-027): `.spelaion/tunnels/<name>.toml`. SSH hops, after a proxy or an
+/// AWS SSM session, or one of those alone; or a Kubernetes cluster (ADR-050).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TunnelFile {
@@ -353,10 +389,60 @@ pub struct TunnelFile {
     /// hops, it reaches the database itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    /// AWS SSM Session Manager port forwarding through a managed node (ADR-050): the first hop
+    /// is reached through it or, with no hops, it reaches the database itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssm: Option<SsmConfig>,
+    /// `kubectl port-forward` through a cluster, shared by every connection that names this
+    /// profile (ADR-050). It has no hops or proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubernetes: Option<KubernetesProfileConfig>,
     /// Hops in order; the last one is the one that reaches the database. None with a proxy
-    /// that reaches the database alone.
+    /// that reaches the database alone, or with Kubernetes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hops: Vec<HopConfig>,
+}
+
+/// AWS SSM in a network profile (ADR-050). It holds no secret: the AWS CLI uses the user's own
+/// credentials.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SsmConfig {
+    /// The managed node: an instance (`i-…`), on-premises (`mi-…`) or ECS target.
+    pub target: String,
+    /// The AWS region; the AWS CLI's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// The AWS CLI profile; its default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The AWS CLI executable; `aws` on the PATH (or in its installer's folder) when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws: Option<String>,
+}
+
+/// A Kubernetes network profile (ADR-050): the settings of `[kubernetes]` in a connection
+/// (ADR-015), shared. Each one is set here or in the connection that uses the profile, never
+/// in both; the resource may be left to each connection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KubernetesProfileConfig {
+    /// Context of the kubeconfig; its current context when absent here and in the connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// The context's namespace when absent here and in the connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// `svc/<name>`, `pod/<name>` or `deployment/<name>`; when absent, each connection names
+    /// its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubeconfig: Option<String>,
+    /// The `kubectl` executable; `kubectl` on the PATH when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubectl: Option<String>,
 }
 
 /// A tunnel's proxy (ADR-027).
@@ -403,7 +489,9 @@ pub struct KubernetesConfig {
     /// The context's namespace when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
-    /// `svc/<name>`, `pod/<name>` or `deployment/<name>`.
+    /// `svc/<name>`, `pod/<name>` or `deployment/<name>`. Left out only when the connection's
+    /// Kubernetes network profile names it (ADR-050).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub resource: String,
     /// A kubeconfig file instead of the default one (`KUBECONFIG` or `~/.kube/config`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -489,6 +577,10 @@ pub struct ConnectionTypeConfig {
     /// until that transaction is committed or rolled back (ADR-031). On for Production.
     #[serde(default, skip_serializing_if = "is_false")]
     pub smart_commit: bool,
+    /// Columns every connection of this type masks (ADR-051), as `[masking] always`
+    /// patterns. They add up across layers, and no connection's `never` unmasks them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_columns: Vec<String>,
 }
 
 /// The tones a connection type's badge can have: a fixed palette the app draws for the light
@@ -535,6 +627,25 @@ pub struct UserFile {
     pub vars: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "TunnelPreferences::is_default")]
     pub tunnels: TunnelPreferences,
+    /// Columns masked on every connection on this computer (ADR-051).
+    #[serde(default, skip_serializing_if = "UserMasking::is_default")]
+    pub masking: UserMasking,
+}
+
+/// The user's own masking patterns, for every connection (ADR-051).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UserMasking {
+    /// Columns to mask, as a connection's `[masking] always` patterns. A personal
+    /// connection's `never` may leave one of them visible; a repository connection's cannot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub always: Vec<String>,
+}
+
+impl UserMasking {
+    pub fn is_default(&self) -> bool {
+        self.always.is_empty()
+    }
 }
 
 /// Personal settings of every SSH tunnel on this computer.

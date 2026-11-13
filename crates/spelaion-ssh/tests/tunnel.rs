@@ -6,12 +6,13 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
+use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PublicKeyOrCertificate};
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, ExecOptions, Secret, TlsMode,
 };
@@ -647,6 +648,145 @@ async fn the_teams_known_hosts_verifies_the_first_connection_and_blocks_a_differ
     }
 }
 
+/// The bastion's own host key of one type, as `known_hosts` writes it (`type base64`): the
+/// bastion is asked for that type only, and the handshake stops once it shows the key.
+async fn bastion_key(host: &str, port: u16, algorithm: Algorithm) -> String {
+    struct Capture(Arc<Mutex<Option<String>>>);
+
+    impl russh::client::Handler for Capture {
+        type Error = russh::Error;
+
+        async fn check_server_key(
+            &mut self,
+            key: &PublicKeyOrCertificate,
+        ) -> Result<bool, Self::Error> {
+            if let PublicKeyOrCertificate::PublicKey { key, .. } = key {
+                let line = key.to_openssh().expect("an OpenSSH public key");
+                let fields: Vec<&str> = line.split_whitespace().take(2).collect();
+                *self.0.lock().unwrap() = Some(fields.join(" "));
+            }
+            Ok(false)
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(None));
+    let config = Arc::new(russh::client::Config {
+        preferred: russh::Preferred {
+            key: vec![algorithm.clone()].into(),
+            ..russh::Preferred::DEFAULT
+        },
+        ..Default::default()
+    });
+    let _ = russh::client::connect(config, (host, port), Capture(seen.clone())).await;
+    let key = seen.lock().unwrap().take();
+    key.unwrap_or_else(|| panic!("the bastion has no {algorithm} host key"))
+}
+
+const P256: Algorithm = Algorithm::Ecdsa {
+    curve: EcdsaCurve::NistP256,
+};
+const RSA_SHA512: Algorithm = Algorithm::Rsa {
+    hash: Some(HashAlg::Sha512),
+};
+/// Keys of the right types that are not the bastion's.
+const WRONG_ECDSA: &str = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHwf2HMM5TRXvo2SQJjsNkiDD5KqiiNjrGVv3UUh+mMT5RHxiRtOnlqvjhQtBq0VpmpCV/PwUdhOig4vkbqAcEc=";
+const WRONG_RSA: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCySqTyc8K7tJAp7upw9csSH1ewI4S+kZWeuwRaL+xCgT58/V/hMJx2OxV93QahNyijbOUoVnn8T+5b1SdIDXNuKF0tEs+gB6xJTYtpfktOpzHgO3MKwBuQ0adf2HOP9/qGX3pK4Mcv8LtP0w77LLiFvuFdMBGNh2Sy6ecyyFhbuxizA3wJkBfH+9OZpvbTtP5QQmMPBGf116Ua+OrPGyqeT6UhOnc9lXZIwsyVrfVVN096y0rxyl0HI5sHSv2q/c3RZfANdxy1FYviUnTlzg9ppy2kaLyx7BgO9HsQOZkUVq/Xg8FZ2AmXBVm6Zg8ehV5UzTYgTMRCmqszB052zqAn";
+
+/// A `known_hosts` that pins only one of a server's keys (the one `ssh` first negotiated,
+/// or `ssh-keyscan -t rsa`) verifies it: the server is asked for the pinned type first.
+#[tokio::test]
+async fn a_host_pinned_with_one_key_type_is_verified_without_a_dialog() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let spec = TunnelSpec {
+        hops: vec![hop(&host, port, "id_ed25519")],
+        ..Default::default()
+    };
+    for algorithm in [P256, RSA_SHA512] {
+        let pin = bastion_key(&host, port, algorithm.clone()).await;
+        assert!(!pin.starts_with("ssh-ed25519"), "{pin}");
+        let known = TempKnownHosts::new(&format!("pinned-{}", pin.split(' ').next().unwrap()));
+        let line = format!("[{host}]:{port} {pin}\n");
+        std::fs::write(&known.known().app_file, &line).unwrap();
+        let tunnel = Tunnel::connect(&spec, &known.known(), Arc::new(NeverAsked))
+            .await
+            .unwrap_or_else(|e| panic!("{algorithm} pinned: {e}"));
+        tunnel.close().await;
+        assert_eq!(
+            std::fs::read_to_string(&known.known().app_file).unwrap(),
+            line,
+            "nothing was learnt"
+        );
+    }
+
+    // Each hop asks for its own types: the second bastion, with no entry, is asked about
+    // with the default order (an Ed25519 key) and learnt.
+    let pin = bastion_key(&host, port, P256).await;
+    let known = TempKnownHosts::new("pinned-two-hops");
+    std::fs::write(&known.known().app_file, format!("[{host}]:{port} {pin}\n")).unwrap();
+    let ui = TestUi::accepting();
+    let tunnel = Tunnel::connect(&two_hops(&host, port), &known.known(), ui.clone())
+        .await
+        .unwrap();
+    tunnel.close().await;
+    assert_eq!(ui.hosts_asked.load(Ordering::SeqCst), 1);
+    let learnt = std::fs::read_to_string(&known.known().app_file).unwrap();
+    assert!(
+        learnt
+            .lines()
+            .any(|l| l.starts_with("bastion2 ssh-ed25519 ")),
+        "{learnt}"
+    );
+}
+
+/// Asking for the pinned type first changes which key the server shows, never the check: a
+/// pin of the right type with another key still blocks.
+#[tokio::test]
+async fn a_pinned_type_with_another_key_still_blocks() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let spec = TunnelSpec {
+        hops: vec![hop(&host, port, "id_ed25519")],
+        ..Default::default()
+    };
+    for wrong in [WRONG_RSA, WRONG_ECDSA] {
+        let known = TempKnownHosts::new(&format!("pinned-wrong-{}", &wrong[..7]));
+        std::fs::write(
+            &known.known().app_file,
+            format!("[{host}]:{port} {wrong}\n"),
+        )
+        .unwrap();
+        let ui = TestUi::accepting();
+        match Tunnel::connect(&spec, &known.known(), ui.clone()).await {
+            Err(SshError::HostKeyChanged {
+                hop: 0, line: 1, ..
+            }) => {}
+            other => panic!("{wrong}: expected HostKeyChanged: {:?}", other.map(|_| ())),
+        }
+        assert_eq!(ui.hosts_asked.load(Ordering::SeqCst), 0);
+    }
+
+    // Two types pinned, one of them right: the server is asked for the pinned types in the
+    // usual order (ECDSA before RSA, whatever the lines' order), and the key it shows must
+    // match. With the right ECDSA key it is accepted through it...
+    let ecdsa = bastion_key(&host, port, P256).await;
+    let known = TempKnownHosts::new("pinned-two-types");
+    let team = format!("[{host}]:{port} {WRONG_RSA}\n[{host}]:{port} {ecdsa}\n");
+    let tunnel = Tunnel::connect(&spec, &known.with_team(&team), Arc::new(NeverAsked))
+        .await
+        .unwrap();
+    tunnel.close().await;
+    // ... and with the right RSA key but a wrong ECDSA one, the ECDSA key it shows blocks.
+    let rsa = bastion_key(&host, port, RSA_SHA512).await;
+    let team = format!("[{host}]:{port} {rsa}\n[{host}]:{port} {WRONG_ECDSA}\n");
+    match Tunnel::connect(&spec, &known.with_team(&team), Arc::new(NeverAsked)).await {
+        Err(SshError::HostKeyChanged { hop: 0, .. }) => {}
+        other => panic!("expected HostKeyChanged: {:?}", other.map(|_| ())),
+    }
+}
+
 /// A TCP relay to the bastion that can be frozen: both sockets stay open but no byte goes
 /// through any more, as when a NAT or firewall forgets an idle session without telling either
 /// side. Tunnels open through it with its address as their first hop.
@@ -795,9 +935,126 @@ async fn a_server_that_never_answers_times_out_as_configured() {
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
 }
 
-/// Three consecutive free local ports, held open until dropped.
+/// A person who takes `delay` to compare each fingerprint, then accepts it.
+struct SlowToAnswer {
+    delay: Duration,
+    asked: AtomicUsize,
+}
+
+#[async_trait]
+impl Interaction for SlowToAnswer {
+    async fn confirm_unknown_host(&self, _: &HostInfo) -> bool {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
+        true
+    }
+    async fn ask_secret(&self, _: &SecretRequest) -> Option<Secret> {
+        None
+    }
+}
+
+/// ADR-007: the unknown-host question waits for the person, and that wait is not part of the
+/// hop's connect timeout; the network part keeps it.
+#[tokio::test]
+async fn answering_the_unknown_host_question_slowly_is_not_a_timeout() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("slow-fingerprint");
+    let mut spec = two_hops(&host, port);
+    spec.options.connect_timeout = Duration::from_secs(1);
+    let person = Arc::new(SlowToAnswer {
+        delay: Duration::from_secs(3),
+        asked: AtomicUsize::new(0),
+    });
+    let started = std::time::Instant::now();
+    let tunnel = Tunnel::open(&spec, postgres(), &known.known(), person.clone())
+        .await
+        .unwrap();
+    // Both bastions were asked about, each answered after three times the timeout.
+    assert_eq!(person.asked.load(Ordering::SeqCst), 2);
+    assert!(started.elapsed() >= Duration::from_secs(6));
+    assert_eq!(*tunnel.state().borrow(), TunnelState::Up);
+    let conn = pg_through(&tunnel).await;
+    assert_eq!(scalar(&*conn, "select 1").await.unwrap(), "1");
+    drop(conn);
+    tunnel.close().await;
+
+    // A server that never answers still times out as configured: nobody is asked anything,
+    // so the clock never stops, however slow the person would be.
+    let relay = Relay::to(&host, port).await;
+    relay.freeze();
+    let mut spec = two_hops("127.0.0.1", relay.port);
+    spec.options.connect_timeout = Duration::from_secs(1);
+    let started = std::time::Instant::now();
+    let fresh = TempKnownHosts::new("slow-fingerprint-frozen");
+    match Tunnel::connect(&spec, &fresh.known(), person.clone()).await {
+        Err(SshError::Timeout { hop: 0, after, .. }) => {
+            assert_eq!(after, Duration::from_secs(1))
+        }
+        other => panic!("expected a timeout at hop 1: {:?}", other.err()),
+    }
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(person.asked.load(Ordering::SeqCst), 2);
+}
+
+/// A changed key is still refused at once, without asking and without waiting: the pause
+/// only covers a question to the person.
+#[tokio::test]
+async fn a_changed_key_is_still_refused_with_a_slow_person() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("slow-changed");
+    // Another ed25519 key registered for the bastion, as in `a_changed_host_key_blocks_the_tunnel`.
+    let other_key = std::fs::read_to_string(key("id_ed25519_pass.pub")).unwrap();
+    let mut parts = other_key.split_whitespace();
+    std::fs::write(
+        &known.known().app_file,
+        format!(
+            "[{host}]:{port} {} {}\n",
+            parts.next().unwrap(),
+            parts.next().unwrap()
+        ),
+    )
+    .unwrap();
+    let mut spec = two_hops(&host, port);
+    spec.options.connect_timeout = Duration::from_secs(1);
+    let person = Arc::new(SlowToAnswer {
+        delay: Duration::from_secs(3),
+        asked: AtomicUsize::new(0),
+    });
+    match Tunnel::connect(&spec, &known.known(), person.clone()).await {
+        Err(SshError::HostKeyChanged { hop: 0, .. }) => {}
+        other => panic!("expected a changed key at hop 1: {:?}", other.err()),
+    }
+    assert_eq!(person.asked.load(Ordering::SeqCst), 0);
+}
+
+/// Three consecutive free local ports, held open until dropped, that the operating system never
+/// hands out on its own.
+///
+/// The tests release them before a tunnel binds them. A port from the system's ephemeral range
+/// could be taken in between: every outgoing connection and every listener on port 0 made by the
+/// tests running alongside gets one (`spelaion-core`'s `tests/open.rs` once failed that way on
+/// Linux, SDB-128). So they come from below every system's default range (Linux 32768, Windows
+/// and macOS 49152), and on Linux also from outside the range this machine is configured with.
+///
+/// The tests that call it run at the same time, so each call gets ports no other call in this
+/// process got: scanning from the same start, two of them once found the same free ports and
+/// the second to bind lost (SDB-261).
 fn free_ports() -> (u16, Vec<std::net::TcpListener>) {
-    for base in (41_000u16..60_000).step_by(37) {
+    static NEXT: AtomicU16 = AtomicU16::new(20_000);
+    let ephemeral = ephemeral_ports();
+    loop {
+        let base = NEXT.fetch_add(3, Ordering::SeqCst);
+        assert!(
+            base + 3 <= 32_000,
+            "no three consecutive free ports outside the system's ephemeral range"
+        );
+        if (base..base + 3).any(|p| ephemeral.contains(&p)) {
+            continue;
+        }
         let held: Vec<_> = (base..base + 3)
             .map_while(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok())
             .collect();
@@ -805,7 +1062,24 @@ fn free_ports() -> (u16, Vec<std::net::TcpListener>) {
             return (base, held);
         }
     }
-    panic!("no three consecutive free ports");
+}
+
+/// The ports the system gives to outgoing connections and to listeners on port 0.
+fn ephemeral_ports() -> std::ops::RangeInclusive<u16> {
+    if cfg!(target_os = "linux")
+        && let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        && let [Ok(low), Ok(high)] = range
+            .split_whitespace()
+            .map(str::parse::<u16>)
+            .collect::<Vec<_>>()[..]
+    {
+        return low..=high;
+    }
+    if cfg!(target_os = "linux") {
+        32_768..=60_999
+    } else {
+        49_152..=65_535
+    }
 }
 
 #[tokio::test]
@@ -1081,6 +1355,7 @@ async fn proxy_password_prompt_is_not_subject_to_connect_timeout() {
             connect_timeout: Duration::from_secs(1),
             ..Default::default()
         },
+        ssm: None,
     };
     let tunnel = Tunnel::connect(&spec, &known.known(), Arc::new(SlowProxyPassword))
         .await

@@ -18,7 +18,8 @@ use spelaion_config::{
 };
 use spelaion_driver_api::{DriverError, Secret};
 use spelaion_ssh::{
-    HostInfo, Interaction, KnownHosts, ProxyFailure, SecretRequest, SshError, Tunnel, TunnelStage,
+    HostInfo, Interaction, KnownHosts, ProxyFailure, SecretRequest, SshError, SsmFailure, Tunnel,
+    TunnelStage,
 };
 
 use crate::Engines;
@@ -48,6 +49,11 @@ pub enum StepKind {
         proxy_type: String,
         host: String,
         port: u16,
+    },
+    /// The network profile's AWS SSM session (ADR-050).
+    Ssm {
+        target: String,
+        region: Option<String>,
     },
     /// An SSH hop (0-based `hop`).
     Hop {
@@ -95,6 +101,9 @@ pub enum FailureKind {
     Config,
     /// The connection asks for its password and none was typed.
     PasswordRequired,
+    /// The password is read from the system keychain, which has none stored for this
+    /// connection, and none was typed.
+    KeychainEmpty,
     /// A question (password, passphrase, fingerprint) was dismissed.
     Cancelled,
     ProxyAuth,
@@ -109,6 +118,8 @@ pub enum FailureKind {
     Tls,
     Timeout,
     Kubernetes,
+    /// AWS SSM could not start: a missing AWS CLI or plugin, credentials, the managed node.
+    Ssm,
     Other,
 }
 
@@ -118,6 +129,7 @@ impl FailureKind {
         match self {
             FailureKind::Config => "configuration",
             FailureKind::PasswordRequired => "password required",
+            FailureKind::KeychainEmpty => "no password stored",
             FailureKind::Cancelled => "cancelled",
             FailureKind::ProxyAuth => "proxy authentication",
             FailureKind::SshAuth => "SSH authentication",
@@ -129,6 +141,7 @@ impl FailureKind {
             FailureKind::Tls => "TLS",
             FailureKind::Timeout => "timeout",
             FailureKind::Kubernetes => "Kubernetes",
+            FailureKind::Ssm => "AWS SSM",
             FailureKind::Other => "error",
         }
     }
@@ -141,6 +154,9 @@ impl FailureKind {
             }
             FailureKind::PasswordRequired => {
                 "This connection asks for its password every time: type it in the form to test the login."
+            }
+            FailureKind::KeychainEmpty => {
+                "No password is stored in the system keychain for this connection. Type it to test the login; saving the connection stores it."
             }
             FailureKind::Cancelled => {
                 "A question (a password, a passphrase or a server fingerprint) was dismissed, so the test stopped there. Test again and answer it."
@@ -174,6 +190,9 @@ impl FailureKind {
             }
             FailureKind::Kubernetes => {
                 "kubectl could not forward the port: check the context, namespace, resource and port in the Kubernetes tab, and that kubectl works from a terminal."
+            }
+            FailureKind::Ssm => {
+                "AWS SSM could not start the session: check that the AWS CLI v2 and the Session Manager plugin are installed (the message names what is missing), that you are signed in (aws sso login for SSO profiles), and that the target is a managed node you may start sessions on."
             }
             FailureKind::Other => {
                 "See the message. Copy the diagnostics to share them: secrets are left out."
@@ -228,6 +247,10 @@ impl TestStep {
                 hop + 1,
                 if *command { " (through a command)" } else { "" }
             ),
+            StepKind::Ssm { target, region } => match region {
+                Some(region) => format!("AWS SSM session through {target} ({region})"),
+                None => format!("AWS SSM session through {target}"),
+            },
             StepKind::Kubernetes {
                 resource,
                 context,
@@ -463,6 +486,7 @@ struct Plan {
 /// Where a tunnel's proxy and hops are in the list.
 struct TunnelLayout {
     proxy: Option<usize>,
+    ssm: Option<usize>,
     /// The first hop's step; the others follow it.
     first_hop: usize,
     hops: usize,
@@ -481,6 +505,13 @@ impl TunnelLayout {
             });
             steps.len() - 1
         });
+        let ssm = tunnel.ssm.as_ref().map(|ssm| {
+            steps.push(StepKind::Ssm {
+                target: ssm.target.clone(),
+                region: ssm.region.clone(),
+            });
+            steps.len() - 1
+        });
         let first_hop = steps.len();
         for (hop, spec) in tunnel.hops.iter().enumerate() {
             steps.push(StepKind::Hop {
@@ -493,6 +524,7 @@ impl TunnelLayout {
         }
         Self {
             proxy,
+            ssm,
             first_hop,
             hops: tunnel.hops.len(),
         }
@@ -500,12 +532,13 @@ impl TunnelLayout {
 
     /// The first step the tunnel runs.
     fn first(&self) -> usize {
-        self.proxy.unwrap_or(self.first_hop)
+        self.proxy.or(self.ssm).unwrap_or(self.first_hop)
     }
 
     fn step_of(&self, stage: TunnelStage) -> usize {
         match stage {
             TunnelStage::Proxy => self.first(),
+            TunnelStage::Ssm => self.ssm.unwrap_or(self.first()),
             TunnelStage::Hop(hop) => self.first_hop + hop.min(self.hops.saturating_sub(1)),
         }
     }
@@ -596,13 +629,22 @@ async fn connection_steps(
         return Ok(None);
     };
     run.start(step);
-    if let Password::Prompt { .. } = resolved.password
+    if let Password::Prompt { save_to } = &resolved.password
         && options.password.is_none()
     {
-        return Err((
-            FailureKind::PasswordRequired,
-            "this connection asks for its password, and none was typed".into(),
-        ));
+        return Err(match save_to {
+            // `keychain`, and the keychain has nothing for it.
+            Some(_) => (
+                FailureKind::KeychainEmpty,
+                "the system keychain has no password stored for this connection, and none was typed"
+                    .into(),
+            ),
+            // `prompt`, or `keychain` with no keychain on this system.
+            None => (
+                FailureKind::PasswordRequired,
+                "this connection asks for its password, and none was typed".into(),
+            ),
+        });
     }
     if let Some(tunnel) = &tunnel {
         if resolved.engine == Engine::Sqlite {
@@ -684,6 +726,13 @@ pub fn classify_ssh(error: &SshError) -> FailureKind {
         SshError::HostKeyRejected { .. } => FailureKind::HostKeyRejected,
         SshError::Auth { .. } => FailureKind::SshAuth,
         SshError::Cancelled => FailureKind::Cancelled,
+        SshError::Ssm { failure, .. } => match failure {
+            SsmFailure::Timeout => FailureKind::Timeout,
+            SsmFailure::MissingCli
+            | SsmFailure::MissingPlugin
+            | SsmFailure::Invalid
+            | SsmFailure::Exited => FailureKind::Ssm,
+        },
         SshError::Proxy { failure, .. } => match failure {
             ProxyFailure::Unreachable | ProxyFailure::Target => FailureKind::HostUnreachable,
             ProxyFailure::Rejected => FailureKind::ProxyAuth,
@@ -812,7 +861,12 @@ fn open_failure(error: &OpenError) -> Failure {
         OpenError::Timeout { .. } => (FailureKind::Timeout, error.to_string()),
         OpenError::Tunnel(e) => ssh_failure(e),
         OpenError::Kube(e) => (classify_kube(e), error.to_string()),
-        OpenError::PasswordRequired { .. } => (FailureKind::PasswordRequired, error.to_string()),
+        OpenError::PasswordRequired { save_to: Some(_) } => {
+            (FailureKind::KeychainEmpty, error.to_string())
+        }
+        OpenError::PasswordRequired { save_to: None } => {
+            (FailureKind::PasswordRequired, error.to_string())
+        }
         OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
         // The test logs in without the session setup; only an opened session runs it.
         OpenError::Setup(_) => (FailureKind::Other, error.to_string()),
@@ -1018,7 +1072,7 @@ fn format_elapsed(elapsed: Duration) -> String {
 }
 
 /// Learns every secret the configuration resolved for a connection.
-fn learn_connection_secrets(redactor: &Redactor, resolved: &ResolvedConnection) {
+pub(crate) fn learn_connection_secrets(redactor: &Redactor, resolved: &ResolvedConnection) {
     if let Password::Value(secret) = &resolved.password {
         redactor.add(secret.expose());
     }
@@ -1040,9 +1094,9 @@ fn learn_tunnel_secrets(redactor: &Redactor, tunnel: &ResolvedTunnel) {
 }
 
 /// Passes dialogs through, remembering every answer as a secret to redact.
-struct Recording {
-    inner: Arc<dyn Interaction>,
-    redactor: Arc<Redactor>,
+pub(crate) struct Recording {
+    pub(crate) inner: Arc<dyn Interaction>,
+    pub(crate) redactor: Arc<Redactor>,
 }
 
 #[async_trait]
@@ -1141,6 +1195,10 @@ impl Redactor {
                 host: text(host),
                 port: *port,
                 command: *command,
+            },
+            StepKind::Ssm { target, region } => StepKind::Ssm {
+                target: text(target),
+                region: region.as_ref().map(text),
             },
             StepKind::Kubernetes {
                 resource,
@@ -1388,6 +1446,7 @@ mod tests {
         let kinds = [
             FailureKind::Config,
             FailureKind::PasswordRequired,
+            FailureKind::KeychainEmpty,
             FailureKind::Cancelled,
             FailureKind::ProxyAuth,
             FailureKind::SshAuth,

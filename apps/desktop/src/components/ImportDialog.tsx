@@ -22,6 +22,8 @@ import type {
   RiskKind,
 } from "../bindings";
 import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase } from "../connect";
+import { isTextField, useFocusedPaste } from "../focusedPaste";
+import { readClipboardText } from "../clipboardText";
 import { chooseOpenFile } from "../dialogs";
 import { Icon } from "./Icons";
 import { useApp, useDialogs } from "../store";
@@ -62,6 +64,9 @@ interface Mapping {
 }
 const NEW = "\u0000new";
 const SKIP = "\u0000skip";
+
+/** The source step's own key: pastes the clipboard's text as the source. */
+const PASTE_SHORTCUT = "Ctrl+V";
 
 /** Rows of the preview shown. */
 const SHOWN_ROWS = 8;
@@ -228,22 +233,38 @@ function ImportForm({ request }: { request: ImportRequest }) {
     }
   }
 
+  function takeText(text: string) {
+    if (!text.trim()) {
+      setSourceError(t("import.clipboardEmpty"));
+      return;
+    }
+    const next: ImportSourceItem = { kind: "text", text };
+    setSource(next);
+    setNewTable("");
+    setPreview(null);
+    void read(next, null);
+  }
+
   async function paste() {
+    let text: string;
     try {
-      const text = await navigator.clipboard.readText();
-      if (!text.trim()) {
-        setSourceError(t("import.clipboardEmpty"));
-        return;
-      }
-      const next: ImportSourceItem = { kind: "text", text };
-      setSource(next);
-      setNewTable("");
-      setPreview(null);
-      void read(next, null);
+      text = await readClipboardText();
     } catch {
       setSourceError(t("import.clipboardUnavailable"));
+      return;
     }
+    takeText(text);
   }
+
+  // Ctrl+V outside a dialog's text fields (this one's, or one opened over it) never reaches what
+  // is behind it (the explorer would paste a connection, the editor the text); on the source step
+  // it takes the text from the paste event. Judged by the focused element: WebKitGTK sends the
+  // event to wherever the page's selection was left, which can be the editor behind the dialog.
+  useFocusedPaste((e, focused) => {
+    if (isTextField(focused) && focused?.closest('[aria-modal="true"]')) return false;
+    if (step === "source") takeText(e.clipboardData?.getData("text/plain") ?? "");
+    return true;
+  });
 
   function importRequest(): ImportRequestItem | null {
     if (!source || !options || !preview) return null;
@@ -357,7 +378,9 @@ function ImportForm({ request }: { request: ImportRequest }) {
           <>
             <div className="import-source">
               <button onClick={() => void chooseFile()}>{t("import.chooseFile")}</button>
-              <button onClick={() => void paste()}>{t("import.paste")}</button>
+              <button title={`${t("import.paste")} (${PASTE_SHORTCUT})`} onClick={() => void paste()}>
+                {t("import.paste")}
+              </button>
               {sourceName && (
                 <span className="import-source-name" title={sourceName}>
                   {sourceName}

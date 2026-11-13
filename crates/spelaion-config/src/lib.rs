@@ -10,6 +10,7 @@
 //! anything is resolved ([`TrustStore`]).
 
 mod accounts;
+pub mod atomic_file;
 mod beekeeper;
 mod check;
 mod conn_url;
@@ -22,7 +23,9 @@ mod engine_change;
 mod error;
 mod heidisql;
 mod import;
+mod linux_dirs;
 mod load;
+mod masking;
 pub mod mcp_clients;
 mod migrate;
 mod model;
@@ -51,16 +54,16 @@ pub use datagrip::{DatagripError, datagrip_dirs, jetbrains_dir, read_datagrip};
 pub use dbeaver::{DbeaverError, dbeaver_workspace, read_dbeaver};
 pub use draft::{
     CloudToken, ConnectionDraft, KubernetesDraft, PasswordChoice, SessionDraft, add_connection,
-    connection_revision, connections_dir, delete_connection, normalize_tags, slug,
-    update_connection, update_connection_at_revision,
+    connection_password_stored, connection_revision, connections_dir, delete_connection,
+    normalize_tags, slug, update_connection, update_connection_at_revision,
 };
 pub use edit::{
-    CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_vars,
-    set_value,
+    CONNECTION_SCHEMA_URL, create_connection, remove_value, set_tunnel_ports, set_user_masking,
+    set_user_vars, set_value,
 };
 pub use engine_change::EngineChange;
-pub use error::{ConfigError, ResolveError};
-pub use heidisql::{HeidiSqlError, read_heidisql, read_heidisql_registry};
+pub use error::{ConfigError, ProblemKind, ResolveError};
+pub use heidisql::{HeidiSqlError, heidisql_has_registry, read_heidisql, read_heidisql_registry};
 pub use import::{
     DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedProxy, ImportedSsh,
     ImportedTls, KeychainItem, TargetFolder, find_duplicate, import_names, import_plan,
@@ -71,11 +74,13 @@ pub use load::{
     WORKSPACE_DIR, default_user_dir, ensure_private_dir, find_workspace, load, valid_type_id,
     workspace_dir,
 };
+pub use masking::{MASK_EVERYTHING, MaskingRules, check_pattern, check_patterns};
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{
     ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, HopConfig, IsolationLevel,
-    KubernetesConfig, McpConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec, SessionConfig,
-    SshAuth, TlsConfig, TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile, WritePolicy,
+    KubernetesConfig, KubernetesProfileConfig, MaskingConfig, McpConfig, ProxyConfig, ProxyType,
+    SCHEMA_VERSION, SecretSpec, SessionConfig, SshAuth, SsmConfig, TlsConfig, TlsModeConfig, Tone,
+    TunnelFile, TunnelPreferences, UserFile, UserMasking, WritePolicy,
 };
 pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,
@@ -85,10 +90,11 @@ pub use pgadmin::{PgadminError, pgadmin_dir, read_pgadmin};
 pub use relocate::{Moved, move_connection};
 pub use resolve::{
     LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
-    ResolvedSession, ResolvedTunnel, Resolver, TunnelSettings,
+    ResolvedSession, ResolvedSsm, ResolvedTunnel, Resolver, TunnelSettings,
 };
 pub use secrets::{
-    KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef, SystemBackend,
+    KEYCHAIN_NOT_KEPT, KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef,
+    SystemBackend,
 };
 pub use tableplus::{TableplusError, read_tableplus, tableplus_dir};
 pub use trust::{
@@ -96,8 +102,9 @@ pub use trust::{
     team_known_hosts, tunnel_item,
 };
 pub use tunnel_draft::{
-    HopDraft, ProxyDraft, TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, TunnelPasswords,
-    add_tunnel, delete_tunnel, tunnel_revision, tunnel_users, tunnels_dir, update_tunnel,
+    HopDraft, KubernetesProfileDraft, ProxyDraft, SsmDraft, StoredTunnelPasswords,
+    TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, TunnelPasswords, add_tunnel, delete_tunnel,
+    tunnel_passwords_stored, tunnel_revision, tunnel_users, tunnels_dir, update_tunnel,
     update_tunnel_at_revision,
 };
 pub use types::{ConnectionType, ConnectionTypes, PRODUCTION, Safeguards, type_id};

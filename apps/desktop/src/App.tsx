@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ExportDialog } from "./components/ExportDialog";
+import { BackupDialog } from "./components/BackupDialog";
 import { ImportDialog } from "./components/ImportDialog";
+import { RunFileDialog } from "./components/RunFileDialog";
 import { ActivityBar } from "./components/ActivityBar";
 import { McpPage } from "./components/McpPage";
 import { AddConnection } from "./components/AddConnection";
@@ -14,18 +16,21 @@ import { openSavedPlan } from "./planFiles";
 import { TabBar } from "./components/TabBar";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { ProcessMonitor, ProcessSidebar } from "./components/ProcessMonitor";
+import { SearchPanel } from "./components/SearchPanel";
 import { SettingsDialog } from "./components/Settings";
+import { ReleaseNotesDialog } from "./components/ReleaseNotesDialog";
 import { SnippetsPanel } from "./components/SnippetsPanel";
 import { Sidebar, refreshConnections } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
-import { EXPLORER_SESSION_CLOSED_EVENT, tabName } from "./connect";
+import { ErDiagramView } from "./components/ErDiagram";
+import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest } from "./connect";
 import { commandSpec, globalCommandFor, withShortcut, type CommandId } from "./commandRegistry";
 import { activeContext, isCommandId, runCommand } from "./commands";
-import { call, commands, events } from "./api";
+import { commands, events } from "./api";
 import { usePreferences } from "./preferences";
-import { useUpdate } from "./update";
+import { manualUpdateKey, useUpdate } from "./update";
 import { useApp, useDialogs } from "./store";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
@@ -117,12 +122,8 @@ export default function App() {
     const unlistenTransaction = events.transactionChanged.listen((e) => {
       useApp.getState().updateTab(e.payload.session, { transaction: e.payload.status });
     });
-    // Quitting with transactions open: the core held the window; the user decides.
-    const unlistenQuit = events.quitBlocked.listen((e) => {
-      void useDialogs.getState().askOpenTransactions(e.payload.sessions.map(tabName), "quit").then((quit) => {
-        if (quit) void call(commands.quitApp()).catch(() => undefined);
-      });
-    });
+    // Closing the window with sessions open: the core held it; the UI quits or asks (SDB-140).
+    const unlistenQuit = events.quitRequested.listen(() => void answerQuitRequest());
     // Global shortcuts: the registry's (commandRegistry.ts), the same commands as the menus and
     // the command palette. Ctrl+Tab is the tab bar's switcher (TabBar.tsx).
     const onKey = (e: KeyboardEvent) => {
@@ -153,6 +154,8 @@ export default function App() {
       <ActivityBar />
       <Sidebar hidden={sidebarSection !== "connections"} />
       {sidebarSection === "processes" && <ProcessSidebar selected={processConnection} onSelect={setProcessConnection} />}
+      {/* Always mounted: a data search goes on while another panel is shown. */}
+      <SearchPanel hidden={sidebarSection !== "search"} />
       <div
         className="sidebar-resizer"
         hidden={!sidebarOpen}
@@ -160,7 +163,7 @@ export default function App() {
         tabIndex={0}
         aria-label={t("resizeSidebar")}
         title={t("resizeSidebarHint")}
-        aria-controls={sidebarSection === "processes" ? "processes-sidebar" : "connections-sidebar"}
+        aria-controls={sidebarSection === "processes" ? "processes-sidebar" : sidebarSection === "search" ? "search-sidebar" : "connections-sidebar"}
         aria-orientation="vertical"
         aria-valuemin={SIDEBAR_MIN}
         aria-valuemax={maxSidebarWidth}
@@ -195,6 +198,7 @@ export default function App() {
         {loadError && <div className="banner" role="alert">{loadError}<button onClick={() => void loadConnections()}>{t("retryConnections")}</button></div>}
         {preferenceError && <div className="banner" role="alert">{t("preferenceLoadError")} {preferenceError.detail}</div>}
         <UpdateNotice />
+        <ReleaseNotesDialog />
         <TabBar hidden={sidebarSection === "processes" || sidebarSection === "mcp"} />
         <div className="workspace-content">
           <div className="editor-workspace" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
@@ -215,7 +219,7 @@ export default function App() {
               tabs.map((t) => (
                 // All mounted (the editor keeps its state); only the active one is visible.
                 <div key={t.id} className="tab-panel" hidden={t.id !== activeTab}>
-                  {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : <EditorTab tab={t} />}
+                  {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
                 </div>
               ))
             )}
@@ -240,6 +244,8 @@ export default function App() {
       {paletteOpen && <CommandPalette onClose={() => useApp.getState().setPaletteOpen(false)} />}
       <ExportDialog />
       <ImportDialog />
+      <BackupDialog />
+      <RunFileDialog />
       <Dialogs />
     </div>
   );
@@ -265,15 +271,27 @@ function UpdateNotice() {
   const error = useUpdate((s) => s.error);
   const install = useUpdate((s) => s.install);
   const dismiss = useUpdate((s) => s.dismiss);
+  const showNotes = useUpdate((s) => s.showNotes);
+  const openReleasesPage = useUpdate((s) => s.openReleasesPage);
   if (status?.kind !== "available" || dismissed) return null;
+  // Only a copy that can replace itself offers to install (the core refuses the others too).
+  const manual = manualUpdateKey(status.method);
   return (
     <div className="banner update-notice" role="status">
-      <span>{t("update.available", { version: status.version, current: status.currentVersion })}</span>
+      <span>
+        {t("update.available", { version: status.version, current: status.currentVersion })}
+        {manual && ` ${t(`update.${manual}`)}`}
+      </span>
       {error && <span className="error">{error}</span>}
       <div className="banner-actions">
-        <button className="primary" disabled={installing} onClick={() => void install()}>
-          {installing ? t("update.installing") : t("update.install")}
-        </button>
+        <button disabled={installing} onClick={showNotes}>{t("update.notesAction")}</button>
+        {manual ? (
+          <button className="primary" onClick={() => void openReleasesPage()}>{t("update.openReleases")}</button>
+        ) : (
+          <button className="primary" disabled={installing} onClick={() => void install()}>
+            {installing ? t("update.installing") : t("update.install")}
+          </button>
+        )}
         <button disabled={installing} onClick={dismiss}>
           {t("update.later")}
         </button>

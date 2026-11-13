@@ -16,6 +16,23 @@ russh = { version = "0.65", default-features = false, features = ["ring", "flate
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "process", "io-util", "time", "sync", "rt", "macros"] }
 
+# Stopping an SSM session waits until the AWS CLI and its plugin are gone (ADR-050): their
+# process group on Unix, a job object on Windows. Both are safe APIs: the workspace forbids
+# `unsafe`.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+win32job = "2"
+
+# A stand-in for the AWS CLI and its Session Manager plugin, for the SSM tests only (ADR-050).
+# Never shipped: releases build `spelaion-cli` and the desktop app, not this crate's binaries.
+[[bin]]
+name = "spelaion-test-fake-aws"
+path = "tests/support/fake_aws.rs"
+test = false
+doc = false
+
 [dev-dependencies]
 futures-util.workspace = true
 spelaion-driver-postgres.workspace = true

@@ -53,18 +53,38 @@ import {
   type KeyRefItem,
   type RowReferenceItem_Serialize,
   type SelectionStatsItem_Serialize,
+  type ChartAggregateItem,
+  type ChartKindItem,
+  type ChartLabelItem,
+  type ChartPointsItem_Serialize,
   type ColumnStatsItem_Serialize,
+  type RevealedCellItem_Serialize,
+  type DataSearchEventItem_Deserialize,
+  type DataSearchLimitsItem,
+  type DataSearchRequestItem,
+  type DataSearchSummaryItem,
+  type SchemaColumnItem,
+  type SearchHitItem_Deserialize,
+  type SearchTableItem,
+  type TableStatusItem_Deserialize,
   type ColumnStatsOutcome_Serialize,
   type ColumnStatsTarget,
   type TopValueItem_Serialize,
   type StatStateItem,
   type RiskKind,
+  type SsmDraftItem,
   type KubernetesDraftItem,
   type KubePortItem_Serialize,
+  type KubeEditor_Deserialize,
   type ImportItem_Serialize,
   type ImportScan_Serialize,
   type ImportReport,
-  type RowChangeItem_Deserialize,
+  type PendingEditItem_Deserialize,
+  type PendingEditsItem_Serialize,
+  type BlockItem,
+  type BulkActionItem,
+  type CellInputItem,
+  type UpdateMethod,
   type UpdateStatus_Serialize,
   type CellEditItem_Deserialize,
   type ColumnFilterItem,
@@ -106,7 +126,13 @@ import {
 } from "./bindings";
 
 export { commands, events };
-export type { ImportReport, KubernetesDraftItem };
+// Data search (ADR-043): its events arrive through a channel (the deserialization variant).
+export type DataSearchEventItem = DataSearchEventItem_Deserialize;
+export type SearchHitItem = SearchHitItem_Deserialize;
+export type TableStatusItem = TableStatusItem_Deserialize;
+export type { DataSearchLimitsItem, DataSearchRequestItem, DataSearchSummaryItem, SchemaColumnItem, SearchTableItem };
+export type { ImportReport, KubernetesDraftItem, SsmDraftItem };
+export type { BlockItem, BulkActionItem, CellInputItem };
 export type EngineChangeItem = EngineChangeItem_Serialize;
 export type NamePatternPreview = NamePatternPreview_Serialize;
 export type { CellRange, ColumnFilterItem, ColumnItem, FilterOpItem, NameStyleItem, ConnectOutcome, FieldChangeItem, InteractionKind, PasswordMode, RiskKind, SchemaItem, SnippetItem, SqlTemplateItem, SshAuthItem, TextFormat, TlsModeItem, TunnelItem };
@@ -122,8 +148,11 @@ export type TransactionStatusItem = TransactionStatusItem_Serialize;
 export type ConnectionTypeDraft = ConnectionTypeDraft_Deserialize;
 export type ImportItem = ImportItem_Serialize;
 export type KubePort = KubePortItem_Serialize;
+/** Which editor asks kubectl for its lists (ADR-015, ADR-050). */
+export type KubeEditor = KubeEditor_Deserialize;
 export type ImportScan = ImportScan_Serialize;
-export type RowChangeItem = RowChangeItem_Deserialize;
+export type PendingEditItem = PendingEditItem_Deserialize;
+export type PendingEdits = PendingEditsItem_Serialize;
 export type CellEditItem = CellEditItem_Deserialize;
 export type UrlFields = UrlFields_Serialize;
 export type HistoryItem = HistoryItem_Serialize;
@@ -143,7 +172,10 @@ export type TableDetails = TableDetails_Serialize;
 export type { TableKeyItem, KeyTargetItem, KeyRefItem };
 export type RowReferenceItem = RowReferenceItem_Serialize;
 export type SelectionStatsItem = SelectionStatsItem_Serialize;
+export type ChartPointsItem = ChartPointsItem_Serialize;
+export type { ChartAggregateItem, ChartKindItem, ChartLabelItem };
 export type ColumnStatsItem = ColumnStatsItem_Serialize;
+export type RevealedCellItem = RevealedCellItem_Serialize;
 export type ColumnStatsOutcome = ColumnStatsOutcome_Serialize;
 export type TopValueItem = TopValueItem_Serialize;
 export type { ColumnStatsTarget, StatStateItem };
@@ -156,6 +188,8 @@ export type { McpInstallPlanItem, McpSettingsItem, ToolOutputItem };
 export type AuditEventItem = AuditEventItem_Serialize;
 export type { AuditSessionItem, AuditStatusItem };
 export type UpdateStatus = UpdateStatus_Serialize;
+/** How this copy of the app gets a new version: only `inApp` may offer "Install and restart". */
+export type { UpdateMethod };
 /** What `connect` returns. */
 export type ConnectResult = ConnectOutcome_Serialize;
 /** What `testConnection` returns; its steps arrive through a channel (ADR-032). */

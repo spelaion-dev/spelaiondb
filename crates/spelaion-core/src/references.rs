@@ -84,6 +84,9 @@ pub enum FollowError {
     Condition(ConditionError),
     #[error("{0}")]
     Page(PageError),
+    /// A column of the key is masked (ADR-051): the result holds the mask, not the value.
+    #[error("{0} is masked: the key cannot be followed from this row")]
+    Masked(String),
 }
 
 /// Every key that can be followed from `schema.table`: its own keys (outgoing) first, then
@@ -167,6 +170,9 @@ pub fn follow(
     for (column, other) in key.columns.iter().zip(&key.other_columns) {
         let index = column_index(stored, column)
             .ok_or_else(|| FollowError::MissingColumn(column.clone()))?;
+        if stored.is_masked(index) {
+            return Err(FollowError::Masked(column.clone()));
+        }
         let logical = stored.schema().columns[index].logical;
         let value = stored
             .value_at(position, index)

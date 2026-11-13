@@ -4,15 +4,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { call, commands, type CellEditItem, type ColumnFilterItem, type RowChangeItem, type ScriptEvent } from "../api";
+import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import type { EditableTableItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities } from "../bindings";
 import { PlanViewer } from "./PlanViewer";
 import { confirmOpenTransactions, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
-import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
+import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
 import { connectionTooltip } from "../connectionInfo";
 import { byteToIndex } from "../text";
 import { ExportButton } from "./ExportButton";
 import { ResultFilter } from "./ResultFilter";
+import { defaultChart, ResultChart, type ChartSettings } from "./ResultChart";
 import { ResultGrid, type GridEditing } from "./ResultGrid";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { summaryMessages, summaryShort } from "../scriptRun";
@@ -32,6 +33,11 @@ import { useEngineInfo } from "../engines";
 /** Engines whose sessions can change database with `USE` (a selector per tab). */
 function databaseSwitching(engine: string | undefined): boolean {
   return engine === "mysql" || engine === "mariadb" || engine === "sqlserver";
+}
+
+/** No pending edits, as the core answers for a page it never edited. */
+function emptyPending(): PendingEdits {
+  return { cells: [], deleted: [], inserts: [], updatedRows: 0, canUndo: false, canRedo: false, changed: 0, clipped: 0 };
 }
 
 function message(e: unknown): string {
@@ -120,14 +126,36 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return () => clearTimeout(timer);
   }, [notice]);
 
-  // Pending changes of a table data tab (ADR-014): the user's input until Apply.
-  const [pending, setPending] = useState<{ cells: Record<string, string | null>; deleted: number[]; inserts: CellEditItem[][] }>({
-    cells: {},
-    deleted: [],
-    inserts: [],
-  });
+  // Pending edits of a table data tab (ADR-044): the core holds them with the page's result;
+  // this is only what it answered last, to draw them. Edits go to the core one at a time, in
+  // order, and only the answer to the latest one is shown (a cell typed shows at once).
+  const [pendingView, setPendingView] = useState<{ result: number; edits: PendingEdits } | null>(null);
+  const editQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const editSeq = useRef(0);
+  const shownPending = pendingView && pendingView.result === tab.run?.activeResult ? pendingView.edits : null;
+  const pending = useMemo(() => {
+    const cells: Record<string, string | null> = {};
+    const defaults = new Set<string>();
+    for (const cell of shownPending?.cells ?? []) {
+      const key = `${cell.row}:${cell.column}`;
+      cells[key] = cell.value;
+      if (cell.isDefault) defaults.add(key);
+    }
+    return {
+      cells,
+      defaults,
+      deleted: shownPending?.deleted ?? [],
+      inserts: (shownPending?.inserts ?? []) as CellEditItem[][],
+      updatedRows: shownPending?.updatedRows ?? 0,
+      canUndo: shownPending?.canUndo ?? false,
+      canRedo: shownPending?.canRedo ?? false,
+    };
+  }, [shownPending]);
   const pendingCount = Object.keys(pending.cells).length + pending.deleted.length + pending.inserts.length;
-  const clearPending = () => setPending({ cells: {}, deleted: [], inserts: [] });
+  const clearPending = () => {
+    editSeq.current += 1;
+    setPendingView(null);
+  };
   /** The table's primary key (`null` until known): editing needs one. */
   const [primaryKey, setPrimaryKey] = useState<string[] | null>(null);
   const [queryTable, setQueryTable] = useState<(EditableTableItem & { result: number }) | null>(null);
@@ -153,87 +181,182 @@ export function EditorTab({ tab }: { tab: Tab }) {
       .catch(() => { if (active) setQueryChecked(result.id); });
     return () => { active = false; };
   }, [tab.id, tab.table, tab.status, tab.run?.running, tab.run?.results]);
+  // Rows read through a session that is gone (lost, disconnected, another connection) are not
+  // editable: the check above asks again once connected, and the core refuses them anyway
+  // (SDB-137).
+  useEffect(() => {
+    if (tab.status !== "connected") setQueryTable(null);
+  }, [tab.status]);
 
   const activeResult = tab.run?.results.find((result) => result.id === tab.run?.activeResult);
   const editTarget = tab.table
     ? (primaryKey?.length && !connection?.readOnly ? { ...tab.table, primaryKey } : null)
     : (queryTable && queryTable.result === activeResult?.id ? queryTable : null);
 
+  // A page shown again (another result tab, a tab restored) shows the edits its core holds.
+  const activeResultId = activeResult?.complete ? activeResult.id : null;
+  useEffect(() => {
+    if (activeResultId === null) return;
+    let live = true;
+    const seq = editSeq.current;
+    call(commands.pendingEdits(activeResultId))
+      .then((edits) => { if (live && seq === editSeq.current) setPendingView({ result: activeResultId, edits }); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [activeResultId]);
+
+  /** Sends one edit to the core, after the ones before it; `local` draws it before the answer. */
+  function sendEdit(edit: PendingEditItem, local?: (cells: PendingEdits) => PendingEdits): Promise<PendingEdits | null> {
+    const result = activeResult;
+    if (!result) return Promise.resolve(null);
+    const seq = ++editSeq.current;
+    if (local) setPendingView((p) => ({ result: result.id, edits: local(p && p.result === result.id ? p.edits : emptyPending()) }));
+    const sent = editQueue.current.then(async () => {
+      try {
+        const edits = await call(commands.editPending(result.id, edit));
+        if (seq === editSeq.current) setPendingView({ result: result.id, edits });
+        reportEdit(edit, edits);
+        return edits;
+      } catch (e) {
+        setNotice({ text: t("edit.editFailed", { detail: message(e) }), error: true });
+        // Show what the core holds, not what was drawn before it refused.
+        if (seq === editSeq.current) {
+          const edits = await call(commands.pendingEdits(result.id)).catch(() => null);
+          if (edits && seq === editSeq.current) setPendingView({ result: result.id, edits });
+        }
+        return null;
+      }
+    });
+    editQueue.current = sent;
+    return sent;
+  }
+
+  /** A short note for edits whose effect is not obvious in the grid. */
+  function reportEdit(edit: PendingEditItem, edits: PendingEdits) {
+    if (edits.clipped > 0) setNotice({ text: t("edit.pasteClipped", { count: edits.clipped }), error: false });
+    else if (edit.kind === "undo" || edit.kind === "redo") {
+      if (edits.changed === 0) setNotice({ text: t(edit.kind === "undo" ? "edit.nothingToUndo" : "edit.nothingToRedo"), error: false });
+    } else if (edit.kind === "bulk" || edit.kind === "paste") {
+      setNotice({ text: edits.changed > 0 ? t("edit.cellsChanged", { count: edits.changed }) : t("edit.noCellChanged"), error: false });
+    }
+  }
+
+  const cellInput = (value: string | null | undefined): CellInputItem | null =>
+    value === undefined ? null : value === null ? { kind: "null" } : { kind: "text", text: value };
+  /** The cell drawn with its new value at once (the core's answer follows). */
+  const localCell = (row: number, column: number, value: string | null | undefined) => (edits: PendingEdits): PendingEdits => ({
+    ...edits,
+    cells: [
+      ...edits.cells.filter((c) => c.row !== row || c.column !== column),
+      ...(value === undefined ? [] : [{ row, column, value, isDefault: false }]),
+    ],
+  });
+
   const editing: GridEditing | undefined =
     editTarget && activeResult?.complete && tab.status === "connected"
       ? {
           cells: pending.cells,
+          defaults: pending.defaults,
           deleted: pending.deleted,
           inserts: pending.inserts,
+          updatedRows: pending.updatedRows,
+          canUndo: pending.canUndo,
+          canRedo: pending.canRedo,
           primaryKey: editTarget.primaryKey,
+          table: { schema: editTarget.schema, name: editTarget.name },
           busy: (tab.run?.running ?? false) || savingEdits || pageLoading || (activeResult?.paging?.loading ?? false),
-          onInsert: (values) => setPending((p) => ({ ...p, inserts: [...p.inserts, values] })),
-          onUpdateInsert: (index, values) => setPending((p) => ({ ...p, inserts: p.inserts.map((row, i) => i === index ? values : row) })),
-          onRemoveInsert: (index) => setPending((p) => ({ ...p, inserts: p.inserts.filter((_, i) => i !== index) })),
+          onInsert: (values) => void sendEdit({ kind: "insert", values }),
+          onUpdateInsert: (index, values) => void sendEdit({ kind: "updateInsert", index, values }),
+          onRemoveInsert: (index) => void sendEdit({ kind: "removeInsert", index }),
           onApply: () => void applyEdits(),
           onApplyCell: (row, col, value, dirty) => {
-            const cells = { ...pending.cells };
-            if (dirty) {
-              if (value === undefined) delete cells[`${row}:${col}`];
-              else cells[`${row}:${col}`] = value;
-            }
-            const changes = { ...pending, cells };
-            setPending(changes);
-            void applyEdits(changes);
+            if (dirty) void sendEdit({ kind: "setCells", cells: [{ row, column: col, value: cellInput(value) }] }, localCell(row, col, value));
+            void applyEdits();
           },
-          onDiscard: clearPending,
+          onDiscard: () => void sendEdit({ kind: "discard" }),
+          onLoadFile: (row, col, path) => loadValueFile(row, col, path),
           onEdit: (row, col, value) =>
-            setPending((p) => {
-              const cells = { ...p.cells };
-              if (value === undefined) delete cells[`${row}:${col}`];
-              else cells[`${row}:${col}`] = value;
-              return { ...p, cells };
-            }),
-          onDelete: (rows) => setPending((p) => ({ ...p, deleted: [...new Set([...p.deleted, ...rows])] })),
-          onRevert: (rows) =>
-            setPending((p) => ({
-              ...p,
-              deleted: p.deleted.filter((r) => !rows.includes(r)),
-              cells: Object.fromEntries(Object.entries(p.cells).filter(([k]) => !rows.includes(Number(k.split(":")[0])))),
-            })),
+            void sendEdit({ kind: "setCells", cells: [{ row, column: col, value: cellInput(value) }] }, localCell(row, col, value)),
+          onType: (row, col, value) =>
+            void sendEdit({ kind: "type", cell: { row, column: col, value: cellInput(value) } }, localCell(row, col, value)),
+          onDelete: (rows) => void sendEdit({ kind: "delete", rows }),
+          onRevert: (rows) => void sendEdit({ kind: "revert", rows }),
+          onBulk: (block, action) => void sendEdit({ kind: "bulk", block, action }),
+          onPaste: (selection, columns, text) => void sendEdit({ kind: "paste", selection, columns, text }),
+          onUndo: () => void sendEdit({ kind: "undo" }),
+          onRedo: () => void sendEdit({ kind: "redo" }),
         }
       : undefined;
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  // Undo and redo from the command palette reach this tab's pending edits.
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const detail = (e as CustomEvent<{ tab: string; command: "undo" | "redo" }>).detail;
+      const target = editingRef.current;
+      if (detail.tab !== tab.id || !target || target.busy) return;
+      if (detail.command === "undo") target.onUndo();
+      else target.onRedo();
+    };
+    window.addEventListener(EDITS_COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(EDITS_COMMAND_EVENT, onCommand);
+  }, [tab.id]);
 
-  /** Sends the pending changes; the core writes and applies them in one transaction. */
-  async function applyEdits(changesToApply = pending) {
+  /** Applies the edits the core holds; it writes and applies them in one transaction. */
+  async function applyEdits() {
     const view = editTarget;
     const result = activeResult;
-    if (!view || !result || (Object.keys(changesToApply.cells).length + changesToApply.deleted.length + changesToApply.inserts.length === 0) || savingEditsRef.current) return;
+    if (!view || !result || savingEditsRef.current) return;
     savingEditsRef.current = true;
     setSavingEdits(true);
-    const deleted = new Set(changesToApply.deleted);
-    const updates = new Map<number, CellEditItem[]>();
-    for (const [key, value] of Object.entries(changesToApply.cells)) {
-      const [row = 0, column = 0] = key.split(":").map(Number);
-      if (deleted.has(row)) continue;
-      updates.set(row, [...(updates.get(row) ?? []), { column, value }]);
-    }
-    const changes: RowChangeItem[] = [
-      ...[...updates].map(([row, values]): RowChangeItem => ({ kind: "update", row, values })),
-      ...changesToApply.deleted.map((row): RowChangeItem => ({ kind: "delete", row })),
-      ...changesToApply.inserts.map((values): RowChangeItem => ({ kind: "insert", values })),
-    ];
     try {
+      // Every edit sent before Apply reaches the core first.
+      await editQueue.current;
+      const held = await call(commands.pendingEdits(result.id));
+      if (held.cells.length + held.deleted.length + held.inserts.length === 0) return;
       let confirmed = false;
       // The core decided the type's safeguards; it refuses unconfirmed edits too.
       if (connection?.kind?.safeguards.confirmDataChanges) {
-        const statements = await call(commands.previewTableEdits(tab.id, result.id, view.schema, view.name, changes));
+        const statements = await call(commands.previewTableEdits(tab.id, result.id, view.schema, view.name));
         const ok = await useDialogs.getState().askRisks(connection.name, statements.map((sql) => ({ sql, risk: "dataChange" as const })));
         if (!ok) return;
         confirmed = true;
       }
-      const applied = await call(commands.applyTableEdits(tab.id, result.id, view.schema, view.name, changes, confirmed));
+      const applied = await call(commands.applyTableEdits(tab.id, result.id, view.schema, view.name, confirmed));
       clearPending();
       setNotice({ text: t("edit.applied", { count: applied }), error: false });
       if (tab.table) void loadPage(tab.table);
       else if (executedRequest.current) void run(executedRequest.current, true);
     } catch (e) {
       setNotice({ text: message(e), error: true });
+    } finally {
+      savingEditsRef.current = false;
+      setSavingEdits(false);
+    }
+  }
+  /** Loads a file into one cell at once: the core reads it and writes one UPDATE by primary
+   *  key, applied like any edit (production asks first, read-only refuses). */
+  async function loadValueFile(row: number, column: number, path: string) {
+    const view = editTarget;
+    const result = activeResult;
+    if (!view || !result || savingEditsRef.current) return;
+    savingEditsRef.current = true;
+    setSavingEdits(true);
+    try {
+      let confirmed = false;
+      if (connection?.kind?.safeguards.confirmDataChanges) {
+        const statements = await call(commands.previewLoadValueFile(tab.id, result.id, view.schema, view.name, row, column, path));
+        const ok = await useDialogs.getState().askRisks(connection.name, statements.map((sql) => ({ sql, risk: "dataChange" as const })));
+        if (!ok) return;
+        confirmed = true;
+      }
+      await call(commands.loadValueFile(tab.id, result.id, view.schema, view.name, row, column, path, confirmed));
+      const file = path.split(/[\\/]/).pop() ?? path;
+      setNotice({ text: t("edit.fileLoaded", { file, column: result.columns[column]?.name ?? "" }), error: false });
+      if (tab.table) void loadPage(tab.table);
+      else if (executedRequest.current) void run(executedRequest.current, true);
+    } catch (e) {
+      setNotice({ text: t("edit.fileLoadFailed", { detail: message(e) }), error: true });
     } finally {
       savingEditsRef.current = false;
       setSavingEdits(false);
@@ -298,12 +421,13 @@ export function EditorTab({ tab }: { tab: Tab }) {
 
   /** Changes what the table data tab shows and loads it again. */
   function changeView(patch: Partial<TableView>) {
-    if (!tab.table) return;
+    const current = useApp.getState().tabs.find((item) => item.id === tab.id)?.table;
+    if (!current) return;
     if (pendingCount > 0 || savingEditsRef.current) {
       setNotice({ text: t("edit.applyFirst"), error: true });
       return;
     }
-    const next = { ...tab.table, ...patch };
+    const next = { ...current, ...patch };
     updateTab(tab.id, { table: next });
     void loadPage(next);
   }
@@ -321,12 +445,24 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
   }
 
+  const countSequence = useRef(0);
   async function countTable() {
     const view = tab.table;
+    const connectionId = tab.connectionId;
+    const sequence = ++countSequence.current;
     if (!view || !(await ensureConnected())) return;
+    const matchingView = () => {
+      const current = useApp.getState().tabs.find((item) => item.id === tab.id);
+      if (sequence !== countSequence.current || !current || current.connectionId !== connectionId ||
+          !current.table || current.table.schema !== view.schema || current.table.name !== view.name ||
+          current.table.filter !== view.filter) return undefined;
+      return current.table;
+    };
+    if (!matchingView()) return;
     try {
       const total = await call(commands.countTableRows(tab.id, view.schema, view.name, view.filter));
-      updateTab(tab.id, { table: { ...view, total: total ?? 0 } });
+      const current = matchingView();
+      if (current) updateTab(tab.id, { table: { ...current, total: total ?? 0 } });
     } catch (e) {
       setNotice({ text: message(e), error: true });
     }
@@ -566,6 +702,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
       await call(commands.selectDatabase(tab.id, next));
       setDatabase(next);
       updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
+      // The rows on screen were read in the other database: read-only until run again
+      // (SDB-137; the core refuses their edits too).
+      setQueryTable(null);
+      setQueryChecked(activeResult?.id ?? null);
     } catch (e) {
       setNotice({ text: message(e), error: true });
     } finally {
@@ -647,8 +787,23 @@ export function EditorTab({ tab }: { tab: Tab }) {
     await call(commands.disconnect(tab.id)).catch(() => undefined);
     setPlan(null); setPlanOpen(false); setCapabilities(null); setAnalyzePlan(false);
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
+    // The rows on screen came from the other connection: read-only until run again (SDB-137).
+    setQueryTable(null);
+    setQueryChecked(activeResult?.id ?? null);
     updateTab(tab.id, { connectionId: id || null, status: "disconnected", serverVersion: null, lost: undefined, idleClosed: undefined, lostTransaction: undefined, transaction: undefined });
   }
+
+  // "Run…" on a routine (ADR-047): the whole script once, as soon as the tab is connected and
+  // idle (its database list read), like Run script: the parameters are asked, the guard
+  // confirms. The request is cleared first, so nothing runs again after a reconnect.
+  const runOnOpenReady = !!tab.runOnOpen && tab.status === "connected" && !(tab.run?.running ?? false)
+    && !databaseBusy && !historySaving && !workspaceChanging;
+  useEffect(() => {
+    // The database list may have started loading in this same commit: wait for it.
+    if (!runOnOpenReady || !editor.current || databaseBusyRef.current) return;
+    useApp.getState().updateTab(tab.id, { runOnOpen: undefined });
+    editor.current.runScript();
+  }, [tab.id, runOnOpenReady]);
 
   async function run(request: RunRequest, refreshingEdits = false, pageSize = queryPageSize) {
     if (!refreshingEdits && (pendingCount > 0 || savingEditsRef.current)) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
@@ -705,7 +860,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     channel.onmessage = (event) => handle(event, sent, startedAt, queryPage, failures);
     const options = runOptionsOf(tab);
     try {
-      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, options, channel));
+      if (queryPage) await call(commands.runQueryPage(tab.id, sent.text, pageSize, confirmed, options, channel));
       else await call(commands.runScript(tab.id, sent.text, confirmed, options, channel));
     } catch (e) {
       const detail = message(e);
@@ -1180,6 +1335,9 @@ function Results({
   const [viewerWidth, setViewerWidth] = useState(420);
   /** Columns hidden in each result's grid (positions only), for the export dialog. */
   const [hiddenColumns, setHiddenColumns] = useState<Record<number, number[]>>({});
+  /** Results shown as a chart instead of the grid, and what each chart draws (ADR-040). */
+  const [chartShown, setChartShown] = useState<Record<number, boolean>>({});
+  const [charts, setCharts] = useState<Record<number, ChartSettings | null>>({});
   const maximizeButton = maximize && (
     <button
       className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
@@ -1236,14 +1394,41 @@ function Results({
             table={table}
             hidden={hiddenColumns[active.id] ?? []}
           />
+          <button
+            type="button"
+            className={`ghost result-chart-toggle${chartShown[active.id] ? " active" : ""}`}
+            aria-pressed={!!chartShown[active.id]}
+            aria-label={t(chartShown[active.id] ? "chart.hide" : "chart.show")}
+            title={t(chartShown[active.id] ? "chart.hide" : "chart.show")}
+            onClick={() => {
+              if (!(active.id in charts)) setCharts((current) => ({ ...current, [active.id]: defaultChart(active.columns) }));
+              setChartShown((current) => ({ ...current, [active.id]: !current[active.id] }));
+            }}
+          >
+            <Icon name="chart" />
+          </button>
         </div>}
         {maximizeButton}
       </div>
       {active && filterError?.result === active.id && <div id={`result-filter-error-${active.id}`} className="result-filter-error" role="alert">{filterError.message}</div>}
       <div className="result-body">
+        {active && chartShown[active.id] && (
+          <ResultChart
+            key={`chart-${active.id}`}
+            result={active}
+            settings={charts[active.id] ?? null}
+            onSettings={(settings) => setCharts((current) => ({ ...current, [active.id]: settings }))}
+            scope={serverSort ? "page" : active.paging?.hasMore ? "loaded" : undefined}
+          />
+        )}
         {active ? (
+          <div className="result-view" hidden={!!chartShown[active.id]}>
           <ResultGrid
             result={active}
+            onChart={(columns) => {
+              setCharts((current) => ({ ...current, [active.id]: defaultChart(active.columns, columns) }));
+              setChartShown((current) => ({ ...current, [active.id]: true }));
+            }}
             session={session}
             onSorted={(sort) => onSorted(active.id, sort)}
             onColumnFiltered={(columnFilters, rows, total) => onColumnFiltered(active.id, columnFilters, rows, total)}
@@ -1260,6 +1445,7 @@ function Results({
             onQueryPageSize={onQueryPageSize}
             onHiddenColumns={(hidden) => setHiddenColumns((current) => ({ ...current, [active.id]: hidden }))}
           />
+          </div>
         ) : (
           <div className="messages">
             {error && <pre className="error-box">{error}</pre>}

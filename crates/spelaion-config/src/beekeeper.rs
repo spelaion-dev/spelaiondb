@@ -30,6 +30,7 @@ use spelaion_driver_api::Secret;
 
 use crate::datagrip::shown;
 use crate::import::{ImportedConnection, ImportedSsh, ImportedTls};
+use crate::linux_dirs::{LinuxHome, first_found};
 use crate::model::{Engine, SshAuth, TlsModeConfig};
 
 /// Beekeeper's own database, in its data folder.
@@ -68,22 +69,45 @@ fn unreadable(path: &Path, e: impl std::fmt::Display) -> BeekeeperError {
 
 /// Beekeeper Studio's data folder on this system, where `app.db` is (it may not exist). The
 /// portable build keeps its data in `beekeeper_studio_data` next to the executable instead:
-/// that folder can be picked by hand.
+/// that folder can be picked by hand. On Linux, the first of [`beekeeper_linux_dirs`] that has
+/// an `app.db`.
 pub fn beekeeper_dir() -> Option<PathBuf> {
-    let base = if cfg!(windows) {
-        std::env::var_os("APPDATA").map(PathBuf::from)
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|base| PathBuf::from(base).join(APP_DIR))
     } else if cfg!(target_os = "macos") {
         std::env::var_os("HOME").map(|home| {
             PathBuf::from(home)
                 .join("Library")
                 .join("Application Support")
+                .join(APP_DIR)
         })
     } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-    };
-    base.map(|base| base.join("beekeeper-studio"))
+        let home = LinuxHome::from_env()?;
+        first_found(beekeeper_linux_dirs(&home), |dir| {
+            dir.join(DATABASE_FILE).is_file()
+        })
+    }
+}
+
+/// Beekeeper's folder under the system's application data: Electron's `userData`, named after
+/// its package (<https://github.com/beekeeper-studio/beekeeper-studio/blob/master/docs/support/data-location.md>).
+const APP_DIR: &str = "beekeeper-studio";
+
+/// Where Beekeeper Studio's data folder may be on Linux, native install first. Electron puts
+/// `userData` under `XDG_CONFIG_HOME`, which the packages point at their own folders.
+fn beekeeper_linux_dirs(home: &LinuxHome) -> Vec<PathBuf> {
+    vec![
+        home.config.join(APP_DIR),
+        // The Flatpak (io.beekeeperstudio.Studio) changes neither the variable nor the folder
+        // (<https://github.com/flathub/io.beekeeperstudio.Studio>).
+        home.flatpak("io.beekeeperstudio.Studio")
+            .join("config")
+            .join(APP_DIR),
+        // The snap (beekeeper-studio) is strict: its HOME, and the gnome extension's
+        // XDG_CONFIG_HOME, are under its own folder (built from `electron-builder-config.js`,
+        // <https://github.com/beekeeper-studio/beekeeper-studio>).
+        home.snap("beekeeper-studio").join(".config").join(APP_DIR),
+    ]
 }
 
 /// The saved connections under `path`: Beekeeper's data folder (its `app.db` and `.key`), or
@@ -850,6 +874,65 @@ fn ssh_of(row: &Row, key: &KeyState, unmapped: &mut Vec<String>) -> ImportedSsh 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Beekeeper data folder at `dir` as Beekeeper writes it: its `app.db` (the fixture's
+    /// tables) and its `.key`.
+    fn write_data_dir(dir: &Path) {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/beekeeper");
+        std::fs::create_dir_all(dir).unwrap();
+        let db = rusqlite::Connection::open(dir.join(DATABASE_FILE)).unwrap();
+        let sql = std::fs::read_to_string(fixtures.join("beekeeper-6.2.2.sql")).unwrap();
+        db.execute_batch(&sql).unwrap();
+        std::fs::copy(fixtures.join(KEY_FILE), dir.join(KEY_FILE)).unwrap();
+    }
+
+    fn found_on_linux(home: &Path) -> PathBuf {
+        let home = LinuxHome::at(home);
+        first_found(beekeeper_linux_dirs(&home), |dir| {
+            dir.join(DATABASE_FILE).is_file()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn linux_search_finds_the_flatpak_data_folder() {
+        let home = crate::linux_dirs::testing::fake_home("beekeeper-flatpak");
+        let flatpak = home.join(".var/app/io.beekeeperstudio.Studio/config/beekeeper-studio");
+        write_data_dir(&flatpak);
+        assert_eq!(found_on_linux(&home), flatpak);
+        assert!(!read_beekeeper(&flatpak).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_search_finds_the_snap_data_folder() {
+        let home = crate::linux_dirs::testing::fake_home("beekeeper-snap");
+        let revision = crate::linux_dirs::testing::snap_revision(&home, "beekeeper-studio", "512");
+        write_data_dir(&revision.join(".config/beekeeper-studio"));
+        let found = found_on_linux(&home);
+        assert_eq!(
+            found,
+            home.join("snap/beekeeper-studio/current/.config/beekeeper-studio")
+        );
+        assert!(!read_beekeeper(&found).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn linux_search_prefers_the_native_data_folder_and_names_it_when_none_exists() {
+        let home = crate::linux_dirs::testing::fake_home("beekeeper-native");
+        let native = home.join(".config/beekeeper-studio");
+        assert_eq!(found_on_linux(&home), native);
+        // An empty native folder (Beekeeper opened once, nothing saved) does not hide a package's.
+        std::fs::create_dir_all(&native).unwrap();
+        let flatpak = home.join(".var/app/io.beekeeperstudio.Studio/config/beekeeper-studio");
+        write_data_dir(&flatpak);
+        assert_eq!(found_on_linux(&home), flatpak);
+        write_data_dir(&native);
+        assert_eq!(found_on_linux(&home), native);
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn base64_reads_what_node_writes() {

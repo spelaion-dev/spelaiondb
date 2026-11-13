@@ -28,7 +28,8 @@
     "about": "Sobre esta conexión",
     "session": "Valores por defecto",
     "setup": "Sentencias de inicio",
-    "onThisComputer": "En este equipo"
+    "onThisComputer": "En este equipo",
+    "masking": "Enmascarado de columnas"
   },
   "fields": {
     "name": "Nombre",
@@ -123,7 +124,13 @@
     "sessionSetup": "Ejecutar al abrir una sesión",
     "ignoreSetupErrors": "Ignorar errores en estas sentencias",
     "sessionSetupHint": "Se ejecutan en cada sesión nueva, antes que nada, también tras reconectar. No son tus consultas: no van al historial y no se vuelve a ejecutar nada de lo que ejecutaste.",
-    "sessionSetupRestricted": "En esta conexión solo pueden leer y cambiar ajustes de la sesión (search path, zona horaria, rol…): una sentencia que escribe impide abrir la sesión."
+    "sessionSetupRestricted": "En esta conexión solo pueden leer y cambiar ajustes de la sesión (search path, zona horaria, rol…): una sentencia que escribe impide abrir la sesión.",
+    "maskAlways": "Enmascarar estas columnas",
+    "maskAlwaysPlaceholder": "*password*\nemail\ncard_*",
+    "maskNever": "Dejar visibles estas columnas",
+    "maskNeverPlaceholder": "email_verified",
+    "maskTypeRequires": "El tipo {{type}} siempre enmascara: {{patterns}}.",
+    "maskingHint": "Un patrón por línea, sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Un patrón coincide con el nombre de una columna o con la columna de tabla que lee; tabla.columna nombra también la tabla. Los valores enmascarados se muestran como •••••• en la cuadrícula, las copias, las exportaciones, las estadísticas y las respuestas a los agentes; puedes mostrar una celda cada vez. «Dejar visibles» exime de tus propios patrones aquí, nunca de los de un tipo de conexión. El enmascarado aparta los valores de la pantalla, no del SQL: una expresión como lower(email) lo salta, y también un alias en SQL Server, DuckDB y SQLite en un servidor. Usa los permisos de la base de datos para apartar los datos de las personas."
   },
   "tls": {
     "disable": "Desactivado",
@@ -164,11 +171,14 @@
       "target": "Llegar a {{host}}:{{port}}",
       "database": "Iniciar sesión en la base de datos {{database}} de {{engine}} como {{user}}",
       "databaseNoName": "Iniciar sesión en {{engine}} como {{user}}",
-      "file": "Abrir el archivo de {{engine}} {{database}}"
+      "file": "Abrir el archivo de {{engine}} {{database}}",
+      "ssm": "Sesión de AWS SSM a través de {{target}}",
+      "ssmRegion": "Sesión de AWS SSM a través de {{target}} ({{region}})"
     },
     "kinds": {
       "config": "Configuración",
       "passwordRequired": "Falta la contraseña",
+      "keychainEmpty": "No hay contraseña guardada",
       "cancelled": "Cancelado",
       "proxyAuth": "Autenticación del proxy",
       "sshAuth": "Autenticación SSH",
@@ -180,11 +190,13 @@
       "tls": "TLS",
       "timeout": "Tiempo agotado",
       "kubernetes": "Kubernetes",
-      "other": "Error"
+      "other": "Error",
+      "ssm": "AWS SSM"
     },
     "hints": {
       "config": "No se pudo leer la conexión o su perfil de red: corrige lo que indica el mensaje (una variable, una referencia a un secreto, la ruta de un archivo).",
       "passwordRequired": "Esta conexión pide su contraseña cada vez: escríbela en el formulario para probar el inicio de sesión.",
+      "keychainEmpty": "El llavero del sistema no tiene ninguna contraseña guardada para esta conexión. Escríbela para probar el inicio de sesión; al guardar la conexión se guarda.",
       "cancelled": "Se descartó una pregunta (una contraseña, una frase de paso o la huella de un servidor) y la prueba se paró ahí. Vuelve a probar y respóndela.",
       "proxyAuth": "El proxy rechazó el usuario o la contraseña. Revísalos en la sección del proxy del perfil de red.",
       "sshAuth": "Este servidor SSH rechazó todos los métodos probados: revisa el usuario, la clave (su clave pública debe estar en el authorized_keys del servidor), la contraseña o el agente. Algunos servidores no aceptan contraseñas en absoluto.",
@@ -196,7 +208,8 @@
       "tls": "Falló la conexión cifrada: revisa el modo SSL/TLS, el certificado de la autoridad y que el nombre del servidor coincida con su certificado (a través de un túnel se sigue comprobando el nombre real del servidor).",
       "timeout": "No hubo respuesta a tiempo: puede que el servidor esté caído o que un cortafuegos descarte los paquetes. Revisa la dirección, o sube el tiempo máximo de conexión si la red solo es lenta.",
       "kubernetes": "kubectl no pudo redirigir el puerto: revisa el contexto, el espacio de nombres, el recurso y el puerto en la pestaña Kubernetes, y que kubectl funcione desde un terminal.",
-      "other": "Mira el mensaje. Copia el diagnóstico para compartirlo: no incluye secretos."
+      "other": "Mira el mensaje. Copia el diagnóstico para compartirlo: no incluye secretos.",
+      "ssm": "AWS SSM no pudo iniciar la sesión: comprueba que la AWS CLI v2 y el plugin de Session Manager están instalados (el mensaje dice qué falta), que has iniciado sesión (aws sso login con perfiles SSO) y que el destino es un nodo administrado en el que puedes abrir sesiones."
     }
   },
   "browse": "Examinar…",
@@ -224,6 +237,7 @@
     "other": "Definida en el fichero",
     "otherHint": "Esta contraseña viene de una referencia que el formulario no puede editar (1Password, una orden o una entrada con nombre del llavero). Se conserva tal cual; edita el fichero para cambiarla.",
     "keepPlaceholder": "Déjala vacía para conservar la contraseña guardada",
+    "notStoredPlaceholder": "No hay ninguna contraseña guardada: escríbela para guardarla",
     "token": "Token de la nube (IAM)"
   },
   "cancel": "Cancelar",
@@ -262,6 +276,7 @@
     "editButton": "Editar perfil…",
     "newTitle": "Nuevo perfil de red",
     "editTitle": "Editar el perfil de red {{name}}",
+    "loading": "Leyendo el perfil…",
     "name": "Nombre del perfil",
     "nameHint": "Las conexiones se refieren al perfil por este nombre. Se guarda como un fichero de túnel (.spelaion/tunnels/).",
     "fixedHint": "Al editarlo, el perfil conserva su nombre y ubicación: las conexiones se refieren a él.",
@@ -314,7 +329,21 @@
     "ok_one": "Túnel correcto · {{count}} salto",
     "ok_other": "Túnel correcto · {{count}} saltos",
     "delete": "Borrar perfil",
-    "confirmDelete": "Pulsa otra vez para borrar"
+    "confirmDelete": "Pulsa otra vez para borrar",
+    "route": "Ruta",
+    "routeSsh": "Saltos SSH y proxy",
+    "routeKubernetes": "Kubernetes",
+    "routeSsm": "AWS SSM",
+    "ssm": "AWS SSM Session Manager",
+    "ssmTarget": "Nodo administrado",
+    "ssmRegion": "Región",
+    "ssmRegionPlaceholder": "La predeterminada de la AWS CLI",
+    "ssmProfile": "Perfil de AWS",
+    "ssmProfilePlaceholder": "El predeterminado de la AWS CLI",
+    "ssmAws": "Programa de la AWS CLI",
+    "ssmHint": "SpelaionDB ejecuta aws ssm start-session con tus credenciales de AWS (inicia sesión antes, por ejemplo con aws sso login). Necesita la AWS CLI v2 y el plugin de Session Manager. Sin saltos, el host de la conexión se alcanza desde el nodo administrado: localhost es el propio nodo, y cualquier otro host (un endpoint de RDS) se alcanza a través de él.",
+    "ssmHopsHint": "Los saltos después de AWS SSM se alcanzan por su sesión: el primero es un host al que llega el nodo administrado (o localhost, el propio nodo).",
+    "okSsm": "AWS SSM está listo"
   },
   "newDatabase": "Nueva base de datos…",
   "url": {
@@ -332,6 +361,9 @@
     "registrySource": "Registro de Windows",
     "windowsRegistry": "Usar el registro de Windows",
     "chooseFile": "Elegir fichero exportado…",
+    "nothingChosen": "Nada elegido todavía",
+    "chooseHeidisqlExport": "HeidiSQL guarda sus sesiones en el registro de Windows, que este sistema no tiene. Expórtalas a un fichero de configuración en HeidiSQL y elige ese fichero.",
+    "chooseSource": "SpelaionDB no sabe dónde guarda {{client}} sus conexiones en este sistema: elígelas arriba.",
     "exportFiles": "Exportaciones de {{client}}",
     "allFiles": "Todos los ficheros",
     "encrypted": "Este fichero está cifrado. Escribe la contraseña con la que se exportó en {{client}}.",
@@ -395,7 +427,13 @@
     "kubectl": "Programa kubectl",
     "hint": "SpelaionDB ejecuta kubectl port-forward con tu kubeconfig. El puerto de la conexión es el de este recurso; el host de la pestaña Principal solo se usa para TLS.",
     "exclusive": "Una conexión va por Kubernetes o por un túnel SSH, no por los dos.",
-    "mainHint": "Por Kubernetes: el puerto es el del recurso, elegido en la pestaña Kubernetes."
+    "mainHint": "Por Kubernetes: el puerto es el del recurso, elegido en la pestaña Kubernetes.",
+    "profile": "Perfil de Kubernetes",
+    "noProfile": "Ninguno: se configura aquí",
+    "profilesHint": "Un perfil de red de Kubernetes guarda los ajustes de un clúster para varias conexiones. Sin él, esta conexión tiene los suyos.",
+    "fromProfile": "Los campos bloqueados vienen del perfil de red; esta conexión pone el resto.",
+    "eachConnection": "Lo elige cada conexión",
+    "profileHint": "Las conexiones que usan este perfil toman estos ajustes y eligen lo que aquí se deja vacío, como el recurso. SpelaionDB ejecuta kubectl port-forward con tu kubeconfig."
   },
   "cloudToken": {
     "awsRds": "AWS RDS (autenticación IAM)",

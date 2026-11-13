@@ -8,6 +8,16 @@ use crate::LogicalType;
 const META_LOGICAL: &str = "spelaion.logical";
 const META_NATIVE_TYPE: &str = "spelaion.native_type";
 const META_NATIVE_ID: &str = "spelaion.native_id";
+const META_ORIGIN_TABLE: &str = "spelaion.origin_table";
+const META_ORIGIN_COLUMN: &str = "spelaion.origin_column";
+
+/// The table column a result column reads, when the engine says so (ADR-052): `SELECT email
+/// AS e FROM users` gives `e` the origin `users.email`. An expression has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnOrigin {
+    pub table: String,
+    pub column: String,
+}
 
 /// Metadata of a result column: common logical type + the engine's native type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +28,9 @@ pub struct ColumnMeta {
     pub native_type: String,
     /// Numeric type identifier in the engine (OID in PostgreSQL).
     pub native_id: Option<u32>,
+    /// The table column it reads, where the engine reports it (ADR-052); `None` for an
+    /// expression, or where the engine does not tell.
+    pub origin: Option<ColumnOrigin>,
 }
 
 impl ColumnMeta {
@@ -30,6 +43,10 @@ impl ColumnMeta {
         if let Some(id) = self.native_id {
             meta.insert(META_NATIVE_ID.to_string(), id.to_string());
         }
+        if let Some(origin) = &self.origin {
+            meta.insert(META_ORIGIN_TABLE.to_string(), origin.table.clone());
+            meta.insert(META_ORIGIN_COLUMN.to_string(), origin.column.clone());
+        }
         Field::new(&self.name, self.logical.arrow_type(), true).with_metadata(meta)
     }
 
@@ -41,6 +58,13 @@ impl ColumnMeta {
             logical: LogicalType::parse(meta.get(META_LOGICAL)?)?,
             native_type: meta.get(META_NATIVE_TYPE)?.clone(),
             native_id: meta.get(META_NATIVE_ID).and_then(|v| v.parse().ok()),
+            origin: match (meta.get(META_ORIGIN_TABLE), meta.get(META_ORIGIN_COLUMN)) {
+                (Some(table), Some(column)) => Some(ColumnOrigin {
+                    table: table.clone(),
+                    column: column.clone(),
+                }),
+                _ => None,
+            },
         })
     }
 }
@@ -72,6 +96,7 @@ mod tests {
             logical: LogicalType::Native,
             native_type: "geometry".into(),
             native_id: Some(18_000),
+            origin: None,
         };
         let schema = ResultSchema::new(vec![col.clone()]);
         assert_eq!(ColumnMeta::from_field(schema.arrow.field(0)), Some(col));

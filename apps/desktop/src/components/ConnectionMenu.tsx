@@ -15,6 +15,11 @@ export interface ConnectionMenuActions {
   configureFilters(): void;
   /** Absent when the engine cannot create a schema from here. */
   createSchema?: () => void;
+  /** Absent when the engine's backups have no client tool (ADR-049). */
+  backup?: () => void;
+  restore?: () => void;
+  /** Runs an .sql file through a session of its own (ADR-049). */
+  runFile?: () => void;
   duplicate(): void;
   copy(): void;
   paste(): void;
@@ -119,6 +124,21 @@ export function ConnectionMenu({
       {item(t("connections:edit"), () => app().setConnectionDialog({ kind: "edit", id: connection.id }))}
       {item(t("connections:configureFilters"), actions.configureFilters)}
       {connected && actions.createSchema && item(t("create.schema"), actions.createSchema)}
+      {connected && actions.backup && (
+        <>
+          <hr />
+          {/* Backup and restore with the engine's own tools, through the tunnel (ADR-049). */}
+          {item(t("editor:backup.menu"), actions.backup)}
+          {actions.restore && item(t("editor:restoreDb.menu"), actions.restore)}
+          {actions.runFile && item(t("editor:runFile.menu"), actions.runFile)}
+        </>
+      )}
+      {connected && !actions.backup && actions.runFile && (
+        <>
+          <hr />
+          {item(t("editor:runFile.menu"), actions.runFile)}
+        </>
+      )}
       <hr />
       {/* Copies and where it is kept; deleting comes last. */}
       {item(t("connections:copies.duplicate"), actions.duplicate)}

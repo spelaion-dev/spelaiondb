@@ -118,6 +118,13 @@ pub fn read_heidisql(path: &Path) -> Result<Vec<ImportedConnection>, HeidiSqlErr
     Ok(convert(parse_export(content)?))
 }
 
+/// Whether this system has HeidiSQL's registry sessions to read: only Windows does. Elsewhere
+/// HeidiSQL's connections can only come from a settings file the user exported from it, so the
+/// importer starts by asking for one and never offers the registry.
+pub fn heidisql_has_registry() -> bool {
+    cfg!(windows)
+}
+
 /// Read the classic HeidiSQL sessions in the current user's registry, only on explicit import.
 #[cfg(windows)]
 pub fn read_heidisql_registry() -> Result<Vec<ImportedConnection>, HeidiSqlError> {
@@ -567,6 +574,17 @@ mod tests {
             "Servers\\Example\\Host<|||>1<|||>localhost\nServers\\Example\\NetType<|||>3<|||>{net}\n{extra}"
         );
         convert(parse_export(&input).expect("valid export")).remove(0)
+    }
+
+    #[test]
+    fn heidisql_offers_the_registry_only_on_windows() {
+        assert_eq!(heidisql_has_registry(), cfg!(windows));
+        if !heidisql_has_registry() {
+            assert!(matches!(
+                read_heidisql_registry(),
+                Err(HeidiSqlError::RegistryUnavailable)
+            ));
+        }
     }
 
     #[test]

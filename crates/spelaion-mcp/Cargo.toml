@@ -19,6 +19,8 @@ serde_json = "1"
 tokio = { workspace = true, features = ["sync", "time", "io-std"] }
 
 [dev-dependencies]
+async-trait.workspace = true
+futures-util.workspace = true
 rusqlite = { version = "0.41", features = ["bundled"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 toml = "1"

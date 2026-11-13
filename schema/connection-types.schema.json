@@ -31,6 +31,13 @@
           "description": "Editor tabs start with auto-commit off: changes wait for Commit (ADR-031).",
           "type": "boolean"
         },
+        "mask_columns": {
+          "description": "Columns every connection of this type masks (ADR-051), as `[masking] always`\npatterns. They add up across layers, and no connection's `never` unmasks them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "name": {
           "type": [
             "string",

@@ -14,10 +14,10 @@ yr      int        year                 2026
 f       float      float                1.1
 d       float      double               0.000025
 dec_    decimal    decimal              12345678.1234
-dt      date       date                 2026-01-31
-dtm     timestamp  datetime             2026-01-31 10:20:30
-dtm6    timestamp  datetime             2026-01-31 10:20:30.123456
-ts3     timestamp  timestamp            2026-01-31 10:20:30.12
+dt      text       date                 2026-01-31
+dtm     text       datetime             2026-01-31 10:20:30
+dtm6    text       datetime             2026-01-31 10:20:30.123456
+ts3     text       timestamp            2026-01-31 10:20:30.120
 tm      interval   time                 -12:30:15
 tm_big  interval   time                 838:59:59
 ch      text       char                 ab

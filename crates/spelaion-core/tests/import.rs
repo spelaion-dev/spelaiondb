@@ -704,6 +704,76 @@ async fn sqlite_imports() {
     .await;
 }
 
+#[tokio::test]
+async fn unicode_csv_values_are_previewed_and_imported_unchanged() {
+    let dir = folder("unicode");
+    let db = dir.join("unicode.db");
+    let csv = dir.join("unicode.csv");
+    std::fs::File::create(&db).unwrap();
+    let values = ["ITEM-Молоко 3.2%", "CODE-商品名称テスト", "2024-ééééééééé"];
+    let rows = values
+        .iter()
+        .enumerate()
+        .map(|(i, value)| format!("{},{value}\n", i + 1))
+        .collect::<String>();
+    std::fs::write(&csv, format!("id,name\n{rows}")).unwrap();
+    let driver = SqliteDriver::default();
+    let session = Session::new(
+        driver
+            .connect(&ConnectParams {
+                database: db.display().to_string(),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        driver.dialect(),
+        Arc::new(ResultStore::new()),
+    );
+    let source = ImportSource::File(csv);
+    let shown = preview(&source, None, 100, "sqlite").unwrap();
+    assert_eq!(shown.columns[1].kind, ColumnKind::Text);
+    let request = ImportRequest {
+        source,
+        options: shown.options,
+        target: ImportTarget::New {
+            schema: "main".into(),
+            table: "products".into(),
+            if_exists: IfExists::Fail,
+        },
+        columns: shown
+            .columns
+            .into_iter()
+            .map(|c| ColumnMapping::New {
+                name: c.name,
+                sql_type: c.sql_type,
+            })
+            .collect(),
+        commit_every: 0,
+    };
+    let summary = run_import(
+        &session,
+        &request,
+        &NONE,
+        false,
+        false,
+        &ImportCancel::new(),
+        &nothing,
+    )
+    .await
+    .unwrap();
+    assert_eq!(summary.rows, values.len() as u64);
+    for (i, value) in values.iter().enumerate() {
+        assert_eq!(
+            scalar(
+                &session,
+                &format!("select name from products where id = {}", i + 1)
+            )
+            .await,
+            Value::Text((*value).into())
+        );
+    }
+}
+
 /// Pasted text (a Markdown table) into a new SQLite table, and a view that is not a target.
 #[tokio::test]
 async fn pasted_tables_and_views() {

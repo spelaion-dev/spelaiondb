@@ -45,6 +45,16 @@ A summary of how the pieces fit together. The reasons behind each decision are i
    Sorting by a column keeps a row permutation in the core, so windows, copies and exports
    all see the same order.
 
+**Column masking (ADR-051)**
+A connection's masking rules (its `[masking]`, the user's `user.toml`, its connection type)
+are compiled into the session. Every result the session stores is masked as its batches
+arrive: masked columns become `••••••` in the stored batches and their originals are kept
+aside, read only to reveal one cell. Windows, sorting, filters, Ctrl+F, the calc panel,
+copies and exports never see a value; streaming exports, column statistics, the data search
+and agents' reads apply the same rules. Drivers report the table column each result column
+reads where the engine can (ADR-052), so an alias stays masked; an expression gets past it,
+so masking is not access control.
+
 **Execution plans**
 The core's `plan` module owns the normalized tree, metrics, generic findings, bounded document
 store and raw/CSV file behavior. The desktop executes a core-prepared request on the selected
@@ -55,14 +65,16 @@ See [execution plans](execution-plans.md) for metric semantics, capabilities and
 **A query from an agent (v0.1)**
 1. The agent launches `spelaiondb mcp --profile <profile>`.
 2. `spelaiondb mcp` loads the same config and keychain, and only sees the connections with
-   `mcp.exposed = true`.
+   `mcp.exposed = true`. It reads the configuration and the trust store again at the start of
+   every tool call, so the user's changes apply to a server that is already running.
 3. Every `run_query` goes through the classifier, runs in a read-only transaction with
    limits, and is recorded in the audit log.
 4. On connections with `mcp.writes = "allow"`, `execute_write` runs one checked write in its
    own transaction, in a session separate from the reads, also audited (ADR-019).
 
 ## Phases
-- **Phase 0** (current): risk experiments in `spikes/`.
+- **Phase 0** (done, 2026-11-02): risk experiments for the conditional decisions; ADR-003,
+  ADR-007 and ADR-010 record what they measured.
 - **v0.1:** PostgreSQL + SQLite, multi-hop SSH with agent, editor, read-only grid,
   explorer, history, read-only `spelaiondb mcp`.
 - **v0.2:** MySQL/MariaDB (in the MCP since ADR-020), result editing,

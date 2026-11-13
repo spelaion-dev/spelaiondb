@@ -1,26 +1,34 @@
 // Canvas result grid (ADR-010). Only what is visible is painted; scrolling is native
-// (a container with a "spacer" of the full size) and the canvas is redrawn on top.
+// (a container with a "spacer" of the full size) and the canvas is redrawn on top. Past the
+// browser's height cap the spacer stops growing and its scroll is scaled to the rows
+// (`grid/scroll.ts`, SDB-109): every row position read or set goes through `contentTop` and
+// `scrollToContent`, never the container's `scrollTop`.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
+import { call, commands, type BlockItem, type BulkActionItem, type CellEditItem, type CellRange, type ColumnFilterItem, type FilterOpItem, type KeyTargetItem, type NameStyleItem, type TableKeyItem, type TextFormat } from "../api";
+import { readClipboardText } from "../clipboardText";
 import { openTableData } from "../connect";
 import { THEME_CHANGE_EVENT, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
 import { RowCache } from "../grid/rowCache";
-import type { ResultMeta, SortState } from "../store";
+import { isScaled, maxContentTop, scrollMap, toContent, toScroll, wheelPixels } from "../grid/scroll";
+import { useDialogs, type ResultMeta, type SortState } from "../store";
+import { commandSpec, matchesShortcut } from "../commandRegistry";
 import { useExport } from "./ExportDialog";
-import { CellViewer, ViewerModes, type ViewerMode } from "./CellViewer";
+import { CellViewer, ViewerModes, chooseValueFile, saveValueToFile, type ViewerMode } from "./CellViewer";
 import { Icon, PATHS } from "./Icons";
 import { ReferencesPanel } from "./ReferencesPanel";
 import { CalcPanel } from "./CalcPanel";
 import { ColumnStatsPopover } from "./ColumnStatsPopover";
+import { RevealPopover } from "./RevealPopover";
 import { FindBar } from "./GridFind";
 import { InsertRowDialog, PAGE_SIZES } from "./TableDataBar";
+import { MENU_MARGIN, placeMenu } from "../menuPlacement";
 
-const ROW_H = 26;
-const HEADER_H = 36;
-const PAD = 8;
+const ROW_H = 24;
+const HEADER_H = 34;
+const PAD = 6;
 const MIN_COL = 72;
 const MAX_COL = 420;
 /** Limits when the user resizes a column (wider than the automatic maximum). */
@@ -29,7 +37,7 @@ const MAX_RESIZE = 2000;
 /** Pixels on each side of a header edge that grab it. */
 const EDGE = 4;
 // Regular UI text is easier to scan across dense rows; the header remains distinct.
-const DATA_FONT = '400 13px "Segoe UI", system-ui, sans-serif';
+const DATA_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
 const ROW_NUMBER_FONT = '400 12px "Segoe UI", system-ui, sans-serif';
 const HEADER_FONT = '600 12.5px system-ui, "Segoe UI", sans-serif';
 const TYPE_FONT = '11px system-ui, "Segoe UI", sans-serif';
@@ -57,14 +65,6 @@ function drawKeyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, color:
   ctx.lineJoin = "round";
   for (const path of keyIconPaths) ctx.stroke(path);
   ctx.restore();
-}
-const MENU_MARGIN = 8;
-
-/** Keep a measured popup inside the window, including when the window is resized. */
-function placeMenu(menu: HTMLElement, x: number, y: number) {
-  const rect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(MENU_MARGIN, Math.min(x, window.innerWidth - rect.width - MENU_MARGIN))}px`;
-  menu.style.top = `${Math.max(MENU_MARGIN, Math.min(y, window.innerHeight - rect.height - MENU_MARGIN))}px`;
 }
 
 interface Cell {
@@ -126,25 +126,52 @@ function cssVar(style: CSSStyleDeclaration, name: string): string {
   return style.getPropertyValue(name).trim() || "#888";
 }
 
-/** Pending changes of a table data tab (ADR-014): drawn over the page until applied. */
+/** Pending edits of a table data tab, as the core holds them (ADR-044): drawn over the page
+ *  until applied. */
 export interface GridEditing {
   /** `"row:col"` → the value typed (`null` is NULL). */
   cells: Record<string, string | null>;
+  /** Keys of `cells` set to the column's default. */
+  defaults: Set<string>;
   deleted: number[];
   inserts: CellEditItem[][];
+  /** Rows with a pending value, not counting rows to delete. */
+  updatedRows: number;
+  canUndo: boolean;
+  canRedo: boolean;
   primaryKey: string[];
+  /** The table the rows are from: its columns may take a value picker in the cell panel. */
+  table: { schema: string; name: string };
   busy: boolean;
   onInsert(values: CellEditItem[]): void;
   onUpdateInsert(index: number, values: CellEditItem[]): void;
   onRemoveInsert(index: number): void;
   onApply(): void;
   onApplyCell(row: number, col: number, value: string | undefined, dirty: boolean): void;
+  /** Loads a file into one cell now: one UPDATE by primary key, written by the core. */
+  onLoadFile(row: number, col: number, path: string): Promise<void>;
   onDiscard(): void;
   /** `undefined` takes the cell back to its value in the database. */
   onEdit(row: number, col: number, value: string | null | undefined): void;
+  /** A keystroke in the cell panel's text box: typing on in one cell is one undo step. */
+  onType(row: number, col: number, value: string | null | undefined): void;
   onDelete(rows: number[]): void;
   onRevert(rows: number[]): void;
+  /** A bulk edit of the selection's block (its shown columns). */
+  onBulk(block: BlockItem, action: BulkActionItem): void;
+  /** Tab-separated text pasted on the selection; `columns` are the shown ones from its first. */
+  onPaste(selection: BlockItem, columns: number[], text: string): void;
+  onUndo(): void;
+  onRedo(): void;
 }
+
+/** The grid's own keys for pending edits (undo and redo are app commands, `commandRegistry.ts`). */
+const UNDO_SHORTCUT = commandSpec("edits.undo").shortcut ?? "";
+const REDO_SHORTCUT = commandSpec("edits.redo").shortcut ?? "";
+const FILL_DOWN_SHORTCUT = "Ctrl+D";
+const PASTE_SHORTCUT = "Ctrl+V";
+const SET_NULL_SHORTCUT = "Ctrl+Alt+N";
+const REVERT_SHORTCUT = "Ctrl+Alt+Z";
 
 const EDITED_BG = "rgba(250, 204, 21, 0.30)";
 /** Cells the search found, and the one it is on. */
@@ -159,12 +186,14 @@ const NAME_STYLES: { style: NameStyleItem; key: string }[] = [
 ];
 const DELETED_BG = "rgba(239, 68, 68, 0.20)";
 
-function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "save" | "cancel" }) {
+function EditIcon({ name }: { name: "add" | "duplicate" | "delete" | "undo" | "redo" | "revert" | "save" | "cancel" }) {
   return <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     {name === "add" && <><rect x="3" y="4" width="14" height="12" rx="1" /><path d="M10 7v6M7 10h6" /></>}
     {name === "duplicate" && <><rect x="7" y="6" width="10" height="11" rx="1" /><path d="M13 6V3H3v11h4M12 9v5M9.5 11.5h5" /></>}
     {name === "delete" && <><path d="M4 6h12M7 6V4h6v2M6 6l1 10h6l1-10M9 9v4M11 9v4" /></>}
     {name === "undo" && <><path d="M7 6 3.5 9.5 7 13M4 9.5h7.5a4 4 0 0 1 0 8H10" /></>}
+    {name === "redo" && <><path d="M13 6l3.5 3.5L13 13M16 9.5H8.5a4 4 0 0 0 0 8H10" /></>}
+    {name === "revert" && <><path d="M3.5 4v4h4" /><path d="M4 8a6.5 6.5 0 1 1-.5 4" /></>}
     {name === "save" && <><path d="M4 3.5h10l2.5 2.5v10.5H4zM6.5 3.5v4h7v-4M6.5 16.5v-6h7v6" /></>}
     {name === "cancel" && <><circle cx="10" cy="10" r="7" /><path d="m7 7 6 6M13 7l-6 6" /></>}
   </svg>;
@@ -215,6 +244,7 @@ export function ResultGrid({
   onQueryPageSize,
   tableData,
   onHiddenColumns,
+  onChart,
 }: {
   result: ResultMeta;
   session: string;
@@ -234,6 +264,8 @@ export function ResultGrid({
   onQueryPageSize(size: number): void;
   /** The columns hidden in this grid changed (for the export dialog). */
   onHiddenColumns?(hidden: number[]): void;
+  /** "Chart selected columns": the first is the X axis, the numeric ones after it the values. */
+  onChart?(columns: number[]): void;
   /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
    *  can be followed to new table data tabs of `connectionId`. */
@@ -243,6 +275,12 @@ export function ResultGrid({
   const { t, i18n } = useTranslation("editor");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  /** The content position shown and the container position it was set at. While the scroll is
+   *  scaled the container's own position is too coarse to keep it, so it is kept here; a
+   *  container position other than `scroll` means the scroll bar was moved. */
+  const scrollPos = useRef({ content: 0, scroll: 0 });
+  /** The content's height (header and rows), for the helpers called outside the render. */
+  const contentH = useRef(0);
   const accessibleCell = useRef<HTMLDivElement>(null);
   const accessibleCellId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -265,6 +303,8 @@ export function ResultGrid({
   const [chooser, setChooser] = useState<{ x: number; y: number } | null>(null);
   /** A table data tab column's statistics popover, where it was opened. */
   const [columnStats, setColumnStats] = useState<{ x: number; y: number; column: number } | null>(null);
+  /** A masked cell revealed on request (ADR-051): its value lives only in the popover. */
+  const [reveal, setReveal] = useState<{ x: number; y: number; row: number; col: number } | null>(null);
   const gridLook = usePreferences((s) => s.grid);
   /** The find bar (Ctrl+F): what is searched, and what the core found. */
   const [find, setFind] = useState<{ text: string; matchCase: boolean } | null>(null);
@@ -332,6 +372,11 @@ export function ResultGrid({
   /** Opens the inline editor on a cell, with its pending value or the one loaded. */
   async function startEdit(cell: Cell) {
     if (!editing || editing.deleted.includes(cell.row) || editing.busy || sorting) return;
+    const meta = result.columns[cell.col];
+    if (meta?.masked) {
+      setNotice({ text: t("masking.noEdit", { column: meta.name }), error: true });
+      return;
+    }
     const request = ++editRequest.current;
     const key = `${cell.row}:${cell.col}`;
     setSelection({ anchor: cell, focus: cell });
@@ -371,6 +416,7 @@ export function ResultGrid({
       const initial = values.flatMap((value, column): CellEditItem[] => {
         const key = `${row}:${column}`;
         if (editing.primaryKey.includes(result.columns[column]?.name ?? "")) return [];
+        if (result.columns[column]?.masked) return [];
         return [{ column, value: key in editing.cells ? editing.cells[key] ?? null : value }];
       });
       setInserting({ values: initial });
@@ -379,12 +425,68 @@ export function ResultGrid({
     }
   }
 
+  /** One cell switches between NULL and its value; a larger selection is set to NULL. */
   function setSelectedNull() {
-    if (!editing || !selection || editing.deleted.includes(selection.focus.row)) return;
+    if (!editing || !selection) return;
+    const block = selectedBlock();
+    if (block && (block.firstRow !== block.lastRow || block.columns.length > 1)) {
+      editing.onBulk(block, { kind: "set", value: { kind: "null" } });
+      return;
+    }
+    if (editing.deleted.includes(selection.focus.row)) return;
     const { row, col } = selection.focus;
     const original = cache.get(row, col);
     if (original === undefined) return;
     editing.onEdit(row, col, original === null ? undefined : null);
+  }
+
+  /** The selection's rows and shown columns. */
+  function selectedBlock(): BlockItem | null {
+    if (!selection) return null;
+    const b = bounds(selection);
+    const columns = visibleCols.filter((c) => c >= b.c0 && c <= b.c1);
+    return columns.length ? { firstRow: b.r0, lastRow: b.r1, columns } : null;
+  }
+
+  function bulkEdit(action: BulkActionItem) {
+    setMenu(null);
+    const block = selectedBlock();
+    if (editing && block && !editing.busy && !sorting) editing.onBulk(block, action);
+    scrollerRef.current?.focus();
+  }
+
+  /** "Set value…": one value typed for every selected cell. */
+  async function setSelectedValue() {
+    setMenu(null);
+    const block = selectedBlock();
+    if (!editing || !block) return;
+    const cells = (block.lastRow - block.firstRow + 1) * block.columns.length;
+    const text = await useDialogs.getState().askText({
+      title: t("edit.setValueTitle", { count: cells }),
+      label: t("edit.setValueLabel"),
+      initial: "",
+      confirm: t("edit.setValueConfirm"),
+    });
+    scrollerRef.current?.focus();
+    if (text !== null) editing.onBulk(block, { kind: "set", value: { kind: "text", text } });
+  }
+
+  /** Text pasted on the selection: the core lays it out and checks every value. */
+  function pasteText(text: string) {
+    const block = selectedBlock();
+    if (!editing || !block || editing.busy || sorting) return;
+    const from = visibleCols.indexOf(block.columns[0] ?? -1);
+    editing.onPaste(block, from < 0 ? block.columns : visibleCols.slice(from), text);
+  }
+
+  async function pasteFromMenu() {
+    setMenu(null);
+    try {
+      pasteText(await readClipboardText());
+    } catch (e) {
+      setNotice({ text: t("edit.pasteUnavailable", { detail: e instanceof Error ? e.message : String(e) }), error: true });
+    }
+    scrollerRef.current?.focus();
   }
 
   /** Ctrl+Shift+J: the column picker's search text (`null` when closed). */
@@ -418,7 +520,7 @@ export function ResultGrid({
       const name = ctx.measureText(c.name).width;
       ctx.font = TYPE_FONT;
       const type = ctx.measureText(c.nativeType).width;
-      const base = NUMERIC.has(c.logical) ? 110 : 160;
+      const base = NUMERIC.has(c.logical) ? 96 : 132;
       return Math.round(Math.min(MAX_COL, Math.max(MIN_COL, name + PAD * 2 + 8, type + PAD * 2, base)));
     });
   }, [result.columns]);
@@ -437,6 +539,7 @@ export function ResultGrid({
   const rowNumW = Math.max(52, numbers.format(result.rows).length * 8 + PAD * 2);
   const totalW = rowNumW + (offsets[offsets.length - 1] ?? 0);
   const totalH = HEADER_H + result.rows * ROW_H;
+  contentH.current = totalH;
 
   // The canvas has no accessible cells. Expose the active one without putting result data in
   // React state; stale asynchronous answers must not announce a previously selected cell.
@@ -495,7 +598,7 @@ export function ResultGrid({
       accent: cssVar(style, "--accent"),
     };
     const left = scroller.scrollLeft;
-    const top = scroller.scrollTop;
+    const top = contentTop(scroller);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = c.bg;
     ctx.fillRect(0, 0, size.w, size.h);
@@ -557,14 +660,18 @@ export function ResultGrid({
       }
       const numeric = NUMERIC.has(logical);
       let text: string;
-      if (value === undefined) {
+      if (edited && editing?.defaults.has(editKey)) {
+        ctx.fillStyle = c.muted;
+        text = "DEFAULT";
+      } else if (value === undefined) {
         ctx.fillStyle = c.muted;
         text = "…";
       } else if (value === null) {
         ctx.fillStyle = c.muted;
         text = gridLook.nullText ? "NULL" : "";
       } else {
-        ctx.fillStyle = c.text;
+        // A masked value (ADR-051) holds the mask, not data: drawn like NULL.
+        ctx.fillStyle = result.columns[col]?.masked && !edited ? c.muted : c.text;
         text = value.replace(/[\r\n\t]+/g, " ");
       }
       // A foreign key value: a link at the right, which opens the referenced row.
@@ -680,7 +787,8 @@ export function ResultGrid({
       }
       ctx.font = TYPE_FONT;
       ctx.fillStyle = c.muted;
-      ctx.fillText(fit(ctx, meta.nativeType, w - PAD * 2), x + PAD, 27);
+      const typeLine = meta.masked ? `${meta.nativeType} · ${t("masking.header")}` : meta.nativeType;
+      ctx.fillText(fit(ctx, typeLine, w - PAD * 2), x + PAD, 26);
       ctx.fillStyle = c.line;
       ctx.fillRect(Math.round(x + w) - 1, 0, 1, HEADER_H);
     };
@@ -765,13 +873,14 @@ export function ResultGrid({
     setQueryPage(0);
     requestedPageScroll.current = null;
     scrollerRef.current?.scrollTo(0, 0);
+    scrollPos.current = { content: 0, scroll: 0 };
   }, [result.id]);
 
   useEffect(() => {
     const row = requestedPageScroll.current;
     if (row !== null && result.rows > row) {
       requestedPageScroll.current = null;
-      scrollerRef.current?.scrollTo({ top: row * ROW_H });
+      scrollToContent(row * ROW_H);
     }
   }, [result.rows]);
 
@@ -784,8 +893,9 @@ export function ResultGrid({
     const x = clientX - rect.left;
     const y = clientY - rect.top;
     if (!clamp && (y < HEADER_H || x > scroller.clientWidth || y > scroller.clientHeight)) return null;
-    const row = Math.min(result.rows - 1, Math.max(0, Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H)));
-    if (!clamp && Math.floor((y - HEADER_H + scroller.scrollTop) / ROW_H) >= result.rows) return null;
+    const top = contentTop(scroller);
+    const row = Math.min(result.rows - 1, Math.max(0, Math.floor((y - HEADER_H + top) / ROW_H)));
+    if (!clamp && Math.floor((y - HEADER_H + top) / ROW_H) >= result.rows) return null;
     const gutter = x < rowNumW;
     let col = columnAtX(x, scroller.scrollLeft);
     if (col < 0) col = x - rowNumW + scroller.scrollLeft < 0 ? firstVisible : lastVisible;
@@ -837,6 +947,30 @@ export function ResultGrid({
 
   /** Shows the value of the active cell (Enter, double-click, "View value"), even when the
    *  side panel last showed the row's references. */
+  /** The cell menu's Save to file…: the extension comes from the core, which recognises images. */
+  async function saveCellFromMenu(row: number, col: number) {
+    const meta = result.columns[col];
+    if (!meta) return;
+    try {
+      const item = await call(commands.viewCell(result.id, row, col, false));
+      if (item.kind === "null") {
+        setNotice({ text: t("viewer.saveError", { detail: t("viewer.nullValue") }), error: true });
+        return;
+      }
+      const saved = await saveValueToFile(result.id, row, col, meta.name, item.extension, t, i18n.language);
+      if (saved) setNotice(saved);
+    } catch (e) {
+      setNotice({ text: t("viewer.saveError", { detail: e instanceof Error ? e.message : String(e) }), error: true });
+    }
+  }
+
+  /** The cell menu's Load from file…: one UPDATE by primary key, applied at once. */
+  async function loadCellFromMenu(row: number, col: number) {
+    if (!editing) return;
+    const path = await chooseValueFile(t);
+    if (path) await editing.onLoadFile(row, col, path);
+  }
+
   function openCellViewer() {
     if (viewerMode === "references" || viewerMode === "calc") setViewerMode("cell");
     setViewer(true);
@@ -913,6 +1047,9 @@ export function ResultGrid({
   // ---- Find (Ctrl+F): the core searches the whole result; the grid asks for the matches of
   // the rows it shows and steps from one to the next.
   const findRun = useRef(0);
+  // The result the core holds a search for, so closing the search clears it once: this
+  // effect also runs on every row count of a streaming result, with no search open.
+  const searched = useRef<number | null>(null);
   const shownKey = visibleCols.join(",");
   useEffect(() => {
     const text = find?.text ?? "";
@@ -923,7 +1060,10 @@ export function ResultGrid({
     setFindCache(null);
     if (!find || !text) {
       setFound(null);
-      void call(commands.clearFind(result.id)).catch(() => undefined);
+      if (searched.current !== null) {
+        void call(commands.clearFind(searched.current)).catch(() => undefined);
+        searched.current = null;
+      }
       return;
     }
     if (!result.complete) {
@@ -933,6 +1073,7 @@ export function ResultGrid({
     setFound((current) => ({ count: current?.count ?? 0, truncated: current?.truncated ?? false, busy: true }));
     // Typing fast searches once, for the last text.
     const timer = setTimeout(() => {
+      searched.current = result.id;
       call(commands.findInResult(result.id, text, find.matchCase, visibleCols))
         .then(async (outcome) => {
           if (run !== findRun.current || !outcome) return;
@@ -1075,6 +1216,12 @@ export function ResultGrid({
       setNotice({ text: t("results.filterWhenComplete"), error: true });
       return;
     }
+    // Pending edits name rows by their place in the view (ADR-044): the core refuses to change
+    // it under them, and the grid says so first, as it does for sorting.
+    if (editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) {
+      setNotice({ text: t("edit.applyFirst"), error: true });
+      return;
+    }
     try {
       const outcome = await call(commands.filterColumns(result.id, filters));
       onColumnFiltered(filters, outcome.rows, outcome.total);
@@ -1122,7 +1269,7 @@ export function ResultGrid({
     widest = Math.max(widest, ctx.measureText(meta.nativeType).width);
     ctx.font = DATA_FONT;
     const scroller = scrollerRef.current;
-    const first = scroller ? Math.floor(scroller.scrollTop / ROW_H) : 0;
+    const first = scroller ? Math.floor(contentTop(scroller) / ROW_H) : 0;
     const last = Math.min(result.rows, first + Math.ceil((size.h || 600) / ROW_H) + 1);
     for (let row = first; row < last; row++) {
       const value = cache.get(row, col);
@@ -1158,6 +1305,11 @@ export function ResultGrid({
   function sortBy(sort: SortState | undefined) {
     setMenu(null);
     if (result.paging?.loading) return;
+    const sortColumn = sort ? result.columns[sort.column] : undefined;
+    if (sortColumn?.masked) {
+      setNotice({ text: t("masking.noSort", { column: sortColumn.name }), error: true });
+      return;
+    }
     if (editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0)) {
       setNotice({ text: t("edit.applyFirst"), error: true });
       return;
@@ -1208,13 +1360,67 @@ export function ResultGrid({
     scrollerRef.current?.focus();
   }
 
+  /** The content position at the grid's top (row `r` starts at `r * ROW_H` in it). The
+   *  container's position itself until the result is taller than the spacer can be. */
+  function contentTop(scroller: HTMLDivElement | null = scrollerRef.current): number {
+    if (!scroller) return 0;
+    const map = scrollMap(contentH.current, scroller.clientHeight);
+    if (!isScaled(map)) return scroller.scrollTop;
+    const known = scrollPos.current;
+    if (Math.abs(scroller.scrollTop - known.scroll) < 1) return Math.min(known.content, maxContentTop(map));
+    return toContent(map, scroller.scrollTop);
+  }
+
+  /** Scrolls so that a content position is at the grid's top. */
+  function scrollToContent(top: number) {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const map = scrollMap(contentH.current, scroller.clientHeight);
+    if (!isScaled(map)) {
+      scroller.scrollTop = top;
+      return;
+    }
+    const content = Math.min(Math.max(0, top), maxContentTop(map));
+    const before = scroller.scrollTop;
+    scroller.scrollTop = toScroll(map, content);
+    scrollPos.current = { content, scroll: scroller.scrollTop };
+    // A move smaller than a pixel of the container fires no scroll event: paint it anyway.
+    if (scroller.scrollTop === before) onGridScroll();
+  }
+
+  // While the scroll is scaled a wheel moves the content by its own amount (a pixel of the
+  // container would be many rows); otherwise the browser scrolls as usual.
+  const onScaledWheel = useRef<(e: WheelEvent) => void>(() => {});
+  onScaledWheel.current = (e: WheelEvent) => {
+    const scroller = scrollerRef.current;
+    if (!scroller || e.ctrlKey || !isScaled(scrollMap(contentH.current, scroller.clientHeight))) return;
+    let dy = wheelPixels(e.deltaY, e.deltaMode, ROW_H, scroller.clientHeight - HEADER_H);
+    let dx = wheelPixels(e.deltaX, e.deltaMode, ROW_H, scroller.clientWidth - rowNumW);
+    if (e.shiftKey && dx === 0) {
+      dx = dy;
+      dy = 0;
+    }
+    e.preventDefault();
+    if (dx !== 0) scroller.scrollLeft += dx;
+    if (dy !== 0) scrollToContent(contentTop(scroller) + dy);
+  };
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    // Not passive: a scaled wheel replaces the browser's scroll.
+    const listener = (e: WheelEvent) => onScaledWheel.current(e);
+    scroller.addEventListener("wheel", listener, { passive: false });
+    return () => scroller.removeEventListener("wheel", listener);
+  }, []);
+
   function scrollIntoView(cell: Cell) {
     const scroller = scrollerRef.current;
     if (!scroller) return;
     const y = cell.row * ROW_H;
-    if (y < scroller.scrollTop) scroller.scrollTop = y;
-    else if (y + ROW_H > scroller.scrollTop + scroller.clientHeight - HEADER_H)
-      scroller.scrollTop = y + ROW_H - scroller.clientHeight + HEADER_H;
+    const top = contentTop(scroller);
+    if (y < top) scrollToContent(y);
+    else if (y + ROW_H > top + scroller.clientHeight - HEADER_H)
+      scrollToContent(y + ROW_H - scroller.clientHeight + HEADER_H);
     // The frozen column is always in view; the others scroll into the part it leaves.
     if (cell.col === frozenCol) return;
     const x = offsets[cell.col] ?? 0;
@@ -1288,8 +1494,15 @@ export function ResultGrid({
     if (!menu || !menuRef.current) return;
     const position = () => { if (menuRef.current) placeMenu(menuRef.current, menu.x, menu.y); };
     position();
+    // Items can appear while it is open ("Export selection…" once the result is complete):
+    // a taller menu is placed again so it stays inside the window.
+    const resized = new ResizeObserver(position);
+    resized.observe(menuRef.current);
     window.addEventListener("resize", position);
-    return () => window.removeEventListener("resize", position);
+    return () => {
+      resized.disconnect();
+      window.removeEventListener("resize", position);
+    };
   }, [menu]);
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -1440,14 +1653,15 @@ export function ResultGrid({
   const pageCanLoad = !!paging?.hasMore && (paging.total === undefined || result.rows < paging.total);
   const pageStart = paging ? queryPage * paging.pageSize : 0;
   const hasPendingEdits = !!editing && (editing.inserts.length > 0 || editing.deleted.length > 0 || Object.keys(editing.cells).length > 0);
-  const updatedRows = editing ? new Set(Object.keys(editing.cells).map((key) => key.split(":")[0]).filter((row) => !editing.deleted.includes(Number(row)))).size : 0;
+  const updatedRows = editing?.updatedRows ?? 0;
 
   function onGridScroll() {
+    const scroller = scrollerRef.current;
+    if (scroller) scrollPos.current = { content: contentTop(scroller), scroll: scroller.scrollTop };
     redraw();
     setMenu(null);
-    const scroller = scrollerRef.current;
     if (!paging || !scroller) return;
-    const bottom = Math.max(0, Math.min(result.rows - 1, Math.floor((scroller.scrollTop + scroller.clientHeight - HEADER_H - 1) / ROW_H)));
+    const bottom = Math.max(0, Math.min(result.rows - 1, Math.floor((contentTop(scroller) + scroller.clientHeight - HEADER_H - 1) / ROW_H)));
     setQueryPage(Math.floor(bottom / paging.pageSize));
     if (!pageBusy && !pageViewChanged && pageCanLoad && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) {
       void onLoadMore();
@@ -1463,7 +1677,7 @@ export function ResultGrid({
       if (!(await onLoadMore())) requestedPageScroll.current = null;
       return;
     }
-    scrollerRef.current?.scrollTo({ top: next * ROW_H });
+    scrollToContent(next * ROW_H);
   }
   function onResultShortcut(e: React.KeyboardEvent<HTMLDivElement>) {
     const target = e.target instanceof HTMLElement ? e.target : null;
@@ -1507,18 +1721,41 @@ export function ResultGrid({
       e.preventDefault();
       e.stopPropagation();
       if (selection) editing.onDelete(selectedRows());
-    } else if (mod && !e.altKey && !e.shiftKey && key === "z") {
+    } else if (matchesShortcut(e, UNDO_SHORTCUT)) {
+      e.preventDefault();
+      e.stopPropagation();
+      editing.onUndo();
+    } else if (matchesShortcut(e, REDO_SHORTCUT) || (mod && e.shiftKey && !e.altKey && key === "z")) {
+      e.preventDefault();
+      e.stopPropagation();
+      editing.onRedo();
+    } else if (matchesShortcut(e, REVERT_SHORTCUT)) {
       e.preventDefault();
       e.stopPropagation();
       if (selection) editing.onRevert(selectedRows());
-    } else if (mod && e.altKey && !e.shiftKey && key === "n") {
+    } else if (matchesShortcut(e, SET_NULL_SHORTCUT)) {
       e.preventDefault();
       e.stopPropagation();
       setSelectedNull();
+    } else if (matchesShortcut(e, FILL_DOWN_SHORTCUT)) {
+      e.preventDefault();
+      e.stopPropagation();
+      bulkEdit({ kind: "fillDown" });
     }
   }
   return (
-    <div className="grid-wrap" ref={wrapRef} onKeyDown={onResultShortcut}>
+    <div
+      className="grid-wrap"
+      ref={wrapRef}
+      onKeyDown={onResultShortcut}
+      onPaste={(e) => {
+        // Ctrl+V on the grid pastes into the selected cells; text boxes keep their own paste.
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        if (!editing || target?.closest('input, textarea, [contenteditable="true"], [role="dialog"]')) return;
+        e.preventDefault();
+        pasteText(e.clipboardData.getData("text/plain"));
+      }}
+    >
     <div className="grid-main">
     {(result.columnFilters?.length ?? 0) > 0 && (
       <div className="filter-bar" role="toolbar" aria-label={t("results.columnFilters")}>
@@ -1529,13 +1766,20 @@ export function ResultGrid({
             <button
               className="ghost small"
               aria-label={t("results.removeFilter", { filter: filterLabel(f, result.columns) })}
+              title={hasPendingEdits ? t("edit.applyFirst") : undefined}
+              disabled={hasPendingEdits}
               onClick={() => void applyColumnFilters((result.columnFilters ?? []).filter((_, j) => j !== i))}
             >
               ×
             </button>
           </span>
         ))}
-        <button className="ghost small" onClick={() => void applyColumnFilters([])}>
+        <button
+          className="ghost small"
+          title={hasPendingEdits ? t("edit.applyFirst") : undefined}
+          disabled={hasPendingEdits}
+          onClick={() => void applyColumnFilters([])}
+        >
           {t("results.resetFilters")}
         </button>
       </div>
@@ -1634,7 +1878,7 @@ export function ResultGrid({
             : "")
         }
       >
-        <div aria-hidden="true" style={{ width: totalW, height: totalH }} />
+        <div aria-hidden="true" style={{ width: totalW, height: scrollMap(totalH, 0).spacerH }} />
         {selection && selection.focus.row < result.rows && <div className="sr-only" role="row" aria-rowindex={selection.focus.row + 2}>
           <div ref={accessibleCell} id={accessibleCellId} role="gridcell" aria-colindex={Math.max(1, visibleCols.indexOf(selection.focus.col) + 1)} aria-selected="true" aria-live="polite" aria-atomic="true" />
         </div>}
@@ -1668,6 +1912,7 @@ export function ResultGrid({
               setFrozen(!frozen);
             }}
             onSort={(sort) => sortBy(sort)}
+            masked={result.columns[menu.header ?? 0]?.masked ?? false}
           >
             <GridSubmenu label={t("results.copyNamesMenu")}>
               {NAME_STYLES.filter((n) => n.style !== "qualified" || tableData).map((n) => (
@@ -1707,14 +1952,53 @@ export function ResultGrid({
               >
                 {t("edit.editCell")}
               </button>
+              <button role="menuitem" onClick={() => void setSelectedValue()}>
+                {t("edit.setValue")}
+              </button>
+              <button role="menuitem" onClick={() => void pasteFromMenu()}>
+                <span>{t("edit.paste")}</span><span className="menu-shortcut">{PASTE_SHORTCUT}</span>
+              </button>
+              <button role="menuitem" onClick={() => bulkEdit({ kind: "fillDown" })}>
+                <span>{t("edit.fillDown")}</span><span className="menu-shortcut">{FILL_DOWN_SHORTCUT}</span>
+              </button>
               <button
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
-                  if (menu.cell && !editing.deleted.includes(menu.cell.row)) editing.onEdit(menu.cell.row, menu.cell.col, cache.get(menu.cell.row, menu.cell.col) === null ? undefined : null);
+                  setSelectedNull();
                 }}
               >
-                {t("edit.setNull")}
+                <span>{t("edit.setNull")}</span><span className="menu-shortcut">{SET_NULL_SHORTCUT}</span>
+              </button>
+              <GridSubmenu label={t("edit.changeCells")}>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "trim" })}>{t("edit.trim")}</button>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "upperCase" })}>{t("edit.upperCase")}</button>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "lowerCase" })}>{t("edit.lowerCase")}</button>
+                <hr />
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "set", value: { kind: "default" } })}>{t("edit.setDefault")}</button>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "newUuid" })}>{t("edit.newUuid")}</button>
+                <button role="menuitem" onClick={() => bulkEdit({ kind: "now" })}>{t("edit.now")}</button>
+              </GridSubmenu>
+              <hr />
+              <button
+                role="menuitem"
+                disabled={!editing.canUndo}
+                onClick={() => {
+                  setMenu(null);
+                  editing.onUndo();
+                }}
+              >
+                <span>{t("edit.undo")}</span><span className="menu-shortcut">{UNDO_SHORTCUT}</span>
+              </button>
+              <button
+                role="menuitem"
+                disabled={!editing.canRedo}
+                onClick={() => {
+                  setMenu(null);
+                  editing.onRedo();
+                }}
+              >
+                <span>{t("edit.redo")}</span><span className="menu-shortcut">{REDO_SHORTCUT}</span>
               </button>
               <button
                 role="menuitem"
@@ -1733,11 +2017,24 @@ export function ResultGrid({
                     editing.onRevert(selectedRows());
                   }}
                 >
-                  {t("edit.revert")}
+                  <span>{t("edit.revert")}</span><span className="menu-shortcut">{REVERT_SHORTCUT}</span>
                 </button>
               )}
               <hr />
             </>
+          )}
+          {menu.cell && result.columns[menu.cell.col]?.masked && (
+            <button
+              role="menuitem"
+              title={t("masking.revealHint")}
+              onClick={() => {
+                const cell = menu.cell;
+                setMenu(null);
+                if (cell) setReveal({ x: menu.x, y: menu.y, row: cell.row, col: cell.col });
+              }}
+            >
+              {t("masking.reveal")}
+            </button>
           )}
           <button
             role="menuitem"
@@ -1748,6 +2045,32 @@ export function ResultGrid({
           >
             {t("viewer.open")}
           </button>
+          {menu.cell && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                const cell = menu.cell;
+                setMenu(null);
+                if (cell) void saveCellFromMenu(cell.row, cell.col);
+              }}
+            >
+              {t("viewer.save")}
+            </button>
+          )}
+          {menu.cell && editing && (
+            <button
+              role="menuitem"
+              title={hasPendingEdits ? t("edit.applyFirst") : t("viewer.loadHint")}
+              disabled={editing.busy || sorting || hasPendingEdits || editing.deleted.includes(menu.cell.row)}
+              onClick={() => {
+                const cell = menu.cell;
+                setMenu(null);
+                if (cell) void loadCellFromMenu(cell.row, cell.col);
+              }}
+            >
+              {t("viewer.load")}
+            </button>
+          )}
           {selection && (
             <button
               role="menuitem"
@@ -1757,6 +2080,17 @@ export function ResultGrid({
               }}
             >
               {t("calc.open")}
+            </button>
+          )}
+          {selection && onChart && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                onChart(shownIn(bounds(selection)));
+              }}
+            >
+              {t("chart.fromSelection")}
             </button>
           )}
           {menu.cell && (keyColumns.get(menu.cell.col) ?? []).map((key) => (
@@ -1855,7 +2189,7 @@ export function ResultGrid({
           spellCheck={false}
           style={{
             left: cellEditor.col === frozenCol ? rowNumW : rowNumW + (offsets[cellEditor.col] ?? 0) - (scrollerRef.current?.scrollLeft ?? 0),
-            top: HEADER_H + cellEditor.row * ROW_H - (scrollerRef.current?.scrollTop ?? 0),
+            top: HEADER_H + cellEditor.row * ROW_H - contentTop(),
             width: widths[cellEditor.col] ?? MIN_COL,
             height: ROW_H,
           }}
@@ -1899,6 +2233,19 @@ export function ResultGrid({
           onNext={() => void goToMatch("next")}
           onPrevious={() => void goToMatch("previous")}
           onClose={closeFind}
+        />
+      )}
+      {reveal && (
+        <RevealPopover
+          x={reveal.x}
+          y={reveal.y}
+          resultId={result.id}
+          row={reveal.row}
+          column={reveal.col}
+          onClose={() => {
+            setReveal(null);
+            scrollerRef.current?.focus();
+          }}
         />
       )}
       {columnStats && tableData && (
@@ -1977,9 +2324,11 @@ export function ResultGrid({
               <button className="ghost" title={t("edit.shortcutAdd")} aria-label={t("edit.addRow")} disabled={editing.busy || sorting || !result.complete} onClick={() => setInserting({ values: [] })}><EditIcon name="add" /><span>{t("edit.addRow")}</span></button>
               <button className="ghost" title={t("edit.shortcutDuplicate")} aria-label={t("edit.duplicateRow")} disabled={editing.busy || sorting || !selection || editing.deleted.includes(selection.focus.row)} onClick={() => void duplicateRow()}><EditIcon name="duplicate" /><span>{t("edit.duplicateAction")}</span></button>
               <button className="ghost" title={t("edit.shortcutDelete")} aria-label={t("edit.deleteSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onDelete(selectedRows())}><EditIcon name="delete" /><span>{t("edit.deleteAction")}</span></button>
-              <button className="ghost" title={t("edit.shortcutRevert")} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="undo" /><span>{t("edit.undoAction")}</span></button>
+              <button className="ghost" title={`${t("edit.revertSelected")} (${REVERT_SHORTCUT})`} aria-label={t("edit.revertSelected")} disabled={editing.busy || sorting || !selection} onClick={() => editing.onRevert(selectedRows())}><EditIcon name="revert" /><span>{t("edit.revertAction")}</span></button>
             </div>
             <div className="result-commit-actions" role="group" aria-label={t("edit.pendingActions")}>
+              <button className="ghost" title={`${t("edit.undo")} (${UNDO_SHORTCUT})`} aria-label={t("edit.undo")} disabled={editing.busy || sorting || !editing.canUndo} onClick={() => { scrollerRef.current?.focus(); editing.onUndo(); }}><EditIcon name="undo" /></button>
+              <button className="ghost" title={`${t("edit.redo")} (${REDO_SHORTCUT})`} aria-label={t("edit.redo")} disabled={editing.busy || sorting || !editing.canRedo} onClick={() => { scrollerRef.current?.focus(); editing.onRedo(); }}><EditIcon name="redo" /></button>
               <button className={hasPendingEdits ? "primary" : ""} title={t("edit.shortcutSave")} aria-label={t("edit.saveChanges")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={() => { scrollerRef.current?.focus(); editing.onApply(); }}><EditIcon name="save" /><span>{t("edit.saveChanges")}</span></button>
               <button className="ghost" title={t("edit.shortcutDiscard")} aria-label={t("edit.discard")} disabled={editing.busy || sorting || !hasPendingEdits} onClick={editing.onDiscard}><EditIcon name="cancel" /><span>{t("edit.discard")}</span></button>
             </div>
@@ -1993,7 +2342,7 @@ export function ResultGrid({
               <select aria-label={t("table.pageSize")} value={paging.pageSize} disabled={pageBusy} onChange={(e) => onQueryPageSize(Number(e.target.value))}>
                 {PAGE_SIZES.map((size) => <option key={size} value={size}>{t("table.perPage", { count: size, formattedCount: numbers.format(size) })}</option>)}
               </select>
-              <button type="button" className="ghost" aria-label={t("table.previous")} disabled={pageBusy || queryPage === 0} onClick={() => scrollerRef.current?.scrollTo({ top: Math.max(0, queryPage - 1) * paging.pageSize * ROW_H })}>◀</button>
+              <button type="button" className="ghost" aria-label={t("table.previous")} disabled={pageBusy || queryPage === 0} onClick={() => scrollToContent(Math.max(0, queryPage - 1) * paging.pageSize * ROW_H)}>◀</button>
               <span className="small table-range" role="status">
                 {result.rows === 0 ? t("table.noRows") : t("table.range", { from: numbers.format(pageStart + 1), to: numbers.format(Math.min(result.rows, pageStart + paging.pageSize)) })}
                 {paging.total !== undefined && !pageViewChanged ? ` ${t("table.ofTotal", { total: numbers.format(paging.total) })}` : ""}
@@ -2081,8 +2430,13 @@ export function ResultGrid({
         mode={shownMode}
         modes={viewerModes}
         edits={editing?.cells}
+        defaults={editing?.defaults}
         editable={!!editing && !editing.busy && !sorting && !editing.deleted.includes(selection.focus.row)}
         onEdit={editing?.onEdit}
+        onType={editing?.onType}
+        pendingChanges={hasPendingEdits}
+        onLoadFile={editing?.onLoadFile}
+        pickerSource={editing ? { session, schema: editing.table.schema, table: editing.table.name } : undefined}
         onMode={(mode) => {
           setViewerMode(mode);
           // Arrow keys keep moving through the grid.
@@ -2095,6 +2449,12 @@ export function ResultGrid({
           scrollIntoView(cell);
           setViewerMode("cell");
           scrollerRef.current?.focus();
+        }}
+        rowCount={result.rows}
+        onPickRow={(row) => {
+          const cell = { row, col: selection.focus.col };
+          setSelection({ anchor: cell, focus: cell });
+          scrollIntoView(cell);
         }}
         onClose={() => {
           setViewer(false);
@@ -2241,6 +2601,8 @@ function HeaderMenuItems(props: {
   onShowAll(): void;
   onFreeze(): void;
   onSort(sort: SortState | undefined): void;
+  /** The column is masked (ADR-051): it cannot be sorted by. */
+  masked?: boolean;
   /** Column-wide copies, after the hide and freeze entries. */
   children?: React.ReactNode;
 }) {
@@ -2267,8 +2629,8 @@ function HeaderMenuItems(props: {
       {props.children && <hr />}
       {props.children}
       <hr />
-      <button role="menuitem" onClick={() => props.onSort({ column: props.column, descending: false })}>{t("results.sortAsc")}</button>
-      <button role="menuitem" onClick={() => props.onSort({ column: props.column, descending: true })}>{t("results.sortDesc")}</button>
+      <button role="menuitem" disabled={props.masked} title={props.masked ? t("masking.noSortHint") : undefined} onClick={() => props.onSort({ column: props.column, descending: false })}>{t("results.sortAsc")}</button>
+      <button role="menuitem" disabled={props.masked} title={props.masked ? t("masking.noSortHint") : undefined} onClick={() => props.onSort({ column: props.column, descending: true })}>{t("results.sortDesc")}</button>
       {props.sorted && <button role="menuitem" onClick={() => props.onSort(undefined)}>{t("results.sortClear")}</button>}
     </>
   );
@@ -2347,11 +2709,38 @@ function ColumnChooser(props: {
   );
 }
 
+/** How long the pointer rests on a submenu's item before the submenu opens, and how long an
+ *  open submenu stays once the pointer has left it. A pointer going diagonally into an open
+ *  submenu crosses other items of the menu on the way: they neither close it nor open theirs. */
+const SUBMENU_OPEN_DELAY = 150;
+const SUBMENU_CLOSE_DELAY = 400;
+
+/** The grid submenu open now: opening another one closes it at once. */
+let openSubmenu: { close(): void } | null = null;
+
 /** A context submenu that stays inside the window, even near its edges. */
 function GridSubmenu({ label, children }: { label: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const submenu = useRef<HTMLDivElement>(null);
+  const timer = useRef<number | null>(null);
+  const clearTimer = () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const self = useRef({ close: () => {} });
+  self.current.close = () => {
+    clearTimer();
+    if (openSubmenu === self.current) openSubmenu = null;
+    setOpen(false);
+  };
+  const show = () => {
+    clearTimer();
+    if (openSubmenu !== self.current) openSubmenu?.close();
+    openSubmenu = self.current;
+    setOpen(true);
+  };
+  useEffect(() => () => self.current.close(), []);
   useLayoutEffect(() => {
     if (!open || !trigger.current || !submenu.current) return;
     const position = () => {
@@ -2363,18 +2752,28 @@ function GridSubmenu({ label, children }: { label: string; children: React.React
       placeMenu(submenu.current, x, anchor.top);
     };
     position();
+    // It follows its item when the menu or the submenu changes size (items added while open).
+    const resized = new ResizeObserver(position);
+    resized.observe(submenu.current);
+    const parent = trigger.current.closest(".grid-menu");
+    if (parent) resized.observe(parent);
     window.addEventListener("resize", position);
     window.addEventListener("scroll", position, true);
     return () => {
+      resized.disconnect();
       window.removeEventListener("resize", position);
       window.removeEventListener("scroll", position, true);
     };
   }, [open, children]);
   return (
-    <div className="grid-submenu" onMouseEnter={() => setOpen(true)} onMouseLeave={(e) => {
-      if (!e.currentTarget.contains(document.activeElement)) setOpen(false);
-    }} onFocus={() => setOpen(true)} onBlur={(e) => {
-      if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
+    <div className="grid-submenu" onMouseEnter={() => {
+      clearTimer();
+      if (!open) timer.current = window.setTimeout(show, SUBMENU_OPEN_DELAY);
+    }} onMouseLeave={(e) => {
+      clearTimer();
+      if (open && !e.currentTarget.contains(document.activeElement)) timer.current = window.setTimeout(() => self.current.close(), SUBMENU_CLOSE_DELAY);
+    }} onFocus={show} onBlur={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget)) self.current.close();
     }}>
       <button ref={trigger} role="menuitem" aria-haspopup="menu" aria-expanded={open}>
         {label} ▸

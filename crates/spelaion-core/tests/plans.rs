@@ -11,7 +11,7 @@ use spelaion_core::{
     CoreEvent, Engines, HistoryScope, OpenConnection, OpenOptions, QueryHistory, ReadLimits,
     ResultStore, Session, TransactionState, TunnelPool, open_connection,
 };
-use spelaion_driver_api::{ConnectParams, Secret};
+use spelaion_driver_api::{ConnectParams, ExecOptions, Secret};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
 async fn open(read_only: bool) -> Option<OpenConnection> {
@@ -53,6 +53,7 @@ async fn open_with_setup(
         statement_timeout: Some(Duration::from_secs(5)),
         session: setup,
         mcp: Default::default(),
+        masking: Default::default(),
     };
     Some(
         open_connection(
@@ -100,6 +101,21 @@ async fn run(session: &Session, sql: &str) -> Vec<String> {
         }
     }
     values
+}
+
+/// Runs `statements` straight on the driver, around the core's read-only check (ADR-053): the
+/// test's own temporary data on a read-only connection's session.
+async fn around_the_core(session: &Session, statements: &[&str]) {
+    for sql in statements {
+        let mut events = session
+            .connection()
+            .execute(sql, &ExecOptions::default())
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        while let Some(event) = events.next().await {
+            event.unwrap_or_else(|e| panic!("{sql}: {e}"));
+        }
+    }
 }
 
 fn analyzed() -> ExplainOptions {
@@ -310,8 +326,18 @@ async fn plans_readonly_is_captured_from_the_real_open_connection_and_never_exec
         return;
     };
     assert!(open.resolved.params.read_only);
-    // PG's driver flag alone does not enforce read-only; own temp data proves the core barrier.
-    run(&open.session, "CREATE TEMP TABLE readonly_plan_values(value int); INSERT INTO readonly_plan_values VALUES (7)").await;
+    // The core refuses the temporary table and the session is read-only in PostgreSQL too
+    // (ADR-053): the test's own data goes around both, in a transaction that asks to write.
+    around_the_core(
+        &open.session,
+        &[
+            "BEGIN READ WRITE",
+            "CREATE TEMP TABLE readonly_plan_values(value int)",
+            "INSERT INTO readonly_plan_values VALUES (7)",
+            "COMMIT",
+        ],
+    )
+    .await;
     let policy = ExplainPolicy::for_connection(&open);
     let capabilities = plan::plan_capabilities(&open.session, &policy);
     assert!(capabilities.estimated && !capabilities.analyze);

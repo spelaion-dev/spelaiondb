@@ -10,8 +10,8 @@ use futures_util::stream::BoxStream;
 use spelaion_store::{
     AuditEntry, AuditFilter, AuditRecord, AuditSession, Bookmark, EditorPreferences,
     ExplorerFilter, ExplorerPreferences, GridPreferences, HistoryEntry, HistoryFilter, HistoryPage,
-    NewHistoryEntry, RecentFile, SavedTabs, ScriptPreferences, Snippet, SnippetFilter,
-    SnippetFolder, Store, StoreError, ToolOutput,
+    MapPreferences, NewHistoryEntry, RecentFile, SavedTabs, ScriptPreferences, Snippet,
+    SnippetFilter, SnippetFolder, Store, StoreError, ToolOutput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -142,6 +142,20 @@ enum Request {
     },
     GetGrid {
         reply: Reply<GridPreferences>,
+    },
+    GetMap {
+        reply: Reply<MapPreferences>,
+    },
+    GetBackup {
+        reply: Reply<crate::BackupPreferences>,
+    },
+    SetBackup {
+        preferences: crate::BackupPreferences,
+        reply: Reply<()>,
+    },
+    SetMap {
+        preferences: MapPreferences,
+        reply: Reply<()>,
     },
     SetGrid {
         preferences: GridPreferences,
@@ -340,6 +354,18 @@ impl QueryHistory {
                         }
                         Request::GetGrid { reply } => {
                             let _ = reply.send(store.get_grid_preferences());
+                        }
+                        Request::GetMap { reply } => {
+                            let _ = reply.send(store.get_map_preferences());
+                        }
+                        Request::GetBackup { reply } => {
+                            let _ = reply.send(store.get_backup_preferences());
+                        }
+                        Request::SetBackup { preferences, reply } => {
+                            let _ = reply.send(store.set_backup_preferences(&preferences));
+                        }
+                        Request::SetMap { preferences, reply } => {
+                            let _ = reply.send(store.set_map_preferences(&preferences));
                         }
                         Request::SetGrid { preferences, reply } => {
                             let _ = reply.send(store.set_grid_preferences(&preferences));
@@ -707,6 +733,33 @@ impl QueryHistory {
         preferences: EditorPreferences,
     ) -> Result<(), HistoryError> {
         self.request(|reply| Request::SetEditor { preferences, reply })
+            .await
+    }
+
+    /// The map view's background (ADR-045): tiles off until the user turns them on.
+    pub async fn map_preferences(&self) -> Result<MapPreferences, HistoryError> {
+        self.request(|reply| Request::GetMap { reply }).await
+    }
+
+    /// Saves the map's preferences; a tile server that fails `check_tile_server` is refused.
+    pub async fn set_map_preferences(
+        &self,
+        preferences: MapPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetMap { preferences, reply })
+            .await
+    }
+
+    /// The backup dialog's remembered tool folders, output folder and name pattern (ADR-049).
+    pub async fn backup_preferences(&self) -> Result<crate::BackupPreferences, HistoryError> {
+        self.request(|reply| Request::GetBackup { reply }).await
+    }
+
+    pub async fn set_backup_preferences(
+        &self,
+        preferences: crate::BackupPreferences,
+    ) -> Result<(), HistoryError> {
+        self.request(|reply| Request::SetBackup { preferences, reply })
             .await
     }
 
@@ -1301,64 +1354,45 @@ fn export_history(
     path: &std::path::Path,
     cancel: &crate::ExportCancel,
 ) -> Result<usize, StoreError> {
+    use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
     use std::io::Write;
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(format!(
-        ".spelaion-history-{}-{}.tmp",
-        std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let temporary = PathBuf::from(temporary);
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    let result = (|| {
-        let mut writer = std::io::BufWriter::new(file);
-        let count = store.visit_history(workspace, filter, |entries| {
-            for entry in entries {
-                if cancel.is_cancelled() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Interrupted,
-                        "History export cancelled: no file was written",
-                    )
-                    .into());
-                }
-                // Do not turn a connection/database/error containing a newline into SQL.
-                // Only the fixed timestamp and numbers appear in generated comments.
-                writeln!(
-                    writer,
-                    "-- {} · {} ms · {} rows",
-                    crate::audit::iso_time(entry.at_ms),
-                    entry.duration_ms,
-                    entry.rows
-                )?;
-                writeln!(
-                    writer,
-                    "{}\n;\n",
-                    crate::audit::redact_secrets(&entry.statement)
-                )?;
+    // Dropped on any error or cancel, which deletes the temporary file.
+    let mut writer = std::io::BufWriter::new(AtomicWriter::create(path, NewFileMode::Default)?);
+    let count = store.visit_history(workspace, filter, |entries| {
+        for entry in entries {
+            if cancel.is_cancelled() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "History export cancelled: no file was written",
+                )
+                .into());
             }
-            Ok(())
-        })?;
-        if cancel.is_cancelled() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "History export cancelled: no file was written",
-            )
-            .into());
+            // Do not turn a connection/database/error containing a newline into SQL.
+            // Only the fixed timestamp and numbers appear in generated comments.
+            writeln!(
+                writer,
+                "-- {} · {} ms · {} rows",
+                crate::audit::iso_time(entry.at_ms),
+                entry.duration_ms,
+                entry.rows
+            )?;
+            writeln!(
+                writer,
+                "{}\n;\n",
+                crate::audit::redact_secrets(&entry.statement)
+            )?;
         }
-        writer.flush()?;
-        writer.get_ref().sync_all()?;
-        drop(writer);
-        std::fs::rename(&temporary, path)?;
-        Ok(count)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        Ok(())
+    })?;
+    if cancel.is_cancelled() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "History export cancelled: no file was written",
+        )
+        .into());
     }
-    result
+    writer.into_inner().map_err(|e| e.into_error())?.commit()?;
+    Ok(count)
 }
 
 fn millis(duration: Duration) -> i64 {
@@ -2241,7 +2275,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    // Several threads: the mode and link check blocks on exports in place.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn history_redaction_and_atomic_paged_export_preserve_scope_and_cancelled_destination() {
         let (history, _, _, path) = context_history("export");
         let entry = |workspace: &str, sql: &str| NewHistoryEntry {
@@ -2327,8 +2362,24 @@ mod tests {
                     .unwrap()
                     .file_name()
                     .to_string_lossy()
-                    .ends_with(".tmp"))
+                    .ends_with(".spelaion-tmp"))
         );
+        #[cfg(unix)]
+        {
+            let handle = tokio::runtime::Handle::current();
+            crate::test_files::assert_keeps_mode_and_links("history", |path| {
+                let count = tokio::task::block_in_place(|| {
+                    handle.block_on(history.export_history(
+                        "/repo".into(),
+                        HistoryFilter::default(),
+                        path.to_path_buf(),
+                        Arc::new(crate::ExportCancel::new()),
+                    ))
+                })
+                .unwrap();
+                assert_eq!(count, 2);
+            });
+        }
     }
 
     #[tokio::test]

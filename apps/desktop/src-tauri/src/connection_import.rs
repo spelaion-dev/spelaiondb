@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use spelaion_config::{
     Config, DuplicateAction, ImportClient, ImportedConnection, Source, SystemBackend,
-    TableplusError, TargetFolder, TrustStore,
+    TableplusError, TargetFolder,
 };
 use spelaion_driver_api::Secret;
 use tauri::State;
@@ -80,13 +80,11 @@ enum ReadError {
     Password {
         wrong: bool,
     },
+    /// Nothing was chosen and the client keeps nothing this system can read on its own
+    /// (HeidiSQL outside Windows, or a client whose folder is unknown here): the user must
+    /// choose a folder or a file first.
+    NoDefault,
     Other(String),
-}
-
-impl From<&str> for ReadError {
-    fn from(message: &str) -> Self {
-        ReadError::Other(message.to_string())
-    }
 }
 
 impl From<ReadError> for String {
@@ -96,6 +94,7 @@ impl From<ReadError> for String {
             ReadError::Password { wrong: true } => {
                 "the password does not open the export file".into()
             }
+            ReadError::NoDefault => "choose a folder or file to import from".into(),
             ReadError::Other(message) => message,
         }
     }
@@ -103,6 +102,20 @@ impl From<ReadError> for String {
 
 fn other(e: impl std::fmt::Display) -> ReadError {
     ReadError::Other(e.to_string())
+}
+
+/// Whether the client keeps its connections somewhere this system can read without the user
+/// choosing a folder or file (HeidiSQL's registry only exists on Windows).
+fn has_default_source(client: ImportClient) -> bool {
+    match client {
+        ImportClient::Dbeaver => spelaion_config::dbeaver_workspace().is_some(),
+        ImportClient::Datagrip => jetbrains_dir().is_some(),
+        ImportClient::Tableplus => tableplus_dir().is_some(),
+        ImportClient::Heidisql => spelaion_config::heidisql_has_registry(),
+        ImportClient::Workbench => workbench_dir().is_some(),
+        ImportClient::Pgadmin => pgadmin_dir().is_some(),
+        ImportClient::Beekeeper => beekeeper_dir().is_some(),
+    }
 }
 
 /// Reads a client's connections from the folder or file chosen, or from where the client keeps
@@ -117,8 +130,7 @@ fn read(
         ImportClient::Dbeaver => {
             let dir = match chosen {
                 Some(dir) => dir,
-                None => spelaion_config::dbeaver_workspace()
-                    .ok_or("DBeaver's folder is unknown on this system")?,
+                None => spelaion_config::dbeaver_workspace().ok_or(ReadError::NoDefault)?,
             };
             let found = spelaion_config::read_dbeaver(&dir).map_err(other)?;
             Ok((dir, found))
@@ -131,7 +143,7 @@ fn read(
                 .unwrap_or_default();
             let dir = match chosen {
                 Some(dir) => dir,
-                None => jetbrains.ok_or("JetBrains' folder is unknown on this system")?,
+                None => jetbrains.ok_or(ReadError::NoDefault)?,
             };
             let found = spelaion_config::read_datagrip(&dir, &config_dirs).map_err(other)?;
             Ok((dir, found))
@@ -141,6 +153,7 @@ fn read(
                 let found = spelaion_config::read_heidisql(&file).map_err(other)?;
                 Ok((file, found))
             }
+            None if !spelaion_config::heidisql_has_registry() => Err(ReadError::NoDefault),
             None => {
                 let found = spelaion_config::read_heidisql_registry().map_err(other)?;
                 Ok((PathBuf::from(r"HKCU\Software\HeidiSQL\Servers"), found))
@@ -149,7 +162,7 @@ fn read(
         ImportClient::Tableplus => {
             let dir = match chosen {
                 Some(dir) => dir,
-                None => tableplus_dir().ok_or("TablePlus's folder is unknown on this system")?,
+                None => tableplus_dir().ok_or(ReadError::NoDefault)?,
             };
             let found =
                 spelaion_config::read_tableplus(&dir, password.as_ref()).map_err(|e| match e {
@@ -162,9 +175,7 @@ fn read(
         ImportClient::Workbench => {
             let dir = match chosen {
                 Some(dir) => dir,
-                None => {
-                    workbench_dir().ok_or("MySQL Workbench's folder is unknown on this system")?
-                }
+                None => workbench_dir().ok_or(ReadError::NoDefault)?,
             };
             let found = spelaion_config::read_workbench(
                 &dir,
@@ -176,7 +187,7 @@ fn read(
         ImportClient::Pgadmin => {
             let path = match chosen {
                 Some(path) => path,
-                None => pgadmin_dir().ok_or("pgAdmin's folder is unknown on this system")?,
+                None => pgadmin_dir().ok_or(ReadError::NoDefault)?,
             };
             let found = spelaion_config::read_pgadmin(&path).map_err(other)?;
             Ok((path, found))
@@ -184,9 +195,7 @@ fn read(
         ImportClient::Beekeeper => {
             let path = match chosen {
                 Some(path) => path,
-                None => {
-                    beekeeper_dir().ok_or("Beekeeper Studio's folder is unknown on this system")?
-                }
+                None => beekeeper_dir().ok_or(ReadError::NoDefault)?,
             };
             let found = spelaion_config::read_beekeeper(&path).map_err(other)?;
             Ok((path, found))
@@ -300,6 +309,12 @@ pub struct ImportScan {
     pub needs_password: bool,
     /// The password given does not open it.
     pub wrong_password: bool,
+    /// Nothing was read: nothing was chosen, and the client keeps nothing this system can read
+    /// on its own, so the user chooses a folder or file first.
+    pub needs_choice: bool,
+    /// The client keeps its connections somewhere this system reads when nothing is chosen
+    /// (its folders, or HeidiSQL's registry on Windows), so the UI can offer to go back to it.
+    pub default_source: bool,
 }
 
 /// The connections of a client under a folder or in a file (where the client keeps them if
@@ -315,17 +330,20 @@ pub async fn scan_connections(
     state: State<'_, AppState>,
 ) -> CmdResult<ImportScan> {
     let client = client_named(&client)?;
+    let default_source = has_default_source(client);
     let shown = path.clone().unwrap_or_default();
+    let unread = |needs_password: bool, wrong_password: bool, needs_choice: bool| ImportScan {
+        dir: shown.clone(),
+        connections: Vec::new(),
+        needs_password,
+        wrong_password,
+        needs_choice,
+        default_source,
+    };
     let (dir, found) = match read_blocking(client, path, file_password).await {
         Ok(read) => read,
-        Err(ReadError::Password { wrong }) => {
-            return Ok(ImportScan {
-                dir: shown,
-                connections: Vec::new(),
-                needs_password: true,
-                wrong_password: wrong,
-            });
-        }
+        Err(ReadError::Password { wrong }) => return Ok(unread(true, wrong, false)),
+        Err(ReadError::NoDefault) => return Ok(unread(false, false, true)),
         Err(e) => return Err(e.into()),
     };
     let config = state.config.read().await;
@@ -334,6 +352,8 @@ pub async fn scan_connections(
         connections: found.iter().map(|c| item(&config, c)).collect(),
         needs_password: false,
         wrong_password: false,
+        needs_choice: false,
+        default_source,
     })
 }
 
@@ -525,9 +545,7 @@ async fn import_one(
             let name = spelaion_config::add_tunnel(&config, tunnel, passwords, &SystemBackend)
                 .map_err(|e| e.to_string())?;
             if source == Source::Workspace {
-                TrustStore::load(&state.user_dir)
-                    .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
-                    .map_err(|e| e.to_string())?;
+                state.change_trust(|trust| trust.accept_tunnel_write(&config, &name, &file))?;
             }
             created_tunnel = true;
         }
@@ -550,11 +568,9 @@ async fn import_one(
                     )
                     .map_err(|e| e.to_string())?;
                     if source == Source::Workspace {
-                        TrustStore::load(&state.user_dir)
-                            .and_then(|mut trust| {
-                                trust.accept_connection_edit(&config, &id, &written)
-                            })
-                            .map_err(|e| e.to_string())?;
+                        state.change_trust(|trust| {
+                            trust.accept_connection_edit(&config, &id, &written)
+                        })?;
                     }
                     Some(name)
                 }
@@ -587,9 +603,7 @@ async fn import_one(
             if let Ok(id) = &result
                 && source == Source::Workspace
             {
-                TrustStore::load(&state.user_dir)
-                    .and_then(|mut trust| trust.accept_connection_write(&config, id, &file))
-                    .map_err(|e| e.to_string())?;
+                state.change_trust(|trust| trust.accept_connection_write(&config, id, &file))?;
             }
             result
         };

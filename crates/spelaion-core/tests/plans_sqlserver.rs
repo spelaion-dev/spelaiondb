@@ -46,6 +46,7 @@ async fn open(read_only: bool) -> Option<OpenConnection> {
         statement_timeout: Some(Duration::from_secs(10)),
         session: Default::default(),
         mcp: Default::default(),
+        masking: Default::default(),
     };
     Some(
         open_connection(

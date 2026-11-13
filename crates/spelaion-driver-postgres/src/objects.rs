@@ -186,12 +186,16 @@ const TYPE_SQL: &str = r"select case t.typtype
 /// `CALL schema.proc(a => :a, b => NULL)`: IN, INOUT and VARIADIC parameters as placeholders,
 /// OUT ones as NULL (the call returns them as a row). Named when every parameter has a name.
 pub async fn procedure_call(client: &Client, object: &SchemaObject) -> Result<String> {
-    if object.kind != SchemaObjectKind::Procedure {
-        return Err(DriverError::Other(format!(
-            "{} is not a procedure",
-            object.name
-        )));
-    }
+    let function = match object.kind {
+        SchemaObjectKind::Procedure => false,
+        SchemaObjectKind::Function => true,
+        _ => {
+            return Err(DriverError::Other(format!(
+                "{} is not a procedure or a function",
+                object.name
+            )));
+        }
+    };
     let detail = object.detail.clone().unwrap_or_default();
     let row = client
         .query_opt(
@@ -199,7 +203,8 @@ pub async fn procedure_call(client: &Client, object: &SchemaObject) -> Result<St
                 "select format('%I.%I', n.nspname, p.proname), \
                         coalesce(p.proargnames, '{{}}'::text[]), \
                         coalesce(p.proargmodes::text[], '{{}}'::text[]), \
-                        coalesce(array_length(p.proallargtypes, 1), p.pronargs::int) {ROUTINE}"
+                        coalesce(array_length(p.proallargtypes, 1), p.pronargs::int), \
+                        p.prokind::text {ROUTINE}"
             ),
             &[&object.schema, &object.name, &detail],
         )
@@ -212,10 +217,21 @@ pub async fn procedure_call(client: &Client, object: &SchemaObject) -> Result<St
     let names: Vec<String> = row.get(1);
     let modes: Vec<String> = row.get(2);
     let count: i32 = row.get(3);
+    // A procedure is called with CALL, a function selected: never the one as the other.
+    let prokind: String = row.get(4);
+    if prokind != if function { "f" } else { "p" } {
+        return Err(DriverError::Other(format!(
+            "{} is not a {}",
+            object.name,
+            if function { "function" } else { "procedure" }
+        )));
+    }
     let count = usize::try_from(count).unwrap_or(0);
     let named = (0..count).all(|i| names.get(i).is_some_and(|n| !n.is_empty()));
     let quote = |name: &str| crate::dialect::PostgresDialect.quote_identifier(name);
     let arguments: Vec<String> = (0..count)
+        // A function takes no OUT or TABLE argument: they are its result.
+        .filter(|i| !(function && matches!(modes.get(*i).map(String::as_str), Some("o" | "t"))))
         .map(|i| {
             let name = names.get(i).map(String::as_str).unwrap_or("");
             let value = if modes.get(i).map(String::as_str) == Some("o") {
@@ -230,7 +246,15 @@ pub async fn procedure_call(client: &Client, object: &SchemaObject) -> Result<St
             }
         })
         .collect();
-    Ok(format!("CALL {qualified}({});", arguments.join(", ")))
+    if function {
+        // `SELECT * FROM` reads a scalar, a row or a set alike.
+        Ok(format!(
+            "SELECT * FROM {qualified}({});",
+            arguments.join(", ")
+        ))
+    } else {
+        Ok(format!("CALL {qualified}({});", arguments.join(", ")))
+    }
 }
 
 pub async fn object_definition(client: &Client, object: &SchemaObject) -> Result<String> {

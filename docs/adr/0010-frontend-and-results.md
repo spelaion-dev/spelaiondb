@@ -31,6 +31,33 @@
 - A new result mounts a new grid (otherwise it inherits the scroll position).
 - WebKitGTK on WSLg without a GPU: 50–55 fps, p95 21 ms, first PostgreSQL row after 64 ms.
   Real Linux with a GPU is still missing.
+- The measurements, from the two reports the experiment wrote. Each run: 1 M rows in the
+  backend as Arrow batches, a release build, the UI asking for windows of 1,000 rows and
+  keeping the last 64; 4 s of very fast continuous scrolling (~70 rows per frame), then 4 s
+  of random jumps. PostgreSQL is `select * from big`, every column as text.
+
+  | | WebView2 156, synthetic | WebView2 156, PostgreSQL | WebKitGTK 2.52.6, synthetic | WebKitGTK 2.52.6, PostgreSQL |
+  |---|---|---|---|---|
+  | First row on screen | 150 ms (generation included) | 33 ms | 668 ms | 64 ms |
+  | First batch in the backend | n/a | 25 ms | n/a | 38 ms |
+  | Full load | 110 ms | 1.5 s | 142 ms | 2.0 s |
+  | Scrolling, mean | 164 fps | 164 fps | 50 fps | 55 fps |
+  | Frame time, p95 | 6.2 ms | 6.2 ms | 21 ms | 21 ms |
+  | Slowest frame | 6.3 ms | 6.3 ms | 673 ms (one, at startup) | 43 ms |
+  | Slow frames (> 33 ms) | 0 % | 0 % | 0.5 % | 0.7 % |
+  | Cells painted as "loading" | 10.5 % | 10.5 % | 11 % | 11 % |
+  | `fetch_window` (1,000 rows), p95 | 3.2 ms | 3.3 ms | 10 ms | 10 ms |
+  | Backend memory | 143 MB | 238 MB | 302 MB | 433 MB |
+  | Backend + web view processes | 545 MB | 652 MB | not valid on WSL | not valid on WSL |
+  | JS heap | 18 MB | 22 MB | not available | not available |
+
+  Windows 11 on a ~165 Hz display, so the grid dropped no frame; at rest the backend took
+  27 MB and WebView2's processes ~280 MB (working set, which counts shared memory several
+  times: the totals overestimate). WSLg on a 60 Hz display, rendering in software; its
+  backend figure includes ~180 MB of GTK and WebKit loaded at startup, so 1 M rows add the
+  same as on Windows (~120 MB synthetic, ~250 MB of PostgreSQL text).
+- Note (2026-11-10): the experiment's code and raw reports were removed from the repository
+  after v0.8.0. They can be read at tag `v0.8.0`, under `spikes/`.
 
 ## App implementation (2026-11-02)
 - Our own canvas grid (`apps/desktop/src/components/ResultGrid.tsx`): native scrolling with
@@ -80,6 +107,27 @@
   easier to read. Each number has its own statement, so one the engine refuses for the type
   (PostgreSQL's `json`) leaves the others. A most frequent value carries the core's
   "filter by this value" condition, which the popover adds to the tab's filter.
+
+## Value viewers (2026-11-09, SDB-57)
+- **The cell viewer asks the core for one cell when it opens** (`value_view.rs`): values up to
+  2 MB come whole, bigger ones only after "Load anyway" (up to 64 MB; past that they can only be
+  saved to a file). Only that cell crosses to React, as the grid's text already did.
+- **Images are recognised by their first bytes**, never by the column's name: PNG, JPEG, GIF and
+  WebP, and nothing else. The core hands them over as a `data:` URL with the type it detected,
+  shown in an `<img>`; SVG and HTML are never rendered, so nothing in a value can run. Any other
+  binary value stays a hex dump.
+- **XML is pretty-printed in the core** (quick-xml, already used for SQL Server plans) when the
+  text is one well-formed document; entities are not expanded and the result is shown as text.
+- **Save to file** writes the stored value byte for byte (bytes as stored, other values as their
+  text in UTF-8), replacing the file whole. **Load from file** is an edit (ADR-014): the core reads
+  the file (at most 16 MB: the statement carries it as a literal, and servers bound packet sizes),
+  writes one UPDATE by primary key through `edit.rs` and applies it at once, refused on read-only
+  connections and confirmed first on Production like any edit. It waits until the tab has no
+  pending changes, since applying it reloads the page.
+
+## Charts (2026-11-09, SDB-29)
+- **A chart is points, not rows** (ADR-040): the core combines the view's rows by X into at most
+  2,000 points and the UI draws them as SVG; what was combined is said under the chart.
 
 ## Alternatives
 Monaco (heavier), AG Grid (DOM, more editing features, heavier).

@@ -5,15 +5,19 @@
 use std::sync::Arc;
 
 use futures_util::StreamExt;
+use spelaion_config::Safeguards;
 use spelaion_core::{
-    CoreEvent, CreateKind, FoundObject, NewIndexKind, NewTableElement, ObjectChange, ObjectError,
-    ObjectTarget, ResultStore, SEARCH_LIMIT, Session, active_schema, apply_change, create_sql,
-    new_index_sql, new_table_element_sql, object_actions, search_objects, set_active_schema,
-    supports_added_checks,
+    ColumnEdit, CoreEvent, CreateKind, DroppedConstraint, EditableColumn, FoundObject, NewColumn,
+    NewForeignKey, NewIndex, NewIndexKind, NewTable, NewTableElement, ObjectChange, ObjectError,
+    ObjectTarget, ResultStore, SEARCH_LIMIT, Session, SourceTarget, TableAlteration,
+    TableStructure, active_schema, alteration_plan, apply_alteration, apply_change,
+    apply_create_table, create_sql, create_table_plan, editable_source, new_index_sql,
+    new_table_element_sql, object_actions, search_objects, set_active_schema,
+    supports_added_checks, table_structure,
 };
 use spelaion_driver_api::{
     ConnectParams, ConstraintKind, Driver, NameFilter, ObjectKind, SchemaObject, SchemaObjectKind,
-    Secret, TlsMode,
+    Secret, TlsMode, Value,
 };
 
 async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
@@ -1015,5 +1019,1000 @@ async fn the_editors_schema_is_set_where_the_engine_has_one_per_session() {
             "{label}"
         );
         run(label, &session, &cleanup, true).await;
+    }
+}
+
+async fn scalar(session: &Session, sql: &str) -> Value {
+    let events: Vec<CoreEvent> = session.run_script(sql).collect().await;
+    let result = events
+        .iter()
+        .find_map(|e| match e {
+            CoreEvent::ResultStarted { result, .. } => Some(*result),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{sql}: {events:?}"));
+    let value = {
+        let stored = session.results().get(result).unwrap();
+        let stored = stored.read().unwrap();
+        stored.window(0, 1).first().map_or(Value::Null, |batch| {
+            Value::from_array(
+                batch.column(0).as_ref(),
+                0,
+                stored.schema().columns[0].logical,
+            )
+            .unwrap_or(Value::Null)
+        })
+    };
+    session.results().remove(result);
+    value
+}
+
+async fn text(session: &Session, sql: &str) -> String {
+    match scalar(session, sql).await {
+        Value::Text(text) => text,
+        other => other.to_string(),
+    }
+}
+
+fn edit_of(column: &EditableColumn) -> ColumnEdit {
+    ColumnEdit {
+        name: column.name.clone(),
+        data_type: column.data_type.clone(),
+        nullable: column.nullable,
+        default: column.default.clone(),
+        comment: column.comment.clone(),
+    }
+}
+
+async fn structure(label: &str, session: &Session, schema: &str, table: &str) -> TableStructure {
+    table_structure(session, schema, table)
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"))
+}
+
+fn column<'a>(structure: &'a TableStructure, name: &str) -> &'a EditableColumn {
+    structure
+        .columns
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("{name}: {structure:?}"))
+}
+
+/// Applies a form's change as the dialog does: preview, then apply what was shown, confirmed.
+async fn apply_form(label: &str, session: &Session, alteration: &TableAlteration) -> String {
+    let plan = alteration_plan(session, alteration)
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+    let script = plan.script();
+    apply_alteration(
+        session,
+        alteration,
+        &script,
+        false,
+        &Safeguards::default(),
+        true,
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{label}: {e}\n{script}"));
+    script
+}
+
+#[tokio::test]
+async fn structure_forms_change_columns_on_every_engine() {
+    for (label, session, schema) in engines().await {
+        let cleanup = ["DROP TABLE oa_alter_t"];
+        run(label, &session, &cleanup, true).await;
+        let (wide, collate) = match label {
+            "sqlserver" => ("VARCHAR(40)", " COLLATE Latin1_General_BIN"),
+            "mysql" | "mariadb" => ("varchar(40)", " COLLATE utf8mb4_bin"),
+            _ => ("VARCHAR(40)", ""),
+        };
+        run(
+            label,
+            &session,
+            &[
+                &format!(
+                    "CREATE TABLE oa_alter_t (id INT NOT NULL PRIMARY KEY, qty INT, note VARCHAR(20){collate} DEFAULT 'x')"
+                ),
+                "INSERT INTO oa_alter_t (id, qty, note) VALUES (1, 5, 'a')",
+                "INSERT INTO oa_alter_t (id, qty, note) VALUES (2, 7, 'b')",
+            ],
+            false,
+        )
+        .await;
+        let before = structure(label, &session, schema, "oa_alter_t").await;
+        let note = column(&before, "note");
+        assert!(
+            note.default.as_deref().is_some_and(|d| d.contains("'x'")),
+            "{label}: {note:?}"
+        );
+        assert!(column(&before, "qty").nullable, "{label}");
+        assert_eq!(before.comments, label != "sqlite", "{label}");
+        assert_eq!(before.rebuilds, label == "sqlite", "{label}");
+        assert_eq!(
+            before.transactional,
+            !matches!(label, "mysql" | "mariadb"),
+            "{label}"
+        );
+
+        // Nothing typed differently: nothing to do.
+        let unchanged = TableAlteration {
+            schema: schema.into(),
+            table: "oa_alter_t".into(),
+            columns: before.columns.iter().map(edit_of).collect(),
+            drop: Vec::new(),
+        };
+        assert!(
+            matches!(
+                alteration_plan(&session, &unchanged).await,
+                Err(ObjectError::Unsupported(_))
+            ),
+            "{label}"
+        );
+
+        // Several columns at once: a type, the nullability and a default; a wider type that
+        // keeps its default and collation; a comment.
+        let mut qty = edit_of(column(&before, "qty"));
+        qty.data_type = "BIGINT".into();
+        qty.nullable = false;
+        qty.default = Some("0".into());
+        let mut note = edit_of(column(&before, "note"));
+        note.data_type = wide.into();
+        if before.comments {
+            note.comment = Some("the customer's note".into());
+        }
+        let alteration = TableAlteration {
+            columns: vec![qty, note],
+            ..unchanged.clone()
+        };
+        let script = apply_form(label, &session, &alteration).await;
+        let after = structure(label, &session, schema, "oa_alter_t").await;
+        let qty = column(&after, "qty");
+        assert!(
+            qty.data_type.to_lowercase().contains("bigint"),
+            "{label}: {qty:?}\n{script}"
+        );
+        assert!(!qty.nullable, "{label}: {qty:?}\n{script}");
+        assert!(
+            qty.default.as_deref().is_some_and(|d| d.contains('0')),
+            "{label}: {qty:?}\n{script}"
+        );
+        let note = column(&after, "note");
+        // DuckDB has no VARCHAR lengths.
+        if label != "duckdb" {
+            assert!(note.data_type.contains("40"), "{label}: {note:?}\n{script}");
+        }
+        assert!(
+            note.default.as_deref().is_some_and(|d| d.contains("'x'")),
+            "{label}: the default stays: {note:?}\n{script}"
+        );
+        if after.comments {
+            assert_eq!(
+                note.comment.as_deref(),
+                Some("the customer's note"),
+                "{label}\n{script}"
+            );
+        }
+        // What the form did not touch stays as it was.
+        match label {
+            "sqlserver" => assert_eq!(
+                text(
+                    &session,
+                    "SELECT collation_name FROM sys.columns WHERE object_id = OBJECT_ID('dbo.oa_alter_t') AND name = 'note'"
+                )
+                .await,
+                "Latin1_General_BIN",
+                "{script}"
+            ),
+            "mysql" | "mariadb" => assert_eq!(
+                text(
+                    &session,
+                    "SELECT collation_name FROM information_schema.columns WHERE table_schema = 'spelaion' AND table_name = 'oa_alter_t' AND column_name = 'note'"
+                )
+                .await,
+                "utf8mb4_bin",
+                "{label}: {script}"
+            ),
+            _ => {}
+        }
+        // The rows are still there, and the new default and NOT NULL work.
+        assert_eq!(
+            text(&session, "SELECT note FROM oa_alter_t WHERE id = 2").await,
+            "b",
+            "{label}"
+        );
+        run(
+            label,
+            &session,
+            &["INSERT INTO oa_alter_t (id) VALUES (3)"],
+            false,
+        )
+        .await;
+        assert_eq!(
+            text(&session, "SELECT qty FROM oa_alter_t WHERE id = 3").await,
+            "0",
+            "{label}"
+        );
+        assert_eq!(
+            text(&session, "SELECT note FROM oa_alter_t WHERE id = 3").await,
+            "x",
+            "{label}"
+        );
+
+        // Back again: nullable, no default, no comment.
+        let mut qty = edit_of(column(&after, "qty"));
+        qty.nullable = true;
+        qty.default = None;
+        let mut note = edit_of(column(&after, "note"));
+        note.comment = None;
+        let alteration = TableAlteration {
+            columns: vec![qty, note],
+            ..unchanged.clone()
+        };
+        let script = apply_form(label, &session, &alteration).await;
+        let last = structure(label, &session, schema, "oa_alter_t").await;
+        let qty = column(&last, "qty");
+        assert!(
+            qty.nullable && qty.default.is_none(),
+            "{label}: {qty:?}\n{script}"
+        );
+        assert_eq!(column(&last, "note").comment, None, "{label}\n{script}");
+        run(label, &session, &cleanup, true).await;
+    }
+}
+
+#[tokio::test]
+async fn mysql_restates_every_attribute_of_a_modified_column() {
+    for (label, session, schema) in engines().await {
+        if !matches!(label, "mysql" | "mariadb") {
+            continue;
+        }
+        run(label, &session, &["DROP TABLE oa_modify_t"], true).await;
+        run(
+            label,
+            &session,
+            &["CREATE TABLE oa_modify_t (id INT AUTO_INCREMENT PRIMARY KEY, code VARCHAR(10) CHARACTER SET latin1 COLLATE latin1_bin NOT NULL DEFAULT 'it''s' COMMENT 'it''s kept', n INT)"],
+            false,
+        )
+        .await;
+        let before = structure(label, &session, schema, "oa_modify_t").await;
+        let code = column(&before, "code").clone();
+        assert!(
+            code.default.as_deref().is_some_and(|d| d.starts_with('\'')),
+            "{label}: the default is SQL: {code:?}"
+        );
+        let mut edit = edit_of(&code);
+        edit.data_type = "varchar(30)".into();
+        // A number keeps no character set: the type change drops it.
+        let mut n = edit_of(column(&before, "n"));
+        n.data_type = "bigint".into();
+        n.comment = Some("a\\b".into());
+        let script = apply_form(
+            label,
+            &session,
+            &TableAlteration {
+                schema: schema.into(),
+                table: "oa_modify_t".into(),
+                columns: vec![edit, n],
+                drop: Vec::new(),
+            },
+        )
+        .await;
+        let definition = session
+            .connection()
+            .relation_definition(schema, "oa_modify_t")
+            .await
+            .unwrap();
+        for kept in [
+            "latin1_bin",
+            "NOT NULL",
+            "COMMENT 'it''s kept'",
+            "AUTO_INCREMENT",
+            "varchar(30)",
+        ] {
+            assert!(
+                definition.contains(kept),
+                "{label}: {kept}\n{script}\n{definition}"
+            );
+        }
+        let after = structure(label, &session, schema, "oa_modify_t").await;
+        assert_eq!(column(&after, "code").default, code.default, "{label}");
+        assert_eq!(
+            column(&after, "n").comment.as_deref(),
+            Some("a\\b"),
+            "{label}"
+        );
+        run(label, &session, &["DROP TABLE oa_modify_t"], true).await;
+    }
+}
+
+#[tokio::test]
+async fn constraints_drop_with_the_column_changes() {
+    for (label, session, schema) in engines().await {
+        if label == "duckdb" {
+            continue;
+        }
+        let cleanup = ["DROP TABLE oa_cdrop_child", "DROP TABLE oa_cdrop_parent"];
+        run(label, &session, &cleanup, true).await;
+        run(
+            label,
+            &session,
+            &[
+                "CREATE TABLE oa_cdrop_parent (id INT NOT NULL PRIMARY KEY)",
+                "CREATE TABLE oa_cdrop_child (id INT NOT NULL PRIMARY KEY, code VARCHAR(10), parent_id INT, CONSTRAINT oa_cdrop_code UNIQUE (code), CONSTRAINT oa_cdrop_fk FOREIGN KEY (parent_id) REFERENCES oa_cdrop_parent (id))",
+                "INSERT INTO oa_cdrop_parent (id) VALUES (1)",
+                "INSERT INTO oa_cdrop_child (id, code, parent_id) VALUES (1, 'a', 1)",
+            ],
+            false,
+        )
+        .await;
+        let info = session
+            .connection()
+            .describe_table(schema, "oa_cdrop_child")
+            .await
+            .unwrap();
+        let unique = info
+            .constraints
+            .iter()
+            .find(|c| c.kind == ConstraintKind::Unique)
+            .and_then(|c| c.name.clone())
+            .unwrap_or_else(|| panic!("{label}: {info:?}"));
+        let fk = info.foreign_keys[0].name.clone();
+        let before = structure(label, &session, schema, "oa_cdrop_child").await;
+        let mut code = edit_of(column(&before, "code"));
+        code.default = Some("'z'".into());
+        let script = apply_form(
+            label,
+            &session,
+            &TableAlteration {
+                schema: schema.into(),
+                table: "oa_cdrop_child".into(),
+                columns: vec![code],
+                drop: vec![
+                    DroppedConstraint::Constraint { name: unique },
+                    DroppedConstraint::ForeignKey { name: fk },
+                ],
+            },
+        )
+        .await;
+        let info = session
+            .connection()
+            .describe_table(schema, "oa_cdrop_child")
+            .await
+            .unwrap();
+        assert!(info.foreign_keys.is_empty(), "{label}: {info:?}\n{script}");
+        assert!(
+            !info
+                .constraints
+                .iter()
+                .any(|c| c.kind == ConstraintKind::Unique),
+            "{label}: {info:?}\n{script}"
+        );
+        // Without them, a duplicate code and a parent that does not exist are accepted.
+        run(
+            label,
+            &session,
+            &["INSERT INTO oa_cdrop_child (id, code, parent_id) VALUES (2, 'a', 99)"],
+            false,
+        )
+        .await;
+        assert_eq!(
+            text(&session, "SELECT code FROM oa_cdrop_child WHERE id = 1").await,
+            "a",
+            "{label}"
+        );
+        run(label, &session, &cleanup, true).await;
+    }
+}
+
+async fn sqlite_memory() -> Session {
+    session(
+        &spelaion_driver_sqlite::SqliteDriver::default(),
+        ConnectParams {
+            database: ":memory:".into(),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn sqlite_rebuild_keeps_rows_indexes_triggers_views_and_keys() {
+    let session = sqlite_memory().await;
+    run(
+        "sqlite",
+        &session,
+        &[
+            "PRAGMA foreign_keys = ON",
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT)",
+            "CREATE TABLE item (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER REFERENCES parent (id), qty TEXT NOT NULL, code TEXT UNIQUE COLLATE NOCASE, total INTEGER GENERATED ALWAYS AS (qty * 2) VIRTUAL, CHECK (qty <> ''))",
+            "CREATE INDEX item_qty ON item (qty)",
+            "CREATE TABLE audit (n INTEGER)",
+            "CREATE TRIGGER item_added AFTER INSERT ON item BEGIN INSERT INTO audit VALUES (new.id); END",
+            "CREATE VIEW item_view AS SELECT id, qty FROM item",
+            "CREATE VIEW item_view_2 AS SELECT * FROM item_view",
+            "CREATE TABLE other (x INTEGER)",
+            "CREATE TRIGGER other_added AFTER INSERT ON other BEGIN DELETE FROM item WHERE id < 0; END",
+            "CREATE TABLE child (item_id INTEGER REFERENCES item (id))",
+            "INSERT INTO parent VALUES (1, 'p')",
+            "INSERT INTO item (parent_id, qty, code) VALUES (1, '10', 'a')",
+            "INSERT INTO item (parent_id, qty, code) VALUES (1, '20', 'b')",
+            "INSERT INTO item (parent_id, qty, code) VALUES (1, '30', 'c')",
+            "DELETE FROM item WHERE id = 3",
+            "INSERT INTO child VALUES (2)",
+        ],
+        false,
+    )
+    .await;
+    let before = structure("sqlite", &session, "main", "item").await;
+    assert_eq!(column(&before, "qty").data_type, "TEXT");
+    assert!(column(&before, "total").generated);
+    let mut qty = edit_of(column(&before, "qty"));
+    qty.data_type = "INTEGER".into();
+    qty.default = Some("1".into());
+    let mut code = edit_of(column(&before, "code"));
+    code.nullable = false;
+    let alteration = TableAlteration {
+        schema: "main".into(),
+        table: "item".into(),
+        columns: vec![qty, code],
+        drop: Vec::new(),
+    };
+    let plan = alteration_plan(&session, &alteration).await.unwrap();
+    assert!(plan.rebuilds() && plan.transactional());
+    let script = plan.script();
+    // The rebuild drops a table: it needs the user's confirmation on every connection.
+    assert!(
+        !plan
+            .risks(session.dialect().as_ref(), &Safeguards::default())
+            .is_empty()
+    );
+    assert_eq!(
+        apply_alteration(
+            &session,
+            &alteration,
+            &script,
+            false,
+            &Safeguards::default(),
+            false
+        )
+        .await,
+        Err(ObjectError::NeedsConfirmation)
+    );
+    assert_eq!(
+        apply_alteration(
+            &session,
+            &alteration,
+            &script,
+            true,
+            &Safeguards::default(),
+            true
+        )
+        .await,
+        Err(ObjectError::ReadOnly)
+    );
+    apply_alteration(
+        &session,
+        &alteration,
+        &script,
+        false,
+        &Safeguards::default(),
+        true,
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e}\n{script}"));
+
+    let after = structure("sqlite", &session, "main", "item").await;
+    assert_eq!(column(&after, "qty").data_type, "INTEGER", "{script}");
+    assert_eq!(column(&after, "qty").default.as_deref(), Some("1"));
+    assert!(!column(&after, "code").nullable);
+    // Rows, converted to the new affinity, with their generated column.
+    assert_eq!(
+        text(&session, "SELECT typeof(qty) FROM item WHERE id = 2").await,
+        "integer"
+    );
+    assert_eq!(
+        text(&session, "SELECT total FROM item WHERE id = 2").await,
+        "40"
+    );
+    assert_eq!(text(&session, "SELECT count(*) FROM item").await, "2");
+    // The index, the unique constraint, its collation and the check are still there.
+    let definition = session
+        .connection()
+        .relation_definition("main", "item")
+        .await
+        .unwrap();
+    for kept in [
+        "CREATE INDEX item_qty ON item (qty)",
+        "AUTOINCREMENT",
+        "UNIQUE COLLATE NOCASE",
+        "CHECK (qty <> '')",
+        "REFERENCES parent (id)",
+    ] {
+        assert!(definition.contains(kept), "{kept}\n{definition}");
+    }
+    // The views and triggers work, and AUTOINCREMENT goes on from its old counter.
+    run(
+        "sqlite",
+        &session,
+        &["INSERT INTO item (parent_id, qty, code) VALUES (1, 5, 'd')"],
+        false,
+    )
+    .await;
+    assert_eq!(text(&session, "SELECT max(id) FROM item").await, "4");
+    assert_eq!(text(&session, "SELECT max(n) FROM audit").await, "4");
+    assert_eq!(
+        text(&session, "SELECT count(*) FROM item_view_2").await,
+        "3"
+    );
+    run("sqlite", &session, &["INSERT INTO other VALUES (1)"], false).await;
+    assert_eq!(text(&session, "PRAGMA foreign_keys").await, "1");
+    // The child's key still points to the table.
+    assert_eq!(
+        text(
+            &session,
+            "SELECT count(*) FROM pragma_foreign_key_check('child')"
+        )
+        .await,
+        "0"
+    );
+    assert!(
+        session
+            .connection()
+            .relation_definition("main", "child")
+            .await
+            .unwrap()
+            .contains("REFERENCES item (id)")
+    );
+    // A unique constraint and a foreign key dropped by a rebuild, from the columns' clauses.
+    let info = session
+        .connection()
+        .describe_table("main", "item")
+        .await
+        .unwrap();
+    let unique = info
+        .constraints
+        .iter()
+        .find(|c| c.kind == ConstraintKind::Unique)
+        .and_then(|c| c.name.clone())
+        .unwrap();
+    let fk = info.foreign_keys[0].name.clone();
+    apply_form(
+        "sqlite",
+        &session,
+        &TableAlteration {
+            drop: vec![
+                DroppedConstraint::Constraint { name: unique },
+                DroppedConstraint::ForeignKey { name: fk },
+            ],
+            columns: Vec::new(),
+            ..alteration.clone()
+        },
+    )
+    .await;
+    let definition = session
+        .connection()
+        .relation_definition("main", "item")
+        .await
+        .unwrap();
+    assert!(
+        !definition.contains("UNIQUE") && !definition.contains("REFERENCES"),
+        "{definition}"
+    );
+    assert!(definition.contains("COLLATE NOCASE"), "{definition}");
+    assert!(definition.contains("CREATE INDEX item_qty"), "{definition}");
+    assert_eq!(text(&session, "SELECT count(*) FROM item").await, "3");
+}
+
+#[tokio::test]
+async fn a_sqlite_rebuild_that_breaks_a_key_changes_nothing() {
+    let session = sqlite_memory().await;
+    run(
+        "sqlite",
+        &session,
+        &[
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY)",
+            "CREATE TABLE item (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent (id), qty TEXT)",
+            // Written with the keys off: the table already breaks its key.
+            "PRAGMA foreign_keys = OFF",
+            "INSERT INTO item VALUES (1, 99, 'a')",
+            "PRAGMA foreign_keys = ON",
+        ],
+        false,
+    )
+    .await;
+    let before = structure("sqlite", &session, "main", "item").await;
+    let mut qty = edit_of(column(&before, "qty"));
+    qty.data_type = "BLOB".into();
+    let alteration = TableAlteration {
+        schema: "main".into(),
+        table: "item".into(),
+        columns: vec![qty],
+        drop: Vec::new(),
+    };
+    let script = alteration_plan(&session, &alteration)
+        .await
+        .unwrap()
+        .script();
+    match apply_alteration(
+        &session,
+        &alteration,
+        &script,
+        false,
+        &Safeguards::default(),
+        true,
+    )
+    .await
+    {
+        Err(ObjectError::Failed { message, .. }) => {
+            assert!(message.contains("foreign keys"), "{message}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        column(&structure("sqlite", &session, "main", "item").await, "qty").data_type,
+        "TEXT"
+    );
+    assert_eq!(text(&session, "PRAGMA foreign_keys").await, "1");
+    assert_eq!(relations(&session, "main").await, ["item", "parent"]);
+    // Nothing is left half done: no transaction stays open.
+    run("sqlite", &session, &["BEGIN", "COMMIT"], false).await;
+}
+
+#[tokio::test]
+async fn a_form_runs_only_the_script_it_showed() {
+    let session = sqlite_memory().await;
+    run(
+        "sqlite",
+        &session,
+        &["CREATE TABLE t (a TEXT, b TEXT)"],
+        false,
+    )
+    .await;
+    let before = structure("sqlite", &session, "main", "t").await;
+    let mut a = edit_of(column(&before, "a"));
+    a.default = Some("'x'".into());
+    let alteration = TableAlteration {
+        schema: "main".into(),
+        table: "t".into(),
+        columns: vec![a],
+        drop: Vec::new(),
+    };
+    let script = alteration_plan(&session, &alteration)
+        .await
+        .unwrap()
+        .script();
+    // Someone changes the table after the preview.
+    run(
+        "sqlite",
+        &session,
+        &["ALTER TABLE t ADD COLUMN c TEXT"],
+        false,
+    )
+    .await;
+    assert_eq!(
+        apply_alteration(
+            &session,
+            &alteration,
+            &script,
+            false,
+            &Safeguards::default(),
+            true
+        )
+        .await,
+        Err(ObjectError::Changed)
+    );
+    // A production type asks for confirmation of any change.
+    let production = Safeguards {
+        confirm_data_changes: true,
+        ..Safeguards::default()
+    };
+    let plan = alteration_plan(&session, &alteration).await.unwrap();
+    assert!(
+        !plan
+            .risks(session.dialect().as_ref(), &production)
+            .is_empty()
+    );
+}
+
+fn new_column(name: &str, ty: &str, nullable: bool) -> NewColumn {
+    NewColumn {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable,
+        default: None,
+        comment: None,
+    }
+}
+
+#[tokio::test]
+async fn the_create_table_form_runs_on_every_engine() {
+    for (label, session, schema) in engines().await {
+        let cleanup = ["DROP TABLE oa_new_line", "DROP TABLE oa_new_head"];
+        run(label, &session, &cleanup, true).await;
+        run(
+            label,
+            &session,
+            &["CREATE TABLE oa_new_head (id INT NOT NULL PRIMARY KEY)"],
+            false,
+        )
+        .await;
+        let comments = label != "sqlite";
+        let mut note = new_column("note", "VARCHAR(40)", true);
+        note.default = Some("'none'".into());
+        if comments {
+            note.comment = Some("what it's for".into());
+        }
+        let table = NewTable {
+            schema: schema.into(),
+            name: "oa_new_line".into(),
+            columns: vec![
+                new_column("head_id", "INT", false),
+                new_column("line", "INT", false),
+                note,
+            ],
+            primary_key: vec!["head_id".into(), "line".into()],
+            foreign_keys: vec![NewForeignKey {
+                name: String::new(),
+                columns: vec!["head_id".into()],
+                referenced_schema: schema.into(),
+                referenced_table: "oa_new_head".into(),
+                referenced_columns: vec!["id".into()],
+            }],
+            indexes: vec![NewIndex {
+                name: String::new(),
+                columns: vec!["note".into()],
+                unique: false,
+            }],
+        };
+        let plan = create_table_plan(session.dialect().as_ref(), &table)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let script = plan.script();
+        apply_create_table(
+            &session,
+            &table,
+            &script,
+            false,
+            &Safeguards::default(),
+            false,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}\n{script}"));
+        let info = session
+            .connection()
+            .describe_table(schema, "oa_new_line")
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}\n{script}"));
+        assert_eq!(
+            info.columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["head_id", "line", "note"],
+            "{label}"
+        );
+        assert_eq!(info.primary_key, ["head_id", "line"], "{label}\n{script}");
+        assert_eq!(info.foreign_keys.len(), 1, "{label}\n{script}");
+        assert_eq!(
+            info.foreign_keys[0].referenced_table, "oa_new_head",
+            "{label}"
+        );
+        assert!(
+            info.indexes
+                .iter()
+                .any(|i| i.name == "oa_new_line_note_idx"),
+            "{label}: {:?}\n{script}",
+            info.indexes
+        );
+        let note = info.columns.iter().find(|c| c.name == "note").unwrap();
+        assert!(
+            note.default.as_deref().is_some_and(|d| d.contains("none")),
+            "{label}: {note:?}"
+        );
+        if comments {
+            assert_eq!(note.comment.as_deref(), Some("what it's for"), "{label}");
+        }
+        // Only the script it showed: a different one is refused, and so is a read-only
+        // connection.
+        assert_eq!(
+            apply_create_table(
+                &session,
+                &table,
+                "CREATE TABLE other (x INT);\n",
+                false,
+                &Safeguards::default(),
+                true
+            )
+            .await,
+            Err(ObjectError::Changed),
+            "{label}"
+        );
+        assert_eq!(
+            apply_create_table(
+                &session,
+                &table,
+                &script,
+                true,
+                &Safeguards::default(),
+                true
+            )
+            .await,
+            Err(ObjectError::ReadOnly),
+            "{label}"
+        );
+        run(label, &session, &cleanup, true).await;
+    }
+}
+
+async fn listed_object(session: &Session, schema: &str, name: &str) -> SchemaObject {
+    session
+        .connection()
+        .list_schema_objects(schema)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|o| o.name == name)
+        .unwrap_or_else(|| panic!("{name} is not listed"))
+}
+
+#[tokio::test]
+async fn routines_are_called_with_their_parameters_on_every_engine() {
+    for (label, session, schema) in engines().await {
+        let (create, cleanup): (&str, &str) = match label {
+            "postgres" => (
+                "CREATE FUNCTION oa_add(a integer, b integer) RETURNS integer LANGUAGE sql AS 'SELECT a + b'",
+                "DROP FUNCTION oa_add",
+            ),
+            "mysql" | "mariadb" => (
+                "CREATE FUNCTION oa_add(a INT, b INT) RETURNS INT DETERMINISTIC RETURN a + b",
+                "DROP FUNCTION oa_add",
+            ),
+            "sqlserver" => (
+                "CREATE FUNCTION dbo.oa_add(@a INT, @b INT) RETURNS INT AS BEGIN RETURN @a + @b END",
+                "DROP FUNCTION dbo.oa_add",
+            ),
+            "duckdb" => ("CREATE MACRO oa_add(a, b) AS a + b", "DROP MACRO oa_add"),
+            // SQLite has no functions of its own.
+            _ => continue,
+        };
+        run(label, &session, &[cleanup], true).await;
+        run(label, &session, &[create], false).await;
+        let object = listed_object(&session, schema, "oa_add").await;
+        let call = session
+            .connection()
+            .procedure_call(&object)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let dialect = session.dialect();
+        assert_eq!(
+            spelaion_core::script_params(dialect.as_ref(), &call),
+            ["a", "b"],
+            "{label}: {call}"
+        );
+        let values = [
+            ("a".to_string(), "2".to_string()),
+            ("b".to_string(), "3".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let bound = spelaion_core::bind_params(dialect.as_ref(), &call, &values).unwrap();
+        assert_eq!(text(&session, &bound).await, "5", "{label}: {bound}");
+        run(label, &session, &[cleanup], true).await;
+    }
+}
+
+/// Changes `41` to `42` in an editable source and runs it as the editor would, as one script.
+async fn edit_and_run(label: &str, session: &Session, target: SourceTarget) -> String {
+    let source = editable_source(session, &target)
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {target:?}: {e}"));
+    assert!(source.contains("41"), "{label}: {source}");
+    let edited = source.replacen("41", "42", 1);
+    run(label, session, &[edited.as_str()], false).await;
+    edited
+}
+
+#[tokio::test]
+async fn edited_sources_replace_views_and_routines_on_every_engine() {
+    for (label, session, schema) in engines().await {
+        let (function, procedure, cleanup): (Option<&str>, Option<&str>, &[&str]) = match label {
+            "postgres" => (
+                Some("CREATE FUNCTION oa_src_f() RETURNS integer LANGUAGE sql AS 'SELECT 41'"),
+                Some("CREATE PROCEDURE oa_src_p() LANGUAGE sql AS 'SELECT 41'"),
+                &[
+                    "DROP VIEW oa_src_v",
+                    "DROP FUNCTION oa_src_f",
+                    "DROP PROCEDURE oa_src_p",
+                ],
+            ),
+            "mysql" | "mariadb" => (
+                Some("CREATE FUNCTION oa_src_f() RETURNS INT DETERMINISTIC RETURN 41"),
+                Some(
+                    "DELIMITER $$
+CREATE PROCEDURE oa_src_p() BEGIN SELECT 41; SELECT 1; END$$
+DELIMITER ;",
+                ),
+                &[
+                    "DROP VIEW oa_src_v",
+                    "DROP FUNCTION oa_src_f",
+                    "DROP PROCEDURE oa_src_p",
+                ],
+            ),
+            "sqlserver" => (
+                Some("CREATE FUNCTION dbo.oa_src_f() RETURNS INT AS BEGIN RETURN 41 END"),
+                Some("CREATE PROCEDURE dbo.oa_src_p AS SELECT 41"),
+                &[
+                    "DROP VIEW oa_src_v",
+                    "DROP FUNCTION oa_src_f",
+                    "DROP PROCEDURE oa_src_p",
+                ],
+            ),
+            "duckdb" => (
+                Some("CREATE MACRO oa_src_f() AS 41"),
+                None,
+                &["DROP VIEW oa_src_v", "DROP MACRO oa_src_f"],
+            ),
+            _ => (None, None, &["DROP VIEW oa_src_v"]),
+        };
+        run(label, &session, cleanup, true).await;
+        run(
+            label,
+            &session,
+            &["CREATE VIEW oa_src_v AS SELECT 41 AS n"],
+            false,
+        )
+        .await;
+        let edited = edit_and_run(
+            label,
+            &session,
+            SourceTarget::View {
+                schema: schema.into(),
+                name: "oa_src_v".into(),
+            },
+        )
+        .await;
+        assert_eq!(
+            text(&session, "SELECT n FROM oa_src_v").await,
+            "42",
+            "{label}: {edited}"
+        );
+        if let Some(function) = function {
+            run(label, &session, &[function], false).await;
+            let object = listed_object(&session, schema, "oa_src_f").await;
+            let edited = edit_and_run(label, &session, SourceTarget::Routine(object.clone())).await;
+            let call = session.connection().procedure_call(&object).await.unwrap();
+            assert_eq!(text(&session, &call).await, "42", "{label}: {edited}");
+        }
+        if let Some(procedure) = procedure {
+            run(label, &session, &[procedure], false).await;
+            let object = listed_object(&session, schema, "oa_src_p").await;
+            let edited = edit_and_run(label, &session, SourceTarget::Routine(object.clone())).await;
+            let definition = session
+                .connection()
+                .object_definition(&object)
+                .await
+                .unwrap();
+            assert!(
+                definition.contains("42") && !definition.contains("41"),
+                "{label}: {edited}\n{definition}"
+            );
+        }
+        // A table has no source to edit here.
+        assert!(
+            editable_source(
+                &session,
+                &SourceTarget::Routine(SchemaObject {
+                    schema: schema.into(),
+                    name: "oa_src_v".into(),
+                    kind: SchemaObjectKind::Sequence,
+                    detail: None,
+                    comment: None,
+                })
+            )
+            .await
+            .is_err(),
+            "{label}"
+        );
+        run(label, &session, cleanup, true).await;
     }
 }

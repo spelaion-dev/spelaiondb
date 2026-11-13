@@ -22,12 +22,13 @@ use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use duckdb::{AccessMode, Config, InterruptHandle};
+use duckdb::{AccessMode, Config};
+use spelaion_driver_api::thread_cancel::{Canceller, Closer, Work};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext,
     Dialect, Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter,
-    NameFilter, ObjectInfo, ReferencingKey, Result, SchemaInfo, SchemaObject, TableInfo,
-    TransactionState,
+    NameFilter, ObjectInfo, ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject,
+    TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -214,21 +215,25 @@ impl Driver for DuckdbDriver {
                         return;
                     }
                 };
-                let _ = ready_tx.send(Ok((conn.interrupt_handle(), client_lease)));
-                actor(&conn, inbox);
+                let interrupt = conn.interrupt_handle();
+                let canceller = Canceller::new(Box::new(move || interrupt.interrupt()));
+                let closer = Closer(Arc::clone(&canceller));
+                let _ = ready_tx.send(Ok((Arc::clone(&canceller), client_lease)));
+                actor(&conn, &canceller, inbox);
+                drop(closer);
                 // The connection goes before the root, so the root is the last to close the file.
                 drop(conn);
                 drop(actor_lease);
             })
             .map_err(|e| DriverError::Other(format!("could not spawn the DuckDB thread: {e}")))?;
 
-        let (interrupt, client_lease) = ready_rx.await.map_err(|_| {
+        let (canceller, client_lease) = ready_rx.await.map_err(|_| {
             DriverError::Connection("the DuckDB thread ended while opening".into())
         })??;
         Ok(Box::new(DuckdbConnection {
             _lease: client_lease,
             commands,
-            cancel: Arc::new(DuckdbCancel(interrupt)),
+            cancel: Arc::new(DuckdbCancel(canceller)),
             capabilities: Capabilities {
                 transactions: true,
                 cancel: true,
@@ -236,6 +241,7 @@ impl Driver for DuckdbDriver {
                 editable_results: false,
                 schemas: true, // main and attached databases (ATTACH)
                 insert_rows: true,
+                bound_params: true,
             },
         }))
     }
@@ -245,10 +251,15 @@ type Reply<T> = oneshot::Sender<Result<T>>;
 
 enum Command {
     Execute {
+        /// Its id for cancelling (`thread_cancel`).
+        id: u64,
         sql: String,
+        /// Bound to `$1`, `$2`… (ADR-043).
+        params: Vec<String>,
         batch_size: usize,
         events: mpsc::Sender<Result<ExecEvent>>,
     },
+    Columns(String, Reply<Vec<SchemaColumn>>),
     Version(Reply<String>),
     CurrentDatabase(Reply<String>),
     DatabaseContext(Reply<Option<String>>),
@@ -258,15 +269,21 @@ enum Command {
     Referencing(String, String, Reply<Vec<ReferencingKey>>),
     SchemaObjects(String, LikeFilter, Reply<Vec<SchemaObject>>),
     Definition(Box<SchemaObject>, Reply<String>),
+    /// The call of a macro (`Connection::procedure_call`).
+    Call(Box<SchemaObject>, Reply<String>),
     RelationDefinition(String, String, Reply<String>),
     /// Whether a transaction is open (ADR-031).
     TransactionState(Reply<TransactionState>),
     /// Rows of an import (ADR-038), through DuckDB's appender.
-    Append(InsertTarget, Vec<Vec<Option<String>>>, Reply<u64>),
+    Append(u64, InsertTarget, Vec<Vec<Option<String>>>, Reply<u64>),
 }
 
 /// Loop of the connection thread. Ends when the `DuckdbConnection` is dropped.
-fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>) {
+fn actor(
+    conn: &duckdb::Connection,
+    canceller: &Arc<Canceller>,
+    mut inbox: mpsc::UnboundedReceiver<Command>,
+) {
     // Initialization happens before the actor accepts any user SQL.
     let mut context = DatabaseContext::new(
         ContextDialect::Duckdb,
@@ -275,11 +292,19 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
     while let Some(command) = inbox.blocking_recv() {
         match command {
             Command::Execute {
+                id,
                 sql,
+                params,
                 batch_size,
                 events,
             } => {
-                let result = exec::execute(conn, &sql, batch_size, &events);
+                let work = canceller.begin(id);
+                // A statement cancelled before it started is never run.
+                let result = work
+                    .check()
+                    .and_then(|()| exec::execute(conn, &sql, &params, batch_size, &events, &work));
+                // Every DuckDB call of the statement is over: a cancel can no longer reach it.
+                drop(work);
                 context.observe(&sql, result.is_ok());
                 if result.is_err() && !matches!(&result, Err(DriverError::Database { .. })) {
                     context.refresh(None);
@@ -311,6 +336,9 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(conn, &schema, &name));
             }
+            Command::Columns(schema, reply) => {
+                let _ = reply.send(introspect::list_columns(conn, &schema));
+            }
             Command::Referencing(schema, name, reply) => {
                 let _ = reply.send(introspect::list_referencing_keys(conn, &schema, &name));
             }
@@ -320,14 +348,22 @@ fn actor(conn: &duckdb::Connection, mut inbox: mpsc::UnboundedReceiver<Command>)
             Command::Definition(object, reply) => {
                 let _ = reply.send(objects::object_definition(conn, &object));
             }
+            Command::Call(object, reply) => {
+                let _ = reply.send(objects::procedure_call(conn, &object));
+            }
             Command::RelationDefinition(schema, name, reply) => {
                 let _ = reply.send(objects::relation_definition(conn, &schema, &name));
             }
             Command::TransactionState(reply) => {
                 let _ = reply.send(transaction_state(conn));
             }
-            Command::Append(target, rows, reply) => {
-                let _ = reply.send(append(conn, &target, rows));
+            Command::Append(id, target, rows, reply) => {
+                let work = canceller.begin(id);
+                let result = work
+                    .check()
+                    .and_then(|()| append(conn, &target, rows, &work));
+                drop(work);
+                let _ = reply.send(result);
             }
         }
     }
@@ -340,6 +376,7 @@ fn append(
     conn: &duckdb::Connection,
     target: &InsertTarget,
     rows: Vec<Vec<Option<String>>>,
+    work: &Work,
 ) -> Result<u64> {
     let schema = if target.schema.is_empty() {
         "main"
@@ -351,7 +388,10 @@ fn append(
         .appender_with_columns_to_db(&target.table, schema, &columns)
         .map_err(exec::map_error)?;
     let count = rows.len() as u64;
-    for row in rows {
+    for (i, row) in rows.into_iter().enumerate() {
+        if i % 1024 == 0 {
+            work.check()?;
+        }
         appender
             .append_row(duckdb::appender_params_from_iter(row))
             .map_err(exec::map_error)?;
@@ -396,6 +436,29 @@ impl DuckdbConnection {
         self.commands.send(make(tx)).map_err(|_| closed())?;
         rx.await.map_err(|_| closed())?
     }
+
+    /// Sends work a cancel can stop (statements, appends), with its id.
+    fn submit(&self, make: impl FnOnce(u64) -> Command) -> Result<()> {
+        self.cancel
+            .0
+            .submit(|id| self.commands.send(make(id)).map_err(|_| closed()))
+    }
+
+    fn run(&self, sql: &str, params: Vec<String>, opts: &ExecOptions) -> Result<EventStream> {
+        // Bounded channel: if the UI does not consume, the DuckDB thread waits instead of filling memory.
+        let (events, rx) = mpsc::channel(4);
+        self.submit(|id| Command::Execute {
+            id,
+            sql: sql.to_string(),
+            params,
+            batch_size: opts.batch_size.max(1),
+            events,
+        })?;
+        Ok(Box::pin(futures_util::stream::unfold(
+            rx,
+            |mut rx| async move { rx.recv().await.map(|event| (event, rx)) },
+        )))
+    }
 }
 
 fn closed() -> DriverError {
@@ -409,19 +472,16 @@ impl Connection for DuckdbConnection {
     }
 
     async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
-        // Bounded channel: if the UI does not consume, the DuckDB thread waits instead of filling memory.
-        let (events, rx) = mpsc::channel(4);
-        self.commands
-            .send(Command::Execute {
-                sql: sql.to_string(),
-                batch_size: opts.batch_size.max(1),
-                events,
-            })
-            .map_err(|_| closed())?;
-        Ok(Box::pin(futures_util::stream::unfold(
-            rx,
-            |mut rx| async move { rx.recv().await.map(|event| (event, rx)) },
-        )))
+        self.run(sql, Vec::new(), opts)
+    }
+
+    async fn execute_bound(
+        &self,
+        sql: &str,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        self.run(sql, params, opts)
     }
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
@@ -454,7 +514,9 @@ impl Connection for DuckdbConnection {
             return Ok(0);
         }
         let target = target.clone();
-        self.ask(|reply| Command::Append(target, rows, reply)).await
+        let (reply, answer) = oneshot::channel();
+        self.submit(|id| Command::Append(id, target, rows, reply))?;
+        answer.await.map_err(|_| closed())?
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
@@ -508,6 +570,11 @@ impl Connection for DuckdbConnection {
             .await
     }
 
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        let schema = schema.to_string();
+        self.ask(|reply| Command::Columns(schema, reply)).await
+    }
+
     async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Referencing(schema, name, reply))
@@ -525,6 +592,11 @@ impl Connection for DuckdbConnection {
         self.ask(|reply| Command::Definition(object, reply)).await
     }
 
+    async fn procedure_call(&self, object: &SchemaObject) -> Result<String> {
+        let object = Box::new(object.clone());
+        self.ask(|reply| Command::Call(object, reply)).await
+    }
+
     async fn relation_definition(&self, schema: &str, name: &str) -> Result<String> {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::RelationDefinition(schema, name, reply))
@@ -532,12 +604,13 @@ impl Connection for DuckdbConnection {
     }
 }
 
-struct DuckdbCancel(Arc<InterruptHandle>);
+/// Stops the statements and appends submitted before it, queued or running: DuckDB clears an
+/// interrupt when a statement starts, so a plain interrupt could be lost (`thread_cancel`).
+struct DuckdbCancel(Arc<Canceller>);
 
 #[async_trait]
 impl CancelHandle for DuckdbCancel {
     async fn cancel(&self) -> Result<()> {
-        self.0.interrupt();
-        Ok(())
+        self.0.cancel()
     }
 }

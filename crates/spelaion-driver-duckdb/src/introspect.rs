@@ -6,7 +6,7 @@ use duckdb::types::Value;
 use duckdb::{Connection, params, params_from_iter};
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
-    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaColumn, SchemaInfo, TableInfo,
 };
 
 use crate::exec::map_error;
@@ -136,6 +136,27 @@ fn schema_label(conn: &Connection, database: &str, schema: &str) -> Result<Strin
 pub fn list_objects(conn: &Connection, schema: &str, like: &LikeFilter) -> Result<Vec<ObjectInfo>> {
     let (database, schema) = locate(conn, schema)?;
     objects(conn, &database, &schema, None, like)
+}
+
+/// Every column of the schema's tables and views (those `list_objects` lists).
+pub fn list_columns(conn: &Connection, schema: &str) -> Result<Vec<SchemaColumn>> {
+    let (database, schema) = locate(conn, schema)?;
+    let mut statement = conn
+        .prepare(
+            "select table_name, column_name, data_type from duckdb_columns()              where database_name = ? and schema_name = ? and not internal              order by table_name, column_index",
+        )
+        .map_err(map_error)?;
+    statement
+        .query_map(params![database, schema], |r| {
+            Ok(SchemaColumn {
+                table: r.get(0)?,
+                name: r.get(1)?,
+                native_type: r.get(2)?,
+            })
+        })
+        .map_err(map_error)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(map_error)
 }
 
 pub fn describe_table(conn: &Connection, schema: &str, name: &str) -> Result<TableInfo> {

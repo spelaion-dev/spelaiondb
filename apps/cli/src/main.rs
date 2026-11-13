@@ -242,13 +242,12 @@ async fn main() -> Result<()> {
                     start.display()
                 )
             })?;
-            let mut trust = TrustStore::load(&user_dir)?;
             if revoke {
-                trust.revoke(&root)?;
+                TrustStore::update(&user_dir, |trust| trust.revoke(&root))?;
                 println!("Trust revoked for {}", root.display());
             } else {
                 let config = load(Some(&root), &user_dir);
-                let changes = trust.trust(&config)?;
+                let changes = TrustStore::update(&user_dir, |trust| trust.trust(&config))?;
                 for change in &changes {
                     println!("Accepted: {change}");
                 }

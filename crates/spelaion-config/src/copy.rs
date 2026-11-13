@@ -12,7 +12,6 @@
 //!   checks as the connection form, whose password is always asked when connecting, which
 //!   runs no command and which agents cannot use until the user turns that on.
 
-use std::io::Write as _;
 use std::path::Path;
 
 use spelaion_driver_api::Secret;
@@ -87,15 +86,6 @@ fn split_id(path: &str) -> (&str, &str) {
     }
 }
 
-/// Writes a new file, failing if it exists: a copy never replaces a connection.
-fn create_new(path: &Path, content: &str) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    file.write_all(content.as_bytes())
-}
-
 /// Duplicates a connection next to the original: `<file>-copy` (then `-copy-2`…) named
 /// "<name> (copy)" (then "(copy 2)"…). See the module documentation for secrets and trust.
 pub fn duplicate_connection(
@@ -142,7 +132,9 @@ pub fn duplicate_connection(
         let parsed: ConnectionFile = toml::from_str(&text)
             .map_err(|e| ConfigError::new(&file_path, format!("the copy is not valid: {e}")))?;
         let file = validate_connection(&file_path, parsed)?;
-        match create_new(&file_path, &text) {
+        // A new file, never one over another (a copy never replaces a connection), with the
+        // original's mode.
+        match crate::atomic_file::create_like(&file_path, text.as_bytes(), &entry.file_path) {
             Ok(()) => {}
             // Someone else took this name in the meantime: the next one.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -162,7 +154,7 @@ pub fn duplicate_connection(
                 Ok(Some(secret)) => {
                     let secret = Secret::new(secret);
                     password_copied = true;
-                    backend.keychain_set(&to, secret.expose())
+                    crate::secrets::store(backend, &to, secret.expose())
                 }
                 // Nothing to copy: the copy asks. An entry left under the copy's name by an
                 // older connection must not be sent to this copy's server.
@@ -228,6 +220,12 @@ fn sanitize(mut file: ConnectionFile) -> (ConnectionFile, Vec<String>) {
     if file.mcp != McpConfig::default() {
         left_out.push("mcp".to_string());
         file.mcp = McpConfig::default();
+    }
+    // A pasted connection becomes the user's own, whose `never` would unmask the user's own
+    // patterns (ADR-051): pasted text may add masking, never take it away.
+    if !file.masking.never.is_empty() {
+        left_out.push("masking.never".to_string());
+        file.masking.never.clear();
     }
     (file, left_out)
 }
@@ -361,6 +359,8 @@ fn variables(value: &toml::Value, out: &mut Vec<String>) {
 /// - nothing runs a program: `cmd:` passwords and cloud tokens, `kubernetes.kubectl`,
 ///   `kubernetes.kubeconfig` (which can run its own) and `sqlite3` are left out;
 /// - no SQL comes along: the session setup statements are left out (ADR-037);
+/// - masking can only be added: `[masking] never` is left out, since a personal connection's
+///   `never` would unmask the user's own patterns (ADR-051);
 /// - `${env:…}` is refused: resolving it would send an environment variable to the server
 ///   (or to DNS through the host name);
 /// - agents cannot use it (`[mcp]` is left out), and a tunnel is kept only if one of that

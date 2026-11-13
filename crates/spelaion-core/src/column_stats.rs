@@ -23,6 +23,7 @@ use crate::classify::{ReadKind, classify_read_only, reject_mysql_executable_comm
 use crate::export_stream::{ExportCancel, barrier, drain};
 use crate::filter::FilterOp;
 use crate::generate::qualified;
+use crate::masking::MASK;
 use crate::session::{CoreEvent, Session};
 use crate::table_data::{PageError, check, push_clauses, value_condition};
 
@@ -101,6 +102,9 @@ pub struct ColumnStats {
     pub top: Stat<Vec<TopValue>>,
     /// What ran, in order: every statement a read.
     pub statements: Vec<String>,
+    /// The column is masked (ADR-051): the minimum, maximum and most frequent values are the
+    /// mask, and no most frequent value carries a condition.
+    pub masked: bool,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -226,7 +230,9 @@ async fn read_rows(
     drain(session, begin)
         .await
         .map_err(|e| ColumnStatsError::Failed(e.to_string()))?;
-    let mut events = session.run_generated(sql);
+    // Parsed here, and masked by `column_stats` for a masked column (ADR-051): the statements'
+    // columns are aliases, which the connection's patterns do not name.
+    let mut events = session.run_parsed(sql);
     let mut results = Vec::new();
     let mut failure = None;
     while let Some(event) = events.next().await {
@@ -330,6 +336,9 @@ pub async fn column_stats(
     cancel: &ExportCancel,
 ) -> Result<ColumnStats, ColumnStatsError> {
     let dialect = session.dialect().clone();
+    let masked = session
+        .masking()
+        .masks_table_column(&request.table, &request.column);
     let probe = column_stats_sql(dialect.as_ref(), request, false)?.probe;
     let mut statements = vec![probe.clone()];
     let seen = count(
@@ -356,6 +365,12 @@ pub async fn column_stats(
 
     let range = match &sql.range {
         None => Stat::NotForType,
+        // A masked column's minimum and maximum are not read: they would be values.
+        Some(_) if masked => Stat::Value(if values > 0 {
+            (Some(MASK.to_string()), Some(MASK.to_string()))
+        } else {
+            (None, None)
+        }),
         Some(range) => {
             statements.push(range.clone());
             stat(read_rows(session, range, cancel).await.map(|r| {
@@ -382,6 +397,8 @@ pub async fn column_stats(
                         &value,
                     )
                     .ok(),
+                    // The condition would hold the masked value (ADR-051).
+                    _ if masked => None,
                     v if v.to_string().chars().count() > MAX_CONDITION_CHARS => None,
                     v => value_condition(
                         dialect.as_ref(),
@@ -393,7 +410,11 @@ pub async fn column_stats(
                     .ok(),
                 };
                 Ok(TopValue {
-                    text: shown(Some(&value)),
+                    text: if masked && !matches!(value, Value::Null) {
+                        Some(MASK.to_string())
+                    } else {
+                        shown(Some(&value))
+                    },
                     count: count(row.get(1))?,
                     condition,
                 })
@@ -409,6 +430,7 @@ pub async fn column_stats(
         range,
         top,
         statements,
+        masked,
     })
 }
 

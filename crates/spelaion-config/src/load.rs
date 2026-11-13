@@ -8,8 +8,8 @@ use serde::de::DeserializeOwned;
 
 use crate::error::ConfigError;
 use crate::model::{
-    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, SCHEMA_VERSION,
-    SessionConfig, TunnelFile, UserFile,
+    ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, KubernetesProfileConfig,
+    SCHEMA_VERSION, SessionConfig, SsmConfig, TunnelFile, UserFile,
 };
 
 /// Configuration directory inside a repository.
@@ -112,6 +112,9 @@ pub struct Config {
     pub team_types: TypesLayer,
     /// The user's connection types.
     pub user_types: TypesLayer,
+    /// `user.toml` exists but does not load: its masking patterns are unknown, so every
+    /// connection masks every column until it is fixed (ADR-051).
+    pub user_unreadable: bool,
     /// Files with problems. A broken file does not prevent loading the rest.
     pub problems: Vec<ConfigError>,
 }
@@ -207,7 +210,11 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
 
     let user_file = user_dir.join("user.toml");
     if user_file.is_file() {
-        match parse_file::<UserFile>(&user_file) {
+        match parse_file::<UserFile>(&user_file).and_then(|user| {
+            crate::masking::check_patterns("masking.always", &user.masking.always)
+                .map_err(|m| ConfigError::new(&user_file, m))?;
+            Ok(user)
+        }) {
             Ok(mut user) => {
                 // A wrong range is reported and ignored: tunnels then take any free port.
                 if let Err(message) = user.tunnels.range() {
@@ -216,7 +223,10 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
                 }
                 config.user = user;
             }
-            Err(e) => config.problems.push(e),
+            Err(e) => {
+                config.user_unreadable = true;
+                config.problems.push(e);
+            }
         }
     }
     config.workspace_root = start.and_then(find_workspace);
@@ -231,8 +241,10 @@ pub fn load(start: Option<&Path>, user_dir: &Path) -> Config {
     let mut layers = vec![(Source::User, user_dir.to_path_buf())];
     if let Some(root) = &config.workspace_root {
         let legacy = root.join(crate::migrate::LEGACY_WORKSPACE_DIR);
+        // Only informs: `workspace_dir` reads `.spelunk/` when it is the only folder, and
+        // `.spelaion/` (as the app does) when both exist.
         if legacy.is_dir() {
-            config.problems.push(ConfigError::new(
+            config.problems.push(ConfigError::notice(
                 &legacy,
                 if root.join(WORKSPACE_DIR).is_dir() {
                     "both .spelaion/ and .spelunk/ exist: .spelaion/ is used; move what is left in .spelunk/ into it and delete it"
@@ -359,6 +371,8 @@ pub(crate) fn validate_type(id: &str, kind: &ConnectionTypeConfig) -> Result<(),
             ConnectionTypeConfig::MAX_CLOSE_IDLE_AFTER
         ));
     }
+    crate::masking::check_patterns("mask_columns", &kind.mask_columns)
+        .map_err(|m| format!("connection type {id:?}: {m}"))?;
     Ok(())
 }
 
@@ -433,9 +447,13 @@ pub(crate) fn validate_connection(
 ) -> Result<ConnectionFile, ConfigError> {
     check_version(path, file.schema_version)?;
     let missing: Vec<&str> = match file.engine {
-        // Through Kubernetes the host is only a name for TLS: it may be left out.
+        // Through Kubernetes the host is only a name for TLS: it may be left out. A network
+        // profile may be a Kubernetes one (ADR-050): the resolver asks for the host otherwise.
         Engine::Postgres => [
-            ("host", file.host.is_none() && file.kubernetes.is_none()),
+            (
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            ),
             ("database", file.database.is_none()),
             ("user", file.user.is_none()),
         ]
@@ -444,7 +462,10 @@ pub(crate) fn validate_connection(
         .collect(),
         // A MySQL connection may have no default database: `USE` or qualified names work.
         Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => [
-            ("host", file.host.is_none() && file.kubernetes.is_none()),
+            (
+                "host",
+                file.host.is_none() && file.kubernetes.is_none() && file.tunnel.is_none(),
+            ),
             ("user", file.user.is_none()),
         ]
         .into_iter()
@@ -580,26 +601,39 @@ pub(crate) fn validate_connection(
         check_description(description).map_err(|m| ConfigError::new(path, m))?;
     }
     check_tags(&file.tags).map_err(|m| ConfigError::new(path, m))?;
+    crate::masking::check_masking(&file.masking).map_err(|m| ConfigError::new(path, m))?;
     check_session(file.engine, &file.session).map_err(|m| ConfigError::new(path, m))?;
     if let Some(kubernetes) = &file.kubernetes {
-        if file.tunnel.is_some() {
+        // With a network profile, the profile must be a Kubernetes one and may name the
+        // resource: the resolver checks both (ADR-050).
+        if !(file.tunnel.is_some() && kubernetes.resource.trim().is_empty()) {
+            check_kubernetes_resource(&kubernetes.resource)
+                .map_err(|m| ConfigError::new(path, m))?;
+        }
+        if file.local_port.is_some() {
             return Err(ConfigError::new(
                 path,
-                "a connection goes through an SSH tunnel or Kubernetes, not both",
+                "local_port is the local end of an SSH tunnel: kubectl chooses its own",
             ));
         }
-        check_kubernetes_resource(&kubernetes.resource).map_err(|m| ConfigError::new(path, m))?;
     }
     Ok(file)
 }
 
 pub(crate) fn validate_tunnel(path: &Path, file: TunnelFile) -> Result<TunnelFile, ConfigError> {
     check_version(path, file.schema_version)?;
-    if file.hops.is_empty() && file.proxy.is_none() {
+    if let Some(kubernetes) = &file.kubernetes {
+        check_kubernetes_profile(&file, kubernetes).map_err(|m| ConfigError::new(path, m))?;
+        return Ok(file);
+    }
+    if file.hops.is_empty() && file.proxy.is_none() && file.ssm.is_none() {
         return Err(ConfigError::new(
             path,
-            "a tunnel needs at least one hop in [[hops]], or a [proxy]",
+            "a tunnel needs at least one hop in [[hops]], a [proxy], [ssm] or [kubernetes]",
         ));
+    }
+    if let Some(ssm) = &file.ssm {
+        check_ssm(&file, ssm).map_err(|m| ConfigError::new(path, m))?;
     }
     if let Some(proxy) = &file.proxy {
         if proxy.host.trim().is_empty() {
@@ -800,6 +834,83 @@ fn check_tags(tags: &[String]) -> Result<(), String> {
         if !seen.insert(tag.to_lowercase()) {
             return Err(format!("tag {tag:?} is repeated"));
         }
+    }
+    Ok(())
+}
+
+/// AWS SSM in a network profile (ADR-050): never with a proxy or a first hop command (each is
+/// already the way to the first hop), and only plain values. Whether a value can be passed to
+/// the AWS CLI is checked again by `spelaion-ssh` before it runs.
+fn check_ssm(file: &TunnelFile, ssm: &SsmConfig) -> Result<(), String> {
+    if file.proxy.is_some() {
+        return Err("AWS SSM and a [proxy] cannot both lead to the first hop: keep one".into());
+    }
+    if file.hops.first().is_some_and(|hop| hop.command.is_some()) {
+        return Err(
+            "the first hop's command already is the way to it: it cannot go through AWS SSM too"
+                .into(),
+        );
+    }
+    if ssm.target.trim().is_empty() {
+        return Err("ssm.target needs the managed node (i-…, mi-… or an ECS target)".into());
+    }
+    for (name, value) in [
+        ("target", Some(&ssm.target)),
+        ("region", ssm.region.as_ref()),
+        ("profile", ssm.profile.as_ref()),
+        ("aws", ssm.aws.as_ref()),
+    ] {
+        if let Some(value) = value {
+            if value.trim().is_empty() {
+                return Err(format!("ssm.{name} is empty: leave it out instead"));
+            }
+            if value.chars().any(is_hidden_char) {
+                return Err(format!("ssm.{name} has hidden characters"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A Kubernetes network profile (ADR-050): the cluster alone, never with hops, a proxy or the
+/// SSH settings, and with a valid resource when it names one.
+fn check_kubernetes_profile(
+    file: &TunnelFile,
+    kubernetes: &KubernetesProfileConfig,
+) -> Result<(), String> {
+    if !file.hops.is_empty() || file.proxy.is_some() || file.ssm.is_some() {
+        return Err(
+            "a Kubernetes profile reaches the database through kubectl: it has no [[hops]], [proxy] or [ssm]"
+                .into(),
+        );
+    }
+    if file.keepalive_interval.is_some()
+        || file.keepalive_count.is_some()
+        || file.connect_timeout.is_some()
+    {
+        return Err(
+            "keepalive_interval, keepalive_count and connect_timeout are SSH settings: a Kubernetes profile has none"
+                .into(),
+        );
+    }
+    for (name, value) in [
+        ("context", &kubernetes.context),
+        ("namespace", &kubernetes.namespace),
+        ("resource", &kubernetes.resource),
+        ("kubeconfig", &kubernetes.kubeconfig),
+        ("kubectl", &kubernetes.kubectl),
+    ] {
+        if let Some(value) = value {
+            if value.trim().is_empty() {
+                return Err(format!("kubernetes.{name} is empty: leave it out instead"));
+            }
+            if value.chars().any(is_hidden_char) {
+                return Err(format!("kubernetes.{name} has hidden characters"));
+            }
+        }
+    }
+    if let Some(resource) = &kubernetes.resource {
+        check_kubernetes_resource(resource)?;
     }
     Ok(())
 }

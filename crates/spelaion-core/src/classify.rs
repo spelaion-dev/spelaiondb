@@ -1,16 +1,19 @@
 //! Statement classification for read-only mode (ADR-008, layer 4).
 //!
 //! Allow list: only what is recognised as a read passes; whatever cannot be parsed is
-//! rejected. Functions that reach outside the database (files, other servers, the session:
-//! [`reaches_outside`]) are refused by name. It is not the only barrier: a user function that
-//! writes looks like a read. That is why it also runs in a read-only (or always rolled back)
-//! transaction and a read-only database user is recommended.
+//! rejected. Functions that reach outside the database (files, other servers, the session, the
+//! server: [`reaches_outside`]) and functions that run SQL given as text are refused by name.
+//! That list can never be complete: a user function can do anything, and so can an extension's.
+//! It is not the only barrier: that is why reads also run in a read-only (or always rolled
+//! back) transaction, and a read-only database user stays the recommendation (ADR-008).
+//! PostgreSQL's Unicode escapes (`U&"…"`, `U&'…'`) are refused before parsing, because the
+//! server reads them as other names than the parser does.
 
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{
     ContextModifier, Expr, ObjectName, Query, Set, SetExpr, SetSessionParamKind, Statement,
-    TransactionMode, UnaryOperator, Value as SqlValue, Visit, Visitor,
+    TransactionAccessMode, TransactionMode, UnaryOperator, Value as SqlValue, Visit, Visitor,
 };
 use sqlparser::parser::Parser;
 
@@ -29,6 +32,7 @@ pub enum ReadKind {
 
 /// Is `sql` (a single statement) a read? `Err` explains why not.
 pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
+    reject_unicode_escapes(engine, sql)?;
     let dialect = sql_dialect(engine);
     let statements = Parser::parse_sql(dialect.as_ref(), sql)
         .map_err(|e| format!("could not parse the statement: {e}"))?;
@@ -37,7 +41,11 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
         [] => return Err("there is no statement".into()),
         _ => return Err("only one statement per query is allowed".into()),
     };
+    read_statement(engine, statement)
+}
 
+/// [`classify_read_only`] of one statement sqlparser has already read.
+fn read_statement(engine: &str, statement: &Statement) -> Result<ReadKind, String> {
     let kind = match statement {
         Statement::Query(query) => check_query(query).map(|()| ReadKind::Query),
         Statement::Explain {
@@ -47,7 +55,9 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
             ..
         } => {
             let analyze_option = options.iter().flatten().any(|o| {
-                o.name.value.eq_ignore_ascii_case("analyze")
+                // PostgreSQL accepts the British spelling too.
+                (o.name.value.eq_ignore_ascii_case("analyze")
+                    || o.name.value.eq_ignore_ascii_case("analyse"))
                     && !matches!(&o.arg, Some(Expr::Value(v)) if matches!(v.value, SqlValue::Boolean(false)))
             });
             if *analyze || analyze_option {
@@ -100,6 +110,7 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
 /// like anything that does not parse. `Err` explains why.
 pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
     reject_mysql_executable_comments(engine, sql)?;
+    reject_unicode_escapes(engine, sql)?;
     let dialect = sql_dialect(engine);
     let statements = Parser::parse_sql(dialect.as_ref(), sql)
         .map_err(|e| format!("could not parse the statement: {e}"))?;
@@ -108,6 +119,11 @@ pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
         [] => return Err("there is no statement".into()),
         _ => return Err("only one statement at a time".into()),
     };
+    setup_statement(engine, statement)
+}
+
+/// [`classify_session_setup`] of one statement sqlparser has already read.
+fn setup_statement(engine: &str, statement: &Statement) -> Result<(), String> {
     let set = match statement {
         Statement::Set(set) => set,
         Statement::Use(_) => {
@@ -117,7 +133,7 @@ pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
             };
         }
         _ => {
-            return classify_read_only(engine, sql)
+            return read_statement(engine, statement)
                 .map(|_| ())
                 .map_err(|reason| {
                     format!("{reason}: only reads and session settings may run here")
@@ -188,6 +204,93 @@ pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
         | Set::SetSessionAuthorization(_)
         | Set::SetNames { .. }
         | Set::SetNamesDefault {} => Err(refused()),
+    }
+}
+
+/// May `sql` (one statement, or one T-SQL batch) run on a read-only connection (ADR-053)?
+/// The editor's scripts, query pages and plans all go through it before anything runs. Only:
+/// - a read, as [`classify_read_only`] decides;
+/// - a session setting or `USE`, as [`classify_session_setup`] allows;
+/// - plain transaction control: `BEGIN` / `START TRANSACTION` with at most an isolation level
+///   and `READ ONLY`, `COMMIT`, `ROLLBACK` (to a savepoint too), `SAVEPOINT`, `RELEASE` and
+///   `SET TRANSACTION` with an isolation level or `READ ONLY`.
+///
+/// Anything else, `READ WRITE` in any form, MySQL's executable comments and whatever does not
+/// parse are refused. A T-SQL batch may hold several statements, and each must pass; elsewhere
+/// a span is one statement, as for agents. `Err` explains why.
+pub fn classify_read_only_connection(engine: &str, sql: &str) -> Result<(), String> {
+    if reject_mysql_executable_comments(engine, sql).is_err() {
+        return Err(
+            "it has a MySQL executable comment (/*! … */), which the server runs as SQL".into(),
+        );
+    }
+    reject_unicode_escapes(engine, sql)?;
+    let dialect = sql_dialect(engine);
+    let statements = Parser::parse_sql(dialect.as_ref(), sql)
+        .map_err(|e| format!("could not parse the statement: {e}"))?;
+    match (engine, statements.as_slice()) {
+        // Only comments: nothing runs.
+        (_, []) => Ok(()),
+        (_, [one]) => read_only_connection_statement(engine, one),
+        ("sqlserver", batch) => batch
+            .iter()
+            .try_for_each(|statement| read_only_connection_statement(engine, statement)),
+        _ => Err("only one statement at a time".into()),
+    }
+}
+
+/// [`classify_read_only_connection`] of one statement sqlparser has already read.
+fn read_only_connection_statement(engine: &str, statement: &Statement) -> Result<(), String> {
+    if plain_transaction_control(statement) {
+        return Ok(());
+    }
+    match statement {
+        Statement::Set(_) | Statement::Use(_) => setup_statement(engine, statement).map_err(|_| {
+            format!(
+                "{} could change more than this session's settings",
+                kind_name(statement)
+            )
+        }),
+        _ => read_statement(engine, statement).map(|_| ()),
+    }
+}
+
+/// `BEGIN`, `COMMIT`, `ROLLBACK`, savepoints and `SET TRANSACTION`, never asking for `READ
+/// WRITE`, another transaction's snapshot or a block of statements (T-SQL's `BEGIN … END`,
+/// `BEGIN TRY`).
+fn plain_transaction_control(statement: &Statement) -> bool {
+    let read_only_modes = |modes: &[TransactionMode]| {
+        modes.iter().all(|mode| {
+            matches!(
+                mode,
+                TransactionMode::IsolationLevel(_)
+                    | TransactionMode::AccessMode(TransactionAccessMode::ReadOnly)
+            )
+        })
+    };
+    match statement {
+        Statement::StartTransaction {
+            modes,
+            modifier,
+            statements,
+            exception,
+            has_end_keyword,
+            ..
+        } => {
+            modifier.is_none()
+                && statements.is_empty()
+                && exception.is_none()
+                && !has_end_keyword
+                && read_only_modes(modes)
+        }
+        Statement::Commit { end, modifier, .. } => !end && modifier.is_none(),
+        Statement::Rollback { .. }
+        | Statement::Savepoint { .. }
+        | Statement::ReleaseSavepoint { .. } => true,
+        Statement::Set(Set::SetTransaction {
+            modes, snapshot, ..
+        }) => !modes.is_empty() && snapshot.is_none() && read_only_modes(modes),
+        _ => false,
     }
 }
 
@@ -306,9 +409,75 @@ pub(crate) fn reject_mysql_executable_comments(engine: &str, sql: &str) -> Resul
     Ok(())
 }
 
+/// PostgreSQL reads `U&"pg_r\0065ad_file"` as the name `pg_read_file`, and `U&'…'` as a string
+/// with escapes; sqlparser reads the first as `U & "pg_r\0065ad_file"`, so a refused function
+/// would pass under its escaped name. Both forms are refused before parsing, case-insensitively,
+/// even inside a quoted literal: telling them apart there is what the parser gets wrong. DuckDB's
+/// grammar comes from PostgreSQL's, so it is checked too.
+pub(crate) fn reject_unicode_escapes(engine: &str, sql: &str) -> Result<(), String> {
+    if matches!(engine, "postgres" | "duckdb")
+        && sql.as_bytes().windows(3).any(|w| {
+            w[0].eq_ignore_ascii_case(&b'u') && w[1] == b'&' && (w[2] == b'"' || w[2] == b'\'')
+        })
+    {
+        return Err(
+            "Unicode escapes (U&\"…\" or U&'…') are not allowed: the server reads them as other names than this check does"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Functions that run SQL given as text: the query inside is never parsed, so nothing in it is
+/// checked. Matched like [`outside_functions`].
+fn sql_text_functions(engine: &str) -> &'static [&'static str] {
+    match engine {
+        "postgres" => &[
+            "query_to_xml",
+            "query_to_xmlschema",
+            "query_to_xml_and_xmlschema",
+            "cursor_to_xml",
+            "cursor_to_xmlschema",
+            "ts_stat",
+            // Its two-argument form runs the second argument as a query.
+            "ts_rewrite",
+            // tablefunc and xml2.
+            "connectby",
+            "xpath_table",
+        ],
+        _ => &[],
+    }
+}
+
+/// Name prefixes refused like [`outside_functions`]: whole families, so a member the list does
+/// not name yet is refused too.
+fn outside_prefixes(engine: &str) -> &'static [&'static str] {
+    match engine {
+        "postgres" => &[
+            // dblink_open, dblink_fetch, dblink_get_result… run SQL on another connection.
+            "dblink",
+            "pg_ls_",
+            "pg_stat_reset",
+            "pg_replication_origin_",
+            "pg_advisory_unlock",
+        ],
+        _ => &[],
+    }
+}
+
+/// Name prefixes refused like [`sql_text_functions`].
+fn sql_text_prefixes(engine: &str) -> &'static [&'static str] {
+    match engine {
+        // tablefunc's crosstab, crosstab2, crosstab3… run their text arguments as queries.
+        "postgres" => &["crosstab"],
+        _ => &[],
+    }
+}
+
 /// Functions that reach outside the database: files on the server, other servers, environment
-/// variables, or locks and settings that outlive the statement. Matched by their last name
-/// part, case-insensitively, as calls and as table functions.
+/// variables, the server itself (WAL, backups, replication, statistics), or locks and settings
+/// that outlive the statement. Matched by their last name part, case-insensitively, as calls and
+/// as table functions.
 fn outside_functions(engine: &str) -> &'static [&'static str] {
     match engine {
         "postgres" => &[
@@ -336,6 +505,30 @@ fn outside_functions(engine: &str) -> &'static [&'static str] {
             "pg_advisory_lock_shared",
             "pg_try_advisory_lock",
             "pg_try_advisory_lock_shared",
+            "pg_switch_wal",
+            "pg_create_restore_point",
+            "pg_promote",
+            "pg_wal_replay_pause",
+            "pg_wal_replay_resume",
+            "pg_stat_statements_reset",
+            "pg_drop_replication_slot",
+            "pg_create_physical_replication_slot",
+            "pg_create_logical_replication_slot",
+            "pg_copy_physical_replication_slot",
+            "pg_copy_logical_replication_slot",
+            "pg_replication_slot_advance",
+            "pg_logical_slot_get_changes",
+            "pg_logical_slot_get_binary_changes",
+            "pg_logical_emit_message",
+            "pg_backup_start",
+            "pg_backup_stop",
+            "pg_start_backup",
+            "pg_stop_backup",
+            // adminpack.
+            "pg_file_write",
+            "pg_file_unlink",
+            "pg_file_rename",
+            "pg_file_sync",
         ],
         "sqlite" => &[
             "load_extension",
@@ -389,6 +582,9 @@ fn outside_functions(engine: &str) -> &'static [&'static str] {
 pub(crate) fn reaches_outside(engine: &str, statements: &[Statement]) -> Option<String> {
     let mut visitor = Outside {
         functions: outside_functions(engine),
+        prefixes: outside_prefixes(engine),
+        sql_text: sql_text_functions(engine),
+        sql_text_prefixes: sql_text_prefixes(engine),
         linked_servers: engine == "sqlserver",
     };
     statements
@@ -401,6 +597,9 @@ pub(crate) fn reaches_outside(engine: &str, statements: &[Statement]) -> Option<
 
 struct Outside {
     functions: &'static [&'static str],
+    prefixes: &'static [&'static str],
+    sql_text: &'static [&'static str],
+    sql_text_prefixes: &'static [&'static str],
     linked_servers: bool,
 }
 
@@ -411,11 +610,20 @@ impl Outside {
             .last()
             .and_then(|part| part.as_ident())
             .map(|ident| ident.value.to_ascii_lowercase());
-        if let Some(last) = last
-            && self.functions.contains(&last.as_str())
-        {
+        let Some(last) = last else {
+            return ControlFlow::Continue(());
+        };
+        let named = |names: &[&str], prefixes: &[&str]| {
+            names.contains(&last.as_str()) || prefixes.iter().any(|p| last.starts_with(p))
+        };
+        if named(self.sql_text, self.sql_text_prefixes) {
             return ControlFlow::Break(format!(
-                "{last}() reaches outside the database (files, other servers or the session)"
+                "{last}() runs SQL given as text, which this check cannot read"
+            ));
+        }
+        if named(self.functions, self.prefixes) {
+            return ControlFlow::Break(format!(
+                "{last}() reaches outside the database (files, other servers, the session or the server)"
             ));
         }
         ControlFlow::Continue(())
@@ -861,5 +1069,419 @@ mod tests {
         let err = classify_session_setup("postgres", "SET default_transaction_read_only = off")
             .unwrap_err();
         assert!(err.contains("allow list"), "{err}");
+    }
+
+    #[test]
+    fn read_only_connections_run_reads_settings_and_transaction_control() {
+        for (engine, sql) in [
+            ("postgres", "select 1"),
+            ("postgres", "  SeLeCt * FROM orders -- the rest"),
+            ("postgres", "/* a comment */ select 1"),
+            ("postgres", "-- only a comment"),
+            (
+                "postgres",
+                "with recent as (select * from orders) select count(*) from recent",
+            ),
+            ("postgres", "explain select * from orders"),
+            ("postgres", "show search_path"),
+            ("postgres", "set search_path to app, public"),
+            ("postgres", "SET statement_timeout = 5000"),
+            ("postgres", "SET ROLE reporting"),
+            ("postgres", "begin"),
+            ("postgres", "BEGIN READ ONLY"),
+            ("postgres", "begin isolation level serializable"),
+            (
+                "postgres",
+                "start transaction isolation level repeatable read, read only",
+            ),
+            ("postgres", "commit"),
+            ("postgres", "COMMIT AND CHAIN"),
+            ("postgres", "rollback"),
+            ("postgres", "savepoint before_reads"),
+            ("postgres", "rollback to savepoint before_reads"),
+            ("postgres", "release savepoint before_reads"),
+            ("postgres", "set transaction read only"),
+            ("postgres", "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"),
+            ("mysql", "select * from orders limit 5"),
+            ("mysql", "show tables"),
+            ("mysql", "use shop"),
+            ("mysql", "set time_zone = '+00:00'"),
+            (
+                "mysql",
+                "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            ),
+            ("mysql", "start transaction"),
+            ("mysql", "START TRANSACTION READ ONLY"),
+            ("mysql", "commit"),
+            ("mysql", "rollback"),
+            ("sqlserver", "SELECT TOP 5 * FROM dbo.orders"),
+            ("sqlserver", "SELECT 1; SELECT 2"),
+            ("sqlserver", "USE master"),
+            ("sqlserver", "SET NOCOUNT ON"),
+            ("sqlserver", "BEGIN TRANSACTION"),
+            ("sqlserver", "COMMIT"),
+            ("sqlserver", "ROLLBACK TRANSACTION"),
+            ("duckdb", "select 42"),
+            ("duckdb", "use memory"),
+            ("duckdb", "begin transaction"),
+            ("sqlite", "select * from t"),
+            ("sqlite", "begin"),
+            ("sqlite", "commit"),
+        ] {
+            assert_eq!(
+                classify_read_only_connection(engine, sql),
+                Ok(()),
+                "{engine}: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_connections_refuse_writes_however_they_are_written() {
+        for (engine, sql) in [
+            // Writes, in odd casing and behind comments.
+            ("postgres", "insert into t values (1)"),
+            ("postgres", "DeLeTe FrOm t WhErE id = 1"),
+            ("postgres", "/* select */ delete from t where id = 1"),
+            ("postgres", "-- select 1\nupdate t set a = 1 where id = 1"),
+            (
+                "postgres",
+                "merge into t using s on t.id = s.id when matched then delete",
+            ),
+            ("postgres", "create temp table t (a int)"),
+            ("postgres", "create table t (a int)"),
+            ("postgres", "alter table t add column b int"),
+            ("postgres", "drop table t"),
+            ("postgres", "truncate t"),
+            ("postgres", "grant all on t to public"),
+            ("postgres", "comment on table t is 'x'"),
+            // Data-modifying CTEs, SELECT … INTO and locking reads.
+            (
+                "postgres",
+                "with d as (delete from t returning *) select * from d",
+            ),
+            (
+                "postgres",
+                "WITH u AS (UPDATE t SET a = 1 RETURNING *) SELECT 1",
+            ),
+            (
+                "postgres",
+                "with i as (insert into t values (1) returning *) select * from i",
+            ),
+            ("postgres", "select * into t2 from t"),
+            ("postgres", "select * from t for update"),
+            ("postgres", "explain analyze delete from t"),
+            ("postgres", "EXPLAIN (ANALYZE) SELECT 1"),
+            ("postgres", "explain delete from t"),
+            // Statements that run other statements, or write elsewhere.
+            ("postgres", "do $$ begin delete from t; end $$"),
+            ("postgres", "call purge()"),
+            ("postgres", "prepare p as delete from t"),
+            ("postgres", "execute p"),
+            ("postgres", "copy t from stdin"),
+            ("postgres", "copy t to '/tmp/x'"),
+            ("postgres", "lock table t"),
+            ("postgres", "vacuum t"),
+            ("postgres", "notify channel"),
+            ("postgres", "select pg_terminate_backend(1)"),
+            (
+                "postgres",
+                "select dblink_exec('dbname=x', 'delete from t')",
+            ),
+            ("postgres", "select lo_import('/etc/passwd')"),
+            ("postgres", "select pg_advisory_lock(1)"),
+            // Turning read-only mode off, in every spelling.
+            ("postgres", "begin read write"),
+            ("postgres", "START TRANSACTION READ WRITE"),
+            ("postgres", "begin isolation level serializable, read write"),
+            (
+                "postgres",
+                "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE",
+            ),
+            ("postgres", "set transaction read write"),
+            ("postgres", "SET TRANSACTION SNAPSHOT '00000003-0000001B-1'"),
+            ("postgres", "SET default_transaction_read_only = off"),
+            ("postgres", "set default_transaction_read_only to default"),
+            (
+                "postgres",
+                "SET SESSION default_transaction_read_only TO false",
+            ),
+            ("postgres", "set transaction_read_only = off"),
+            ("postgres", "RESET ALL"),
+            ("postgres", "reset default_transaction_read_only"),
+            ("postgres", "DISCARD ALL"),
+            (
+                "postgres",
+                "select set_config('default_transaction_read_only', 'off', false)",
+            ),
+            ("postgres", "SET SESSION AUTHORIZATION admin"),
+            ("postgres", "prepare transaction 'x'"),
+            ("postgres", "commit prepared 'x'"),
+            // Several statements in one span, or one that does not parse.
+            ("postgres", "select 1; delete from t"),
+            ("postgres", "begin; delete from t; commit"),
+            ("postgres", "this is not sql"),
+            ("postgres", "TABLE t"),
+            // MySQL: executable comments, files, locks and READ WRITE.
+            ("mysql", "/*!50000 DELETE FROM t */"),
+            ("mysql", "select 1 /*!, (select sleep(1)) */"),
+            ("mysql", "select 1 /*M!100000 , 2 */"),
+            ("mysql", "SELECT * FROM t INTO OUTFILE '/tmp/x'"),
+            ("mysql", "select 1 into @x"),
+            ("mysql", "select * from t for update"),
+            ("mysql", "replace into t values (1)"),
+            (
+                "mysql",
+                "insert into t values (1) on duplicate key update a = 1",
+            ),
+            ("mysql", "load data infile '/tmp/x' into table t"),
+            ("mysql", "lock tables t write"),
+            ("mysql", "START TRANSACTION READ WRITE"),
+            ("mysql", "SET SESSION TRANSACTION READ WRITE"),
+            ("mysql", "set transaction read write"),
+            ("mysql", "SET transaction_read_only = 0"),
+            ("mysql", "SET @@session.transaction_read_only = OFF"),
+            ("mysql", "set session tx_read_only = 0"),
+            ("mysql", "SET GLOBAL read_only = 0"),
+            ("mysql", "SET sql_mode = ''"),
+            ("mysql", "set autocommit = 0"),
+            ("mysql", "select get_lock('x', 1)"),
+            ("mysql", "call purge()"),
+            ("mysql", "xa start 'x'"),
+            // SQL Server: a write hidden in a batch after a read, blocks and dynamic SQL.
+            ("sqlserver", "SELECT 1; DELETE FROM t"),
+            ("sqlserver", "SELECT 1\nDELETE FROM t"),
+            ("sqlserver", "SELECT * FROM t DELETE FROM t WHERE id = 1"),
+            ("sqlserver", "SELECT 1\nUPDATE t SET a = 1 WHERE id = 1"),
+            ("sqlserver", "SET NOCOUNT ON DELETE FROM t"),
+            ("sqlserver", "BEGIN DELETE FROM t END"),
+            (
+                "sqlserver",
+                "BEGIN TRY DELETE FROM t END TRY BEGIN CATCH SELECT 1 END CATCH",
+            ),
+            ("sqlserver", "IF 1 = 1 DELETE FROM t"),
+            ("sqlserver", "exec sp_who"),
+            ("sqlserver", "EXEC('DELETE FROM t')"),
+            ("sqlserver", "EXECUTE AS USER = 'dbo'"),
+            ("sqlserver", "SELECT * INTO #copy FROM t"),
+            ("sqlserver", "select * from srv.shop.dbo.t"),
+            (
+                "sqlserver",
+                "select * from openrowset('SQLNCLI', 'x', 'select 1')",
+            ),
+            (
+                "sqlserver",
+                "update t set a = 1 output inserted.* where id = 1",
+            ),
+            ("sqlserver", "SET IMPLICIT_TRANSACTIONS ON"),
+            ("sqlserver", "SET QUOTED_IDENTIFIER OFF"),
+            ("sqlserver", "SET IDENTITY_INSERT dbo.t ON"),
+            ("sqlserver", "TRUNCATE TABLE t"),
+            ("sqlserver", "drop table t"),
+            ("sqlserver", "BEGIN DISTRIBUTED TRANSACTION"),
+            ("sqlserver", "bulk insert t from 'c:/x.csv'"),
+            // DuckDB and SQLite: files, attachments, pragmas.
+            ("duckdb", "attach 'x.db' as x"),
+            ("duckdb", "copy t to 'x.csv'"),
+            ("duckdb", "install httpfs"),
+            ("duckdb", "SET enable_external_access = true"),
+            ("duckdb", "checkpoint"),
+            ("duckdb", "create table t (a int)"),
+            ("sqlite", "pragma query_only = 0"),
+            ("sqlite", "attach 'x.db' as x"),
+            ("sqlite", "vacuum"),
+            ("sqlite", "begin exclusive"),
+            ("sqlite", "insert or replace into t values (1)"),
+        ] {
+            assert!(
+                classify_read_only_connection(engine, sql).is_err(),
+                "{engine}: {sql} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_connection_refusals_say_why() {
+        let err = classify_read_only_connection("postgres", "delete from t").unwrap_err();
+        assert!(err.contains("DELETE is not a read"), "{err}");
+        let err = classify_read_only_connection(
+            "postgres",
+            "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE",
+        )
+        .unwrap_err();
+        assert!(err.contains("more than this session's settings"), "{err}");
+        let err = classify_read_only_connection("mysql", "/*!50000 DELETE FROM t */").unwrap_err();
+        assert!(err.contains("executable comment"), "{err}");
+        let err = classify_read_only_connection("postgres", "this is not sql").unwrap_err();
+        assert!(err.contains("could not parse"), "{err}");
+    }
+
+    /// Every PostgreSQL function the agents' barrier refuses by name (SDB-115), with arguments
+    /// that make each call valid, and the word its refusal must name.
+    const PG_REFUSED_CALLS: &[(&str, &str)] = &[
+        // SQL given as text: what runs inside is never seen by the check.
+        (
+            "query_to_xml('select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid()', true, true, '')",
+            "query_to_xml",
+        ),
+        (
+            "query_to_xml('select pg_read_file(''/etc/passwd'')', true, true, '')",
+            "query_to_xml",
+        ),
+        (
+            "query_to_xmlschema('select 1', true, true, '')",
+            "query_to_xmlschema",
+        ),
+        (
+            "query_to_xml_and_xmlschema('select 1', true, true, '')",
+            "query_to_xml_and_xmlschema",
+        ),
+        ("cursor_to_xml('c', 1, true, true, '')", "cursor_to_xml"),
+        (
+            "cursor_to_xmlschema('c', true, true, '')",
+            "cursor_to_xmlschema",
+        ),
+        (
+            "ts_stat('select set_config(''search_path'', ''evil'', false)::tsvector')",
+            "ts_stat",
+        ),
+        (
+            "ts_rewrite('a'::tsquery, 'select pg_reload_conf()')",
+            "ts_rewrite",
+        ),
+        ("crosstab('select 1, 2, 3')", "crosstab"),
+        ("crosstab3('select 1, 2, 3')", "crosstab3"),
+        ("connectby('t', 'id', 'parent', '1', 0)", "connectby"),
+        ("xpath_table('id', 'x', 't', '/a', 'true')", "xpath_table"),
+        // Names the list did not have.
+        ("dblink_open('c', 'select 1')", "dblink_open"),
+        ("dblink_fetch('c', 1)", "dblink_fetch"),
+        ("dblink_get_result('c')", "dblink_get_result"),
+        ("dblink_close('c')", "dblink_close"),
+        ("pg_advisory_unlock(1)", "pg_advisory_unlock"),
+        ("pg_advisory_unlock_shared(1)", "pg_advisory_unlock_shared"),
+        ("pg_advisory_unlock_all()", "pg_advisory_unlock_all"),
+        ("pg_switch_wal()", "pg_switch_wal"),
+        ("pg_create_restore_point('x')", "pg_create_restore_point"),
+        ("pg_promote()", "pg_promote"),
+        ("pg_wal_replay_pause()", "pg_wal_replay_pause"),
+        ("pg_wal_replay_resume()", "pg_wal_replay_resume"),
+        ("pg_stat_reset()", "pg_stat_reset"),
+        ("pg_stat_reset_shared('bgwriter')", "pg_stat_reset_shared"),
+        (
+            "pg_stat_reset_single_table_counters(1)",
+            "pg_stat_reset_single_table_counters",
+        ),
+        ("pg_drop_replication_slot('s')", "pg_drop_replication_slot"),
+        (
+            "pg_create_physical_replication_slot('s')",
+            "pg_create_physical_replication_slot",
+        ),
+        (
+            "pg_create_logical_replication_slot('s', 'pgoutput')",
+            "pg_create_logical_replication_slot",
+        ),
+        (
+            "pg_replication_origin_create('o')",
+            "pg_replication_origin_create",
+        ),
+        (
+            "pg_replication_origin_drop('o')",
+            "pg_replication_origin_drop",
+        ),
+        ("pg_backup_start('x')", "pg_backup_start"),
+        ("pg_backup_stop()", "pg_backup_stop"),
+        ("pg_file_write('x', 'y', false)", "pg_file_write"),
+        ("pg_file_unlink('x')", "pg_file_unlink"),
+        ("pg_file_rename('x', 'y')", "pg_file_rename"),
+        (
+            "pg_logical_emit_message(false, 'p', 'm')",
+            "pg_logical_emit_message",
+        ),
+    ];
+
+    #[test]
+    fn postgres_functions_that_run_sql_or_reach_outside_are_refused_wherever_they_hide() {
+        for (call, name) in PG_REFUSED_CALLS {
+            for sql in [
+                format!("select {call}"),
+                format!("SELECT {}", call.to_uppercase()),
+                format!("select pg_catalog.{call}"),
+                format!("with x as (select {call} as v) select * from x"),
+                format!("select * from orders where id in (select {call})"),
+                format!("select (select {call}) as v"),
+                format!("select * from {call} as f"),
+                format!("explain select {call}"),
+            ] {
+                let err = pg(&sql).expect_err(&sql);
+                assert!(err.contains(name), "{sql}: {err}");
+                // The same refusal wherever the barrier applies.
+                assert!(classify_session_setup("postgres", &sql).is_err(), "{sql}");
+                assert!(
+                    classify_read_only_connection("postgres", &sql).is_err(),
+                    "{sql}"
+                );
+            }
+        }
+        let err = pg("select query_to_xml('select 1', true, true, '')").unwrap_err();
+        assert!(err.contains("runs SQL given as text"), "{err}");
+        let err = pg("select pg_switch_wal()").unwrap_err();
+        assert!(err.contains("reaches outside"), "{err}");
+    }
+
+    #[test]
+    fn unicode_escapes_are_refused_before_parsing() {
+        for sql in [
+            r#"select U&"pg_r\0065ad_file"('/etc/passwd')"#,
+            r#"select U&"set_c\006Fnfig"('a', 'b', false)"#,
+            r#"select u&"pg_backend_p\0069d"()"#,
+            r#"select U&"query_to_xml"('select 1', true, true, '')"#,
+            r#"with x as (select U&"pg_r\0065ad_file"('/etc/passwd') as v) select * from x"#,
+            r#"select * from orders where id in (select U&"pg_backend_p\0069d"())"#,
+            r#"select * from U&"pg_ls_\0064ir"('.') as f"#,
+            r#"select * from U&"\006Frders""#,
+            r"select U&'\0041'",
+            r"select u&'d\0061ta'",
+            r#"select 'a literal that holds u&"' as v"#,
+            r#"explain select U&"pg_backend_p\0069d"()"#,
+        ] {
+            let err = pg(sql).expect_err(sql);
+            assert!(err.contains("Unicode escapes"), "{sql}: {err}");
+            assert!(classify_session_setup("postgres", sql).is_err(), "{sql}");
+            assert!(
+                classify_read_only_connection("postgres", sql).is_err(),
+                "{sql}"
+            );
+            assert!(classify_read_only("duckdb", sql).is_err(), "duckdb: {sql}");
+        }
+        // Other engines have no such syntax: `u&` there is not an escape.
+        assert_eq!(
+            classify_read_only("mysql", "select 'u&''x' as v"),
+            Ok(ReadKind::Query)
+        );
+        // An ampersand is still an operator.
+        assert_eq!(pg("select 5 & 3"), Ok(ReadKind::Query));
+        assert_eq!(
+            pg("select u & 3 from (select 1 as u) s"),
+            Ok(ReadKind::Query)
+        );
+    }
+
+    #[test]
+    fn explain_analyse_runs_the_statement_like_explain_analyze() {
+        for sql in [
+            "EXPLAIN (ANALYSE) SELECT 1",
+            "explain (analyse true) select 1",
+            "explain (format json, ANALYSE TRUE) select 1",
+            "EXPLAIN (ANALYZE) SELECT 1",
+        ] {
+            let err = pg(sql).expect_err(sql);
+            assert!(err.contains("ANALYZE"), "{sql}: {err}");
+        }
+        assert_eq!(
+            pg("explain (analyse false) select 1"),
+            Ok(ReadKind::Explain)
+        );
+        assert!(pg("explain analyse select 1").is_err());
     }
 }

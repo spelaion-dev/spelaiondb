@@ -2,8 +2,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { chooseFolder, workspaceParent } from "../dialogs";
 import { Trans, useTranslation } from "react-i18next";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   call,
   commands,
@@ -30,7 +30,7 @@ import {
   type TableKeyItem,
 } from "../api";
 import {
-  confirmOpenTransactions,
+  confirmLeaving,
   connectTabFromExplorer,
   explorerDatabase,
   EXPLORER_REFRESH_EVENT,
@@ -49,13 +49,26 @@ import { useApp, useDialogs, type ExplorerReveal, type TableDetailKind } from ".
 import { detachTabs, flushTabs, restoreTabs } from "../tabPersistence";
 import { useExport } from "./ExportDialog";
 import { useImport } from "./ImportDialog";
+import { backupFamily, familyRestores, useBackup } from "./BackupDialog";
+import { useRunFile } from "./RunFileDialog";
 import { ConnectionMenu } from "./ConnectionMenu";
-import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard, pasteIsForText } from "../connectionCopies";
+import { copyConnection, duplicateConnection, pasteConnection, pasteFromClipboard } from "../connectionCopies";
+import { isTextField, useFocusedPaste } from "../focusedPaste";
+import { topDialog } from "../modalFocus";
 import { ExplorerFilterDialog, isFilterEmpty, type FilterKind } from "./ExplorerFilterDialog";
 import { EngineIcon } from "./EngineIcon";
+import { useFittingMarks } from "../connectionMarks";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
+import { StructureDialog } from "./StructureDialog";
+import { CreateTableDialog } from "./CreateTableDialog";
+import { AccountDialog, usePrincipalActions, type AccountAction } from "./AccountDialog";
+import { PrivilegesDialog } from "./PrivilegesDialog";
+import type { PrincipalActionsItem, PrincipalKindItem, PrincipalTargetItem } from "../bindings";
 import { TypeBadge } from "./TypeBadge";
 import { openFound } from "./OpenObjectDialog";
+import { openDiagram } from "../diagramTabs";
+import { MENU_MARGIN, placeMenu } from "../menuPlacement";
+import { ObjectMenu } from "./ObjectMenu";
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -194,10 +207,9 @@ function GenerateMenu({ children }: { children: ReactNode }) {
     const position = () => {
       if (!trigger.current || !submenu.current) return;
       const anchor = trigger.current.getBoundingClientRect();
-      const rect = submenu.current.getBoundingClientRect();
-      const x = anchor.right + rect.width <= window.innerWidth - 8 ? anchor.right : anchor.left - rect.width;
-      submenu.current.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-      submenu.current.style.top = `${Math.max(8, Math.min(anchor.top, window.innerHeight - rect.height - 8))}px`;
+      const width = submenu.current.getBoundingClientRect().width;
+      const x = anchor.right + width <= window.innerWidth - MENU_MARGIN ? anchor.right : anchor.left - width;
+      placeMenu(submenu.current, x, anchor.top);
     };
     position();
     window.addEventListener("resize", position);
@@ -356,8 +368,17 @@ function useObjectActions(session: string, enabled = true): ObjectActionsItem | 
 
 /** SQL written by the core, in a new tab of the connection (on the schema's database where the
  *  engine has one per schema): nothing runs. */
-function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string) {
+/** Opens the backup or restore dialog of a connection the explorer has open (ADR-049). */
+function openBackup(connection: ConnectionItem, session: string, mode: "backup" | "restore") {
+  const family = backupFamily(connection.engine);
+  if (!family) return;
+  useBackup.getState().open({ session, connectionId: connection.id, connectionName: connection.name, family, mode });
+}
+
+function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string, run = false) {
   const tab = useApp.getState().addTab(connectionId, sql);
+  // "Run…": the tab runs its script once connected, asking the call's parameters first.
+  if (run) useApp.getState().updateTab(tab, { runOnOpen: true });
   connectTabFromExplorer(tab, session, schema === undefined ? undefined : explorerDatabase(connectionId, schema));
 }
 
@@ -470,14 +491,14 @@ function LeafRow({
         <span className="muted small">{detail}</span>
       </div>
       {menu && target && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <DropMenuItem
             onClick={() => {
               setMenu(null);
               setDropping(true);
             }}
           />
-        </div>
+        </ObjectMenu>
       )}
       {dropping && target && (
         <DropDialog
@@ -655,7 +676,7 @@ function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
         <span className="muted small">{where}</span>
       </div>
       {menu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <button role="menuitem" onClick={open}>
             {t("bookmarkOpenMenu")}
           </button>
@@ -672,7 +693,7 @@ function BookmarkRow({ bookmark }: { bookmark: BookmarkItem }) {
           <button role="menuitem" title="Delete" onClick={remove}>
             {t("removeBookmark")}
           </button>
-        </div>
+        </ObjectMenu>
       )}
       {error && (
         <p className="error small" role="alert">
@@ -879,6 +900,80 @@ function serverFolder(kind: ServerObjectKindItem): (typeof SERVER_FOLDERS)[numbe
   }
 }
 
+/** The kind of account a server folder holds (ADR-048), or none. */
+function folderAccountKind(folder: (typeof SERVER_FOLDERS)[number]): PrincipalKindItem | null {
+  switch (folder) {
+    case "roles":
+      return "role";
+    case "users":
+      return "user";
+    case "logins":
+      return "login";
+    case "tablespaces":
+    case "extensions":
+      return null;
+  }
+}
+
+/** What an account's menu opens: the account dialog, or its privileges. */
+type AccountRequest = AccountAction | { action: "privileges"; target: PrincipalTargetItem };
+
+/** An account of the server (ADR-048): its menu changes its password, locks it, shows and
+ * changes its privileges, or drops it. */
+function AccountRow({ object, kind, actions, onAct }: {
+  object: ServerObjectItem;
+  kind: PrincipalKindItem;
+  actions: PrincipalActionsItem | undefined;
+  onAct(request: AccountRequest): void;
+}) {
+  const { t } = useTranslation("shell");
+  const [menu, setMenu] = useContextMenu();
+  // Built-in accounts (fixed roles, internal users) are only listed.
+  const can = (kinds: PrincipalKindItem[] | undefined) => !object.system && (kinds ?? []).includes(kind);
+  const canPassword = can(actions?.password);
+  const canLock = can(actions?.lock);
+  const canDrop = can(actions?.drop);
+  const canPrivileges = can(actions?.privileges);
+  const any = canPassword || canLock || canPrivileges || canDrop;
+  const act = (action: "password" | "lock" | "privileges" | "drop") => {
+    setMenu(null);
+    onAct({ action, target: { kind, name: object.name } });
+  };
+  return (
+    <div className="node">
+      <div
+        className="row leaf-row"
+        title={object.detail ?? ""}
+        tabIndex={any ? 0 : undefined}
+        onKeyDown={(e) => {
+          if (canDrop && isDropKey(e)) act("drop");
+          else if (any && (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey))) {
+            e.preventDefault();
+            const box = e.currentTarget.getBoundingClientRect();
+            setMenu({ x: box.left + 24, y: box.bottom });
+          }
+        }}
+        onContextMenu={(e) => {
+          if (!any) return;
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        <span className="label">{object.name}</span>
+        {object.detail && <span className="muted small">{object.detail}</span>}
+      </div>
+      {menu && any && (
+        <ObjectMenu at={menu}>
+          {canPassword && <button role="menuitem" onClick={() => act("password")}>{t("accounts.passwordMenu")}</button>}
+          {canLock && <button role="menuitem" onClick={() => act("lock")}>{t("accounts.lockMenu")}</button>}
+          {canPrivileges && <button role="menuitem" onClick={() => act("privileges")}>{t("privileges.menu")}</button>}
+          {canDrop && <DropMenuItem onClick={() => act("drop")} />}
+        </ObjectMenu>
+      )}
+    </div>
+  );
+}
+
 /** A folder of the explorer, closed until clicked, with how many items it holds. */
 function Folder({
   label,
@@ -964,7 +1059,7 @@ function Folder({
         <span className="muted small">{count.toLocaleString(i18n.language)}</span>
       </div>
       {menu && (onConfigureFilter || create) && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           {create && (
             <button
               role="menuitem"
@@ -987,7 +1082,7 @@ function Folder({
               {t("configureFilter")}
             </button>
           )}
-        </div>
+        </ObjectMenu>
       )}
       {open && <div className="children">{children}</div>}
     </div>
@@ -1014,6 +1109,16 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   const [folderError, setFolderError] = useState<string | null>(null);
   /** What the last paste of a connection (Ctrl+V) went wrong with. */
   const [pasteError, setPasteError] = useState<string | null>(null);
+  const tree = useRef<HTMLDivElement>(null);
+  // Ctrl+V with the focus on the explorer (a row, not a text field such as the filter): a
+  // connection from the clipboard, checked by the core as untrusted text. Taken before the event
+  // reaches its target, which on WebKitGTK can be the SQL editor that last held the selection.
+  useFocusedPaste((e, focused) => {
+    if (!focused || !tree.current?.contains(focused) || isTextField(focused) || topDialog()) return false;
+    setPasteError(null);
+    pasteConnection(e.clipboardData?.getData("text/plain") ?? "").catch((err: unknown) => setPasteError(errorText(err)));
+    return true;
+  });
   const filter = useApp((s) => s.explorerFilter);
   const openConnections = useApp((s) => s.openConnections);
   const filterBox = useRef<HTMLInputElement>(null);
@@ -1053,8 +1158,6 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
   }, [revealConnection?.nonce, connections]);
   const explorer = usePreferences((s) => s.explorer);
   useEffect(() => setClosedFilteredFolders(new Set()), [filterText, activeTags.join("\u0000"), explorer.connectedOnly]);
-  // A preference being saved takes no other change until it is done (setExplorer ignores it).
-  const savingPreference = usePreferences((s) => s.saving !== null);
   const explorerConnected = useApp((s) => s.explorerConnected);
   const tabs = useApp((s) => s.tabs);
   const tabConnected = tabs.filter((tab) => tab.status === "connected").map((tab) => tab.connectionId);
@@ -1162,18 +1265,24 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     drag?.dragging && drag.personal === personal && drag.target === folder ? " drop-target" : "";
 
   async function openFolder() {
-    const path = await open({ directory: true, title: t("openFolderTitle") });
-    if (typeof path !== "string") return;
+    const path = await chooseFolder(t("openFolderTitle"), workspaceParent());
+    if (!path) return;
     const app = useApp.getState();
     // A connection ID can refer to a different server in the next folder: the tabs on screen
     // are kept under this folder and the next folder's own tabs come back (ADR-036).
-    if (
-      app.tabs.some((t) => t.status === "connecting" || t.run?.running) ||
-      app.historySaving.length > 0
-    )
-      return;
-    // Changing folder closes every tab's session (ADR-031): ask first if a transaction is open.
-    if (!(await confirmOpenTransactions(app.tabs.map((t) => t.id), "disconnect"))) return;
+    if (app.tabs.some((t) => t.status === "connecting") || app.historySaving.length > 0) return;
+    // Changing folder closes every tab's session (ADR-031): ask first, as before closing tabs,
+    // about open transactions, running queries and row edits not applied (SDB-140).
+    let open: string[] = [];
+    try {
+      open = await call(commands.sessionsToConfirm(app.tabs.map((t) => t.id)));
+    } catch {
+      // The sessions are gone: nothing is left to roll back.
+    }
+    if (!(await confirmLeaving("folder", open))) return;
+    // Saving started while the question was open, or a tab began connecting: nothing changes.
+    const now = useApp.getState();
+    if (now.tabs.some((t) => t.savingEdits || t.status === "connecting") || now.historySaving.length > 0) return;
     app.setWorkspaceChanging(true);
     setFolderError(null);
     // Tabs belong to the folder they were opened in (ADR-036): the old folder's are written
@@ -1182,16 +1291,19 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     detachTabs();
     try {
       const sessions = [
-        ...app.tabs.map((t) => t.id),
-        ...app.connections.map((c) => `meta:${c.id}`),
+        ...now.tabs.map((t) => t.id),
+        ...now.connections.map((c) => `meta:${c.id}`),
       ];
+      // The core stops the runs the user agreed to cancel, then the sessions close.
+      const running = now.tabs.filter((t) => t.run?.running).map((t) => t.id);
       app.clearTabConnections();
       app.setConnections([]);
+      await Promise.all(running.map((id) => call(commands.cancel(id)).catch(() => undefined)));
       await Promise.all(
         sessions.map((session) => call(commands.disconnect(session))),
       );
       await Promise.all(
-        app.tabs.flatMap((tab) =>
+        now.tabs.flatMap((tab) =>
           (tab.run?.results ?? []).map((r) =>
             call(commands.releaseResult(r.id)),
           ),
@@ -1232,6 +1344,19 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
     folder.items.push(c);
   }
 
+  const allFolderKeys = (folder: ConnectionFolder): string[] => [
+    connectionFolderKey(folder.personal, folder.path),
+    ...[...folder.children.values()].flatMap(allFolderKeys),
+  ];
+  const folderKeys = [
+    ...[...repository.children.values()].flatMap(allFolderKeys),
+    ...(personal.items.length > 0 || personal.children.size > 0 ? allFolderKeys(personal) : []),
+  ];
+  const collapseFolders = () => {
+    const set = filtering || explorer.connectedOnly ? setClosedFilteredFolders : setClosedFolders;
+    set(new Set(folderKeys));
+  };
+
   const connectionRows = (items: ConnectionItem[]) => items.map((c) => (
     <ConnectionNode
       key={`${workspace?.workspace ?? ""}:${c.id}:${c.engine}`}
@@ -1261,6 +1386,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
               return next;
             })}
           >
+            <svg className="connection-folder-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true"><path d="M1.8 4.1h4l1.3 1.4h7v6.8H1.8z" strokeLinejoin="round" /></svg>
             <span
               className={`group-segment${dropClass(folder.personal, folder.path)}`}
               data-drop-folder={folder.path}
@@ -1299,10 +1425,16 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         </div>
         <div className="sidebar-tools">
           <span className="sidebar-section-title">{t("connections")}</span>
+          <button className="ghost icon-button" type="button" aria-label={t("collapseAllFolders")} title={t("collapseAllFolders")} onClick={collapseFolders} disabled={folderKeys.length === 0}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" aria-hidden="true"><rect x="3.5" y="4.5" width="9" height="9" rx="1" /><path d="M6 9h4M2 10.5V3a1 1 0 0 1 1-1h7.5" strokeLinecap="round" /></svg>
+          </button>
           <button
             className={`ghost icon-button${explorer.linkWithEditor ? " active" : ""}`}
-            onClick={() => void usePreferences.getState().setExplorer({ ...explorer, linkWithEditor: !explorer.linkWithEditor })}
-            disabled={savingPreference}
+            onClick={() => {
+              // From the store's own state: a second click before the next render toggles back.
+              const { explorer: now, setExplorer } = usePreferences.getState();
+              void setExplorer({ ...now, linkWithEditor: !now.linkWithEditor });
+            }}
             aria-label={t("linkWithEditor")}
             aria-pressed={explorer.linkWithEditor}
             title={t("linkWithEditorHint")}
@@ -1311,7 +1443,10 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
           </button>
           <button
             className={`ghost icon-button${explorer.connectedOnly ? " active" : ""}`}
-            onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: !explorer.connectedOnly })}
+            onClick={() => {
+              const { explorer: now, setExplorer } = usePreferences.getState();
+              void setExplorer({ ...now, connectedOnly: !now.connectedOnly });
+            }}
             aria-label={t("connectedOnly")}
             aria-pressed={explorer.connectedOnly}
             title={t("connectedOnly")}
@@ -1430,14 +1565,8 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         </div>
       )}
       <div
+        ref={tree}
         className={`tree${drag?.dragging ? " drag-active" : ""}`}
-        onPaste={(e) => {
-          // Ctrl+V in the explorer (not in a text field): a connection from the clipboard.
-          if (pasteIsForText(e.target)) return;
-          e.preventDefault();
-          setPasteError(null);
-          pasteConnection(e.clipboardData.getData("text/plain")).catch((err: unknown) => setPasteError(errorText(err)));
-        }}
       >
         <BookmarksSection />
         {connections.length > 0 && filtering && !connections.some(shown) && (
@@ -1446,7 +1575,7 @@ export function Sidebar({ hidden = false }: { hidden?: boolean }) {
         {connections.length > 0 && !filtering && explorer.connectedOnly && !connections.some(shown) && (
           <div className="empty small">
             {t("noneConnected")}{" "}
-            <button className="link" onClick={() => void usePreferences.getState().setExplorer({ ...explorer, connectedOnly: false })}>
+            <button className="link" onClick={() => void usePreferences.getState().setExplorer({ ...usePreferences.getState().explorer, connectedOnly: false })}>
               {t("showAllConnections")}
             </button>
           </div>
@@ -1490,6 +1619,7 @@ function ConnectionNode({
   dropClass: string;
 }) {
   const { t } = useTranslation("shell");
+  const marksRef = useFittingMarks();
   /** The outcome of copying this connection, or of an action of its menus, under its row. */
   const [rowNote, setRowNote] = useState<{ error: boolean; text: string } | null>(null);
   useEffect(() => {
@@ -1539,6 +1669,9 @@ function ConnectionNode({
   }
   const session = `meta:${connection.id}`;
   const actions = useObjectActions(session, schemas !== null);
+  const principalActions = usePrincipalActions(session, schemas !== null);
+  /** The account dialog that is open (ADR-048). */
+  const [account, setAccount] = useState<AccountRequest | null>(null);
   useEffect(() => {
     const refresh = (event: Event) => {
       if ((event as CustomEvent<string>).detail === connection.id && schemas) void refreshAll();
@@ -1733,9 +1866,10 @@ function ConnectionNode({
           {connection.name}
         </span>
         {(kind || connection.tunnel || connection.tags.length > 0) && (
-          // In order of importance, each shown whole or not at all: the type, SSH, then a few
-          // quiet tags (a click filters the explorer by one). The name's tooltip has them all.
-          <span className="connection-marks">
+          // In order of importance: the type (its dot always stays), SSH, then a few quiet tags (a
+          // click filters the explorer by one), each shown whole or not at all where it fits
+          // (connectionMarks.ts). The name's tooltip has them all.
+          <span ref={marksRef} className="connection-marks">
             {kind && <TypeBadge type={kind} small />}
             {connection.tunnel && (
               <span
@@ -1786,6 +1920,14 @@ function ConnectionNode({
             createSchema: actions?.create.includes("schema")
               ? () => openCreate(connection.id, session, "schema", "").catch((e: unknown) => setError(errorText(e)))
               : undefined,
+            backup: backupFamily(connection.engine)
+              ? () => openBackup(connection, session, "backup")
+              : undefined,
+            restore: (() => {
+              const family = backupFamily(connection.engine);
+              return family && familyRestores(family) ? () => openBackup(connection, session, "restore") : undefined;
+            })(),
+            runFile: () => useRunFile.getState().open({ session, connectionName: connection.name }),
             duplicate,
             copy,
             paste: () => {
@@ -1804,23 +1946,53 @@ function ConnectionNode({
           {busy && <div className="muted small">{t(schemas ? "refreshing" : "connecting")}</div>}
           {error && <div className="error small">{error}</div>}
           {!foldersFirst && schemaNodes}
-          {SERVER_FOLDERS.map((folder) => {
+          {schemas && SERVER_FOLDERS.map((folder) => {
             const items = shownServerObjects.filter((o) => serverFolder(o.kind) === folder);
+            const kind = folderAccountKind(folder);
+            // A folder of accounts the engine can create shows even empty (the session may
+            // read none), unless the quick filter is looking for something else.
+            const creatable = kind !== null && (principalActions?.create ?? []).includes(kind);
             return (
-              items.length > 0 && (
-                <Folder key={folder} label={t(`folders.${folder}`)} count={items.length} forceOpen={inner !== ""}>
-                  {items.map((o) => (
-                    <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
-                      <span className="label">{o.name}</span>
-                      {o.detail && <span className="muted small">{o.detail}</span>}
-                    </div>
-                  ))}
+              (items.length > 0 || (creatable && inner === "")) && (
+                <Folder
+                  key={folder}
+                  label={t(`folders.${folder}`)}
+                  count={items.length}
+                  forceOpen={inner !== ""}
+                  create={creatable && kind ? { label: t(`accounts.newMenu.${kind}`), run: () => setAccount({ action: "create", kind }) } : undefined}
+                >
+                  {items.map((o) =>
+                    kind ? (
+                      <AccountRow key={`${o.kind}:${o.name}`} object={o} kind={kind} actions={principalActions} onAct={setAccount} />
+                    ) : (
+                      <div key={`${o.kind}:${o.name}`} className="row leaf-row" title={o.detail ?? ""}>
+                        <span className="label">{o.name}</span>
+                        {o.detail && <span className="muted small">{o.detail}</span>}
+                      </div>
+                    ),
+                  )}
                 </Folder>
               )
             );
           })}
           {foldersFirst && schemaNodes}
         </div>
+      )}
+      {account?.action === "privileges" && (
+        <PrivilegesDialog session={session} connectionId={connection.id} target={account.target} onClose={() => setAccount(null)} />
+      )}
+      {account && account.action !== "privileges" && (
+        <AccountDialog
+          session={session}
+          connectionId={connection.id}
+          request={account}
+          logins={serverObjects.filter((o) => o.kind === "login" && !o.system).map((o) => o.name)}
+          onClose={() => setAccount(null)}
+          onDone={() => {
+            setAccount(null);
+            void refreshAll();
+          }}
+        />
       )}
       {editingFilters && (
         <ExplorerFilterDialog
@@ -1876,6 +2048,12 @@ function SchemaNode({
   const sort = useSortByName();
   const actions = useObjectActions(session);
   const [dropping, setDropping] = useState(false);
+  /** The create table form (ADR-047); other kinds open their statement in a tab. */
+  const [creatingTable, setCreatingTable] = useState(false);
+  const create = (kind: CreateKindItem) => {
+    if (kind === "table") setCreatingTable(true);
+    else openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
+  };
   /** The editor tab "Set as the editor's schema" applies to: the active query tab, connected to
    *  this connection and idle. */
   const editorTab = useApp((s) => {
@@ -2024,7 +2202,7 @@ function SchemaNode({
         )}
       </div>
       {menu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <CopyMenuItems
             session={session}
             paths={[{ schema: "", names: [schema] }]}
@@ -2075,6 +2253,15 @@ function SchemaNode({
           >
             {t("importNewTable")}
           </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              openDiagram(connectionId, { kind: "schema", schema, filter: objectFilter }, session);
+            }}
+          >
+            {t("diagram.menuSchema")}
+          </button>
           {actions && actions.create.some((kind) => kind !== "schema") && <hr />}
           {actions?.create
             .filter((kind) => kind !== "schema")
@@ -2084,7 +2271,7 @@ function SchemaNode({
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
-                  openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
+                  create(kind);
                 }}
               >
                 {t(`create.${kind}`)}
@@ -2101,7 +2288,19 @@ function SchemaNode({
               />
             </>
           )}
-        </div>
+        </ObjectMenu>
+      )}
+      {creatingTable && (
+        <CreateTableDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          onClose={() => setCreatingTable(false)}
+          onDone={() => {
+            setCreatingTable(false);
+            refresh();
+          }}
+        />
       )}
       {dropping && (
         <DropDialog
@@ -2146,9 +2345,7 @@ function SchemaNode({
                       return kind && actions?.create.includes(kind)
                         ? {
                             label: t(`create.${kind}`),
-                            run: () => {
-                              openCreate(connectionId, session, kind, schema).catch((e: unknown) => setError(errorText(e)));
-                            },
+                            run: () => create(kind),
                           }
                         : undefined;
                     })()}
@@ -2314,6 +2511,16 @@ function ObjectNode({
       setError(errorText(e));
     }
   }
+  /** "Edit source": the core writes the view as the statement that replaces it (ADR-047). */
+  async function openSource() {
+    setMenu(null);
+    try {
+      setError(null);
+      openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "view", schema: object.schema, name: object.name })));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
   /** "Generate DDL": the driver writes the CREATE statement. */
   async function openDdl() {
     setMenu(null);
@@ -2439,16 +2646,7 @@ function ObjectNode({
         )}
       </div>
       {menu && (
-        <div
-          className="grid-menu object-menu explorer-relation-menu"
-          role="menu"
-          style={{
-            position: "fixed",
-            left: Math.max(8, Math.min(menu.x, window.innerWidth - 300)),
-            top: Math.max(8, Math.min(menu.y, window.innerHeight - 250)),
-            maxHeight: Math.min(window.innerHeight - Math.max(8, Math.min(menu.y, window.innerHeight - 250)) - 8, 480),
-          }}
-        >
+        <ObjectMenu at={menu} className="explorer-relation-menu">
           <button role="menuitem" onClick={preview}>
             {t("sql.preview")}
           </button>
@@ -2479,6 +2677,25 @@ function ObjectNode({
               }}
             >
               {t("importData")}
+            </button>
+          )}
+          {!view && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenu(null);
+                const tables = chosen && selection.length > 1 ? selection.map((o) => ({ schema: o.schema, name: o.name })) : null;
+                openDiagram(connectionId, tables ? { kind: "tables", tables } : { kind: "focus", schema: object.schema, table: object.name }, session);
+              }}
+            >
+              {chosen && selection.length > 1
+                ? t("diagram.menuTables", { count: selection.length, formattedCount: selection.length.toLocaleString(i18n.language) })
+                : t("diagram.menuFocus")}
+            </button>
+          )}
+          {object.kind === "view" && (
+            <button role="menuitem" onClick={() => void openSource()}>
+              {t("editSource")}
             </button>
           )}
           <button role="menuitem" onClick={refresh}>
@@ -2536,7 +2753,7 @@ function ObjectNode({
               </button>
             ))}
           </GenerateMenu>
-        </div>
+        </ObjectMenu>
       )}
       {error && (
         <p className="error small" role="alert">
@@ -2728,6 +2945,8 @@ function ColumnRow({
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
+  /** The structure form on this column, or on the chosen ones (ADR-047). */
+  const [editing, setEditing] = useState<string[] | null>(null);
   const actions = useObjectActions(session);
   const paths = [{ schema, names: [table, column.name] }];
   const chosen = chosenColumns.includes(column.name);
@@ -2770,7 +2989,7 @@ function ColumnRow({
         </span>
       </div>
       {menu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <CopyMenuItems session={session} paths={paths} close={() => setMenu(null)} onError={setError} />
           <button
             role="menuitem"
@@ -2781,6 +3000,15 @@ function ColumnRow({
             }}
           >
             {t("objectChange.renameMenu")}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              setEditing(indexColumns);
+            }}
+          >
+            {t(indexColumns.length > 1 ? "structure.editSelected" : "structure.editColumn", { count: indexColumns.length })}
           </button>
           <DropMenuItem
             onClick={() => {
@@ -2797,7 +3025,21 @@ function ColumnRow({
                 {t(`newIndex.${kind}`, { columns: indexColumns.join(", ") })}
               </button>
             ))}
-        </div>
+        </ObjectMenu>
+      )}
+      {editing && (
+        <StructureDialog
+          session={session}
+          connectionId={connectionId}
+          schema={schema}
+          table={table}
+          columns={editing}
+          onClose={() => setEditing(null)}
+          onDone={() => {
+            setEditing(null);
+            onTableChanged();
+          }}
+        />
       )}
       {renaming && (
         <ObjectChangeDialog
@@ -2903,7 +3145,7 @@ function IndexNode({
         )}
       </div>
       {menu && (
-        <div className="grid-menu object-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }}>
+        <ObjectMenu at={menu}>
           <button role="menuitem" onClick={openDefinition}>
             {t("openDefinition")}
           </button>
@@ -2915,7 +3157,7 @@ function IndexNode({
               setDropping(true);
             }}
           />
-        </div>
+        </ObjectMenu>
       )}
       {dropping && (
         <DropDialog
@@ -2960,6 +3202,7 @@ function SchemaObjectNode({
   const [menu, setMenu] = useContextMenu();
   const [error, setError] = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);
+  const actions = useObjectActions(session);
   const { row, revealed } = useRevealedRow(
     (r) => r.connectionId === connectionId && r.schema === object.schema && r.name === object.name,
   );
@@ -2982,13 +3225,23 @@ function SchemaObjectNode({
       setError(errorText(e));
     }
   }
-  /** "Generate CALL": the procedure's call, written by the driver, in a new tab. */
-  async function openCall() {
+  /** "Generate call": the routine's call, written by the driver, in a new tab; "Run…" also runs
+   *  it there, so the editor asks its parameters and its usual barriers apply (ADR-047). */
+  async function openCall(run = false) {
     setMenu(null);
     setError(null);
     try {
-      const tab = addTab(connectionId, await call(commands.procedureCall(session, object)));
-      connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+      openSqlTab(connectionId, session, object.schema, await call(commands.procedureCall(session, object)), run);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  /** "Edit source": the core writes the routine as the statement that replaces it (ADR-047). */
+  async function openSource() {
+    setMenu(null);
+    setError(null);
+    try {
+      openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "routine", object })));
     } catch (e) {
       setError(errorText(e));
     }
@@ -3043,15 +3296,21 @@ function SchemaObjectNode({
         {detail && <span className="muted small">{detail}</span>}
       </div>
       {menu && (
-        <div
-          className="grid-menu object-menu"
-          role="menu"
-          style={{ position: "fixed", left: menu.x, top: menu.y }}
-        >
+        <ObjectMenu at={menu}>
           <button role="menuitem" onClick={() => void openDefinition()}>
             {t("openDefinition")}
           </button>
-          {object.kind === "procedure" && (
+          {(object.kind === "procedure" || object.kind === "function") && actions?.routineSource && (
+            <button role="menuitem" onClick={() => void openSource()}>
+              {t("editSource")}
+            </button>
+          )}
+          {(object.kind === "procedure" || object.kind === "function") && actions?.routineCalls && (
+            <button role="menuitem" onClick={() => void openCall(true)}>
+              {t("runRoutine")}
+            </button>
+          )}
+          {(object.kind === "procedure" || (object.kind === "function" && actions?.routineCalls)) && (
             <button role="menuitem" onClick={() => void openCall()}>
               {t("generateCall")}
             </button>
@@ -3071,7 +3330,7 @@ function SchemaObjectNode({
             }}
           />
           <FilterMenuItems kind="objects" names={[object.name]} onFilterName={onFilterName} close={() => setMenu(null)} />
-        </div>
+        </ObjectMenu>
       )}
       {dropping && (
         <DropDialog

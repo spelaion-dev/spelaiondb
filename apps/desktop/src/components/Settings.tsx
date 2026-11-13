@@ -2,19 +2,20 @@
 // behind shows a new theme at once). Per-connection options (such as saving query history)
 // live with each connection in the sidebar, not here.
 
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
 import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
 import { getVersion } from "@tauri-apps/api/app";
 import { useApp, useDialogs } from "../store";
-import { useUpdate } from "../update";
+import { manualUpdateKey, useUpdate } from "../update";
 import { call, commands, type NamePatternPreview, type NetworkProfileItem } from "../api";
 import { ConnectionTypesSettings } from "./ConnectionTypesSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
+import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "history" | "network" | "updates" | "scripts" | "editor";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "history", "network", "updates", "scripts", "editor"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "scripts" | "editor" | "map";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "scripts", "editor", "map"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -63,11 +64,13 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "explorer" && <ExplorerSettings />}
         {category === "connections" && <ConnectionSettings />}
         {category === "types" && <ConnectionTypesSettings />}
+        {category === "masking" && <MaskingSettings />}
         {category === "history" && <HistorySettings />}
         {category === "network" && <NetworkSettings />}
         {category === "updates" && <UpdateSettings />}
         {category === "scripts" && <ScriptSettings />}
         {category === "editor" && <EditorSettings />}
+        {category === "map" && <MapSettings />}
       </section>
     </div>
   );
@@ -114,7 +117,8 @@ function SaveError({ setting }: { setting: PreferenceSetting }) {
 function AppearanceSettings() {
   const { t } = useTranslation("settings");
   const theme = usePreferences((s) => s.theme);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  // Only while loading: a change made while another saves waits for it (SDB-83).
+  const busy = usePreferences((s) => s.loading);
   const setTheme = usePreferences((s) => s.setTheme);
   return (
     <>
@@ -144,7 +148,7 @@ function EditorSettings() {
   const preferences = usePreferences((s) => s.editor);
   const setEditor = usePreferences((s) => s.setEditor);
   const reconnect = usePreferences((s) => s.reconnectOnStart);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setReconnect = usePreferences((s) => s.setReconnectOnStart);
   return (
     <>
@@ -196,7 +200,7 @@ const MAX_CONFIRM_DELAY = 10;
 function ScriptSettings() {
   const { t } = useTranslation("settings");
   const script = usePreferences((s) => s.script);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setScript = usePreferences((s) => s.setScript);
   const [after, setAfter] = useState(String(script.notifyAfterSeconds));
   useEffect(() => setAfter(String(script.notifyAfterSeconds)), [script.notifyAfterSeconds]);
@@ -272,11 +276,72 @@ function ScriptSettings() {
   );
 }
 
+/** The map's background (ADR-045): tiles from a server the user names, off by default. The
+ *  server's fields are saved when they lose focus and the core accepts them (all three empty
+ *  removes the server); tiles can be turned on only once a server is saved. */
+function MapSettings() {
+  const { t } = useTranslation("settings");
+  const map = usePreferences((s) => s.map);
+  const busy = usePreferences((s) => s.loading);
+  const setMap = usePreferences((s) => s.setMap);
+  const [draft, setDraft] = useState({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution });
+  useEffect(() => setDraft({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution }), [map.tileName, map.tileUrl, map.tileAttribution]);
+  const saved = map.tileUrl !== "";
+  const changed = draft.tileName !== map.tileName || draft.tileUrl !== map.tileUrl || draft.tileAttribution !== map.tileAttribution;
+  const saveServer = () => {
+    if (!changed) return;
+    const empty = draft.tileName.trim() === "" && draft.tileUrl === "" && draft.tileAttribution === "";
+    // A half-typed server waits for its other fields; the core checks it once name and address are there.
+    if (!empty && (draft.tileName.trim() === "" || draft.tileUrl === "")) return;
+    void setMap({ ...draft, tiles: empty ? false : map.tiles });
+  };
+  const field = (key: "tileName" | "tileUrl" | "tileAttribution", label: string, hint?: string, placeholder?: string) => (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        name={key}
+        value={draft[key]}
+        placeholder={placeholder}
+        spellCheck={false}
+        onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+        onBlur={saveServer}
+        onKeyDown={(e) => e.key === "Enter" && saveServer()}
+      />
+      {hint && <span className="muted small">{hint}</span>}
+    </label>
+  );
+  return (
+    <>
+      <fieldset className="settings-choice" disabled={busy}>
+        <legend>{t("map.background")}</legend>
+        <label className="check">
+          <input type="checkbox" name="mapTiles" checked={map.tiles} disabled={!saved} onChange={(e) => void setMap({ ...map, tiles: e.target.checked }, true)} />
+          {t("map.tiles")}
+        </label>
+      </fieldset>
+      <p className="muted small">{t("map.tilesHint")}</p>
+      {!saved && <p className="muted small">{t("map.tilesNeedServer")}</p>}
+      <fieldset className="settings-choice">
+        <legend>{t("map.server")}</legend>
+        {field("tileName", t("map.name"))}
+        {field("tileUrl", t("map.url"), t("map.urlHint"), "https://tiles.example.com/{z}/{x}/{y}.png")}
+        {field("tileAttribution", t("map.attribution"), t("map.attributionHint"))}
+        {saved && (
+          <div>
+            <button className="small" disabled={busy} onClick={() => void setMap({ tiles: false, tileName: "", tileUrl: "", tileAttribution: "" })}>{t("map.remove")}</button>
+          </div>
+        )}
+      </fieldset>
+      <SaveError setting="map" />
+    </>
+  );
+}
+
 /** How the result grid draws its cells: zebra rows, NULL and booleans. */
 function GridSettings() {
   const { t } = useTranslation("settings");
   const grid = usePreferences((s) => s.grid);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setGrid = usePreferences((s) => s.setGrid);
   return (
     <>
@@ -304,7 +369,7 @@ function GridSettings() {
 function LanguageSettings() {
   const { t } = useTranslation("settings");
   const language = usePreferences((s) => s.language);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setLanguage = usePreferences((s) => s.setLanguage);
   return (
     <>
@@ -330,7 +395,7 @@ function LanguageSettings() {
 function ExplorerSettings() {
   const { t } = useTranslation("settings");
   const explorer = usePreferences((s) => s.explorer);
-  const busy = usePreferences((s) => s.loading || s.saving !== null);
+  const busy = usePreferences((s) => s.loading);
   const setExplorer = usePreferences((s) => s.setExplorer);
   return (
     <>
@@ -443,7 +508,9 @@ function NetworkProfiles() {
       {profiles && profiles.length > 0 && (
         <ul className="profile-list">
           {profiles.map((profile) => {
-            const route = [...(profile.proxy ? [profile.proxy] : []), ...profile.hops].join(" → ");
+            const route = profile.kubernetes
+              ? `Kubernetes: ${profile.kubernetes}`
+              : [...(profile.proxy ? [profile.proxy] : []), ...(profile.ssm ? [`AWS SSM ${profile.ssm}`] : []), ...profile.hops].join(" → ");
             return (
               <li key={`${profile.personal}:${profile.name}`} className="profile-row" aria-label={profile.name}>
                 <div className="grow">
@@ -581,61 +648,124 @@ function ConnectionSettings() {
   );
 }
 
-function PortRange() {
+/** The user's own masking patterns (ADR-051), `[masking] always` in user.toml: saved when the
+ *  box loses focus, for sessions opened from then on. The core checks every pattern. */
+function MaskingSettings() {
   const { t } = useTranslation("settings");
-  const [min, setMin] = useState("");
-  const [max, setMax] = useState("");
+  const [text, setText] = useState("");
+  const [saved, setSaved] = useState<string | null>(null);
+  const [unreadable, setUnreadable] = useState(false);
   const [status, setStatus] = useState<{ kind: "idle" | "saved" } | { kind: "error"; message: string }>({ kind: "idle" });
 
   useEffect(() => {
-    call(commands.tunnelPorts())
-      .then((range) => {
-        setMin(range ? String(range.min) : "");
-        setMax(range ? String(range.max) : "");
+    call(commands.userMasking())
+      .then((masking) => {
+        const joined = masking.patterns.join("\n");
+        setText(joined);
+        setSaved(joined);
+        setUnreadable(masking.unreadable);
       })
       .catch((e: unknown) => setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) }));
   }, []);
 
-  async function save(range: { min: number; max: number } | null) {
+  async function save() {
+    if (saved === null || text === saved) return;
     try {
-      await call(commands.setTunnelPorts(range));
-      if (!range) {
-        setMin("");
-        setMax("");
-      }
+      await call(commands.setUserMasking(text.split("\n")));
+      const masking = await call(commands.userMasking());
+      const joined = masking.patterns.join("\n");
+      setText(joined);
+      setSaved(joined);
+      setUnreadable(masking.unreadable);
       setStatus({ kind: "saved" });
     } catch (e) {
       setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) });
     }
   }
 
-  const port = (text: string) => (text.trim() === "" ? null : Math.trunc(Number(text)));
-  const typedMin = port(min);
-  const typedMax = port(max);
+  return (
+    <section aria-label={t("masking.patterns")}>
+      <p>{t("masking.intro")}</p>
+      {unreadable && <p className="banner" role="alert">{t("masking.unreadable")}</p>}
+      <label className="field">
+        <span>{t("masking.patterns")}</span>
+        <textarea
+          className="masking-patterns"
+          name="userMasking"
+          rows={5}
+          spellCheck={false}
+          value={text}
+          placeholder={t("masking.placeholder")}
+          onChange={(e) => {
+            setText(e.target.value);
+            setStatus({ kind: "idle" });
+          }}
+          onBlur={() => void save()}
+        />
+      </label>
+      {status.kind === "saved" && <p className="small" role="status">{t("masking.saved")}</p>}
+      {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
+      <p className="muted small">{t("masking.hint")}</p>
+    </section>
+  );
+}
+
+function PortRange() {
+  const { t } = useTranslation("settings");
+  const [state, dispatch] = useReducer(portRangeReducer, initialPortRange);
+  const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+  // Reads the stored range when the form opens and on Retry; only the latest read counts, and
+  // it never overwrites what was typed (portRange.ts).
+  const request = state.request;
+  useEffect(() => {
+    call(commands.tunnelPorts())
+      .then((range) => dispatch({ type: "loaded", request, range }))
+      .catch((e: unknown) => dispatch({ type: "loadFailed", request, message: errorText(e) }));
+  }, [request]);
+
+  async function save(range: PortRange | null) {
+    try {
+      await call(commands.setTunnelPorts(range));
+      dispatch({ type: "saved", range });
+    } catch (e) {
+      dispatch({ type: "saveFailed", message: errorText(e) });
+    }
+  }
+
+  const ready = portRangeReady(state);
+  const range = typedRange(state);
   return (
     <section aria-label={t("network.ports")}>
       <h3>{t("network.ports")}</h3>
       <p>{t("network.portsIntro")}</p>
+      {state.load.kind === "loading" && <p className="muted small" role="status">{t("network.loading")}</p>}
+      {state.load.kind === "failed" && (
+        <div className="form-row">
+          <p className="error small" role="alert">{t("network.loadFailed", { error: state.load.message })}</p>
+          <button className="ghost" onClick={() => dispatch({ type: "reload" })}>{t("network.retry")}</button>
+        </div>
+      )}
       <div className="form-pair">
         <label className="field port">
           <span>{t("network.portMin")}</span>
-          <input type="number" min={1} max={65535} value={min} onChange={(e) => { setMin(e.target.value); setStatus({ kind: "idle" }); }} />
+          <input type="number" min={1} max={65535} value={state.min} disabled={!ready} onChange={(e) => dispatch({ type: "typed", field: "min", value: e.target.value })} />
         </label>
         <label className="field port">
           <span>{t("network.portMax")}</span>
-          <input type="number" min={1} max={65535} value={max} onChange={(e) => { setMax(e.target.value); setStatus({ kind: "idle" }); }} />
+          <input type="number" min={1} max={65535} value={state.max} disabled={!ready} onChange={(e) => dispatch({ type: "typed", field: "max", value: e.target.value })} />
         </label>
       </div>
       <div className="form-row">
-        <button disabled={typedMin === null || typedMax === null} onClick={() => typedMin !== null && typedMax !== null && void save({ min: typedMin, max: typedMax })}>
+        <button disabled={!ready || range === null} onClick={() => range !== null && void save(range)}>
           {t("network.save")}
         </button>
-        <button className="ghost" onClick={() => void save(null)}>
+        <button className="ghost" disabled={!ready} onClick={() => void save(null)}>
           {t("network.clear")}
         </button>
       </div>
-      {status.kind === "saved" && <p className="small" role="status">{t("network.saved")}</p>}
-      {status.kind === "error" && <p className="error small" role="alert">{status.message}</p>}
+      {state.status.kind === "saved" && <p className="small" role="status">{t("network.saved")}</p>}
+      {state.status.kind === "error" && <p className="error small" role="alert">{state.status.message}</p>}
       <p className="muted small">{t("network.portsHint")}</p>
     </section>
   );
@@ -652,6 +782,8 @@ function UpdateSettings() {
   const error = useUpdate((s) => s.error);
   const check = useUpdate((s) => s.check);
   const setCheckAtStartup = useUpdate((s) => s.setCheckAtStartup);
+  const showNotes = useUpdate((s) => s.showNotes);
+  const openReleasesPage = useUpdate((s) => s.openReleasesPage);
   useEffect(() => {
     void getVersion().then(setVersion);
   }, []);
@@ -660,6 +792,7 @@ function UpdateSettings() {
     if (useUpdate.getState().status === null) void useUpdate.getState().check();
   }, []);
   const unavailable = status?.kind === "unavailable";
+  const manual = status?.kind === "available" ? manualUpdateKey(status.method) : null;
   return (
     <>
       <p>{t("updates.version", { version })}</p>
@@ -680,15 +813,21 @@ function UpdateSettings() {
             {status?.kind === "upToDate" && t("updates.upToDate")}
             {status?.kind === "available" && t("updates.available", { version: status.version })}
           </p>
+          {manual && <p className="small">{t(`updates.${manual}`)}</p>}
           {/* Installed from here too, without closing the dialog for the notice behind it. */}
           {status?.kind === "available" && (
             <div>
-              <button className="primary" disabled={installing} onClick={() => void install()}>
-                {installing ? t("updates.installing") : t("updates.install")}
-              </button>
+              <button disabled={installing} onClick={showNotes}>{t("updates.notesAction")}</button>{" "}
+              {manual ? (
+                <button className="primary" onClick={() => void openReleasesPage()}>{t("updates.openReleases")}</button>
+              ) : (
+                <button className="primary" disabled={installing} onClick={() => void install()}>
+                  {installing ? t("updates.installing") : t("updates.install")}
+                </button>
+              )}
             </div>
           )}
-          <p className="muted small">{t("updates.hint")}</p>
+          {!manual && <p className="muted small">{t("updates.hint")}</p>}
         </>
       )}
       {error && (

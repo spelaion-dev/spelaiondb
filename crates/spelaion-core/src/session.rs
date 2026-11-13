@@ -2,7 +2,7 @@
 //! In the app there is one per editor tab (ADR-004).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -13,7 +13,8 @@ use spelaion_driver_api::{
 };
 
 use crate::health::{Health, SessionHealth, Tracked};
-use crate::results::{ResultId, ResultStore};
+use crate::masking::MaskPolicy;
+use crate::results::{ResultId, ResultSource, ResultStore};
 pub use crate::script::{
     AnswerError, ErrorAnswer, ErrorTicket, OnError, ScriptOptions, ScriptStop, ScriptSummary,
 };
@@ -132,22 +133,60 @@ impl StatementError {
 }
 
 pub struct Session {
+    /// Unique in this process: a result read through this session remembers it (SDB-137).
+    id: u64,
     /// Every use goes through [`Tracked`] (ADR-028).
     connection: Arc<dyn Connection>,
     tracked: Arc<Tracked>,
     health: Health,
     keep_alive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     idle_close: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    dialect: Arc<dyn Dialect>,
+    /// The driver's dialect, as the session's `sql_mode` reads text (SDB-161).
+    dialect: Arc<crate::sql_mode::SessionDialect>,
     results: Arc<ResultStore>,
     options: ExecOptions,
     /// Held while a script runs: one at a time, and no Commit or Rollback meanwhile.
     control: Arc<tokio::sync::Mutex<()>>,
+    /// Runs the user sees as running (their scripts, the core's generated statements such as a
+    /// table's page) that hold `control` or wait for it. Commit, Rollback and the auto-commit
+    /// switch are refused as busy while there is one; the core's own short reads (the editor's
+    /// schema, a catalog) only make them wait (SDB-277).
+    user_runs: Arc<AtomicUsize>,
     transaction: Arc<tokio::sync::watch::Sender<TransactionStatus>>,
     /// The run that waits for an answer after an error ([`OnError::Ask`]), if any.
     pause: Arc<Pause>,
     /// How many times the user asked to cancel: a run that sees it change stops.
     cancels: Arc<AtomicU64>,
+    /// Cancels still on their way to the engine: a new run, or a commit, waits for them before
+    /// it sends anything (SDB-266).
+    cancel_gate: CancelGate,
+    /// The connection's column masking (ADR-051), applied to every result this session stores
+    /// from a run, and by the core's own reads that do not go through the result store.
+    masking: Arc<MaskPolicy>,
+    /// The connection is read-only (ADR-053): a run refuses, before anything is sent, a script
+    /// with a statement that is not a read, a session setting or transaction control.
+    read_only: bool,
+}
+
+/// How long Commit, Rollback or the auto-commit switch wait for one of the core's own reads
+/// that holds the session (SDB-277) before they say it is busy.
+const CORE_READ_WAIT: Duration = Duration::from_secs(10);
+
+/// A run the user sees, counted in [`Session::user_runs`] from when it asks for the session
+/// until it lets go of it (or is dropped).
+struct UserRun(Arc<AtomicUsize>);
+
+impl UserRun {
+    fn new(count: Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(count)
+    }
+}
+
+impl Drop for UserRun {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// All paths share session serialization and state observation. Only editor SQL manages
@@ -156,6 +195,9 @@ pub struct Session {
 enum RunKind {
     User,
     Generated,
+    /// A generated read whose values the core parses itself (counts, statistics): its result
+    /// is not masked, and the caller applies [`Session::masking`] to what it shows (ADR-051).
+    Parsed,
     Metadata,
 }
 
@@ -171,6 +213,31 @@ impl Drop for Session {
     }
 }
 
+/// Whether a session of this engine is always in some database that its edits depend on: SQL
+/// Server and DuckDB write `dbo.t` or `main.t`, which is another table in another database.
+/// There a database the driver cannot name is unknown (after an ambiguous `USE`), and rows
+/// read in it are never editable. PostgreSQL and SQLite sessions stay in the database they
+/// opened; a MySQL session may have no database, and its edits name the table's database.
+fn database_can_change(engine: &str) -> bool {
+    matches!(engine, "sqlserver" | "duckdb")
+}
+
+/// The database a session is in, when it is known: `Some(None)` only for an engine whose
+/// sessions cannot change database (SDB-137).
+fn known_database(
+    snapshot: Result<Option<String>, spelaion_driver_api::DriverError>,
+    can_change: bool,
+) -> Option<Option<String>> {
+    match snapshot {
+        Ok(Some(database)) => Some(Some(database)),
+        Ok(None) if !can_change => Some(None),
+        Ok(None) | Err(_) => None,
+    }
+}
+
+/// The next [`Session`]'s id: sessions are never told apart by anything the UI sends.
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
 impl Session {
     pub fn new(
         connection: Box<dyn Connection>,
@@ -180,19 +247,47 @@ impl Session {
         let tracked = Arc::new(Tracked::new(Arc::from(connection)));
         let health = tracked.health().clone();
         Self {
+            id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             connection: tracked.clone(),
             tracked,
             health,
             keep_alive: std::sync::Mutex::new(None),
             idle_close: std::sync::Mutex::new(None),
-            dialect,
+            dialect: Arc::new(crate::sql_mode::SessionDialect::new(dialect)),
             results,
             options: ExecOptions::default(),
             control: Arc::new(tokio::sync::Mutex::new(())),
+            user_runs: Arc::new(AtomicUsize::new(0)),
             transaction: Arc::new(tokio::sync::watch::Sender::new(TransactionStatus::default())),
             pause: Arc::new(Pause::default()),
             cancels: Arc::new(AtomicU64::new(0)),
+            cancel_gate: CancelGate::default(),
+            masking: Arc::new(MaskPolicy::none()),
+            read_only: false,
         }
+    }
+
+    /// Makes the session refuse every script a read-only connection does not run (ADR-053).
+    /// [`crate::open_connection`] sets it from the connection.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// The session belongs to a read-only connection (ADR-053).
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Masks these columns in every result the session stores (ADR-051).
+    pub fn with_masking(mut self, masking: MaskPolicy) -> Self {
+        self.masking = Arc::new(masking);
+        self
+    }
+
+    /// The connection's column masking (ADR-051).
+    pub fn masking(&self) -> &MaskPolicy {
+        &self.masking
     }
 
     /// Whether the connection still works. Once lost it stays lost: reconnecting means a
@@ -239,18 +334,55 @@ impl Session {
         &self.connection
     }
 
-    pub fn dialect(&self) -> &Arc<dyn Dialect> {
-        &self.dialect
+    /// The dialect the session splits with: the driver's, as the session's `sql_mode` reads
+    /// text (MySQL, MariaDB; SDB-161).
+    pub fn dialect(&self) -> Arc<dyn Dialect> {
+        self.dialect.current()
+    }
+
+    /// Reads the session's `sql_mode` again, so the next run splits as the session reads text.
+    /// [`crate::open_connection`] calls it once the session setup ran; a run calls it after a
+    /// statement that names `sql_mode`.
+    pub async fn refresh_sql_mode(&self) {
+        let _run = self.control.lock().await;
+        self.cancel_gate.settled().await;
+        self.dialect.refresh(self.connection.as_ref()).await;
     }
 
     pub fn results(&self) -> &Arc<ResultStore> {
         &self.results
     }
 
+    /// What edits are written through now (SDB-137): this session, in the database it is in
+    /// at this moment. [`crate::edit_statements`] refuses a result read elsewhere. Where the
+    /// engine can change database and the driver cannot name the current one, no stored
+    /// result matches it: nothing is written until the query runs again.
+    pub async fn edit_target(&self) -> Result<crate::EditTarget, crate::EditError> {
+        let database = self
+            .connection
+            .database_context()
+            .await
+            .map_err(|e| crate::EditError::Source(e.to_string()))?;
+        Ok(crate::EditTarget::new(
+            ResultSource {
+                session: self.id,
+                database,
+            },
+            self.dialect(),
+        ))
+    }
+
     /// Cancels the running statement, and the run that sent it: a cancelled script always
     /// stops, whatever its [`OnError`]. A run waiting for an answer after an error stops at
     /// once, without asking the engine anything.
+    ///
+    /// The engine's cancel may still be on its way when the run it was meant for has already
+    /// stopped (MySQL's `KILL QUERY` and PostgreSQL's cancel request travel over a connection
+    /// of their own, and stop whatever runs when they arrive). It is counted in flight before
+    /// the run can see it, and a new run, a commit or a rollback waits until it has returned,
+    /// so it never stops them (SDB-266). A cancel never waits for anything.
     pub async fn cancel(&self) -> Result<(), DriverError> {
+        let _in_flight = self.cancel_gate.enter();
         self.cancels.fetch_add(1, Ordering::SeqCst);
         if self.pause.resume(Resume::Cancelled) {
             return Ok(());
@@ -293,6 +425,7 @@ impl Session {
     /// auto-commit and says so ([`TransactionStatus::supported`]).
     pub async fn follow_transactions(&self, safeguards: &Safeguards) -> TransactionStatus {
         let _running = self.control.lock().await;
+        self.cancel_gate.settled().await;
         let status = match self.connection.transaction_state().await {
             Ok(state) => transaction::initial_status(safeguards, state),
             Err(_) => TransactionStatus::default(),
@@ -326,9 +459,8 @@ impl Session {
     /// user commits or rolls back first, nothing is committed by a toggle. Turning it off sends
     /// nothing until the next statement.
     pub async fn set_auto_commit(&self, on: bool) -> Result<TransactionStatus, TransactionError> {
-        let Ok(_running) = self.control.try_lock() else {
-            return Err(TransactionError::Busy);
-        };
+        let _running = self.transaction_control().await?;
+        self.cancel_gate.settled().await;
         if !self.transaction_status().supported {
             return Err(TransactionError::Unsupported);
         }
@@ -359,10 +491,29 @@ impl Session {
         self.end_transaction(false).await
     }
 
-    async fn end_transaction(&self, commit: bool) -> Result<TransactionOutcome, TransactionError> {
-        let Ok(_running) = self.control.try_lock() else {
+    /// The session for Commit, Rollback or the auto-commit switch. Refused while a run the
+    /// user sees is going or waiting: what it does is part of the transaction. The core's own
+    /// short reads that hold the session meanwhile (the editor reads the session's schema after
+    /// every run) are waited for, at most [`CORE_READ_WAIT`], instead of refusing a click that
+    /// came right after a run (SDB-277).
+    async fn transaction_control(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, ()>, TransactionError> {
+        if let Ok(guard) = self.control.try_lock() {
+            return Ok(guard);
+        }
+        if self.user_runs.load(Ordering::SeqCst) > 0 {
             return Err(TransactionError::Busy);
-        };
+        }
+        tokio::time::timeout(CORE_READ_WAIT, self.control.lock())
+            .await
+            .map_err(|_| TransactionError::Busy)
+    }
+
+    async fn end_transaction(&self, commit: bool) -> Result<TransactionOutcome, TransactionError> {
+        let _running = self.transaction_control().await?;
+        // A late cancel must not stop the COMMIT or ROLLBACK (SDB-266).
+        self.cancel_gate.settled().await;
         if !self.transaction_status().supported {
             return Err(TransactionError::Unsupported);
         }
@@ -372,7 +523,7 @@ impl Session {
             self.transaction.send_modify(|s| s.observe(before));
             return Err(TransactionError::NotOpen);
         }
-        let engine = self.dialect.name();
+        let engine = self.dialect().name();
         let sql = if commit {
             transaction::commit_statement(engine)
         } else {
@@ -429,6 +580,12 @@ impl Session {
         self.run(script, RunKind::Metadata, ScriptOptions::default())
     }
 
+    /// Runs a read the core wrote and parses itself (counts, statistics), without masking its
+    /// result (ADR-051): the caller must apply [`Session::masking`] to anything it shows.
+    pub(crate) fn run_parsed(&self, script: &str) -> BoxStream<'static, CoreEvent> {
+        self.run(script, RunKind::Parsed, ScriptOptions::default())
+    }
+
     fn run(
         &self,
         script: &str,
@@ -466,24 +623,92 @@ impl Session {
         let cancels_at_start = self.cancels.load(Ordering::SeqCst);
         let (managed, count_statement) = match kind {
             RunKind::User => (true, true),
-            RunKind::Generated => (false, true),
+            RunKind::Generated | RunKind::Parsed => (false, true),
             RunKind::Metadata => (false, false),
         };
+        // Every result that shows rows is masked (ADR-051); execution plans show the plan,
+        // not rows, and the core's own metadata and parsed reads apply it themselves.
+        let masking = match kind {
+            RunKind::User | RunKind::Generated if plan_mode.is_none() && intent.is_none() => {
+                Some(self.masking.clone())
+            }
+            RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
+        };
         let script = script.to_string();
-        let spans = self.dialect.split_statements(&script);
-        let engine = self.dialect.name();
+        let dialect = self.dialect();
+        // A read-only connection refuses the whole run before anything is sent (ADR-053),
+        // whatever the caller checked: the user's scripts, query pages and plans all come here.
+        let refusal = match kind {
+            RunKind::User if self.read_only => {
+                crate::guard::check_read_only(dialect.as_ref(), &script).err()
+            }
+            RunKind::User | RunKind::Generated | RunKind::Parsed | RunKind::Metadata => None,
+        };
+        let spans = dialect.split_statements(&script);
+        let engine = dialect.name();
+        let session_dialect = self.dialect.clone();
         let connection = self.connection.clone();
         let results = self.results.clone();
-        let options = self.options.clone();
+        // Results that show rows remember where they were read (SDB-137): edits are written
+        // only through this session, still in the same database.
+        let track_source = match kind {
+            RunKind::User | RunKind::Generated => plan_mode.is_none(),
+            RunKind::Parsed | RunKind::Metadata => false,
+        };
+        let session_id = self.id;
+        let can_change = database_can_change(engine);
+        let mut options = self.options.clone();
+        // Masking matches each column's origin too (ADR-052): ask the driver for it.
+        options.origins |= masking.is_some() && !self.masking.is_empty();
         let control = self.control.clone();
+        let user_runs = match kind {
+            RunKind::User | RunKind::Generated => Some(self.user_runs.clone()),
+            RunKind::Parsed | RunKind::Metadata => None,
+        };
         let transaction = self.transaction.clone();
         let pause = self.pause.clone();
         let cancels = self.cancels.clone();
+        let cancel_gate = self.cancel_gate.clone();
         let mut health = self.health.subscribe();
 
         Box::pin(async_stream::stream! {
-            // One script at a time; Commit, Rollback and the toggle wait for none.
-            let _running = control.lock_owned().await;
+            if let Some(refusal) = refusal {
+                let index = refusal.index;
+                let total = spans.len();
+                yield CoreEvent::StatementStarted { index, span: refusal.span };
+                yield CoreEvent::StatementFailed {
+                    index,
+                    error: StatementError {
+                        message: refusal.to_string(),
+                        code: None,
+                        detail: None,
+                        hint: None,
+                        script_offset: Some(refusal.span.start),
+                        cancelled: false,
+                        timed_out: false,
+                    },
+                };
+                yield CoreEvent::ScriptFinished {
+                    executed: 0,
+                    failed: true,
+                    summary: ScriptSummary {
+                        statements: total,
+                        failed: 1,
+                        stop: (index + 1 < total).then_some(ScriptStop::Failed { index }),
+                        ..Default::default()
+                    },
+                };
+                return;
+            }
+            // A run the user sees makes Commit, Rollback and the toggle busy from now on, while
+            // it waits for the session too (SDB-277).
+            let seen = user_runs.map(UserRun::new);
+            // One script at a time; Commit, Rollback and the toggle wait for none. Held until
+            // just before the last event (below), not until the stream is polled once more.
+            let running = control.lock_owned().await;
+            // A cancel still on its way to the engine would stop this run's first statement:
+            // nothing is sent before it has returned (SDB-266).
+            cancel_gate.settled().await;
             let cancelled = || cancels.load(Ordering::SeqCst) != cancels_at_start;
             let follow = transaction.borrow().supported;
             let mut on_error = run_options.on_error;
@@ -555,6 +780,14 @@ impl Session {
                 let mut failure = None;
                 let mut rows_affected = None;
                 let mut notices = Vec::new();
+                // The database this statement starts in (a local snapshot, no SQL), and the
+                // results it creates: they keep it only if it is still the same afterwards.
+                let source_before = if track_source {
+                    known_database(connection.database_context().await, can_change)
+                } else {
+                    None
+                };
+                let mut created: Vec<ResultId> = Vec::new();
                 let execute = async {
                     match plan_mode {
                         Some(mode) => connection.execute_plan(text, mode).await,
@@ -595,7 +828,17 @@ impl Session {
                                     if let Some(previous) = current {
                                         results.complete(previous);
                                     }
-                                    let result = results.create(schema.clone());
+                                    let (result, schema) = match &masking {
+                                        Some(policy) => results.create_masked(schema, policy),
+                                        None => (results.create(schema.clone()), schema),
+                                    };
+                                    if let Some(database) = &source_before {
+                                        results.set_source(result, Some(ResultSource {
+                                            session: session_id,
+                                            database: database.clone(),
+                                        }));
+                                    }
+                                    created.push(result);
                                     current = Some(result);
                                     yield CoreEvent::ResultStarted { index, result, schema };
                                 }
@@ -621,6 +864,17 @@ impl Session {
                                 }
                             }
                         }
+                    }
+                }
+                // The statement changed the database (a `USE` in a batch): its rows cannot be
+                // told to belong to one, so none of its results is editable.
+                if let Some(before) = &source_before
+                    && !created.is_empty()
+                    && known_database(connection.database_context().await, can_change).as_ref()
+                        != Some(before)
+                {
+                    for id in &created {
+                        results.set_source(*id, None);
                     }
                 }
                 let finished = Instant::now();
@@ -675,6 +929,11 @@ impl Session {
                             }
                         }
                     });
+                }
+                // A statement that may change the session's sql_mode: later runs split as the
+                // session now reads text (SDB-161).
+                if session_dialect.follows_sql_mode() && crate::sql_mode::may_change_sql_mode(text) {
+                    session_dialect.refresh(connection.as_ref()).await;
                 }
 
                 let Some(error) = failure else {
@@ -745,6 +1004,11 @@ impl Session {
                     }
                 }
             }
+            // The session takes the next command before anyone hears the run is over: the app
+            // hands this event to the window before it asks the stream for more, and the switch,
+            // Commit and Rollback it enables again would find the session still busy (SDB-98).
+            drop(running);
+            drop(seen);
             yield CoreEvent::ScriptFinished {
                 executed: summary.executed,
                 failed: summary.failed > 0,
@@ -803,4 +1067,185 @@ async fn run_control(
         }
     }
     Ok(notices)
+}
+
+/// How long a run waits for cancels still on their way before it goes on anyway. Each one is
+/// bounded by its engine's own connect timeout; this only keeps a cancel that never returns
+/// from holding the session.
+const CANCEL_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The cancels of a session still on their way to the engine (SDB-266).
+#[derive(Clone)]
+struct CancelGate(Arc<tokio::sync::watch::Sender<usize>>);
+
+impl Default for CancelGate {
+    fn default() -> Self {
+        Self(Arc::new(tokio::sync::watch::Sender::new(0)))
+    }
+}
+
+impl CancelGate {
+    /// Counts a cancel in flight until the guard is dropped (returned, failed or abandoned).
+    fn enter(&self) -> CancelInFlight {
+        self.0.send_modify(|n| *n += 1);
+        CancelInFlight(self.0.clone())
+    }
+
+    /// Once no cancel is in flight (or [`CANCEL_SETTLE_LIMIT`] has passed).
+    async fn settled(&self) {
+        let mut idle = self.0.subscribe();
+        let _ = tokio::time::timeout(CANCEL_SETTLE_LIMIT, idle.wait_for(|n| *n == 0)).await;
+    }
+}
+
+struct CancelInFlight(Arc<tokio::sync::watch::Sender<usize>>);
+
+impl Drop for CancelInFlight {
+    fn drop(&mut self) {
+        self.0.send_modify(|n| *n = n.saturating_sub(1));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
+
+    async fn session(driver: &dyn Driver, params: ConnectParams) -> Session {
+        let session = Session::new(
+            driver.connect(&params).await.expect("connecting"),
+            driver.dialect(),
+            Arc::new(ResultStore::new()),
+        );
+        // As an editor tab's session does (ADR-031).
+        assert!(
+            session
+                .follow_transactions(&Safeguards::default())
+                .await
+                .supported
+        );
+        session
+    }
+
+    /// SQLite and DuckDB always; the Docker servers when their variables are set.
+    async fn sessions() -> Vec<(&'static str, Session)> {
+        let memory = || ConnectParams {
+            database: ":memory:".into(),
+            ..Default::default()
+        };
+        let mut out = vec![
+            (
+                "sqlite",
+                session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+            ),
+            (
+                "duckdb",
+                session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+            ),
+        ];
+        let server = |var: &str, user: &str, password: &str, database: &str| {
+            std::env::var(var).ok().map(|address| {
+                let (host, port) = address.rsplit_once(':').expect("host:port");
+                ConnectParams {
+                    host: host.into(),
+                    port: port.parse().expect("port"),
+                    user: user.into(),
+                    password: Some(Secret::new(password)),
+                    database: database.into(),
+                    ..Default::default()
+                }
+            })
+        };
+        if let Some(params) = server("SPELAION_TEST_PG", "spelaion", "spelaion", "spelaion") {
+            out.push((
+                "postgres",
+                session(&spelaion_driver_postgres::PostgresDriver, params).await,
+            ));
+        }
+        for (name, var, driver) in [
+            (
+                "mysql",
+                "SPELAION_TEST_MYSQL",
+                spelaion_driver_mysql::MysqlDriver::mysql(),
+            ),
+            (
+                "mariadb",
+                "SPELAION_TEST_MARIADB",
+                spelaion_driver_mysql::MysqlDriver::mariadb(),
+            ),
+        ] {
+            if let Some(params) = server(var, "spelaion", "spelaion", "spelaion") {
+                out.push((name, session(&driver, params).await));
+            }
+        }
+        if let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1", "master") {
+            params.tls = TlsMode::Require;
+            out.push((
+                "sqlserver",
+                session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+            ));
+        }
+        out
+    }
+
+    /// The first event of a run: from then on it holds the session, until it is read to its end.
+    async fn holding(
+        name: &str,
+        mut run: BoxStream<'static, CoreEvent>,
+    ) -> BoxStream<'static, CoreEvent> {
+        assert!(run.next().await.is_some(), "{name}: the run sent nothing");
+        run
+    }
+
+    async fn drain(mut run: BoxStream<'static, CoreEvent>) {
+        while run.next().await.is_some() {}
+    }
+
+    /// One of the core's own reads holding the session (the editor reads its schema after every
+    /// run) does not make Commit, Rollback or the auto-commit switch fail: they wait for it. A run
+    /// the user sees still makes them busy (SDB-277).
+    #[tokio::test]
+    async fn transaction_controls_wait_for_the_cores_reads_but_not_for_a_users_run() {
+        for (name, session) in sessions().await {
+            // The switch, while a metadata read holds the session.
+            let read = holding(name, session.run_metadata("select 1")).await;
+            let (off, ()) = tokio::join!(session.set_auto_commit(false), drain(read));
+            assert!(
+                matches!(&off, Ok(status) if !status.auto_commit),
+                "{name}: {off:?}"
+            );
+
+            // In manual commit a run opens a transaction; Commit, while a parsed read holds the
+            // session, is taken too.
+            drain(session.run_script("select 1")).await;
+            if session.transaction_status().is_open() {
+                let read = holding(name, session.run_parsed("select 1")).await;
+                let (committed, ()) = tokio::join!(session.commit(), drain(read));
+                assert!(committed.is_ok(), "{name}: {:?}", committed.err());
+            }
+
+            // A run of the user's: busy, at once, whatever it is doing.
+            let run = holding(name, session.run_script("select 1")).await;
+            let on = session.set_auto_commit(true).await;
+            assert!(matches!(on, Err(TransactionError::Busy)), "{name}: {on:?}");
+            assert!(
+                matches!(session.rollback().await, Err(TransactionError::Busy)),
+                "{name}"
+            );
+            drain(run).await;
+            assert_eq!(session.user_runs.load(Ordering::SeqCst), 0, "{name}");
+
+            // And once it has ended, Rollback and the switch are taken (in manual commit that run
+            // opened a transaction: auto-commit only comes back once it is ended).
+            if session.transaction_status().is_open() {
+                let rolled_back = session.rollback().await;
+                assert!(rolled_back.is_ok(), "{name}: {:?}", rolled_back.err());
+            }
+            let on = session.set_auto_commit(true).await;
+            assert!(
+                matches!(&on, Ok(status) if status.auto_commit),
+                "{name}: {on:?}"
+            );
+        }
+    }
 }

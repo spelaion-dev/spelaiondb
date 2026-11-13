@@ -12,7 +12,7 @@ use spelaion_core::{
     CoreEvent, Engines, OpenConnection, OpenOptions, ReadLimits, ResultStore, Session, TunnelPool,
     open_connection,
 };
-use spelaion_driver_api::{ConnectParams, Secret};
+use spelaion_driver_api::{ConnectParams, ExecOptions, Secret};
 use spelaion_ssh::{KnownHosts, NonInteractive};
 
 /// The servers to test, as `(variable, engine the connection is opened as)`.
@@ -53,6 +53,7 @@ async fn open(variable: &str, engine: Engine, read_only: bool) -> Option<OpenCon
         statement_timeout: Some(Duration::from_secs(5)),
         session: Default::default(),
         mcp: Default::default(),
+        masking: Default::default(),
     };
     Some(
         open_connection(
@@ -102,6 +103,21 @@ async fn run(session: &Session, sql: &str) -> Vec<String> {
 }
 
 const SETUP: &str = "CREATE TEMPORARY TABLE plan_values (id INT PRIMARY KEY, value INT NOT NULL, KEY plan_values_value (value)); INSERT INTO plan_values VALUES (1, 10), (2, 20), (3, 30)";
+
+/// Runs `statements` straight on the driver, around the core's read-only check (ADR-053): the
+/// test's own temporary data on a read-only connection's session.
+async fn around_the_core(session: &Session, statements: &[&str]) {
+    for sql in statements {
+        let mut events = session
+            .connection()
+            .execute(sql, &ExecOptions::default())
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        while let Some(event) = events.next().await {
+            event.unwrap_or_else(|e| panic!("{sql}: {e}"));
+        }
+    }
+}
 
 fn analyzed() -> ExplainOptions {
     ExplainOptions {
@@ -288,7 +304,13 @@ async fn mysql_family_read_only_connections_get_estimated_read_plans_only() {
         };
         assert!(open.resolved.params.read_only);
         let session = &open.session;
-        run(session, SETUP).await;
+        // The core refuses the temporary table on a read-only connection, and the session is
+        // read-only in the server too (ADR-053): the test's own data goes around both, in a
+        // transaction that asks to write.
+        let mut setup = vec!["START TRANSACTION READ WRITE"];
+        setup.extend(SETUP.split("; "));
+        setup.push("COMMIT");
+        around_the_core(session, &setup).await;
         let policy = ExplainPolicy::for_connection(&open);
         let capabilities = plan::plan_capabilities(session, &policy);
         assert!(capabilities.estimated && !capabilities.analyze);

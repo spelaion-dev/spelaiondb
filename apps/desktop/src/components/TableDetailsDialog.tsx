@@ -5,12 +5,15 @@ import { connectTabFromExplorer, explorerDatabase, EXPLORER_REFRESH_EVENT, openS
 import { useApp, type Tab } from "../store";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
 import { NewTableElementDialog } from "./NewTableElementDialog";
+import { StructureDialog } from "./StructureDialog";
+import { formatBytes } from "./ServerObservation";
+import type { DroppedConstraintItem, TableStatsItem_Serialize as TableStatsItem } from "../bindings";
 
-type Row = { cells: string[]; target?: ObjectTargetItem; definition?: string; trigger?: SchemaObjectItem; column?: string; data?: { schema: string; table: string } };
+type Row = { cells: string[]; target?: ObjectTargetItem; rebuildDrop?: DroppedConstraintItem; definition?: string; trigger?: SchemaObjectItem; column?: string; data?: { schema: string; table: string } };
 
 /** Catalog data is loaded on this tab's own session, independently of the explorer. */
 export function TableDetailsView({ tab }: { tab: Tab }) {
-  const { t } = useTranslation("shell");
+  const { t, i18n } = useTranslation("shell");
   const view = tab.tableDetails!;
   const { schema, name: table, kind } = view;
   const [details, setDetails] = useState<TableDetails | null>(null);
@@ -18,12 +21,16 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
   /** The foreign keys of other tables that point to this one (the "References" tab). */
   const [references, setReferences] = useState<TableKeyItem[]>([]);
   const [actions, setActions] = useState<ObjectActionsItem | null>(null);
+  /** Size on disk, index size and row estimate from the catalog's statistics (`null`: none). */
+  const [stats, setStats] = useState<{ value: TableStatsItem | null } | { error: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [change, setChange] = useState<{ target: ObjectTargetItem; name: string; rename: boolean } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [revision, setRevision] = useState(0);
   const [creating, setCreating] = useState(false);
+  /** The structure form: columns to edit, or a constraint SQLite drops by a rebuild (ADR-047). */
+  const [editing, setEditing] = useState<{ columns?: string[]; drop?: { constraint: DroppedConstraintItem; label: string } } | null>(null);
   const [needsRefresh, setNeedsRefresh] = useState(false);
   const refresh = useCallback(() => { setNeedsRefresh(false); setRevision((value) => value + 1); }, []);
 
@@ -38,8 +45,11 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       call(commands.objectActions(tab.id)),
       kind === "triggers" ? call(commands.listSchemaObjects(tab.id, schema, null, false)) : Promise.resolve([]),
       kind === "references" ? call(commands.referencingKeys(tab.id, schema, table)) : Promise.resolve([]),
-    ]).then(([result, capabilities, objects, referencing]) => {
+      // The statistics are extra: when they cannot be read, the rest of the tab still shows.
+      call(commands.tableStats(tab.id, schema, table)).then((value) => ({ value }), (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })),
+    ]).then(([result, capabilities, objects, referencing, statistics]) => {
       if (!current) return;
+      setStats(statistics);
       setDetails(result);
       setActions(capabilities);
       setTriggers(objects.filter((object) => object.kind === "trigger" && object.detail === table));
@@ -97,11 +107,13 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
       break;
     case "constraints":
       headers = [t("tableDetails.name"), t("tableDetails.type"), t("tableDetails.columns"), t("tableDetails.definition")];
-      rows = details.constraints.map((c) => ({ cells: [text(c.name), t(`constraintKinds.${c.kind}`), text(c.columns.join(", ")), text(c.definition)], target: c.name && actions?.dropConstraints ? { kind: "constraint", schema, table, name: c.name, constraint: c.kind } : undefined }));
+      rows = details.constraints.map((c) => ({ cells: [text(c.name), t(`constraintKinds.${c.kind}`), text(c.columns.join(", ")), text(c.definition)], target: c.name && actions?.dropConstraints ? { kind: "constraint", schema, table, name: c.name, constraint: c.kind } : undefined,
+        rebuildDrop: c.name && c.kind === "unique" && actions?.rebuildDrops ? { kind: "constraint", name: c.name } : undefined }));
       break;
     case "foreignKeys":
       headers = [t("tableDetails.name"), t("tableDetails.columns"), t("tableDetails.referencedTable"), t("tableDetails.referencedColumns")];
-      rows = details.foreignKeys.map((fk) => ({ cells: [text(fk.name), text(fk.columns.join(", ")), `${fk.referencedSchema}.${fk.referencedTable}`, text(fk.referencedColumns.join(", "))], target: actions?.dropConstraints ? { kind: "foreignKey", schema, table, name: fk.name } : undefined }));
+      rows = details.foreignKeys.map((fk) => ({ cells: [text(fk.name), text(fk.columns.join(", ")), `${fk.referencedSchema}.${fk.referencedTable}`, text(fk.referencedColumns.join(", "))], target: actions?.dropConstraints ? { kind: "foreignKey", schema, table, name: fk.name } : undefined,
+        rebuildDrop: actions?.rebuildDrops ? { kind: "foreignKey", name: fk.name } : undefined }));
       break;
     case "references":
       headers = [t("tableDetails.name"), t("tableDetails.referencingTable"), t("tableDetails.columns"), t("tableDetails.referencedColumns")];
@@ -123,11 +135,21 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
   return (
     <section className="table-details-view" aria-label={t("tableDetails.title", { section: title, table })}>
       <div className="table-details-heading">
-        <div><p className="table-details-path">{schema} / {table}</p><h2>{title}</h2></div>
+        <div><p className="table-details-path">{schema} / {table}</p><h2>{title}</h2>
+          {stats && "value" in stats && stats.value && <dl className="table-stats" aria-label={t("tableStats.title")}>
+            {stats.value.totalBytes !== null && <div><dt>{t("tableStats.total")}</dt><dd>{formatBytes(stats.value.totalBytes, i18n.language)}</dd></div>}
+            {stats.value.tableBytes !== null && <div><dt>{t("tableStats.table")}</dt><dd>{formatBytes(stats.value.tableBytes, i18n.language)}</dd></div>}
+            {stats.value.indexBytes !== null && <div><dt>{t("tableStats.indexes")}</dt><dd>{formatBytes(stats.value.indexBytes, i18n.language)}</dd></div>}
+            {stats.value.rowEstimate !== null && <div><dt>{t("tableStats.rows")}</dt><dd title={t("tableStats.estimateHint")}>{t("tableStats.rowsValue", { rows: new Intl.NumberFormat(i18n.language).format(stats.value.rowEstimate) })}</dd></div>}
+          </dl>}
+          {stats && "error" in stats && <p className="muted small">{t("tableStats.failed", { detail: stats.error })}</p>}
+        </div>
         <div className="table-details-actions">
           <span className="table-details-count">{t("tableDetails.count", { count: rows.length })}</span>
           {creates && <button type="button" className="primary" disabled={tab.status !== "connected" || loading || !details || !canCreate}
             title={!canCreate ? t("newTableElement.unsupported") : undefined} onClick={() => setCreating(true)}>{t("newTableElement.add")}</button>}
+          {kind === "columns" && <button type="button" disabled={tab.status !== "connected" || loading || !details}
+            onClick={() => setEditing({ columns: selected.length > 0 ? selected : undefined })}>{t(selected.length > 0 ? "structure.editSelected" : "structure.editColumns", { count: selected.length })}</button>}
           <button type="button" disabled={tab.status !== "connected" || loading} onClick={refresh}>{t("refresh")}</button>
         </div>
       </div>
@@ -157,6 +179,7 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
                     {row.data && tab.connectionId && <button type="button" className="ghost" onClick={() => tab.connectionId && row.data && openTableData(tab.connectionId, tab.id, row.data.schema, row.data.table)}>{t("tableDetails.openData")}</button>}
                     {row.column && row.target && <button type="button" className="ghost" onClick={() => setChange({ target: row.target!, name: row.column!, rename: true })}>{t("objectChange.renameMenu")}</button>}
                     {row.target && <button type="button" className="ghost table-action-drop" onClick={() => setChange({ target: row.target!, name: row.cells[0] ?? "", rename: false })}>{t("objectChange.dropMenu")}</button>}
+                    {!row.target && row.rebuildDrop && <button type="button" className="ghost table-action-drop" onClick={() => setEditing({ drop: { constraint: row.rebuildDrop!, label: row.cells[0] ?? "" } })}>{t("objectChange.dropMenu")}</button>}
                   </div></td>
                 </tr>)}</tbody>
               </table>
@@ -172,6 +195,9 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
         change={({ newName, cascade }) => change.rename ? { action: "rename", target: change.target, newName } : { action: "drop", target: change.target, cascade }}
         onClose={() => setChange(null)} onDone={() => { setChange(null); refresh(); window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: tab.connectionId })); }}
       />}
+      {editing && tab.connectionId && <StructureDialog session={tab.id} connectionId={tab.connectionId} schema={schema} table={table}
+        columns={editing.columns} drop={editing.drop} onClose={() => setEditing(null)}
+        onDone={() => { setEditing(null); refresh(); window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: tab.connectionId })); }} />}
       {creating && details && actions && tab.connectionId && <NewTableElementDialog session={tab.id} connectionId={tab.connectionId} schema={schema} table={table} kind={kind}
         details={details} actions={actions} onClose={() => setCreating(false)} onSql={(sql) => { setCreating(false); openSql(sql); }} />}
     </section>

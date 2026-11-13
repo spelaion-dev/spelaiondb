@@ -1,5 +1,6 @@
 //! Writes from agents (ADR-019) against SQLite (always) and a real PostgreSQL
-//! (`SPELAION_TEST_PG`).
+//! (`SPELAION_TEST_PG`). What a test creates on the shared server is dropped even when one of
+//! its assertions fails (`support`).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -9,6 +10,9 @@ use spelaion_core::{CoreEvent, ResultStore, Session, WriteError, WriteLimits};
 use spelaion_driver_api::{ConnectParams, Driver, Secret};
 use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
+
+mod support;
+use support::{cleaning_up, run_cleanup};
 
 async fn sqlite() -> Session {
     let driver = SqliteDriver::default();
@@ -81,50 +85,56 @@ async fn count(session: &Session, sql: &str) -> String {
 
 #[tokio::test]
 async fn destructive_ddl_is_rejected_before_reaching_sqlite_or_postgres() {
-    let mut sessions = vec![sqlite().await];
+    let mut sessions = vec![("sqlite", sqlite().await)];
     if let Some(session) = pg().await {
-        sessions.push(session);
+        sessions.push(("postgres", session));
     }
-    for session in sessions {
+    for (label, session) in sessions {
         let table = format!("agent_ddl_{}", std::process::id());
-        run(
+        let drops = [format!("drop table if exists {table}")];
+        let body = async {
+            run(
             &session,
             &format!(
-                "create table {table} (id int, body text); insert into {table} values (1, 'keep')"
+                "drop table if exists {table}; create table {table} (id int, body text); insert into {table} values (1, 'keep')"
             ),
         )
         .await;
-        let result = session
-            .run_write(
-                &format!("alter table {table} drop column body"),
-                &WriteLimits::default(),
-            )
-            .await;
-        assert!(matches!(result, Err(WriteError::Rejected(_))), "{result:?}");
-        assert_eq!(
-            count(
-                &session,
-                &format!("select count(*) from {table} where body = 'keep'")
-            )
-            .await,
-            "1"
-        );
-        session
-            .run_write(
-                &format!("alter table {table} add column extra int"),
-                &WriteLimits::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            count(
-                &session,
-                &format!("select count(*) from {table} where extra is null")
-            )
-            .await,
-            "1"
-        );
-        run(&session, &format!("drop table {table}")).await;
+            let result = session
+                .run_write(
+                    &format!("alter table {table} drop column body"),
+                    &WriteLimits::default(),
+                )
+                .await;
+            assert!(matches!(result, Err(WriteError::Rejected(_))), "{result:?}");
+            assert_eq!(
+                count(
+                    &session,
+                    &format!("select count(*) from {table} where body = 'keep'")
+                )
+                .await,
+                "1"
+            );
+            session
+                .run_write(
+                    &format!("alter table {table} add column extra int"),
+                    &WriteLimits::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                count(
+                    &session,
+                    &format!("select count(*) from {table} where extra is null")
+                )
+                .await,
+                "1"
+            );
+        };
+        cleaning_up(body, |panicked| {
+            run_cleanup(label, &session, &drops, panicked)
+        })
+        .await;
     }
 }
 
@@ -210,55 +220,63 @@ async fn a_failed_write_leaves_nothing_behind() {
 #[tokio::test]
 async fn postgres_writes_commit_roll_back_and_time_out() {
     let Some(session) = pg().await else { return };
-    run(
+    // Its own name: another run on the shared server may be using the table at the same time.
+    let t = format!("agent_notes_{}", std::process::id());
+    let drops = [format!("drop table if exists {t}")];
+    let body = async {
+        run(
         &session,
-        "drop table if exists agent_notes; create table agent_notes (id int primary key, body text not null)",
+        &format!("drop table if exists {t}; create table {t} (id int primary key, body text not null)"),
     )
     .await;
-    let limits = WriteLimits {
-        timeout: Duration::from_secs(2),
+        let limits = WriteLimits {
+            timeout: Duration::from_secs(2),
+        };
+        let done = session
+            .run_write(
+                &format!("insert into {t} values (1, 'a'), (2, 'b') returning id"),
+                &limits,
+            )
+            .await
+            .unwrap();
+        assert_eq!(done.rows_affected, Some(2));
+        let err = session
+            .run_write(
+                &format!("insert into {t} values (3, 'c'), (1, 'duplicate')"),
+                &limits,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WriteError::Database(_)), "{err:?}");
+        assert_eq!(
+            count(&session, &format!("select count(*) from {t}")).await,
+            "2"
+        );
+        // A write that runs too long is stopped by statement_timeout and undone.
+        let started = Instant::now();
+        let err = session
+            .run_write(
+                &format!("update {t} set body = body || pg_sleep(10)::text where id = 1"),
+                &limits,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(
+            err.to_string().contains("timeout") || matches!(err, WriteError::Timeout(_)),
+            "{err}"
+        );
+        assert_eq!(
+            count(&session, &format!("select body from {t} where id = 1")).await,
+            "a"
+        );
     };
-    let done = session
-        .run_write(
-            "insert into agent_notes values (1, 'a'), (2, 'b') returning id",
-            &limits,
-        )
-        .await
-        .unwrap();
-    assert_eq!(done.rows_affected, Some(2));
-    let err = session
-        .run_write(
-            "insert into agent_notes values (3, 'c'), (1, 'duplicate')",
-            &limits,
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(err, WriteError::Database(_)), "{err:?}");
-    assert_eq!(
-        count(&session, "select count(*) from agent_notes").await,
-        "2"
-    );
-    // A write that runs too long is stopped by statement_timeout and undone.
-    let started = Instant::now();
-    let err = session
-        .run_write(
-            "update agent_notes set body = body || pg_sleep(10)::text where id = 1",
-            &limits,
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        started.elapsed() < Duration::from_secs(8),
-        "{:?}",
-        started.elapsed()
-    );
-    assert!(
-        err.to_string().contains("timeout") || matches!(err, WriteError::Timeout(_)),
-        "{err}"
-    );
-    assert_eq!(
-        count(&session, "select body from agent_notes where id = 1").await,
-        "a"
-    );
-    run(&session, "drop table agent_notes").await;
+    cleaning_up(body, |panicked| {
+        run_cleanup("postgres", &session, &drops, panicked)
+    })
+    .await;
 }

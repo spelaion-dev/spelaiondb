@@ -55,7 +55,10 @@ Three ways exist:
     one is tried: the session says so). It exists since SQLite 3.37 (2021): an older
     `sqlite3` is refused with a clear message, never used without it.
   - The driver sends only statements from the core's splitter, each ending with `;`, and
-    refuses one that starts with `.`: user text never reaches the shell as a dot-command.
+    refuses one that starts with `.` (or `#`) once its leading comments are skipped, as the
+    shell skips them; the statement is sent from its first word. Any later line that starts
+    with `.` or `#` outside a quote or comment is written with a space before it (still the
+    same SQL; a value is never changed): user text never reaches the shell as a dot-command.
   - Repository connections need a trusted repository (ADR-009): they run a program on a
     server, a stronger permission than forwarding a port.
   - Not served by `spelunk mcp`, like the other engines without a read-only barrier of

@@ -30,8 +30,12 @@ async fn session() -> Session {
         })
         .await
         .unwrap();
-    Session::new(connection, driver.dialect(), Arc::new(ResultStore::new()))
-        .with_options(ExecOptions { batch_size: 2 })
+    Session::new(connection, driver.dialect(), Arc::new(ResultStore::new())).with_options(
+        ExecOptions {
+            batch_size: 2,
+            ..Default::default()
+        },
+    )
 }
 
 async fn entries(history: &QueryHistory) -> Vec<HistoryEntry> {
@@ -97,11 +101,13 @@ async fn paged_queries_keep_the_original_sql_in_history() {
     let (history, _path) = history("paged");
     let session = session().await;
     let _: Vec<_> = session
-        .run_script("create table t (id integer); insert into t values (1), (2), (3)")
+        .run_script("create table t (id integer primary key); insert into t values (1), (2), (3)")
         .collect()
         .await;
     let original = "select * from t order by id;";
-    let page = spelaion_core::query_page_sql(session.dialect().as_ref(), original, 2, 0).unwrap();
+    let page = spelaion_core::first_query_page_sql(&session, original, 2)
+        .await
+        .unwrap();
     let _: Vec<_> = history
         .run_script_with_original(
             &session,

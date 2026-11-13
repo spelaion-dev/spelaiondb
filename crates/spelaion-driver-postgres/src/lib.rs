@@ -18,10 +18,10 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use spelaion_driver_api::{
-    CancelHandle, Capabilities, ColumnMeta, ConnectParams, Connection, Dialect, Driver,
-    DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
-    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaInfo, SchemaObject,
-    ServerObject, TableInfo, TransactionState,
+    CancelHandle, Capabilities, ColumnMeta, ColumnOrigin, ConnectParams, Connection, Dialect,
+    Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
+    NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaColumn, SchemaInfo,
+    SchemaObject, ServerObject, TableInfo, TransactionState,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -97,6 +97,10 @@ impl Driver for PostgresDriver {
 
         let cancel = Arc::new(PgCancel {
             token: client.cancel_token(),
+            host: params.host.clone(),
+            port: params.port,
+            connect_addr: params.connect_addr,
+            timeout: params.connect_timeout(),
             tls,
         });
         Ok(Box::new(PgConnection {
@@ -110,6 +114,7 @@ impl Driver for PostgresDriver {
                 editable_results: false, // comes in v0.2
                 schemas: true,
                 insert_rows: true,
+                bound_params: true,
             },
         }))
     }
@@ -139,34 +144,92 @@ impl<'a> FromSql<'a> for Raw<'a> {
     }
 }
 
-#[async_trait]
-impl Connection for PgConnection {
-    fn capabilities(&self) -> &Capabilities {
-        &self.capabilities
+impl PgConnection {
+    /// The table column each result column reads (ADR-052): the row description gives its
+    /// table's OID and column number, resolved to names in the catalog as it is now (never
+    /// cached, so a rename is seen at once). An expression has none. Read before the
+    /// statement runs; if the catalog cannot be read, no column has an origin.
+    async fn origins(&self, columns: &[tokio_postgres::Column]) -> Vec<Option<ColumnOrigin>> {
+        let keys: Vec<(u32, i16)> = columns
+            .iter()
+            .filter_map(|c| Some((c.table_oid()?, c.column_id()?)))
+            .filter(|(oid, attnum)| *oid != 0 && *attnum > 0)
+            .collect();
+        if keys.is_empty() {
+            return vec![None; columns.len()];
+        }
+        let mut oids: Vec<u32> = keys.iter().map(|(oid, _)| *oid).collect();
+        oids.sort_unstable();
+        oids.dedup();
+        // Only numbers are written into the statement.
+        let list = oids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT a.attrelid::int8, a.attnum::int4, c.relname::text, a.attname::text \
+             FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+             WHERE a.attrelid IN ({list}) AND a.attnum > 0"
+        );
+        let mut names: std::collections::HashMap<(u32, i16), ColumnOrigin> =
+            std::collections::HashMap::new();
+        if let Ok(rows) = self.client.query(sql.as_str(), &[]).await {
+            for row in rows {
+                let (Ok(oid), Ok(attnum), Ok(table), Ok(column)) = (
+                    row.try_get::<_, i64>(0),
+                    row.try_get::<_, i32>(1),
+                    row.try_get::<_, String>(2),
+                    row.try_get::<_, String>(3),
+                ) else {
+                    continue;
+                };
+                if let (Ok(oid), Ok(attnum)) = (u32::try_from(oid), i16::try_from(attnum)) {
+                    names.insert((oid, attnum), ColumnOrigin { table, column });
+                }
+            }
+        }
+        columns
+            .iter()
+            .map(|c| names.get(&(c.table_oid()?, c.column_id()?)).cloned())
+            .collect()
     }
 
-    async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
-        let statement = self.client.prepare(sql).await.map_err(map_error)?;
+    /// Streams the rows of a prepared statement, with `params` bound to it.
+    async fn stream(
+        &self,
+        sql: &str,
+        statement: tokio_postgres::Statement,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
         let types: Vec<Type> = statement
             .columns()
             .iter()
             .map(|c| c.type_().clone())
             .collect();
+        let origins = if opts.origins {
+            self.origins(statement.columns()).await
+        } else {
+            vec![None; statement.columns().len()]
+        };
         let schema = Arc::new(ResultSchema::new(
             statement
                 .columns()
                 .iter()
-                .map(|c| ColumnMeta {
+                .zip(origins)
+                .map(|(c, origin)| ColumnMeta {
                     name: c.name().to_string(),
                     logical: decode::logical_type(c.type_()),
                     native_type: c.type_().name().to_string(),
                     native_id: Some(c.type_().oid()),
+                    origin,
                 })
                 .collect(),
         ));
         let rows = self
             .client
-            .query_raw(&statement, std::iter::empty::<i32>())
+            .query_raw(&statement, params.iter().map(String::as_str))
             .await
             .map_err(map_error)?;
         let batch_size = opts.batch_size.max(1);
@@ -203,6 +266,36 @@ impl Connection for PgConnection {
             yield ExecEvent::Done { rows_affected: rows.rows_affected().filter(|_| counts_rows) };
         };
         Ok(Box::pin(stream))
+    }
+}
+
+#[async_trait]
+impl Connection for PgConnection {
+    fn capabilities(&self) -> &Capabilities {
+        &self.capabilities
+    }
+
+    async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
+        refuse_copy_stdio(sql)?;
+        let statement = self.client.prepare(sql).await.map_err(map_error)?;
+        self.stream(sql, statement, Vec::new(), opts).await
+    }
+
+    /// Every parameter is declared `text`: the SQL casts it where it needs another type.
+    async fn execute_bound(
+        &self,
+        sql: &str,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        refuse_copy_stdio(sql)?;
+        let types = vec![Type::TEXT; params.len()];
+        let statement = self
+            .client
+            .prepare_typed(sql, &types)
+            .await
+            .map_err(map_error)?;
+        self.stream(sql, statement, params, opts).await
     }
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
@@ -294,6 +387,10 @@ impl Connection for PgConnection {
         introspect::describe_table(&self.client, schema, name).await
     }
 
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        introspect::list_columns(&self.client, schema).await
+    }
+
     async fn list_referencing_keys(&self, schema: &str, name: &str) -> Result<Vec<ReferencingKey>> {
         introspect::list_referencing_keys(&self.client, schema, name).await
     }
@@ -355,6 +452,27 @@ impl Connection for PgConnection {
                 .map_err(map_error)?;
         }
         sink.as_mut().finish().await.map_err(map_error)
+    }
+}
+
+/// `COPY … FROM STDIN` and `COPY … TO STDOUT` move their data through the connection, apart
+/// from the statement, which a statement run from the editor does not do: tokio-postgres's
+/// query path cannot answer the server's `CopyInResponse`, and the connection would be lost.
+/// They are refused before anything is sent, saying what to use instead; nothing is reconnected
+/// or run again. (Importing rows uses `copy_in` on its own path, `insert_rows`.)
+fn refuse_copy_stdio(sql: &str) -> Result<()> {
+    match dialect::copy_stdio(sql) {
+        None => Ok(()),
+        Some(dialect::CopyStdio::FromStdin) => Err(DriverError::Other(
+            "the editor cannot send the data of COPY … FROM STDIN: use Import data to load rows \
+             into a table (or psql's \\copy)"
+                .into(),
+        )),
+        Some(dialect::CopyStdio::ToStdout) => Err(DriverError::Other(
+            "the editor cannot read the data of COPY … TO STDOUT: run the query and use Export, \
+             or COPY … TO a file on the server"
+                .into(),
+        )),
     }
 }
 
@@ -461,17 +579,126 @@ fn finish_batch(
 /// Cancellation opens a new connection, which must use the same TLS as the original.
 struct PgCancel {
     token: CancelToken,
+    /// The server's name (TLS checks it) and port, and where the session's connection went
+    /// instead when it goes through a tunnel (its local end).
+    host: String,
+    port: u16,
+    connect_addr: Option<std::net::SocketAddr>,
+    timeout: Duration,
     tls: Option<MakeRustlsConnect>,
 }
 
+/// How long a cancel waits for the server to close its connection once the request is sent.
+const CANCEL_CLOSE_WAIT: Duration = Duration::from_secs(5);
+
 #[async_trait]
 impl CancelHandle for PgCancel {
+    /// Returns once the server has closed the cancel connection, which it does after it has
+    /// signalled the session's backend: a cancel that has returned can no longer stop a
+    /// statement sent after it (SDB-266). tokio-postgres's own `cancel_query` returns as soon
+    /// as the request is written.
     async fn cancel(&self) -> Result<()> {
-        match &self.tls {
-            Some(tls) => self.token.cancel_query(tls.clone()).await,
-            None => self.token.cancel_query(NoTls).await,
+        let failed = |e: String| DriverError::Connection(format!("cancelling: {e}"));
+        let connect = async {
+            match self.connect_addr {
+                Some(addr) => tokio::net::TcpStream::connect(addr).await,
+                None => tokio::net::TcpStream::connect((self.host.as_str(), self.port)).await,
+            }
+        };
+        let socket = tokio::time::timeout(self.timeout, connect)
+            .await
+            .map_err(|_| failed("the server did not answer in time".into()))?
+            .map_err(|e| failed(e.to_string()))?;
+        let socket = UntilClosed {
+            inner: socket,
+            write_closed: false,
+        };
+        let sent = async {
+            match &self.tls {
+                Some(tls) => {
+                    let connector = tokio_postgres::tls::MakeTlsConnect::<
+                        UntilClosed<tokio::net::TcpStream>,
+                    >::make_tls_connect(
+                        &mut tls.clone(), &self.host
+                    )
+                    .map_err(|e| failed(e.to_string()))?;
+                    self.token
+                        .cancel_query_raw(socket, connector)
+                        .await
+                        .map_err(map_error)
+                }
+                None => self
+                    .token
+                    .cancel_query_raw(socket, NoTls)
+                    .await
+                    .map_err(map_error),
+            }
+        };
+        tokio::time::timeout(self.timeout + CANCEL_CLOSE_WAIT, sent)
+            .await
+            .map_err(|_| failed("the server did not close the cancel connection".into()))?
+    }
+}
+
+/// The cancel request's socket. Shutting it down also waits until the server closes it: the
+/// postmaster's child for a cancel request signals the backend, then exits.
+struct UntilClosed<S> {
+    inner: S,
+    write_closed: bool,
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for UntilClosed<S> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite
+    for UntilClosed<S>
+{
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        if !this.write_closed {
+            match std::pin::Pin::new(&mut this.inner).poll_shutdown(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(result) => result?,
+            }
+            this.write_closed = true;
         }
-        .map_err(map_error)
+        let mut chunk = [0u8; 512];
+        loop {
+            let mut buf = tokio::io::ReadBuf::new(&mut chunk);
+            match std::pin::Pin::new(&mut this.inner).poll_read(cx, &mut buf) {
+                Poll::Pending => return Poll::Pending,
+                // Closed (or reset): the server is done with the request.
+                Poll::Ready(Ok(())) if buf.filled().is_empty() => return Poll::Ready(Ok(())),
+                Poll::Ready(Err(_)) => return Poll::Ready(Ok(())),
+                Poll::Ready(Ok(())) => {}
+            }
+        }
     }
 }
 

@@ -42,6 +42,12 @@ Rules:
   via `SSH_AUTH_SOCK` on Linux.
 - Finding: even with an agent, the key must be pinnable per hop (`IdentityFile` +
   `IdentitiesOnly`); trying all the agent's keys hits `MaxAuthTries`.
+- Measured on Windows 11 against the Docker bastions: 2 hops with a key in 43 ms + 75 ms;
+  a wrong passphrase gives a clear error; Pageant 0.83 through both hops; `pg_sleep(30)`
+  cancelled through the tunnel after 1.0 s; 1 M rows streamed through both hops in
+  1.5–1.7 s (~600,000 rows/s, debug build), the first row after 45 ms.
+- Note (2026-11-10): the experiment's code was removed from the repository after v0.8.0.
+  It can be read at tag `v0.8.0`, under `spikes/`.
 
 ## Implementation (2026-11-02, `crates/spelunk-ssh`)
 - Independent of the configuration: it receives an already resolved `TunnelSpec` (the core
@@ -78,7 +84,10 @@ Rules:
 - Connect timeout (2026-11-05): each hop has 15 s to answer and finish the SSH handshake
   (before, only the first hop's TCP connection and handshake had a limit; a later hop or a
   `command` could wait forever). `connect_timeout` in the tunnel file changes it.
-  Authentication is not counted: it may be waiting for a passphrase or a 2FA code.
+  Authentication is not counted: it may be waiting for a passphrase or a 2FA code. Nor is the
+  time the person takes to answer the unknown-host question, which comes during the handshake
+  (2026-11-12): the hop's clock stops while that question is open and runs for the rest, so a
+  server that never answers still times out, and a changed key is still refused at once.
 - Local ports (2026-11-05): a connection can fix the port its forward listens on
   (`local_port`, for other tools to use the same tunnel), and the personal `user.toml` can
   limit tunnels to a range (`[tunnels] port_min`/`port_max`, for firewalls). Forwards are still

@@ -2,6 +2,14 @@
 //!
 //! - Only connections with `mcp.exposed = true` are visible, and a repository's only if the
 //!   user trusted it.
+//! - The configuration and the trust store are read again at the start of every tool call, so
+//!   a change the user makes (hiding a connection, denying writes, removing trust, fewer rows)
+//!   takes effect at the next call of a server that is already running, never in the middle of
+//!   one. A configuration with problems exposes nothing until it is fixed. A cached session is
+//!   reused only while its connection is exposed and defined as when it was opened.
+//! - A lost session (the server ended it, a connection error, its tunnel went down) is never
+//!   used again: the call that found out fails and is never retried, and the next call opens a
+//!   new session through the same path as the first one (ADR-028).
 //! - Every query goes through the core's read-only mode (classifier, read-only transaction,
 //!   limits) and is recorded in the audit log.
 //! - Writes only through `execute_write`, on connections with `mcp.writes = "allow"`, through
@@ -28,14 +36,16 @@ use rmcp::{
 };
 use serde::Deserialize;
 use spelaion_config::{
-    Config, ConnectionEntry, Engine, Resolver, Source, SystemBackend, TrustStore, WritePolicy,
+    Config, ConfigError, ConnectionEntry, ConnectionFile, ConnectionTypesFile, Engine, Resolver,
+    Source, SystemBackend, TrustStore, TunnelFile, TypesLayer, UserFile, WritePolicy,
 };
 use spelaion_core::{
     AgentAccess, AgentView, Engines, OpenConnection, OpenError, OpenOptions, ReadError, ReadLimits,
-    ResultStore, ToolOutput, TunnelPool, WriteError, WriteLimits, agent_access, agent_view,
-    open_connection,
+    ResultStore, SessionHealth, ToolOutput, TunnelPool, WriteError, WriteLimits, agent_access,
+    agent_view, open_connection,
 };
-use spelaion_ssh::{KnownHosts, NonInteractive};
+use spelaion_driver_api::Connection;
+use spelaion_ssh::{KnownHosts, NonInteractive, TunnelState};
 use spelaion_store::{AuditEntry, Decision, Store};
 
 /// Default rows if the connection does not set `mcp.max_rows`.
@@ -54,23 +64,237 @@ pub struct ServerOptions {
 }
 
 struct State {
-    config: Config,
-    trust: TrustStore,
+    /// What the latest call saw: read again at the start of every call (`SpelaionMcp::begin`).
+    current: Mutex<Access>,
     options: ServerOptions,
     engines: Engines,
     tunnels: Arc<TunnelPool>,
     store: Mutex<Option<Store>>,
     /// This process in the audit log (ADR-033): its calls are grouped by it.
     audit_session: String,
-    /// One session per connection and use, opened on first use. The Mutex serializes the
-    /// statements of one session (each opens and closes its own transaction).
-    sessions: tokio::sync::Mutex<HashMap<(String, Use), Shared>>,
+    /// One session per connection and use, opened on first use and kept while its connection
+    /// stays exposed and defined the same. The Mutex serializes the statements of one session
+    /// (each opens and closes its own transaction).
+    sessions: tokio::sync::Mutex<HashMap<(String, Use), Cached>>,
     plans: spelaion_core::plan::PlanStore,
     plan_connections: Mutex<HashMap<u32, String>>,
 }
 
 /// An open connection, shared by the calls that use it one at a time.
 type Shared = Arc<tokio::sync::Mutex<OpenConnection>>;
+
+/// A cached session and the definition it was opened from.
+struct Cached {
+    open: Shared,
+    definition: Definition,
+    /// Read without locking the session, which a call may be using.
+    health: tokio::sync::watch::Receiver<SessionHealth>,
+    connection: Arc<dyn Connection>,
+    tunnel: Option<tokio::sync::watch::Receiver<TunnelState>>,
+}
+
+impl Cached {
+    fn new(open: OpenConnection, definition: Definition) -> Self {
+        Self {
+            health: open.session.health(),
+            connection: open.session.connection().clone(),
+            tunnel: open.tunnel_state(),
+            open: Arc::new(tokio::sync::Mutex::new(open)),
+            definition,
+        }
+    }
+
+    /// Whether the session can still be used. A lost connection (the server ended it, a
+    /// connection error in an earlier call, the tunnel went down) is never used again: the next
+    /// call opens a new session, as the user does when reconnecting, and nothing that ran on
+    /// the old one is run again (ADR-028).
+    fn usable(&self) -> bool {
+        let alive = match &*self.health.borrow() {
+            SessionHealth::Alive => true,
+            SessionHealth::Lost { .. } | SessionHealth::IdleClosed { .. } => false,
+        };
+        let tunnel_up = self.tunnel.as_ref().is_none_or(|t| match &*t.borrow() {
+            TunnelState::Up => true,
+            TunnelState::Down { .. } => false,
+        });
+        alive && tunnel_up && !self.connection.is_closed()
+    }
+}
+
+/// What agents may see and do during one call: the configuration and the trust store as they
+/// were when the call started. A call uses one snapshot from start to end, so a change takes
+/// effect between calls, never in the middle of one.
+struct Snapshot {
+    config: Config,
+    trust: TrustStore,
+    /// The workspace's repository is trusted (ADR-022).
+    trusted: bool,
+}
+
+/// A call's snapshot, or why nothing is exposed during it.
+type Access = Result<Arc<Snapshot>, Arc<str>>;
+
+impl Snapshot {
+    /// Reads the configuration and the trust store, as at start-up. A problem that may change
+    /// what connections resolve to (a file that does not load, a value dropped) fails closed:
+    /// no connection is exposed until the user fixes it. Notices that only inform do not.
+    fn load(options: &ServerOptions) -> Access {
+        let config = spelaion_config::load(options.workspace.as_deref(), &options.user_dir);
+        let blocking: Vec<&ConfigError> = config.problems.iter().filter(|p| p.blocks()).collect();
+        if !blocking.is_empty() {
+            let files = blocking
+                .into_iter()
+                .map(position)
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(format!(
+                "no connection is exposed to agents: SpelaionDB's configuration has problems ({files}); the user can see and fix them in SpelaionDB"
+            )
+            .into());
+        }
+        let trust = TrustStore::load(&options.user_dir).map_err(|e| {
+            format!(
+                "no connection is exposed to agents: the list of trusted repositories could not be read ({})",
+                position(&e)
+            )
+        })?;
+        let trusted = config
+            .workspace_root
+            .as_deref()
+            .is_some_and(|root| trust.is_trusted(root));
+        Ok(Arc::new(Snapshot {
+            config,
+            trust,
+            trusted,
+        }))
+    }
+
+    /// Connections visible to agents (ADR-008, ADR-022).
+    fn exposed(&self) -> Vec<&ConnectionEntry> {
+        self.config
+            .connections
+            .iter()
+            .filter(|c| matches!(agent_view(c, self.trusted, false), AgentView::Visible(_)))
+            .collect()
+    }
+
+    fn entry(&self, id: &str) -> Result<&ConnectionEntry, String> {
+        self.exposed()
+            .into_iter()
+            .find(|c| c.id.to_string() == id)
+            .ok_or_else(|| {
+                format!(
+                    "connection {id:?} does not exist or is not exposed to the MCP (use list_connections)"
+                )
+            })
+    }
+
+    /// Everything `entry` is resolved from, except its secrets.
+    fn definition(&self, entry: &ConnectionEntry) -> Definition {
+        let config = &self.config;
+        Definition {
+            file_path: entry.file_path.clone(),
+            file: entry.file.clone(),
+            tunnel: entry
+                .file
+                .tunnel
+                .as_deref()
+                .and_then(|name| config.tunnel_for(entry.id.source, name))
+                .map(|t| (t.file_path.clone(), t.file.clone())),
+            user: config.user.clone(),
+            user_unreadable: config.user_unreadable,
+            types: [
+                TypesKey::of(&config.team_types),
+                TypesKey::of(&config.user_types),
+            ],
+            workspace_root: config.workspace_root.clone(),
+            trusted: self.trusted,
+        }
+    }
+}
+
+/// Where a configuration problem is, without its message: a parse error may quote the file,
+/// and nothing of a file's contents is sent to agents.
+fn position(problem: &ConfigError) -> String {
+    let mut out = problem.file.display().to_string();
+    if let Some(line) = problem.line {
+        out.push_str(&format!(":{line}"));
+    }
+    out
+}
+
+/// Everything a connection's session is opened from (what `Resolver` reads), except its
+/// secrets: reading them again could run a program or ask a password manager on every call.
+/// A cached session is reused only while this stays the same.
+#[derive(Debug, Clone, PartialEq)]
+struct Definition {
+    file_path: PathBuf,
+    file: ConnectionFile,
+    /// The network profile it names, as found.
+    tunnel: Option<(PathBuf, TunnelFile)>,
+    /// `user.toml`: variables, masking, tunnel ports.
+    user: UserFile,
+    user_unreadable: bool,
+    /// The repository's and the user's connection types (ADR-029).
+    types: [TypesKey; 2],
+    workspace_root: Option<PathBuf>,
+    trusted: bool,
+}
+
+/// A `TypesLayer` that can be compared.
+#[derive(Debug, Clone, PartialEq)]
+enum TypesKey {
+    Absent,
+    Loaded(PathBuf, ConnectionTypesFile),
+    Broken(ConfigError),
+}
+
+impl TypesKey {
+    fn of(layer: &TypesLayer) -> Self {
+        match layer {
+            TypesLayer::Absent => TypesKey::Absent,
+            TypesLayer::Loaded { path, file } => TypesKey::Loaded(path.clone(), file.clone()),
+            TypesLayer::Broken(e) => TypesKey::Broken(e.clone()),
+        }
+    }
+}
+
+/// The definition `id` has in `access`, if agents may use it there.
+fn definition_in(access: &Access, id: &str) -> Option<Definition> {
+    let snapshot = access.as_ref().ok()?;
+    let entry = snapshot.entry(id).ok()?;
+    Some(snapshot.definition(entry))
+}
+
+/// The exposed connection `id` of a call, or why the call cannot use it.
+fn exposed_entry<'a>(
+    access: &'a Access,
+    id: &str,
+) -> Result<(&'a Snapshot, &'a ConnectionEntry), String> {
+    match access {
+        Ok(snapshot) => Ok((snapshot, snapshot.entry(id)?)),
+        Err(reason) => Err(reason.to_string()),
+    }
+}
+
+/// Why the session can no longer be used, if it was lost during a call.
+fn lost(open: &OpenConnection) -> Option<String> {
+    match &*open.session.health().borrow() {
+        SessionHealth::Alive => None,
+        SessionHealth::Lost { reason } => Some(reason.clone()),
+        SessionHealth::IdleClosed { after } => {
+            Some(format!("closed after {} s without use", after.as_secs()))
+        }
+    }
+}
+
+/// Closes a session that is no longer valid. A call still using it keeps it until that call
+/// ends, and then drops it.
+async fn close(open: Shared) {
+    if let Ok(open) = Arc::try_unwrap(open) {
+        open.into_inner().close().await;
+    }
+}
 
 /// Reads and writes never share a session: reads keep the native read-only connection where
 /// the engine has one (and SQLite's `query_only` stays on for good once set).
@@ -227,15 +451,18 @@ pub struct WriteArgs {
 #[tool_router]
 impl SpelaionMcp {
     pub fn new(options: ServerOptions) -> Result<Self, String> {
-        let config = spelaion_config::load(options.workspace.as_deref(), &options.user_dir);
-        let trust = TrustStore::load(&options.user_dir).map_err(|e| e.to_string())?;
         // Without an audit log nothing is served: it is part of security, not an extra.
         let store = Store::open(&spelaion_config::state_db(&options.user_dir))
             .map_err(|e| e.to_string())?;
+        // Read again at the start of every call; a problem now only fails those calls closed,
+        // so the server serves again once the user fixes it.
+        let current = Snapshot::load(&options);
+        if let Err(reason) = &current {
+            eprintln!("spelaiondb mcp: {reason}");
+        }
         Ok(Self {
             state: Arc::new(State {
-                config,
-                trust,
+                current: Mutex::new(current),
                 options,
                 engines: Engines::builtin(),
                 tunnels: Arc::new(TunnelPool::new()),
@@ -249,20 +476,32 @@ impl SpelaionMcp {
         })
     }
 
-    /// Connections visible to the agent.
-    fn exposed(&self) -> Vec<&ConnectionEntry> {
-        let state = &self.state;
-        let trusted = state
-            .config
-            .workspace_root
-            .as_deref()
-            .is_some_and(|root| state.trust.is_trusted(root));
-        state
-            .config
-            .connections
-            .iter()
-            .filter(|c| matches!(agent_view(c, trusted, false), AgentView::Visible(_)))
-            .collect()
+    /// Starts a tool call: reads the configuration and the trust store again, keeps them as
+    /// what this call sees from start to end, and closes the cached sessions that this view no
+    /// longer allows (their connection hidden, or defined differently) and those whose
+    /// connection was lost.
+    async fn begin(&self) -> Access {
+        let access = Snapshot::load(&self.state.options);
+        *self.state.current.lock().expect("lock poisoned") = access.clone();
+        let stale: Vec<Shared> = {
+            let mut sessions = self.state.sessions.lock().await;
+            let keys: Vec<(String, Use)> = sessions
+                .iter()
+                .filter(|((id, _), cached)| {
+                    !cached.usable()
+                        || definition_in(&access, id).as_ref() != Some(&cached.definition)
+                })
+                .map(|(key, _)| key.clone())
+                .collect();
+            keys.iter()
+                .filter_map(|key| sessions.remove(key))
+                .map(|cached| cached.open)
+                .collect()
+        };
+        for open in stale {
+            close(open).await;
+        }
+        access
     }
 
     /// The user's read-only mode for every agent, read on every call so that turning it on
@@ -310,24 +549,22 @@ impl SpelaionMcp {
         }
     }
 
-    fn entry(&self, id: &str) -> Result<&ConnectionEntry, String> {
-        self.exposed()
-            .into_iter()
-            .find(|c| c.id.to_string() == id)
-            .ok_or_else(|| {
-                format!(
-                    "connection {id:?} does not exist or is not exposed to the MCP (use list_connections)"
-                )
-            })
-    }
-
     /// Session of an exposed connection for reading, opening it if needed.
-    async fn session(&self, id: &str) -> Result<(Shared, usize), String> {
-        self.session_for(id, Use::Read).await
+    async fn session(&self, access: &Access, id: &str) -> Result<(Shared, usize), String> {
+        self.session_for(access, id, Use::Read).await
     }
 
-    async fn session_for(&self, id: &str, purpose: Use) -> Result<(Shared, usize), String> {
-        let entry = self.entry(id)?;
+    /// The session of `id` for `purpose`, as this call's snapshot defines it: a cached one
+    /// opened from the same definition, or a new one (which replaces a cached one opened from
+    /// another).
+    async fn session_for(
+        &self,
+        access: &Access,
+        id: &str,
+        purpose: Use,
+    ) -> Result<(Shared, usize), String> {
+        let (snapshot, entry) = exposed_entry(access, id)?;
+        let definition = snapshot.definition(entry);
         let max_rows = entry
             .file
             .mcp
@@ -335,10 +572,18 @@ impl SpelaionMcp {
             .map_or(DEFAULT_MAX_ROWS, |n| n as usize);
         let key = (id.to_string(), purpose);
         let mut sessions = self.state.sessions.lock().await;
-        if let Some(open) = sessions.get(&key) {
-            return Ok((open.clone(), max_rows));
+        if let Some(cached) = sessions.get(&key)
+            && cached.definition == definition
+            && cached.usable()
+        {
+            return Ok((cached.open.clone(), max_rows));
         }
-        let mut resolved = Resolver::new(&self.state.config, &self.state.trust, &SystemBackend)
+        let replaced = sessions.remove(&key);
+        // The old one goes first: DuckDB opens a file in one mode per process (ADR-016).
+        if let Some(replaced) = replaced {
+            close(replaced.open).await;
+        }
+        let mut resolved = Resolver::new(&snapshot.config, &snapshot.trust, &SystemBackend)
             .resolve(&entry.id)
             .map_err(|e| e.to_string())?;
         // Native read-only where the engine has it (SQLite, DuckDB), except to write. DuckDB
@@ -363,22 +608,31 @@ impl SpelaionMcp {
                 ),
                 other => other.to_string(),
             })?;
-        let open = Arc::new(tokio::sync::Mutex::new(open));
-        sessions.insert(key, open.clone());
+        let cached = Cached::new(open, definition);
+        let open = cached.open.clone();
+        sessions.insert(key, cached);
         Ok((open, max_rows))
     }
 
     /// Runs a tool that is not a query and records it (ADR-033): refused if the connection is
-    /// not available to agents, failed if the tool answered with an error.
+    /// not available to agents in this call's snapshot, failed if the tool answered with an
+    /// error. `run` must use the same snapshot.
     async fn audited(
         &self,
         call: Call,
+        access: &Access,
         connection: &str,
         what: String,
         run: impl std::future::Future<Output = Result<CallToolResult, ErrorData>>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Err(reason) = access {
+            self.audit(&call, connection, &what, Decision::Rejected, |e| {
+                e.detail = Some(reason.to_string())
+            });
+            return tool_error(reason.to_string());
+        }
         if !connection.is_empty()
-            && let Err(message) = self.session(connection).await
+            && let Err(message) = self.session(access, connection).await
         {
             self.audit(&call, connection, &what, Decision::Rejected, |e| {
                 e.detail = Some(message.clone())
@@ -417,22 +671,27 @@ impl SpelaionMcp {
             });
             tool_error(message)
         };
-        let access = match self.entry(connection) {
-            Ok(entry) => agent_access(&entry.file, self.all_read_only()),
+        let view = self.begin().await;
+        let access = match exposed_entry(&view, connection) {
+            Ok((_, entry)) => agent_access(&entry.file, self.all_read_only()),
             Err(message) => return refuse(message),
         };
         match access {
             AgentAccess::ReadWrite => {}
             AgentAccess::ReadOnly(because) => return refuse(because.refusal(connection)),
         }
-        let (open, _) = match self.session_for(connection, Use::Write).await {
+        let (open, _) = match self.session_for(&view, connection, Use::Write).await {
             Ok(found) => found,
             Err(message) => return refuse(message),
         };
         let limits = WriteLimits {
             timeout: self.state.options.timeout,
         };
-        let result = open.lock().await.session.run_write(sql, &limits).await;
+        let (result, lost) = {
+            let open = open.lock().await;
+            let result = open.session.run_write(sql, &limits).await;
+            (result, lost(&open))
+        };
         match result {
             Ok(done) => {
                 self.audit(client, connection, sql, Decision::Executed, |e| {
@@ -451,9 +710,16 @@ impl SpelaionMcp {
                 self.audit(client, connection, sql, Decision::Failed, |e| {
                     e.detail = Some(format!("write: {message}"))
                 });
-                tool_error(format!(
-                    "{message} (nothing was changed: the transaction was rolled back)"
-                ))
+                // Never retried: with the connection gone, the commit may or may not have
+                // reached the server.
+                tool_error(match lost {
+                    Some(reason) => format!(
+                        "{message} (the connection was lost: {reason}. It is not known whether the write was committed: check before writing again. The next call opens a new session.)"
+                    ),
+                    None => {
+                        format!("{message} (nothing was changed: the transaction was rolled back)")
+                    }
+                })
             }
         }
     }
@@ -465,8 +731,20 @@ impl SpelaionMcp {
         sql: &str,
         format: Option<OutputFormat>,
     ) -> Result<CallToolResult, ErrorData> {
+        let access = self.begin().await;
+        self.read_in(&access, client, connection, sql, format).await
+    }
+
+    async fn read_in(
+        &self,
+        access: &Access,
+        client: &Call,
+        connection: &str,
+        sql: &str,
+        format: Option<OutputFormat>,
+    ) -> Result<CallToolResult, ErrorData> {
         let format = format.map_or_else(|| self.default_output(), ToolOutput::from);
-        let (open, max_rows) = match self.session(connection).await {
+        let (open, max_rows) = match self.session(access, connection).await {
             Ok(found) => found,
             Err(message) => {
                 self.audit(client, connection, sql, Decision::Rejected, |e| {
@@ -479,7 +757,11 @@ impl SpelaionMcp {
             max_rows,
             timeout: self.state.options.timeout,
         };
-        let result = open.lock().await.session.run_read_only(sql, &limits).await;
+        let (result, lost) = {
+            let open = open.lock().await;
+            let result = open.session.run_read_only(sql, &limits).await;
+            (result, lost(&open))
+        };
         match result {
             Ok(result) => {
                 self.audit(client, connection, sql, Decision::Executed, |e| {
@@ -501,7 +783,12 @@ impl SpelaionMcp {
                 self.audit(client, connection, sql, Decision::Failed, |e| {
                     e.detail = Some(message.clone())
                 });
-                tool_error(message)
+                tool_error(match lost {
+                    Some(reason) => format!(
+                        "{message} (the connection was lost: {reason}. The next call opens a new session.)"
+                    ),
+                    None => message,
+                })
             }
         }
     }
@@ -519,7 +806,8 @@ impl SpelaionMcp {
             );
             tool_error(reason)
         };
-        if let Err(reason) = self.entry(&args.connection) {
+        let access = self.begin().await;
+        if let Err(reason) = exposed_entry(&access, &args.connection) {
             return reject(&reason);
         }
         if let Some(id) = args.plan_id {
@@ -588,7 +876,8 @@ impl SpelaionMcp {
         let structured = args.structured.unwrap_or(false);
         if !structured {
             return self
-                .read(
+                .read_in(
+                    &access,
                     client,
                     &args.connection,
                     &format!("explain {}", sql.trim()),
@@ -596,7 +885,7 @@ impl SpelaionMcp {
                 )
                 .await;
         }
-        let (open, max_rows) = match self.session(&args.connection).await {
+        let (open, max_rows) = match self.session(&access, &args.connection).await {
             Ok(value) => value,
             Err(reason) => {
                 self.audit(client, &args.connection, sql, Decision::Rejected, |e| {
@@ -677,9 +966,11 @@ impl SpelaionMcp {
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_connections(&self, peer: Peer<RoleServer>) -> Result<CallToolResult, ErrorData> {
-        let run = self.list_connections_inner();
+        let access = self.begin().await;
+        let run = self.list_connections_inner(&access);
         self.audited(
             Call::new(&peer, "list_connections"),
+            &access,
             "",
             "list_connections".into(),
             run,
@@ -687,13 +978,16 @@ impl SpelaionMcp {
         .await
     }
 
-    async fn list_connections_inner(&self) -> Result<CallToolResult, ErrorData> {
-        let exposed = self.exposed();
+    async fn list_connections_inner(&self, access: &Access) -> Result<CallToolResult, ErrorData> {
+        let snapshot = match access {
+            Ok(snapshot) => snapshot,
+            Err(reason) => return tool_error(reason.to_string()),
+        };
+        let exposed = snapshot.exposed();
         let mut out = String::new();
-        if let Some(root) = &self.state.config.workspace_root
-            && !self.state.trust.is_trusted(root)
-            && self
-                .state
+        if let Some(root) = &snapshot.config.workspace_root
+            && !snapshot.trusted
+            && snapshot
                 .config
                 .connections
                 .iter()
@@ -741,16 +1035,24 @@ impl SpelaionMcp {
             None => "schemas".to_string(),
         };
         let connection = args.connection.clone();
-        let run = self.list_objects_inner(Parameters(args));
-        self.audited(Call::new(&peer, "list_objects"), &connection, what, run)
-            .await
+        let access = self.begin().await;
+        let run = self.list_objects_inner(&access, Parameters(args));
+        self.audited(
+            Call::new(&peer, "list_objects"),
+            &access,
+            &connection,
+            what,
+            run,
+        )
+        .await
     }
 
     async fn list_objects_inner(
         &self,
+        access: &Access,
         Parameters(args): Parameters<ListObjectsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (open, _) = match self.session(&args.connection).await {
+        let (open, _) = match self.session(access, &args.connection).await {
             Ok(found) => found,
             Err(message) => return tool_error(message),
         };
@@ -807,16 +1109,24 @@ impl SpelaionMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let what = format!("{}.{}", args.schema, args.table);
         let connection = args.connection.clone();
-        let run = self.describe_table_inner(Parameters(args));
-        self.audited(Call::new(&peer, "describe_table"), &connection, what, run)
-            .await
+        let access = self.begin().await;
+        let run = self.describe_table_inner(&access, Parameters(args));
+        self.audited(
+            Call::new(&peer, "describe_table"),
+            &access,
+            &connection,
+            what,
+            run,
+        )
+        .await
     }
 
     async fn describe_table_inner(
         &self,
+        access: &Access,
         Parameters(args): Parameters<DescribeArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (open, _) = match self.session(&args.connection).await {
+        let (open, _) = match self.session(access, &args.connection).await {
             Ok(found) => found,
             Err(message) => return tool_error(message),
         };
@@ -887,16 +1197,24 @@ impl SpelaionMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let what = format!("search {}", args.query);
         let connection = args.connection.clone();
-        let run = self.search_schema_inner(Parameters(args));
-        self.audited(Call::new(&peer, "search_schema"), &connection, what, run)
-            .await
+        let access = self.begin().await;
+        let run = self.search_schema_inner(&access, Parameters(args));
+        self.audited(
+            Call::new(&peer, "search_schema"),
+            &access,
+            &connection,
+            what,
+            run,
+        )
+        .await
     }
 
     async fn search_schema_inner(
         &self,
+        access: &Access,
         Parameters(args): Parameters<SearchArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (open, _) = match self.session(&args.connection).await {
+        let (open, _) = match self.session(access, &args.connection).await {
             Ok(found) => found,
             Err(message) => return tool_error(message),
         };

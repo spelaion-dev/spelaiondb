@@ -7,10 +7,12 @@
 import { call, commands as core, type ConnectionItem, type ObjectItem, type SchemaObjectItem } from "./api";
 import { COMMANDS, commandSpec, type CommandId, type CommandSpec } from "./commandRegistry";
 import { closeQueryTab, connectTabFromExplorer, explorerDatabase } from "./connect";
+import { readClipboardText } from "./clipboardText";
 import { duplicateConnection } from "./connectionCopies";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
 import { openSavedPlan } from "./planFiles";
-import { EDITOR_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type Tab } from "./store";
+import { openDiagram } from "./diagramTabs";
+import { EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, type Tab } from "./store";
 import {
   closable,
   closeAllTabs,
@@ -23,6 +25,7 @@ import {
   togglePinned,
 } from "./tabActions";
 import { FOCUS_EXPLORER_FILTER_EVENT } from "./components/Sidebar";
+import { FOCUS_SEARCH_EVENT } from "./components/SearchPanel";
 import { openFound } from "./components/OpenObjectDialog";
 import { useImport } from "./components/ImportDialog";
 
@@ -49,7 +52,7 @@ function tabOf(context: CommandContext): Tab | undefined {
 /** A SQL editor tab (not a table's data or details). */
 function editorTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && !tab.table && !tab.tableDetails && !tab.plan ? tab : undefined;
+  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram ? tab : undefined;
 }
 
 function editorCommand(command: EditorCommand): CommandBinding["run"] {
@@ -59,7 +62,20 @@ function editorCommand(command: EditorCommand): CommandBinding["run"] {
   };
 }
 
-function toggleSection(section: "connections" | "processes") {
+/** A tab whose result may hold pending table edits (a table's data, or a query's). */
+function editableTab(context: CommandContext): Tab | undefined {
+  const tab = tabOf(context);
+  return tab && !tab.tableDetails && !tab.plan && !tab.diagram && tab.status === "connected" ? tab : undefined;
+}
+
+function editsCommand(command: "undo" | "redo"): CommandBinding["run"] {
+  return (context) => {
+    const tab = editableTab(context);
+    if (tab) window.dispatchEvent(new CustomEvent(EDITS_COMMAND_EVENT, { detail: { tab: tab.id, command } }));
+  };
+}
+
+function toggleSection(section: "connections" | "processes" | "search") {
   useApp.getState().setSidebarSection((current) => (current === section ? null : section));
 }
 
@@ -81,12 +97,31 @@ async function importFromClipboard(context: CommandContext) {
   if (!target) return;
   let text: string | null = null;
   try {
-    text = (await navigator.clipboard.readText()) || null;
+    text = (await readClipboardText()) || null;
   } catch {
     // The dialog's own Paste button says why the clipboard could not be read.
   }
   const schema = tabOf(context)?.table?.schema ?? null;
   useImport.getState().open({ ...target, schema, table: null, text });
+}
+
+/** The connected tab an "ER diagram" command starts from: any but a diagram or a plan. */
+function diagramSource(context: CommandContext): Tab | undefined {
+  const tab = tabOf(context);
+  return tab && tab.connectionId && !tab.diagram && !tab.plan && tab.status === "connected" ? tab : undefined;
+}
+
+/** A diagram around the active tab's table, or of its editor's current schema. */
+async function openActiveDiagram(context: CommandContext) {
+  const tab = diagramSource(context);
+  if (!tab?.connectionId) return;
+  const table = tab.table ?? tab.tableDetails;
+  if (table) {
+    openDiagram(tab.connectionId, { kind: "focus", schema: table.schema, table: table.name }, tab.id);
+    return;
+  }
+  const schema = await call(core.activeSchema(tab.id));
+  if (schema !== null) openDiagram(tab.connectionId, { kind: "schema", schema, filter: null }, tab.id);
 }
 
 function stepTab(back: boolean) {
@@ -114,7 +149,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "tab.duplicate": {
     enabled: (c) => {
       const tab = tabOf(c);
-      return tab !== undefined && !tab.tableDetails && !tab.plan;
+      return tab !== undefined && !tab.tableDetails && !tab.plan && !tab.diagram;
     },
     run: (c) => c.tab && duplicateTab(c.tab),
   },
@@ -187,6 +222,8 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   "editor.run": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runCurrent") },
   "editor.runScript": { enabled: (c) => editorTab(c) !== undefined && !editorTab(c)?.run?.running, run: editorCommand("runScript") },
+  "edits.undo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("undo") },
+  "edits.redo": { enabled: (c) => editableTab(c) !== undefined, run: editsCommand("redo") },
   "editor.cancel": { enabled: (c) => Boolean(editorTab(c)?.run?.running), run: editorCommand("cancel") },
   "editor.format": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("format") },
   "editor.lineComment": { enabled: (c) => editorTab(c) !== undefined, run: editorCommand("lineComment") },
@@ -215,6 +252,20 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     },
   },
   "view.processes": { run: () => toggleSection("processes") },
+  // The shortcut always shows the search and focuses its box; the activity button toggles it.
+  "view.erDiagram": {
+    enabled: (c) => diagramSource(c) !== undefined,
+    run: (c) => openActiveDiagram(c),
+  },
+  "view.search": {
+    run: (c) => {
+      const app = useApp.getState();
+      if (c.source !== "menu" || app.sidebarSection !== "search") {
+        app.setSidebarSection("search");
+        window.dispatchEvent(new Event(FOCUS_SEARCH_EVENT));
+      } else app.setSidebarSection(null);
+    },
+  },
   "view.history": { run: () => useApp.getState().setHistoryOpen(!useApp.getState().historyOpen) },
   "view.savedQueries": { run: () => useApp.getState().setSnippetsOpen(!useApp.getState().snippetsOpen) },
   // The MCP page fills the window: leaving it shows the explorer again.
@@ -326,6 +377,9 @@ export function objectActions(item: PaletteObject): PaletteObjectAction[] {
         { id: "openData", label: "app:palette.actions.openData", run: () => openFound(connectionId, { kind: "relation", object }) },
         { id: "openStructure", label: "app:palette.actions.openStructure", run: () => openStructure(connectionId, object) },
         { id: "newConsole", label: "app:palette.actions.newConsole", run: () => newConsole(connectionId, object.schema) },
+        ...(object.kind === "view" || object.kind === "materialized_view"
+          ? []
+          : [{ id: "erDiagram", label: "app:palette.actions.erDiagram", run: () => openDiagram(connectionId, { kind: "focus", schema: object.schema, table: object.name }) }]),
         { id: "copyName", label: "shell:copyName", run: () => copyName(object.name) },
         { id: "copyQualifiedName", label: "shell:copyQualifiedName", run: () => copyQualifiedName(connectionId, object.schema, object.name) },
         {

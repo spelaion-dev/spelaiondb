@@ -103,7 +103,21 @@
     "noSafeguards": "No safeguards",
     "inheritedHint": "Greyed-out safeguards are turned on by the project or by Production and cannot be turned off.",
     "cancel": "Cancel",
-    "save": "Save"
+    "save": "Save",
+    "masking": "Column masking",
+    "maskColumns": "Mask these columns on every connection of this type",
+    "maskInherited": "The team's definition always masks: {{patterns}}. Yours add to them.",
+    "maskHint": "One pattern per line (* is any characters, ? one). Patterns add up across the built-in, team and personal definitions, and no connection can leave them visible.",
+    "masks": "masks {{patterns}}"
+  },
+  "masking": {
+    "title": "Masking",
+    "intro": "Columns whose values show as •••••• on every connection on this computer: in the grid, copies, exports, statistics and agents' answers. One cell can be revealed at a time.",
+    "patterns": "Mask these columns everywhere",
+    "placeholder": "*password*\n*email*\ncard_*",
+    "saved": "Saved. It applies to connections opened from now on.",
+    "unreadable": "user.toml could not be read, so every column of every connection is masked until it is fixed.",
+    "hint": "One pattern per line, ignoring case: * is any characters, ? one. A pattern matches a column's name or the table column it reads; table.column names the table too. A connection of your own can leave a column visible in its form; a connection from the repository cannot unmask these, and connection types can add their own. Masking keeps values off the screen, not away from SQL: an expression such as lower(email) gets past it, and so does an alias on SQL Server, DuckDB and SQLite on a server."
   },
   "history": {
     "title": "History",
@@ -125,6 +139,9 @@
     "usedBy": "Used by: {{names}}",
     "ports": "Local ports",
     "portsIntro": "SSH tunnels listen on a local port of this computer (127.0.0.1). By default any free one is used.",
+    "loading": "Reading the current range…",
+    "loadFailed": "Could not read the current range: {{error}}",
+    "retry": "Retry",
     "portMin": "Lowest port",
     "portMax": "Highest port",
     "save": "Use this range",
@@ -141,8 +158,13 @@
     "checking": "Checking…",
     "upToDate": "You have the latest version.",
     "available": "Version {{version}} is available.",
+    "notesAction": "Release notes…",
     "install": "Install and restart",
     "installing": "Installing…",
+    "manualDeb": "This copy was installed from a .deb package: download the new .deb from the releases page and install it with your package manager.",
+    "manualRpm": "This copy was installed from an .rpm package: download the new .rpm from the releases page and install it with your package manager.",
+    "manualDownload": "This copy cannot update itself: download the new version from the releases page.",
+    "openReleases": "Open releases page",
     "hint": "Updates are signed and installed only when you click “Install and restart”. Open tabs come back with their SQL, not run.",
     "error": "Could not check for updates:"
   },
@@ -185,5 +207,19 @@
     "trailing": "End of line",
     "leading": "Start of line",
     "snippets": "Type sel, ins or upd and press Tab to expand a snippet. Tab moves to its next field; Shift+Tab moves back."
+  },
+  "map": {
+    "title": "Map",
+    "background": "Map background",
+    "tiles": "Show map tiles from a tile server",
+    "tilesHint": "Off by default. Every tile the map loads tells that server which part of the world you are looking at. Without tiles, shapes are drawn on a plain background and nothing leaves this computer.",
+    "tilesNeedServer": "Give a tile server below first.",
+    "server": "Tile server",
+    "name": "Name",
+    "url": "Tile address",
+    "urlHint": "An https:// address with {z}, {x} and {y} where the server puts the zoom and the tile, as its documentation gives it (http:// only for a server on this computer). Check that its terms allow use from an app.",
+    "attribution": "Attribution",
+    "attributionHint": "The credit the server asks maps to show. It is shown on the map.",
+    "remove": "Remove tile server"
   }
 }

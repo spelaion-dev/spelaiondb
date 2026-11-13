@@ -8,12 +8,14 @@ use spelaion_driver_api::Secret;
 use toml_edit::{Array, ArrayOfTables, InlineTable, Item, Table, Value};
 
 use crate::accounts::{proxy_account, tunnel_account};
+use crate::atomic_file;
 use crate::draft::{PasswordChoice, portable_path, slug};
-use crate::edit::{read_doc, write_doc};
+use crate::edit::{new_file_mode, read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{Config, Source, TunnelEntry, validate_tunnel, workspace_dir};
 use crate::model::{
-    HopConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec, SshAuth, TunnelFile,
+    HopConfig, KubernetesProfileConfig, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec,
+    SshAuth, SsmConfig, TunnelFile,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 
@@ -46,6 +48,30 @@ pub struct TunnelDraft {
     pub options: TunnelDraftOptions,
     /// A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027).
     pub proxy: Option<ProxyDraft>,
+    /// AWS SSM in front of the first hop, or instead of hops (ADR-050).
+    pub ssm: Option<SsmDraft>,
+    /// A Kubernetes profile (ADR-050): then there are no hops, proxy or SSH settings.
+    pub kubernetes: Option<KubernetesProfileDraft>,
+}
+
+/// AWS SSM as typed in the form. Empty strings mean "not set": the AWS CLI's defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SsmDraft {
+    pub target: String,
+    pub region: String,
+    pub profile: String,
+    pub aws: String,
+}
+
+/// A Kubernetes network profile as typed in the form. Empty strings mean "not set": the
+/// connection that uses the profile may set them, or the defaults apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KubernetesProfileDraft {
+    pub context: String,
+    pub namespace: String,
+    pub resource: String,
+    pub kubeconfig: String,
+    pub kubectl: String,
 }
 
 /// The proxy as typed in the form. Empty strings mean "not set".
@@ -156,6 +182,32 @@ fn uses_keychain(hop: &HopConfig) -> bool {
     hop.password
         .as_ref()
         .is_some_and(|p| p.secret == "keychain")
+}
+
+/// Which of a tunnel's `keychain` passwords the keychain holds, never their values: the
+/// editor offers to keep a saved password only when there is one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoredTunnelPasswords {
+    /// One per hop, in order.
+    pub hops: Vec<bool>,
+    pub proxy: bool,
+}
+
+pub fn tunnel_passwords_stored(
+    config: &Config,
+    entry: &TunnelEntry,
+    backend: &dyn SecretBackend,
+) -> StoredTunnelPasswords {
+    let stored = |account: String| crate::secrets::is_stored(backend, &account);
+    StoredTunnelPasswords {
+        hops: (entry.file.hops.iter().enumerate())
+            .map(|(i, hop)| {
+                uses_keychain(hop) && stored(tunnel_account(config, entry.source, &entry.name, i))
+            })
+            .collect(),
+        proxy: proxy_uses_keychain(&entry.file)
+            && stored(proxy_account(config, entry.source, &entry.name)),
+    }
 }
 
 impl TunnelDraft {
@@ -273,6 +325,49 @@ impl TunnelDraft {
                 })
             }
         };
+        if let Some(kubernetes) = &self.kubernetes {
+            if !self.hops.is_empty() || self.proxy.is_some() || self.ssm.is_some() {
+                return Err(ConfigError::new(
+                    path,
+                    "a Kubernetes profile reaches the database through kubectl: it has no hops, proxy or AWS SSM",
+                ));
+            }
+            // The form's SSH settings do not apply: they are left out.
+            return validate_tunnel(
+                path,
+                TunnelFile {
+                    schema_version: SCHEMA_VERSION,
+                    keepalive_interval: None,
+                    keepalive_count: None,
+                    connect_timeout: None,
+                    proxy: None,
+                    ssm: None,
+                    kubernetes: Some(KubernetesProfileConfig {
+                        context: non_empty(&kubernetes.context),
+                        namespace: non_empty(&kubernetes.namespace),
+                        resource: non_empty(&kubernetes.resource),
+                        kubeconfig: non_empty(&kubernetes.kubeconfig)
+                            .map(|f| portable_path(&f, root)),
+                        kubectl: non_empty(&kubernetes.kubectl),
+                    }),
+                    hops: Vec::new(),
+                },
+            );
+        }
+        let ssm = match &self.ssm {
+            None => None,
+            Some(ssm) => Some(SsmConfig {
+                target: non_empty(&ssm.target).ok_or_else(|| {
+                    ConfigError::new(
+                        path,
+                        "the AWS SSM target (the managed node, i-… or mi-…) cannot be empty",
+                    )
+                })?,
+                region: non_empty(&ssm.region),
+                profile: non_empty(&ssm.profile),
+                aws: non_empty(&ssm.aws),
+            }),
+        };
         let options = &self.options;
         validate_tunnel(
             path,
@@ -288,6 +383,8 @@ impl TunnelDraft {
                     .connect_timeout
                     .filter(|s| *s != TunnelFile::DEFAULT_CONNECT_TIMEOUT),
                 proxy,
+                ssm,
+                kubernetes: None,
                 hops,
             },
         )
@@ -328,6 +425,23 @@ impl TunnelDraft {
                 user: proxy.user.clone().unwrap_or_default(),
                 password: choice_of(proxy.password.as_ref()),
             }),
+            ssm: entry.file.ssm.as_ref().map(|ssm| SsmDraft {
+                target: ssm.target.clone(),
+                region: ssm.region.clone().unwrap_or_default(),
+                profile: ssm.profile.clone().unwrap_or_default(),
+                aws: ssm.aws.clone().unwrap_or_default(),
+            }),
+            kubernetes: entry
+                .file
+                .kubernetes
+                .as_ref()
+                .map(|k| KubernetesProfileDraft {
+                    context: k.context.clone().unwrap_or_default(),
+                    namespace: k.namespace.clone().unwrap_or_default(),
+                    resource: k.resource.clone().unwrap_or_default(),
+                    kubeconfig: k.kubeconfig.clone().unwrap_or_default(),
+                    kubectl: k.kubectl.clone().unwrap_or_default(),
+                }),
         }
     }
 }
@@ -354,8 +468,7 @@ fn store_passwords(
     backend: &dyn SecretBackend,
 ) -> Result<Vec<String>, ResolveError> {
     let set = |account: String, secret: &Secret| {
-        backend
-            .keychain_set(&account, secret.expose())
+        crate::secrets::store(backend, &account, secret.expose())
             .map_err(|message| ResolveError::Secret {
                 reference: format!("keychain:{account}"),
                 message,
@@ -396,8 +509,18 @@ pub fn add_tunnel(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
     }
-    std::fs::write(&path, format!("#:schema {TUNNEL_SCHEMA_URL}\n\n{body}"))
-        .map_err(|e| ConfigError::new(&path, e.to_string()))?;
+    let content = format!("#:schema {TUNNEL_SCHEMA_URL}\n\n{body}");
+    atomic_file::create_new(&path, content.as_bytes(), new_file_mode(draft.source)).map_err(
+        |e| {
+            let message = match e.kind() {
+                std::io::ErrorKind::AlreadyExists => {
+                    "a tunnel with that name already exists".to_string()
+                }
+                _ => format!("could not write: {e}"),
+            };
+            ConfigError::new(&path, message)
+        },
+    )?;
     if let Err(e) = store_passwords(config, draft.source, &name, &file, passwords, backend) {
         let _ = std::fs::remove_file(&path);
         for i in 0..file.hops.len() {
@@ -514,6 +637,45 @@ fn write_options(table: &mut Table, old: &TunnelFile, new: &TunnelFile) {
             }
         }
     }
+    if old.ssm != new.ssm {
+        match &new.ssm {
+            None => {
+                table.remove("ssm");
+            }
+            Some(ssm) => {
+                let item = table
+                    .entry("ssm")
+                    .or_insert_with(|| Item::Table(Table::new()));
+                if let Some(section) = item.as_table_mut() {
+                    let text = |v: &Option<String>| v.clone().map(Value::from);
+                    put(section, "target", Some(Value::from(ssm.target.as_str())));
+                    put(section, "region", text(&ssm.region));
+                    put(section, "profile", text(&ssm.profile));
+                    put(section, "aws", text(&ssm.aws));
+                }
+            }
+        }
+    }
+    if old.kubernetes != new.kubernetes {
+        match &new.kubernetes {
+            None => {
+                table.remove("kubernetes");
+            }
+            Some(kubernetes) => {
+                let item = table
+                    .entry("kubernetes")
+                    .or_insert_with(|| Item::Table(Table::new()));
+                if let Some(section) = item.as_table_mut() {
+                    let text = |v: &Option<String>| v.clone().map(Value::from);
+                    put(section, "context", text(&kubernetes.context));
+                    put(section, "namespace", text(&kubernetes.namespace));
+                    put(section, "resource", text(&kubernetes.resource));
+                    put(section, "kubeconfig", text(&kubernetes.kubeconfig));
+                    put(section, "kubectl", text(&kubernetes.kubectl));
+                }
+            }
+        }
+    }
 }
 
 /// A revision identifies the complete tunnel and the file it was loaded from.
@@ -590,7 +752,7 @@ pub fn update_tunnel(
     let parsed: TunnelFile = toml::from_str(&edited)
         .map_err(|e| ConfigError::new(path, format!("the edited file is not valid: {e}")))?;
     let parsed = validate_tunnel(path, parsed)?;
-    write_doc(path, &doc)?;
+    write_doc(path, &doc, new_file_mode(source))?;
 
     let mut result = store_passwords(config, source, name, &new, passwords, backend).map(|_| ());
     if result.is_ok() {
@@ -639,7 +801,8 @@ pub fn update_tunnel(
         }
     }
     if result.is_err() {
-        let _ = std::fs::write(path, original);
+        // Put the file back as it was, the same way it was written.
+        let _ = atomic_file::replace(path, original.as_bytes(), new_file_mode(source));
     }
     result.map(|()| parsed)
 }

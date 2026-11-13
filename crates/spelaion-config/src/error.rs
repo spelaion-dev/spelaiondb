@@ -9,6 +9,19 @@ pub struct ConfigError {
     pub line: Option<usize>,
     pub column: Option<usize>,
     pub message: String,
+    pub kind: ProblemKind,
+}
+
+/// Whether a problem changes what the configuration says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProblemKind {
+    /// Something did not load or was dropped (a file, a value): what connections resolve to
+    /// may not be what the user wrote. Whatever must fail closed does (the MCP server exposes
+    /// nothing).
+    Error,
+    /// Only informs: what the app uses loaded as written, and nothing was dropped or replaced
+    /// (the old `.spelunk/` folder, for example).
+    Notice,
 }
 
 impl ConfigError {
@@ -18,6 +31,24 @@ impl ConfigError {
             line: None,
             column: None,
             message: message.into(),
+            kind: ProblemKind::Error,
+        }
+    }
+
+    /// A problem that only informs ([`ProblemKind::Notice`]): use it only when every file
+    /// still loaded as written.
+    pub fn notice(file: &Path, message: impl Into<String>) -> Self {
+        Self {
+            kind: ProblemKind::Notice,
+            ..Self::new(file, message)
+        }
+    }
+
+    /// Whether whatever must fail closed on a broken configuration must do so for this.
+    pub fn blocks(&self) -> bool {
+        match self.kind {
+            ProblemKind::Error => true,
+            ProblemKind::Notice => false,
         }
     }
 
@@ -31,6 +62,7 @@ impl ConfigError {
             line: Some(line),
             column: Some(column),
             message: message.into(),
+            kind: ProblemKind::Error,
         }
     }
 }

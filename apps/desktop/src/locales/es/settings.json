@@ -103,7 +103,21 @@
     "noSafeguards": "Sin salvaguardas",
     "inheritedHint": "Las salvaguardas en gris las activa el proyecto o Producción y no se pueden desactivar.",
     "cancel": "Cancelar",
-    "save": "Guardar"
+    "save": "Guardar",
+    "masking": "Enmascarado de columnas",
+    "maskColumns": "Enmascarar estas columnas en todas las conexiones de este tipo",
+    "maskInherited": "La definición del equipo siempre enmascara: {{patterns}}. Las tuyas se suman.",
+    "maskHint": "Un patrón por línea (* es cualquier texto y ? un carácter). Los patrones se suman entre las definiciones integrada, del equipo y personal, y ninguna conexión puede dejarlos visibles.",
+    "masks": "enmascara {{patterns}}"
+  },
+  "masking": {
+    "title": "Enmascarado",
+    "intro": "Columnas cuyos valores se muestran como •••••• en todas las conexiones de este equipo: en la cuadrícula, las copias, las exportaciones, las estadísticas y las respuestas a los agentes. Se puede mostrar una celda cada vez.",
+    "patterns": "Enmascarar estas columnas en todas partes",
+    "placeholder": "*password*\n*email*\ncard_*",
+    "saved": "Guardado. Se aplica a las conexiones que se abran a partir de ahora.",
+    "unreadable": "No se pudo leer user.toml, así que todas las columnas de todas las conexiones se enmascaran hasta que se arregle.",
+    "hint": "Un patrón por línea, sin distinguir mayúsculas: * es cualquier texto y ? un carácter. Un patrón coincide con el nombre de una columna o con la columna de tabla que lee; tabla.columna nombra también la tabla. Una conexión tuya puede dejar visible una columna en su formulario; una conexión del repositorio no puede desenmascarar estas, y los tipos de conexión pueden añadir las suyas. El enmascarado aparta los valores de la pantalla, no del SQL: una expresión como lower(email) lo salta, y también un alias en SQL Server, DuckDB y SQLite en un servidor."
   },
   "history": {
     "title": "Historial",
@@ -125,6 +139,9 @@
     "usedBy": "Lo usan: {{names}}",
     "ports": "Puertos locales",
     "portsIntro": "Los túneles SSH escuchan en un puerto local de este ordenador (127.0.0.1). Por defecto se usa cualquiera libre.",
+    "loading": "Leyendo el rango actual…",
+    "loadFailed": "No se pudo leer el rango actual: {{error}}",
+    "retry": "Reintentar",
     "portMin": "Puerto más bajo",
     "portMax": "Puerto más alto",
     "save": "Usar este rango",
@@ -141,8 +158,13 @@
     "checking": "Buscando…",
     "upToDate": "Tienes la última versión.",
     "available": "La versión {{version}} está disponible.",
+    "notesAction": "Notas de la versión…",
     "install": "Instalar y reiniciar",
     "installing": "Instalando…",
+    "manualDeb": "Esta copia se instaló desde un paquete .deb: descarga el nuevo .deb de la página de releases e instálalo con tu gestor de paquetes.",
+    "manualRpm": "Esta copia se instaló desde un paquete .rpm: descarga el nuevo .rpm de la página de releases e instálalo con tu gestor de paquetes.",
+    "manualDownload": "Esta copia no puede actualizarse sola: descarga la nueva versión de la página de releases.",
+    "openReleases": "Abrir la página de releases",
     "hint": "Las actualizaciones van firmadas y solo se instalan cuando pulsas «Instalar y reiniciar». Las pestañas abiertas vuelven con su SQL, sin ejecutarlo.",
     "error": "No se pudo buscar actualizaciones:"
   },
@@ -185,5 +207,19 @@
     "trailing": "Final de línea",
     "leading": "Inicio de línea",
     "snippets": "Escribe sel, ins o upd y pulsa Tab para expandir un fragmento. Tab avanza al siguiente campo; Mayús+Tab vuelve atrás."
+  },
+  "map": {
+    "title": "Mapa",
+    "background": "Fondo del mapa",
+    "tiles": "Mostrar teselas de un servidor de mapas",
+    "tilesHint": "Desactivado por defecto. Cada tesela que carga el mapa le dice a ese servidor qué parte del mundo estás mirando. Sin teselas, las formas se dibujan sobre un fondo liso y nada sale de este equipo.",
+    "tilesNeedServer": "Indica antes un servidor de teselas.",
+    "server": "Servidor de teselas",
+    "name": "Nombre",
+    "url": "Dirección de las teselas",
+    "urlHint": "Una dirección https:// con {z}, {x} e {y} donde el servidor pone el zoom y la tesela, tal como la da su documentación (http:// solo para un servidor en este equipo). Comprueba que sus condiciones permiten usarlo desde una aplicación.",
+    "attribution": "Atribución",
+    "attributionHint": "El crédito que el servidor pide mostrar en los mapas. Se muestra en el mapa.",
+    "remove": "Quitar el servidor de teselas"
   }
 }

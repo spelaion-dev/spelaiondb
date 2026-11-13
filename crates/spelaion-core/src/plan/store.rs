@@ -1,8 +1,9 @@
 use super::*;
+use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A bounded raw-text window. Offsets are UTF-8 bytes and always returned on boundaries.
@@ -327,6 +328,7 @@ impl PlanDocument {
                 },
                 native_type: "plan".into(),
                 native_id: None,
+                origin: None,
             })
             .collect();
         let mut writer = crate::export::RowWriter::new(
@@ -480,31 +482,11 @@ fn atomic(
     cancel: &crate::ExportCancel,
     write: impl FnOnce(&mut dyn Write) -> Result<(), PlanError>,
 ) -> Result<(), PlanError> {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
     check_cancel(cancel)?;
-    let mut name = path.as_os_str().to_owned();
-    name.push(format!(
-        ".spelaion-plan-{}-{}.tmp",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    let temporary = PathBuf::from(name);
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    let result = (|| {
-        let mut writer = std::io::BufWriter::new(file);
-        write(&mut writer)?;
-        check_cancel(cancel)?;
-        writer.flush()?;
-        writer.get_ref().sync_all()?;
-        drop(writer);
-        std::fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result
+    // Dropped on any error or cancel, which deletes the temporary file.
+    let mut writer = std::io::BufWriter::new(AtomicWriter::create(path, NewFileMode::Default)?);
+    write(&mut writer)?;
+    check_cancel(cancel)?;
+    writer.into_inner().map_err(|e| e.into_error())?.commit()?;
+    Ok(())
 }

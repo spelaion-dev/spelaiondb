@@ -7,7 +7,9 @@ use spelaion_driver_api::{Dialect, StatementSpan};
 /// - ends a batch at a line that is only `GO` (the line is not sent);
 /// - splits at `;` only outside quotes, comments and `BEGIN … END` / `CASE … END` blocks;
 /// - keeps the rest of the batch as one statement after `CREATE`/`ALTER` of a procedure,
-///   function, trigger or view, which must be alone in their batch anyway.
+///   function, trigger or view, which must be alone in their batch anyway, and after a
+///   `DECLARE`: a variable only lives for its batch, so the statements that use it go with it
+///   (statements before the `DECLARE` still split).
 ///
 /// Several statements without `;` between them go to the server as one batch: SQL Server runs
 /// them in order and each result set is shown.
@@ -20,6 +22,10 @@ impl Dialect for SqlServerDialect {
 
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script)
+    }
+
+    fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
+        spelaion_driver_api::code_ranges(script, skip_non_code)
     }
 
     fn quote_identifier(&self, ident: &str) -> String {
@@ -269,12 +275,17 @@ fn go_line(b: &[u8], start: usize) -> Option<usize> {
     (first.eq_ignore_ascii_case("go") && count_ok && words.next().is_none()).then_some(end)
 }
 
-/// Statements that must be alone in their batch: the rest of the batch belongs to them.
+/// Statements the rest of the batch belongs to: those that must be alone in their batch, and
+/// `DECLARE`, whose variables (and cursors) only live for the batch, so the statements that use
+/// them must go with it.
 fn takes_rest_of_batch(words: &[String]) -> bool {
     let mut rest = words.iter().map(String::as_str);
     let Some(first) = rest.next() else {
         return false;
     };
+    if first == "declare" {
+        return true;
+    }
     if first != "create" && first != "alter" {
         return false;
     }
@@ -354,27 +365,8 @@ fn split(script: &str) -> Vec<StatementSpan> {
                     .position(|&c| c == b'\n')
                     .map_or(b.len(), |p| i + p);
             }
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                // Block comments nest in T-SQL.
-                let mut nested = 0usize;
-                while i < b.len() {
-                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
-                        nested += 1;
-                        i += 2;
-                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
-                        nested -= 1;
-                        i += 2;
-                        if nested == 0 {
-                            break;
-                        }
-                    } else {
-                        if b[i] == b'\n' {
-                            at_line_start = false;
-                        }
-                        i += 1;
-                    }
-                }
-            }
+            // Block comments nest in T-SQL; a `GO` line inside one does not end the batch.
+            b'/' if b.get(i + 1) == Some(&b'*') => i = block_comment_end(b, i),
             b';' if depth == 0 && !rest_of_batch => {
                 if has_code {
                     // MERGE is the one statement T-SQL refuses without its `;`: it keeps it.
@@ -445,6 +437,45 @@ fn next_word(script: &str, from: usize) -> String {
         .next()
         .unwrap_or("")
         .to_ascii_lowercase()
+}
+
+/// The byte after a block comment that starts at `i` (`/*`); block comments nest in T-SQL.
+fn block_comment_end(b: &[u8], mut i: usize) -> usize {
+    let mut nested = 0usize;
+    while i < b.len() {
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            nested += 1;
+            i += 2;
+        } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+            nested -= 1;
+            i += 2;
+            if nested == 0 {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    b.len()
+}
+
+/// The byte after the string, bracketed or quoted name, or comment that starts at `i`, read
+/// as the splitter reads it; `None` when none starts there.
+fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+    let b = script.as_bytes();
+    match *b.get(i)? {
+        b'\'' => Some(skip_quoted(b, i, b'\'', b'\'')),
+        b'"' => Some(skip_quoted(b, i, b'"', b'"')),
+        b'[' => Some(skip_quoted(b, i, b'[', b']')),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some(
+            b[i..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(b.len(), |p| i + p + 1),
+        ),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i)),
+        _ => None,
+    }
 }
 
 /// Skips a quoted text starting at `i` (the opening character); a doubled closing character
@@ -547,6 +578,41 @@ mod tests {
         assert_eq!(
             parts("create table t (a int); select 2"),
             ["create table t (a int)", "select 2"]
+        );
+    }
+
+    #[test]
+    fn variables_keep_the_rest_of_their_batch() {
+        // A variable lives for one batch: the statements that use it go with its DECLARE.
+        assert_eq!(
+            parts("DECLARE @id int = 5;\nSELECT * FROM orders WHERE id = @id;\nSET @id = 6;"),
+            ["DECLARE @id int = 5;\nSELECT * FROM orders WHERE id = @id;\nSET @id = 6;"]
+        );
+        // A table variable too, and statements before the DECLARE still split.
+        assert_eq!(
+            parts(
+                "select 1;\nset nocount on;\n-- the rows\ndeclare @t table (id int);\ninsert into @t values (1);\nselect * from @t;"
+            ),
+            [
+                "select 1",
+                "set nocount on",
+                "-- the rows\ndeclare @t table (id int);\ninsert into @t values (1);\nselect * from @t;"
+            ]
+        );
+        // A GO line ends it: the next batch splits as usual.
+        assert_eq!(
+            parts("declare @x int = 1; select @x;\nGO\nselect 2; select 3"),
+            ["declare @x int = 1; select @x;", "select 2", "select 3"]
+        );
+        // A DECLARE inside a block is the block's: the block ends at its `;` as before.
+        assert_eq!(
+            parts("if 1 = 1 begin declare @y int; set @y = 1; end; select 4"),
+            ["if 1 = 1 begin declare @y int; set @y = 1; end", "select 4"]
+        );
+        // `declare` as a later word does not count.
+        assert_eq!(
+            parts("select 1 as [declare]; select 2"),
+            ["select 1 as [declare]", "select 2"]
         );
     }
 

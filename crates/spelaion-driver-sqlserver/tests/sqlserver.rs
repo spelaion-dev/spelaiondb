@@ -245,10 +245,16 @@ async fn connect() -> Option<Box<dyn Connection>> {
 }
 
 async fn run(conn: &dyn Connection, sql: &str) -> Result<Vec<ExecEvent>, DriverError> {
-    conn.execute(sql, &ExecOptions { batch_size: 10_000 })
-        .await?
-        .try_collect()
-        .await
+    conn.execute(
+        sql,
+        &ExecOptions {
+            batch_size: 10_000,
+            ..Default::default()
+        },
+    )
+    .await?
+    .try_collect()
+    .await
 }
 
 /// A result set: its header (name, logical type, native type) and its rows as text.
@@ -416,13 +422,19 @@ async fn type_zoo() {
         ),
         (
             "cast('23:59:59.1234567' as time(7))",
-            LogicalType::Time,
+            LogicalType::Text,
             "time",
-            "23:59:59.123456",
+            "23:59:59.1234567",
+        ),
+        (
+            "cast('10:11:12.5' as time(3))",
+            LogicalType::Text,
+            "time",
+            "10:11:12.500",
         ),
         (
             "cast('10:11:12' as time(0))",
-            LogicalType::Time,
+            LogicalType::Text,
             "time",
             "10:11:12",
         ),
@@ -445,23 +457,43 @@ async fn type_zoo() {
             "datetime",
             "2024-01-01 10:00:00",
         ),
+        // datetime2 and datetimeoffset are the server's text (SDB-265): every digit of their
+        // scale, and a datetimeoffset's own offset.
         (
             "cast('2024-01-01 10:00:00.5' as datetime2(3))",
-            LogicalType::Timestamp,
+            LogicalType::Text,
             "datetime2",
-            "2024-01-01 10:00:00.5",
+            "2024-01-01 10:00:00.500",
         ),
         (
             "cast('9999-12-31 23:59:59.9999999' as datetime2(7))",
-            LogicalType::Timestamp,
+            LogicalType::Text,
             "datetime2",
-            "9999-12-31 23:59:59.999999",
+            "9999-12-31 23:59:59.9999999",
+        ),
+        (
+            "cast('0001-01-01 00:00:00' as datetime2(0))",
+            LogicalType::Text,
+            "datetime2",
+            "0001-01-01 00:00:00",
         ),
         (
             "cast('2024-01-01 10:00:00 +02:00' as datetimeoffset)",
-            LogicalType::TimestampTz,
+            LogicalType::Text,
             "datetimeoffset",
-            "2024-01-01 08:00:00+00",
+            "2024-01-01 10:00:00.0000000 +02:00",
+        ),
+        (
+            "cast('2024-01-01 01:30:00.1234567 -05:30' as datetimeoffset(7))",
+            LogicalType::Text,
+            "datetimeoffset",
+            "2024-01-01 01:30:00.1234567 -05:30",
+        ),
+        (
+            "cast('9999-12-31 23:59:59.99 +14:00' as datetimeoffset(2))",
+            LogicalType::Text,
+            "datetimeoffset",
+            "9999-12-31 23:59:59.99 +14:00",
         ),
         (
             "cast(42 as sql_variant)",
@@ -486,6 +518,11 @@ async fn type_zoo() {
             "{expr}"
         );
         assert_eq!(rows[0][0], *text, "{expr}");
+        // The server's own text, exactly.
+        if matches!(*native, "datetime2" | "datetimeoffset" | "time") {
+            let server = tables(&*conn, &format!("select convert(varchar(40), {expr}) as v")).await;
+            assert_eq!(rows[0][0], server[0].1[0][0], "{expr}");
+        }
     }
 }
 
@@ -589,19 +626,34 @@ async fn errors_point_at_their_line_and_the_session_survives() {
     assert_eq!(tables(&*conn, "select 1 as one").await[0].1, [["1"]]);
 }
 
+/// How long a cancelled batch may take to stop: a lost cancel fails the test here instead of
+/// waiting for the batch to end on its own.
+const CANCEL_LIMIT: Duration = Duration::from_secs(10);
+
+/// Collects a batch's events, failing if it does not end within [`CANCEL_LIMIT`].
+async fn finish(
+    events: spelaion_driver_api::EventStream,
+    what: &str,
+) -> Result<Vec<ExecEvent>, DriverError> {
+    tokio::time::timeout(CANCEL_LIMIT, events.try_collect())
+        .await
+        .unwrap_or_else(|_| panic!("{what}: the cancel was lost, the batch still runs"))
+}
+
 #[tokio::test]
 async fn cancel_stops_the_batch_and_keeps_the_session() {
     let Some(conn) = connect().await else { return };
     let conn: Arc<dyn Connection> = Arc::from(conn);
     exec_all(&*conn, "set lock_timeout 1000").await;
     let cancel = conn.cancel_handle();
-    let canceller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        cancel.cancel().await
-    });
     let started = Instant::now();
-    let result = run(&*conn, "waitfor delay '00:00:30'").await;
-    canceller.await.unwrap().unwrap();
+    let events = conn
+        .execute("waitfor delay '00:00:30'", &ExecOptions::default())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    cancel.cancel().await.unwrap();
+    let result = finish(events, "during").await;
     assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
     assert!(started.elapsed() < Duration::from_secs(10));
     // Same session: its settings are still there.
@@ -614,6 +666,52 @@ async fn cancel_stops_the_batch_and_keeps_the_session() {
     assert_eq!(tables(&*conn, "select 2 as two").await[0].1, [["2"]]);
 }
 
+/// A cancel that arrives while a batch still waits behind another request, or before the
+/// connection's task picked it up, stops it too: it never reaches the server.
+#[tokio::test]
+async fn cancel_before_the_batch_starts_stops_it() {
+    let Some(conn) = connect().await else { return };
+    exec_all(&*conn, "create table #ran (n int)").await;
+    for round in 0..5 {
+        let events = conn
+            .execute(
+                "insert into #ran values (1); waitfor delay '00:00:30'",
+                &ExecOptions::default(),
+            )
+            .await
+            .unwrap();
+        conn.cancel_handle().cancel().await.unwrap();
+        let result = finish(events, &format!("before, round {round}")).await;
+        assert!(matches!(result, Err(DriverError::Cancelled)), "{result:?}");
+    }
+    // Queued behind a running batch: both stop, and the queued one never ran.
+    let running = conn
+        .execute("waitfor delay '00:00:30'", &ExecOptions::default())
+        .await
+        .unwrap();
+    let queued = conn
+        .execute(
+            "insert into #ran values (100); waitfor delay '00:00:30'",
+            &ExecOptions::default(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    conn.cancel_handle().cancel().await.unwrap();
+    for (events, what) in [(running, "running"), (queued, "queued")] {
+        let result = finish(events, what).await;
+        assert!(
+            matches!(result, Err(DriverError::Cancelled)),
+            "{what}: {result:?}"
+        );
+    }
+    // The session goes on, and the queued batch's insert never ran.
+    let ran = tables(&*conn, "select count(*) as n from #ran where n = 100").await;
+    assert_eq!(ran[0].1, [["0"]]);
+    // Sent right after a cancel, the next batch is not touched by it.
+    assert_eq!(tables(&*conn, "select 3 as three").await[0].1, [["3"]]);
+}
+
 /// A cancel while rows stream (the response is dropped in the middle of a packet) also
 /// leaves the session in step: the next statements get their own results.
 #[tokio::test]
@@ -622,7 +720,7 @@ async fn cancel_while_rows_stream() {
     let mut events = conn
         .execute(
             "select a.object_id, a.name, b.name as other from sys.all_objects a cross join sys.all_objects b",
-            &ExecOptions { batch_size: 500 },
+            &ExecOptions { batch_size: 500, ..Default::default() },
         )
         .await
         .unwrap();
@@ -637,7 +735,7 @@ async fn cancel_while_rows_stream() {
         }
     }
     conn.cancel_handle().cancel().await.unwrap();
-    let rest: Result<Vec<ExecEvent>, DriverError> = events.try_collect().await;
+    let rest = finish(events, "while rows stream").await;
     assert!(
         matches!(rest, Err(DriverError::Cancelled)),
         "{:?}",
@@ -1288,7 +1386,7 @@ async fn keep_alive_pauses_after_a_dropped_batch_with_a_transaction() {
     let Some(conn) = connect().await else { return };
     let events = conn.execute(
         "begin transaction; select top (1000) a.object_id from sys.all_objects a cross join sys.all_objects b",
-        &ExecOptions { batch_size: 1 },
+        &ExecOptions { batch_size: 1, ..Default::default() },
     ).await.unwrap();
     drop(events);
     assert_eq!(conn.keep_alive().await.unwrap(), KeepAlive::InTransaction);

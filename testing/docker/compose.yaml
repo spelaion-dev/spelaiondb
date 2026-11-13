@@ -27,8 +27,11 @@ services:
       - ./keys/authorized_keys:/etc/ssh/authorized_keys/spelaion:ro
     networks: [mid, data]
 
+  # PostgreSQL 17 with PostGIS available (the map view's tests, ADR-045). The image's own
+  # init script is hidden by the mount below: only `spelaion_gis` has the extension, so the
+  # `spelaion` database's catalog is the same as on plain PostgreSQL.
   postgres:
-    image: postgres:17-alpine
+    image: postgis/postgis:17-3.5-alpine
     environment:
       POSTGRES_USER: spelaion
       POSTGRES_PASSWORD: spelaion

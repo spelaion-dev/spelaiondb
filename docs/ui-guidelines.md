@@ -86,6 +86,8 @@ Each role is defined for both themes:
 | Interaction | `--hover`, `--accent`, `--accent-soft`, `--accent-text` | hover is a neutral tint; a selected row or item is `--accent-soft` with `--fg` text; only the primary button is filled with the accent |
 | Status | `--success`, `--warning`, `--danger`, `--info`, each with `-soft` and `-fg` | always beside text or an icon; `-fg` text reaches 4.5:1 on `-soft` |
 | Connection types | `--tone-{neutral,green,blue,amber,red}`, each with `-soft` and `-fg` | ADR-029's fixed palette: no free colors, no stripes |
+| Chart series | `--chart-1` … `--chart-8`, `--chart-other` | ADR-040's categorical palette, in fixed order (series 1 is always `--chart-1`); only for chart marks, never text, and never color alone: a legend, labels or a tooltip name every series |
+| Map | `--map-bg`, `--map-shape`, `--map-shape-fill`, `--map-hover`, `--map-point-ring` | ADR-045's map: the plain background, the shapes, the hovered shape (its row is also written as text) and the ring that keeps points visible over tiles |
 
 - One accent, blue. Red is for destructive actions, errors and Production; amber for pending
   or risky states; green for connected and completed. Never use a status color as decoration.
@@ -102,8 +104,9 @@ Each role is defined for both themes:
   behind modal ones. Panels, cards and buttons have no shadow.
 - Heights: `--control-sm` 24px (icon buttons in toolbars, inline controls), `--control-md`
   28px (buttons, inputs and selects) and `--control-lg` 32px (welcome and empty-state
-  actions). Rows in lists, trees, menus and the grid are `--row-h` (26px); bars (the tab strip
-  and the editor's and the results' toolbars) are `--bar-h` (36px).
+  actions). Rows in lists, trees and menus are `--row-h` (26px); result grid rows are 24px to
+  display more data with 12px text. Bars (the tab strip and the editor's and the
+  results' toolbars) are `--bar-h` (36px).
 - Stacking order, lowest first: `--z-sticky`, `--z-dropdown`, `--z-dialog`, `--z-popover` (a
   menu opened from a dialog shows above it) and `--z-toast`.
 
@@ -139,9 +142,12 @@ animate data, the grid, layout changes or anything while the user types. Under
 - **Tabs.** One active indicator: the `--panel` surface and a 2px accent edge. The close button
   shows on the active tab and on hover or focus; `Ctrl+W` always closes the active tab.
 - **Explorer, lists and trees.** 26px rows, a 16px icon and the name in `--text-md`. The name
-  comes first: badges and metadata sit on the right, shrink first and collapse to a dot with a
-  tooltip when the sidebar is narrow. Row actions show on hover, focus and selection, and are
-  always in the context menu.
+  comes first: badges and metadata sit on the right and only take the room the name leaves, each
+  shown whole or not at all, in order of importance, skipping one that does not fit without
+  hiding a smaller one after it (never cut with an ellipsis). A type badge collapses to its dot
+  when its name does not fit, and the dot always stays (the name gives way to it): the type is
+  what tells environments apart. The row's tooltip says what every hidden mark says. Row actions
+  show on hover, focus and selection, and are always in the context menu.
 - **Badges.** Soft: the tone's `-soft` background and `-fg` text, `--text-xs` at 600,
   `--radius-sm`, 2px by 6px of padding, the type's name in sentence case. Production's badge
   is the only solid one. One type badge per row at most; other flags (SSH, read-only) are
@@ -193,13 +199,14 @@ to an action that is also in a context menu, never its only way in.
 |---|---|---|
 | Editor action column | running and saving the tab's SQL | Run (Cancel while running), Run script, Run options, Format, Save, Save as |
 | Tab bar (connection row) | what the tab is connected to and its state | connection and database (or schema) pickers, status with Reconnect, type badge, transaction controls; Refresh / Cancel on table tabs |
-| Results toolbar and grid | the active result and its selection | result tabs, filter, Export…, maximize; row edits with Save changes / Discard above the grid; copy, sort and filters in the grid's menus; in a table data tab, a foreign key cell's link and Open referenced row, and the side panel's references of the active row; the side panel's selection numbers (also in the cell menu); in a table data tab, Column statistics in the header menu |
+| Results toolbar and grid | the active result and its selection | result tabs, filter, Export…, chart (grid or chart of the result; Chart selected columns in the cell menu; the chart's own controls and Save image… above it), maximize; row edits with Undo, Redo, Save changes and Discard above the grid; bulk edits of the selection in the cell menu (Set value…, Paste, Fill down, Set NULL, and under Change selected cells: trim, case, DEFAULT, a new UUID, now); copy, sort and filters in the grid's menus; in a table data tab, a foreign key cell's link and Open referenced row, and the side panel's references of the active row; the side panel's selection numbers (also in the cell menu); the cell panel's Map of a geometry value or of its whole column (ADR-045; tiles only from the server chosen in Settings), Save to file… and, in an editable result, Load from file… and the value pickers (a date and time, the allowed values, a row of the referenced table); in a table data tab, Column statistics in the header menu; Reveal value of a masked cell in the cell menu (ADR-051: a popover, never the grid) |
 | Tab strip | tabs and files | new tab, the file menu (Open…, recent files: the app has no menu bar), each tab's context menu |
 | Explorer header | the explorer itself | link with editor, connected only, quick filter (finds connections by name, tag, type or host, forgiving a typo), add connection |
-| Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create, Import data… (a table, or a new table from a schema),  Move to folder… (also by dragging the connection onto a folder title), Rename…, Drop… (last, red); a connection's: New query, Open object by name…, Refresh all schemas, Edit…, Configure filters…, New schema, Duplicate, Copy, Paste connection, Move to folder…, Delete… (last, red) |
-| Activity bar | panels and pages | explorer, processes; history, saved queries, MCP and Settings at the bottom |
+| Explorer row menu | everything about that object or connection | open, generate SQL, copy names, filters, create (New table… opens ADR-047's form), Edit column… (a column, or the columns chosen with Ctrl+click: ADR-047's structure form), Edit source (a view, function or procedure, opened in the editor), Run… (a function or procedure: its call runs in a new tab after the parameter form), Import data… (a table, or a new table from a schema), ER diagram (of a schema; of a table's related tables, or of the tables chosen with Ctrl+click), New role… / New user… / New login… (a Roles, Users or Logins folder) and Change password…, Lock or unlock…, Privileges… (an account, ADR-048: the password shown as *** in the SQL; what it has, and a grant or revoke form), Move to folder… (also by dragging the connection onto a folder title), Rename…, Drop… (last, red); a connection's: New query, Open object by name…, Refresh all schemas, Edit…, Configure filters…, New schema, Back up… and Restore… (ADR-049: the engine's own tools through the tunnel, or SQLite's and DuckDB's own commands, with their live log; a restore asks first), Run SQL file… (statements done of the total, after a confirmation), Duplicate, Copy, Paste connection, Move to folder…, Delete… (last, red) |
+| ER diagram tab | the diagram on screen | its toolbar: the columns shown (all, keys only, names only), types, comments, zoom out / in, fit to screen, read the tables again, Export (PNG, SVG, Mermaid, DBML); a table's menu (right click): Focus on this table (a new diagram tab), Open data, Open structure (ADR-046) |
+| Activity bar | panels and pages | explorer, processes (its Processes, Locks and Settings views; ending a session from Locks uses the process actions), search (names from the explorer's catalog, values in chosen tables, ADR-043); history, saved queries, MCP and Settings at the bottom |
 | Settings | preferences for every workspace | applied and saved as they change, with no Save button |
-| Command palette | every app command, and the actions of connections and loaded objects | Ctrl+Shift+P: commands with their shortcuts, connections, the explorer's loaded objects (open data, open structure, new console, copy names, show in explorer) and recent files |
+| Command palette | every app command, and the actions of connections and loaded objects | Ctrl+Shift+P: commands with their shortcuts, connections, the explorer's loaded objects (open data, open structure, new console, ER diagram of related tables, copy names, show in explorer), ER diagram of the current table or schema, and recent files |
 
 - App commands (the tab menu, the file menu, the activity bar, the welcome screen and the global
   shortcuts) are registered once in `commandRegistry.ts`, with their name and shortcut, and what
@@ -229,7 +236,7 @@ to an action that is also in a context menu, never its only way in.
   one handler (and the Ctrl+Tab switcher in `TabBar.tsx`). They do nothing while a modal is
   open, and never take a key that a focused area uses.
 - Focused areas (editor, grid, explorer, tab strip) handle their own keys and may give a key a
-  local meaning: Ctrl+S in the grid saves pending edits; Ctrl+Shift+C copies with headers in the
+  local meaning: Ctrl+S in the grid saves pending edits, Ctrl+Z and Ctrl+Y undo and redo them; Ctrl+Shift+C copies with headers in the
   grid and qualified names in the explorer. Text inputs keep their own keys (Ctrl+Z, Ctrl+A).
 - Handlers accept Ctrl or Cmd (`ctrlKey || metaKey`). Ctrl+Alt is AltGr on Windows: match
   `e.key`, so a key that AltGr turns into a character never fires the shortcut.
@@ -242,12 +249,15 @@ to an action that is also in a context menu, never its only way in.
 
 | Where | Keys |
 |---|---|
-| Anywhere | Ctrl+Shift+P command palette · Ctrl+T new query · Ctrl+Shift+T reopen closed tab · Ctrl+W close tab (or Settings) · Ctrl+Shift+W close all · Ctrl+Alt+W close others · Ctrl+Alt+R close to the right · Ctrl+F2 rename tab · Ctrl+Alt+D duplicate tab · Ctrl+Alt+P pin tab · Ctrl+Tab / Ctrl+Shift+Tab recent tabs · Ctrl+PageDown / Ctrl+PageUp next / previous tab · Ctrl+Shift+PageDown / Ctrl+Shift+PageUp move the tab · Ctrl+O open SQL file · Ctrl+S save the file tab, or the console's query by name · Ctrl+Shift+S save as file · Ctrl+Alt+M maximize results · Ctrl+Shift+D open object by name · Ctrl+Shift+F explorer filter · Ctrl+Alt+V import data from the clipboard into the active tab's connection · Ctrl+, Settings |
+| Anywhere | Ctrl+Shift+P command palette · Ctrl+T new query · Ctrl+Shift+T reopen closed tab · Ctrl+W close tab (or Settings) · Ctrl+Shift+W close all · Ctrl+Alt+W close others · Ctrl+Alt+R close to the right · Ctrl+F2 rename tab · Ctrl+Alt+D duplicate tab · Ctrl+Alt+P pin tab · Ctrl+Tab / Ctrl+Shift+Tab recent tabs · Ctrl+PageDown / Ctrl+PageUp next / previous tab · Ctrl+Shift+PageDown / Ctrl+Shift+PageUp move the tab · Ctrl+O open SQL file · Ctrl+S save the file tab, or the console's query by name · Ctrl+Shift+S save as file · Ctrl+Alt+M maximize results · Ctrl+Shift+D open object by name · Ctrl+Shift+F explorer filter · Ctrl+H search names and data · Ctrl+Alt+V import data from the clipboard into the active tab's connection · Ctrl+, Settings |
 | SQL editor | Ctrl+Enter run selection or statement · Ctrl+Shift+Enter run script · Shift+Alt+F format · Ctrl+click / Alt+click add a cursor · Ctrl+/ line comment · Shift+Alt+A block comment · Alt+Z word wrap · Ctrl+Shift+[ fold selection · Ctrl+Shift+] unfold selection · Ctrl+Shift+\ matching bracket · Ctrl+Shift+Alt+U upper case · Ctrl+Shift+Alt+L lower case · Ctrl+Alt+Q lines to quoted list · Ctrl+Alt+S select statement · Ctrl+Alt+C copy statement · Ctrl+Shift+L select all occurrences · Ctrl+Alt+1 SELECT snippet · Ctrl+Alt+2 INSERT snippet · Ctrl+Alt+3 UPDATE snippet · Tab expand sel / ins / upd or next snippet field · Shift+Tab previous snippet field · Menu key / Shift+F10 editor actions · CodeMirror's defaults otherwise |
 | Result grid | arrows, Home, End, PageUp, PageDown (Ctrl: to the edge; Shift: extend) · Ctrl+A all · Shift+Space rows · Ctrl+Space columns · Ctrl+C copy · Ctrl+Shift+C copy with headers · Enter cell viewer, Escape closes it · Ctrl+Enter or Ctrl+click open the row a foreign key cell references (table data tabs) · Ctrl+F find, F3 / Shift+F3 next / previous, Alt+C match case · Ctrl+Shift+J jump to column |
-| Table data edits | F2 edit cell · Alt+Insert add row · Ctrl+Alt+Insert duplicate row · Delete or Alt+Delete delete rows · Ctrl+Z undo the selected rows' edits · Ctrl+Alt+N set NULL · Ctrl+S save changes · Ctrl+R discard all |
+| Map in the cell panel | arrows pan · + or = zoom in · - zoom out · 0 fit the shapes · drag to pan · wheel to zoom |
+| ER diagram | arrows pan (Shift: further) · + or = zoom in · - zoom out · 0 fit to screen · 1 actual size · drag to pan · wheel to zoom · click a table to light up its relations, Escape clears |
+| Table data edits | F2 edit cell · Alt+Insert add row · Ctrl+Alt+Insert duplicate row · Delete or Alt+Delete delete rows · Ctrl+Z undo the last pending edit · Ctrl+Y or Ctrl+Shift+Z redo · Ctrl+Alt+Z revert the selected rows · Ctrl+Alt+N set NULL (a cell switches, a larger selection is set) · Ctrl+D fill down · Ctrl+V paste into the selected cells · Ctrl+S save changes · Ctrl+R discard all |
 | Explorer row | Enter / Space expand · Ctrl+Enter or double-click open the overview (a connection: a new query) · Menu key / Shift+F10 a connection's menu · F5 refresh · F2 rename · Delete Drop… · Ctrl+C copy names (a connection row copies the connection) · Ctrl+Shift+C qualified names · Ctrl+V paste a connection |
 | Tab strip | arrows, Home, End move between tabs · F2 rename · Menu key or Shift+F10 tab menu |
+| Import dialog | Ctrl+V on the source step (outside a text field) pastes the clipboard's text as the source |
 | Command palette | Up / Down, PageUp / PageDown move · Enter runs a command, or lists an object's actions · Escape or Backspace (empty box) goes back from an object's actions, Escape closes |
 | Dialogs, menus, separators | Escape cancels the topmost · Enter submits a one-field dialog · Tab stays inside a modal · arrows resize a separator (Shift: bigger steps), Home / End to its limits |
 
@@ -264,7 +274,9 @@ to an action that is also in a context menu, never its only way in.
   production warning.
 - **A system notification** only tells that a long run finished while the app was in the
   background (opt-in, ADR-035), never with SQL, data or error text. Native dialogs only choose
-  files and folders (`dialogs.ts`).
+  files and folders, always through `dialogs.ts`: on Linux it opens GTK's chooser over the
+  window, starting in the file's folder or the workspace, with the saved name's extension
+  following the chosen type (`src-tauri/src/file_dialog.rs`).
 
 A confirmation reads:
 
@@ -351,19 +363,25 @@ lookups follow the same rules:
 ## App icon
 
 The icon is the first thing anyone sees of the brand, at 16px in a taskbar as often as at
-256px in an installer. The current one, a database cylinder lit by a caver's lamp and drawn
-with gradients, says "database" generically and loses its detail below 48px. Its replacement:
+256px in an installer. It is the σ of σπήλαιον (a cave), the letter Spelaion starts with, drawn
+as a database: a cylinder of stacked discs whose top disc, a ring with a bar to its right, is
+the σ, lit from inside by a caver's lamp. The icon:
 
 - has one bold silhouette that is recognizable at 16px and in a single color (system trays,
   monochrome taskbars);
-- uses at most two brand colors and a neutral, close to the interface's accent, in flat shapes
-  or one subtle gradient: no gloss and no thin lines that vanish when small;
-- carries the idea of Spelaion (from σπήλαιον, a cave: exploring, light in the dark, layers)
-  without the stock database cylinder;
-- works as a family: SpelaionSSH (ADR-023) shares the mark and changes one element or color;
-- has a single SVG source, `apps/desktop/src-tauri/icons/icon.svg`, from which
-  `npx tauri icon` generates every size, with hand-tuned 16px and 32px versions if the
-  generated ones blur, and is checked on light and dark taskbars on Windows, macOS and Linux.
+- uses two brand colors and a neutral, in flat shapes: ink `#17233f` (the interface's accent
+  blue, darkened), lamp amber `#f29d1d` and a limestone tile `#f1ece1`. No gradients, no gloss
+  and no thin lines that vanish when small;
+- keeps the σ whole. A database cylinder alone says "database" generically; the ring, its bar
+  and the lamp are what make this one Spelaion's, so no size drops them;
+- works as a family: every Spelaion product keeps the σ, its lamp, the tile and the colors, and
+  changes one element. The brand's own mark is the σ alone, and SpelaionSSH (ADR-023) cuts its
+  bar into the teeth of a key;
+- has a single SVG source, `apps/desktop/src-tauri/icons/icon.svg`, from which `npm run icons`
+  generates every size with `tauri icon`. Scaled down to 16px and 24px the mark blurs, so
+  `icon.ico` carries those two sizes drawn on the pixel grid (`icon-16.svg` and `icon-24.svg`,
+  next to the source): change the three together, and check the result on light and dark
+  taskbars on Windows, macOS and Linux.
 
 ## Verification
 

@@ -286,6 +286,9 @@ pub struct ObjectActionsItem {
     pub rename_views: bool,
     pub drop_schemas: bool,
     pub drop_constraints: bool,
+    pub rebuild_drops: bool,
+    pub routine_source: bool,
+    pub routine_calls: bool,
     pub create: Vec<CreateKindItem>,
     pub new_index: Vec<NewIndexKindItem>,
     pub active_schema: bool,
@@ -473,6 +476,9 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             rename_views,
             drop_schemas,
             drop_constraints,
+            rebuild_drops,
+            routine_source,
+            routine_calls,
             create,
             new_index,
             active_schema,
@@ -486,6 +492,9 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             rename_views,
             drop_schemas,
             drop_constraints,
+            rebuild_drops,
+            routine_source,
+            routine_calls,
             create: create.into_iter().map(CreateKindItem::from).collect(),
             new_index: new_index.into_iter().map(NewIndexKindItem::from).collect(),
             active_schema,
@@ -494,6 +503,264 @@ impl From<spelaion_core::ObjectActions> for ObjectActionsItem {
             before_triggers,
             trigger_function,
             add_check_constraints,
+        }
+    }
+}
+
+/// A column as a structure form shows it (ADR-047): every field is SQL as the engine writes it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditableColumnItem {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub comment: Option<String>,
+    pub generated: bool,
+}
+
+/// A table's columns for its structure form, and what the engine does with a change.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStructureItem {
+    pub columns: Vec<EditableColumnItem>,
+    pub comments: bool,
+    pub transactional: bool,
+    pub rebuilds: bool,
+}
+
+impl From<spelaion_core::TableStructure> for TableStructureItem {
+    fn from(structure: spelaion_core::TableStructure) -> Self {
+        Self {
+            columns: structure
+                .columns
+                .into_iter()
+                .map(|c| EditableColumnItem {
+                    name: c.name,
+                    data_type: c.data_type,
+                    nullable: c.nullable,
+                    default: c.default,
+                    comment: c.comment,
+                    generated: c.generated,
+                })
+                .collect(),
+            comments: structure.comments,
+            transactional: structure.transactional,
+            rebuilds: structure.rebuilds,
+        }
+    }
+}
+
+/// A column's new state in a structure form.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnEditItem {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// A constraint a structure form drops, by its name in the catalog.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DroppedConstraintItem {
+    Constraint { name: String },
+    ForeignKey { name: String },
+}
+
+/// What a structure form asks for on one table; the core writes the SQL.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableAlterationItem {
+    pub schema: String,
+    pub table: String,
+    pub columns: Vec<ColumnEditItem>,
+    pub drop: Vec<DroppedConstraintItem>,
+}
+
+impl From<TableAlterationItem> for spelaion_core::TableAlteration {
+    fn from(item: TableAlterationItem) -> Self {
+        Self {
+            schema: item.schema,
+            table: item.table,
+            columns: item
+                .columns
+                .into_iter()
+                .map(|c| spelaion_core::ColumnEdit {
+                    name: c.name,
+                    data_type: c.data_type,
+                    nullable: c.nullable,
+                    default: c.default,
+                    comment: c.comment,
+                })
+                .collect(),
+            drop: item
+                .drop
+                .into_iter()
+                .map(|d| match d {
+                    DroppedConstraintItem::Constraint { name } => {
+                        spelaion_core::DroppedConstraint::Constraint { name }
+                    }
+                    DroppedConstraintItem::ForeignKey { name } => {
+                        spelaion_core::DroppedConstraint::ForeignKey { name }
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A statement of a structure script that needs confirmation: its position in `statements`.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct PlanRiskItem {
+    pub statement: u32,
+    pub risk: RiskKind,
+}
+
+/// The script a structure form would run, written by the core, to show before it does.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AlterationPreviewItem {
+    /// The whole script, as shown and as sent back to apply it.
+    pub sql: String,
+    /// Each statement, in the order it runs.
+    pub statements: Vec<String>,
+    pub risks: Vec<PlanRiskItem>,
+    pub transactional: bool,
+    pub rebuilds: bool,
+}
+
+/// A column of the create table form (ADR-047).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewColumnItem {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// A foreign key of the create table form; an empty name is written by the core.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewForeignKeyItem {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub referenced_schema: String,
+    pub referenced_table: String,
+    pub referenced_columns: Vec<String>,
+}
+
+/// An index of the create table form; an empty name is written by the core.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewIndexItem {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+}
+
+/// What the create table form asks for; the core writes the SQL.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewTableItem {
+    pub schema: String,
+    pub name: String,
+    pub columns: Vec<NewColumnItem>,
+    pub primary_key: Vec<String>,
+    pub foreign_keys: Vec<NewForeignKeyItem>,
+    pub indexes: Vec<NewIndexItem>,
+}
+
+impl From<NewTableItem> for spelaion_core::NewTable {
+    fn from(item: NewTableItem) -> Self {
+        Self {
+            schema: item.schema,
+            name: item.name,
+            columns: item
+                .columns
+                .into_iter()
+                .map(|c| spelaion_core::NewColumn {
+                    name: c.name,
+                    data_type: c.data_type,
+                    nullable: c.nullable,
+                    default: c.default,
+                    comment: c.comment,
+                })
+                .collect(),
+            primary_key: item.primary_key,
+            foreign_keys: item
+                .foreign_keys
+                .into_iter()
+                .map(|k| spelaion_core::NewForeignKey {
+                    name: k.name,
+                    columns: k.columns,
+                    referenced_schema: k.referenced_schema,
+                    referenced_table: k.referenced_table,
+                    referenced_columns: k.referenced_columns,
+                })
+                .collect(),
+            indexes: item
+                .indexes
+                .into_iter()
+                .map(|i| spelaion_core::NewIndex {
+                    name: i.name,
+                    columns: i.columns,
+                    unique: i.unique,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl AlterationPreviewItem {
+    /// A plan as the dialogs show it, with the risks the connection's safeguards see.
+    pub fn new(
+        plan: &spelaion_core::AlterationPlan,
+        dialect: &dyn spelaion_driver_api::Dialect,
+        safeguards: &spelaion_config::Safeguards,
+    ) -> Self {
+        Self {
+            sql: plan.script(),
+            statements: plan.statements().into_iter().map(String::from).collect(),
+            risks: plan
+                .risks(dialect, safeguards)
+                .into_iter()
+                .map(|risk| PlanRiskItem {
+                    statement: u32::try_from(risk.statement.saturating_sub(1)).unwrap_or(u32::MAX),
+                    risk: risk.risk.into(),
+                })
+                .collect(),
+            transactional: plan.transactional(),
+            rebuilds: plan.rebuilds(),
+        }
+    }
+}
+
+/// What "Edit source" opens (ADR-047): a view, or a function or procedure.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SourceTargetItem {
+    View { schema: String, name: String },
+    Routine { object: SchemaObjectItem },
+}
+
+impl From<SourceTargetItem> for spelaion_core::SourceTarget {
+    fn from(item: SourceTargetItem) -> Self {
+        match item {
+            SourceTargetItem::View { schema, name } => Self::View { schema, name },
+            SourceTargetItem::Routine { object } => Self::Routine(object.into()),
         }
     }
 }
@@ -681,6 +948,129 @@ impl From<EditorPreferencesItem> for spelaion_core::EditorPreferences {
     }
 }
 
+/// The map view's background (ADR-045): tiles from the user's server, off by default.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MapPreferencesItem {
+    pub tiles: bool,
+    pub tile_name: String,
+    /// An image address with `{z}`, `{x}` and `{y}`.
+    pub tile_url: String,
+    pub tile_attribution: String,
+}
+
+impl From<spelaion_core::MapPreferences> for MapPreferencesItem {
+    fn from(p: spelaion_core::MapPreferences) -> Self {
+        let spelaion_core::MapPreferences {
+            tiles,
+            tile_name,
+            tile_url,
+            tile_attribution,
+        } = p;
+        Self {
+            tiles,
+            tile_name,
+            tile_url,
+            tile_attribution,
+        }
+    }
+}
+
+impl From<MapPreferencesItem> for spelaion_core::MapPreferences {
+    fn from(p: MapPreferencesItem) -> Self {
+        let MapPreferencesItem {
+            tiles,
+            tile_name,
+            tile_url,
+            tile_attribution,
+        } = p;
+        Self {
+            tiles,
+            tile_name,
+            tile_url,
+            tile_attribution,
+        }
+    }
+}
+
+/// A cell or a column read as geometry, for the map (ADR-045): GeoJSON from the core, never
+/// the database's bytes.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoItem {
+    pub geometry: spelaion_core::Geometry,
+    pub srid: Option<u32>,
+    pub format: spelaion_core::GeoFormat,
+    pub dimensions: spelaion_core::Dimensions,
+    pub crs: spelaion_core::MapCrs,
+    pub bounds: Option<spelaion_core::Bounds>,
+}
+
+impl From<spelaion_core::GeoValue> for GeoItem {
+    fn from(value: spelaion_core::GeoValue) -> Self {
+        Self {
+            crs: value.crs(),
+            bounds: value.geometry.bounds(),
+            geometry: value.geometry,
+            srid: value.srid,
+            format: value.format,
+            dimensions: value.dimensions,
+        }
+    }
+}
+
+/// One shape of a column's map and the row of the current view it is on.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MapShapeItem {
+    pub row: u32,
+    pub geometry: spelaion_core::Geometry,
+}
+
+/// A column of a result on one map, and what was left out of it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnMapItem {
+    pub shapes: Vec<MapShapeItem>,
+    pub srid: Option<u32>,
+    pub mixed_srids: bool,
+    pub crs: spelaion_core::MapCrs,
+    pub bounds: Option<spelaion_core::Bounds>,
+    pub rows_read: u32,
+    pub nulls: u32,
+    pub unreadable: u32,
+    pub too_big: u32,
+    pub truncated: bool,
+    /// The most shapes a column's map holds.
+    pub max_shapes: u32,
+}
+
+impl From<spelaion_core::ColumnMap> for ColumnMapItem {
+    fn from(map: spelaion_core::ColumnMap) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            shapes: map
+                .shapes
+                .into_iter()
+                .map(|s| MapShapeItem {
+                    row: count(s.row),
+                    geometry: s.geometry,
+                })
+                .collect(),
+            srid: map.srid,
+            mixed_srids: map.mixed_srids,
+            crs: map.crs,
+            bounds: map.bounds,
+            rows_read: count(map.rows_read),
+            nulls: count(map.nulls),
+            unreadable: count(map.unreadable),
+            too_big: count(map.too_big),
+            truncated: map.truncated,
+            max_shapes: count(spelaion_core::MAP_MAX_SHAPES),
+        }
+    }
+}
+
 /// How the result grid draws its cells; personal, like the theme.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -808,6 +1198,9 @@ pub struct ConnectionTypeDraft {
     pub manual_commit: bool,
     #[serde(default)]
     pub smart_commit: bool,
+    /// Column patterns every connection of the type masks (ADR-051).
+    #[serde(default)]
+    pub mask_columns: Vec<String>,
 }
 
 impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
@@ -822,6 +1215,7 @@ impl From<&spelaion_config::ConnectionTypeConfig> for ConnectionTypeDraft {
             close_idle_after: c.close_idle_after,
             manual_commit: c.manual_commit,
             smart_commit: c.smart_commit,
+            mask_columns: c.mask_columns.clone(),
         }
     }
 }
@@ -838,6 +1232,7 @@ impl From<ConnectionTypeDraft> for spelaion_config::ConnectionTypeConfig {
             close_idle_after: d.close_idle_after,
             manual_commit: d.manual_commit,
             smart_commit: d.smart_commit,
+            mask_columns: d.mask_columns,
         }
     }
 }
@@ -861,6 +1256,10 @@ pub struct ConnectionTypeItem {
     pub inherited: SafeguardsItem,
     /// The user's own definition or changes, if any.
     pub personal: Option<ConnectionTypeDraft>,
+    /// Column patterns its connections mask, every layer together (ADR-051).
+    pub mask_columns: Vec<String>,
+    /// The team's: the user cannot remove them.
+    pub inherited_mask_columns: Vec<String>,
 }
 
 impl From<&spelaion_config::ConnectionType> for ConnectionTypeItem {
@@ -876,6 +1275,8 @@ impl From<&spelaion_config::ConnectionType> for ConnectionTypeItem {
             safeguards: t.safeguards.into(),
             inherited: t.inherited.into(),
             personal: t.personal.as_ref().map(ConnectionTypeDraft::from),
+            mask_columns: t.mask_columns.clone(),
+            inherited_mask_columns: t.inherited_mask_columns.clone(),
         }
     }
 }
@@ -936,6 +1337,72 @@ pub struct ProcessSnapshotItem {
     pub own_id: String,
     pub processes: Vec<ProcessItem>,
     pub limited: bool,
+}
+
+/// One lock of the lock view (`spelaion_core::Lock`).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LockItem {
+    pub session: String,
+    pub object: String,
+    pub lock_type: String,
+    pub mode: String,
+    pub granted: bool,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub seconds: Option<i64>,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LockWaitItem {
+    pub waiting: String,
+    pub blocking: String,
+}
+
+/// A row of the blocking tree, in display order.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockingNodeItem {
+    pub session: String,
+    pub depth: u32,
+    pub cycle: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LockSnapshotItem {
+    pub own_id: String,
+    pub locks: Vec<LockItem>,
+    pub waits: Vec<LockWaitItem>,
+    pub tree: Vec<BlockingNodeItem>,
+}
+
+/// One server setting, variable, status counter or property.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerSettingItem {
+    pub name: String,
+    pub value: String,
+    /// `setting`, `variable`, `status` or `property`.
+    pub kind: String,
+    pub category: Option<String>,
+    pub description: Option<String>,
+    pub source: Option<String>,
+}
+
+/// A table's sizes in bytes and row estimate; any may be unknown.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStatsItem {
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub total_bytes: Option<i64>,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub table_bytes: Option<i64>,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub index_bytes: Option<i64>,
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub row_estimate: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -1170,6 +1637,8 @@ pub struct ColumnItem {
     /// Common logical type (`int`, `text`, `timestamptz`…).
     pub logical: String,
     pub native_type: String,
+    /// Its values are masked (ADR-051): the cells hold the mask, and one can be revealed.
+    pub masked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -1428,10 +1897,12 @@ impl From<CoreEvent> for ScriptEvent {
                 columns: schema
                     .columns
                     .iter()
-                    .map(|c| ColumnItem {
+                    .enumerate()
+                    .map(|(i, c)| ColumnItem {
                         name: c.name.clone(),
                         logical: c.logical.as_str().into(),
                         native_type: c.native_type.clone(),
+                        masked: spelaion_core::masking::is_masked_field(schema.arrow.field(i)),
                     })
                     .collect(),
             },
@@ -2025,13 +2496,10 @@ pub struct TransactionChanged {
     pub status: TransactionStatusItem,
 }
 
-/// The window was asked to close while these tabs have a transaction open: the UI asks, then
-/// calls `quit_app` (ADR-031).
+/// The window was asked to close while sessions are open: the UI calls `quit_asking`, looks for
+/// work that quitting would lose and calls `quit_app` or `quit_cancelled` (ADR-031).
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
-#[serde(rename_all = "camelCase")]
-pub struct QuitBlocked {
-    pub sessions: Vec<String>,
-}
+pub struct QuitRequested {}
 
 /// A dialog nobody waits for any more (the connection test that asked was stopped, or
 /// the answer took too long): the UI closes it.
@@ -2131,12 +2599,31 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
     }
 }
 
-/// A tunnel that a new connection can use.
+/// A tunnel (a network profile) that a new connection can use.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TunnelItem {
     pub name: String,
     pub personal: bool,
+    /// A Kubernetes profile (ADR-050): what it sets, for the Kubernetes tab to show; `None`
+    /// for an SSH one (hops, a proxy, or both).
+    pub kubernetes: Option<KubernetesDraftItem>,
+}
+
+impl TunnelItem {
+    pub fn of(entry: &spelaion_config::TunnelEntry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            personal: entry.source == spelaion_config::Source::User,
+            kubernetes: entry.file.kubernetes.as_ref().map(|k| KubernetesDraftItem {
+                context: k.context.clone().unwrap_or_default(),
+                namespace: k.namespace.clone().unwrap_or_default(),
+                resource: k.resource.clone().unwrap_or_default(),
+                kubeconfig: k.kubeconfig.clone().unwrap_or_default(),
+                kubectl: k.kubectl.clone().unwrap_or_default(),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -2282,6 +2769,10 @@ pub struct ConnectionDraftItem {
     pub default_schema: String,
     /// `read-committed`…; null for the server's default.
     pub isolation: Option<String>,
+    /// Column patterns this connection masks (ADR-051, `[masking] always`).
+    pub mask_always: Vec<String>,
+    /// Column patterns it leaves visible (`[masking] never`).
+    pub mask_never: Vec<String>,
 }
 
 impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
@@ -2350,6 +2841,10 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
                     ),
                 },
             },
+            masking: spelaion_config::MaskingConfig {
+                always: item.mask_always,
+                never: item.mask_never,
+            },
         })
     }
 }
@@ -2408,6 +2903,8 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
                 .session
                 .isolation
                 .map(|level| level.as_str().to_string()),
+            mask_always: draft.masking.always,
+            mask_never: draft.masking.never,
         }
     }
 }
@@ -2450,6 +2947,45 @@ pub struct TunnelDraftItem {
     pub connect_timeout: Option<u32>,
     /// A SOCKS5 or HTTP proxy in front of the first hop, or instead of hops (ADR-027).
     pub proxy: Option<ProxyDraftItem>,
+    /// AWS SSM in front of the first hop, or instead of hops (ADR-050).
+    pub ssm: Option<SsmDraftItem>,
+    /// A Kubernetes profile (ADR-050): then no hops, proxy or SSH settings are saved.
+    pub kubernetes: Option<KubernetesDraftItem>,
+}
+
+/// The AWS SSM section of the network profile editor (ADR-050); empty fields mean the AWS
+/// CLI's defaults. It holds no secret.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SsmDraftItem {
+    pub target: String,
+    pub region: String,
+    pub profile: String,
+    pub aws: String,
+}
+
+/// A connection opened in the editor.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedConnectionItem {
+    pub draft: ConnectionDraftItem,
+    /// The file's revision, for a save to refuse a file changed on disk.
+    pub revision: String,
+    /// Whether the system keychain holds this connection's password (never its value): the
+    /// form offers to keep a saved password only then.
+    pub password_stored: bool,
+}
+
+/// A tunnel opened in the editor.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedTunnelItem {
+    pub draft: TunnelDraftItem,
+    pub revision: String,
+    /// Whether the system keychain holds each hop's password, in order (never the values).
+    pub hop_passwords_stored: Vec<bool>,
+    /// Whether it holds the proxy's password.
+    pub proxy_password_stored: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -2493,6 +3029,25 @@ impl From<KubernetesDraftItem> for spelaion_config::KubernetesDraft {
             kubectl: k.kubectl,
         }
     }
+}
+
+/// Which editor asks `kubectl` for its lists, so its values are checked against trust before
+/// a process starts (ADR-015, ADR-050).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum KubeEditor {
+    /// The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
+    /// the Kubernetes network profile it uses, whose settings come first.
+    Connection {
+        personal: bool,
+        editing: Option<String>,
+        profile: Option<String>,
+    },
+    /// The network profile editor; `editing` is the profile's name.
+    Profile {
+        personal: bool,
+        editing: Option<String>,
+    },
 }
 
 /// A port of a Kubernetes resource, for the port picker.
@@ -2545,6 +3100,11 @@ pub struct NetworkProfileItem {
     pub proxy: Option<String>,
     /// `user@host:port` per hop, in order.
     pub hops: Vec<String>,
+    /// AWS SSM (ADR-050): `target (region, profile)`, before the hops.
+    pub ssm: Option<String>,
+    /// A Kubernetes profile (ADR-050): `context / namespace / resource`, with `…` where the
+    /// profile leaves it out.
+    pub kubernetes: Option<String>,
     /// Display names of the connections that use it.
     pub used_by: Vec<String>,
 }
@@ -2567,6 +3127,26 @@ impl NetworkProfileItem {
                 .iter()
                 .map(|hop| format!("{}@{}:{}", hop.user, hop.host, hop.port.unwrap_or(22)))
                 .collect(),
+            ssm: entry.file.ssm.as_ref().map(|ssm| {
+                let details: Vec<&str> = [ssm.region.as_deref(), ssm.profile.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                if details.is_empty() {
+                    ssm.target.clone()
+                } else {
+                    format!("{} ({})", ssm.target, details.join(", "))
+                }
+            }),
+            kubernetes: entry.file.kubernetes.as_ref().map(|k| {
+                let part = |v: &Option<String>| v.clone().unwrap_or_else(|| "…".into());
+                format!(
+                    "{} / {} / {}",
+                    part(&k.context),
+                    part(&k.namespace),
+                    part(&k.resource)
+                )
+            }),
             used_by: spelaion_config::tunnel_users(config, entry.source, &entry.name),
         }
     }
@@ -2689,6 +3269,21 @@ impl From<TunnelDraftItem> for spelaion_config::TunnelDraft {
                     proxy.password_other,
                 ),
             }),
+            ssm: item.ssm.map(|ssm| spelaion_config::SsmDraft {
+                target: ssm.target,
+                region: ssm.region,
+                profile: ssm.profile,
+                aws: ssm.aws,
+            }),
+            kubernetes: item
+                .kubernetes
+                .map(|k| spelaion_config::KubernetesProfileDraft {
+                    context: k.context,
+                    namespace: k.namespace,
+                    resource: k.resource,
+                    kubeconfig: k.kubeconfig,
+                    kubectl: k.kubectl,
+                }),
         }
     }
 }
@@ -2736,6 +3331,19 @@ impl From<spelaion_config::TunnelDraft> for TunnelDraftItem {
                     password_env,
                     password_other,
                 }
+            }),
+            ssm: draft.ssm.map(|ssm| SsmDraftItem {
+                target: ssm.target,
+                region: ssm.region,
+                profile: ssm.profile,
+                aws: ssm.aws,
+            }),
+            kubernetes: draft.kubernetes.map(|k| KubernetesDraftItem {
+                context: k.context,
+                namespace: k.namespace,
+                resource: k.resource,
+                kubeconfig: k.kubeconfig,
+                kubectl: k.kubectl,
             }),
         }
     }
@@ -3100,38 +3708,383 @@ pub struct CellEditItem {
     pub value: Option<String>,
 }
 
-/// A pending change of a table data tab (ADR-014), by position in the page shown.
+/// A value given to a cell: text, NULL or the column's default (ADR-044).
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-pub enum RowChangeItem {
-    Update { row: u32, values: Vec<CellEditItem> },
-    Delete { row: u32 },
-    Insert { values: Vec<CellEditItem> },
+pub enum CellInputItem {
+    Text { text: String },
+    Null,
+    Default,
 }
 
-impl From<RowChangeItem> for spelaion_core::RowChange {
-    fn from(item: RowChangeItem) -> Self {
-        let values = |values: Vec<CellEditItem>| {
-            values
-                .into_iter()
-                .map(|v| {
-                    (
-                        v.column as usize,
-                        match v.value {
-                            Some(text) => spelaion_core::CellInput::Text(text),
-                            None => spelaion_core::CellInput::Null,
-                        },
-                    )
-                })
-                .collect()
-        };
+impl From<CellInputItem> for spelaion_core::CellInput {
+    fn from(item: CellInputItem) -> Self {
         match item {
-            RowChangeItem::Update { row, values: v } => Self::Update {
-                row: row as usize,
-                values: values(v),
+            CellInputItem::Text { text } => Self::Text(text),
+            CellInputItem::Null => Self::Null,
+            CellInputItem::Default => Self::Default,
+        }
+    }
+}
+
+/// A cell's new value; `null` takes it back to its value in the database.
+#[derive(Debug, Clone, Deserialize, Type)]
+pub struct PendingCellItem {
+    pub row: u32,
+    pub column: u32,
+    pub value: Option<CellInputItem>,
+}
+
+impl From<PendingCellItem> for spelaion_core::CellEdit {
+    fn from(item: PendingCellItem) -> Self {
+        Self {
+            row: item.row as usize,
+            column: item.column as usize,
+            value: item.value.map(Into::into),
+        }
+    }
+}
+
+/// A rectangle of the page: rows `firstRow..=lastRow` of the shown `columns`, in order.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockItem {
+    pub first_row: u32,
+    pub last_row: u32,
+    pub columns: Vec<u32>,
+}
+
+impl From<BlockItem> for spelaion_core::Block {
+    fn from(item: BlockItem) -> Self {
+        Self {
+            first_row: item.first_row as usize,
+            last_row: item.last_row as usize,
+            columns: item.columns.into_iter().map(|c| c as usize).collect(),
+        }
+    }
+}
+
+/// What a bulk edit does to each cell of the selection.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BulkActionItem {
+    Set { value: CellInputItem },
+    FillDown,
+    Trim,
+    UpperCase,
+    LowerCase,
+    NewUuid,
+    Now,
+}
+
+impl From<BulkActionItem> for spelaion_core::BulkAction {
+    fn from(item: BulkActionItem) -> Self {
+        match item {
+            BulkActionItem::Set { value } => Self::Set(value.into()),
+            BulkActionItem::FillDown => Self::FillDown,
+            BulkActionItem::Trim => Self::Trim,
+            BulkActionItem::UpperCase => Self::UpperCase,
+            BulkActionItem::LowerCase => Self::LowerCase,
+            BulkActionItem::NewUuid => Self::NewUuid,
+            BulkActionItem::Now => Self::Now,
+        }
+    }
+}
+
+/// What the user did to a table data page's pending edits (ADR-044); the core keeps them.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PendingEditItem {
+    SetCells {
+        cells: Vec<PendingCellItem>,
+    },
+    /// A keystroke in a cell's text box: typing on in the same cell is one undo step.
+    Type {
+        cell: PendingCellItem,
+    },
+    Delete {
+        rows: Vec<u32>,
+    },
+    Revert {
+        rows: Vec<u32>,
+    },
+    Insert {
+        values: Vec<CellEditItem>,
+    },
+    UpdateInsert {
+        index: u32,
+        values: Vec<CellEditItem>,
+    },
+    RemoveInsert {
+        index: u32,
+    },
+    Discard,
+    Bulk {
+        block: BlockItem,
+        action: BulkActionItem,
+    },
+    Paste {
+        selection: BlockItem,
+        columns: Vec<u32>,
+        text: String,
+    },
+    Undo,
+    Redo,
+}
+
+fn insert_values(values: Vec<CellEditItem>) -> Vec<(usize, spelaion_core::CellInput)> {
+    values
+        .into_iter()
+        .map(|v| {
+            (
+                v.column as usize,
+                match v.value {
+                    Some(text) => spelaion_core::CellInput::Text(text),
+                    None => spelaion_core::CellInput::Null,
+                },
+            )
+        })
+        .collect()
+}
+
+impl From<PendingEditItem> for spelaion_core::PendingEdit {
+    fn from(item: PendingEditItem) -> Self {
+        let rows = |rows: Vec<u32>| rows.into_iter().map(|r| r as usize).collect();
+        match item {
+            PendingEditItem::SetCells { cells } => {
+                Self::SetCells(cells.into_iter().map(Into::into).collect())
+            }
+            PendingEditItem::Type { cell } => Self::Type(cell.into()),
+            PendingEditItem::Delete { rows: r } => Self::Delete(rows(r)),
+            PendingEditItem::Revert { rows: r } => Self::Revert(rows(r)),
+            PendingEditItem::Insert { values } => Self::Insert(insert_values(values)),
+            PendingEditItem::UpdateInsert { index, values } => Self::UpdateInsert {
+                index: index as usize,
+                values: insert_values(values),
             },
-            RowChangeItem::Delete { row } => Self::Delete { row: row as usize },
-            RowChangeItem::Insert { values: v } => Self::Insert { values: values(v) },
+            PendingEditItem::RemoveInsert { index } => Self::RemoveInsert(index as usize),
+            PendingEditItem::Discard => Self::Discard,
+            PendingEditItem::Bulk { block, action } => Self::Bulk {
+                block: block.into(),
+                action: action.into(),
+            },
+            PendingEditItem::Paste {
+                selection,
+                columns,
+                text,
+            } => Self::Paste {
+                selection: selection.into(),
+                columns: columns.into_iter().map(|c| c as usize).collect(),
+                text,
+            },
+            PendingEditItem::Undo => Self::Undo,
+            PendingEditItem::Redo => Self::Redo,
+        }
+    }
+}
+
+/// A pending value as the grid draws it: its text (`null` is NULL), or the column's default.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingValueItem {
+    pub row: u32,
+    pub column: u32,
+    pub value: Option<String>,
+    pub is_default: bool,
+}
+
+/// A value of a new row, as typed (`null` is NULL).
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct CellEditViewItem {
+    pub column: u32,
+    pub value: Option<String>,
+}
+
+/// A table data page's pending edits, as the core holds them, and what the last edit did.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingEditsItem {
+    pub cells: Vec<PendingValueItem>,
+    pub deleted: Vec<u32>,
+    pub inserts: Vec<Vec<CellEditViewItem>>,
+    pub updated_rows: u32,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    /// Cells, deletions and new rows the last edit changed (or undo / redo restored).
+    pub changed: u32,
+    /// Pasted values left out past the last row or column.
+    pub clipped: u32,
+}
+
+/// Bytes are shown in hex up to this size, past it by their length.
+const PENDING_BYTES_SHOWN: usize = 4096;
+
+fn input_text(input: &spelaion_core::CellInput) -> (Option<String>, bool) {
+    match input {
+        spelaion_core::CellInput::Null => (None, false),
+        spelaion_core::CellInput::Default => (None, true),
+        spelaion_core::CellInput::Text(text) => (Some(text.clone()), false),
+        spelaion_core::CellInput::Bytes(bytes) if bytes.len() <= PENDING_BYTES_SHOWN => {
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            (Some(format!("\\x{hex}")), false)
+        }
+        spelaion_core::CellInput::Bytes(bytes) => (Some(format!("({} bytes)", bytes.len())), false),
+    }
+}
+
+impl PendingEditsItem {
+    pub fn new(pending: &spelaion_core::PendingEdits, outcome: spelaion_core::EditOutcome) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            cells: pending
+                .cells()
+                .map(|(row, column, input)| {
+                    let (value, is_default) = input_text(input);
+                    PendingValueItem {
+                        row: count(row),
+                        column: count(column),
+                        value,
+                        is_default,
+                    }
+                })
+                .collect(),
+            deleted: pending.deleted().map(count).collect(),
+            inserts: pending
+                .inserts()
+                .iter()
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|(column, input)| CellEditViewItem {
+                            column: count(*column),
+                            value: input_text(input).0,
+                        })
+                        .collect()
+                })
+                .collect(),
+            updated_rows: count(pending.updated_rows()),
+            can_undo: pending.can_undo(),
+            can_redo: pending.can_redo(),
+            changed: count(outcome.changed),
+            clipped: count(outcome.clipped),
+        }
+    }
+}
+
+/// The user's own column masking patterns (ADR-051).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct UserMaskingItem {
+    pub patterns: Vec<String>,
+    /// `user.toml` does not load: every column of every connection is masked until it is fixed.
+    pub unreadable: bool,
+}
+
+/// A masked cell's value, revealed on the user's request (ADR-051).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealedCellItem {
+    pub column: String,
+    /// The value as the grid would show it; `None` for NULL. Cut at
+    /// [`RevealedCellItem::MAX_CHARS`] characters.
+    pub text: Option<String>,
+    /// The value was longer and was cut.
+    pub cut: bool,
+    pub native_type: String,
+}
+
+impl RevealedCellItem {
+    /// Longest text shown in the popover.
+    pub const MAX_CHARS: usize = 10_000;
+}
+
+impl From<spelaion_core::RevealedCell> for RevealedCellItem {
+    fn from(cell: spelaion_core::RevealedCell) -> Self {
+        let (text, cut) = match cell.value {
+            spelaion_driver_api::Value::Null => (None, false),
+            value => {
+                let text = value.to_string();
+                match text.char_indices().nth(Self::MAX_CHARS) {
+                    Some((end, _)) => (Some(text[..end].to_string()), true),
+                    None => (Some(text), false),
+                }
+            }
+        };
+        Self {
+            column: cell.column,
+            text,
+            cut,
+            native_type: cell.native_type,
+        }
+    }
+}
+
+/// A cell for the cell viewer: whole up to the core's limit, or withheld until the user asks
+/// ("load anyway"); an image only as a `data:` URL of a type the core recognised by its bytes.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CellViewItem {
+    pub kind: CellViewKind,
+    /// Bytes of the value, or of its text in UTF-8.
+    pub size: f64,
+    pub binary: bool,
+    /// `png`, `jpeg`, `gif` or `webp`, also when withheld.
+    pub image: Option<String>,
+    /// The extension a file of this value takes.
+    pub extension: String,
+    /// The text as the grid writes it (`\x…` for bytes).
+    pub text: Option<String>,
+    /// Pretty-printed when the text is one well-formed XML document.
+    pub xml: Option<String>,
+    pub image_url: Option<String>,
+    /// The size past which a value waits for "load anyway".
+    pub limit: f64,
+    /// The value read as a geometry, for the map view (ADR-045).
+    pub geometry: Option<GeoItem>,
+}
+
+/// `withheld`: past the limit, shown when asked; `tooBig`: only saved to a file.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum CellViewKind {
+    Null,
+    Text,
+    Bytes,
+    Withheld,
+    TooBig,
+}
+
+impl From<spelaion_core::CellView> for CellViewItem {
+    fn from(view: spelaion_core::CellView) -> Self {
+        use spelaion_core::{CellContent, ImageFormat};
+        let (kind, text, xml, image_url) = match view.content {
+            CellContent::Null => (CellViewKind::Null, None, None, None),
+            CellContent::Text { text, xml } => (CellViewKind::Text, Some(text), xml, None),
+            CellContent::Bytes { text, image_url } => {
+                (CellViewKind::Bytes, Some(text), None, image_url)
+            }
+            CellContent::Withheld => (CellViewKind::Withheld, None, None, None),
+            CellContent::TooBig => (CellViewKind::TooBig, None, None, None),
+        };
+        Self {
+            kind,
+            size: view.size as f64,
+            binary: view.binary,
+            image: view.image.map(|format| {
+                match format {
+                    ImageFormat::Png => "png",
+                    ImageFormat::Jpeg => "jpeg",
+                    ImageFormat::Gif => "gif",
+                    ImageFormat::Webp => "webp",
+                }
+                .to_string()
+            }),
+            extension: view.extension.to_string(),
+            text,
+            xml,
+            image_url,
+            limit: spelaion_core::VIEW_LIMIT as f64,
+            geometry: view.geometry.map(GeoItem::from),
         }
     }
 }
@@ -3274,6 +4227,10 @@ impl From<&spelaion_core::TestStep> for TestStepItem {
                     port: *port,
                     command: *command,
                 },
+                StepKind::Ssm { target, region } => TestStepKindItem::Ssm {
+                    target: target.clone(),
+                    region: region.clone(),
+                },
                 StepKind::Kubernetes {
                     resource,
                     context,
@@ -3346,6 +4303,10 @@ pub enum TestStepKindItem {
         context: Option<String>,
         namespace: Option<String>,
     },
+    Ssm {
+        target: String,
+        region: Option<String>,
+    },
     Target {
         host: String,
         port: u16,
@@ -3383,6 +4344,7 @@ pub struct TestFailureItem {
 pub enum FailureKindItem {
     Config,
     PasswordRequired,
+    KeychainEmpty,
     Cancelled,
     ProxyAuth,
     SshAuth,
@@ -3394,6 +4356,7 @@ pub enum FailureKindItem {
     Tls,
     Timeout,
     Kubernetes,
+    Ssm,
     Other,
 }
 
@@ -3403,6 +4366,7 @@ impl From<spelaion_core::FailureKind> for FailureKindItem {
         match kind {
             FailureKind::Config => Self::Config,
             FailureKind::PasswordRequired => Self::PasswordRequired,
+            FailureKind::KeychainEmpty => Self::KeychainEmpty,
             FailureKind::Cancelled => Self::Cancelled,
             FailureKind::ProxyAuth => Self::ProxyAuth,
             FailureKind::SshAuth => Self::SshAuth,
@@ -3414,6 +4378,7 @@ impl From<spelaion_core::FailureKind> for FailureKindItem {
             FailureKind::Tls => Self::Tls,
             FailureKind::Timeout => Self::Timeout,
             FailureKind::Kubernetes => Self::Kubernetes,
+            FailureKind::Ssm => Self::Ssm,
             FailureKind::Other => Self::Other,
         }
     }
@@ -4340,6 +5305,8 @@ pub struct ColumnStatsItem {
     pub top_state: StatStateItem,
     /// The statements that ran, every one a read.
     pub statements: Vec<String>,
+    /// The column is masked (ADR-051): minimum, maximum and frequent values are the mask.
+    pub masked: bool,
 }
 
 impl ColumnStatsItem {
@@ -4377,6 +5344,7 @@ impl ColumnStatsItem {
             },
             top_state,
             statements: s.statements,
+            masked: s.masked,
         }
     }
 }
@@ -4391,4 +5359,924 @@ impl ColumnStatsItem {
 pub enum ColumnStatsOutcome {
     Done { stats: Box<ColumnStatsItem> },
     Cancelled,
+}
+
+/// The kind of chart drawn from a result (ADR-040).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartKindItem {
+    Bar,
+    Line,
+    Pie,
+}
+
+impl From<ChartKindItem> for spelaion_core::ChartKind {
+    fn from(kind: ChartKindItem) -> Self {
+        match kind {
+            ChartKindItem::Bar => Self::Bar,
+            ChartKindItem::Line => Self::Line,
+            ChartKindItem::Pie => Self::Pie,
+        }
+    }
+}
+
+/// How the rows that share a point are combined.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartAggregateItem {
+    Sum,
+    Avg,
+    Min,
+    Max,
+    Count,
+}
+
+impl From<ChartAggregateItem> for spelaion_core::ChartAggregate {
+    fn from(aggregate: ChartAggregateItem) -> Self {
+        match aggregate {
+            ChartAggregateItem::Sum => Self::Sum,
+            ChartAggregateItem::Avg => Self::Avg,
+            ChartAggregateItem::Min => Self::Min,
+            ChartAggregateItem::Max => Self::Max,
+            ChartAggregateItem::Count => Self::Count,
+        }
+    }
+}
+
+/// What to draw: columns by position in the result, never values.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartRequestItem {
+    pub kind: ChartKindItem,
+    pub x: u32,
+    pub y: Vec<u32>,
+    pub aggregate: ChartAggregateItem,
+}
+
+impl From<ChartRequestItem> for spelaion_core::ChartRequest {
+    fn from(r: ChartRequestItem) -> Self {
+        Self {
+            kind: r.kind.into(),
+            x: r.x as usize,
+            y: r.y.into_iter().map(|c| c as usize).collect(),
+            aggregate: r.aggregate.into(),
+        }
+    }
+}
+
+/// A point's label: the X value as the grid shows it, NULL, or the rows combined in "Other".
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ChartLabelItem {
+    Value { text: String },
+    Null,
+    Other,
+}
+
+/// One Y column: a value per point (`null`: no row of that point had a number).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartSeriesItem {
+    pub column: u32,
+    pub name: String,
+    pub values: Vec<Option<f64>>,
+}
+
+/// How the rows became points.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartReductionItem {
+    Rows,
+    Grouped,
+    Ranges,
+    Other,
+}
+
+/// The points of a chart, prepared by the core from the stored result: at most
+/// `MAX_CHART_POINTS` labels and a value per label and series. It never carries rows.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartPointsItem {
+    pub labels: Vec<ChartLabelItem>,
+    /// Where each point sits on a continuous X axis, for lines.
+    pub positions: Option<Vec<f64>>,
+    pub series: Vec<ChartSeriesItem>,
+    pub reduction: ChartReductionItem,
+    /// Rows of the current view that were read.
+    pub rows: u32,
+    /// Different X values; a lower bound when `groups_capped`.
+    pub groups: u32,
+    pub groups_capped: bool,
+    /// Rows left out: their X is NULL or infinite on a continuous axis.
+    pub skipped_rows: u32,
+    /// Y cells that are NULL or not a number.
+    pub empty_values: u32,
+    /// Pie values with no slice (zero, negative or empty).
+    pub hidden_slices: u32,
+}
+
+impl From<spelaion_core::ChartData> for ChartPointsItem {
+    fn from(d: spelaion_core::ChartData) -> Self {
+        Self {
+            labels: d
+                .labels
+                .into_iter()
+                .map(|label| match label {
+                    spelaion_core::ChartLabel::Value(text) => ChartLabelItem::Value { text },
+                    spelaion_core::ChartLabel::Null => ChartLabelItem::Null,
+                    spelaion_core::ChartLabel::Other => ChartLabelItem::Other,
+                })
+                .collect(),
+            positions: d.positions,
+            series: d
+                .series
+                .into_iter()
+                .map(|s| ChartSeriesItem {
+                    column: s.column as u32,
+                    name: s.name,
+                    values: s.values,
+                })
+                .collect(),
+            reduction: match d.reduction {
+                spelaion_core::ChartReduction::Rows => ChartReductionItem::Rows,
+                spelaion_core::ChartReduction::Grouped => ChartReductionItem::Grouped,
+                spelaion_core::ChartReduction::Ranges => ChartReductionItem::Ranges,
+                spelaion_core::ChartReduction::Other => ChartReductionItem::Other,
+            },
+            rows: saturating_u32(d.rows),
+            groups: saturating_u32(d.groups),
+            groups_capped: d.groups_capped,
+            skipped_rows: saturating_u32(d.skipped_rows),
+            empty_values: saturating_u32(d.empty_values),
+            hidden_slices: saturating_u32(d.hidden_slices),
+        }
+    }
+}
+
+/// A count for the UI (counts of a stored result fit; a larger one reads as the largest).
+fn saturating_u32(n: u64) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// The format of a chart image saved to a file.
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ChartImageFormatItem {
+    Png,
+    Svg,
+}
+
+impl From<ChartImageFormatItem> for spelaion_core::ChartImageFormat {
+    fn from(format: ChartImageFormatItem) -> Self {
+        match format {
+            ChartImageFormatItem::Png => Self::Png,
+            ChartImageFormatItem::Svg => Self::Svg,
+        }
+    }
+}
+
+/// A column of a schema's relation: the catalog metadata search keeps (ADR-043).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaColumnItem {
+    pub table: String,
+    pub name: String,
+    pub native_type: String,
+}
+
+impl From<spelaion_driver_api::SchemaColumn> for SchemaColumnItem {
+    fn from(c: spelaion_driver_api::SchemaColumn) -> Self {
+        Self {
+            table: c.table,
+            name: c.name,
+            native_type: c.native_type,
+        }
+    }
+}
+
+/// A table or view a data search reads.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchTableItem {
+    pub schema: String,
+    pub table: String,
+}
+
+/// What to search for and where (ADR-043): the value is bound as a parameter by the core.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSearchRequestItem {
+    pub value: String,
+    pub tables: Vec<SearchTableItem>,
+    pub case_sensitive: bool,
+    pub numbers: bool,
+    pub large: bool,
+    pub rows_per_table: u32,
+}
+
+impl From<DataSearchRequestItem> for spelaion_core::DataSearchRequest {
+    fn from(r: DataSearchRequestItem) -> Self {
+        Self {
+            value: r.value,
+            tables: r
+                .tables
+                .into_iter()
+                .map(|t| spelaion_core::SearchTable {
+                    schema: t.schema,
+                    table: t.table,
+                })
+                .collect(),
+            options: spelaion_core::DataSearchOptions {
+                case_sensitive: r.case_sensitive,
+                numbers: r.numbers,
+                large: r.large,
+                rows_per_table: r.rows_per_table,
+            },
+        }
+    }
+}
+
+/// The data search's limits, for the form.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSearchLimitsItem {
+    pub max_tables: u32,
+    pub max_rows_per_table: u32,
+    pub default_rows_per_table: u32,
+    pub max_hits: u32,
+    pub max_value_chars: u32,
+}
+
+/// One searched column of a hit that matched.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnMatchItem {
+    pub column: String,
+    /// Its text around the match; `None` for binary columns.
+    pub text: Option<String>,
+}
+
+/// A primary key column of a hit and its value as text.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyPartItem {
+    pub column: String,
+    pub value: String,
+}
+
+/// A row that contains the value.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHitItem {
+    pub key: Vec<KeyPartItem>,
+    pub matches: Vec<ColumnMatchItem>,
+    /// The filter of the table data tab that shows this row, written by the core.
+    pub filter: Option<String>,
+}
+
+/// How searching one table ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TableStatusItem {
+    Searched {
+        columns: u32,
+        hits: Vec<SearchHitItem>,
+        more: bool,
+    },
+    NoColumns,
+    Failed {
+        message: String,
+    },
+    Cancelled,
+}
+
+/// What a data search tells while it runs.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DataSearchEventItem {
+    Started {
+        index: u32,
+        total: u32,
+        schema: String,
+        table: String,
+    },
+    Finished {
+        schema: String,
+        table: String,
+        status: TableStatusItem,
+    },
+}
+
+impl From<spelaion_core::DataSearchEvent> for DataSearchEventItem {
+    fn from(event: spelaion_core::DataSearchEvent) -> Self {
+        match event {
+            spelaion_core::DataSearchEvent::Started {
+                index,
+                total,
+                schema,
+                table,
+            } => Self::Started {
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                total: u32::try_from(total).unwrap_or(u32::MAX),
+                schema,
+                table,
+            },
+            spelaion_core::DataSearchEvent::Finished(outcome) => Self::Finished {
+                schema: outcome.schema,
+                table: outcome.table,
+                status: match outcome.status {
+                    spelaion_core::TableStatus::Searched {
+                        columns,
+                        hits,
+                        more,
+                    } => TableStatusItem::Searched {
+                        columns,
+                        more,
+                        hits: hits
+                            .into_iter()
+                            .map(|h| SearchHitItem {
+                                key: h
+                                    .key
+                                    .into_iter()
+                                    .map(|(column, value)| KeyPartItem { column, value })
+                                    .collect(),
+                                matches: h
+                                    .matches
+                                    .into_iter()
+                                    .map(|m| ColumnMatchItem {
+                                        column: m.column,
+                                        text: m.text,
+                                    })
+                                    .collect(),
+                                filter: h.filter,
+                            })
+                            .collect(),
+                    },
+                    spelaion_core::TableStatus::NoColumns => TableStatusItem::NoColumns,
+                    spelaion_core::TableStatus::Failed(message) => {
+                        TableStatusItem::Failed { message }
+                    }
+                    spelaion_core::TableStatus::Cancelled => TableStatusItem::Cancelled,
+                },
+            },
+        }
+    }
+}
+
+/// How a data search ended.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSearchSummaryItem {
+    pub tables: u32,
+    pub hits: u32,
+    pub cancelled: bool,
+    /// It stopped at the most hits a search returns.
+    pub stopped: bool,
+}
+
+impl From<spelaion_core::DataSearchSummary> for DataSearchSummaryItem {
+    fn from(s: spelaion_core::DataSearchSummary) -> Self {
+        Self {
+            tables: u32::try_from(s.tables).unwrap_or(u32::MAX),
+            hits: u32::try_from(s.hits).unwrap_or(u32::MAX),
+            cancelled: s.cancelled,
+            stopped: s.stopped,
+        }
+    }
+}
+
+/// What a cell panel's value picker writes (SDB-58): a date and time, one of the allowed values,
+/// or a row of the table a foreign key references. Exactly the field its `kind` names is set.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ValuePickerItem {
+    pub kind: ValuePickerKind,
+    pub temporal: Option<TemporalPickerItem>,
+    pub choice: Option<ChoicePickerItem>,
+    pub key: Option<KeyPickerItem>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ValuePickerKind {
+    Temporal,
+    Choice,
+    ForeignKey,
+}
+
+impl From<spelaion_core::ValuePicker> for ValuePickerItem {
+    fn from(picker: spelaion_core::ValuePicker) -> Self {
+        let empty = |kind| Self {
+            kind,
+            temporal: None,
+            choice: None,
+            key: None,
+        };
+        match picker {
+            spelaion_core::ValuePicker::Temporal(t) => Self {
+                temporal: Some(t.into()),
+                ..empty(ValuePickerKind::Temporal)
+            },
+            spelaion_core::ValuePicker::Choice(c) => Self {
+                choice: Some(c.into()),
+                ..empty(ValuePickerKind::Choice)
+            },
+            spelaion_core::ValuePicker::ForeignKey(k) => Self {
+                key: Some(KeyPickerItem {
+                    name: k.name,
+                    schema: k.schema,
+                    table: k.table,
+                    columns: k.columns,
+                    referenced_columns: k.referenced_columns,
+                }),
+                ..empty(ValuePickerKind::ForeignKey)
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TemporalKindItem {
+    Date,
+    Time,
+    Timestamp,
+    /// Written in UTC with `+00`, as the grid shows it.
+    TimestampTz,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TemporalStepItem {
+    Fraction,
+    /// SQL Server's `datetime`: thousandths ending in 0, 3 or 7.
+    SqlServerDatetime,
+    /// Whole minutes (SQL Server's `smalldatetime`).
+    Minutes,
+}
+
+/// A date and time picker: what it writes and how precisely.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TemporalPickerItem {
+    pub kind: TemporalKindItem,
+    /// Fractional digits of a second the column keeps (0 to 7).
+    pub digits: u8,
+    pub padded: bool,
+    pub step: TemporalStepItem,
+    /// A time zone is written with its own offset (SQL Server's `datetimeoffset`), not in UTC.
+    pub keeps_offset: bool,
+}
+
+impl From<spelaion_core::TemporalPicker> for TemporalPickerItem {
+    fn from(t: spelaion_core::TemporalPicker) -> Self {
+        use spelaion_core::{TemporalKind, TemporalStep};
+        Self {
+            kind: match t.kind {
+                TemporalKind::Date => TemporalKindItem::Date,
+                TemporalKind::Time => TemporalKindItem::Time,
+                TemporalKind::Timestamp => TemporalKindItem::Timestamp,
+                TemporalKind::TimestampTz => TemporalKindItem::TimestampTz,
+            },
+            digits: t.digits,
+            padded: t.padded,
+            step: match t.step {
+                TemporalStep::Fraction => TemporalStepItem::Fraction,
+                TemporalStep::SqlServerDatetime => TemporalStepItem::SqlServerDatetime,
+                TemporalStep::Minutes => TemporalStepItem::Minutes,
+            },
+            keeps_offset: t.keeps_offset,
+        }
+    }
+}
+
+impl From<TemporalPickerItem> for spelaion_core::TemporalPicker {
+    fn from(t: TemporalPickerItem) -> Self {
+        use spelaion_core::{TemporalKind, TemporalStep};
+        Self {
+            kind: match t.kind {
+                TemporalKindItem::Date => TemporalKind::Date,
+                TemporalKindItem::Time => TemporalKind::Time,
+                TemporalKindItem::Timestamp => TemporalKind::Timestamp,
+                TemporalKindItem::TimestampTz => TemporalKind::TimestampTz,
+            },
+            digits: t.digits,
+            padded: t.padded,
+            step: match t.step {
+                TemporalStepItem::Fraction => TemporalStep::Fraction,
+                TemporalStepItem::SqlServerDatetime => TemporalStep::SqlServerDatetime,
+                TemporalStepItem::Minutes => TemporalStep::Minutes,
+            },
+            keeps_offset: t.keeps_offset,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ChoiceSourceItem {
+    Enum,
+    Set,
+    Check,
+}
+
+/// A column's allowed values, in the catalog's order.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ChoicePickerItem {
+    pub source: ChoiceSourceItem,
+    pub values: Vec<String>,
+}
+
+impl From<spelaion_core::ChoicePicker> for ChoicePickerItem {
+    fn from(c: spelaion_core::ChoicePicker) -> Self {
+        use spelaion_core::ChoiceSource;
+        Self {
+            source: match c.source {
+                ChoiceSource::Enum => ChoiceSourceItem::Enum,
+                ChoiceSource::Set => ChoiceSourceItem::Set,
+                ChoiceSource::Check => ChoiceSourceItem::Check,
+            },
+            values: c.values,
+        }
+    }
+}
+
+impl From<ChoicePickerItem> for spelaion_core::ChoicePicker {
+    fn from(c: ChoicePickerItem) -> Self {
+        use spelaion_core::ChoiceSource;
+        Self {
+            source: match c.source {
+                ChoiceSourceItem::Enum => ChoiceSource::Enum,
+                ChoiceSourceItem::Set => ChoiceSource::Set,
+                ChoiceSourceItem::Check => ChoiceSource::Check,
+            },
+            values: c.values,
+        }
+    }
+}
+
+/// The foreign key a column belongs to.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyPickerItem {
+    pub name: String,
+    pub schema: String,
+    pub table: String,
+    /// This table's columns, in the key's order.
+    pub columns: Vec<String>,
+    /// The referenced table's columns, in the same order.
+    pub referenced_columns: Vec<String>,
+}
+
+/// A date and time as picked in the date and time picker.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedTimeItem {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+    pub hour: u32,
+    pub minute: u32,
+    pub second: u32,
+    /// Fractional digits of the second, as typed.
+    pub fraction: String,
+    /// Minutes east of UTC the time was picked in.
+    pub offset_minutes: i32,
+}
+
+impl From<PickedTimeItem> for spelaion_core::PickedTime {
+    fn from(p: PickedTimeItem) -> Self {
+        Self {
+            year: p.year,
+            month: p.month,
+            day: p.day,
+            hour: p.hour,
+            minute: p.minute,
+            second: p.second,
+            fraction: p.fraction,
+            offset_minutes: p.offset_minutes,
+        }
+    }
+}
+
+/// A page of the foreign key picker's search of the referenced table.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferencedRowsItem {
+    /// The referenced key's columns first, then a few text columns.
+    pub columns: Vec<String>,
+    pub key_columns: u32,
+    pub rows: Vec<Vec<Option<String>>>,
+    pub offset: u32,
+    pub has_more: bool,
+    /// Rows a page holds.
+    pub page_rows: u32,
+}
+
+impl From<spelaion_core::ReferencedRows> for ReferencedRowsItem {
+    fn from(r: spelaion_core::ReferencedRows) -> Self {
+        Self {
+            columns: r.columns,
+            key_columns: u32::try_from(r.key_columns).unwrap_or(u32::MAX),
+            rows: r.rows,
+            offset: u32::try_from(r.offset).unwrap_or(u32::MAX),
+            has_more: r.has_more,
+            page_rows: u32::try_from(spelaion_core::KEY_PAGE_ROWS).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// An account's kind (ADR-048): PostgreSQL roles, MySQL and MariaDB users and roles, SQL Server
+/// logins, users and roles.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PrincipalKindItem {
+    Role,
+    User,
+    Login,
+}
+
+impl From<PrincipalKindItem> for spelaion_core::PrincipalKind {
+    fn from(kind: PrincipalKindItem) -> Self {
+        match kind {
+            PrincipalKindItem::Role => Self::Role,
+            PrincipalKindItem::User => Self::User,
+            PrincipalKindItem::Login => Self::Login,
+        }
+    }
+}
+
+impl From<spelaion_core::PrincipalKind> for PrincipalKindItem {
+    fn from(kind: spelaion_core::PrincipalKind) -> Self {
+        match kind {
+            spelaion_core::PrincipalKind::Role => Self::Role,
+            spelaion_core::PrincipalKind::User => Self::User,
+            spelaion_core::PrincipalKind::Login => Self::Login,
+        }
+    }
+}
+
+/// An account as the explorer lists it (a MySQL user as `'name'@'host'`).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalTargetItem {
+    pub kind: PrincipalKindItem,
+    pub name: String,
+}
+
+impl From<PrincipalTargetItem> for spelaion_core::PrincipalTarget {
+    fn from(item: PrincipalTargetItem) -> Self {
+        Self {
+            kind: item.kind.into(),
+            name: item.name,
+        }
+    }
+}
+
+/// A new account. Its password is never part of it: only whether one is set (ADR-048).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewPrincipalItem {
+    pub kind: PrincipalKindItem,
+    pub name: String,
+    pub host: String,
+    pub with_password: bool,
+    pub can_login: bool,
+    pub superuser: bool,
+    pub create_db: bool,
+    pub create_role: bool,
+    pub default_database: String,
+    pub check_policy: bool,
+    pub login: String,
+    pub default_schema: String,
+}
+
+/// What to do with an account (ADR-048).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(
+    tag = "action",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PrincipalChangeItem {
+    Create { account: NewPrincipalItem },
+    SetPassword { target: PrincipalTargetItem },
+    Lock { target: PrincipalTargetItem },
+    Unlock { target: PrincipalTargetItem },
+    Drop { target: PrincipalTargetItem },
+}
+
+impl From<PrincipalChangeItem> for spelaion_core::PrincipalChange {
+    fn from(item: PrincipalChangeItem) -> Self {
+        match item {
+            PrincipalChangeItem::Create { account } => Self::Create(spelaion_core::NewPrincipal {
+                kind: Some(account.kind.into()),
+                name: account.name,
+                host: account.host,
+                with_password: account.with_password,
+                can_login: account.can_login,
+                superuser: account.superuser,
+                create_db: account.create_db,
+                create_role: account.create_role,
+                default_database: account.default_database,
+                check_policy: account.check_policy,
+                login: account.login,
+                default_schema: account.default_schema,
+            }),
+            PrincipalChangeItem::SetPassword { target } => Self::SetPassword(target.into()),
+            PrincipalChangeItem::Lock { target } => Self::Lock(target.into()),
+            PrincipalChangeItem::Unlock { target } => Self::Unlock(target.into()),
+            PrincipalChangeItem::Drop { target } => Self::Drop(target.into()),
+        }
+    }
+}
+
+/// Which kinds of account each action has on the session's engine: the core decides.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalActionsItem {
+    pub create: Vec<PrincipalKindItem>,
+    pub password: Vec<PrincipalKindItem>,
+    pub lock: Vec<PrincipalKindItem>,
+    pub drop: Vec<PrincipalKindItem>,
+    pub privileges: Vec<PrincipalKindItem>,
+}
+
+impl From<spelaion_core::PrincipalActions> for PrincipalActionsItem {
+    fn from(actions: spelaion_core::PrincipalActions) -> Self {
+        let kinds = |kinds: Vec<spelaion_core::PrincipalKind>| {
+            kinds.into_iter().map(PrincipalKindItem::from).collect()
+        };
+        Self {
+            create: kinds(actions.create),
+            password: kinds(actions.password),
+            lock: kinds(actions.lock),
+            drop: kinds(actions.drop),
+            privileges: kinds(actions.privileges),
+        }
+    }
+}
+
+/// What a privilege is on (ADR-048).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivilegeScopeItem {
+    Global,
+    Database,
+    Schema,
+    AllTablesInSchema,
+    Table,
+    Column,
+    Sequence,
+    Function,
+    Procedure,
+    DefaultTables,
+    DefaultSequences,
+    DefaultFunctions,
+    DefaultTypes,
+    Role,
+}
+
+impl From<PrivilegeScopeItem> for spelaion_core::PrivilegeScope {
+    fn from(scope: PrivilegeScopeItem) -> Self {
+        match scope {
+            PrivilegeScopeItem::Global => Self::Global,
+            PrivilegeScopeItem::Database => Self::Database,
+            PrivilegeScopeItem::Schema => Self::Schema,
+            PrivilegeScopeItem::AllTablesInSchema => Self::AllTablesInSchema,
+            PrivilegeScopeItem::Table => Self::Table,
+            PrivilegeScopeItem::Column => Self::Column,
+            PrivilegeScopeItem::Sequence => Self::Sequence,
+            PrivilegeScopeItem::Function => Self::Function,
+            PrivilegeScopeItem::Procedure => Self::Procedure,
+            PrivilegeScopeItem::DefaultTables => Self::DefaultTables,
+            PrivilegeScopeItem::DefaultSequences => Self::DefaultSequences,
+            PrivilegeScopeItem::DefaultFunctions => Self::DefaultFunctions,
+            PrivilegeScopeItem::DefaultTypes => Self::DefaultTypes,
+            PrivilegeScopeItem::Role => Self::Role,
+        }
+    }
+}
+
+impl From<spelaion_core::PrivilegeScope> for PrivilegeScopeItem {
+    fn from(scope: spelaion_core::PrivilegeScope) -> Self {
+        use spelaion_core::PrivilegeScope as S;
+        match scope {
+            S::Global => Self::Global,
+            S::Database => Self::Database,
+            S::Schema => Self::Schema,
+            S::AllTablesInSchema => Self::AllTablesInSchema,
+            S::Table => Self::Table,
+            S::Column => Self::Column,
+            S::Sequence => Self::Sequence,
+            S::Function => Self::Function,
+            S::Procedure => Self::Procedure,
+            S::DefaultTables => Self::DefaultTables,
+            S::DefaultSequences => Self::DefaultSequences,
+            S::DefaultFunctions => Self::DefaultFunctions,
+            S::DefaultTypes => Self::DefaultTypes,
+            S::Role => Self::Role,
+        }
+    }
+}
+
+/// A scope the form offers for an account, with the names it asks and its privileges.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivilegeScopeInfoItem {
+    pub scope: PrivilegeScopeItem,
+    pub needs_database: bool,
+    pub needs_schema: bool,
+    pub needs_name: bool,
+    /// The schema may be left empty (PostgreSQL's default privileges: every schema).
+    pub schema_optional: bool,
+    /// The name may be left empty (default privileges: the session's own role).
+    pub name_optional: bool,
+    /// A column privilege: the form asks for its columns.
+    pub needs_columns: bool,
+    pub privileges: Vec<String>,
+}
+
+/// Where a privilege applies.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivilegeTargetItem {
+    pub scope: PrivilegeScopeItem,
+    pub database: String,
+    pub schema: String,
+    /// An object's or role's name; default privileges: the role whose new objects get them.
+    pub name: String,
+    /// A column privilege's columns.
+    pub columns: Vec<String>,
+}
+
+impl From<PrivilegeTargetItem> for spelaion_core::PrivilegeTarget {
+    fn from(item: PrivilegeTargetItem) -> Self {
+        Self {
+            scope: Some(item.scope.into()),
+            database: item.database,
+            schema: item.schema,
+            name: item.name,
+            columns: item.columns,
+        }
+    }
+}
+
+/// Grant or revoke privileges of one scope to an account (ADR-048).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivilegeChangeItem {
+    pub grantee: PrincipalTargetItem,
+    pub target: PrivilegeTargetItem,
+    pub privileges: Vec<String>,
+    pub revoke: bool,
+    pub grant_option: bool,
+}
+
+impl From<PrivilegeChangeItem> for spelaion_core::PrivilegeChange {
+    fn from(item: PrivilegeChangeItem) -> Self {
+        Self {
+            grantee: item.grantee.into(),
+            target: item.target.into(),
+            privileges: item.privileges,
+            revoke: item.revoke,
+            grant_option: item.grant_option,
+        }
+    }
+}
+
+/// A privilege an account has, as the catalog says.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantedPrivilegeItem {
+    pub target: PrivilegeTargetItem,
+    pub privilege: String,
+    pub grantable: bool,
+    pub denied: bool,
+}
+
+impl GrantedPrivilegeItem {
+    pub fn from_core(granted: spelaion_core::GrantedPrivilege) -> Option<Self> {
+        Some(Self {
+            target: PrivilegeTargetItem {
+                scope: granted.target.scope?.into(),
+                database: granted.target.database,
+                schema: granted.target.schema,
+                name: granted.target.name,
+                columns: granted.target.columns,
+            },
+            privilege: granted.privilege,
+            grantable: granted.grantable,
+            denied: granted.denied,
+        })
+    }
 }

@@ -3378,13 +3378,10 @@ checksum = "0140448c472968ee5cf5ba697435deebe558b366ef1e5c080d24d9696b600725"
 dependencies = [
  "cc",
  "flate2",
- "pkg-config",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tar",
- "ureq",
- "vcpkg",
 ]
 
 [[package]]
@@ -5778,7 +5775,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5796,7 +5793,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-config"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "aes 0.8.4",
  "apple-native-keyring-store",
@@ -5824,11 +5821,12 @@ dependencies = [
 
 [[package]]
 name = "spelaion-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "futures-util",
  "quick-xml",
@@ -5849,15 +5847,17 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "toml 1.1.8+spec-1.1.0",
+ "uuid",
 ]
 
 [[package]]
 name = "spelaion-desktop"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "async-trait",
  "futures-util",
+ "gtk",
  "serde",
  "serde_json",
  "specta",
@@ -5877,7 +5877,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-api"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5888,7 +5888,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-duckdb"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5900,7 +5900,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-mysql"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5914,7 +5914,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-postgres"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "async-stream",
@@ -5934,7 +5934,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-sqlite"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5947,7 +5947,7 @@ dependencies = [
 
 [[package]]
 name = "spelaion-driver-sqlserver"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5962,8 +5962,10 @@ dependencies = [
 
 [[package]]
 name = "spelaion-mcp"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
+ "async-trait",
+ "futures-util",
  "rmcp",
  "rusqlite",
  "serde",
@@ -5979,22 +5981,24 @@ dependencies = [
 
 [[package]]
 name = "spelaion-ssh"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "data-encoding",
  "futures-util",
  "ring",
  "russh",
+ "rustix",
  "spelaion-driver-api",
  "spelaion-driver-postgres",
  "thiserror 2.0.21",
  "tokio",
+ "win32job",
 ]
 
 [[package]]
 name = "spelaion-store"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
@@ -7308,34 +7312,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
-name = "ureq"
-version = "3.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7be76686bdf7198002062423ca0d8cf9b75a27c8e1de804513b97e97b555d9d"
-dependencies = [
- "base64 0.23.1",
- "log",
- "percent-encoding",
- "rustls",
- "rustls-pki-types",
- "ureq-proto",
- "utf8-zero",
- "webpki-roots",
-]
-
-[[package]]
-name = "ureq-proto"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "622dce33c252115466d83f63e9744a18f12b4406aae51a01c15ad8fcf1185eb3"
-dependencies = [
- "base64 0.23.1",
- "http",
- "httparse",
- "log",
-]
-
-[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7359,12 +7335,6 @@ dependencies = [
  "serde",
  "url",
 ]
-
-[[package]]
-name = "utf8-zero"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
 
 [[package]]
 name = "utf8_iter"
@@ -7696,6 +7666,16 @@ dependencies = [
  "objc2-system-configuration",
  "wasite",
  "web-sys",
+]
+
+[[package]]
+name = "win32job"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21b25acac91041257d64f5625690b626133e0ca9e4e17814552b5803b1a82f7c"
+dependencies = [
+ "thiserror 1.0.69",
+ "windows",
 ]
 
 [[package]]

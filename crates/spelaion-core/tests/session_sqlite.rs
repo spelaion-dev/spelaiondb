@@ -128,7 +128,9 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
     let session = session().await;
     let _: Vec<CoreEvent> = session.run_script("create table t (id integer primary key, name text); insert into t values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e')").collect().await;
     let original = "select id, name from t where id > 1 order by id";
-    let first = spelaion_core::query_page_sql(session.dialect().as_ref(), original, 2, 0).unwrap();
+    let first = spelaion_core::first_query_page_sql(&session, original, 2)
+        .await
+        .unwrap();
     let id = first_result(&session, &first).await;
     assert_eq!(session.results().get(id).unwrap().read().unwrap().rows(), 2);
     assert_eq!(
@@ -171,6 +173,28 @@ async fn query_pages_append_atomically_and_count_all_matching_rows() {
     );
     assert_eq!(result.read().unwrap().total_rows(), 4);
     assert_eq!(session.results().len(), 1);
+}
+
+#[tokio::test]
+async fn a_paged_query_still_requires_execution_confirmation() {
+    let session = session().await;
+    let _: Vec<CoreEvent> = session
+        .run_script("create table orders (id integer primary key)")
+        .collect()
+        .await;
+    let dialect = session.dialect().clone();
+    let sql = spelaion_core::first_query_page_sql(&session, "select * from orders", 100)
+        .await
+        .expect("a pageable query");
+    let safeguards = spelaion_config::Safeguards {
+        confirm_execution: true,
+        ..Default::default()
+    };
+    let error = spelaion_core::check_script(dialect.as_ref(), &sql, &safeguards, false)
+        .expect_err("a paged query must not bypass the execution confirmation");
+    assert_eq!(error.risks.len(), 1);
+    assert_eq!(error.risks[0].risk, spelaion_core::Risk::Execution);
+    assert!(spelaion_core::check_script(dialect.as_ref(), &sql, &safeguards, true).is_ok());
 }
 
 async fn texts(session: &Session, sql: &str) -> Vec<String> {
@@ -223,11 +247,12 @@ async fn table_edits_apply_in_one_transaction_by_primary_key() {
     let sql = spelaion_core::table_page_sql(session.dialect().as_ref(), &page).unwrap();
     let id = first_result(&session, &sql).await;
     let stored = session.results().get(id).unwrap();
+    let edit_target = session.edit_target().await.unwrap();
     let statements = {
         let stored = stored.read().unwrap();
         // Rows shown: 3, 2, 1 (id desc).
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[
@@ -270,7 +295,7 @@ async fn table_edits_apply_in_one_transaction_by_primary_key() {
     let stale = {
         let stored = stored.read().unwrap();
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored,
             &[
@@ -304,7 +329,7 @@ async fn table_edits_apply_in_one_transaction_by_primary_key() {
     let stored_guard = stored.read().unwrap();
     assert!(matches!(
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &table,
             &stored_guard,
             &[RowChange::Update {
@@ -318,7 +343,7 @@ async fn table_edits_apply_in_one_transaction_by_primary_key() {
     keyless.primary_key.clear();
     assert!(matches!(
         spelaion_core::edit_statements(
-            session.dialect().as_ref(),
+            &edit_target,
             &keyless,
             &stored_guard,
             &[RowChange::Delete { row: 0 }],

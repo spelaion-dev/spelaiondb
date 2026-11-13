@@ -63,13 +63,31 @@
           ]
         },
         "resource": {
-          "description": "`svc/<name>`, `pod/<name>` or `deployment/<name>`.",
+          "description": "`svc/<name>`, `pod/<name>` or `deployment/<name>`. Left out only when the connection's\nKubernetes network profile names it (ADR-050).",
           "type": "string"
         }
       },
-      "required": [
-        "resource"
-      ],
+      "type": "object"
+    },
+    "MaskingConfig": {
+      "additionalProperties": false,
+      "description": "A connection's column masking (ADR-051). Patterns match result column names, ignoring\ncase: `*` is any characters, `?` one character, and a pattern without them is a name.\nMasking keeps values off the screen, the clipboard, files and agents' answers in normal\nwork; it is not access control (an alias such as `SELECT email AS e` gets past it).",
+      "properties": {
+        "always": {
+          "description": "Columns to mask (`*password*`, `email`, `card_number`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "never": {
+          "description": "Columns to leave visible although a pattern of `always`, or one of the user's own\npatterns, matches them (`email_verified`). Never a connection type's `mask_columns`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
       "type": "object"
     },
     "McpConfig": {
@@ -259,7 +277,7 @@
           "type": "null"
         }
       ],
-      "description": "Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):\n`port` is then the resource's port and `host` is only the name TLS checks."
+      "description": "Reach the database with `kubectl port-forward` to a resource of a cluster (ADR-015):\n`port` is then the resource's port and `host` is only the name TLS checks. With a\nKubernetes network profile in `tunnel` (ADR-050), only what the profile leaves out."
     },
     "local_port": {
       "description": "A fixed port on 127.0.0.1 for this connection's end of its SSH tunnel, so other tools\ncan use it too. A free port when absent (from the personal `[tunnels]` range, if set).",
@@ -270,6 +288,10 @@
         "integer",
         "null"
       ]
+    },
+    "masking": {
+      "$ref": "#/$defs/MaskingConfig",
+      "description": "Columns whose values the app shows as `••••••` (ADR-051): in the grid, copies,\nexports, statistics and agents' answers."
     },
     "mcp": {
       "$ref": "#/$defs/McpConfig"
@@ -302,7 +324,7 @@
       ]
     },
     "read_only": {
-      "description": "Open read-only (native in SQLite).",
+      "description": "Read-only (ADR-053): only reads, session settings and transaction control run, and the\nengine's own read-only mode is set where it has one (the file opened read-only on SQLite\nand DuckDB, read-only transactions on PostgreSQL, MySQL and MariaDB).",
       "type": "boolean"
     },
     "schema_version": {
@@ -342,7 +364,7 @@
       "$ref": "#/$defs/TlsConfig"
     },
     "tunnel": {
-      "description": "Name of a tunnel in `.spelaion/tunnels/`.",
+      "description": "Name of a tunnel (a network profile) in `.spelaion/tunnels/`. With a Kubernetes profile\n(ADR-050), `[kubernetes]` may set what the profile leaves out, such as the resource.",
       "type": [
         "string",
         "null"

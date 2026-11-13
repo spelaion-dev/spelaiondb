@@ -13,11 +13,12 @@ mod remote;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rusqlite::{InterruptHandle, OpenFlags};
+use rusqlite::OpenFlags;
+use spelaion_driver_api::thread_cancel::{Canceller, Closer, Work};
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, Dialect, Driver, DriverError,
     EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter, ObjectInfo,
-    ReferencingKey, Result, SchemaInfo, SchemaObject, TableInfo, TransactionState,
+    ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -107,17 +108,21 @@ impl Driver for SqliteDriver {
                     let _ = ready_tx.send(Err(exec::map_error(e)));
                     return;
                 }
-                let _ = ready_tx.send(Ok(Arc::new(conn.get_interrupt_handle())));
-                actor(conn, inbox);
+                let interrupt = conn.get_interrupt_handle();
+                let canceller = Canceller::new(Box::new(move || interrupt.interrupt()));
+                let closer = Closer(Arc::clone(&canceller));
+                let _ = ready_tx.send(Ok(Arc::clone(&canceller)));
+                actor(conn, &canceller, inbox);
+                drop(closer);
             })
             .map_err(|e| DriverError::Other(format!("could not spawn the SQLite thread: {e}")))?;
 
-        let interrupt = ready_rx.await.map_err(|_| {
+        let canceller = ready_rx.await.map_err(|_| {
             DriverError::Connection("the SQLite thread ended while opening".into())
         })??;
         Ok(Box::new(SqliteConnection {
             commands,
-            cancel: Arc::new(SqliteCancel(interrupt)),
+            cancel: Arc::new(SqliteCancel(canceller)),
             capabilities: Capabilities {
                 transactions: true,
                 cancel: true,
@@ -125,6 +130,7 @@ impl Driver for SqliteDriver {
                 editable_results: false, // comes in v0.2
                 schemas: true,           // main, temp and attached databases (ATTACH)
                 insert_rows: true,
+                bound_params: true,
             },
         }))
     }
@@ -134,7 +140,11 @@ type Reply<T> = oneshot::Sender<Result<T>>;
 
 enum Command {
     Execute {
+        /// Its id for cancelling (`thread_cancel`).
+        id: u64,
         sql: String,
+        /// Bound to `?1`, `?2`… (ADR-043).
+        params: Vec<String>,
         batch_size: usize,
         events: mpsc::Sender<Result<ExecEvent>>,
     },
@@ -148,19 +158,32 @@ enum Command {
     /// `sqlite3_get_autocommit`: no query (ADR-031).
     TransactionState(Reply<TransactionState>),
     /// Rows of an import (ADR-038): one prepared single-row INSERT, values bound.
-    Insert(String, Vec<Vec<Option<String>>>, Reply<u64>),
+    Insert(u64, String, Vec<Vec<Option<String>>>, Reply<u64>),
 }
 
 /// Loop of the connection thread. Ends when the `SqliteConnection` is dropped.
-fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>) {
+fn actor(
+    conn: rusqlite::Connection,
+    canceller: &Arc<Canceller>,
+    mut inbox: mpsc::UnboundedReceiver<Command>,
+) {
     while let Some(command) = inbox.blocking_recv() {
         match command {
             Command::Execute {
+                id,
                 sql,
+                params,
                 batch_size,
                 events,
             } => {
-                if let Err(e) = exec::execute(&conn, &sql, batch_size, &events) {
+                let work = canceller.begin(id);
+                // A statement cancelled before it started is never run.
+                let result = work
+                    .check()
+                    .and_then(|()| exec::execute(&conn, &sql, &params, batch_size, &events, &work));
+                // Every SQLite call of the statement is over: a cancel can no longer reach it.
+                drop(work);
+                if let Err(e) = result {
                     let _ = events.blocking_send(Err(e));
                 }
             }
@@ -185,8 +208,11 @@ fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>
             Command::Catalog(sql, reply) => {
                 let _ = reply.send(introspect::query(&conn, &sql));
             }
-            Command::Insert(sql, rows, reply) => {
-                let _ = reply.send(insert(&conn, &sql, rows));
+            Command::Insert(id, sql, rows, reply) => {
+                let work = canceller.begin(id);
+                let result = work.check().and_then(|()| insert(&conn, &sql, rows, &work));
+                drop(work);
+                let _ = reply.send(result);
             }
             Command::TransactionState(reply) => {
                 // SQLite has no failed transactions: an error that ends one rolls it back.
@@ -200,10 +226,19 @@ fn actor(conn: rusqlite::Connection, mut inbox: mpsc::UnboundedReceiver<Command>
     }
 }
 
-fn insert(conn: &rusqlite::Connection, sql: &str, rows: Vec<Vec<Option<String>>>) -> Result<u64> {
+fn insert(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    rows: Vec<Vec<Option<String>>>,
+    work: &Work,
+) -> Result<u64> {
     let mut statement = conn.prepare_cached(sql).map_err(exec::map_error)?;
     let mut inserted = 0;
-    for row in rows {
+    for (i, row) in rows.into_iter().enumerate() {
+        // Each row is a statement of its own, which an interrupt between two would miss.
+        if i % 1024 == 0 {
+            work.check()?;
+        }
         inserted += statement
             .execute(rusqlite::params_from_iter(row))
             .map_err(exec::map_error)? as u64;
@@ -223,6 +258,29 @@ impl SqliteConnection {
         self.commands.send(make(tx)).map_err(|_| closed())?;
         rx.await.map_err(|_| closed())?
     }
+
+    /// Sends work a cancel can stop (statements, inserts), with its id.
+    fn submit(&self, make: impl FnOnce(u64) -> Command) -> Result<()> {
+        self.cancel
+            .0
+            .submit(|id| self.commands.send(make(id)).map_err(|_| closed()))
+    }
+
+    fn run(&self, sql: &str, params: Vec<String>, opts: &ExecOptions) -> Result<EventStream> {
+        // Bounded channel: if the UI does not consume, the SQLite thread waits instead of filling memory.
+        let (events, rx) = mpsc::channel(4);
+        self.submit(|id| Command::Execute {
+            id,
+            sql: sql.to_string(),
+            params,
+            batch_size: opts.batch_size.max(1),
+            events,
+        })?;
+        Ok(Box::pin(futures_util::stream::unfold(
+            rx,
+            |mut rx| async move { rx.recv().await.map(|event| (event, rx)) },
+        )))
+    }
 }
 
 fn closed() -> DriverError {
@@ -236,19 +294,16 @@ impl Connection for SqliteConnection {
     }
 
     async fn execute(&self, sql: &str, opts: &ExecOptions) -> Result<EventStream> {
-        // Bounded channel: if the UI does not consume, the SQLite thread waits instead of filling memory.
-        let (events, rx) = mpsc::channel(4);
-        self.commands
-            .send(Command::Execute {
-                sql: sql.to_string(),
-                batch_size: opts.batch_size.max(1),
-                events,
-            })
-            .map_err(|_| closed())?;
-        Ok(Box::pin(futures_util::stream::unfold(
-            rx,
-            |mut rx| async move { rx.recv().await.map(|event| (event, rx)) },
-        )))
+        self.run(sql, Vec::new(), opts)
+    }
+
+    async fn execute_bound(
+        &self,
+        sql: &str,
+        params: Vec<String>,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        self.run(sql, params, opts)
     }
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
@@ -274,7 +329,9 @@ impl Connection for SqliteConnection {
             return Ok(0);
         }
         let sql = target.insert_sql(&SqliteDialect, 1, |n| format!("?{n}"));
-        self.ask(|reply| Command::Insert(sql, rows, reply)).await
+        let (reply, answer) = oneshot::channel();
+        self.submit(|id| Command::Insert(id, sql, rows, reply))?;
+        answer.await.map_err(|_| closed())?
     }
 
     async fn list_schemas(&self) -> Result<Vec<SchemaInfo>> {
@@ -296,6 +353,12 @@ impl Connection for SqliteConnection {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Referencing(schema, name, reply))
             .await
+    }
+
+    async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {
+        let sql = catalog::schema_columns_sql(schema);
+        let rows = self.ask(|reply| Command::Catalog(sql, reply)).await?;
+        Ok(catalog::schema_columns(&rows))
     }
 
     async fn list_schema_objects(&self, schema: &str) -> Result<Vec<SchemaObject>> {
@@ -350,12 +413,14 @@ impl Connection for SqliteConnection {
     }
 }
 
-struct SqliteCancel(Arc<InterruptHandle>);
+/// Stops the statements and inserts submitted before it, queued or running: SQLite ignores an
+/// interrupt when no statement runs, so a plain one sent while a statement waits in the queue
+/// or is being prepared would be lost (`thread_cancel`).
+struct SqliteCancel(Arc<Canceller>);
 
 #[async_trait]
 impl CancelHandle for SqliteCancel {
     async fn cancel(&self) -> Result<()> {
-        self.0.interrupt();
-        Ok(())
+        self.0.cancel()
     }
 }

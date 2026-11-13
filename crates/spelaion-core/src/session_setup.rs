@@ -1,5 +1,6 @@
-//! How a new session starts (ADR-037): the connection's isolation level, its default schema and
-//! its setup statements, applied by [`crate::open_connection`] every time a session opens,
+//! How a new session starts (ADR-037): on a read-only connection, the engine's own read-only
+//! mode first (ADR-053), then the connection's isolation level, its default schema and its
+//! setup statements, applied by [`crate::open_connection`] every time a session opens,
 //! reconnecting included. Nothing the user ran is ever re-run: only this, which is part of the
 //! connection, as its host or its user are.
 //!
@@ -39,6 +40,9 @@ pub enum SetupError {
         total: usize,
         message: String,
     },
+    /// The engine's read-only mode could not be set on a read-only connection (ADR-053).
+    #[error("could not make the session read-only: {message}")]
+    ReadOnly { message: String },
     #[error("could not set the isolation level to {level}: {message}")]
     Isolation { level: String, message: String },
     #[error("could not make {schema:?} the default schema: {message}")]
@@ -120,6 +124,19 @@ pub fn check_file_setup(file: &ConnectionFile, safeguards: &Safeguards) -> Resul
     check_session_setup(dialect.as_ref(), dialect.name(), setup, restricted).map(|_| ())
 }
 
+/// The statement that makes a read-only connection's session read-only in the engine itself
+/// (ADR-053), run before anything else when it opens: every transaction of the session is then
+/// read-only, so a function that writes behind a `SELECT` fails too. `None` where the engine has
+/// no such mode for a session (SQL Server: the core's check is the barrier there) or the
+/// connection already opens its file read-only (SQLite, DuckDB).
+pub fn read_only_statement(engine: &str) -> Option<&'static str> {
+    match engine {
+        "postgres" => Some("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"),
+        "mysql" | "mariadb" => Some("SET SESSION TRANSACTION READ ONLY"),
+        _ => None,
+    }
+}
+
 /// The statement that sets the session's isolation level, by engine; `None` where the engine
 /// has a single level (the configuration refuses one there).
 pub fn isolation_statement(engine: &str, level: IsolationLevel) -> Option<String> {
@@ -136,8 +153,9 @@ pub fn isolation_statement(engine: &str, level: IsolationLevel) -> Option<String
     }
 }
 
-/// Sets up a session that has just opened: the isolation level, then the default schema, then
-/// the setup statements, within the connection's connect timeout. Statements are run as the
+/// Sets up a session that has just opened: the engine's read-only mode on a read-only
+/// connection (ADR-053), the isolation level, then the default schema, then the setup
+/// statements, within the connection's connect timeout. Statements are run as the
 /// core's own (not recorded in the history, never inside the manual-commit transaction).
 pub async fn apply_session_setup(
     session: &Session,
@@ -145,7 +163,13 @@ pub async fn apply_session_setup(
     restricted: bool,
 ) -> Result<SetupReport, SetupError> {
     let config = &resolved.session;
-    if config.setup.is_none() && config.schema.is_none() && config.isolation.is_none() {
+    let read_only_mode =
+        resolved.params.read_only && read_only_statement(session.dialect().name()).is_some();
+    if !read_only_mode
+        && config.setup.is_none()
+        && config.schema.is_none()
+        && config.isolation.is_none()
+    {
         return Ok(SetupReport::default());
     }
     let after = resolved.params.connect_timeout();
@@ -169,6 +193,16 @@ async fn apply(
     // Every statement is checked before anything runs.
     if let Some(setup) = &config.setup {
         check_session_setup(dialect.as_ref(), engine, setup, restricted)?;
+    }
+
+    // Before anything else, so the setup itself runs read-only (ADR-053).
+    if resolved.params.read_only
+        && let Some(statement) = read_only_statement(engine)
+    {
+        run_statement(session, statement)
+            .await
+            .map_err(|message| SetupError::ReadOnly { message })?;
+        lost(session)?;
     }
 
     if let Some(level) = config.isolation {
@@ -292,6 +326,21 @@ fn start_of(statement: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_only_mode_by_engine() {
+        assert_eq!(
+            read_only_statement("postgres"),
+            Some("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        );
+        assert_eq!(
+            read_only_statement("mysql"),
+            Some("SET SESSION TRANSACTION READ ONLY")
+        );
+        assert_eq!(read_only_statement("sqlserver"), None);
+        assert_eq!(read_only_statement("sqlite"), None);
+        assert_eq!(read_only_statement("duckdb"), None);
+    }
 
     #[test]
     fn isolation_statements_by_engine() {

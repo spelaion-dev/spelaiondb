@@ -355,6 +355,8 @@ pub fn import_plan(
                         connect_timeout: ssh.connect_timeout,
                     },
                     proxy,
+                    kubernetes: None,
+                    ssm: None,
                 },
                 TunnelPasswords {
                     hops: vec![keep(&ssh.password)],
@@ -370,6 +372,8 @@ pub fn import_plan(
                 hops: Vec::new(),
                 options: TunnelDraftOptions::default(),
                 proxy: Some(proxy),
+                kubernetes: None,
+                ssm: None,
             },
             TunnelPasswords {
                 hops: Vec::new(),
@@ -425,6 +429,7 @@ pub fn import_plan(
             session: SessionDraft::default(),
             mcp_exposed: false,
             mcp_writes: false,
+            masking: Default::default(),
         },
         password: if file {
             None

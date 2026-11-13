@@ -29,7 +29,8 @@ Each engine is a Rust crate that implements a common contract, organized in laye
    functions) shared by the core and the UI.
 7. **Result transport:** Arrow (see ADR-010).
 
-Extensibility:
+Extensibility (superseded by ADR-041: every engine becomes a plugin in its own process, with
+results still in Arrow and the dialects and barriers kept in the core):
 - Now: Rust crates compiled in, with a contract designed so it can travel as messages.
 - Later: drivers in external processes with an LSP-like protocol (JSON-RPC over stdio),
   including a JDBC bridge for Oracle, DB2, Snowflake…
@@ -44,6 +45,26 @@ Extensibility:
   timestamp(tz) in microseconds. The rest (decimal, uuid, json, interval, array and
   `Native`) goes as text, identical to what the engine's console shows.
 - ±infinity in dates and timestamps is represented with `i32::MAX/MIN` and `i64::MAX/MIN`.
+- Note (2026-11-12, SDB-122): a column's logical type is decided from its metadata alone,
+  never from the values it holds, so a value far down a result cannot fail it. A temporal
+  native type whose values are not all dates may travel as logical `text`, keeping its native
+  type: MySQL's and MariaDB's `DATE`, `DATETIME` and `TIMESTAMP` do (ADR-006), because of
+  their legacy zero dates. Their text sorts and compares as the date does. What places values
+  on a time line or writes a date in the column's form (a chart's X axis, the bulk "now")
+  reads such a column by its native type (`spelaion-core`'s `temporal.rs`); a zero date is no
+  point in time there and is skipped and counted, never dropped from the result or made NULL.
+- Note (2026-11-12, SDB-265): the same applies to a temporal type whose values a timestamp
+  cannot hold exactly. SQL Server's `datetime2`, `datetimeoffset` and `time` (SDB-268) keep
+  100 ns (the seventh digit of `SYSDATETIME()`), past a timestamp's microseconds, and a
+  `datetimeoffset` keeps the offset it was written with; all travel as the server's text with
+  their native type (ADR-006), so the grid, "filter by this value", an edit's key and a copied INSERT carry
+  every digit. A `datetimeoffset`'s text sorts by the instant it is, not by its text.
+- Note (2026-11-12, SDB-135): `Dialect::code_ranges` gives the byte ranges of a script that
+  are code, outside strings, quoted names and comments, read as that engine's splitter reads
+  them (SQL Server's `[names]`, `E'…'` strings, nested comments, `$tag$` bodies). The core
+  looks for things in the code (the editor's `:name` placeholders) only there, instead of
+  keeping a simpler scanner of its own that disagreed with the engines. It returns owned
+  ranges, so it can travel as a message when engines run as plugins (ADR-041).
 - `Done.rows_affected` is `None` for statements without a count (DDL, `SET`…).
 - Deliberate differences from `psql`: a `bool` cell is shown as `true`/`false`, and `money`
   without symbol or separators (they depend on `lc_monetary`).

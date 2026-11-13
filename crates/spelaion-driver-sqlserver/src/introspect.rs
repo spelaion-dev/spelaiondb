@@ -4,7 +4,7 @@
 
 use spelaion_driver_api::{
     ColumnInfo, ConstraintInfo, ConstraintKind, DriverError, ForeignKeyInfo, IndexInfo, LikeFilter,
-    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, ReferencingKey, Result, SchemaColumn, SchemaInfo, TableInfo,
 };
 
 use crate::SqlServerConnection;
@@ -124,6 +124,30 @@ pub(crate) fn native_type(name: &str, max_length: i64, precision: i64, scale: i6
         "datetime2" | "time" | "datetimeoffset" => format!("{name}({scale})"),
         _ => name.to_string(),
     }
+}
+
+/// Every column of the schema's tables and views (those `list_objects` lists).
+pub async fn list_columns(conn: &SqlServerConnection, schema: &str) -> Result<Vec<SchemaColumn>> {
+    let rows = conn
+        .rows(
+            "select o.name, c.name, t.name, c.max_length, c.precision, c.scale              from sys.columns c              join sys.objects o on o.object_id = c.object_id              join sys.schemas s on s.schema_id = o.schema_id              join sys.types t on t.user_type_id = c.user_type_id              where s.name = @P1 and o.type in ('U', 'V') and o.is_ms_shipped = 0              order by o.name, c.column_id",
+            vec![schema.to_string()],
+        )
+        .await?;
+    let number = |row: &[Option<String>], i| text(row, i).parse::<i64>().unwrap_or(0);
+    Ok(rows
+        .iter()
+        .map(|row| SchemaColumn {
+            table: text(row, 0),
+            name: text(row, 1),
+            native_type: native_type(
+                &text(row, 2),
+                number(row, 3),
+                number(row, 4),
+                number(row, 5),
+            ),
+        })
+        .collect())
 }
 
 pub async fn describe_table(

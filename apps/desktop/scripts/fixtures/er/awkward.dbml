@@ -1,0 +1,52 @@
+// "Ventas ñ"."empty" has no columns
+
+Table "Ventas ñ"."ficha" {
+  "id" "int" [pk, not null]
+}
+
+Table "Ventas ñ"."producto" {
+  "id" "int" [not null]
+  "variante" "int" [not null]
+  "ficha" "int" [not null, unique, note: 'one-to-one']
+  indexes {
+    ("id", "variante") [pk]
+  }
+}
+
+Table "sales"."Orders" {
+  "number" "character varying(80)" [pk, not null]
+  "parent" "character varying(80)"
+  "customer" "int"
+}
+
+Table "sales"."order lines" [note: 'Lines of an order: it\'s "quoted"
+and on two lines \ with a backslash'] {
+  "id" "integer" [not null, note: 'the line\'s number']
+  "order no" "character varying(80)" [not null]
+  "pk" "numeric(12,2)" [unique, note: 'a column named like a key']
+  "1st" "char"
+  "name'quote" "text" [note: 'a "double" quote in the name']
+  "日本語" "text" [note: 'non-Latin name']
+  "Ref" "int"
+  "Note" "int"
+  "indexes" "int"
+  "back\slash" "int" [note: 'a \\' pair, and a backslash at the end \ ']
+  "untyped" "unknown"
+  "Table" "timestamp with time zone"
+  "uk" "uk"
+  "arr" "int[]"
+  indexes {
+    ("id", "order no") [pk]
+    ("Ref", "Note") [unique]
+  }
+}
+
+Table "sales"."orders" [note: 'lower case'] {
+  "id" "int" [pk, not null]
+}
+
+Ref "producto_ficha": "Ventas ñ"."producto"."ficha" - "Ventas ñ"."ficha"."id"
+Ref "fk_1": "sales"."Orders"."parent" > "sales"."Orders"."number"
+Ref "fk_customer": "sales"."Orders"."customer" > "sales"."orders"."id"
+Ref "fk_1 (2)": "sales"."order lines"."order no" > "sales"."Orders"."number"
+Ref "lines→product": "sales"."order lines".("Ref", "Note") - "Ventas ñ"."producto".("id", "variante")

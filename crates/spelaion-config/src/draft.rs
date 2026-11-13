@@ -8,14 +8,14 @@ use spelaion_driver_api::Secret;
 
 use crate::accounts::connection_account;
 use crate::edit::create_connection;
-use crate::edit::{read_doc, write_doc};
+use crate::edit::{new_file_mode, read_doc, write_doc};
 use crate::error::{ConfigError, ResolveError};
 use crate::load::{
     Config, ConnectionEntry, ConnectionId, Source, validate_connection, workspace_dir,
 };
 use crate::model::{
-    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, McpConfig, SCHEMA_VERSION,
-    SecretSpec, SessionConfig, TlsConfig, TlsModeConfig, WritePolicy,
+    ConnectionFile, Engine, IsolationLevel, KubernetesConfig, MaskingConfig, McpConfig,
+    SCHEMA_VERSION, SecretSpec, SessionConfig, TlsConfig, TlsModeConfig, WritePolicy,
 };
 use crate::secrets::{SecretBackend, SecretRef};
 use crate::vars::home_dir;
@@ -124,10 +124,12 @@ pub struct ConnectionDraft {
     /// Client certificate and its private key (ADR-022); empty for none.
     pub tls_cert: String,
     pub tls_key: String,
+    /// A network profile (ADR-027): an SSH one, or a Kubernetes one used with `kubernetes`
+    /// for what the profile leaves out (ADR-050).
     pub tunnel: String,
     /// Fixed local port of the SSH tunnel; `None` for a free one.
     pub local_port: Option<u16>,
-    /// Through `kubectl port-forward` instead of a tunnel (ADR-015).
+    /// Through `kubectl port-forward` instead of an SSH tunnel (ADR-015).
     pub kubernetes: Option<KubernetesDraft>,
     /// SQLite on a server: the program that opens the file there; empty for `sqlite3`.
     pub sqlite3: String,
@@ -143,6 +145,19 @@ pub struct ConnectionDraft {
     pub mcp_writes: bool,
     /// How every new session starts (ADR-037).
     pub session: SessionDraft,
+    /// Columns masked on this connection (ADR-051): patterns as typed, one per entry.
+    pub masking: MaskingConfig,
+}
+
+/// Masking patterns as typed: trimmed, blank ones left out, each once.
+fn tidy_patterns(patterns: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for pattern in patterns.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        if !out.iter().any(|p| p == pattern) {
+            out.push(pattern.to_string());
+        }
+    }
+    out
 }
 
 /// The Session tab of the connection form (ADR-037); empty fields mean "not set".
@@ -180,7 +195,8 @@ impl SessionDraft {
     }
 }
 
-/// The Kubernetes tab of the connection form; empty fields mean the defaults.
+/// The Kubernetes tab of the connection form; empty fields mean the defaults, or what the
+/// connection's Kubernetes network profile sets (ADR-050).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KubernetesDraft {
     pub context: String,
@@ -387,6 +403,12 @@ impl ConnectionDraft {
             Source::Workspace => config.workspace_root.as_deref(),
             Source::User => None,
         };
+        // A Kubernetes network profile (ADR-050): the form sets only what it leaves out, and
+        // the resolver checks that nothing is set in both.
+        let kube_profile = network
+            && non_empty(&self.tunnel)
+                .and_then(|name| config.tunnel_for(self.source, &name))
+                .is_some_and(|t| t.file.kubernetes.is_some());
         let kubernetes = self
             .kubernetes
             .as_ref()
@@ -395,17 +417,31 @@ impl ConnectionDraft {
                 Ok(KubernetesConfig {
                     context: non_empty(&k.context),
                     namespace: non_empty(&k.namespace),
-                    resource: non_empty(&k.resource)
-                        .ok_or_else(|| ConfigError::new(path, "choose the Kubernetes resource"))?,
+                    resource: match non_empty(&k.resource) {
+                        Some(resource) => resource,
+                        None if kube_profile => String::new(),
+                        None => {
+                            return Err(ConfigError::new(path, "choose the Kubernetes resource"));
+                        }
+                    },
                     kubeconfig: non_empty(&k.kubeconfig).map(|f| portable_path(&f, root)),
                     kubectl: non_empty(&k.kubectl),
                 })
             })
-            .transpose()?;
+            .transpose()?
+            // With a profile, a section that sets nothing is left out.
+            .filter(|k| {
+                !kube_profile
+                    || k.context.is_some()
+                    || k.namespace.is_some()
+                    || !k.resource.is_empty()
+                    || k.kubeconfig.is_some()
+                    || k.kubectl.is_some()
+            });
         // SQLite through a tunnel: the file is on the server (ADR-018).
         let remote_sqlite = self.engine == Engine::Sqlite && non_empty(&self.tunnel).is_some();
-        let tunnel =
-            non_empty(&self.tunnel).filter(|_| (network || remote_sqlite) && kubernetes.is_none());
+        let tunnel = non_empty(&self.tunnel)
+            .filter(|_| (network || remote_sqlite) && (kubernetes.is_none() || kube_profile));
         if let Some(name) = &tunnel
             && config.tunnel_for(self.source, name).is_none()
         {
@@ -438,7 +474,7 @@ impl ConnectionDraft {
                 .map(|secret| SecretSpec { secret }),
             local_port: self
                 .local_port
-                .filter(|_| tunnel.is_some() && !remote_sqlite),
+                .filter(|_| tunnel.is_some() && !remote_sqlite && !kube_profile),
             tunnel,
             kubernetes,
             sqlite3: non_empty(&self.sqlite3).filter(|_| remote_sqlite),
@@ -475,6 +511,10 @@ impl ConnectionDraft {
                 },
                 ..McpConfig::default()
             },
+            masking: MaskingConfig {
+                always: tidy_patterns(&self.masking.always),
+                never: tidy_patterns(&self.masking.never),
+            },
         };
         validate_connection(path, file)
     }
@@ -501,13 +541,13 @@ pub fn add_connection(
 ) -> Result<ConnectionId, ResolveError> {
     let entry = draft.entry(config)?;
     let dir = connections_dir(config, draft.source)?;
-    let path = create_connection(&dir, &entry.id.path, &entry.file)?;
+    let path = create_connection(&dir, draft.source, &entry.id.path, &entry.file)?;
     if draft.password == PasswordChoice::Keychain
         && !draft.engine.is_file()
         && let Some(secret) = password.filter(|s| !s.expose().is_empty())
     {
         let account = connection_account(config, &entry.id);
-        if let Err(message) = backend.keychain_set(&account, secret.expose()) {
+        if let Err(message) = crate::secrets::store(backend, &account, secret.expose()) {
             // Without its password the new file would ask for it on first use, which is
             // confusing right after typing it: undo the whole operation instead.
             let _ = std::fs::remove_file(&path);
@@ -578,6 +618,7 @@ impl ConnectionDraft {
             mcp_exposed: file.mcp.exposed,
             mcp_writes: file.mcp.writes == WritePolicy::Allow,
             session: SessionDraft::from_config(&file.session),
+            masking: file.masking.clone(),
         }
     }
 }
@@ -606,6 +647,17 @@ pub(crate) fn uses_default_keychain(file: &ConnectionFile) -> bool {
     file.password
         .as_ref()
         .is_some_and(|p| p.secret == "keychain")
+}
+
+/// Whether the keychain holds the password of a connection whose password is `keychain`,
+/// never the value: the editor offers to keep a saved password only when there is one.
+pub fn connection_password_stored(
+    config: &Config,
+    entry: &ConnectionEntry,
+    backend: &dyn SecretBackend,
+) -> bool {
+    uses_default_keychain(&entry.file)
+        && crate::secrets::is_stored(backend, &connection_account(config, &entry.id))
 }
 
 /// Sets (or removes, with `None`) one key of the document, creating parent tables as needed
@@ -826,7 +878,9 @@ pub fn update_connection(
                 put(
                     &mut doc,
                     &["kubernetes", "resource"],
-                    Some(Value::from(k.resource.as_str())),
+                    Some(k.resource.as_str())
+                        .filter(|r| !r.is_empty())
+                        .map(Value::from),
                 );
                 put(&mut doc, &["kubernetes", "kubeconfig"], text(&k.kubeconfig));
                 put(&mut doc, &["kubernetes", "kubectl"], text(&k.kubectl));
@@ -900,17 +954,29 @@ pub fn update_connection(
         );
     }
 
+    // Column masking (ADR-051): each list as the form left it, removed when empty.
+    for (name, before, after) in [
+        ("always", &old.masking.always, &new.masking.always),
+        ("never", &old.masking.never, &new.masking.never),
+    ] {
+        if before != after {
+            let value = (!after.is_empty())
+                .then(|| Value::Array(after.iter().map(String::as_str).collect()));
+            put(&mut doc, &["masking", name], value);
+        }
+    }
+
     // The result must still be a valid connection before it replaces the file.
     let edited = doc.to_string();
     let parsed: ConnectionFile = toml::from_str(&edited)
         .map_err(|e| ConfigError::new(path, format!("the edited file is not valid: {e}")))?;
     let parsed = validate_connection(path, parsed)?;
-    write_doc(path, &doc)?;
+    write_doc(path, &doc, new_file_mode(id.source))?;
 
     let account = connection_account(config, &entry.id);
     let keychain = if uses_default_keychain(&new) {
         match password.filter(|s| !s.expose().is_empty()) {
-            Some(secret) => backend.keychain_set(&account, secret.expose()),
+            Some(secret) => crate::secrets::store(backend, &account, secret.expose()),
             None => Ok(()),
         }
     } else if uses_default_keychain(old) {
@@ -919,7 +985,8 @@ pub fn update_connection(
         Ok(())
     };
     if let Err(message) = keychain {
-        let _ = std::fs::write(path, original);
+        // Put the file back as it was, the same way it was written.
+        let _ = crate::atomic_file::replace(path, original.as_bytes(), new_file_mode(id.source));
         return Err(ResolveError::Secret {
             reference: format!("keychain:{account}"),
             message,

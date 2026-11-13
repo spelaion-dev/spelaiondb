@@ -7,12 +7,11 @@
 //!
 //! Every function here blocks on the file system: async callers run them on a blocking thread.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::fs;
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
+use spelaion_config::atomic_file::{self, NewFileMode};
 pub use spelaion_store::{FileEncoding, LineEnding};
 
 /// Largest file the editor opens.
@@ -136,7 +135,7 @@ pub fn write_sql_file(
     check: &SaveCheck,
 ) -> Result<String, FileError> {
     let bytes = encode(text, format)?;
-    let target = follow_link(path)?;
+    let target = atomic_file::follow_link(path)?;
     if let SaveCheck::Unchanged(expected) = check {
         match fs::read(&target) {
             Ok(current) if content_hash(&current) == *expected => {}
@@ -151,62 +150,21 @@ pub fn write_sql_file(
     Ok(content_hash(&bytes))
 }
 
-/// The file a symbolic link points to (so saving keeps the link), or `path` itself.
-fn follow_link(path: &Path) -> Result<PathBuf, FileError> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => Ok(fs::canonicalize(path)?),
-        _ => Ok(path.to_path_buf()),
-    }
-}
-
-/// Writes `bytes` to a temporary file next to `target`, flushes it to disk and renames it
-/// over `target`: a crash leaves the old file or the new one, never part of one.
-fn replace_atomically(target: &Path, bytes: &[u8]) -> Result<(), FileError> {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let name = target
-        .file_name()
-        .ok_or_else(|| FileError::Io("the path has no file name".into()))?;
-    let dir = match target.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    let temporary = dir.join(format!(
-        ".{}.{}-{}.spelaion-tmp",
-        name.to_string_lossy(),
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    let written = (|| -> std::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        // The new file keeps the old one's permissions (its executable or group bits). Not on
-        // Windows, where the only one is "read-only" and the rename must fail on such a file.
-        #[cfg(unix)]
-        if let Ok(meta) = fs::metadata(target) {
-            fs::set_permissions(&temporary, meta.permissions())?;
-        }
-        fs::rename(&temporary, target)
-    })();
-    if let Err(e) = written {
-        let _ = fs::remove_file(&temporary);
-        return Err(match e.kind() {
-            std::io::ErrorKind::NotFound => {
-                FileError::Io(format!("the folder {} does not exist", dir.display()))
-            }
-            _ => FileError::Io(e.to_string()),
-        });
-    }
-    // The rename itself is durable once the folder is (Unix; Windows has no such call).
-    #[cfg(unix)]
-    if let Ok(folder) = fs::File::open(&dir) {
-        let _ = folder.sync_all();
-    }
-    Ok(())
+/// Writes `bytes` over `target` atomically (`spelaion_config::atomic_file`): a crash leaves
+/// the old file or the new one, never part of one; on Unix the old file's mode is kept and a
+/// symbolic link stays a link.
+pub(crate) fn replace_atomically(target: &Path, bytes: &[u8]) -> Result<(), FileError> {
+    atomic_file::replace(target, bytes, NewFileMode::Default).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => FileError::Io(format!(
+            "the folder {} does not exist",
+            target
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
+                .display()
+        )),
+        _ => FileError::Io(e.to_string()),
+    })
 }
 
 /// A file's bytes as editor text and the format to write them back in.
@@ -355,6 +313,8 @@ fn windows_1252_byte(c: char) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn folder(name: &str) -> PathBuf {

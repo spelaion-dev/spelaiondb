@@ -5,8 +5,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use spelaion_config::{
-    Engine, Password, ProxyType, ResolvedConnection, ResolvedHop, ResolvedProxy, ResolvedTunnel,
-    SshAuth, TunnelPasswords,
+    Engine, Password, ProxyType, ResolvedConnection, ResolvedHop, ResolvedProxy, ResolvedSsm,
+    ResolvedTunnel, SshAuth, TunnelPasswords,
 };
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
@@ -19,7 +19,7 @@ use spelaion_driver_sqlite::SqliteDriver;
 use spelaion_driver_sqlserver::SqlServerDriver;
 use spelaion_ssh::{
     AuthMethod, HopSpec, Interaction, KnownHosts, LocalPort, ProxyKind, ProxySpec, RemoteSignals,
-    SshError, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
+    SshError, SsmSpec, Target, Tunnel, TunnelOptions, TunnelSpec, TunnelState,
 };
 use tokio::sync::watch;
 
@@ -281,51 +281,21 @@ pub async fn open_connection(
         });
     }
     let mut params = resolved.connect_params(options.password);
-
-    let tunnel = match (&resolved.tunnel, &resolved.kubernetes) {
-        (None, None) => None,
-        // Kubernetes: the connection's port is the remote port of the resource (ADR-015).
-        // The configuration never has both: an SSH tunnel would be ignored here.
-        (_, Some(kubernetes)) => {
-            let key = format!("{:?}|{kubernetes:?}", resolved.id.source);
-            let tunnel = options.tunnels.get_or_start_kube(key, kubernetes).await;
-            params.connect_addr = Some(tunnel.forward(params.port).await?);
-            Some(ActiveTunnel::Kube(tunnel))
-        }
-        (Some(resolved_tunnel), None) => {
-            let spec = tunnel_spec(resolved_tunnel);
-            // Same layer, name, settings, proxy and hops = same tunnel. Secrets are not part of
-            // the key (their Debug is `***`).
-            let key = format!(
-                "{:?}|{}|{:?}|{:?}|{:?}",
-                resolved.id.source,
-                resolved_tunnel.name,
-                resolved_tunnel.options,
-                resolved_tunnel.proxy,
-                resolved_tunnel.hops
-            );
-            let known_hosts = team_known_hosts(resolved_tunnel, &options.known_hosts);
-            let tunnel = options
-                .tunnels
-                .get_or_connect(key, &spec, &known_hosts, options.interaction)
-                .await?;
-            if resolved.engine == Engine::Sqlite {
-                // The file is on the last hop: its sqlite3 is run there (ADR-018).
-                params.remote = Some(remote_sqlite(&tunnel, &resolved));
-            } else {
-                let port = match resolved.local_port {
-                    spelaion_config::LocalPort::Any => LocalPort::Any,
-                    spelaion_config::LocalPort::Fixed(port) => LocalPort::Fixed(port),
-                    spelaion_config::LocalPort::Range { min, max } => LocalPort::Range { min, max },
-                };
-                params.connect_addr = Some(tunnel.forward_on(target(&params), port).await?);
-            }
-            Some(ActiveTunnel::Ssh(tunnel))
-        }
-    };
+    let tunnel = start_tunnel(
+        &resolved,
+        &mut params,
+        &options.tunnels,
+        &options.known_hosts,
+        options.interaction,
+    )
+    .await?;
 
     let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
-    let session = Session::new(connection, driver.dialect(), results);
+    // Every result of the session is masked as its connection says (ADR-051).
+    let session = Session::new(connection, driver.dialect(), results)
+        .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
+        // A read-only connection runs only reads, settings and transaction control (ADR-053).
+        .with_read_only(resolved.params.read_only);
     // A tunnel that goes down takes its sessions with it (ADR-028).
     match &tunnel {
         Some(ActiveTunnel::Ssh(t)) => session.health_handle().watch_tunnel(t.state()),
@@ -347,7 +317,136 @@ pub async fn open_connection(
             return Err(error.into());
         }
     }
+    // Scripts split as the session reads text: its sql_mode, setup included (SDB-161).
+    open.session.refresh_sql_mode().await;
     Ok(open)
+}
+
+/// Opens the tunnel a connection goes through, if any, and points `params` at its local end:
+/// `connect_addr` for a database reached through a forward, `remote` for a SQLite file on the
+/// last hop (ADR-018). Tunnels come from the shared pool.
+async fn start_tunnel(
+    resolved: &ResolvedConnection,
+    params: &mut ConnectParams,
+    tunnels: &TunnelPool,
+    known_hosts: &KnownHosts,
+    interaction: Arc<dyn Interaction>,
+) -> Result<Option<ActiveTunnel>, OpenError> {
+    let tunnel = match (&resolved.tunnel, &resolved.kubernetes) {
+        (None, None) => None,
+        // Kubernetes: the connection's port is the remote port of the resource (ADR-015).
+        // The configuration never has both: an SSH tunnel would be ignored here.
+        (_, Some(kubernetes)) => {
+            let key = format!("{:?}|{kubernetes:?}", resolved.id.source);
+            let tunnel = tunnels.get_or_start_kube(key, kubernetes).await;
+            params.connect_addr = Some(tunnel.forward(params.port).await?);
+            Some(ActiveTunnel::Kube(tunnel))
+        }
+        (Some(resolved_tunnel), None) => {
+            let spec = tunnel_spec(resolved_tunnel);
+            // Same layer, name, settings, proxy, SSM and hops = same tunnel. Secrets are not
+            // part of the key (their Debug is `***`).
+            let key = format!(
+                "{:?}|{}|{:?}|{:?}|{:?}|{:?}",
+                resolved.id.source,
+                resolved_tunnel.name,
+                resolved_tunnel.options,
+                resolved_tunnel.proxy,
+                resolved_tunnel.ssm,
+                resolved_tunnel.hops
+            );
+            let known_hosts = team_known_hosts(resolved_tunnel, known_hosts);
+            let tunnel = tunnels
+                .get_or_connect(key, &spec, &known_hosts, interaction)
+                .await?;
+            if resolved.engine == Engine::Sqlite {
+                // The file is on the last hop: its sqlite3 is run there (ADR-018).
+                params.remote = Some(remote_sqlite(&tunnel, resolved));
+            } else {
+                let port = match resolved.local_port {
+                    spelaion_config::LocalPort::Any => LocalPort::Any,
+                    spelaion_config::LocalPort::Fixed(port) => LocalPort::Fixed(port),
+                    spelaion_config::LocalPort::Range { min, max } => LocalPort::Range { min, max },
+                };
+                params.connect_addr = Some(tunnel.forward_on(target(params), port).await?);
+            }
+            Some(ActiveTunnel::Ssh(tunnel))
+        }
+    };
+    Ok(tunnel)
+}
+
+/// What [`open_route`] needs: the shared tunnels and their dialogs.
+pub struct RouteOptions {
+    pub tunnels: Arc<TunnelPool>,
+    pub known_hosts: KnownHosts,
+    pub interaction: Arc<dyn Interaction>,
+}
+
+/// The way to a connection's database without a session of ours: the address a program of the
+/// user's machine connects to (the native backup tools, ADR-049). The tunnel stays open while
+/// the route lives.
+pub struct Route {
+    /// Where to connect: the tunnel's local end, or the connection's own host and port.
+    pub host: String,
+    pub port: u16,
+    /// The tunnel's local end is used: `host` is `127.0.0.1` and the server's certificate
+    /// carries the connection's host name, not this one.
+    pub forwarded: bool,
+    tunnel: Option<ActiveTunnel>,
+}
+
+impl Route {
+    /// Closes the tunnel too if nothing else uses it.
+    pub async fn close(self) {
+        match self.tunnel {
+            Some(ActiveTunnel::Ssh(tunnel)) if Arc::strong_count(&tunnel) == 1 => {
+                tunnel.close().await
+            }
+            Some(ActiveTunnel::Kube(tunnel)) if Arc::strong_count(&tunnel) == 1 => {
+                tunnel.close().await
+            }
+            Some(ActiveTunnel::Ssh(_) | ActiveTunnel::Kube(_)) | None => {}
+        }
+    }
+}
+
+/// Opens a connection's route: its SSH tunnel (hops, a proxy, or a proxy alone), its Kubernetes
+/// forward, or nothing, from the same pool as its sessions, so an open connection's tunnel is
+/// reused. A SQLite file on a server has no address to give.
+pub async fn open_route(
+    resolved: &ResolvedConnection,
+    options: RouteOptions,
+) -> Result<Route, OpenError> {
+    if resolved.engine.is_file() {
+        return Err(OpenError::UnknownEngine(format!(
+            "{} has no network address",
+            resolved.engine.as_str()
+        )));
+    }
+    let mut params = resolved.params.clone();
+    let tunnel = start_tunnel(
+        resolved,
+        &mut params,
+        &options.tunnels,
+        &options.known_hosts,
+        options.interaction,
+    )
+    .await?;
+    Ok(match params.connect_addr {
+        Some(addr) => Route {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            forwarded: true,
+            tunnel,
+        },
+        None => Route {
+            host: params.host,
+            port: params.port,
+            forwarded: false,
+            tunnel,
+        },
+    })
 }
 
 /// Opens a tunnel and closes it again, to check it from the UI before saving. A typed
@@ -396,6 +495,7 @@ pub(crate) fn typed_tunnel_spec(tunnel: &ResolvedTunnel, passwords: TunnelPasswo
             })
             .collect(),
         proxy,
+        ssm: tunnel.ssm.as_ref().map(ssm_spec),
         options: tunnel_options(tunnel),
     }
 }
@@ -405,6 +505,7 @@ pub(crate) fn tunnel_spec(tunnel: &ResolvedTunnel) -> TunnelSpec {
     TunnelSpec {
         hops: tunnel.hops.iter().map(hop_spec).collect(),
         proxy: tunnel.proxy.as_ref().map(proxy_spec),
+        ssm: tunnel.ssm.as_ref().map(ssm_spec),
         options: tunnel_options(tunnel),
     }
 }
@@ -464,6 +565,16 @@ fn proxy_spec(proxy: &ResolvedProxy) -> ProxySpec {
             Password::Value(secret) => Some(secret.clone()),
             Password::Prompt { .. } | Password::None => None,
         },
+    }
+}
+
+/// AWS SSM holds no secret: what the profile says, for the AWS CLI (ADR-050).
+fn ssm_spec(ssm: &ResolvedSsm) -> SsmSpec {
+    SsmSpec {
+        target: ssm.target.clone(),
+        region: ssm.region.clone(),
+        profile: ssm.profile.clone(),
+        aws: ssm.aws.clone(),
     }
 }
 

@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import { usePreferences } from "../preferences";
-import { useDialogs } from "../store";
+import { tabLabel } from "../connect";
+import { useApp, useDialogs } from "../store";
 
 export function Dialogs() {
   const password = useDialogs((s) => s.password);
@@ -334,11 +335,16 @@ function RiskDialog() {
 function ScriptErrorDialog() {
   const { t } = useTranslation("editor");
   const request = useDialogs((s) => s.scriptError);
+  // Two runs paused at once ask one after the other (SDB-139): the title says which tab.
+  const tab = useApp((s) => s.tabs.find((item) => item.id === request?.tab));
   const stop = useRef<HTMLButtonElement>(null);
   useEffect(() => stop.current?.focus(), []);
   if (!request) return null;
+  const title = tab
+    ? t("scriptError.titleInTab", { index: request.statement, tab: tabLabel(tab) })
+    : t("scriptError.title", { index: request.statement });
   return (
-    <Modal title={t("scriptError.title", { index: request.statement })} onCancel={() => request.resolve("stop")}>
+    <Modal title={title} onCancel={() => request.resolve("stop")}>
       <pre className="error-box">{request.message}</pre>
       <p>{t("scriptError.remaining", { count: request.remaining })}</p>
       <p className="muted small">{t("scriptError.hint")}</p>
@@ -379,8 +385,10 @@ function ChoiceDialog() {
   );
 }
 
-/** Closing, disconnecting or quitting with a transaction open (ADR-031): the server rolls
- *  back what was not committed, so the user decides. Cancel has the focus. */
+/** Closing, disconnecting, quitting or opening another folder with a transaction open
+ *  (ADR-031), a query running or row edits not applied: the server rolls back what was not
+ *  committed, the query is cancelled and the edits are lost, so the user decides. Nothing is
+ *  committed, applied or saved either way. Cancel has the focus. */
 function OpenTransactionsDialog() {
   const { t } = useTranslation("shell");
   const request = useDialogs((s) => s.openTransactions);
@@ -388,10 +396,12 @@ function OpenTransactionsDialog() {
   useEffect(() => cancel.current?.focus(), []);
   if (!request) return null;
   const transactions = request.tabs.length > 0;
-  // Only running queries: closing cancels them, nothing is rolled back.
-  const proceed = transactions ? t(`openTransactions.proceed.${request.action}`) : t("openTransactions.proceedRunning");
+  // The title and the button name the gravest loss: a rollback, then a cancelled query.
+  const kind = transactions ? "" : request.running.length > 0 ? "Running" : "Unsaved";
+  const title = t(`openTransactions.title${kind}.${request.action}`);
+  const proceed = t(`openTransactions.proceed${kind}.${request.action}`);
   return (
-    <Modal title={transactions ? t(`openTransactions.title.${request.action}`) : t("openTransactions.titleRunning")} onCancel={() => request.resolve(false)}>
+    <Modal title={title} onCancel={() => request.resolve(false)}>
       {transactions && (
         <>
           <p>{t("openTransactions.explanation", { count: request.tabs.length })}</p>
@@ -408,7 +418,16 @@ function OpenTransactionsDialog() {
           </ul>
         </>
       )}
+      {request.unsaved.length > 0 && (
+        <>
+          <p>{t("openTransactions.unsaved", { count: request.unsaved.length })}</p>
+          <ul className="risk-list unsaved-edits-list">
+            {request.unsaved.map((tab) => <li key={tab}><strong>{tab}</strong></li>)}
+          </ul>
+        </>
+      )}
       {transactions && <p className="muted small">{t("openTransactions.hint")}</p>}
+      {request.unsaved.length > 0 && <p className="muted small">{t("openTransactions.unsavedHint")}</p>}
       <div className="modal-actions">
         <button ref={cancel} onClick={() => request.resolve(false)}>
           {t("openTransactions.cancel")}

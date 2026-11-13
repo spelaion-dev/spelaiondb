@@ -12,6 +12,10 @@ impl Dialect for PostgresDialect {
         split(script)
     }
 
+    fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
+        spelaion_driver_api::code_ranges(script, skip_non_code)
+    }
+
     fn quote_identifier(&self, ident: &str) -> String {
         let simple = ident
             .bytes()
@@ -115,20 +119,41 @@ fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80
 }
 
+/// `CREATE [OR REPLACE] FUNCTION | PROCEDURE`: its SQL-standard body (`BEGIN ATOMIC … END`,
+/// PostgreSQL 14) is not quoted and holds semicolons.
+fn is_routine(words: &[String]) -> bool {
+    let kind = match words {
+        [create, or, replace, kind, ..]
+            if create == "create" && or == "or" && replace == "replace" =>
+        {
+            kind
+        }
+        [create, kind, ..] if create == "create" => kind,
+        _ => return false,
+    };
+    kind == "function" || kind == "procedure"
+}
+
+/// Splits at `;` outside quotes, comments and `$tag$` bodies. In a `CREATE FUNCTION` or
+/// `PROCEDURE`, as `psql` does, an unquoted `BEGIN` or `CASE` opens a block and `END` closes
+/// one, and a `;` inside a block does not split: a `BEGIN ATOMIC` body stays whole, and its
+/// `END` (a synonym of `COMMIT` on its own) is never sent alone. Elsewhere `BEGIN;` and `END;`
+/// are statements of their own.
 fn split(script: &str) -> Vec<StatementSpan> {
     let b = script.as_bytes();
     let mut spans = Vec::new();
     let mut start = 0;
     let mut has_code = false;
+    // The first words of the current statement, lowercased, and its block depth.
+    let mut words: Vec<String> = Vec::new();
+    let mut depth = 0usize;
     let mut i = 0;
 
     while i < b.len() {
         match b[i] {
             b'\'' => {
                 // E'…' supports backslash escapes.
-                let escapes =
-                    i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]));
-                i = skip_quoted(b, i, b'\'', escapes);
+                i = skip_quoted(b, i, b'\'', escape_string(b, i));
                 has_code = true;
             }
             b'"' => {
@@ -141,8 +166,100 @@ fn split(script: &str) -> Vec<StatementSpan> {
                     .position(|&c| c == b'\n')
                     .map_or(b.len(), |p| i + p + 1);
             }
+            b'/' if b.get(i + 1) == Some(&b'*') => i = block_comment_end(b, i),
+            b'$' if i == 0 || !is_ident_byte(b[i - 1]) => match dollar_tag(b, i) {
+                Some(tag_end) => {
+                    let tag = &script[i..=tag_end];
+                    i = script[tag_end + 1..]
+                        .find(tag)
+                        .map_or(b.len(), |p| tag_end + 1 + p + tag.len());
+                    has_code = true;
+                }
+                None => {
+                    i += 1;
+                    has_code = true;
+                }
+            },
+            b';' if depth == 0 => {
+                if has_code {
+                    spans.push(trimmed(script, start, i));
+                }
+                i += 1;
+                start = i;
+                has_code = false;
+                words.clear();
+            }
+            c if (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
+                && (i == 0 || !is_ident_byte(b[i - 1])) =>
+            {
+                let end = b[i..]
+                    .iter()
+                    .position(|&c| !is_ident_byte(c))
+                    .map_or(b.len(), |p| i + p);
+                let word = script[i..end].to_ascii_lowercase();
+                if words.len() < 4 {
+                    words.push(word.clone());
+                }
+                if is_routine(&words) {
+                    match word.as_str() {
+                        "begin" | "case" => depth += 1,
+                        "end" => depth = depth.saturating_sub(1),
+                        _ => {}
+                    }
+                }
+                has_code = true;
+                i = end;
+            }
+            c => {
+                if !c.is_ascii_whitespace() {
+                    has_code = true;
+                }
+                i += 1;
+            }
+        }
+    }
+    if has_code {
+        spans.push(trimmed(script, start, b.len()));
+    }
+    spans
+}
+
+/// A `COPY` whose data goes through the connection, apart from the statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CopyStdio {
+    /// `COPY … FROM STDIN`: the client sends the rows.
+    FromStdin,
+    /// `COPY … TO STDOUT`: the client reads them.
+    ToStdout,
+}
+
+/// Whether `sql` is a `COPY … FROM STDIN` or `COPY … TO STDOUT`: its first word is `COPY` and,
+/// outside quotes, comments, `$tag$` bodies and parentheses (a query or a column list),
+/// `FROM STDIN` or `TO STDOUT` follow. `COPY … FROM` / `TO` a file or a `PROGRAM` is neither.
+pub(crate) fn copy_stdio(sql: &str) -> Option<CopyStdio> {
+    let b = sql.as_bytes();
+    let mut words: Vec<String> = Vec::new();
+    let mut parens = 0usize;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\'' => {
+                let escapes =
+                    i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]));
+                i = skip_quoted(b, i, b'\'', escapes);
+                words.push(String::new());
+            }
+            b'"' => {
+                i = skip_quoted(b, i, b'"', false);
+                words.push(String::new());
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                i = b[i..]
+                    .iter()
+                    .position(|&c| c == b'\n')
+                    .map_or(b.len(), |p| i + p + 1);
+            }
             b'/' if b.get(i + 1) == Some(&b'*') => {
-                // Block comments nest in PostgreSQL.
                 let mut depth = 0usize;
                 while i < b.len() {
                     if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
@@ -161,37 +278,100 @@ fn split(script: &str) -> Vec<StatementSpan> {
             }
             b'$' if i == 0 || !is_ident_byte(b[i - 1]) => match dollar_tag(b, i) {
                 Some(tag_end) => {
-                    let tag = &script[i..=tag_end];
-                    i = script[tag_end + 1..]
+                    let tag = &sql[i..=tag_end];
+                    i = sql[tag_end + 1..]
                         .find(tag)
                         .map_or(b.len(), |p| tag_end + 1 + p + tag.len());
-                    has_code = true;
+                    words.push(String::new());
                 }
-                None => {
-                    i += 1;
-                    has_code = true;
-                }
+                None => i += 1,
             },
-            b';' => {
-                if has_code {
-                    spans.push(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-            }
-            c => {
-                if !c.is_ascii_whitespace() {
-                    has_code = true;
-                }
+            b'(' => {
+                parens += 1;
                 i += 1;
             }
+            b')' => {
+                parens = parens.saturating_sub(1);
+                i += 1;
+            }
+            c if (c.is_ascii_alphabetic() || c == b'_' || c >= 0x80)
+                && (i == 0 || !is_ident_byte(b[i - 1])) =>
+            {
+                let end = b[i..]
+                    .iter()
+                    .position(|&c| !is_ident_byte(c))
+                    .map_or(b.len(), |p| i + p);
+                if words.is_empty() || parens == 0 {
+                    words.push(sql[i..end].to_ascii_lowercase());
+                }
+                i = end;
+            }
+            b';' => break,
+            _ => i += 1,
         }
     }
-    if has_code {
-        spans.push(trimmed(script, start, b.len()));
+    if words.first().map(String::as_str) != Some("copy") {
+        return None;
     }
-    spans
+    words
+        .windows(2)
+        .find_map(|pair| match (pair[0].as_str(), pair[1].as_str()) {
+            ("from", "stdin") => Some(CopyStdio::FromStdin),
+            ("to", "stdout") => Some(CopyStdio::ToStdout),
+            _ => None,
+        })
+}
+
+/// The byte after a block comment that starts at `i` (`/*`); block comments nest.
+fn block_comment_end(b: &[u8], mut i: usize) -> usize {
+    let mut depth = 0usize;
+    while i < b.len() {
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            depth += 1;
+            i += 2;
+        } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    b.len()
+}
+
+/// Whether the `'` at `i` opens an `E'…'` string, where backslashes escape.
+fn escape_string(b: &[u8], i: usize) -> bool {
+    i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]))
+}
+
+/// The byte after the string, quoted name, comment or `$tag$` body that starts at `i`, read as
+/// the splitter reads it; `None` when none starts there.
+fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+    let b = script.as_bytes();
+    match *b.get(i)? {
+        b'\'' => Some(skip_quoted(b, i, b'\'', escape_string(b, i))),
+        b'"' => Some(skip_quoted(b, i, b'"', false)),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some(
+            b[i..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(b.len(), |p| i + p + 1),
+        ),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i)),
+        b'$' if i == 0 || !is_ident_byte(b[i - 1]) => {
+            let tag_end = dollar_tag(b, i)?;
+            let tag = &script[i..=tag_end];
+            Some(
+                script[tag_end + 1..]
+                    .find(tag)
+                    .map_or(b.len(), |p| tag_end + 1 + p + tag.len()),
+            )
+        }
+        _ => None,
+    }
 }
 
 /// Skips a quoted string starting at `i` (the opening quote).
@@ -294,6 +474,54 @@ mod tests {
     }
 
     #[test]
+    fn begin_atomic_bodies_are_one_statement() {
+        let function = "CREATE OR REPLACE FUNCTION add_one(a int) RETURNS int\nLANGUAGE sql\nBEGIN ATOMIC\n  SELECT a + 1;\n  SELECT CASE WHEN a > 0 THEN a ELSE -a END;\nEND";
+        assert_eq!(
+            parts(&format!("{function};\nselect 1;")),
+            [function, "select 1"]
+        );
+        let procedure =
+            "create procedure p() language sql begin atomic insert into t values (1); end";
+        assert_eq!(
+            parts(&format!("{procedure}; call p()")),
+            [procedure, "call p()"]
+        );
+        // A transaction's BEGIN and END are still statements of their own.
+        assert_eq!(parts("begin; select 1; end;"), ["begin", "select 1", "end"]);
+        assert_eq!(
+            parts("BEGIN WORK; select case when true then 1 end; END WORK;"),
+            ["BEGIN WORK", "select case when true then 1 end", "END WORK"]
+        );
+        // The SQL-standard RETURN form has no block; words in quotes, comments and $$ bodies
+        // do not count.
+        assert_eq!(
+            parts("create function f() returns int language sql return 1; select 2"),
+            [
+                "create function f() returns int language sql return 1",
+                "select 2"
+            ]
+        );
+        assert_eq!(
+            parts(
+                "create function \"begin\"() returns text language sql /* begin */ return 'begin'; select 3"
+            ),
+            [
+                "create function \"begin\"() returns text language sql /* begin */ return 'begin'",
+                "select 3"
+            ]
+        );
+        assert_eq!(
+            parts(
+                "create function g() returns int as $$ begin return 1; end $$ language plpgsql; select 4"
+            ),
+            [
+                "create function g() returns int as $$ begin return 1; end $$ language plpgsql",
+                "select 4"
+            ]
+        );
+    }
+
+    #[test]
     fn dollar_inside_identifiers_is_not_a_tag() {
         assert_eq!(
             parts("select a$b$ from t; select 2"),
@@ -304,6 +532,38 @@ mod tests {
     #[test]
     fn unterminated_string_keeps_rest_as_one_statement() {
         assert_eq!(parts("select 'abc; select 2"), ["select 'abc; select 2"]);
+    }
+
+    #[test]
+    fn copy_through_the_connection_is_recognised() {
+        for sql in [
+            "COPY t FROM STDIN",
+            "copy public.t (a, b) from stdin with (format csv);",
+            "-- rows\n/* and /* nested */ */ CoPy t FROM stdin",
+            "copy \"T\" from stdin",
+        ] {
+            assert_eq!(copy_stdio(sql), Some(CopyStdio::FromStdin), "{sql}");
+        }
+        for sql in [
+            "COPY t TO STDOUT",
+            "copy (select 'from stdin', $$ to $$) to stdout with csv header",
+            "copy t (a) to stdout",
+        ] {
+            assert_eq!(copy_stdio(sql), Some(CopyStdio::ToStdout), "{sql}");
+        }
+        for sql in [
+            "select 'copy t from stdin'",
+            "COPY t FROM '/tmp/x'",
+            "copy t from 'stdin'",
+            "copy t to program 'cat'",
+            "copy (select * from stdin) to '/tmp/x'",
+            "copy (select 1 as stdout) to '/tmp/x'",
+            "-- copy t from stdin\nselect 1",
+            "do $$ begin copy t from stdin; end $$",
+            "with x as (select 1) select * from x",
+        ] {
+            assert_eq!(copy_stdio(sql), None, "{sql}");
+        }
     }
 
     #[test]

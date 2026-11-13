@@ -180,6 +180,11 @@ fn connection_types_snapshot(file: &ConnectionTypesFile) -> Snapshot {
                 out.insert(field(name), "true".into());
             }
         }
+        // ADR-051's masked columns, only when there are some: older snapshots stay unchanged,
+        // and adding, changing or removing one is a change to review.
+        if !kind.mask_columns.is_empty() {
+            out.insert(field("mask_columns"), kind.mask_columns.join("\n"));
+        }
     }
     out
 }
@@ -299,7 +304,28 @@ fn diff(item: String, before: Option<&Snapshot>, after: &Snapshot) -> Option<Ite
     })
 }
 
+/// Held by [`TrustStore::update`] from its load to its save. Every change saves the whole
+/// store, so two that overlap in this process would otherwise lose the first one: the second
+/// writes back what it loaded before the first saved (SDB-276: trusting the repository right
+/// before moving a connection lost the trust; a stale save after a revoke would undo it).
+static UPDATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl TrustStore {
+    /// Loads the store in `user_dir`, applies `change` (whose changes save it) and returns its
+    /// result, with no other `update` of this process in between: each change starts from
+    /// what every earlier one saved. Every change to the store goes through here; reading can
+    /// use [`TrustStore::load`], since the file is always replaced whole.
+    pub fn update<T, E: From<ConfigError>>(
+        user_dir: &Path,
+        change: impl FnOnce(&mut TrustStore) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let _one_at_a_time = UPDATES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut trust = Self::load(user_dir)?;
+        change(&mut trust)
+    }
+
     pub fn load(user_dir: &Path) -> Result<Self, ConfigError> {
         let path = user_dir.join("trusted-workspaces.toml");
         let file = if path.is_file() {
@@ -636,7 +662,14 @@ impl TrustStore {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| ConfigError::new(parent, e.to_string()))?;
         }
-        std::fs::write(&self.path, content).map_err(|e| ConfigError::new(&self.path, e.to_string()))
+        // Atomic, so an interruption never leaves a half-written store (which would fail to
+        // load); owner-only when new, and an existing store keeps its mode and its link.
+        crate::atomic_file::replace(
+            &self.path,
+            content.as_bytes(),
+            crate::atomic_file::NewFileMode::OwnerOnly,
+        )
+        .map_err(|e| ConfigError::new(&self.path, e.to_string()))
     }
 }
 

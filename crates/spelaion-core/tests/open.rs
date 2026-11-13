@@ -16,7 +16,7 @@ use spelaion_core::{
     CoreEvent, Engines, OpenConnection, OpenError, OpenOptions, ResultStore, TunnelPool,
     open_connection, test_tunnel,
 };
-use spelaion_driver_api::{Secret, Value};
+use spelaion_driver_api::{ExecOptions, Secret, Value};
 use spelaion_ssh::{HostInfo, Interaction, KnownHosts, NonInteractive, SecretRequest, TunnelState};
 
 /// Temporary, trusted repository with `.spelaion/` and a user directory.
@@ -403,15 +403,43 @@ async fn connections_go_through_a_proxy_from_their_tunnel_file() {
     }
 }
 
-/// Two consecutive free local ports.
+/// Two consecutive free local ports that the operating system never hands out on its own.
+///
+/// A port from its ephemeral range can be checked free here and taken before the tunnel binds
+/// it: every outgoing connection (this test's own SSH and database connections included) and
+/// every listener on port 0 that the tests running alongside make gets one. That is how the test
+/// once failed on Linux, where the range is 32768–60999 (SDB-128). So the ports come from below
+/// every system's default range (Linux 32768, Windows and macOS 49152), and on Linux also from
+/// outside the range this machine is configured with.
 fn free_port_pair() -> u16 {
-    (42_000u16..60_000)
+    let ephemeral = ephemeral_ports();
+    (20_000u16..32_000)
         .step_by(41)
         .find(|p| {
-            std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok()
+            !ephemeral.contains(p)
+                && !ephemeral.contains(&(*p + 1))
+                && std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok()
                 && std::net::TcpListener::bind(("127.0.0.1", *p + 1)).is_ok()
         })
-        .expect("two free ports")
+        .expect("two free ports outside the system's ephemeral range")
+}
+
+/// The ports the system gives to outgoing connections and to listeners on port 0.
+fn ephemeral_ports() -> std::ops::RangeInclusive<u16> {
+    if cfg!(target_os = "linux")
+        && let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        && let [Ok(low), Ok(high)] = range
+            .split_whitespace()
+            .map(str::parse::<u16>)
+            .collect::<Vec<_>>()[..]
+    {
+        return low..=high;
+    }
+    if cfg!(target_os = "linux") {
+        32_768..=60_999
+    } else {
+        49_152..=65_535
+    }
 }
 
 /// A connection's `local_port` and the personal `[tunnels]` range decide where the tunnel's
@@ -508,6 +536,8 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
         ],
         options: Default::default(),
         proxy: None,
+        kubernetes: None,
+        ssm: None,
     };
     let known_hosts = KnownHosts {
         team_file: None,
@@ -722,6 +752,22 @@ async fn sqlite_on_a_server_through_two_hops() {
         "it's\nmultiline"
     );
 
+    // The column catalog of metadata search, through the server's sqlite3 (ADR-043), and no
+    // data search there: nothing but SQL text reaches that shell, so no value can be bound.
+    let columns = conn
+        .session
+        .connection()
+        .list_columns("main")
+        .await
+        .unwrap();
+    let remote_columns: Vec<&str> = columns
+        .iter()
+        .filter(|c| c.table == "remote_t")
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(remote_columns, ["id", "note"]);
+    assert!(!conn.session.connection().capabilities().bound_params);
+
     // Editing a page of the table, in one transaction.
     let table = conn
         .session
@@ -740,8 +786,9 @@ async fn sqlite_on_a_server_through_two_hops() {
     let sql = spelaion_core::table_page_sql(conn.session.dialect().as_ref(), &page).unwrap();
     let (events, _) = script(&conn, &sql).await;
     let stored = conn.session.results().get(first_result(&events)).unwrap();
+    let edit_target = conn.session.edit_target().await.unwrap();
     let statements = spelaion_core::edit_statements(
-        conn.session.dialect().as_ref(),
+        &edit_target,
         &table,
         &stored.read().unwrap(),
         &[spelaion_core::RowChange::Update {
@@ -838,11 +885,15 @@ async fn sqlite_on_a_server_through_two_hops() {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         cancel.cancel().await
     });
-    let (_, error) = script(
-        &conn,
-        "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c",
+    let (_, error) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        script(
+            &conn,
+            "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c",
+        ),
     )
-    .await;
+    .await
+    .expect("the cancel was lost");
     canceller.await.unwrap().unwrap();
     assert!(error.as_ref().is_some_and(|e| e.cancelled), "{error:?}");
     // sqlite3 ends when interrupted: the session says so, and a new one goes on.
@@ -863,6 +914,68 @@ async fn sqlite_on_a_server_through_two_hops() {
     assert!(message.contains("safe mode"), "{message}");
     let (_, error) = script(&conn, "select 1").await;
     assert!(error.is_some(), "the session ended with sqlite3");
+}
+
+/// Scripts written for the `sqlite3` command line put its commands after a comment header:
+/// the shell skips a line that is only a comment and would then run the command, changing
+/// how it writes every later result. They are refused, and the session reads as before.
+#[tokio::test]
+async fn sqlite_on_a_server_never_runs_a_command_after_a_comment() {
+    let Ok(addr) = std::env::var("SPELAION_TEST_SSH") else {
+        eprintln!("SPELAION_TEST_SSH not set: test skipped");
+        return;
+    };
+    let ws = Workspace::new("sqlite-remote-dot");
+    sqlite_server(&ws, &addr, "sqlitehost");
+    ws.write(
+        ".spelaion/connections/shop.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"/home/spelaion/shop.db\"\ntunnel = \"server\"\n",
+    );
+    let conn = ws
+        .open("shop", None, Arc::new(AcceptHosts))
+        .await
+        .expect("opening the remote file");
+    for refused in [
+        "-- show everything\n.headers off",
+        "/* c */\n.mode list",
+        "-- a\n-- b\n.changes off",
+        "# x\nselect 1",
+        "-- a\n-- b\n.quit",
+    ] {
+        let (_, error) = script(&conn, refused).await;
+        let message = error.map(|e| e.message).unwrap_or_default();
+        assert!(
+            message.contains("not run on the server"),
+            "{refused:?}: {message}"
+        );
+    }
+    // A line of a value that starts with a dot is the value's, byte for byte.
+    assert_eq!(
+        first_value(&conn, "-- a comment first\nselect 'a\n.headers off\n#b'").await,
+        "a\n.headers off\n#b"
+    );
+    let (events, error) = script(&conn, "select id, name from product order by id").await;
+    assert!(error.is_none(), "{error:?}");
+    let stored = conn.session.results().get(first_result(&events)).unwrap();
+    let stored = stored.read().unwrap();
+    let names: Vec<&str> = stored
+        .schema()
+        .columns
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(names, ["id", "name"]);
+    let batch = &stored.window(0, 1)[0];
+    let cell = |c: usize| {
+        Value::from_array(
+            batch.column(c).as_ref(),
+            0,
+            stored.schema().columns[c].logical,
+        )
+        .unwrap()
+        .to_string()
+    };
+    assert_eq!((cell(0), cell(1)), ("1".to_string(), "Lamp".to_string()));
 }
 
 #[tokio::test]
@@ -892,8 +1005,32 @@ async fn sqlite_on_a_server_says_what_is_wrong() {
         .open("readonly", None, Arc::new(AcceptHosts))
         .await
         .unwrap();
+    // The core refuses the write before it reaches the server (ADR-053)…
     let (_, error) = script(&conn, "insert into product (name) values ('x')").await;
     let message = error.unwrap().message;
+    assert!(message.contains("the connection is read-only"), "{message}");
+    // …and sent around the core, the server's `sqlite3 -readonly` refuses it too.
+    let mut failure = None;
+    match conn
+        .session
+        .connection()
+        .execute(
+            "insert into product (name) values ('x')",
+            &ExecOptions::default(),
+        )
+        .await
+    {
+        Err(e) => failure = Some(e.to_string()),
+        Ok(mut events) => {
+            while let Some(event) = events.next().await {
+                if let Err(e) = event {
+                    failure = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+    }
+    let message = failure.expect("the server's sqlite3 let a write through");
     assert!(message.to_lowercase().contains("readonly"), "{message}");
 
     // A last hop that only forwards ports (bastion2 runs no commands).

@@ -1,8 +1,12 @@
 //! SpelaionDB desktop app: a thin Tauri adapter over `spelaion-core` (ADR-002). There is no
 //! database or security logic here: only translation between UI commands and the core.
 
+mod backup;
+mod clipboard_text;
 mod connection_import;
+mod diagram;
 mod dto;
+mod file_dialog;
 mod files;
 mod import;
 mod interaction;
@@ -14,7 +18,7 @@ mod update;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -27,7 +31,7 @@ use spelaion_config::{
 use spelaion_core::{
     Engines, ExportCancel, ExportFormat, ExportOptions, FindQuery, GenericDialect, OpenConnection,
     OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth, SortKey,
-    StreamExport, TabKeeper, TunnelPool, open_connection, write_result,
+    StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
 };
 use spelaion_driver_api::{Dialect, DriverError, Secret, Value};
 use spelaion_ssh::KnownHosts;
@@ -57,13 +61,20 @@ struct AppState {
     /// Writes the open tabs to the local store on a deadline (ADR-036).
     tabs: TabKeeper,
     pending: Pending,
-    /// The user confirmed quitting with transactions open (ADR-031).
+    /// The app is quitting: the user confirmed, or there was nothing to ask (ADR-031).
     quitting: AtomicBool,
+    /// Where the window's last close request stands: `CLOSE_IDLE`, `CLOSE_SENT` or
+    /// `CLOSE_ASKING` (`on_close_requested`).
+    close_request: AtomicU8,
     tests: ConnectionTests,
     /// Streaming exports running, by the id the UI gave them (ADR-034).
     exports: std::sync::Mutex<HashMap<u32, Arc<ExportCancel>>>,
     /// Imports running, by the id the UI gave them (ADR-038).
     imports: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ImportCancel>>>,
+    /// Backups and restores running, by the id the UI gave them (ADR-049).
+    backups: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::backup::BackupCancel>>>,
+    /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
+    diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
 }
 
 struct DesktopSession {
@@ -105,13 +116,20 @@ impl ConnectionTests {
 type CmdResult<T> = Result<T, String>;
 
 impl AppState {
+    /// Every change to the trust store goes through `TrustStore::update`, one at a time, so
+    /// none saves over another it did not see (SDB-276).
+    fn change_trust<T, E: From<spelaion_config::ConfigError> + ToString>(
+        &self,
+        change: impl FnOnce(&mut TrustStore) -> Result<T, E>,
+    ) -> CmdResult<T> {
+        TrustStore::update(&self.user_dir, change).map_err(|e| e.to_string())
+    }
+
     async fn reload(&self) {
         let version = self.workspace_version.load(Ordering::Acquire);
         let workspace = self.workspace.read().await.clone();
         let loaded = load(workspace.as_deref(), &self.user_dir);
-        if let Ok(mut trust) = TrustStore::load(&self.user_dir) {
-            let _ = trust.adopt(&loaded);
-        }
+        let _ = self.change_trust(|trust| trust.adopt(&loaded));
         let mut config = self.config.write().await;
         // A reload started in the previous folder must not overwrite the new one.
         if version == self.workspace_version.load(Ordering::Acquire) {
@@ -296,6 +314,57 @@ async fn set_grid_preferences(
         .map_err(|e| e.to_string())
 }
 
+/// The map view's background (ADR-045): tiles from the user's tile server, off by default.
+#[tauri::command]
+#[specta::specta]
+async fn get_map_preferences(state: State<'_, AppState>) -> CmdResult<MapPreferencesItem> {
+    state
+        .history
+        .map_preferences()
+        .await
+        .map(MapPreferencesItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves the map's preferences; the core checks the tile server first.
+#[tauri::command]
+#[specta::specta]
+async fn set_map_preferences(
+    preferences: MapPreferencesItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .history
+        .set_map_preferences(preferences.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Every geometry of a result's column, in the current view, for one map (ADR-045): GeoJSON
+/// from the core, at most `MAP_MAX_SHAPES` shapes.
+#[tauri::command]
+#[specta::specta]
+async fn column_map(
+    result: u32,
+    column: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<ColumnMapItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        spelaion_core::column_map(&stored, column as usize)
+            .map(ColumnMapItem::from)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// A system notification that a long run finished in the background (ADR-035). The app sends
 /// it only when the user turned it on; its text names the tab and counts statements, never SQL,
 /// data or error text.
@@ -382,7 +451,13 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
         state.workspace_version.fetch_add(2, Ordering::AcqRel);
     }
     let _ = std::fs::create_dir_all(&state.user_dir);
-    let _ = std::fs::write(last_workspace_file(&state.user_dir), &path);
+    // App state in the personal folder: replaced whole (a crash never leaves half a path) and
+    // owner-only when new, like the folder's other files.
+    let _ = spelaion_config::atomic_file::replace(
+        &last_workspace_file(&state.user_dir),
+        path.as_bytes(),
+        spelaion_config::atomic_file::NewFileMode::OwnerOnly,
+    );
     state.reload().await;
     state.workspace_version.fetch_add(1, Ordering::Release);
     state.info().await
@@ -392,14 +467,11 @@ async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<W
 #[tauri::command]
 #[specta::specta]
 async fn trust_workspace(root: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
-    let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let config = state.config.read().await;
     if config.workspace_root.as_deref() != Some(Path::new(&root)) {
         return Err("the folder changed; trust it again".into());
     }
-    trust
-        .trust_if_untrusted(&config)
-        .map_err(|e| e.to_string())?;
+    state.change_trust(|trust| trust.trust_if_untrusted(&config))?;
     drop(config);
     state.info().await
 }
@@ -487,6 +559,26 @@ async fn set_tunnel_ports(
     Ok(())
 }
 
+/// The user's own column masking patterns (`[masking] always` in `user.toml`, ADR-051).
+#[tauri::command]
+#[specta::specta]
+async fn user_masking(state: State<'_, AppState>) -> CmdResult<UserMaskingItem> {
+    let config = state.config.read().await;
+    Ok(UserMaskingItem {
+        patterns: config.user.masking.always.clone(),
+        unreadable: config.user_unreadable,
+    })
+}
+
+/// Sets the user's own column masking patterns. They apply to sessions opened from then on.
+#[tauri::command]
+#[specta::specta]
+async fn set_user_masking(patterns: Vec<String>, state: State<'_, AppState>) -> CmdResult<()> {
+    spelaion_config::set_user_masking(&state.user_dir, &patterns).map_err(|e| e.to_string())?;
+    state.reload().await;
+    Ok(())
+}
+
 /// Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
 /// as it is now, and connecting can go on.
 #[tauri::command]
@@ -500,7 +592,6 @@ async fn accept_change(
 ) -> CmdResult<()> {
     state.reload().await;
     let config = state.config.read().await;
-    let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let change = spelaion_config::ItemChange {
         item,
         new: is_new,
@@ -513,9 +604,7 @@ async fn accept_change(
             })
             .collect(),
     };
-    trust
-        .accept_reviewed(&config, Path::new(&root), &change)
-        .map_err(|e| e.to_string())
+    state.change_trust(|trust| trust.accept_reviewed(&config, Path::new(&root), &change))
 }
 
 #[tauri::command]
@@ -810,14 +899,7 @@ fn engine_catalog() -> Vec<EngineItem> {
 #[specta::specta]
 async fn list_tunnels(state: State<'_, AppState>) -> CmdResult<Vec<TunnelItem>> {
     let config = state.config.read().await;
-    Ok(config
-        .tunnels
-        .iter()
-        .map(|t| TunnelItem {
-            name: t.name.clone(),
-            personal: t.source == Source::User,
-        })
-        .collect())
+    Ok(config.tunnels.iter().map(TunnelItem::of).collect())
 }
 
 /// Every tunnel file as a network profile (ADR-027), for Settings → Network.
@@ -924,9 +1006,7 @@ async fn add_connection(
             spelaion_config::add_connection(&config, &draft, password.as_ref(), &SystemBackend)
                 .map_err(|e| e.to_string())?;
         if id.source == Source::Workspace {
-            TrustStore::load(&state.user_dir)
-                .and_then(|mut trust| trust.accept_connection_write(&config, &id, &file))
-                .map_err(|e| e.to_string())?;
+            state.change_trust(|trust| trust.accept_connection_write(&config, &id, &file))?;
         }
         id
     };
@@ -990,7 +1070,7 @@ async fn connection_editor_access(
 async fn connection_draft(
     connection: String,
     state: State<'_, AppState>,
-) -> CmdResult<(ConnectionDraftItem, String)> {
+) -> CmdResult<EditedConnectionItem> {
     let config = state.config.read().await;
     let id = parse_id(&connection);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
@@ -1001,7 +1081,15 @@ async fn connection_draft(
         .connection(&id)
         .ok_or_else(|| format!("connection {connection} does not exist"))?;
     let revision = spelaion_config::connection_revision(entry).map_err(|e| e.to_string())?;
-    Ok((ConnectionDraft::from_entry(entry).into(), revision))
+    Ok(EditedConnectionItem {
+        draft: ConnectionDraft::from_entry(entry).into(),
+        revision,
+        password_stored: spelaion_config::connection_password_stored(
+            &config,
+            entry,
+            &SystemBackend,
+        ),
+    })
 }
 
 /// Saves an edited connection (same file; for `keychain`, a typed password replaces the
@@ -1032,9 +1120,7 @@ async fn update_connection(
         )
         .map_err(|e| e.to_string())?;
         if id.source == Source::Workspace {
-            TrustStore::load(&state.user_dir)
-                .and_then(|mut trust| trust.accept_connection_edit(&config, &id, &written))
-                .map_err(|e| e.to_string())?;
+            state.change_trust(|trust| trust.accept_connection_edit(&config, &id, &written))?;
         }
     }
     state.reload().await;
@@ -1067,14 +1153,14 @@ async fn duplicate_connection(
 ) -> CmdResult<DuplicatedItem> {
     let duplicated = {
         let config = state.config.read().await;
-        let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-        spelaion_config::duplicate_connection(
-            &config,
-            &mut trust,
-            &parse_id(&connection),
-            &SystemBackend,
-        )
-        .map_err(|e| e.to_string())?
+        state.change_trust(|trust| {
+            spelaion_config::duplicate_connection(
+                &config,
+                trust,
+                &parse_id(&connection),
+                &SystemBackend,
+            )
+        })?
     };
     state.reload().await;
     Ok(DuplicatedItem {
@@ -1109,10 +1195,9 @@ async fn move_connection(
     state.tabs.flush().await.map_err(|e| e.to_string())?;
     let (moved, workspace) = {
         let config = state.config.read().await;
-        let mut trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-        let moved =
-            spelaion_config::move_connection(&config, &mut trust, &id, &folder, &SystemBackend)
-                .map_err(|e| e.to_string())?;
+        let moved = state.change_trust(|trust| {
+            spelaion_config::move_connection(&config, trust, &id, &folder, &SystemBackend)
+        })?;
         let workspace = match id.source {
             Source::User => None,
             Source::Workspace => Some(history_workspace(&config, Source::Workspace)),
@@ -1330,7 +1415,7 @@ async fn tunnel_draft(
     name: String,
     personal: bool,
     state: State<'_, AppState>,
-) -> CmdResult<(TunnelDraftItem, String)> {
+) -> CmdResult<EditedTunnelItem> {
     let config = state.config.read().await;
     let entry = config
         .tunnels
@@ -1338,10 +1423,13 @@ async fn tunnel_draft(
         .find(|t| t.source == source_of(personal) && t.name == name)
         .ok_or_else(|| format!("tunnel {name} does not exist"))?;
     let revision = spelaion_config::tunnel_revision(entry).map_err(|e| e.to_string())?;
-    Ok((
-        spelaion_config::TunnelDraft::from_entry(entry).into(),
+    let stored = spelaion_config::tunnel_passwords_stored(&config, entry, &SystemBackend);
+    Ok(EditedTunnelItem {
+        draft: spelaion_config::TunnelDraft::from_entry(entry).into(),
         revision,
-    ))
+        hop_passwords_stored: stored.hops,
+        proxy_password_stored: stored.proxy,
+    })
 }
 
 /// Tests a network profile step by step (ADR-032): its proxy and each hop, opened and closed
@@ -1404,21 +1492,61 @@ fn kube_spec(k: KubernetesDraftItem) -> spelaion_config::ResolvedKubernetes {
 
 async fn check_kube_editor(
     form: KubernetesDraftItem,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: &AppState,
 ) -> CmdResult<spelaion_config::ResolvedKubernetes> {
-    let id = editing.as_deref().map(parse_id);
     let config = state.config.read().await;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    spelaion_core::kube::editor_spec(
-        &config,
-        &trust,
-        source_of(personal),
-        id.as_ref(),
-        kube_spec(form),
-    )
-    .map_err(|e| e.to_string())
+    match editor {
+        KubeEditor::Connection {
+            personal,
+            editing,
+            profile: Some(profile),
+        } => {
+            let id = editing.as_deref().map(parse_id);
+            let resolver = spelaion_config::Resolver::new(&config, &trust, &SystemBackend);
+            resolver
+                .check_editor_access(source_of(personal), id.as_ref())
+                .map_err(|e| e.to_string())?;
+            let source = id.as_ref().map_or(source_of(personal), |id| id.source);
+            let draft = spelaion_config::KubernetesDraft::from(form);
+            let text = |v: String| Some(v).filter(|v| !v.trim().is_empty());
+            resolver
+                .kubernetes_profile_for_editor(
+                    source,
+                    &profile,
+                    &spelaion_config::KubernetesConfig {
+                        context: text(draft.context),
+                        namespace: text(draft.namespace),
+                        resource: draft.resource,
+                        kubeconfig: text(draft.kubeconfig),
+                        kubectl: text(draft.kubectl),
+                    },
+                )
+                .map_err(|e| e.to_string())
+        }
+        KubeEditor::Connection {
+            personal,
+            editing,
+            profile: None,
+        } => {
+            let id = editing.as_deref().map(parse_id);
+            spelaion_core::kube::editor_spec(
+                &config,
+                &trust,
+                source_of(personal),
+                id.as_ref(),
+                kube_spec(form),
+            )
+            .map_err(|e| e.to_string())
+        }
+        KubeEditor::Profile { personal, editing } => {
+            spelaion_config::Resolver::new(&config, &trust, &SystemBackend)
+                .check_tunnel_editor_access(source_of(personal), editing.as_deref())
+                .map_err(|e| e.to_string())?;
+            Ok(kube_spec(form))
+        }
+    }
 }
 
 /// The contexts of the kubeconfig, for the Kubernetes tab of the connection form (ADR-015).
@@ -1426,11 +1554,10 @@ async fn check_kube_editor(
 #[specta::specta]
 async fn kube_contexts(
     form: KubernetesDraftItem,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
-    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    let spec = check_kube_editor(form, editor, &state).await?;
     spelaion_core::kube::contexts(&spec)
         .await
         .map_err(|e| e.to_string())
@@ -1441,11 +1568,10 @@ async fn kube_contexts(
 #[specta::specta]
 async fn kube_namespaces(
     form: KubernetesDraftItem,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
-    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    let spec = check_kube_editor(form, editor, &state).await?;
     spelaion_core::kube::namespaces(&spec)
         .await
         .map_err(|e| e.to_string())
@@ -1457,11 +1583,10 @@ async fn kube_namespaces(
 async fn kube_names(
     form: KubernetesDraftItem,
     kind: String,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
-    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    let spec = check_kube_editor(form, editor, &state).await?;
     spelaion_core::kube::names(&spec, &kind)
         .await
         .map_err(|e| e.to_string())
@@ -1472,11 +1597,10 @@ async fn kube_names(
 #[specta::specta]
 async fn kube_ports(
     form: KubernetesDraftItem,
-    personal: bool,
-    editing: Option<String>,
+    editor: KubeEditor,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<KubePortItem>> {
-    let spec = check_kube_editor(form, personal, editing, &state).await?;
+    let spec = check_kube_editor(form, editor, &state).await?;
     spelaion_core::kube::ports(&spec)
         .await
         .map(|ports| ports.into_iter().map(Into::into).collect())
@@ -1505,14 +1629,19 @@ async fn add_tunnel(
         )
         .map_err(|e| e.to_string())?;
         if !personal {
-            TrustStore::load(&state.user_dir)
-                .and_then(|mut trust| trust.accept_tunnel_write(&config, &name, &file))
-                .map_err(|e| e.to_string())?;
+            state.change_trust(|trust| trust.accept_tunnel_write(&config, &name, &file))?;
         }
         name
     };
     state.reload().await;
-    Ok(TunnelItem { name, personal })
+    let config = state.config.read().await;
+    let source = source_of(personal);
+    config
+        .tunnels
+        .iter()
+        .find(|t| t.source == source && t.name == name)
+        .map(TunnelItem::of)
+        .ok_or_else(|| format!("the network profile {name:?} was not found after saving"))
 }
 
 /// Saves an edited tunnel (same file and name) and reloads the configuration.
@@ -1541,9 +1670,7 @@ async fn update_tunnel(
         )
         .map_err(|e| e.to_string())?;
         if !personal {
-            TrustStore::load(&state.user_dir)
-                .and_then(|mut trust| trust.accept_tunnel_edit(&config, &name, &written))
-                .map_err(|e| e.to_string())?;
+            state.change_trust(|trust| trust.accept_tunnel_edit(&config, &name, &written))?;
         }
     }
     state.reload().await;
@@ -1958,7 +2085,8 @@ async fn sessions_to_confirm(
     Ok(out)
 }
 
-/// Quits after the user confirmed closing tabs with open transactions (`QuitBlocked`).
+/// Quits: the UI found nothing to ask, or the user confirmed (`QuitRequested`). Nothing is
+/// committed, applied or saved; the servers roll back open transactions.
 #[tauri::command]
 #[specta::specta]
 async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
@@ -1967,8 +2095,39 @@ async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
-/// The editor tabs with an open transaction, from what each session last read (no round trip:
-/// the window's close request cannot wait for servers).
+/// Nobody asked to close the window, or the UI answered the last request by going back.
+const CLOSE_IDLE: u8 = 0;
+/// `QuitRequested` was sent and the UI has not said it got it.
+const CLOSE_SENT: u8 = 1;
+/// The UI got the request and is checking its tabs or asking the user.
+const CLOSE_ASKING: u8 = 2;
+
+/// The UI got `QuitRequested` and is deciding: a later close request asks it again instead of
+/// quitting.
+#[tauri::command]
+#[specta::specta]
+async fn quit_asking(state: State<'_, AppState>) -> CmdResult<()> {
+    state.close_request.store(CLOSE_ASKING, Ordering::SeqCst);
+    Ok(())
+}
+
+/// The user went back from the quit question: the next close request asks again.
+#[tauri::command]
+#[specta::specta]
+async fn quit_cancelled(state: State<'_, AppState>) -> CmdResult<()> {
+    state.close_request.store(CLOSE_IDLE, Ordering::SeqCst);
+    Ok(())
+}
+
+/// The editor tabs with an open transaction, for the quit question: from what each session
+/// last read, with no round trip, so a server that does not answer cannot hold quitting.
+#[tauri::command]
+#[specta::specta]
+async fn quit_open_transactions(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    Ok(open_transactions(&*state.sessions.lock().await))
+}
+
+/// The editor tabs with an open transaction, from what each session last read.
 fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> {
     let mut open: Vec<String> = sessions
         .iter()
@@ -1979,35 +2138,30 @@ fn open_transactions(sessions: &HashMap<String, DesktopSession>) -> Vec<String> 
     open
 }
 
-/// The window was asked to close (ADR-031): with transactions open, the UI asks first and calls
-/// `quit_app`. Nothing is committed or rolled back here; the server rolls back.
+/// The window was asked to close (ADR-031). Without sessions nothing can be lost: it closes.
+/// Otherwise the UI decides, as it does before closing tabs: it looks for row edits not applied,
+/// queries running and open transactions, asks if there are any, and calls `quit_app` (at once
+/// when there is nothing to ask) or `quit_cancelled`. Nothing is committed or rolled back here.
+///
+/// The event loop never waits, not even for the sessions' lock. If a request was sent and the
+/// UI never said it got it (it is frozen), the next close request quits.
 fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     let state = window.state::<AppState>();
     if state.quitting.load(Ordering::SeqCst) {
         return;
     }
-    // The event loop must not block: when a command holds the sessions, decide in a task.
-    let Ok(sessions) = state.sessions.try_lock() else {
-        api.prevent_close();
-        let app = window.app_handle().clone();
-        tauri::async_runtime::spawn(async move {
-            let state = app.state::<AppState>();
-            let open = open_transactions(&*state.sessions.lock().await);
-            if open.is_empty() {
-                state.quitting.store(true, Ordering::SeqCst);
-                app.exit(0);
-            } else {
-                let _ = QuitBlocked { sessions: open }.emit(&app);
-            }
-        });
+    // A command holding the sessions means there are some: the UI decides.
+    let no_sessions = state
+        .sessions
+        .try_lock()
+        .map(|sessions| sessions.is_empty())
+        .unwrap_or(false);
+    if no_sessions || state.close_request.swap(CLOSE_SENT, Ordering::SeqCst) == CLOSE_SENT {
+        state.quitting.store(true, Ordering::SeqCst);
         return;
-    };
-    let open = open_transactions(&sessions);
-    drop(sessions);
-    if !open.is_empty() {
-        api.prevent_close();
-        let _ = QuitBlocked { sessions: open }.emit(window.app_handle());
     }
+    api.prevent_close();
+    let _ = QuitRequested {}.emit(window.app_handle());
 }
 
 #[tauri::command]
@@ -2083,6 +2237,95 @@ async fn control_process(
     .await
 }
 
+/// The server's locks, waits and blocking tree, read once on the monitor's session.
+#[tauri::command]
+#[specta::specta]
+async fn list_locks(session: String, state: State<'_, AppState>) -> CmdResult<LockSnapshotItem> {
+    let open = state.session(&session).await?;
+    let snapshot = spelaion_core::list_locks(&open.session).await?;
+    Ok(LockSnapshotItem {
+        own_id: snapshot.own_id,
+        locks: snapshot
+            .locks
+            .into_iter()
+            .map(|l| LockItem {
+                session: l.session,
+                object: l.object,
+                lock_type: l.lock_type,
+                mode: l.mode,
+                granted: l.granted,
+                seconds: l.seconds,
+                detail: l.detail,
+            })
+            .collect(),
+        waits: snapshot
+            .waits
+            .into_iter()
+            .map(|w| LockWaitItem {
+                waiting: w.waiting,
+                blocking: w.blocking,
+            })
+            .collect(),
+        tree: snapshot
+            .tree
+            .into_iter()
+            .map(|n| BlockingNodeItem {
+                session: n.session,
+                depth: n.depth,
+                cycle: n.cycle,
+            })
+            .collect(),
+    })
+}
+
+/// Every setting, variable, status counter or property the server exposes.
+#[tauri::command]
+#[specta::specta]
+async fn server_settings(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<ServerSettingItem>> {
+    let open = state.session(&session).await?;
+    let settings = spelaion_core::server_settings(&open.session).await?;
+    Ok(settings
+        .into_iter()
+        .map(|s| ServerSettingItem {
+            name: s.name,
+            value: s.value,
+            kind: match s.kind {
+                spelaion_core::SettingKind::Setting => "setting",
+                spelaion_core::SettingKind::Variable => "variable",
+                spelaion_core::SettingKind::Status => "status",
+                spelaion_core::SettingKind::Property => "property",
+            }
+            .into(),
+            category: s.category,
+            description: s.description,
+            source: s.source,
+        })
+        .collect())
+}
+
+/// A table's size on disk, index size and row estimate, from the catalog's statistics;
+/// `None` when the engine keeps none or the object is not a table.
+#[tauri::command]
+#[specta::specta]
+async fn table_stats(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<TableStatsItem>> {
+    let open = state.session(&session).await?;
+    let stats = spelaion_core::table_stats(&open.session, &schema, &table).await?;
+    Ok(stats.map(|s| TableStatsItem {
+        total_bytes: s.total_bytes,
+        table_bytes: s.table_bytes,
+        index_bytes: s.index_bytes,
+        row_estimate: s.row_estimate,
+    }))
+}
+
 /// Runs a script and keeps sending events through the channel. Returns as soon as it starts.
 #[tauri::command]
 #[specta::specta]
@@ -2129,16 +2372,13 @@ async fn start_script(
             .ok_or_else(|| format!("there is no open connection for {session}"))?;
         (session.open.clone(), session.history_workspace.clone())
     };
-    // The core decides what needs confirmation; the UI asks first (`script_risks`), and a
-    // run that skipped the question is refused by the core, whatever its error mode.
-    spelaion_core::check_script(
-        open.session.dialect().as_ref(),
-        &sql,
-        &open.resolved.safeguards(),
-        confirmed,
-    )
-    .map_err(|e| e.to_string())?;
-    let mut events = state.history.run_script_in_context(
+    // The core decides what may run: a read-only connection refuses anything but reads,
+    // settings and transaction control (ADR-053), whatever was confirmed; then what needs
+    // confirmation, which the UI asks first (`script_risks`): a run that skipped the question
+    // is refused by the core, whatever its error mode.
+    spelaion_core::check_run(&open.session, &sql, &open.resolved.safeguards(), confirmed)
+        .map_err(|e| e.to_string())?;
+    let events = state.history.run_script_in_context(
         &open.session,
         &sql,
         spelaion_core::HistoryScope {
@@ -2165,6 +2405,9 @@ async fn start_script(
             },
         },
     );
+    // A big result streams hundreds of batches a second: the window gets its row count a few
+    // times a second, so redrawing it never keeps Cancel from answering.
+    let mut events = spelaion_core::coalesce_rows(events, spelaion_core::ROWS_PROGRESS_INTERVAL);
     tauri::async_runtime::spawn(async move {
         // `open` lives while the script runs, even if the UI closes the tab halfway.
         let _keep = open;
@@ -2186,7 +2429,7 @@ async fn query_page_supported(
     state: State<'_, AppState>,
 ) -> CmdResult<bool> {
     let open = state.session(&session).await?;
-    Ok(spelaion_core::query_page_sql(open.session.dialect().as_ref(), &sql, 1, 0).is_some())
+    Ok(spelaion_core::query_pages_exactly(&open.session, &sql).await)
 }
 
 /// Run the first page, keeping the original SQL in the user's query history.
@@ -2196,17 +2439,29 @@ async fn run_query_page(
     session: String,
     sql: String,
     limit: u32,
+    confirmed: bool,
     options: RunOptionsItem,
     on_event: Channel<ScriptEvent>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let open = state.session(&session).await?;
-    let paged =
-        spelaion_core::query_page_sql(open.session.dialect().as_ref(), &sql, limit.into(), 0)
-            .ok_or("this query cannot be paged")?;
-    start_script(&state, &session, paged, false, options, on_event, Some(sql)).await
+    let paged = spelaion_core::first_query_page_sql(&open.session, &sql, limit.into())
+        .await
+        .ok_or("this query cannot be paged")?;
+    start_script(
+        &state,
+        &session,
+        paged,
+        confirmed,
+        options,
+        on_event,
+        Some(sql),
+    )
+    .await
 }
 
+/// The UI requests subsequent pages of the read it already confirmed. The core only permits
+/// eligible read queries to be paged, and appends each page at the expected offset.
 #[tauri::command]
 #[specta::specta]
 async fn append_query_page(
@@ -2271,11 +2526,7 @@ async fn bind_params(
 }
 
 fn risks_of(open: &OpenConnection, sql: &str) -> Vec<spelaion_core::RiskyStatement> {
-    spelaion_core::script_risks(
-        open.session.dialect().as_ref(),
-        sql,
-        &open.resolved.safeguards(),
-    )
+    spelaion_core::run_risks(&open.session, sql, &open.resolved.safeguards())
 }
 
 /// Statements of a script that need confirmation before `run_script`: a DELETE or UPDATE
@@ -2330,7 +2581,8 @@ async fn dialect_for(state: &AppState, session: &str) -> Arc<dyn Dialect> {
 }
 
 /// A selection of a result as text (TSV, CSV, JSON or INSERT), formatted by the core from
-/// the typed data, for the clipboard.
+/// the typed data, for the clipboard. One cell copied as plain text is its value alone,
+/// without a line break after it.
 #[tauri::command]
 #[specta::specta]
 async fn copy_rows(
@@ -2365,9 +2617,7 @@ async fn copy_rows(
         header,
         csv: spelaion_core::CsvOptions::default(),
     };
-    let mut out = Vec::new();
-    write_result(&stored, &options, dialect.as_ref(), &mut out).map_err(|e| e.to_string())?;
-    String::from_utf8(out).map_err(|e| e.to_string())
+    copy_text(&stored, &options, dialect.as_ref()).map_err(|e| e.to_string())
 }
 
 /// Writes a loaded result to a file the user chose (in a blocking task: it may be millions of
@@ -2987,6 +3237,64 @@ async fn cancel_selection_stats(result: u32, state: State<'_, AppState>) -> CmdR
     Ok(())
 }
 
+/// The points of a chart over a result (ADR-040): the UI names the X and Y columns, the core
+/// reads the current view of the stored result and sends at most `MAX_CHART_POINTS` points,
+/// never rows. A newer chart on the same result, or `cancel_chart`, stops this one (`None`).
+#[tauri::command]
+#[specta::specta]
+async fn result_chart(
+    result: u32,
+    request: ChartRequestItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<ChartPointsItem>> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let request = spelaion_core::ChartRequest::from(request);
+    tokio::task::spawn_blocking(move || {
+        let read = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        let ticket = read.chart_ticket();
+        read.chart(&request, &ticket)
+            .map(|data| data.map(ChartPointsItem::from))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops the chart being prepared on a result (the chart view closed or changed result).
+#[tauri::command]
+#[specta::specta]
+async fn cancel_chart(result: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(stored) = state.results.get(ResultId(result.into())) {
+        stored
+            .read()
+            .map_err(|_| "result lock poisoned")?
+            .cancel_chart();
+    }
+    Ok(())
+}
+
+/// Writes a chart image the UI drew to the file the user chose: an SVG's text, or a PNG in
+/// base64. The core refuses anything that is not such an image.
+#[tauri::command]
+#[specta::specta]
+async fn save_chart_image(
+    path: String,
+    format: ChartImageFormatItem,
+    data: String,
+) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || {
+        spelaion_core::save_chart_image(std::path::Path::new(&path), format.into(), &data)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// A table data tab column's statistics (the column header's "Column statistics"): counted by
 /// the server in a new session of the tab's connection, every statement a read inside the
 /// engine's read-only transaction, sampled past `STATS_SAMPLE_ROWS` rows. The column's name and
@@ -3051,6 +3359,95 @@ async fn column_stats(
     outcome
 }
 
+/// Every column of a schema's relations, read with one catalog query on the explorer's
+/// session: metadata search keeps them with the schema (ADR-043).
+#[tauri::command]
+#[specta::specta]
+async fn list_columns(
+    session: String,
+    schema: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<SchemaColumnItem>> {
+    let open = state.session(&session).await?;
+    let columns = open
+        .session
+        .connection()
+        .list_columns(&schema)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(columns.into_iter().map(SchemaColumnItem::from).collect())
+}
+
+/// The data search's limits, for its form.
+#[tauri::command]
+#[specta::specta]
+fn data_search_limits() -> DataSearchLimitsItem {
+    let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    DataSearchLimitsItem {
+        max_tables: n(spelaion_core::MAX_SEARCH_TABLES),
+        max_rows_per_table: spelaion_core::MAX_ROWS_PER_TABLE,
+        default_rows_per_table: spelaion_core::DEFAULT_ROWS_PER_TABLE,
+        max_hits: n(spelaion_core::MAX_SEARCH_HITS),
+        max_value_chars: n(spelaion_core::MAX_SEARCH_VALUE_CHARS),
+    }
+}
+
+/// Searches a value in the chosen tables of `source`'s connection (ADR-043): the core writes
+/// one read per table with the value bound as a parameter, in a new session opened for reads
+/// only, each table inside the engine's read-only transaction. Each table's start and end go to
+/// `on_event`; `cancel_data_search` with the same `search_id` stops it.
+#[tauri::command]
+#[specta::specta]
+async fn data_search(
+    source: String,
+    search_id: u32,
+    request: DataSearchRequestItem,
+    on_event: Channel<DataSearchEventItem>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<DataSearchSummaryItem> {
+    let request = spelaion_core::DataSearchRequest::from(request);
+    // Checked before connecting: a request out of bounds never opens a session.
+    request.check().map_err(|e| e.to_string())?;
+    {
+        let tab = state.session(&source).await?;
+        if !tab.session.connection().capabilities().bound_params {
+            return Err(spelaion_core::DataSearchError::Unsupported.to_string());
+        }
+    }
+    let (tab, open, cancel) = open_export_session(&state, &app, &source, search_id).await?;
+    let context = spelaion_core::follow_session_context(&tab.session, &open.session).await;
+    drop(tab);
+    let progress = move |event: spelaion_core::DataSearchEvent| {
+        let _ = on_event.send(DataSearchEventItem::from(event));
+    };
+    let outcome = match context {
+        Err(message) => Err(message),
+        Ok(()) => spelaion_core::data_search(&open.session, &request, &cancel, &progress)
+            .await
+            .map(DataSearchSummaryItem::from)
+            .map_err(|e| e.to_string()),
+    };
+    close_export_session(&state, search_id, open).await;
+    outcome
+}
+
+/// Stops a data search: the running statement and every table after it.
+#[tauri::command]
+#[specta::specta]
+async fn cancel_data_search(search_id: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    let cancel = state
+        .exports
+        .lock()
+        .expect("lock poisoned")
+        .get(&search_id)
+        .cloned();
+    if let Some(cancel) = cancel {
+        cancel.cancel().await;
+    }
+    Ok(())
+}
+
 /// Stops a column's statistics while they are counted: the running statement and the rest.
 #[tauri::command]
 #[specta::specta]
@@ -3110,9 +3507,7 @@ async fn table_filter_condition(
             .get(column as usize)
             .ok_or("no such column")?;
         let typed = match row {
-            Some(row) => stored
-                .value_at(row as usize, column as usize)
-                .ok_or("no such row")?,
+            Some(row) => spelaion_core::cell_filter_value(&stored, row as usize, column as usize)?,
             None => spelaion_core::typed_value(&value, meta.logical),
         };
         (meta.name.clone(), meta.logical, typed)
@@ -3271,6 +3666,134 @@ async fn cell_value(
             Some(value) => Some(value.to_string()),
         },
     )
+}
+
+/// The cell viewer's value, read from the stored result when the viewer opens: whole up to
+/// the core's limit, past it only with `load_anyway`. Images are recognised by their bytes.
+#[tauri::command]
+#[specta::specta]
+async fn view_cell(
+    result: u32,
+    row: u32,
+    column: u32,
+    load_anyway: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<CellViewItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        spelaion_core::view_cell(&stored, row as usize, column as usize, load_anyway)
+            .map(CellViewItem::from)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One masked cell's value, on the user's explicit request (ADR-051): read by the core from
+/// what it keeps aside, without running anything. Shown in a popover, never in the grid.
+#[tauri::command]
+#[specta::specta]
+async fn reveal_cell(
+    result: u32,
+    row: u32,
+    column: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<RevealedCellItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    stored
+        .reveal(row as usize, column as usize)
+        .map(RevealedCellItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves a cell's value to `path` (bytes as stored, other values as UTF-8 text); returns the
+/// bytes written.
+#[tauri::command]
+#[specta::specta]
+async fn save_cell_value(
+    result: u32,
+    row: u32,
+    column: u32,
+    path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<f64> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        spelaion_core::save_cell(&stored, row as usize, column as usize, Path::new(&path))
+            .map(|written| written as f64)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The value picker the cell panel offers for `column` of `schema.table` in an editable result
+/// (a date and time, the allowed values, a foreign key's search), read from the catalog now.
+#[tauri::command]
+#[specta::specta]
+async fn value_picker(
+    session: String,
+    schema: String,
+    table: String,
+    column: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<ValuePickerItem>> {
+    let open = state.session(&session).await?;
+    spelaion_core::value_picker(&open.session, &schema, &table, &column)
+        .await
+        .map(|picker| picker.map(ValuePickerItem::from))
+        .map_err(|e| e.to_string())
+}
+
+/// The text a picked date and time is written as (and shown as once saved).
+#[tauri::command]
+#[specta::specta]
+fn pick_time(picker: TemporalPickerItem, picked: PickedTimeItem) -> CmdResult<String> {
+    spelaion_core::picked_time_text(&picker.into(), &picked.into()).map_err(|e| e.to_string())
+}
+
+/// The text of the values picked from a column's allowed values.
+#[tauri::command]
+#[specta::specta]
+fn pick_choices(picker: ChoicePickerItem, chosen: Vec<String>) -> CmdResult<String> {
+    spelaion_core::picked_choice_text(&picker.into(), &chosen).map_err(|e| e.to_string())
+}
+
+/// A page of the table `column`'s foreign key references, keeping the rows that contain
+/// `search`: the key is read from the catalog again and the core writes the page's filter.
+#[tauri::command]
+#[specta::specta]
+async fn search_referenced(
+    session: String,
+    schema: String,
+    table: String,
+    column: String,
+    search: String,
+    offset: u32,
+    state: State<'_, AppState>,
+) -> CmdResult<ReferencedRowsItem> {
+    let open = state.session(&session).await?;
+    let offset = u64::from(offset);
+    spelaion_core::search_referenced(&open.session, &schema, &table, &column, &search, offset)
+        .await
+        .map(ReferencedRowsItem::from)
+        .map_err(|e| e.to_string())
 }
 
 /// Frees a result the UI no longer shows.
@@ -3617,8 +4140,8 @@ async fn table_page_sql(
     state: State<'_, AppState>,
 ) -> CmdResult<String> {
     let open = state.session(&session).await?;
-    spelaion_core::table_page_sql(open.session.dialect().as_ref(), &page.into())
-        .map_err(|e| e.to_string())
+    // Ordered by the primary key after the user's order (ADR-054).
+    spelaion_core::table_page_sql_by_key(&open.session, &page.into()).await
 }
 
 /// How many rows of a table the filter keeps (the table data tab's "Count").
@@ -3967,7 +4490,339 @@ async fn apply_object_change(
     Ok(u32::try_from(ran).unwrap_or(u32::MAX))
 }
 
-/// The statements the core would run for the pending changes of a table data tab, to show
+/// Which accounts the explorer may create, give a password, lock or drop on this session's
+/// engine (ADR-048): the core decides.
+#[tauri::command]
+#[specta::specta]
+async fn principal_actions(
+    session: String,
+    state: State<'_, AppState>,
+) -> CmdResult<PrincipalActionsItem> {
+    let open = state.session(&session).await?;
+    Ok(spelaion_core::principal_actions(open.session.dialect().as_ref()).into())
+}
+
+/// The script an account change would run, written by the core with the password masked
+/// (ADR-048), and the statements the connection's safeguards ask to confirm. Nothing runs.
+#[tauri::command]
+#[specta::specta]
+async fn preview_principal_change(
+    session: String,
+    change: PrincipalChangeItem,
+    state: State<'_, AppState>,
+) -> CmdResult<AlterationPreviewItem> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    let plan = spelaion_core::principal_plan(dialect.as_ref(), &change.into())
+        .map_err(|e| e.to_string())?;
+    Ok(AlterationPreviewItem::new(
+        &plan,
+        dialect.as_ref(),
+        &open.resolved.safeguards(),
+    ))
+}
+
+/// Runs an account change on the explorer's session, only as the masked script `sql` the user
+/// was shown (ADR-048). `password` is the new password when the change sets one: held as a
+/// secret, written only into the statement that runs, never recorded or returned.
+#[tauri::command]
+#[specta::specta]
+async fn apply_principal_change(
+    session: String,
+    change: PrincipalChangeItem,
+    password: Option<String>,
+    sql: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let password = password.map(Secret::new);
+    let open = state.session(&session).await?;
+    let ran = spelaion_core::apply_principal_change(
+        &open.session,
+        &change.into(),
+        password.as_ref(),
+        &sql,
+        open.resolved.params.read_only,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
+/// The scopes an account can be granted on this session's engine, each with the names it asks
+/// and its privileges (ADR-048): the core decides.
+#[tauri::command]
+#[specta::specta]
+async fn privilege_scopes(
+    session: String,
+    kind: PrincipalKindItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<PrivilegeScopeInfoItem>> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    Ok(
+        spelaion_core::privilege_scopes(dialect.as_ref(), kind.into())
+            .into_iter()
+            .map(|scope| {
+                let fields = spelaion_core::privilege_scope_fields(dialect.as_ref(), scope);
+                PrivilegeScopeInfoItem {
+                    scope: scope.into(),
+                    needs_database: fields.database,
+                    needs_schema: fields.schema,
+                    needs_name: fields.name,
+                    schema_optional: fields.schema_optional,
+                    name_optional: fields.name_optional,
+                    needs_columns: fields.columns,
+                    privileges: spelaion_core::privilege_options(dialect.as_ref(), scope)
+                        .iter()
+                        .map(|p| (*p).to_string())
+                        .collect(),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// What an account has: its privileges on each scope and its roles, read from the catalog.
+#[tauri::command]
+#[specta::specta]
+async fn principal_privileges(
+    session: String,
+    target: PrincipalTargetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<GrantedPrivilegeItem>> {
+    let open = state.session(&session).await?;
+    spelaion_core::principal_privileges(&open.session, &target.into())
+        .await
+        .map(|granted| {
+            granted
+                .into_iter()
+                .filter_map(GrantedPrivilegeItem::from_core)
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// The `GRANT` or `REVOKE` a privilege form would run, written by the core. Nothing runs.
+#[tauri::command]
+#[specta::specta]
+async fn preview_privilege_change(
+    session: String,
+    change: PrivilegeChangeItem,
+    state: State<'_, AppState>,
+) -> CmdResult<AlterationPreviewItem> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    let plan = spelaion_core::privilege_plan(dialect.as_ref(), &change.into())
+        .map_err(|e| e.to_string())?;
+    Ok(AlterationPreviewItem::new(
+        &plan,
+        dialect.as_ref(),
+        &open.resolved.safeguards(),
+    ))
+}
+
+/// Grants or revokes on the explorer's session, only as the script `sql` the user was shown
+/// (ADR-048); refused on a read-only connection. Returns how many statements ran.
+#[tauri::command]
+#[specta::specta]
+async fn apply_privilege_change(
+    session: String,
+    change: PrivilegeChangeItem,
+    sql: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    let ran = spelaion_core::apply_privilege_change(
+        &open.session,
+        &change.into(),
+        &sql,
+        open.resolved.params.read_only,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
+/// Whether an account is locked now, for the lock dialog (ADR-048); `None` when unknown.
+#[tauri::command]
+#[specta::specta]
+async fn principal_locked(
+    session: String,
+    target: PrincipalTargetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<bool>> {
+    let open = state.session(&session).await?;
+    spelaion_core::principal_locked(&open.session, &target.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// A table's columns for its structure form (ADR-047), read from the catalog on the tab's
+/// session: each field as SQL the engine writes.
+#[tauri::command]
+#[specta::specta]
+async fn table_structure(
+    session: String,
+    schema: String,
+    table: String,
+    state: State<'_, AppState>,
+) -> CmdResult<TableStructureItem> {
+    let open = state.session(&session).await?;
+    spelaion_core::table_structure(&open.session, &schema, &table)
+        .await
+        .map(TableStructureItem::from)
+        .map_err(|e| e.to_string())
+}
+
+/// The script a structure form's changes would run, written by the core from the catalog as
+/// it is now, with the statements the connection's safeguards ask to confirm. Nothing runs.
+#[tauri::command]
+#[specta::specta]
+async fn preview_table_alteration(
+    session: String,
+    alteration: TableAlterationItem,
+    state: State<'_, AppState>,
+) -> CmdResult<AlterationPreviewItem> {
+    let open = state.session(&session).await?;
+    let alteration = spelaion_core::TableAlteration::from(alteration);
+    let plan = spelaion_core::alteration_plan(&open.session, &alteration)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(AlterationPreviewItem::new(
+        &plan,
+        open.session.dialect().as_ref(),
+        &open.resolved.safeguards(),
+    ))
+}
+
+/// Runs a structure form's changes on the tab's session, only as the script `sql` the user was
+/// shown: the core writes it again and refuses a table that changed, a read-only connection,
+/// and risky statements the user did not confirm (ADR-047). Returns how many statements ran.
+#[tauri::command]
+#[specta::specta]
+async fn apply_table_alteration(
+    session: String,
+    alteration: TableAlterationItem,
+    sql: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    let ran = spelaion_core::apply_alteration(
+        &open.session,
+        &alteration.into(),
+        &sql,
+        open.resolved.params.read_only,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
+/// The script the create table form would run, written by the core (ADR-047). Nothing runs.
+#[tauri::command]
+#[specta::specta]
+async fn preview_create_table(
+    session: String,
+    table: NewTableItem,
+    state: State<'_, AppState>,
+) -> CmdResult<AlterationPreviewItem> {
+    let open = state.session(&session).await?;
+    let dialect = open.session.dialect();
+    let plan = spelaion_core::create_table_plan(dialect.as_ref(), &table.into())
+        .map_err(|e| e.to_string())?;
+    Ok(AlterationPreviewItem::new(
+        &plan,
+        dialect.as_ref(),
+        &open.resolved.safeguards(),
+    ))
+}
+
+/// Creates the table of the form, only as the script `sql` the user was shown: refused on a
+/// read-only connection, and risky statements run only confirmed (ADR-047).
+#[tauri::command]
+#[specta::specta]
+async fn apply_create_table(
+    session: String,
+    table: NewTableItem,
+    sql: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    let ran = spelaion_core::apply_create_table(
+        &open.session,
+        &table.into(),
+        &sql,
+        open.resolved.params.read_only,
+        &open.resolved.safeguards(),
+        confirmed,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(ran).unwrap_or(u32::MAX))
+}
+
+/// "Edit source": a view's, function's or procedure's definition written by the core as the
+/// statement that replaces it, to change and run in a new tab: nothing runs here (ADR-047).
+#[tauri::command]
+#[specta::specta]
+async fn editable_source(
+    session: String,
+    target: SourceTargetItem,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let open = state.session(&session).await?;
+    spelaion_core::editable_source(&open.session, &target.into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The pending edits of a table data page, as the core holds them (ADR-044).
+#[tauri::command]
+#[specta::specta]
+async fn pending_edits(result: u32, state: State<'_, AppState>) -> CmdResult<PendingEditsItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    Ok(PendingEditsItem::new(
+        stored.pending(),
+        spelaion_core::EditOutcome::default(),
+    ))
+}
+
+/// Does one thing to a table data page's pending edits: a cell typed, rows deleted or
+/// reverted, a new row, a bulk edit of the selection, a paste, Discard, undo or redo
+/// (ADR-044). Returns the edits now pending; nothing is written to the database.
+#[tauri::command]
+#[specta::specta]
+async fn edit_pending(
+    result: u32,
+    edit: PendingEditItem,
+    state: State<'_, AppState>,
+) -> CmdResult<PendingEditsItem> {
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let mut stored = stored.write().map_err(|_| "result lock poisoned")?;
+    let outcome = stored
+        .edit_pending(edit.into())
+        .map_err(|e| e.to_string())?;
+    Ok(PendingEditsItem::new(stored.pending(), outcome))
+}
+
+/// The statements the core would run for the pending edits of a table data page, to show
 /// before applying them (production asks for confirmation).
 #[tauri::command]
 #[specta::specta]
@@ -3976,15 +4831,15 @@ async fn preview_table_edits(
     result: u32,
     schema: String,
     name: String,
-    changes: Vec<RowChangeItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
     let open = state.session(&session).await?;
-    table_edit_statements(&state, &open, result, &schema, &name, changes).await
+    table_edit_statements(&state, &open, result, &schema, &name).await
 }
 
-/// Applies the pending changes in one transaction (ADR-014): refused on read-only
-/// connections, and on production unless the user confirmed the statements.
+/// Applies the page's pending edits in one transaction (ADR-014): refused on read-only
+/// connections, and on production unless the user confirmed the statements. Once applied
+/// they are forgotten, with their undo history.
 #[tauri::command]
 #[specta::specta]
 async fn apply_table_edits(
@@ -3992,7 +4847,6 @@ async fn apply_table_edits(
     result: u32,
     schema: String,
     name: String,
-    changes: Vec<RowChangeItem>,
     confirmed: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
@@ -4003,10 +4857,15 @@ async fn apply_table_edits(
         confirmed,
     )
     .map_err(|e| e.to_string())?;
-    let statements = table_edit_statements(&state, &open, result, &schema, &name, changes).await?;
+    let statements = table_edit_statements(&state, &open, result, &schema, &name).await?;
     let applied = spelaion_core::apply_edits(&open.session, &statements)
         .await
         .map_err(|e| e.to_string())?;
+    if let Some(stored) = state.results.get(ResultId(result.into()))
+        && let Ok(mut stored) = stored.write()
+    {
+        stored.clear_pending();
+    }
     Ok(u32::try_from(applied).unwrap_or(u32::MAX))
 }
 
@@ -4016,7 +4875,95 @@ async fn table_edit_statements(
     result: u32,
     schema: &str,
     name: &str,
-    changes: Vec<RowChangeItem>,
+) -> CmdResult<Vec<String>> {
+    // The primary key comes from the database, never from the UI.
+    let table = open
+        .session
+        .connection()
+        .describe_table(schema, name)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Written only through this session, for rows it read in its current database (SDB-137).
+    let target = open
+        .session
+        .edit_target()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stored = state
+        .results
+        .get(ResultId(result.into()))
+        .ok_or("result freed")?;
+    let stored = stored.read().map_err(|_| "result lock poisoned")?;
+    let changes = stored.pending().changes();
+    spelaion_core::edit_statements(&target, &table, &stored, &changes).map_err(|e| e.to_string())
+}
+
+/// The statement that loading the file at `path` into one cell of a table data page would
+/// run, shortened for the confirmation dialog (production asks before data changes).
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn preview_load_value_file(
+    session: String,
+    result: u32,
+    schema: String,
+    name: String,
+    row: u32,
+    column: u32,
+    path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    let open = state.session(&session).await?;
+    let statements =
+        load_file_statements(&state, &open, result, &schema, &name, row, column, path).await?;
+    Ok(statements
+        .iter()
+        .map(|sql| spelaion_core::statement_for_display(sql))
+        .collect())
+}
+
+/// Loads the file at `path` into one cell of a table data page: one UPDATE by primary key,
+/// applied like any edit (ADR-014): refused on read-only connections, and on production
+/// unless the user confirmed it.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+async fn load_value_file(
+    session: String,
+    result: u32,
+    schema: String,
+    name: String,
+    row: u32,
+    column: u32,
+    path: String,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<u32> {
+    let open = state.session(&session).await?;
+    spelaion_core::check_edit_policy(
+        open.resolved.params.read_only,
+        open.resolved.safeguards().confirm_data_changes,
+        confirmed,
+    )
+    .map_err(|e| e.to_string())?;
+    let statements =
+        load_file_statements(&state, &open, result, &schema, &name, row, column, path).await?;
+    let applied = spelaion_core::apply_edits(&open.session, &statements)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(u32::try_from(applied).unwrap_or(u32::MAX))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_file_statements(
+    state: &AppState,
+    open: &OpenConnection,
+    result: u32,
+    schema: &str,
+    name: &str,
+    row: u32,
+    column: u32,
+    path: String,
 ) -> CmdResult<Vec<String>> {
     // The primary key comes from the database, never from the UI.
     let table = open
@@ -4029,10 +4976,25 @@ async fn table_edit_statements(
         .results
         .get(ResultId(result.into()))
         .ok_or("result freed")?;
-    let stored = stored.read().map_err(|_| "result lock poisoned")?;
-    let changes: Vec<spelaion_core::RowChange> = changes.into_iter().map(Into::into).collect();
-    spelaion_core::edit_statements(open.session.dialect().as_ref(), &table, &stored, &changes)
-        .map_err(|e| e.to_string())
+    // Written only through this session, for rows it read in its current database (SDB-137).
+    let target = open
+        .session
+        .edit_target()
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let stored = stored
+            .read()
+            .map_err(|_| "result lock poisoned".to_string())?;
+        target.check(&stored).map_err(|e| e.to_string())?;
+        let change =
+            spelaion_core::file_change(&stored, row as usize, column as usize, Path::new(&path))
+                .map_err(|e| e.to_string())?;
+        spelaion_core::edit_statements(&target, &table, &stored, &[change])
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The UI's answer to a tunnel dialog (unknown host, passphrase…).
@@ -4110,6 +5072,10 @@ fn raw_handler(invoke: tauri::ipc::Invoke<tauri::Wry>) -> bool {
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![
+            diagram::read_diagram,
+            diagram::diagram_layout,
+            diagram::save_diagram_text,
+            diagram::close_diagram,
             plans::explain_preflight,
             plans::plan_capabilities,
             plans::explain_query,
@@ -4137,6 +5103,19 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             import::import_plan,
             import::run_import,
             import::cancel_import,
+            backup::backup_preferences,
+            backup::set_backup_preferences,
+            backup::backup_tools,
+            backup::preview_backup,
+            backup::run_backup,
+            backup::preview_restore,
+            backup::run_restore,
+            backup::cancel_backup,
+            backup::preview_embedded_backup,
+            backup::run_embedded_backup,
+            backup::run_duckdb_import,
+            backup::plan_sql_file,
+            backup::run_sql_file,
             get_language,
             set_language,
             get_theme,
@@ -4149,8 +5128,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_editor_preferences,
             get_grid_preferences,
             set_grid_preferences,
+            get_map_preferences,
+            set_map_preferences,
+            column_map,
             get_script_preferences,
             set_script_preferences,
+            file_dialog::choose_path,
+            clipboard_text::read_clipboard_text,
             files::open_sql_file,
             files::save_sql_file,
             files::recent_files,
@@ -4163,6 +5147,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             notify_run_finished,
             update::update_check,
             update::update_install,
+            update::update_open_releases_page,
             engine_catalog,
             keychain_available,
             list_tunnels,
@@ -4196,8 +5181,15 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             clear_find,
             selection_stats,
             cancel_selection_stats,
+            result_chart,
+            cancel_chart,
+            save_chart_image,
             column_stats,
             cancel_column_stats,
+            list_columns,
+            data_search_limits,
+            data_search,
+            cancel_data_search,
             add_table_condition,
             table_filter_condition,
             table_keys,
@@ -4211,6 +5203,15 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             export_tables,
             cancel_export,
             cell_value,
+            view_cell,
+            reveal_cell,
+            save_cell_value,
+            value_picker,
+            pick_time,
+            pick_choices,
+            search_referenced,
+            preview_load_value_file,
+            load_value_file,
             sort_result,
             filter_result,
             filter_columns,
@@ -4224,12 +5225,28 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             object_actions,
             preview_object_change,
             apply_object_change,
+            principal_actions,
+            preview_principal_change,
+            apply_principal_change,
+            principal_locked,
+            privilege_scopes,
+            principal_privileges,
+            preview_privilege_change,
+            apply_privilege_change,
+            table_structure,
+            preview_table_alteration,
+            apply_table_alteration,
+            preview_create_table,
+            apply_create_table,
+            editable_source,
             create_sql,
             new_index_sql,
             new_table_element_sql,
             search_objects,
             set_active_schema,
             active_schema,
+            pending_edits,
+            edit_pending,
             preview_table_edits,
             apply_table_edits,
             save_snippet,
@@ -4257,6 +5274,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             tunnel_ports,
             network_profiles,
             set_tunnel_ports,
+            user_masking,
+            set_user_masking,
             list_connections,
             list_history,
             library::history_page,
@@ -4273,6 +5292,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             disconnect,
             list_processes,
             control_process,
+            list_locks,
+            server_settings,
+            table_stats,
             run_script,
             answer_script_error,
             query_page_supported,
@@ -4307,6 +5329,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commit_transaction,
             rollback_transaction,
             sessions_to_confirm,
+            quit_open_transactions,
+            quit_asking,
+            quit_cancelled,
             quit_app,
         ])
         .events(tauri_specta::collect_events![
@@ -4314,7 +5339,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             InteractionClosed,
             SessionLost,
             TransactionChanged,
-            QuitBlocked
+            QuitRequested
         ])
 }
 
@@ -4328,6 +5353,72 @@ pub fn export_bindings(path: &std::path::Path) -> Result<(), String> {
             path,
         )
         .map_err(|e| e.to_string())
+}
+
+/// The main window, from `tauri.conf.json` (where `create` is false so it is built here).
+///
+/// On Linux, WebKitGTK refuses the page's clipboard API for text another program copied
+/// unless the page may access the clipboard. The app reads the clipboard's text there through
+/// `read_clipboard_text` (`clipboard_text.rs`: WebKitGTK's `readText()` misses text offered
+/// only as X11's `UTF8_STRING`); with access on, `navigator.clipboard.readText()` still reads
+/// only while handling a click or a key. The text stays untrusted input that the core checks
+/// (ADR-030, ADR-038). WebView2 and WKWebView keep their own behaviour: on Windows this switch
+/// would also grant every read without asking.
+fn open_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .ok_or("tauri.conf.json has no \"main\" window")?;
+    let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+    #[cfg(target_os = "linux")]
+    let window = window.enable_clipboard_access();
+    let offscreen = std::env::var_os(OFFSCREEN_SWITCH).is_some();
+    // Without the switch the builder keeps the configuration's visibility and focus.
+    let window = if offscreen {
+        window.visible(false).focused(false).focusable(false)
+    } else {
+        window
+    }
+    .build()?;
+    if offscreen {
+        move_offscreen(&window)?;
+        window.show()?;
+    }
+    Ok(())
+}
+
+/// The Windows smoke test (`e2e/smoke.mjs`) sets this so its app stays out of reach of the
+/// user's real mouse and keyboard while they use the computer (SDB-274): the main window is
+/// built hidden, moved left of every monitor at its usual size, and only then shown; it can
+/// never be activated, so it never takes the foreground. The test drives the page over
+/// WebView2's debugging port, which needs neither. Without it nothing changes.
+const OFFSCREEN_SWITCH: &str = "SPELAION_E2E_OFFSCREEN";
+
+/// Moves `window` entirely left of every monitor, keeping its size.
+///
+/// It is moved once built, while still hidden: the window system ignores a starting position
+/// outside every monitor and would open the window at its default place instead.
+fn move_offscreen(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    let left = window
+        .available_monitors()?
+        .iter()
+        .map(|m| m.position().x)
+        .min()
+        .unwrap_or(0);
+    let top = window
+        .available_monitors()?
+        .iter()
+        .map(|m| m.position().y)
+        .min()
+        .unwrap_or(0);
+    let width = i32::try_from(window.outer_size()?.width).unwrap_or(i32::MAX / 2);
+    window.set_position(tauri::PhysicalPosition::new(
+        left.saturating_sub(width).saturating_sub(200),
+        top,
+    ))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -4408,9 +5499,12 @@ pub fn run() {
         tabs,
         pending: Pending::default(),
         quitting: AtomicBool::new(false),
+        close_request: AtomicU8::new(CLOSE_IDLE),
         tests: ConnectionTests::default(),
         exports: std::sync::Mutex::new(HashMap::new()),
         imports: std::sync::Mutex::new(HashMap::new()),
+        backups: std::sync::Mutex::new(HashMap::new()),
+        diagrams: std::sync::Mutex::new(HashMap::new()),
     };
 
     let typed = builder.invoke_handler();
@@ -4431,7 +5525,7 @@ pub fn run() {
         })
         .setup(move |app| {
             builder.mount_events(app);
-            let _ = app.handle().get_webview_window("main");
+            open_main_window(app)?;
             Ok(())
         })
         .build(tauri::generate_context!())

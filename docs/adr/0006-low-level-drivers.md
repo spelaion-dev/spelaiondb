@@ -38,6 +38,21 @@ result sets.
   the certificate is checked against the real host name. MariaDB is the same driver with
   engine `mariadb` (its `JSON` is text). Read-only mode for the MCP is not implemented yet:
   it refuses these engines (ADR-008).
+- **MySQL/MariaDB temporal columns (2026-11-12, SDB-122):** the first-batch decision above is
+  gone. A zero date after the first batch failed the whole result, or a streaming export
+  midway, depending on where it fell. `DATE`, `DATETIME` and `TIMESTAMP` columns are now text,
+  always, with their native type (`date`, `datetime`, `timestamp`): exactly the server's text
+  (`2026-01-31 10:20:30.120`, `0000-00-00`), which sorts and compares as the date does and is
+  what the literals the core writes use. Every column's type comes from its metadata, so the
+  driver no longer holds back a first batch. Consumers that need a date read these columns by
+  native type (ADR-005's 2026-11-12 note).
+- **SQL Server `datetime2` and `datetimeoffset` (2026-11-12, SDB-265):** text with their
+  native type, written as the server writes them: every digit of the value's scale
+  (`2024-01-01 10:00:00.1234567`, `10:00:00.500` for `datetime2(3)`) and a `datetimeoffset`
+  where it is with its offset (`2024-01-01 10:00:00.1234567 +02:00`). A microsecond timestamp
+  lost the seventh digit, so a filter or a key written from the cell missed its row, and a
+  `datetimeoffset` was shown in UTC. Both forms are read alike under every language. `time`
+  followed (SDB-268): the same clock text without the date (`23:59:59.1234567`).
 
 ## Revisit if
 Not expected.

@@ -10,8 +10,8 @@ use spelaion_config::{
     Password, PasswordChoice, ProxyDraft, ProxyType, ResolveError, Resolver, SecretBackend, Source,
     SshAuth, SystemBackend, TlsModeConfig, TrustStore, TunnelDraft, TunnelDraftOptions, TunnelFile,
     TunnelPasswords, TunnelSettings, WritePolicy, add_connection, add_tunnel, connection_account,
-    create_connection, delete_connection, delete_tunnel, load, set_value, slug, tunnel_account,
-    update_tunnel,
+    connection_password_stored, create_connection, delete_connection, delete_tunnel, load,
+    proxy_account, set_value, slug, tunnel_account, tunnel_passwords_stored, update_tunnel,
 };
 use spelaion_driver_api::{Secret, TlsMode};
 
@@ -71,6 +71,9 @@ struct FakeBackend {
     no_keychain: bool,
     /// The keychain is there, but reading fails (locked, refused).
     locked_read: bool,
+    /// Writes answer `Ok` and keep nothing, as a Secret Service that accepts an item and
+    /// loses it.
+    drops_writes: bool,
 }
 
 impl SecretBackend for FakeBackend {
@@ -94,6 +97,9 @@ impl SecretBackend for FakeBackend {
         }
         if self.fail_keychain {
             return Err("keychain locked".into());
+        }
+        if self.drops_writes {
+            return Ok(());
         }
         self.keychain
             .lock()
@@ -535,8 +541,9 @@ fn creates_new_connection_files() {
         tls: Default::default(),
         session: Default::default(),
         mcp: Default::default(),
+        masking: Default::default(),
     };
-    let path = create_connection(&dir, "team/analytics", &file).unwrap();
+    let path = create_connection(&dir, Source::Workspace, "team/analytics", &file).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.starts_with("#:schema https://"), "{content}");
     assert!(
@@ -549,11 +556,11 @@ fn creates_new_connection_files() {
     assert_eq!(config.connections[0].file, file);
 
     assert!(
-        create_connection(&dir, "team/analytics", &file).is_err(),
+        create_connection(&dir, Source::Workspace, "team/analytics", &file).is_err(),
         "must not overwrite"
     );
     assert!(
-        create_connection(&dir, "../outside", &file).is_err(),
+        create_connection(&dir, Source::Workspace, "../outside", &file).is_err(),
         "must not escape the directory"
     );
 }
@@ -643,6 +650,7 @@ fn postgres_draft() -> ConnectionDraft {
         mcp_exposed: true,
         mcp_writes: false,
         session: Default::default(),
+        masking: Default::default(),
     }
 }
 
@@ -1430,6 +1438,8 @@ fn two_hop_tunnel() -> TunnelDraft {
         ],
         options: TunnelDraftOptions::default(),
         proxy: None,
+        kubernetes: None,
+        ssm: None,
     }
 }
 
@@ -1468,6 +1478,7 @@ fn kubernetes_connection(resource: &str) -> ConnectionDraft {
         mcp_exposed: false,
         mcp_writes: false,
         session: Default::default(),
+        masking: Default::default(),
     }
 }
 
@@ -1564,10 +1575,31 @@ fn kubernetes_and_an_ssh_tunnel_do_not_mix() {
         "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"x.db\"\n[kubernetes]\nresource = \"svc/db\"\n",
     )
     .unwrap();
+    std::fs::create_dir_all(fx.repo().join(".spelaion/tunnels")).unwrap();
+    std::fs::write(
+        fx.repo().join(".spelaion/tunnels/jump.toml"),
+        "schema_version = 1
+[[hops]]
+host = \"bastion\"
+user = \"ops\"
+",
+    )
+    .unwrap();
     let config = load(Some(&fx.repo()), &fx.user());
     let problems = format!("{:?}", config.problems);
-    assert!(problems.contains("not both"), "{problems}");
     assert!(problems.contains("SQLite is a local file"), "{problems}");
+    // The profile could be a Kubernetes one (ADR-050): only resolving knows it is not.
+    let mut trust = TrustStore::load(&fx.user()).unwrap();
+    trust.trust(&config).unwrap();
+    let id = ConnectionId {
+        source: Source::Workspace,
+        path: "mixed".into(),
+    };
+    let error = Resolver::new(&config, &trust, &FakeBackend::default())
+        .resolve(&id)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not both"), "{error}");
 }
 
 #[test]
@@ -2345,6 +2377,8 @@ fn proxies_are_written_without_their_password_and_resolved() {
         hops: Vec::new(),
         options: TunnelDraftOptions::default(),
         proxy: Some(proxy_draft("proxy.corp.example")),
+        kubernetes: None,
+        ssm: None,
     };
     let passwords = TunnelPasswords {
         hops: Vec::new(),
@@ -2464,6 +2498,8 @@ fn invalid_proxies_explain_what_is_wrong() {
         hops: Vec::new(),
         options: TunnelDraftOptions::default(),
         proxy,
+        kubernetes: None,
+        ssm: None,
     };
     assert!(error(alone(None)).contains("[proxy]"));
     assert!(error(alone(Some(proxy_draft(" ")))).contains("host"));
@@ -2562,6 +2598,78 @@ fn shared_key_paths_work_on_every_machine() {
     assert_eq!(
         personal.to_file(&config).unwrap().hops[0].identity_file,
         Some(draft.hops[0].identity_file.clone())
+    );
+}
+
+const KEYED_TUNNEL: &str = r#"
+schema_version = 1
+
+[[hops]]
+host = "jump.example.com"
+user = "deploy"
+auth = ["key"]
+identity_file = "../keys/id_ed25519"
+"#;
+
+/// Postgres through `tunnel`, with a relative CA certificate.
+fn through(tunnel: &str) -> String {
+    format!(
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"db.internal\"\ndatabase = \"app\"\n\
+         user = \"app\"\ntunnel = \"{tunnel}\"\n\n[tls]\nmode = \"verify-full\"\nca = \"certs/ca.pem\"\n"
+    )
+}
+
+/// A connection may use a tunnel from the other layer (`Config::tunnel_for`): the tunnel's
+/// relative paths stay relative to its own folder, the connection's to the connection's.
+#[test]
+fn tunnel_paths_are_relative_to_the_tunnels_layer() {
+    // A personal connection through a repository tunnel.
+    let fx = Fixture::new("cross-layer-repo-tunnel");
+    fx.write("repo/.spelaion/tunnels/shared.toml", KEYED_TUNNEL);
+    fx.write("user/connections/mine.toml", &through("shared"));
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let id = ConnectionId {
+        source: Source::User,
+        path: "mine".into(),
+    };
+    let backend = FakeBackend::default();
+    // The repository's tunnel still needs the repository trusted.
+    let untrusted = TrustStore::load(&fx.user()).unwrap();
+    assert!(matches!(
+        Resolver::new(&config, &untrusted, &backend).resolve(&id),
+        Err(ResolveError::Untrusted { .. })
+    ));
+    let trust = fx.trusted();
+    let r = Resolver::new(&config, &trust, &backend)
+        .resolve(&id)
+        .unwrap();
+    assert_eq!(
+        r.tunnel.unwrap().hops[0].identity_file.as_deref(),
+        Some(fx.repo().join("../keys/id_ed25519").as_path())
+    );
+    assert_eq!(
+        r.params.ca_certificate.as_deref(),
+        Some(fx.user().join("certs/ca.pem").as_path())
+    );
+
+    // A repository connection through a personal tunnel (the repository has none of that name).
+    let fx = Fixture::new("cross-layer-user-tunnel");
+    fx.write("user/tunnels/mine.toml", KEYED_TUNNEL);
+    fx.write("repo/.spelaion/connections/app.toml", &through("mine"));
+    let config = load(Some(&fx.repo()), &fx.user());
+    assert!(config.problems.is_empty(), "{:?}", config.problems);
+    let trust = fx.trusted();
+    let r = Resolver::new(&config, &trust, &backend)
+        .resolve(&ws("app"))
+        .unwrap();
+    assert_eq!(
+        r.tunnel.unwrap().hops[0].identity_file.as_deref(),
+        Some(fx.user().join("../keys/id_ed25519").as_path())
+    );
+    assert_eq!(
+        r.params.ca_certificate.as_deref(),
+        Some(fx.repo().join("certs/ca.pem").as_path())
     );
 }
 
@@ -3746,6 +3854,8 @@ fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
             .any(|p| p.contains("git mv .spelunk .spelaion")),
         "{problems:?}"
     );
+    // It only informs: what loaded is what the folder says.
+    assert!(config.problems.iter().all(|p| !p.blocks()));
     // A new connection saved from the app goes into the folder that exists.
     let id = add_connection(
         &config,
@@ -3776,6 +3886,11 @@ fn a_repository_with_the_old_folder_name_still_loads_and_says_to_rename_it() {
             .iter()
             .any(|p| p.to_string().contains("both .spelaion/ and .spelunk/"))
     );
+    assert!(config.problems.iter().all(|p| !p.blocks()));
+    // A file that does not load is an error, never a notice.
+    std::fs::write(repo.join(".spelaion/connections/broken.toml"), "name = = 1").unwrap();
+    let config = load(Some(&repo), &fx.user());
+    assert!(config.problems.iter().any(|p| p.blocks()));
 }
 
 #[cfg(unix)]
@@ -3905,5 +4020,240 @@ fn without_a_keychain_saving_a_password_is_refused_and_undone() {
             .join(".spelaion/connections/prod/eu/orders-prod.toml")
             .exists(),
         "nothing is left half saved"
+    );
+}
+
+/// The error of a keychain write that was not kept, checked to name the cause and never the
+/// password.
+fn assert_not_kept(result: Result<impl std::fmt::Debug, ResolveError>, secret: &str) {
+    let err = result.expect_err("a write the keychain did not keep must fail");
+    let ResolveError::Secret { message, .. } = &err else {
+        panic!("expected a keychain error: {err}")
+    };
+    assert!(
+        message.contains("accepted the password but does not have it"),
+        "{message}"
+    );
+    assert!(!err.to_string().contains(secret), "{err}");
+    assert!(!format!("{err:?}").contains(secret), "{err:?}");
+}
+
+#[test]
+fn a_keychain_that_keeps_nothing_fails_every_save_and_leaves_nothing_half_saved() {
+    let fx = Fixture::new("keychain-drops");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let drops = FakeBackend {
+        drops_writes: true,
+        ..FakeBackend::default()
+    };
+
+    // Saving a new connection from the form: no file is left behind.
+    assert_not_kept(
+        add_connection(
+            &config,
+            &postgres_draft(),
+            Some(&Secret::new("typed-in-the-form")),
+            &drops,
+        ),
+        "typed-in-the-form",
+    );
+    assert!(
+        !fx.repo()
+            .join(".spelaion/connections/prod/eu/orders-prod.toml")
+            .exists()
+    );
+
+    // Editing one: the file goes back to what it was, and the old password stays (a store
+    // that keeps the previous value is caught too: it is not the one typed).
+    let path = fx.write("repo/.spelaion/connections/orders.toml", HAND_WRITTEN);
+    let id = ws("orders");
+    let stale = FakeBackend {
+        drops_writes: true,
+        keychain: Mutex::new(BTreeMap::from([(
+            repo_account(&fx, "orders"),
+            "old".to_string(),
+        )])),
+        ..FakeBackend::default()
+    };
+    let config = load(Some(&fx.repo()), &fx.user());
+    let before = std::fs::read_to_string(&path).unwrap();
+    let mut draft = ConnectionDraft::from_entry(config.connection(&id).unwrap());
+    draft.description = "edited".into();
+    assert_not_kept(
+        spelaion_config::update_connection(
+            &config,
+            &id,
+            &draft,
+            Some(&Secret::new("new-password")),
+            &stale,
+        ),
+        "new-password",
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    assert_eq!(
+        stale
+            .keychain
+            .lock()
+            .unwrap()
+            .get(&repo_account(&fx, "orders"))
+            .map(String::as_str),
+        Some("old")
+    );
+
+    // A new tunnel with a hop password and a proxy password: no file is left behind.
+    let mut tunnel = two_hop_tunnel();
+    tunnel.proxy = Some(proxy_draft("proxy.example.com"));
+    let passwords = TunnelPasswords {
+        hops: vec![None, Some(Secret::new("hop-secret"))],
+        proxy: Some(Secret::new("proxy-secret")),
+    };
+    assert_not_kept(
+        add_tunnel(&config, &tunnel, &passwords, &drops),
+        "hop-secret",
+    );
+    assert!(!fx.repo().join(".spelaion/tunnels/bastion-eu.toml").exists());
+    let proxy_only = TunnelPasswords {
+        hops: vec![],
+        proxy: Some(Secret::new("proxy-secret")),
+    };
+    assert_not_kept(
+        add_tunnel(&config, &tunnel, &proxy_only, &drops),
+        "proxy-secret",
+    );
+    assert!(!fx.repo().join(".spelaion/tunnels/bastion-eu.toml").exists());
+
+    // Editing a tunnel: its file goes back to what it was.
+    let keeps = FakeBackend::default();
+    add_tunnel(&config, &tunnel, &TunnelPasswords::default(), &keeps).unwrap();
+    let tunnel_path = fx.repo().join(".spelaion/tunnels/bastion-eu.toml");
+    let before = std::fs::read_to_string(&tunnel_path).unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let mut edited = tunnel.clone();
+    edited.hops[1].host = "10.0.0.6".into();
+    assert_not_kept(
+        update_tunnel(
+            &config,
+            Source::Workspace,
+            "bastion-eu",
+            &edited,
+            &vec![None, Some(Secret::new("hop-secret"))].into(),
+            &drops,
+        ),
+        "hop-secret",
+    );
+    assert_eq!(std::fs::read_to_string(&tunnel_path).unwrap(), before);
+
+    // Remembering the password typed when connecting.
+    fx.write(
+        "repo/.spelaion/connections/db.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\npassword = { secret = \"keychain\" }\n",
+    );
+    let config = load(Some(&fx.repo()), &fx.user());
+    let trust = fx.trusted();
+    let resolver = Resolver::new(&config, &trust, &drops);
+    let Password::Prompt {
+        save_to: Some(account),
+    } = resolver.resolve(&ws("db")).unwrap().password
+    else {
+        panic!("nothing stored: it must ask")
+    };
+    assert_not_kept(
+        resolver.remember_password(&account, &Secret::new("typed-at-connect")),
+        "typed-at-connect",
+    );
+    assert!(drops.keychain.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_editor_is_told_whether_a_password_is_stored_never_its_value() {
+    let fx = Fixture::new("password-stored");
+    let backend = FakeBackend::default();
+    let config = with_password(&fx, "keychain");
+    let entry = config.connection(&ws("db")).unwrap();
+    assert!(!connection_password_stored(&config, entry, &backend));
+    backend
+        .keychain_set(&repo_account(&fx, "db"), "stored")
+        .unwrap();
+    assert!(connection_password_stored(&config, entry, &backend));
+    // A keychain that cannot be read, or none at all, holds nothing the form can keep.
+    let locked = FakeBackend {
+        locked_read: true,
+        ..FakeBackend::default()
+    };
+    assert!(!connection_password_stored(&config, entry, &locked));
+    let none = FakeBackend {
+        no_keychain: true,
+        ..FakeBackend::default()
+    };
+    assert!(!connection_password_stored(&config, entry, &none));
+    // Another kind of reference has no keychain entry to keep, whatever is stored.
+    let config = with_password(&fx, "prompt");
+    let entry = config.connection(&ws("db")).unwrap();
+    assert!(!connection_password_stored(&config, entry, &backend));
+
+    // Tunnels: per hop and for the proxy.
+    let mut tunnel = two_hop_tunnel();
+    tunnel.proxy = Some(proxy_draft("proxy.example.com"));
+    add_tunnel(
+        &config,
+        &tunnel,
+        &vec![None, Some(Secret::new("hop-secret"))].into(),
+        &backend,
+    )
+    .unwrap();
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.tunnel_for(Source::Workspace, "bastion-eu").unwrap();
+    let stored = tunnel_passwords_stored(&config, entry, &backend);
+    assert_eq!(stored.hops, vec![false, true]);
+    assert!(!stored.proxy);
+    backend
+        .keychain_set(
+            &proxy_account(&config, Source::Workspace, "bastion-eu"),
+            "proxy-secret",
+        )
+        .unwrap();
+    assert!(tunnel_passwords_stored(&config, entry, &backend).proxy);
+    assert_eq!(
+        tunnel_passwords_stored(&config, entry, &locked),
+        spelaion_config::StoredTunnelPasswords {
+            hops: vec![false, false],
+            proxy: false,
+        }
+    );
+}
+
+/// Saving from the form against the system's real keychain: the password is there
+/// afterwards and the editor is told so. Not run by default, like
+/// `system_keychain_round_trip`; on Linux run it inside a D-Bus session of its own with a
+/// test Secret Service, never against the user's keyring.
+#[test]
+#[ignore]
+fn system_keychain_keeps_a_password_saved_from_the_form() {
+    let fx = Fixture::new("system-keychain-form");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let draft = ConnectionDraft {
+        source: Source::User,
+        name: format!("selftest-{}", std::process::id()),
+        ..postgres_draft()
+    };
+    let id = add_connection(
+        &config,
+        &draft,
+        Some(&Secret::new("saved-from-the-form")),
+        &SystemBackend,
+    )
+    .expect("saving with the system keychain");
+    let config = load(Some(&fx.repo()), &fx.user());
+    let entry = config.connection(&id).unwrap();
+    let stored = connection_password_stored(&config, entry, &SystemBackend);
+    let read = SystemBackend.keychain_get(&connection_account(&config, &id));
+    delete_connection(&config, &id, &SystemBackend).expect("deleting it");
+    assert!(stored);
+    assert_eq!(read.unwrap().as_deref(), Some("saved-from-the-form"));
+    assert_eq!(
+        SystemBackend
+            .keychain_get(&connection_account(&config, &id))
+            .unwrap(),
+        None
     );
 }

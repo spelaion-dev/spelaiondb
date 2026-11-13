@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use spelaion_config::atomic_file::{AtomicWriter, NewFileMode};
 use spelaion_driver_api::{ColumnMeta, Dialect, LogicalType, Value};
 
 use crate::results::StoredResult;
@@ -428,6 +429,53 @@ pub fn write_result(
     writer.finish(out)
 }
 
+/// A selection of `result` as clipboard text (the grid's copy). One cell copied as plain text
+/// (TSV without a header) is its value exactly: no quotes and no line break after it, so pasted
+/// into a terminal it does not run and pasted into a search box or a form it does not submit.
+/// A line break that is part of the value is kept. Anything else is [`write_result`]'s text,
+/// byte for byte: rows (one row of several cells too) keep their final line break, which a
+/// spreadsheet expects when pasting rows.
+pub fn copy_text(
+    result: &StoredResult,
+    options: &ExportOptions,
+    dialect: &dyn Dialect,
+) -> io::Result<String> {
+    if let Some((value, numeric)) = single_cell(result, options) {
+        return Ok(match text(&value) {
+            None => options.csv.null_text.clone(),
+            Some(text) if options.csv.escape_formulas && !numeric => formula_escaped(&text),
+            Some(text) => text,
+        });
+    }
+    let mut out = Vec::new();
+    write_result(result, options, dialect, &mut out)?;
+    String::from_utf8(out).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// The value of the one cell `options` selects as plain text (TSV, no header), and whether its
+/// column is numeric; `None` for any other copy.
+fn single_cell(result: &StoredResult, options: &ExportOptions) -> Option<(Value, bool)> {
+    if options.format != ExportFormat::Tsv || options.header {
+        return None;
+    }
+    let schema = result.schema();
+    let columns: Vec<usize> = options
+        .columns
+        .iter()
+        .copied()
+        .filter(|&c| c < schema.columns.len())
+        .collect();
+    let rows = options.rows.start.min(result.rows())..options.rows.end.min(result.rows());
+    let ([column], 1) = (columns.as_slice(), rows.len()) else {
+        return None;
+    };
+    let logical = schema.columns[*column].logical;
+    let batch = result.window(rows.start, 1).into_iter().next()?;
+    let value =
+        Value::from_array(batch.column(*column).as_ref(), 0, logical).unwrap_or(Value::Null);
+    Some((value, is_numeric(logical)))
+}
+
 /// What writing a file did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FileSummary {
@@ -465,76 +513,50 @@ pub fn export_to_file(
 
 /// A file written as `<path>.part` and renamed to `path` only when complete (ADR-034): an
 /// error, a cancel or a crash never leaves a partial file under the final name, and whatever
-/// was at `path` stays until the new file is whole. Dropped without [`PartFile::commit`], it
-/// deletes the temporary file.
+/// was at `path` stays until the new file is whole. It is `spelaion-config`'s
+/// [`AtomicWriter`]: the `.part` file sits beside the file a symbolic link points to (the link
+/// stays a link), the old file's mode is kept, and a second export to the same path writes
+/// `<path>.<pid>-<n>.part` instead of sharing the first one's. Dropped without
+/// [`PartFile::commit`], it deletes the temporary file.
 pub(crate) struct PartFile {
-    path: PathBuf,
-    temporary: PathBuf,
-    out: Option<Encoder<io::BufWriter<std::fs::File>>>,
+    out: Encoder<io::BufWriter<AtomicWriter>>,
 }
 
 impl PartFile {
     pub(crate) fn create(path: &Path, encoding: TextEncoding) -> io::Result<Self> {
-        let temporary = part_path(path);
-        let file = std::fs::File::create(&temporary)?;
+        let file = AtomicWriter::create_with_suffix(path, ".part", NewFileMode::Default)?;
         let mut part = Self {
-            path: path.to_path_buf(),
-            temporary,
-            out: Some(Encoder::new(
-                io::BufWriter::with_capacity(1 << 20, file),
-                encoding,
-            )),
+            out: Encoder::new(io::BufWriter::with_capacity(1 << 20, file), encoding),
         };
-        if let Err(e) = part.writer().write_bom() {
-            part.discard();
-            return Err(e);
-        }
+        // On an error `part` is dropped, which deletes the temporary file.
+        part.writer().write_bom()?;
         Ok(part)
     }
 
-    pub(crate) fn writer(&mut self) -> &mut Encoder<io::BufWriter<std::fs::File>> {
-        self.out
-            .as_mut()
-            .expect("the file is open until commit or discard")
+    pub(crate) fn writer(&mut self) -> &mut Encoder<io::BufWriter<AtomicWriter>> {
+        &mut self.out
     }
 
     /// Flushes, renames to the final name and says what was written.
-    pub(crate) fn commit(mut self, rows: u64) -> io::Result<FileSummary> {
-        let mut out = self.out.take().expect("the file is open until commit");
-        let finished = (|| {
-            out.flush()?;
-            let summary = FileSummary {
-                rows,
-                bytes: out.bytes(),
-                replaced: out.replaced(),
-                peak_rows: 0,
-            };
-            out.into_inner().into_inner().map_err(|e| e.into_error())?;
-            std::fs::rename(&self.temporary, &self.path)?;
-            Ok(summary)
-        })();
-        if finished.is_err() {
-            let _ = std::fs::remove_file(&self.temporary);
-        }
-        finished
+    pub(crate) fn commit(self, rows: u64) -> io::Result<FileSummary> {
+        let mut out = self.out;
+        out.flush()?;
+        let summary = FileSummary {
+            rows,
+            bytes: out.bytes(),
+            replaced: out.replaced(),
+            peak_rows: 0,
+        };
+        out.into_inner()
+            .into_inner()
+            .map_err(|e| e.into_error())?
+            .commit()?;
+        Ok(summary)
     }
 
     /// Deletes the temporary file.
-    pub(crate) fn discard(mut self) {
-        self.close_and_remove();
-    }
-
-    fn close_and_remove(&mut self) {
-        if let Some(out) = self.out.take() {
-            drop(out);
-            let _ = std::fs::remove_file(&self.temporary);
-        }
-    }
-}
-
-impl Drop for PartFile {
-    fn drop(&mut self) {
-        self.close_and_remove();
+    pub(crate) fn discard(self) {
+        drop(self);
     }
 }
 
@@ -957,15 +979,20 @@ fn json_is_valid(text: &str) -> bool {
 }
 
 /// A literal for `INSERT`, following the engine (`dialect` is the [`Dialect::name`]).
+///
+/// MySQL and MariaDB read a `\` in a string as an escape, unless the `sql_mode` has
+/// `NO_BACKSLASH_ESCAPES` (SDB-161), and the session the literal runs on (or the server an
+/// exported file is loaded into) may have either. A string that holds a backslash is written
+/// as its UTF-8 bytes with a character set introducer, `_utf8mb4 X'…'`: a string in every mode,
+/// compared with the column's collation like any literal. Strings without one keep `'…'`,
+/// which both modes read the same.
 pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
     let quoted = |text: &str| {
+        if dialect == "mysql" && text.contains('\\') {
+            let hex: String = text.bytes().map(|b| format!("{b:02X}")).collect();
+            return format!("_utf8mb4 X'{hex}'");
+        }
         let text = text.replace('\'', "''");
-        // MySQL treats `\` as an escape inside strings (default `sql_mode`).
-        let text = if dialect == "mysql" {
-            text.replace('\\', "\\\\")
-        } else {
-            text
-        };
         // SQL Server: `N'…'` keeps every character (plain `'…'` goes through a code page).
         if dialect == "sqlserver" {
             format!("N'{text}'")
@@ -990,8 +1017,33 @@ pub(crate) fn sql_literal(value: &Value, dialect: &str) -> String {
                 _ => format!("X'{hex}'"),
             }
         }
+        Value::Date(_) | Value::Timestamp(_) | Value::TimestampTz(_) if dialect == "sqlserver" => {
+            tsql_date_literal(value).unwrap_or_else(|| quoted(&value.to_string()))
+        }
         other => quoted(&other.to_string()),
     }
+}
+
+/// A SQL Server date or time literal that means the same under every language (SDB-123).
+/// `'YYYY-MM-DD hh:mm:ss'` is read by the session's DATEFORMAT for `datetime` and
+/// `smalldatetime` (the 4th of March is the 3rd of April under `dmy`), and a `datetimeoffset`
+/// needs `+hh:mm`. ISO 8601 with `T` (`'2024-03-04T10:00:00.5'`, `+00:00` for a time zone) and
+/// an unseparated date (`'20240304'`) are read alike by every type and language. `None` for
+/// what SQL Server never has (infinity, BC): the generic text.
+fn tsql_date_literal(value: &Value) -> Option<String> {
+    let text = value.to_string();
+    if text.contains("infinity") || text.ends_with(" BC") {
+        return None;
+    }
+    let iso = match value {
+        Value::Date(_) => text.replace('-', ""),
+        Value::Timestamp(_) => text.replacen(' ', "T", 1),
+        Value::TimestampTz(_) => {
+            format!("{}+00:00", text.strip_suffix("+00")?.replacen(' ', "T", 1))
+        }
+        _ => return None,
+    };
+    Some(format!("'{iso}'"))
 }
 
 #[cfg(test)]
@@ -1029,6 +1081,7 @@ mod tests {
             logical,
             native_type: logical.as_str().into(),
             native_id: None,
+            origin: None,
         };
         let schema = Arc::new(ResultSchema::new(vec![
             meta("id", LogicalType::Int),
@@ -1101,6 +1154,203 @@ mod tests {
         )
         .unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    /// A text column and a number column, one row per pair.
+    fn copy_sample(rows: &[(Option<&str>, Option<i64>)]) -> Arc<std::sync::RwLock<StoredResult>> {
+        let meta = |name: &str, logical| ColumnMeta {
+            name: name.into(),
+            logical,
+            native_type: logical.as_str().into(),
+            native_id: None,
+            origin: None,
+        };
+        let schema = Arc::new(ResultSchema::new(vec![
+            meta("value", LogicalType::Text),
+            meta("n", LogicalType::Int),
+        ]));
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(
+                rows.iter().map(|(text, _)| *text).collect::<Vec<_>>(),
+            )),
+            Arc::new(Int64Array::from(
+                rows.iter().map(|(_, n)| *n).collect::<Vec<_>>(),
+            )),
+        ];
+        let store = ResultStore::new();
+        let id = store.create(schema.clone());
+        store
+            .append(
+                id,
+                RecordBatch::try_new(schema.arrow.clone(), columns).unwrap(),
+            )
+            .unwrap();
+        store.get(id).unwrap()
+    }
+
+    fn copy(
+        result: &StoredResult,
+        format: ExportFormat,
+        rows: Range<usize>,
+        columns: Vec<usize>,
+        header: bool,
+        csv: CsvOptions,
+    ) -> String {
+        let options = ExportOptions {
+            format,
+            rows,
+            columns,
+            header,
+            csv,
+        };
+        copy_text(result, &options, &Quoted("postgres")).unwrap()
+    }
+
+    /// What `write_result` writes for the same options: today's copy, byte for byte.
+    fn written(
+        result: &StoredResult,
+        format: ExportFormat,
+        rows: Range<usize>,
+        columns: Vec<usize>,
+        header: bool,
+    ) -> String {
+        let mut out = Vec::new();
+        let options = ExportOptions {
+            format,
+            rows,
+            columns,
+            header,
+            csv: CsvOptions::default(),
+        };
+        write_result(result, &options, &Quoted("postgres"), &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    const COPY_VALUES: [(Option<&str>, Option<i64>); 6] = [
+        (Some("plain"), Some(1)),
+        (Some("ends with a line break\n"), Some(-2)),
+        (Some("windows line\r\n"), None),
+        (Some("tab\tand \"quote\", comma\nsecond line"), Some(4)),
+        (None, Some(5)),
+        (Some("=1+1"), Some(6)),
+    ];
+
+    #[test]
+    fn one_cell_copies_as_its_value_alone() {
+        let result = copy_sample(&COPY_VALUES);
+        let result = result.read().unwrap();
+        let one = |row: usize, column: usize| {
+            copy(
+                &result,
+                ExportFormat::Tsv,
+                row..row + 1,
+                vec![column],
+                false,
+                CsvOptions::default(),
+            )
+        };
+        // No line break after it, no quotes around it.
+        assert_eq!(one(0, 0), "plain");
+        assert_eq!(one(0, 1), "1");
+        assert_eq!(one(1, 1), "-2");
+        // A line break that is part of the value stays, Windows' too.
+        assert_eq!(one(1, 0), "ends with a line break\n");
+        assert_eq!(one(2, 0), "windows line\r\n");
+        assert_eq!(one(3, 0), "tab\tand \"quote\", comma\nsecond line");
+        // NULL is the null text (empty by default), and nothing else.
+        assert_eq!(one(4, 0), "");
+        assert_eq!(one(2, 1), "");
+        assert_eq!(one(5, 0), "=1+1");
+        // A hidden column left out of the selection, a row past the end: still one cell.
+        let hidden = copy(
+            &result,
+            ExportFormat::Tsv,
+            0..1,
+            vec![1, 99],
+            false,
+            CsvOptions::default(),
+        );
+        assert_eq!(hidden, "1");
+        let past_end = copy(
+            &result,
+            ExportFormat::Tsv,
+            5..9,
+            vec![0],
+            false,
+            CsvOptions::default(),
+        );
+        assert_eq!(past_end, "=1+1");
+        // The copy's own options still apply to its value.
+        let options = CsvOptions {
+            null_text: "NULL".into(),
+            escape_formulas: true,
+            ..CsvOptions::default()
+        };
+        let with = |row: usize, column: usize| {
+            copy(
+                &result,
+                ExportFormat::Tsv,
+                row..row + 1,
+                vec![column],
+                false,
+                options.clone(),
+            )
+        };
+        assert_eq!(with(4, 0), "NULL");
+        assert_eq!(with(5, 0), "'=1+1");
+        assert_eq!(with(1, 1), "-2");
+    }
+
+    #[test]
+    fn every_other_copy_is_written_as_before_byte_for_byte() {
+        let result = copy_sample(&COPY_VALUES);
+        let result = result.read().unwrap();
+        let same = |format: ExportFormat, rows: Range<usize>, columns: Vec<usize>, header: bool| {
+            let copied = copy(
+                &result,
+                format.clone(),
+                rows.clone(),
+                columns.clone(),
+                header,
+                CsvOptions::default(),
+            );
+            assert_eq!(copied, written(&result, format, rows, columns, header));
+            copied
+        };
+        // Two rows of one column: each row ends in its line break, quoted values stay quoted.
+        assert_eq!(
+            same(ExportFormat::Tsv, 0..2, vec![0], false),
+            "plain\n\"ends with a line break\n\"\n"
+        );
+        // One row of several cells keeps its final line break (spreadsheets paste rows so).
+        assert_eq!(
+            same(ExportFormat::Tsv, 0..1, vec![0, 1], false),
+            "plain\t1\n"
+        );
+        // One cell with its column's name is a header and a row.
+        assert_eq!(
+            same(ExportFormat::Tsv, 0..1, vec![0], true),
+            "value\nplain\n"
+        );
+        // Other formats keep theirs, CSV's Windows line endings included.
+        assert_eq!(same(ExportFormat::Csv, 0..1, vec![0], false), "plain\r\n");
+        assert_eq!(
+            same(ExportFormat::Csv, 0..2, vec![0, 1], false),
+            "plain,1\r\n\"ends with a line break\n\",-2\r\n"
+        );
+        same(ExportFormat::Json, 0..1, vec![0], false);
+        same(ExportFormat::Markdown, 0..1, vec![0], false);
+        same(ExportFormat::Html, 0..1, vec![0], false);
+        same(ExportFormat::InList, 0..1, vec![0], false);
+        same(
+            ExportFormat::SqlInsertBatch { table: "t".into() },
+            0..1,
+            vec![0],
+            false,
+        );
+        // Nothing selected is nothing.
+        assert_eq!(same(ExportFormat::Tsv, 9..12, vec![0], false), "");
+        assert_eq!(same(ExportFormat::Tsv, 0..1, vec![99], false), "\n");
     }
 
     #[test]
@@ -1222,7 +1472,9 @@ mod tests {
         let mysql = render(table(), 2..3, 0..2, false, "mysql");
         assert_eq!(
             mysql,
-            "INSERT INTO `items` (`id`, `name`) VALUES (NULL, 'it''s \\\\ x');\n"
+            // `it's \ x` holds a backslash: bytes with an introducer, read alike in every
+            // sql_mode (SDB-161).
+            "INSERT INTO `items` (`id`, `name`) VALUES (NULL, _utf8mb4 X'69742773205C2078');\n"
         );
         let sqlite = render(table(), 0..1, 5..6, false, "sqlite");
         assert_eq!(
@@ -1238,7 +1490,7 @@ mod tests {
         };
         assert_eq!(
             render(batch(), 0..3, 0..2, false, "mysql"),
-            "INSERT INTO `items` (`id`, `name`) VALUES (1, 'plain'),\n  (2, 'a,b \"q\"\tc\nd'),\n  (NULL, 'it''s \\\\ x');\n"
+            "INSERT INTO `items` (`id`, `name`) VALUES (1, 'plain'),\n  (2, 'a,b \"q\"\tc\nd'),\n  (NULL, _utf8mb4 X'69742773205C2078');\n"
         );
         assert_eq!(
             render(batch(), 0..1, 5..6, false, "sqlite"),
@@ -1255,6 +1507,7 @@ mod tests {
             logical: LogicalType::Int,
             native_type: "int".into(),
             native_id: None,
+            origin: None,
         }]));
         let store = ResultStore::new();
         let id = store.create(schema.clone());
@@ -1314,6 +1567,7 @@ mod tests {
             logical: LogicalType::Int,
             native_type: "integer".into(),
             native_id: None,
+            origin: None,
         }]));
         let store = ResultStore::new();
         let id = store.create(schema.clone());
@@ -1429,7 +1683,7 @@ mod tests {
         );
         assert_eq!(
             column_in_list(&result, 1, &Quoted("mysql")),
-            Ok("('plain', 'a,b \"q\"\tc\nd', 'it''s \\\\ x')".into())
+            Ok("('plain', 'a,b \"q\"\tc\nd', _utf8mb4 X'69742773205C2078')".into())
         );
         assert_eq!(
             column_in_list(&result, 3, &Quoted("sqlserver")),
@@ -1446,6 +1700,7 @@ mod tests {
             logical: LogicalType::Int,
             native_type: "int8".into(),
             native_id: None,
+            origin: None,
         }]));
         let store = ResultStore::new();
         let id = store.create(schema.clone());
@@ -1534,6 +1789,58 @@ mod tests {
             .is_err()
         );
         assert!(!missing.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_export_keeps_the_files_mode_and_writes_through_a_link() {
+        let result = sample();
+        let result = result.read().unwrap();
+        let options = ExportOptions {
+            format: ExportFormat::Csv,
+            rows: 0..usize::MAX,
+            columns: vec![0, 1],
+            header: true,
+            csv: CsvOptions::default(),
+        };
+        crate::test_files::assert_keeps_mode_and_links("data", |path| {
+            export_to_file(
+                &result,
+                &options,
+                TextEncoding::Utf8,
+                &Quoted("postgres"),
+                path,
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn two_file_exports_to_one_path_never_share_the_part_file() {
+        let dir =
+            std::env::temp_dir().join(format!("spelaion-export-parts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out.csv");
+        let mut first = PartFile::create(&path, TextEncoding::Utf8).unwrap();
+        let mut second = PartFile::create(&path, TextEncoding::Utf8).unwrap();
+        assert!(
+            dir.join("out.csv.part").exists(),
+            "the first is <name>.part (ADR-034)"
+        );
+        first.writer().write_all(b"first").unwrap();
+        second.writer().write_all(b"second").unwrap();
+        first.commit(1).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+        second.commit(1).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        // A cancelled one leaves nothing and the file as it was.
+        let mut cancelled = PartFile::create(&path, TextEncoding::Utf8).unwrap();
+        cancelled.writer().write_all(b"partial").unwrap();
+        cancelled.discard();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1642,6 +1949,7 @@ mod tests {
             logical,
             native_type: logical.as_str().into(),
             native_id: None,
+            origin: None,
         };
         let schema = Arc::new(ResultSchema::new(vec![
             meta("=total", LogicalType::Text),
@@ -1791,5 +2099,38 @@ mod tests {
         assert!(refused.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sqlserver_date_literals_do_not_depend_on_the_language() {
+        // 2024-03-04 and 2024-03-04 10:00:00.5 (days since 1970, microseconds).
+        let day = 19_786;
+        let micros = i64::from(day) * 86_400_000_000 + 36_000_500_000;
+        assert_eq!(sql_literal(&Value::Date(day), "sqlserver"), "'20240304'");
+        assert_eq!(
+            sql_literal(&Value::Timestamp(micros), "sqlserver"),
+            "'2024-03-04T10:00:00.5'"
+        );
+        assert_eq!(
+            sql_literal(&Value::TimestampTz(micros), "sqlserver"),
+            "'2024-03-04T10:00:00.5+00:00'"
+        );
+        // What SQL Server never has keeps the generic text; other engines are unchanged.
+        assert_eq!(
+            sql_literal(
+                // i64::MAX is the driver API's infinity.
+                &Value::Timestamp(i64::MAX),
+                "sqlserver"
+            ),
+            "N'infinity'"
+        );
+        assert_eq!(
+            sql_literal(&Value::Timestamp(micros), "postgres"),
+            "'2024-03-04 10:00:00.5'"
+        );
+        assert_eq!(
+            sql_literal(&Value::TimestampTz(micros), "mysql"),
+            "'2024-03-04 10:00:00.5+00'"
+        );
     }
 }
