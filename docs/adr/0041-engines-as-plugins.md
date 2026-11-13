@@ -1,7 +1,8 @@
 # ADR-041: Engines as plugins: every driver in its own process, behind the same contract
 
 - **Status:** Accepted (not implemented: the stages below are the plan; where our plugins
-  are built and how they are checked is superseded by ADR-042)
+  are built and how they are checked is superseded by ADR-042; how our plugins are found,
+  installed and updated, by ADR-055)
 - **Date:** 2026-11-10
 - **Supersedes:** the "Extensibility" part of ADR-005 (the rest of ADR-005 stands)
 - **Builds on:** ADR-002 (security lives in the core), ADR-004 (no daemon), ADR-005 (driver
@@ -91,6 +92,9 @@ do today. New engines are only written as plugins.**
      name or point to a plugin. Its manifest names one of the core's dialects, or none.
      **Agents get nothing on it and read-only mode is not offered** (not a weaker one): the
      barrier ADR-020 asks of each engine is not ours to vouch for. No registry or marketplace.
+     (Amended by ADR-055: the app has a Plugins page fed by a signed catalogue of our own
+     plugins. Other people's are never in it and are still added only by the user, from a
+     file or from an address typed into that page; the app says they are not ours to support.)
 6. **SQLite on a server stays in the core** (ADR-018). It talks to the server's own `sqlite3`
    through a channel of the core's tunnel, which cannot be handed to another process, and it
    does not use the SQLite library. It is the one driver that is not a plugin.

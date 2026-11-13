@@ -1,6 +1,8 @@
 # ADR-042: Our plugins live in their own repositories, pinned by this one
 
-- **Status:** Accepted (not implemented: it changes how ADR-041's stages are carried out)
+- **Status:** Accepted (not implemented: it changes how ADR-041's stages are carried out;
+  amended by ADR-055: what the app downloads is pinned by a signed catalogue, so a plugin fix no
+  longer waits for an app release)
 - **Date:** 2026-11-10
 - **Supersedes:** in ADR-041, "built from this repository" and "always the same build as the
   core" (point 5, "Ours") and the check of downloaded engines against the update key; in
@@ -55,6 +57,9 @@ hash, the exact plugin builds it ships and tests.**
      accepted only with the pinned hash. So the update key (ADR-021) stays in this repository
      only: a plugin's repository holds no secret.
    - A plugin fix reaches users with the app release that moves its pin, never by itself.
+     (Superseded by ADR-055: the pins of what is downloaded come from a signed catalogue, and an
+     entry of ours enters it only once it is pinned here. What goes inside the installers stays
+     pinned in the app.)
 5. **The gate of ADR-041 is the pull request that moves the pin.** Migrating an engine is one
    pull request here: it pins the plugin and removes the built-in driver. Its CI is the gate's
    part (a), the tests passing through the plugin; its description carries (b), the measured
