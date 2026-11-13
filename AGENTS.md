@@ -98,6 +98,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   one check, which the catalogue's plugins and a user's own will use with their own hash
   (ADR-055). Like `trust.rs`, any change there needs tests that try to get around it
   (`crates/spelaion-test-plugin/tests/pins.rs`).
+  `crates/spelaion-plugin-fetch` (`spelaion-fetch-plugins`, never shipped) is how the pinned
+  builds get here, for CI, the release and a developer: it downloads each pinned release from
+  its plugin's repository and lets a program into the folder it is given only if the archive
+  has the pinned size and SHA-256, holds the program at its top and that program has the
+  pinned SHA-256; then it prints the `SPELAION_DEV_PLUGIN_<ENGINE>` lines that send the tests
+  through them. No secret, and no new dependency (`curl` and `tar`). Any change there needs
+  tests that try to get around it (`tests/fetch.rs`).
   Until an engine's driver moves to its own repository, its crate here also builds its plugin
   program (`src/bin/spelaion-plugin-<engine>.rs`; MySQL's serves MariaDB too), and
   `scripts/measure-plugins.sh` measures ADR-041's gate (a million-row result and a million-row
