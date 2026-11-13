@@ -184,6 +184,12 @@ jobs:
       # Build the tests first: the services are only needed to run them.
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --workspace --locked --no-run
+      # The engines that are plugins (ADR-042): this repository never compiles one. The builds
+      # plugins.toml pins are downloaded and let in only with the pinned hashes, and the
+      # tests run through them. With nothing pinned this fetches nothing.
+      - name: Fetch the pinned plugins
+        if: steps.scope.outputs.rust != 'false'
+        run: cargo run -q --locked -p spelaion-plugin-fetch -- --into target/plugins >> "$GITHUB_ENV"
       - name: Wait for the test services
         if: steps.scope.outputs.rust != 'false'
         run: |
@@ -261,6 +267,13 @@ jobs:
         run: rm -rf target/duckdb-sources
       - if: steps.scope.outputs.rust != 'false'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The engines that are plugins (ADR-042): this repository never compiles one. The builds
+      # plugins.toml pins are downloaded and let in only with the pinned hashes, and the
+      # tests run through them. With nothing pinned this fetches nothing.
+      - name: Fetch the pinned plugins
+        if: steps.scope.outputs.rust != 'false'
+        shell: bash
+        run: cargo run -q --locked -p spelaion-plugin-fetch -- --into target/plugins >> "$GITHUB_ENV"
       - if: steps.scope.outputs.rust != 'false'
         run: cargo test --workspace --locked
 
