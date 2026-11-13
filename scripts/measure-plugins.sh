@@ -27,7 +27,7 @@ cd "$root"
 export CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true
 
 runs=${RUNS:-3}
-engines=${SPELAION_PLUGIN_ENGINES:-"postgres mysql mariadb sqlserver sqlite"}
+engines=${SPELAION_PLUGIN_ENGINES:-"postgres mysql mariadb sqlite"}
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 

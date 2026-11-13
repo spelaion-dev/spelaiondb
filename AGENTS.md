@@ -132,14 +132,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `spelaion-ssh::Tunnel::exec`): it must never let a dot-command or an incomplete statement
   reach the shell. Catalog queries are shared in `catalog.rs`. Tests against
   `testing/docker/sqlitehost` with `SPELAION_TEST_SSH`.
-- `crates/spelaion-driver-sqlserver`: `tiberius` over rustls, one actor task per connection
-  (ADR-017). Its dialect, with the T-SQL batch splitting, is `spelaion-dialect`'s
-  `sqlserver.rs`; a batch may return several result sets. Cancel is a TDS Attention through a patched tiberius in
-  `vendor/tiberius` (read its `PATCHED.md` before upgrading). Tests against the Docker SQL
-  Server with `SPELAION_TEST_MSSQL=127.0.0.1:11433`. `datetime2`, `datetimeoffset` and `time` are
-  text with their native type, exactly as the server writes them (100 ns and the value's own
-  offset; ADR-005 and ADR-006, 2026-11-12 notes): `temporal.rs` reads them as dates, and sorts
-  a `datetimeoffset` by its instant.
+- **SQL Server is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives
+  in `spelaion-dev/spelaiondb-plugin-sqlserver` with its tests and the patched `tiberius` it
+  needs for cancel (a TDS Attention), and this repository pins the release it ships
+  (`plugins.toml`). T-SQL batches are still split here (`spelaion-dialect`'s `sqlserver.rs`):
+  the plugin receives each batch as one statement and may return several result sets. Here,
+  its tests run through that plugin, unchanged, with `SPELAION_TEST_MSSQL=127.0.0.1:11433`:
+  the pinned build next to the program, or, in a development build, the one
+  `SPELAION_DEV_PLUGIN_SQLSERVER` points at.
 - **DuckDB is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives in
   `spelaion-dev/spelaiondb-plugin-duckdb` with its type zoo, and this repository pins the
   release it ships (`plugins.toml`). The core does not compile DuckDB. Here, DuckDB's tests

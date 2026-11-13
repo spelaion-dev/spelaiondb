@@ -16,7 +16,6 @@ spelaion-plugin-host.workspace = true
 spelaion-driver-mysql.workspace = true
 spelaion-driver-postgres.workspace = true
 spelaion-driver-sqlite.workspace = true
-spelaion-driver-sqlserver.workspace = true
 spelaion-ssh.workspace = true
 spelaion-store.workspace = true
 arrow.workspace = true
