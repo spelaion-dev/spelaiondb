@@ -226,7 +226,7 @@ fn split(script: &str) -> Vec<StatementSpan> {
 
 /// A `COPY` whose data goes through the connection, apart from the statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CopyStdio {
+pub enum CopyStdio {
     /// `COPY … FROM STDIN`: the client sends the rows.
     FromStdin,
     /// `COPY … TO STDOUT`: the client reads them.
@@ -236,7 +236,7 @@ pub(crate) enum CopyStdio {
 /// Whether `sql` is a `COPY … FROM STDIN` or `COPY … TO STDOUT`: its first word is `COPY` and,
 /// outside quotes, comments, `$tag$` bodies and parentheses (a query or a column list),
 /// `FROM STDIN` or `TO STDOUT` follow. `COPY … FROM` / `TO` a file or a `PROGRAM` is neither.
-pub(crate) fn copy_stdio(sql: &str) -> Option<CopyStdio> {
+pub fn copy_stdio(sql: &str) -> Option<CopyStdio> {
     let b = sql.as_bytes();
     let mut words: Vec<String> = Vec::new();
     let mut parens = 0usize;

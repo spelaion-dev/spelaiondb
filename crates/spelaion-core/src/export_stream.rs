@@ -708,8 +708,8 @@ mod tests {
 
     #[test]
     fn only_single_reads_pass() {
-        use spelaion_driver_postgres::PostgresDialect;
-        use spelaion_driver_sqlserver::SqlServerDialect;
+        use spelaion_dialect::PostgresDialect;
+        use spelaion_dialect::SqlServerDialect;
         let pg = PostgresDialect;
         assert_eq!(checked_read(&pg, " select 1 ; ").unwrap(), "select 1");
         for sql in [
@@ -752,7 +752,7 @@ mod tests {
         ] {
             assert!(checked_read(&mssql, sql).is_err(), "T-SQL: {sql}");
         }
-        use spelaion_driver_mysql::MysqlDialect;
+        use spelaion_dialect::MysqlDialect;
         let mysql = MysqlDialect;
         for sql in [
             "select * from t /*!50000 into outfile '/tmp/x' */",
@@ -763,7 +763,7 @@ mod tests {
         ] {
             assert!(checked_read(&mysql, sql).is_err(), "MySQL: {sql}");
         }
-        use spelaion_driver_duckdb::DuckdbDialect;
+        use spelaion_dialect::DuckdbDialect;
         for sql in [
             "copy t to 'x.csv'",
             "select * from read_csv('x.csv')",
@@ -772,7 +772,7 @@ mod tests {
         ] {
             assert!(checked_read(&DuckdbDialect, sql).is_err(), "DuckDB: {sql}");
         }
-        use spelaion_driver_sqlite::SqliteDialect;
+        use spelaion_dialect::SqliteDialect;
         for sql in [
             "select writefile('x', 'y')",
             "select load_extension('x')",

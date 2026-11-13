@@ -532,8 +532,8 @@ fn first_word(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_sqlite::SqliteDialect;
-    use spelaion_driver_sqlserver::SqlServerDialect;
+    use spelaion_dialect::SqlServerDialect;
+    use spelaion_dialect::SqliteDialect;
 
     const NONE: Safeguards = Safeguards {
         confirm_execution: false,

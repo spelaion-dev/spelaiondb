@@ -7,7 +7,7 @@
 
 mod ddl;
 mod decode;
-mod dialect;
+use spelaion_dialect::sqlserver as dialect;
 mod introspect;
 mod objects;
 mod plan;

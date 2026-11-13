@@ -18,7 +18,7 @@ use spelaion_driver_api::TransactionState;
 use crate::classify::classify_session_setup;
 use crate::objects::{active_schema, set_active_schema};
 use crate::session::CoreEvent;
-use crate::{Engines, Session, SessionHealth};
+use crate::{Session, SessionHealth};
 
 /// Why a session could not start as its connection says.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -116,10 +116,9 @@ pub fn check_file_setup(file: &ConnectionFile, safeguards: &Safeguards) -> Resul
     let Some(setup) = &file.session.setup else {
         return Ok(());
     };
-    let Some(driver) = Engines::builtin().get(file.engine) else {
+    let Some(dialect) = crate::dialect_of(file.engine) else {
         return Ok(());
     };
-    let dialect = driver.dialect();
     let restricted = file.read_only || safeguards.confirm_data_changes;
     check_session_setup(dialect.as_ref(), dialect.name(), setup, restricted).map(|_| ())
 }

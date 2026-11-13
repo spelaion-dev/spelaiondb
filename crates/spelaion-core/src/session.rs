@@ -1136,11 +1136,19 @@ mod tests {
         let mut out = vec![
             (
                 "sqlite",
-                session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+                session(
+                    crate::open::test_driver(spelaion_config::Engine::Sqlite).as_ref(),
+                    memory(),
+                )
+                .await,
             ),
             (
                 "duckdb",
-                session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+                session(
+                    crate::open::test_driver(spelaion_config::Engine::Duckdb).as_ref(),
+                    memory(),
+                )
+                .await,
             ),
         ];
         let server = |var: &str, user: &str, password: &str, database: &str| {
@@ -1159,30 +1167,38 @@ mod tests {
         if let Some(params) = server("SPELAION_TEST_PG", "spelaion", "spelaion", "spelaion") {
             out.push((
                 "postgres",
-                session(&spelaion_driver_postgres::PostgresDriver, params).await,
+                session(
+                    crate::open::test_driver(spelaion_config::Engine::Postgres).as_ref(),
+                    params,
+                )
+                .await,
             ));
         }
         for (name, var, driver) in [
             (
                 "mysql",
                 "SPELAION_TEST_MYSQL",
-                spelaion_driver_mysql::MysqlDriver::mysql(),
+                crate::open::test_driver(spelaion_config::Engine::Mysql),
             ),
             (
                 "mariadb",
                 "SPELAION_TEST_MARIADB",
-                spelaion_driver_mysql::MysqlDriver::mariadb(),
+                crate::open::test_driver(spelaion_config::Engine::Mariadb),
             ),
         ] {
             if let Some(params) = server(var, "spelaion", "spelaion", "spelaion") {
-                out.push((name, session(&driver, params).await));
+                out.push((name, session(driver.as_ref(), params).await));
             }
         }
         if let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1", "master") {
             params.tls = TlsMode::Require;
             out.push((
                 "sqlserver",
-                session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+                session(
+                    crate::open::test_driver(spelaion_config::Engine::Sqlserver).as_ref(),
+                    params,
+                )
+                .await,
             ));
         }
         out

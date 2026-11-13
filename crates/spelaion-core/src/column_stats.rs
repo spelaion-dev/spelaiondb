@@ -441,11 +441,11 @@ mod tests {
     /// The real dialect of each engine (its splitter and quoting).
     fn d(engine: &str) -> Box<dyn Dialect> {
         match engine {
-            "postgres" => Box::new(spelaion_driver_postgres::PostgresDialect),
-            "mysql" => Box::new(spelaion_driver_mysql::MysqlDialect),
-            "sqlserver" => Box::new(spelaion_driver_sqlserver::SqlServerDialect),
-            "duckdb" => Box::new(spelaion_driver_duckdb::DuckdbDialect),
-            _ => Box::new(spelaion_driver_sqlite::SqliteDialect),
+            "postgres" => Box::new(spelaion_dialect::PostgresDialect),
+            "mysql" => Box::new(spelaion_dialect::MysqlDialect),
+            "sqlserver" => Box::new(spelaion_dialect::SqlServerDialect),
+            "duckdb" => Box::new(spelaion_dialect::DuckdbDialect),
+            _ => Box::new(spelaion_dialect::SqliteDialect),
         }
     }
 
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn only_selects_pass_the_second_check() {
-        let sqlite = spelaion_driver_sqlite::SqliteDialect;
+        let sqlite = spelaion_dialect::SqliteDialect;
         assert!(checked(&sqlite, "SELECT 1").is_ok());
         assert!(checked(&sqlite, "SELECT 1; SELECT 2").is_err());
         assert!(checked(&sqlite, "DELETE FROM t").is_err());

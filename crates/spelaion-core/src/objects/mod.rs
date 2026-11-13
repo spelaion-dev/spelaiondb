@@ -1116,11 +1116,11 @@ fn drop_schema_object(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spelaion_driver_duckdb::DuckdbDialect;
-    use spelaion_driver_mysql::MysqlDialect;
-    use spelaion_driver_postgres::PostgresDialect;
-    use spelaion_driver_sqlite::SqliteDialect;
-    use spelaion_driver_sqlserver::SqlServerDialect;
+    use spelaion_dialect::DuckdbDialect;
+    use spelaion_dialect::MysqlDialect;
+    use spelaion_dialect::PostgresDialect;
+    use spelaion_dialect::SqlServerDialect;
+    use spelaion_dialect::SqliteDialect;
 
     #[test]
     fn added_checks_require_a_server_that_enforces_them() {

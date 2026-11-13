@@ -9,7 +9,7 @@ use spelaion_config::{
     ResolvedTunnel, SshAuth, TunnelPasswords,
 };
 use spelaion_driver_api::{
-    ConnectParams, Connection, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
+    ConnectParams, Connection, Dialect, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
     RemoteProcess, Secret,
 };
 use spelaion_driver_duckdb::DuckdbDriver;
@@ -48,9 +48,43 @@ impl Engines {
         }
     }
 
+    /// These engines with `driver` as the one for its engine, in place of any other: how a
+    /// driver that is not compiled in is used. It brings the wire only: the dialect stays the
+    /// core's ([`dialect_of`]), whatever `driver` reports as its own.
+    pub fn with_driver(mut self, driver: Arc<dyn Driver>) -> Self {
+        self.drivers.insert(driver.engine(), driver);
+        self
+    }
+
     pub fn get(&self, engine: Engine) -> Option<Arc<dyn Driver>> {
         self.drivers.get(engine.as_str()).cloned()
     }
+}
+
+/// An engine's dialect: the core's own, found by the engine's name and never asked of its
+/// driver (ADR-041). What splits, classifies and guards a statement reads SQL with it.
+pub fn dialect_of(engine: Engine) -> Option<Arc<dyn Dialect>> {
+    spelaion_dialect::for_engine(engine.as_str())
+}
+
+/// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file
+/// is never touched.
+pub fn create_file_database(engine: Engine, path: &std::path::Path) -> Result<(), DriverError> {
+    match engine {
+        Engine::Sqlite => spelaion_driver_sqlite::create_database(path),
+        Engine::Duckdb => spelaion_driver_duckdb::create_database(path),
+        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => Err(
+            DriverError::Other(format!("{} is not a file", engine.as_str())),
+        ),
+    }
+}
+
+/// A built-in engine's driver, for this crate's own tests: they name no driver crate.
+#[cfg(test)]
+pub(crate) fn test_driver(engine: Engine) -> Arc<dyn Driver> {
+    Engines::builtin()
+        .get(engine)
+        .expect("every engine of the configuration is built in")
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -273,6 +307,8 @@ pub async fn open_connection(
     let driver = engines
         .get(resolved.engine)
         .ok_or_else(|| OpenError::UnknownEngine(resolved.engine.as_str().into()))?;
+    let dialect = dialect_of(resolved.engine)
+        .ok_or_else(|| OpenError::UnknownEngine(resolved.engine.as_str().into()))?;
     if let Password::Prompt { save_to } = &resolved.password
         && options.password.is_none()
     {
@@ -292,7 +328,7 @@ pub async fn open_connection(
 
     let connection = connect_driver(driver.as_ref(), resolved.engine, &params).await?;
     // Every result of the session is masked as its connection says (ADR-051).
-    let session = Session::new(connection, driver.dialect(), results)
+    let session = Session::new(connection, dialect, results)
         .with_masking(crate::masking::MaskPolicy::new(&resolved.masking))
         // A read-only connection runs only reads, settings and transaction control (ADR-053).
         .with_read_only(resolved.params.read_only);

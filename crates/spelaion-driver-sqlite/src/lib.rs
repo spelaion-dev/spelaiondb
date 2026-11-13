@@ -5,7 +5,7 @@
 //! runtime.
 
 mod catalog;
-mod dialect;
+use spelaion_dialect::sqlite as dialect;
 mod exec;
 mod introspect;
 mod remote;

@@ -6,7 +6,7 @@
 
 mod ddl;
 mod decode;
-mod dialect;
+use spelaion_dialect::postgres as dialect;
 mod introspect;
 mod objects;
 mod tls;

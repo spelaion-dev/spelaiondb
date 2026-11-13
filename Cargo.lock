@@ -5835,6 +5835,7 @@ dependencies = [
  "sha2 0.10.9",
  "specta",
  "spelaion-config",
+ "spelaion-dialect",
  "spelaion-driver-api",
  "spelaion-driver-duckdb",
  "spelaion-driver-mysql",
@@ -5876,6 +5877,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "spelaion-dialect"
+version = "0.9.0"
+dependencies = [
+ "spelaion-driver-api",
+]
+
+[[package]]
 name = "spelaion-driver-api"
 version = "0.9.0"
 dependencies = [
@@ -5894,6 +5902,7 @@ dependencies = [
  "async-trait",
  "duckdb",
  "futures-util",
+ "spelaion-dialect",
  "spelaion-driver-api",
  "tokio",
 ]
@@ -5908,6 +5917,7 @@ dependencies = [
  "insta",
  "mysql_async",
  "rustls",
+ "spelaion-dialect",
  "spelaion-driver-api",
  "tokio",
 ]
@@ -5926,6 +5936,7 @@ dependencies = [
  "postgres-protocol",
  "rustls",
  "rustls-native-certs",
+ "spelaion-dialect",
  "spelaion-driver-api",
  "tokio",
  "tokio-postgres",
@@ -5941,6 +5952,7 @@ dependencies = [
  "futures-util",
  "insta",
  "rusqlite",
+ "spelaion-dialect",
  "spelaion-driver-api",
  "tokio",
 ]
@@ -5954,6 +5966,7 @@ dependencies = [
  "futures-util",
  "rustls",
  "socket2",
+ "spelaion-dialect",
  "spelaion-driver-api",
  "tiberius",
  "tokio",

@@ -12,6 +12,7 @@ publish = false
 
 [workspace.dependencies]
 spelaion-driver-api = { path = "crates/spelaion-driver-api" }
+spelaion-dialect = { path = "crates/spelaion-dialect" }
 spelaion-driver-postgres = { path = "crates/spelaion-driver-postgres" }
 spelaion-driver-sqlite = { path = "crates/spelaion-driver-sqlite" }
 spelaion-driver-mysql = { path = "crates/spelaion-driver-mysql" }
