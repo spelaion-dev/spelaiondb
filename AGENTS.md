@@ -91,6 +91,13 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `SPELAION_DEV_PLUGIN_<ENGINE>` points a development build at a plugin built on this machine;
   a release build ignores it (`dev_plugin`), and nothing in a setting or a repository file can
   name a plugin.
+  `plugins/pins.rs` holds the pins (ADR-042): `plugins.toml` at the root, compiled into the
+  core, names the builds of our plugins this repository tests and ships. Only a pinned program
+  next to the app is ever a plugin (`Engines::with_pinned_plugins`), and its SHA-256 is checked
+  every time its process is about to start (`check_file`, through the host's `with_check`): the
+  one check, which the catalogue's plugins and a user's own will use with their own hash
+  (ADR-055). Like `trust.rs`, any change there needs tests that try to get around it
+  (`crates/spelaion-test-plugin/tests/pins.rs`).
   Until an engine's driver moves to its own repository, its crate here also builds its plugin
   program (`src/bin/spelaion-plugin-<engine>.rs`; MySQL's serves MariaDB too), and
   `scripts/measure-plugins.sh` measures ADR-041's gate (a million-row result and a million-row

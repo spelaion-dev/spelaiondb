@@ -37,6 +37,10 @@ pub const REDACTED: &str = "***";
 /// Where the lines a plugin writes to its standard error go, secrets already taken out.
 pub type LogSink = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// What decides, each time a plugin's process is about to start, whether its file may be
+/// started (the core's pins, ADR-042). An error is why not: nothing is started then.
+pub type StartCheck = Arc<dyn Fn(&Path) -> std::result::Result<(), String> + Send + Sync>;
+
 /// An engine plugin: a program that is started when it is first needed and serves every
 /// session of its engines until this value is dropped.
 #[derive(Clone)]
@@ -47,6 +51,7 @@ pub struct Plugin {
 struct Inner {
     program: PathBuf,
     log: Option<LogSink>,
+    check: Option<StartCheck>,
     /// The running process, if any. The lock is held while one starts, so two connections
     /// that arrive together start one process.
     running: tokio::sync::Mutex<Option<Arc<Process>>>,
@@ -60,6 +65,7 @@ impl Plugin {
             inner: Arc::new(Inner {
                 program: program.into(),
                 log: None,
+                check: None,
                 running: tokio::sync::Mutex::new(None),
                 next_session: AtomicU64::new(1),
             }),
@@ -73,6 +79,22 @@ impl Plugin {
             Ok(inner) => Self {
                 inner: Arc::new(Inner {
                     log: Some(log),
+                    ..inner
+                }),
+            },
+            Err(inner) => Self { inner },
+        }
+    }
+
+    /// The same plugin, started only when `check` accepts its file: asked every time its
+    /// process is about to start, never remembered. Only before it is shared, as [`with_log`].
+    ///
+    /// [`with_log`]: Plugin::with_log
+    pub fn with_check(self, check: StartCheck) -> Self {
+        match Arc::try_unwrap(self.inner) {
+            Ok(inner) => Self {
+                inner: Arc::new(Inner {
+                    check: Some(check),
                     ..inner
                 }),
             },
@@ -121,6 +143,20 @@ impl Plugin {
             && !process.is_dead()
         {
             return Ok(process.clone());
+        }
+        if let Some(check) = self.inner.check.clone() {
+            // Reading a whole program to hash it is not for the runtime's own threads.
+            let program = self.inner.program.clone();
+            let checked = tokio::task::spawn_blocking(move || check(&program))
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+            if let Err(why) = checked {
+                *running = None;
+                return Err(DriverError::Connection(format!(
+                    "the plugin {} was not started: {why}",
+                    self.name()
+                )));
+            }
         }
         let process = Process::start(&self.inner.program, self.inner.log.clone()).await?;
         *running = Some(process.clone());

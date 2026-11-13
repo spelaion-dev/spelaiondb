@@ -14,6 +14,8 @@
 //! the secrets it was given already taken out (`spelaiondb mcp` keeps standard output for its
 //! own protocol).
 
+pub mod pins;
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -21,14 +23,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub use spelaion_plugin_host::{Plugin, PluginDriver};
 
-/// The plugins of this program, by the file they are.
-static PLUGINS: OnceLock<Mutex<HashMap<PathBuf, Plugin>>> = OnceLock::new();
+/// The plugins of this program, by the file they are and the hash that file must have (none
+/// for a development build's own plugin).
+type Registry = HashMap<(PathBuf, Option<String>), Plugin>;
+static PLUGINS: OnceLock<Mutex<Registry>> = OnceLock::new();
 
-/// The plugin whose program is `program`, shared by everything in this program that uses that
-/// file. Nothing is started until one of its engines connects.
-pub fn plugin_at(program: &Path) -> Plugin {
-    // The same file under two spellings is still one plugin.
-    let key = std::fs::canonicalize(program).unwrap_or_else(|_| program.to_path_buf());
+/// The same file under two spellings is still one plugin.
+fn file_of(program: &Path) -> PathBuf {
+    std::fs::canonicalize(program).unwrap_or_else(|_| program.to_path_buf())
+}
+
+fn registered(program: &Path, sha256: Option<&str>) -> Plugin {
+    let key = (file_of(program), sha256.map(str::to_string));
     let mut plugins = PLUGINS
         .get_or_init(Default::default)
         .lock()
@@ -40,9 +46,72 @@ pub fn plugin_at(program: &Path) -> Plugin {
                 .file_stem()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "plugin".into());
-            Plugin::new(program).with_log(Arc::new(move |line: &str| eprintln!("[{name}] {line}")))
+            let plugin = Plugin::new(program)
+                .with_log(Arc::new(move |line: &str| eprintln!("[{name}] {line}")));
+            match sha256 {
+                Some(sha256) => {
+                    let sha256 = sha256.to_string();
+                    plugin.with_check(Arc::new(move |file: &Path| {
+                        pins::check_file(file, &sha256).map_err(|refused| refused.to_string())
+                    }))
+                }
+                None => plugin,
+            }
         })
         .clone()
+}
+
+/// The plugin whose program is `program`, shared by everything in this program that uses that
+/// file. Nothing is started until one of its engines connects. **Unchecked:** only for the
+/// plugin a development build was pointed at ([`dev_plugin`]).
+pub fn plugin_at(program: &Path) -> Plugin {
+    registered(program, None)
+}
+
+/// The plugin whose program is `program`, started only while that file's SHA-256 is `sha256`
+/// (ADR-042): checked every time its process is about to start. The hash comes from the pins
+/// compiled into this build, from a signed catalogue entry, or from what was recorded when the
+/// user added the plugin (ADR-055); never from the file itself.
+pub fn pinned_plugin(program: &Path, sha256: &str) -> Plugin {
+    registered(program, Some(sha256))
+}
+
+/// The plugins of `program` this program knows, pinned or not.
+fn plugins_of(program: &Path) -> Vec<Plugin> {
+    let file = file_of(program);
+    PLUGINS
+        .get_or_init(Default::default)
+        .lock()
+        .expect("lock poisoned")
+        .iter()
+        .filter(|((path, _), _)| path == &file)
+        .map(|(_, plugin)| plugin.clone())
+        .collect()
+}
+
+/// Whether the plugin whose program is `program` is running now.
+pub async fn is_running(program: &Path) -> bool {
+    for plugin in plugins_of(program) {
+        if plugin.is_running().await {
+            return true;
+        }
+    }
+    false
+}
+
+/// Stops the plugin whose program is `program`, if it runs: its sessions are lost (ADR-028)
+/// and the next connection starts it again, checked again. What replacing a plugin's file needs
+/// first (Windows keeps a running program's file locked).
+pub async fn stop(program: &Path) {
+    for plugin in plugins_of(program) {
+        plugin.stop().await;
+    }
+}
+
+/// The folder this program is in: where the plugins that ship with it are (ADR-042).
+pub fn shipped_folder() -> Option<PathBuf> {
+    let program = std::env::current_exe().ok()?;
+    Some(file_of(&program).parent()?.to_path_buf())
 }
 
 /// The variable that points a development build at the plugin of `engine` (the name the

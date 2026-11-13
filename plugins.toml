@@ -1,0 +1,27 @@
+# The builds of our engine plugins that this repository tests and ships (ADR-042, ADR-055).
+#
+# Each plugin is built in its own repository (spelaion-dev/spelaiondb-plugin-<engine>). This
+# file pins, by hash, the exact release this repository was tested with: CI downloads those
+# builds and runs the tests through them, the installers carry them, and the app starts a
+# plugin only if its file has the pinned hash. It is compiled into the app
+# (crates/spelaion-core/src/plugins/pins.rs), so a pin cannot be changed after the build.
+#
+# Moving a pin is a pull request here, and needs an owner (.github/CODEOWNERS).
+#
+#   [[plugin]]
+#   name = "spelaiondb-plugin-duckdb"                    # the program, without .exe
+#   repository = "spelaion-dev/spelaiondb-plugin-duckdb"
+#   version = "0.1.0"                                    # the release pinned
+#   protocol = "1.0"                                     # the plugin protocol it speaks
+#   engines = ["duckdb"]                                 # as in `engine = "duckdb"`
+#   min_app = "0.10.0"                                   # the lowest SpelaionDB it works with
+#
+#   [plugin.platform.x86_64-pc-windows-msvc]             # also aarch64-apple-darwin,
+#   archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-pc-windows-msvc.zip"   # x86_64-apple-darwin,
+#   archive_sha256 = "…"                                 # x86_64-unknown-linux-gnu
+#   archive_size = 12345678
+#   program_sha256 = "…"                                 # of the program inside the archive
+#
+# No engine has left the core yet: nothing is pinned.
+
+schema_version = 1
