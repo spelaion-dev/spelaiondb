@@ -73,6 +73,8 @@ fn server(var: &str, user: &str, password: &str) -> Option<ConnectParams> {
 async fn engines() -> Vec<Engine> {
     let mut out = Vec::new();
     let dir = std::env::temp_dir().join(unique("spelaion-tx"));
+    // What an earlier run left behind: the system gives a process id again.
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
     engines::create_database(spelaion_config::Engine::Sqlite, &dir.join("tx.sqlite")).await;
@@ -748,6 +750,8 @@ async fn a_lost_session_remembers_its_open_transaction() {
 #[tokio::test]
 async fn table_edits_refuse_a_session_with_an_open_transaction() {
     let dir = std::env::temp_dir().join(unique("spelaion-tx-edit"));
+    // What an earlier run left behind: the system gives a process id again.
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     engines::create_database(spelaion_config::Engine::Sqlite, &dir.join("edit.sqlite")).await;
     let driver = engines::sqlite();
