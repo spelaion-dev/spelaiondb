@@ -26,6 +26,8 @@ serde_json = "1"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "io-std", "io-util"] }
 
 [dev-dependencies]
+# tests/pins.rs: the core's pins, tried with this plugin's program.
+spelaion-core.workspace = true
 spelaion-plugin-host.workspace = true
 futures-util.workspace = true
 

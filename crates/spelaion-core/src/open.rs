@@ -1,6 +1,7 @@
 //! Opening a connection from the configuration: tunnel (if any) + driver + session.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -49,6 +50,10 @@ impl Engines {
                 .map(|d| (d.engine().to_string(), d))
                 .collect(),
         };
+        // The pinned plugins that ship next to this program (ADR-042).
+        if let Some(folder) = crate::plugins::shipped_folder() {
+            engines = engines.with_pinned_plugins(crate::plugins::pins::Pins::shipped(), &folder);
+        }
         // A development build can be pointed at a plugin built on this machine, engine by
         // engine; a release build cannot (ADR-042).
         for engine in [
@@ -64,14 +69,8 @@ impl Engines {
             if let Some(program) =
                 crate::plugins::dev_plugin(crate::plugins::RELEASE_BUILD, pointed)
             {
-                let plugin: Arc<dyn Driver> =
-                    Arc::new(crate::plugins::plugin_at(&program).driver(engine.as_str()));
-                // What only the core can reach stays with the driver compiled in.
-                let driver = match engines.get(engine) {
-                    Some(own) => Arc::new(ThroughPlugin { plugin, own }),
-                    None => plugin,
-                };
-                engines = engines.with_driver(driver);
+                let plugin = crate::plugins::plugin_at(&program).driver(engine.as_str());
+                engines = engines.with_plugin(Arc::new(plugin));
             }
         }
         engines
@@ -85,8 +84,47 @@ impl Engines {
         self
     }
 
+    /// These engines with a plugin's driver for its engine. What only the core can reach (a
+    /// database on another machine, ADR-018) stays with the driver compiled in, if there is
+    /// one.
+    fn with_plugin(self, plugin: Arc<dyn Driver>) -> Self {
+        let driver = match self.driver(plugin.engine()) {
+            Some(own) => Arc::new(ThroughPlugin { plugin, own }),
+            None => plugin,
+        };
+        self.with_driver(driver)
+    }
+
+    /// These engines with the plugins `pins` names for this platform whose program is in
+    /// `folder` (ADR-042). **Only a pinned program is ever a plugin**: no other file of the
+    /// folder is looked at. A pinned program is started only while its file has the pinned
+    /// hash, checked at every start; one that does not is refused there, and its engines do not
+    /// fall back to anything else.
+    pub fn with_pinned_plugins(mut self, pins: &crate::plugins::pins::Pins, folder: &Path) -> Self {
+        let Some(platform) = crate::plugins::pins::platform() else {
+            return self;
+        };
+        for (pinned, build) in pins.for_platform(platform) {
+            let program = folder.join(crate::plugins::pins::program_file_name(&pinned.name));
+            if !program.is_file() {
+                continue;
+            }
+            let plugin = crate::plugins::pinned_plugin(&program, &build.program_sha256);
+            for engine in &pinned.engines {
+                self = self.with_plugin(Arc::new(plugin.driver(engine)));
+            }
+        }
+        self
+    }
+
     pub fn get(&self, engine: Engine) -> Option<Arc<dyn Driver>> {
-        self.drivers.get(engine.as_str()).cloned()
+        self.driver(engine.as_str())
+    }
+
+    /// The driver of an engine by the name the configuration uses. An engine served only by a
+    /// plugin has no other name here.
+    pub fn driver(&self, engine: &str) -> Option<Arc<dyn Driver>> {
+        self.drivers.get(engine).cloned()
     }
 
     /// Creates an empty database file for an embedded engine (SQLite, DuckDB), through that

@@ -6071,6 +6071,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "serde_json",
+ "spelaion-core",
  "spelaion-driver-api",
  "spelaion-plugin-host",
  "spelaion-plugin-protocol",

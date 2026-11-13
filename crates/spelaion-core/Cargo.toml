@@ -39,13 +39,14 @@ uuid = { version = "1", features = ["v4"] }
 specta = { version = "=2.0.0-rc.26", features = ["derive"], optional = true }
 # Content hashes of `.sql` files, to notice a change on disk (sql_file.rs, ADR-036).
 sha2 = "0.10"
+# plugins.toml, compiled in, is read when the engines are set up (plugins/pins.rs).
+toml = "1"
 # process + io-util: `kubectl port-forward` for Kubernetes tunnels (kube.rs) and the native
 # backup tools (backup/, ADR-049), whose files are written with fs.
 tokio = { workspace = true, features = ["sync", "time", "process", "io-util", "net", "macros", "fs"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
-toml = "1"
 
 [lints]
 workspace = true
