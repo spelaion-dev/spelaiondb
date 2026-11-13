@@ -1,0 +1,24 @@
+[package]
+name = "spelaion-plugin-fetch"
+description = "Fetches the plugin builds plugins.toml pins and checks their hashes, for CI and for whoever builds SpelaionDB. Never shipped"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A tool of this repository (ADR-042): CI, the release and a developer run it. Releases build
+# `spelaion-cli` and the desktop app, never this crate.
+[[bin]]
+name = "spelaion-fetch-plugins"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+# The pins, compiled in, and the one check of a plugin's file.
+spelaion-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
