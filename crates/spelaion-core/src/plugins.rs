@@ -108,10 +108,25 @@ pub async fn stop(program: &Path) {
     }
 }
 
-/// The folder this program is in: where the plugins that ship with it are (ADR-042).
+/// How Windows starts a path in its verbatim form.
+const VERBATIM: &str = r"\\?\";
+
+/// The folder this program is in: where the plugins that ship with it are (ADR-042). The
+/// program's real folder, when it was started through a link.
 pub fn shipped_folder() -> Option<PathBuf> {
     let program = std::env::current_exe().ok()?;
-    Some(file_of(&program).parent()?.to_path_buf())
+    Some(plain(&file_of(&program)).parent()?.to_path_buf())
+}
+
+/// `path` as a person writes it. Windows gives a resolved path in its verbatim form
+/// (`\\?\C:\…`), which is what a user would then read in "this plugin is missing".
+fn plain(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(VERBATIM) {
+        // Only a drive's path: a verbatim network path has no plain form this short.
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
 }
 
 /// The variable that points a development build at the plugin of `engine` (the name the
@@ -161,6 +176,30 @@ mod tests {
         ] {
             assert_eq!(dev_plugin(true, value.clone()), None, "{value:?}");
         }
+    }
+
+    #[test]
+    fn a_resolved_path_is_shown_as_a_person_writes_it() {
+        assert_eq!(
+            plain(Path::new(r"\\?\C:\Program Files\SpelaionDB")),
+            PathBuf::from(r"C:\Program Files\SpelaionDB")
+        );
+        // Anything else stays as it is.
+        for same in [
+            r"C:\Program Files\SpelaionDB",
+            "/usr/lib/spelaiondb",
+            r"\\?\UNC\server\share\app",
+            r"\\server\share\app",
+        ] {
+            assert_eq!(plain(Path::new(same)), PathBuf::from(same), "{same}");
+        }
+        // Where this program is has no verbatim prefix either.
+        let folder = shipped_folder().expect("this test is a program somewhere");
+        assert!(
+            !folder.to_string_lossy().starts_with(VERBATIM),
+            "{folder:?}"
+        );
+        assert!(folder.is_absolute());
     }
 
     #[test]
