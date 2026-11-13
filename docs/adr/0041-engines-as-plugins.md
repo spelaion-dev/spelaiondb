@@ -1,8 +1,9 @@
 # ADR-041: Engines as plugins: every driver in its own process, behind the same contract
 
-- **Status:** Accepted (not implemented: the stages below are the plan; where our plugins
-  are built and how they are checked is superseded by ADR-042; how our plugins are found,
-  installed and updated, by ADR-055)
+- **Status:** Accepted (stage 0 implemented, 2026-11-13: see "Implementation"; the engines
+  leave the core as their repositories are created. Where our plugins are built and how they
+  are checked is superseded by ADR-042; how our plugins are found, installed and updated, by
+  ADR-055)
 - **Date:** 2026-11-10
 - **Supersedes:** the "Extensibility" part of ADR-005 (the rest of ADR-005 stands)
 - **Builds on:** ADR-002 (security lives in the core), ADR-004 (no daemon), ADR-005 (driver
@@ -143,6 +144,41 @@ do today. New engines are only written as plugins.**
   like any other, and it may link what our licence does not let the core link.
 - The project's "we ship our own drivers, no JDBC-style driver manager" note changes meaning:
   we still write and ship our own; they stop being inside the binary.
+
+## Implementation (2026-11-13)
+Stage 0 is in the repository; the protocol's specification is `docs/plugin-protocol.md`.
+
+- **The protocol** (version 1.0, experimental until SpelaionDB 1.0): frames over the plugin's
+  standard input and output, JSON-RPC 2.0 for control and Arrow IPC for rows, never JSON. The
+  core sets the pace of a result with credit, so a large result does not fill its memory. Three
+  crates: `spelaion-plugin-protocol` (the wire), `spelaion-plugin-sdk` (a plugin implements
+  `Driver` and `Connection` and calls `run`) and `spelaion-plugin-host` (`PluginDriver` is a
+  `Driver`: the session, the result store, the app and the MCP server see no difference).
+- **What running every engine through it added**, before anything depended on it:
+  `create_database` (a database that is a file is created by its driver); a `close` that stops a
+  `connect` still in progress (a login the user stopped is not left open); SQLite on a server
+  stays with the driver compiled in when the local one is a plugin; and the conformance set
+  cancels a statement whose `execute` has not answered (MySQL answers only when its first
+  response arrives).
+- **Each pipe has a thread of its own, with blocking reads and writes,** on both sides: a
+  plugin's process belongs to no caller's runtime, and a frame is one read of the pipe.
+- **The rows of an import travel as columns of text** (`TextRows`, Arrow): the contract's
+  `insert_rows` takes them, and a driver reads them in place.
+- **The gate, measured** (Windows, optimised builds, the same build both ways, median of five,
+  `scripts/measure-plugins.sh`): a million-row result takes 5.7 % longer through DuckDB's
+  plugin; importing a million rows takes at most 13.9 % longer (DuckDB, into a new table;
+  SQLite 13.7 %, PostgreSQL 11.2 %, MySQL 4.2 %, SQL Server 2.0 %, MariaDB 1.2 %). Before the
+  rows travelled as columns and the pipes had their threads, the import took 47 % to 71 %
+  longer on DuckDB. The fastest engines load a million rows in about a second, so 15 % is
+  150 ms: expect a few points between two measurements.
+- **The whole test suite passes through plugins, unchanged**: no test names a driver crate
+  (they take it from the core's engines), and `scripts/test-through-plugins.sh` runs any
+  `cargo test` with every engine through its plugin.
+- **What an engine's leaving saves** (Windows, debug, `cargo test --workspace --no-run` from an
+  empty target folder, each measured once, on the branches where the drivers are already
+  gone): with every driver compiled in, 619 s, 7.8 GB of test executables and a 25.3 GB target
+  folder; without DuckDB, 297 s, 2.2 GB and 10.0 GB; without DuckDB, SQL Server, MySQL/MariaDB
+  and PostgreSQL, 218 s, 1.4 GB and 7.4 GB. DuckDB is most of it, as the Context expected.
 
 ## Alternatives
 - **Hybrid for good** (the five inside, the rest as plugins): the least work, and two classes
