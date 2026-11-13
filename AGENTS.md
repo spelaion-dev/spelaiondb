@@ -168,6 +168,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   build, the one `SPELAION_DEV_PLUGIN_MYSQL` and `SPELAION_DEV_PLUGIN_MARIADB` point at.
 - `crates/spelaion-driver-sqlite`: `rusqlite` in one thread per connection (an actor).
   Dynamic typing resolved in `exec.rs` (see ADR-006). Its tests need nothing external.
+  **It stays compiled into the core** (ADR-041, "SQLite stays compiled in"): the core links
+  SQLite for its store anyway, and the driver for a file on a server (`remote.rs`) is built on
+  the same catalog queries and typing. Its plugin program (`src/bin`) is never shipped: it is
+  how the protocol is tried with a real engine in this repository.
   `remote.rs` opens a file on a server (ADR-018) by running that server's `sqlite3 -safe`
   through `ConnectParams::remote` (an SSH exec channel on the tunnel's last hop,
   `spelaion-ssh::Tunnel::exec`): it must never let a dot-command or an incomplete statement
