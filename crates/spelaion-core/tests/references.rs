@@ -8,6 +8,8 @@
 //! followed to the rows it leads to, and the filter the core writes is run as a page of the
 //! other table: it must keep exactly the rows the key relates.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -48,12 +50,12 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
     let mut out = vec![
         (
             "sqlite",
-            session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+            session(&*engines::sqlite(), memory()).await,
             "main",
         ),
         (
             "duckdb",
-            session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+            session(&*engines::duckdb(), memory()).await,
             "main",
         ),
     ];
@@ -70,21 +72,13 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         let params = login(host, port, "spelaion", "spelaion", "spelaion");
         out.push((
             "postgres",
-            session(&spelaion_driver_postgres::PostgresDriver, params).await,
+            session(&*engines::postgres(), params).await,
             "public",
         ));
     }
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         if let Some((host, port)) = server(var) {
             let params = login(host, port, "spelaion", "spelaion", "spelaion");
@@ -98,7 +92,7 @@ async fn engines() -> Vec<(&'static str, Session, &'static str)> {
         };
         out.push((
             "sqlserver",
-            session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+            session(&*engines::sqlserver(), params).await,
             "dbo",
         ));
     }

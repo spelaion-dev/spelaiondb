@@ -4,14 +4,13 @@
 //! `SPELAION_TEST_MARIADB` and `SPELAION_TEST_MSSQL` (skipped without them, which does not count
 //! as tested).
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode};
-use spelaion_driver_mysql::MysqlDriver;
-use spelaion_driver_postgres::PostgresDriver;
-use spelaion_driver_sqlserver::SqlServerDriver;
 
 fn server(var: &str, user: &str, password: &str) -> Option<ConnectParams> {
     let Ok(addr) = std::env::var(var) else {
@@ -40,18 +39,18 @@ async fn connect(driver: &dyn Driver, params: &ConnectParams) -> Session {
 async fn servers() -> Vec<(&'static str, Session)> {
     let mut out = Vec::new();
     if let Some(params) = server("SPELAION_TEST_PG", "spelaion", "spelaion") {
-        out.push(("postgres", connect(&PostgresDriver, &params).await));
+        out.push(("postgres", connect(&*engines::postgres(), &params).await));
     }
     if let Some(params) = server("SPELAION_TEST_MYSQL", "spelaion", "spelaion") {
-        out.push(("mysql", connect(&MysqlDriver::mysql(), &params).await));
+        out.push(("mysql", connect(&*engines::mysql(), &params).await));
     }
     if let Some(params) = server("SPELAION_TEST_MARIADB", "spelaion", "spelaion") {
-        out.push(("mariadb", connect(&MysqlDriver::mariadb(), &params).await));
+        out.push(("mariadb", connect(&*engines::mariadb(), &params).await));
     }
     if let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1") {
         params.tls = TlsMode::Require;
         params.database = "master".into();
-        out.push(("sqlserver", connect(&SqlServerDriver, &params).await));
+        out.push(("sqlserver", connect(&*engines::sqlserver(), &params).await));
     }
     out
 }

@@ -1,14 +1,14 @@
 //! Read-only mode (ADR-008) against a real PostgreSQL (`SPELAION_TEST_PG`) and SQLite. The
 //! other engines are in `agents_engines.rs`.
 
+mod engines;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use spelaion_core::{ReadError, ReadKind, ReadLimits, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, DriverError, Secret, Value};
-use spelaion_driver_postgres::PostgresDriver;
-use spelaion_driver_sqlite::SqliteDriver;
 
 async fn pg() -> Option<Session> {
     let Ok(addr) = std::env::var("SPELAION_TEST_PG") else {
@@ -24,10 +24,10 @@ async fn pg() -> Option<Session> {
         database: "spelaion".into(),
         ..Default::default()
     };
-    let conn = PostgresDriver.connect(&params).await.unwrap();
+    let conn = engines::postgres().connect(&params).await.unwrap();
     Some(Session::new(
         conn,
-        spelaion_dialect::for_engine(PostgresDriver.engine()).expect("a dialect"),
+        spelaion_dialect::for_engine(engines::postgres().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }
@@ -185,18 +185,17 @@ async fn sqlite_read_only_mode() {
     let path = std::env::temp_dir().join(format!("spelaion-readonly-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&path);
     {
-        let writer = SqliteDriver {
-            create_if_missing: true,
-        }
-        .connect(&ConnectParams {
-            database: path.display().to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+        engines::create_database(spelaion_config::Engine::Sqlite, &path).await;
+        let writer = engines::sqlite()
+            .connect(&ConnectParams {
+                database: path.display().to_string(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         let session = Session::new(
             writer,
-            spelaion_dialect::for_engine(SqliteDriver::default().engine()).expect("a dialect"),
+            spelaion_dialect::for_engine(engines::sqlite().engine()).expect("a dialect"),
             Arc::new(ResultStore::new()),
         );
         setup(
@@ -210,10 +209,10 @@ async fn sqlite_read_only_mode() {
         read_only: true,
         ..Default::default()
     };
-    let conn = SqliteDriver::default().connect(&params).await.unwrap();
+    let conn = engines::sqlite().connect(&params).await.unwrap();
     let session = Session::new(
         conn,
-        spelaion_dialect::for_engine(SqliteDriver::default().engine()).expect("a dialect"),
+        spelaion_dialect::for_engine(engines::sqlite().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     );
 

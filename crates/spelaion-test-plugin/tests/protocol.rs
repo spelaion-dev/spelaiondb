@@ -548,8 +548,26 @@ async fn a_connection_given_up_is_not_left_open_in_the_plugin() {
     // The driver takes ten minutes to connect; the core stops waiting.
     let driver = plugin.driver("test");
     let slow = params("slow");
-    let gave_up = tokio::time::timeout(Duration::from_millis(300), driver.connect(&slow)).await;
-    assert!(gave_up.is_err());
+    let attempt = tokio::spawn(async move { driver.connect(&slow).await.map(|_| ()) });
+    for _ in 0..100 {
+        if one(watcher.as_ref(), "connecting").await == "1" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(one(watcher.as_ref(), "connecting").await, "1");
+    attempt.abort();
+    // The attempt stops in the plugin there and then (a login the user stopped is not left
+    // open until the server answers), not when the ten minutes are over.
+    let mut connecting = String::new();
+    for _ in 0..100 {
+        connecting = one(watcher.as_ref(), "connecting").await;
+        if connecting == "0" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(connecting, "0", "the driver is still connecting");
     // And one that fails leaves nothing either.
     let refused = within(plugin.driver("test").connect(&params("refuse"))).await;
     let Err(DriverError::Connection(message)) = refused else {
@@ -576,6 +594,39 @@ async fn what_a_plugin_cannot_serve_is_refused_by_the_core() {
     };
     assert!(
         error.to_string().contains("could not be started"),
+        "{error}"
+    );
+}
+
+/// An engine whose databases are files has them created by its driver: through a plugin too.
+#[tokio::test]
+async fn a_file_database_is_created_by_the_plugins_driver() {
+    let plugin = Plugin::new(PROGRAM);
+    let driver = plugin.driver("test");
+    within(driver.create_database("new.db")).await.unwrap();
+
+    // An existing file is never touched: the driver's refusal arrives as it wrote it.
+    let error = within(driver.create_database("new.db")).await.unwrap_err();
+    assert!(
+        matches!(&error, DriverError::Other(message) if message.contains("already exists")),
+        "{error:?}"
+    );
+    let connection = connect(&plugin).await;
+    assert_eq!(
+        texts(&run(connection.as_ref(), "created").await),
+        ["new.db"]
+    );
+
+    // An engine that is not a file refuses, and one the plugin does not serve is not asked.
+    let error = within(plugin.driver("test2").create_database("x"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("is not a file"), "{error}");
+    let error = within(plugin.driver("postgres").create_database("x"))
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("does not serve the engine"),
         "{error}"
     );
 }

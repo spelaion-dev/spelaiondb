@@ -11,11 +11,8 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultId, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, TlsMode, Value};
-use spelaion_driver_mysql::MysqlDriver;
-use spelaion_driver_postgres::PostgresDriver;
-use spelaion_driver_sqlite::SqliteDriver;
-use spelaion_driver_sqlserver::SqlServerDriver;
 
+mod engines;
 mod support;
 use support::{cleaning_up, run_cleanup};
 
@@ -118,8 +115,8 @@ async fn engines(table: &str, sqlite_file: &std::path::Path) -> Vec<Engine> {
     if let Some(params) = server("SPELAION_TEST_PG", "spelaion", "spelaion") {
         out.push(Engine {
             label: "postgres",
-            reader: connect(&PostgresDriver, &params).await,
-            writer: connect(&PostgresDriver, &params).await,
+            reader: connect(&*engines::postgres(), &params).await,
+            writer: connect(&*engines::postgres(), &params).await,
             fill: format!(
                 "insert into {table} select g, g % 3, 'v' || g from generate_series(1, {ROWS}) g"
             ),
@@ -129,8 +126,8 @@ async fn engines(table: &str, sqlite_file: &std::path::Path) -> Vec<Engine> {
         });
     }
     for (var, engine, driver) in [
-        ("SPELAION_TEST_MYSQL", "mysql", MysqlDriver::mysql()),
-        ("SPELAION_TEST_MARIADB", "mariadb", MysqlDriver::mariadb()),
+        ("SPELAION_TEST_MYSQL", "mysql", engines::mysql()),
+        ("SPELAION_TEST_MARIADB", "mariadb", engines::mariadb()),
     ] {
         if let Some(params) = server(var, "root", "spelaion-root") {
             out.push(Engine {
@@ -161,7 +158,7 @@ async fn engines(table: &str, sqlite_file: &std::path::Path) -> Vec<Engine> {
     if let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1") {
         params.tls = TlsMode::Require;
         params.database = "master".into();
-        let master = connect(&SqlServerDriver, &params).await;
+        let master = connect(&*engines::sqlserver(), &params).await;
         run(
             "sqlserver",
             &master,
@@ -171,8 +168,8 @@ async fn engines(table: &str, sqlite_file: &std::path::Path) -> Vec<Engine> {
         params.database = "spelaion".into();
         out.push(Engine {
             label: "sqlserver",
-            reader: connect(&SqlServerDriver, &params).await,
-            writer: connect(&SqlServerDriver, &params).await,
+            reader: connect(&*engines::sqlserver(), &params).await,
+            writer: connect(&*engines::sqlserver(), &params).await,
             fill: format!(
                 "insert into {table} select n, n % 3, concat('v', n) from (select top ({ROWS}) row_number() over (order by (select null)) as n from sys.all_objects a cross join sys.all_objects b) s"
             ),
@@ -183,7 +180,7 @@ async fn engines(table: &str, sqlite_file: &std::path::Path) -> Vec<Engine> {
         database: sqlite_file.display().to_string(),
         ..Default::default()
     };
-    let driver = SqliteDriver::default();
+    let driver = engines::sqlite();
     out.push(Engine {
         label: "sqlite",
         reader: connect(&driver, &lite).await,

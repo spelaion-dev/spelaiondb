@@ -8,6 +8,8 @@
 //! - The settings viewer reads the server's settings (and MySQL's status counters).
 //! - Table statistics: sizes and a row estimate for a table, nothing for a view.
 
+mod engines;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -69,7 +71,7 @@ async fn try_run(session: &Session, statement: &str) {
 
 struct Engine {
     label: &'static str,
-    driver: Box<dyn Driver>,
+    driver: Arc<dyn Driver>,
     /// The two sessions that block each other.
     user: ConnectParams,
     /// The monitor: a login that may see every session's locks.
@@ -336,7 +338,7 @@ async fn postgres_shows_who_blocks_whom() {
     let user = login(&host, port, "spelaion", "spelaion", "spelaion");
     blocking_pair(Engine {
         label: "postgres",
-        driver: Box::new(spelaion_driver_postgres::PostgresDriver),
+        driver: engines::postgres(),
         monitor: user.clone(),
         user,
         table: "obs_locks",
@@ -352,7 +354,7 @@ async fn mysql_shows_who_blocks_whom() {
     };
     // Locks need PROCESS and performance_schema: the test user has neither.
     let user = login(&host, port, "spelaion", "spelaion", "spelaion");
-    let unprivileged = session(&spelaion_driver_mysql::MysqlDriver::mysql(), &user).await;
+    let unprivileged = session(&*engines::mysql(), &user).await;
     let refused = list_locks(&unprivileged).await.err().unwrap_or_default();
     assert!(
         refused.to_lowercase().contains("denied"),
@@ -360,7 +362,7 @@ async fn mysql_shows_who_blocks_whom() {
     );
     blocking_pair(Engine {
         label: "mysql",
-        driver: Box::new(spelaion_driver_mysql::MysqlDriver::mysql()),
+        driver: engines::mysql(),
         monitor: login(&host, port, "root", "spelaion-root", "spelaion"),
         user,
         table: "obs_locks",
@@ -376,7 +378,7 @@ async fn mariadb_shows_who_blocks_whom() {
     };
     blocking_pair(Engine {
         label: "mariadb",
-        driver: Box::new(spelaion_driver_mysql::MysqlDriver::mariadb()),
+        driver: engines::mariadb(),
         user: login(&host, port, "spelaion", "spelaion", "spelaion"),
         monitor: login(&host, port, "root", "spelaion-root", "spelaion"),
         table: "obs_locks",
@@ -396,7 +398,7 @@ async fn sqlserver_shows_who_blocks_whom() {
     };
     blocking_pair(Engine {
         label: "sqlserver",
-        driver: Box::new(spelaion_driver_sqlserver::SqlServerDriver),
+        driver: engines::sqlserver(),
         monitor: user.clone(),
         user,
         table: "obs_locks",
@@ -411,7 +413,7 @@ async fn embedded_engines_have_row_estimates_or_nothing() {
         database: ":memory:".into(),
         ..Default::default()
     };
-    let duckdb = session(&spelaion_driver_duckdb::DuckdbDriver::default(), &memory).await;
+    let duckdb = session(&*engines::duckdb(), &memory).await;
     run(
         "duckdb",
         &duckdb,
@@ -430,7 +432,7 @@ async fn embedded_engines_have_row_estimates_or_nothing() {
     assert!(list_locks(&duckdb).await.is_err());
     assert!(server_settings(&duckdb).await.is_err());
 
-    let sqlite = session(&spelaion_driver_sqlite::SqliteDriver::default(), &memory).await;
+    let sqlite = session(&*engines::sqlite(), &memory).await;
     run("sqlite", &sqlite, &["CREATE TABLE stats_t (id INTEGER)"]).await;
     assert_eq!(table_stats(&sqlite, "main", "stats_t").await.unwrap(), None);
 }

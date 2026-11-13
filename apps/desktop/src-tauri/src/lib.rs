@@ -2983,13 +2983,17 @@ fn parse_connection_url(url: String) -> CmdResult<UrlFields> {
 /// overwrites an existing file.
 #[tauri::command]
 #[specta::specta]
-async fn create_database(engine: String, path: String) -> CmdResult<()> {
+async fn create_database(
+    state: State<'_, AppState>,
+    engine: String,
+    path: String,
+) -> CmdResult<()> {
     let engine = engine_named(&engine)?;
-    tokio::task::spawn_blocking(move || {
-        spelaion_core::create_file_database(engine, Path::new(&path)).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    state
+        .engines
+        .create_file_database(engine, Path::new(&path))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The statement under the editor's cursor (`offset` in UTF-8 bytes), split by the

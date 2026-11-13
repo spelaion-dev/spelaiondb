@@ -113,7 +113,8 @@ the secrets it gave that plugin.
   tunnel: only what `connect` says.
 
 `close` (`{"session":1}`) ends a session, also one whose `connect` has not answered yet (the
-core stopped waiting): the plugin drops that connection when it arrives. `session.closed` (a
+core stopped waiting, or the user stopped the login): the plugin stops connecting there and
+then and closes whatever that attempt had open. It does not wait for the server. `session.closed` (a
 notification from the plugin,
 `{"session":1}`) says the plugin knows the connection is closed (the server ended it, the
 network dropped it): the plugin sends it as soon as it knows, before the response of the
@@ -122,6 +123,13 @@ request that found out.
 Every other request names its `session`. Requests of one session may arrive while another of
 the same session is still running (a `cancel` during an `execute`): a plugin answers each
 when it is done, in any order.
+
+## Creating a database that is a file
+`create_database` (`{"engine":"sqlite","database":"/home/me/new.db"}`, answered with `{}`) is
+for engines whose databases are files: it creates an empty one at that path, which is what
+`connect`'s `database` will then be. It names no session. An existing file is never touched:
+the plugin answers with an error instead. An engine whose databases are not files answers with
+an `other` error.
 
 ## Running a statement
 `execute` runs **one** statement. The core has already split the script.

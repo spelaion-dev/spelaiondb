@@ -19,6 +19,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   added to this contract must be able to travel as a message (owned data; no closures, trait
   objects or streams in parameters), and `spelaion-core/src` names a driver crate only in
   `open.rs`, where `Engines` is built (its unit tests take a driver from `open::test_driver`).
+  **No test names a driver crate either**: the core's tests take an engine's driver from
+  `crates/spelaion-core/tests/engines/mod.rs` (`engines::postgres()`, `engines::create_database`),
+  which is `Engines::builtin()`, and the tests of `spelaion-ssh` and `apps/cli` ask the core the
+  same way, so an engine's tests run unchanged through its plugin (ADR-041's gate).
+  A database that is a file (SQLite, DuckDB) is created by its driver (`Driver::create_database`,
+  `Engines::create_file_database`), never by calling a driver crate.
   Results in Arrow with
   `spelaion.logical` / `spelaion.native_type` metadata per column; `Value` for single cells.
   The explorer's folders (ADR-024): `list_objects` (relations), `list_schema_objects`,
@@ -84,6 +90,12 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `SPELAION_DEV_PLUGIN_<ENGINE>` points a development build at a plugin built on this machine;
   a release build ignores it (`dev_plugin`), and nothing in a setting or a repository file can
   name a plugin.
+  Until an engine's driver moves to its own repository, its crate here also builds its plugin
+  program (`src/bin/spelaion-plugin-<engine>.rs`; MySQL's serves MariaDB too), and
+  `scripts/test-through-plugins.sh` runs any `cargo test` with every engine through those
+  programs: a change to the protocol's three crates or to a driver is tested both ways. A
+  database on another machine (SQLite over SSH, ADR-018) never goes through a plugin: the core
+  keeps the driver compiled in for it (`ThroughPlugin` in `open.rs`).
 - `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
   (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
   (`tests/postgres.rs`) checks it. A new type is added there first.

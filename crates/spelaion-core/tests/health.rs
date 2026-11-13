@@ -2,14 +2,14 @@
 //! transaction, and a session the server ended shows as lost. Skipped without
 //! `SPELAION_TEST_PG` / `SPELAION_TEST_MYSQL` / `SPELAION_TEST_MARIADB`.
 
+mod engines;
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultStore, Session, SessionHealth};
 use spelaion_driver_api::{ConnectParams, Driver, Secret};
-use spelaion_driver_mysql::MysqlDriver;
-use spelaion_driver_postgres::PostgresDriver;
 
 fn params(var: &str) -> Option<ConnectParams> {
     let Ok(addr) = std::env::var(var) else {
@@ -92,9 +92,9 @@ async fn keep_alives_outlast_the_servers_idle_timeout() {
     for var in ["SPELAION_TEST_MYSQL", "SPELAION_TEST_MARIADB"] {
         let Some(params) = params(var) else { continue };
         let driver = if var.ends_with("MARIADB") {
-            MysqlDriver::mariadb()
+            engines::mariadb()
         } else {
-            MysqlDriver::mysql()
+            engines::mysql()
         };
         let kept = session(&driver, &params).await;
         run(&kept, "set session wait_timeout = 3").await.unwrap();
@@ -122,8 +122,8 @@ async fn no_keep_alive_is_sent_inside_a_transaction() {
     let Some(params) = params("SPELAION_TEST_PG") else {
         return;
     };
-    let watcher = session(&PostgresDriver, &params).await;
-    let idle = session(&PostgresDriver, &params).await;
+    let watcher = session(&*engines::postgres(), &params).await;
+    let idle = session(&*engines::postgres(), &params).await;
     let name = format!("spelaion-idle-{}", std::process::id());
     run(&idle, &format!("set application_name = '{name}'"))
         .await
@@ -171,8 +171,8 @@ async fn keep_alives_notice_a_session_the_server_ended() {
     let Some(params) = params("SPELAION_TEST_PG") else {
         return;
     };
-    let admin = session(&PostgresDriver, &params).await;
-    let victim = session(&PostgresDriver, &params).await;
+    let admin = session(&*engines::postgres(), &params).await;
+    let victim = session(&*engines::postgres(), &params).await;
     let name = format!("spelaion-ended-core-{}", std::process::id());
     run(&victim, &format!("set application_name = '{name}'"))
         .await
@@ -205,7 +205,7 @@ async fn a_statement_that_ends_the_session_marks_it_lost() {
     let Some(params) = params("SPELAION_TEST_PG") else {
         return;
     };
-    let session = session(&PostgresDriver, &params).await;
+    let session = session(&*engines::postgres(), &params).await;
     assert!(
         run(&session, "select pg_terminate_backend(pg_backend_pid())")
             .await

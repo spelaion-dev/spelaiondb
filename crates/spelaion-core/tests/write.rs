@@ -8,14 +8,13 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultStore, Session, WriteError, WriteLimits};
 use spelaion_driver_api::{ConnectParams, Driver, Secret};
-use spelaion_driver_postgres::PostgresDriver;
-use spelaion_driver_sqlite::SqliteDriver;
 
+mod engines;
 mod support;
 use support::{cleaning_up, run_cleanup};
 
 async fn sqlite() -> Session {
-    let driver = SqliteDriver::default();
+    let driver = engines::sqlite();
     let conn = driver
         .connect(&ConnectParams {
             database: ":memory:".into(),
@@ -36,7 +35,7 @@ async fn pg() -> Option<Session> {
         return None;
     };
     let (host, port) = addr.rsplit_once(':').unwrap();
-    let conn = PostgresDriver
+    let conn = engines::postgres()
         .connect(&ConnectParams {
             host: host.into(),
             port: port.parse().unwrap(),
@@ -49,7 +48,7 @@ async fn pg() -> Option<Session> {
         .unwrap();
     Some(Session::new(
         conn,
-        spelaion_dialect::for_engine(PostgresDriver.engine()).expect("a dialect"),
+        spelaion_dialect::for_engine(engines::postgres().engine()).expect("a dialect"),
         Arc::new(ResultStore::new()),
     ))
 }

@@ -5,6 +5,8 @@
 //! once. A fake connection makes the race certain; MySQL, MariaDB and PostgreSQL (with their
 //! `SPELAION_TEST_*` variables) run it for real.
 
+mod engines;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -146,7 +148,7 @@ async fn a_cancel_still_on_its_way_never_stops_the_next_run() {
     };
     let session = Arc::new(Session::new(
         Box::new(fake),
-        Arc::new(spelaion_driver_sqlite::SqliteDialect),
+        Arc::new(spelaion_dialect::SqliteDialect),
         Arc::new(ResultStore::new()),
     ));
 
@@ -217,7 +219,7 @@ async fn a_cancel_still_on_its_way_never_stops_the_next_run() {
 }
 
 /// A session of a real engine, if its variable is set.
-async fn real(var: &str, driver: Box<dyn Driver>) -> Option<Session> {
+async fn real(var: &str, driver: Arc<dyn Driver>) -> Option<Session> {
     let Ok(addr) = std::env::var(var) else {
         eprintln!("{var} not set: skipped");
         return None;
@@ -243,7 +245,7 @@ async fn real(var: &str, driver: Box<dyn Driver>) -> Option<Session> {
 type RealEngine = (
     &'static str,
     &'static str,
-    Box<dyn Driver>,
+    Arc<dyn Driver>,
     &'static str,
     &'static str,
 );
@@ -256,21 +258,21 @@ async fn cancel_then_run_at_once_never_cancels_the_new_run_on_mysql_mariadb_and_
         (
             "mysql",
             "SPELAION_TEST_MYSQL",
-            Box::new(spelaion_driver_mysql::MysqlDriver::mysql()),
+            engines::mysql(),
             "select sleep(0.02)",
             "select sleep(0.3)",
         ),
         (
             "mariadb",
             "SPELAION_TEST_MARIADB",
-            Box::new(spelaion_driver_mysql::MysqlDriver::mariadb()),
+            engines::mariadb(),
             "select sleep(0.02)",
             "select sleep(0.3)",
         ),
         (
             "postgres",
             "SPELAION_TEST_PG",
-            Box::new(spelaion_driver_postgres::PostgresDriver),
+            engines::postgres(),
             "select pg_sleep(0.02)",
             "select pg_sleep(0.3)",
         ),

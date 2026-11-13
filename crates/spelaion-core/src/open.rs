@@ -64,8 +64,14 @@ impl Engines {
             if let Some(program) =
                 crate::plugins::dev_plugin(crate::plugins::RELEASE_BUILD, pointed)
             {
-                let plugin = crate::plugins::plugin_at(&program);
-                engines = engines.with_driver(Arc::new(plugin.driver(engine.as_str())));
+                let plugin: Arc<dyn Driver> =
+                    Arc::new(crate::plugins::plugin_at(&program).driver(engine.as_str()));
+                // What only the core can reach stays with the driver compiled in.
+                let driver = match engines.get(engine) {
+                    Some(own) => Arc::new(ThroughPlugin { plugin, own }),
+                    None => plugin,
+                };
+                engines = engines.with_driver(driver);
             }
         }
         engines
@@ -82,6 +88,57 @@ impl Engines {
     pub fn get(&self, engine: Engine) -> Option<Arc<dyn Driver>> {
         self.drivers.get(engine.as_str()).cloned()
     }
+
+    /// Creates an empty database file for an embedded engine (SQLite, DuckDB), through that
+    /// engine's driver. An existing file is never touched.
+    pub async fn create_file_database(
+        &self,
+        engine: Engine,
+        path: &std::path::Path,
+    ) -> Result<(), DriverError> {
+        let not_a_file = || DriverError::Other(format!("{} is not a file", engine.as_str()));
+        match engine {
+            Engine::Sqlite | Engine::Duckdb => {}
+            Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => {
+                return Err(not_a_file());
+            }
+        }
+        let driver = self.get(engine).ok_or_else(not_a_file)?;
+        let Some(database) = path.to_str() else {
+            return Err(DriverError::Other(format!(
+                "{} is not a path this engine can be given",
+                path.display()
+            )));
+        };
+        driver.create_database(database).await
+    }
+}
+
+/// An engine served by a plugin, next to the driver compiled in for what a plugin cannot do:
+/// a database on another machine (ADR-018) runs through the core's own tunnel, which cannot be
+/// handed to another process (ADR-041).
+struct ThroughPlugin {
+    plugin: Arc<dyn Driver>,
+    own: Arc<dyn Driver>,
+}
+
+#[async_trait::async_trait]
+impl Driver for ThroughPlugin {
+    fn engine(&self) -> &str {
+        self.plugin.engine()
+    }
+
+    async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>, DriverError> {
+        if params.remote.is_some() {
+            self.own.connect(params).await
+        } else {
+            self.plugin.connect(params).await
+        }
+    }
+
+    async fn create_database(&self, database: &str) -> Result<(), DriverError> {
+        self.plugin.create_database(database).await
+    }
 }
 
 /// An engine's dialect: the core's own, found by the engine's name and never asked of its
@@ -90,16 +147,13 @@ pub fn dialect_of(engine: Engine) -> Option<Arc<dyn Dialect>> {
     spelaion_dialect::for_engine(engine.as_str())
 }
 
-/// Creates an empty database file for an embedded engine (SQLite, DuckDB). An existing file
-/// is never touched.
-pub fn create_file_database(engine: Engine, path: &std::path::Path) -> Result<(), DriverError> {
-    match engine {
-        Engine::Sqlite => spelaion_driver_sqlite::create_database(path),
-        Engine::Duckdb => spelaion_driver_duckdb::create_database(path),
-        Engine::Postgres | Engine::Mysql | Engine::Mariadb | Engine::Sqlserver => Err(
-            DriverError::Other(format!("{} is not a file", engine.as_str())),
-        ),
-    }
+/// Creates an empty database file for an embedded engine (SQLite, DuckDB) with the engines
+/// that ship with SpelaionDB. An existing file is never touched.
+pub async fn create_file_database(
+    engine: Engine,
+    path: &std::path::Path,
+) -> Result<(), DriverError> {
+    Engines::builtin().create_file_database(engine, path).await
 }
 
 /// A built-in engine's driver, for this crate's own tests: they name no driver crate.

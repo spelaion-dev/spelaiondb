@@ -15,12 +15,8 @@ use spelaion_core::{
     ScriptStop, ScriptSummary, Session, TransactionState,
 };
 use spelaion_driver_api::{ConnectParams, Driver, ExecEvent, ExecOptions, Secret, TlsMode};
-use spelaion_driver_duckdb::DuckdbDriver;
-use spelaion_driver_mysql::MysqlDriver;
-use spelaion_driver_postgres::PostgresDriver;
-use spelaion_driver_sqlite::SqliteDriver;
-use spelaion_driver_sqlserver::SqlServerDriver;
 
+mod engines;
 mod support;
 use support::{CLEANUP_TIMEOUT, cleaning_up, run_cleanup};
 
@@ -78,9 +74,8 @@ async fn engines() -> Vec<Engine> {
     let dir = std::env::temp_dir().join(unique("spelaion-script"));
     std::fs::create_dir_all(&dir).unwrap();
 
-    let sqlite = SqliteDriver {
-        create_if_missing: true,
-    };
+    engines::create_database(spelaion_config::Engine::Sqlite, &dir.join("runs.sqlite")).await;
+    let sqlite = engines::sqlite();
     let file = ConnectParams {
         database: dir.join("runs.sqlite").display().to_string(),
         ..Default::default()
@@ -92,8 +87,8 @@ async fn engines() -> Vec<Engine> {
         no_wait: "",
     });
 
-    let duckdb = DuckdbDriver::default();
-    spelaion_driver_duckdb::create_database(&dir.join("runs.duckdb")).unwrap();
+    let duckdb = engines::duckdb();
+    engines::create_database(spelaion_config::Engine::Duckdb, &dir.join("runs.duckdb")).await;
     let file = ConnectParams {
         database: dir.join("runs.duckdb").display().to_string(),
         ..Default::default()
@@ -108,8 +103,8 @@ async fn engines() -> Vec<Engine> {
     if let Some(params) = server("SPELAION_TEST_PG", "spelaion", "spelaion") {
         out.push(Engine {
             name: "postgres",
-            a: connect(&PostgresDriver, &params).await,
-            b: connect(&PostgresDriver, &params).await,
+            a: connect(&*engines::postgres(), &params).await,
+            b: connect(&*engines::postgres(), &params).await,
             no_wait: "",
         });
     }
@@ -119,9 +114,9 @@ async fn engines() -> Vec<Engine> {
     ] {
         if let Some(params) = server(var, "spelaion", "spelaion") {
             let driver = if name == "mariadb" {
-                MysqlDriver::mariadb()
+                engines::mariadb()
             } else {
-                MysqlDriver::mysql()
+                engines::mysql()
             };
             out.push(Engine {
                 name,
@@ -134,7 +129,7 @@ async fn engines() -> Vec<Engine> {
     if let Some(mut params) = server("SPELAION_TEST_MSSQL", "sa", "Spelaion-test-1") {
         params.tls = TlsMode::Require;
         params.database = "master".into();
-        let master = connect(&SqlServerDriver, &params).await;
+        let master = connect(&*engines::sqlserver(), &params).await;
         run(
             &master,
             "if db_id('spelaion') is null create database spelaion",
@@ -145,8 +140,8 @@ async fn engines() -> Vec<Engine> {
         params.database = "spelaion".into();
         out.push(Engine {
             name: "sqlserver",
-            a: connect(&SqlServerDriver, &params).await,
-            b: connect(&SqlServerDriver, &params).await,
+            a: connect(&*engines::sqlserver(), &params).await,
+            b: connect(&*engines::sqlserver(), &params).await,
             no_wait: " with (readpast)",
         });
     }

@@ -3,6 +3,8 @@
 //! statement inside it. The run itself needs `SPELAION_TEST_MSSQL=127.0.0.1:11433`
 //! (testing/docker); without it that test is skipped, which does not count as tested.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -11,8 +13,8 @@ use spelaion_core::{
     CoreEvent, ResultStore, Risk, Session, check_script, check_write, classify_read_only,
     statement_at,
 };
+use spelaion_dialect::SqlServerDialect;
 use spelaion_driver_api::{ConnectParams, Dialect, Driver, Secret, TlsMode, Value};
-use spelaion_driver_sqlserver::{SqlServerDialect, SqlServerDriver};
 
 async fn session() -> Option<Session> {
     let Ok(addr) = std::env::var("SPELAION_TEST_MSSQL") else {
@@ -20,7 +22,7 @@ async fn session() -> Option<Session> {
         return None;
     };
     let (host, port) = addr.rsplit_once(':').unwrap();
-    let driver = SqlServerDriver;
+    let driver = engines::sqlserver();
     let conn = driver
         .connect(&ConnectParams {
             host: host.into(),

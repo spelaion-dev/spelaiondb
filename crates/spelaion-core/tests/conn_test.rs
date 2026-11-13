@@ -4,6 +4,8 @@
 //! The local cases always run. The ones through the bastions need `SPELAION_TEST_SSH` (and
 //! `SPELAION_TEST_PG`, `SPELAION_TEST_SOCKS` where they say so; see `testing/docker`).
 
+mod engines;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -221,7 +223,7 @@ fn postgres_connection(host: &str, port: u16, extra: &str) -> String {
 async fn a_local_file_is_read_and_opened() {
     let ws = Workspace::new("sqlite");
     let file = ws.base.join("data.sqlite");
-    spelaion_core::create_file_database(spelaion_config::Engine::Sqlite, &file).unwrap();
+    engines::create_database(spelaion_config::Engine::Sqlite, &file).await;
     ws.write(
         ".spelaion/connections/local.toml",
         &format!(

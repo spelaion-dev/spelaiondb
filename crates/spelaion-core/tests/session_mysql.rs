@@ -1,12 +1,13 @@
 //! Sessions against a real MySQL. Needs `SPELAION_TEST_MYSQL=host:port`
 //! (see `crates/spelaion-driver-mysql/tests/mysql.rs`).
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{ColumnFilter, CoreEvent, FilterOp, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver, Secret};
-use spelaion_driver_mysql::MysqlDriver;
 
 async fn session() -> Option<Session> {
     let Ok(addr) = std::env::var("SPELAION_TEST_MYSQL") else {
@@ -22,7 +23,7 @@ async fn session() -> Option<Session> {
         database: "spelaion".into(),
         ..Default::default()
     };
-    let driver = MysqlDriver::mysql();
+    let driver = engines::mysql();
     let conn = driver.connect(&params).await.expect("connecting");
     Some(Session::new(
         conn,

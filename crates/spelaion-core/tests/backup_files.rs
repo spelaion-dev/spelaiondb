@@ -2,6 +2,8 @@
 //! session of ours (ADR-049). SQLite and DuckDB need nothing external; the file runs on
 //! PostgreSQL and MySQL need `SPELAION_TEST_PG` and `SPELAION_TEST_MYSQL`.
 
+mod engines;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -230,7 +232,7 @@ async fn sqlite_is_copied_with_vacuum_into_even_read_only() {
 async fn duckdb_exports_a_folder_and_imports_it_into_another_database() {
     let ws = Workspace::new("duckdb");
     for name in ["source.duckdb", "target.duckdb"] {
-        spelaion_core::create_file_database(Engine::Duckdb, &ws.data(name)).unwrap();
+        engines::create_database(Engine::Duckdb, &ws.data(name)).await;
     }
     ws.connection(
         "source",

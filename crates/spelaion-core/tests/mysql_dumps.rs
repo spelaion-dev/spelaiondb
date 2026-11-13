@@ -8,18 +8,19 @@
 //! (`mysqldump` 8.4.13 and `mariadb-dump` 11.4.13, `--no-tablespaces --skip-dump-date`) from a
 //! table `dump_t` with a trigger `dump_t_bi` and a view `dump_v`.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_config::Safeguards;
 use spelaion_core::{CoreEvent, ResultStore, Risk, Session, check_script};
 use spelaion_driver_api::{ConnectParams, Driver, Secret, Value};
-use spelaion_driver_mysql::MysqlDriver;
 
 const MYSQL_DUMP: &str = include_str!("fixtures/mysqldump/mysql.sql");
 const MARIADB_DUMP: &str = include_str!("fixtures/mysqldump/mariadb.sql");
 
-async fn session(var: &str, driver: MysqlDriver) -> Option<Session> {
+async fn session(var: &str, driver: Arc<dyn Driver>) -> Option<Session> {
     let Ok(addr) = std::env::var(var) else {
         eprintln!("{var} not set: test skipped");
         return None;
@@ -84,12 +85,8 @@ const CLEAN: &str = "drop view if exists dump_v; drop table if exists dump_t";
 #[tokio::test]
 async fn dumps_restore_their_views_and_triggers() {
     for (var, driver, dump) in [
-        ("SPELAION_TEST_MYSQL", MysqlDriver::mysql(), MYSQL_DUMP),
-        (
-            "SPELAION_TEST_MARIADB",
-            MysqlDriver::mariadb(),
-            MARIADB_DUMP,
-        ),
+        ("SPELAION_TEST_MYSQL", engines::mysql(), MYSQL_DUMP),
+        ("SPELAION_TEST_MARIADB", engines::mariadb(), MARIADB_DUMP),
     ] {
         let Some(session) = session(var, driver).await else {
             continue;
@@ -149,7 +146,7 @@ async fn dumps_restore_their_views_and_triggers() {
 /// once such a statement is run, the guard must see inside it (MariaDB's `/*M!` too).
 #[test]
 fn the_guard_reads_executable_comments_as_the_server_does() {
-    let dialect = spelaion_dialect::for_engine(MysqlDriver::mysql().engine()).expect("a dialect");
+    let dialect = spelaion_dialect::for_engine(engines::mysql().engine()).expect("a dialect");
     let risk = |sql: &str| {
         check_script(dialect.as_ref(), sql, &Safeguards::default(), false)
             .err()

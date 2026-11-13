@@ -7,6 +7,8 @@
 //! type zoos compare with each server's own. The foreign key picker searches a referenced
 //! table of a million rows a page at a time.
 
+mod engines;
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -57,12 +59,12 @@ async fn engines() -> Vec<Engine> {
     let mut out = vec![
         Engine {
             label: "sqlite",
-            session: session(&spelaion_driver_sqlite::SqliteDriver::default(), memory()).await,
+            session: session(&*engines::sqlite(), memory()).await,
             schema: "main",
         },
         Engine {
             label: "duckdb",
-            session: session(&spelaion_driver_duckdb::DuckdbDriver::default(), memory()).await,
+            session: session(&*engines::duckdb(), memory()).await,
             schema: "main",
         },
     ];
@@ -79,21 +81,13 @@ async fn engines() -> Vec<Engine> {
         let params = login(host, port, "spelaion", "spelaion", "spelaion");
         out.push(Engine {
             label: "postgres",
-            session: session(&spelaion_driver_postgres::PostgresDriver, params).await,
+            session: session(&*engines::postgres(), params).await,
             schema: "public",
         });
     }
     for (label, var, driver) in [
-        (
-            "mysql",
-            "SPELAION_TEST_MYSQL",
-            spelaion_driver_mysql::MysqlDriver::mysql(),
-        ),
-        (
-            "mariadb",
-            "SPELAION_TEST_MARIADB",
-            spelaion_driver_mysql::MysqlDriver::mariadb(),
-        ),
+        ("mysql", "SPELAION_TEST_MYSQL", engines::mysql()),
+        ("mariadb", "SPELAION_TEST_MARIADB", engines::mariadb()),
     ] {
         if let Some((host, port)) = server(var) {
             let params = login(host, port, "spelaion", "spelaion", "spelaion");
@@ -111,7 +105,7 @@ async fn engines() -> Vec<Engine> {
         };
         out.push(Engine {
             label: "sqlserver",
-            session: session(&spelaion_driver_sqlserver::SqlServerDriver, params).await,
+            session: session(&*engines::sqlserver(), params).await,
             schema: "dbo",
         });
     }
@@ -667,7 +661,7 @@ fn the_key_search_is_a_checked_page_of_the_referenced_table() {
         referenced_table: "customers".into(),
         referenced_columns: vec!["id".into()],
     };
-    let dialect = spelaion_driver_sqlite::SqliteDialect;
+    let dialect = spelaion_dialect::SqliteDialect;
     let page = referenced_page_sql(&dialect, &key, &referenced, "  ", 100).unwrap();
     assert_eq!(page.columns, ["id", "name", "email", "city"]);
     assert_eq!(
@@ -696,7 +690,7 @@ fn the_key_search_is_a_checked_page_of_the_referenced_table() {
         page.sql
     );
     // SQL Server pages with OFFSET … FETCH.
-    let dialect = spelaion_driver_sqlserver::SqlServerDialect;
+    let dialect = spelaion_dialect::SqlServerDialect;
     let page = referenced_page_sql(&dialect, &key, &referenced, "a", 50).unwrap();
     assert!(
         page.sql

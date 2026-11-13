@@ -1,14 +1,15 @@
 //! Sessions over in-memory SQLite: they always run, with nothing external.
 
+mod engines;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use spelaion_core::{CoreEvent, ResultStore, Session};
 use spelaion_driver_api::{ConnectParams, Driver};
-use spelaion_driver_sqlite::SqliteDriver;
 
 async fn session() -> Session {
-    let driver = SqliteDriver::default();
+    let driver = engines::sqlite();
     let conn = driver
         .connect(&ConnectParams {
             database: ":memory:".into(),

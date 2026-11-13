@@ -194,6 +194,13 @@ impl Driver for DuckdbDriver {
         "duckdb"
     }
 
+    async fn create_database(&self, database: &str) -> Result<()> {
+        let path = std::path::PathBuf::from(database);
+        tokio::task::spawn_blocking(move || create_database(&path))
+            .await
+            .map_err(|e| DriverError::Other(e.to_string()))?
+    }
+
     async fn connect(&self, params: &ConnectParams) -> Result<Box<dyn Connection>> {
         let path = params.database.clone();
         let read_only = params.read_only;

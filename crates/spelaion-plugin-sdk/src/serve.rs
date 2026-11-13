@@ -8,12 +8,12 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use spelaion_driver_api::{
-    ConnectParams, Connection, DriverError, EventStream, ExecEvent, ExecOptions, Secret,
+    ConnectParams, Connection, Driver, DriverError, EventStream, ExecEvent, ExecOptions, Secret,
 };
 use spelaion_plugin_protocol::ipc::{BatchDecoder, BatchEncoder, Decoded, batch_to_rows};
 use spelaion_plugin_protocol::{
-    CatalogRequest, Connect, ConnectResult, ErrorData, Execute, Frame, FrameError, Initialize,
-    InitializeResult, InsertRows, InsertRowsResult, Message, Program, RpcError, Run,
+    CatalogRequest, Connect, ConnectResult, CreateDatabase, ErrorData, Execute, Frame, FrameError,
+    Initialize, InitializeResult, InsertRows, InsertRowsResult, Message, Program, RpcError, Run,
     SessionRequest, StreamCredit, StreamDone, StreamError, StreamId, StreamNotice, VERSION, code,
     method, read_frame, write_frame,
 };
@@ -87,7 +87,21 @@ where
                 } else if !initialized {
                     let error = RpcError::invalid_request("initialize comes first");
                     shared.send(Message::error(id, error)).await;
+                } else if name == method::CLOSE {
+                    // Here, in the order it arrived, and not in a task that may run before
+                    // the `connect` it follows.
+                    let answer = match shared.close(&message) {
+                        Ok(result) => Message::result(id, result),
+                        Err(error) => Message::error(id, error),
+                    };
+                    shared.send(answer).await;
                 } else {
+                    if name == method::CONNECT
+                        && let Err(error) = shared.reserve(&message)
+                    {
+                        shared.send(Message::error(id, error)).await;
+                        continue;
+                    }
                     tokio::spawn(guarded(shared.clone(), id, name, message));
                 }
             }
@@ -123,9 +137,10 @@ struct Session {
 }
 
 enum Slot {
-    /// `connect` is running. A `close` meanwhile removes the slot, and the connection is
-    /// dropped when it arrives.
-    Connecting,
+    /// `connect` is running. A `close` meanwhile removes the slot and tells it to stop: the
+    /// driver's attempt is dropped there and then, as it is when the core drops a driver's
+    /// `connect` in its own process (a login the user stopped must not stay open).
+    Connecting(Arc<Notify>),
     Open(Arc<Session>),
 }
 
@@ -238,10 +253,40 @@ impl Shared {
         Ok(())
     }
 
+    /// A session's place, taken as its `connect` arrives: a `close` that follows finds it,
+    /// however soon it comes.
+    fn reserve(&self, message: &Message) -> Result<(), RpcError> {
+        let request: SessionRequest = message.params()?;
+        let mut sessions = self.sessions.lock().expect("lock poisoned");
+        if sessions.contains_key(&request.session) {
+            return Err(RpcError::invalid_request(format!(
+                "session {} is already open",
+                request.session
+            )));
+        }
+        sessions.insert(request.session, Slot::Connecting(Arc::new(Notify::new())));
+        Ok(())
+    }
+
+    /// `close`: the session is gone. One that was still connecting stops, and drops what it
+    /// has.
+    fn close(&self, message: &Message) -> Result<Value, RpcError> {
+        let request: SessionRequest = message.params()?;
+        let slot = self
+            .sessions
+            .lock()
+            .expect("lock poisoned")
+            .remove(&request.session);
+        if let Some(Slot::Connecting(given_up)) = slot {
+            given_up.notify_one();
+        }
+        Ok(json!({}))
+    }
+
     fn session(&self, id: u64) -> Result<Arc<Session>, RpcError> {
         match self.sessions.lock().expect("lock poisoned").get(&id) {
             Some(Slot::Open(session)) => Ok(session.clone()),
-            Some(Slot::Connecting) | None => Err(RpcError::invalid_request(format!(
+            Some(Slot::Connecting(_)) | None => Err(RpcError::invalid_request(format!(
                 "there is no session {id}"
             ))),
         }
@@ -315,6 +360,8 @@ async fn handle(shared: Arc<Shared>, id: u64, name: String, message: Message) {
     }
     let result = if name == method::CONNECT {
         connect(&shared, &message).await
+    } else if name == method::CREATE_DATABASE {
+        create_database(&shared, &message).await
     } else {
         match message.params::<SessionRequest>() {
             Ok(request) => {
@@ -345,30 +392,54 @@ fn needs<'a>(value: &'a Option<String>, name: &str) -> Result<&'a str, RpcError>
     })
 }
 
-async fn connect(shared: &Shared, message: &Message) -> Result<Value, RpcError> {
-    let request: Connect = message.params()?;
-    let Some(driver) = shared
+/// The driver of one of this plugin's engines.
+fn driver_of(shared: &Shared, engine: &str) -> Result<Arc<dyn Driver>, RpcError> {
+    shared
         .plugin
         .drivers
         .iter()
-        .find(|d| d.engine() == request.engine)
+        .find(|d| d.engine() == engine)
         .cloned()
-    else {
-        return Err(RpcError::invalid_request(format!(
-            "this plugin has no engine {:?}",
-            request.engine
-        )));
-    };
-    {
+        .ok_or_else(|| RpcError::invalid_request(format!("this plugin has no engine {engine:?}")))
+}
+
+async fn create_database(shared: &Shared, message: &Message) -> Result<Value, RpcError> {
+    let request: CreateDatabase = message.params()?;
+    let driver = driver_of(shared, &request.engine)?;
+    driver
+        .create_database(&request.database)
+        .await
+        .map_err(driver_error)?;
+    Ok(json!({}))
+}
+
+/// `connect`. The session's place was taken when the request arrived (`reserve`).
+async fn connect(shared: &Shared, message: &Message) -> Result<Value, RpcError> {
+    let session = message.params::<SessionRequest>()?.session;
+    let result = connecting(shared, message).await;
+    if result.is_err() {
+        // Its place is given back, unless a `close` already took it.
         let mut sessions = shared.sessions.lock().expect("lock poisoned");
-        if sessions.contains_key(&request.session) {
-            return Err(RpcError::invalid_request(format!(
-                "session {} is already open",
-                request.session
-            )));
+        if matches!(sessions.get(&session), Some(Slot::Connecting(_))) {
+            sessions.remove(&session);
         }
-        sessions.insert(request.session, Slot::Connecting);
     }
+    result
+}
+
+async fn connecting(shared: &Shared, message: &Message) -> Result<Value, RpcError> {
+    let request: Connect = message.params()?;
+    let driver = driver_of(shared, &request.engine)?;
+    let closed = || RpcError::invalid_request("the session was closed");
+    let given_up = match shared
+        .sessions
+        .lock()
+        .expect("lock poisoned")
+        .get(&request.session)
+    {
+        Some(Slot::Connecting(given_up)) => given_up.clone(),
+        Some(Slot::Open(_)) | None => return Err(closed()),
+    };
     let params = ConnectParams {
         host: request.host,
         port: request.port,
@@ -386,13 +457,18 @@ async fn connect(shared: &Shared, message: &Message) -> Result<Value, RpcError> 
         remote: None,
         connect_timeout: request.connect_timeout_ms.map(Duration::from_millis),
     };
-    let connected = driver.connect(&params).await;
+    let connected = tokio::select! {
+        biased;
+        // The attempt ends here: whatever it had open is closed with it.
+        () = given_up.notified() => return Err(closed()),
+        connected = driver.connect(&params) => connected,
+    };
     let mut sessions = shared.sessions.lock().expect("lock poisoned");
     match connected {
         Ok(connection) => {
             // Closed while it was connecting: the connection is dropped here.
-            if !matches!(sessions.get(&request.session), Some(Slot::Connecting)) {
-                return Err(RpcError::invalid_request("the session was closed"));
+            if !matches!(sessions.get(&request.session), Some(Slot::Connecting(_))) {
+                return Err(closed());
             }
             let capabilities = connection.capabilities().clone();
             sessions.insert(
@@ -408,12 +484,7 @@ async fn connect(shared: &Shared, message: &Message) -> Result<Value, RpcError> 
                 data: None,
             })
         }
-        Err(error) => {
-            if matches!(sessions.get(&request.session), Some(Slot::Connecting)) {
-                sessions.remove(&request.session);
-            }
-            Err(driver_error(error))
-        }
+        Err(error) => Err(driver_error(error)),
     }
 }
 
@@ -424,11 +495,6 @@ async fn on_session(
     id: u64,
     message: &Message,
 ) -> Result<Value, RpcError> {
-    if name == method::CLOSE {
-        // Also while it connects: `connect` then drops what it gets.
-        shared.sessions.lock().expect("lock poisoned").remove(&id);
-        return Ok(json!({}));
-    }
     let session = shared.session(id)?;
     let connection = &session.connection;
     let request: CatalogRequest = message.params()?;

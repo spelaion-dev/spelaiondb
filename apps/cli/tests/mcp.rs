@@ -454,7 +454,7 @@ fn an_agent_writes_only_where_the_user_allowed_it() {
     );
 }
 
-/// Runs `script` on a DuckDB file, creating it, with the project's own driver.
+/// Runs `script` on a DuckDB file, creating it, with the driver the core opens.
 fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
     use futures_util::StreamExt;
     use spelaion_driver_api::{ConnectParams, Driver, ExecEvent, ExecOptions, Value};
@@ -463,9 +463,17 @@ fn duckdb(path: &Path, script: &[&str]) -> Vec<String> {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let driver = spelaion_driver_duckdb::DuckdbDriver {
-            create_if_missing: true,
-        };
+        // The engine as the core opens it: built in or through its plugin.
+        let engines = spelaion_core::Engines::builtin();
+        if !path.exists() {
+            engines
+                .create_file_database(spelaion_config::Engine::Duckdb, path)
+                .await
+                .unwrap();
+        }
+        let driver = engines
+            .get(spelaion_config::Engine::Duckdb)
+            .expect("DuckDB has a driver");
         let conn = driver
             .connect(&ConnectParams {
                 database: path.display().to_string(),
