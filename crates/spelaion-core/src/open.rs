@@ -13,7 +13,6 @@ use spelaion_driver_api::{
     ConnectParams, Connection, Dialect, Driver, DriverError, Remote, RemoteCommand, RemoteControl,
     RemoteProcess, Secret,
 };
-use spelaion_driver_postgres::PostgresDriver;
 use spelaion_driver_sqlite::SqliteDriver;
 use spelaion_ssh::{
     AuthMethod, HopSpec, Interaction, KnownHosts, LocalPort, ProxyKind, ProxySpec, RemoteSignals,
@@ -34,8 +33,7 @@ impl Engines {
     /// The engines that ship with SpelaionDB: the drivers still compiled in, and the pinned
     /// plugins next to this program (DuckDB is one, ADR-041).
     pub fn builtin() -> Self {
-        let drivers: Vec<Arc<dyn Driver>> =
-            vec![Arc::new(PostgresDriver), Arc::new(SqliteDriver::default())];
+        let drivers: Vec<Arc<dyn Driver>> = vec![Arc::new(SqliteDriver::default())];
         let mut engines = Self {
             drivers: drivers
                 .into_iter()

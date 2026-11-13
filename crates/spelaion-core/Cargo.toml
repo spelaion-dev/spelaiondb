@@ -13,7 +13,6 @@ spelaion-config.workspace = true
 spelaion-driver-api.workspace = true
 spelaion-dialect.workspace = true
 spelaion-plugin-host.workspace = true
-spelaion-driver-postgres.workspace = true
 spelaion-driver-sqlite.workspace = true
 spelaion-ssh.workspace = true
 spelaion-store.workspace = true

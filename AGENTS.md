@@ -113,9 +113,14 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   programs: a change to the protocol's three crates or to a driver is tested both ways. A
   database on another machine (SQLite over SSH, ADR-018) never goes through a plugin: the core
   keeps the driver compiled in for it (`ThroughPlugin` in `open.rs`).
-- `crates/spelaion-driver-postgres`: extended protocol + our own binary decoding
-  (`decode.rs`). TLS (and client certificates, ADR-022) in `tls.rs`. Each type's text must be identical to `psql`'s: the type zoo
-  (`tests/postgres.rs`) checks it. A new type is added there first.
+- **PostgreSQL is a plugin** (ADR-041, ADR-042): its driver is not in this workspace. It lives
+  in `spelaion-dev/spelaiondb-plugin-postgres` with its type zoo (each type's text identical
+  to `psql`'s; a new type is added there first), its TLS and client certificates (ADR-022)
+  and the patched `tokio-postgres`, and this repository pins the release it ships
+  (`plugins.toml`). The plugin does the TLS handshake itself, against the host name the core
+  gives it with the tunnel's local address. Here, its tests run through that plugin,
+  unchanged, `spelaion-ssh`'s tunnel tests included: the pinned build next to the program, or,
+  in a development build, the one `SPELAION_DEV_PLUGIN_POSTGRES` points at.
 - **MySQL and MariaDB are a plugin** (ADR-041, ADR-042): their driver is not in this
   workspace. It lives in `spelaion-dev/spelaiondb-plugin-mysql` (one program serves both
   engines) with its type zoo and the patched `mysql_async` (`verify-ca` skips the name check),

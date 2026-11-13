@@ -22,9 +22,9 @@
 #   archive_size = 12345678
 #   program_sha256 = "…"                                 # of the program inside the archive
 #
-# Pinned so far: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL. Their drivers are
-# still compiled into the core until each engine's migration is merged: a pin alone changes
-# nothing for a user.
+# Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL. None of their drivers
+# is compiled into the core any more: these builds, inside the installer, are what serves
+# those engines.
 
 schema_version = 1
 
