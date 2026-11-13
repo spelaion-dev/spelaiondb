@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
-exclude = ["vendor"]
 
 [workspace.package]
 version = "0.9.0"
@@ -16,7 +15,6 @@ spelaion-dialect = { path = "crates/spelaion-dialect" }
 spelaion-plugin-protocol = { path = "crates/spelaion-plugin-protocol" }
 spelaion-plugin-host = { path = "crates/spelaion-plugin-host" }
 spelaion-plugin-sdk = { path = "crates/spelaion-plugin-sdk" }
-spelaion-driver-postgres = { path = "crates/spelaion-driver-postgres" }
 spelaion-driver-sqlite = { path = "crates/spelaion-driver-sqlite" }
 spelaion-core = { path = "crates/spelaion-core" }
 spelaion-config = { path = "crates/spelaion-config" }
@@ -29,11 +27,8 @@ arrow = { version = "60", default-features = false, features = ["ipc"] }
 async-trait = "0.1"
 futures-util = "0.3"
 insta = "1"
-postgres-protocol = "0.6"
-postgres-types = "0.2"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-tokio-postgres = "0.7"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -48,5 +43,3 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
-[patch.crates-io]
-tokio-postgres = { path = "vendor/tokio-postgres" }

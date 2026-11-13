@@ -6,7 +6,7 @@
 #
 #   scripts/measure-plugins.sh            # three runs each way, then the medians
 #   RUNS=5 scripts/measure-plugins.sh
-#   SPELAION_PLUGIN_ENGINES="postgres sqlite" scripts/measure-plugins.sh
+#   SPELAION_PLUGIN_ENGINES="sqlite" scripts/measure-plugins.sh
 #
 # Optimised builds, the same one both ways, with debug assertions on: only a build with them
 # follows SPELAION_DEV_PLUGIN_<ENGINE> (a release build ignores it, ADR-042). The servers are
@@ -27,7 +27,7 @@ cd "$root"
 export CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true
 
 runs=${RUNS:-3}
-engines=${SPELAION_PLUGIN_ENGINES:-"postgres sqlite"}
+engines=${SPELAION_PLUGIN_ENGINES:-"sqlite"}
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 

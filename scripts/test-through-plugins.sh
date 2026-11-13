@@ -13,7 +13,7 @@
 # plugin of its own repository): its tests always go through its plugin.
 # `SPELAION_PLUGIN_ENGINES` narrows it to some engines:
 #
-#   SPELAION_PLUGIN_ENGINES="postgres sqlite" scripts/test-through-plugins.sh -p spelaion-core
+#   SPELAION_PLUGIN_ENGINES="sqlite" scripts/test-through-plugins.sh -p spelaion-core
 #
 # The servers the tests need are the usual ones (`SPELAION_TEST_PG` and the rest, see
 # `AGENTS.md`); without them those tests are skipped, here as anywhere.
@@ -22,7 +22,7 @@ set -euo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-engines=${SPELAION_PLUGIN_ENGINES:-"postgres sqlite"}
+engines=${SPELAION_PLUGIN_ENGINES:-"sqlite"}
 
 # The program that serves an engine: MySQL's serves MariaDB too.
 program_of() {
