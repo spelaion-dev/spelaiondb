@@ -12,6 +12,7 @@ mod error;
 mod filter;
 mod introspect;
 mod remote;
+mod rows;
 mod secret;
 pub mod thread_cancel;
 mod value;
@@ -35,6 +36,7 @@ pub use introspect::{
     ServerObjectKind, TableInfo, check_definition, terminated,
 };
 pub use remote::{Remote, RemoteCommand, RemoteControl, RemoteProcess};
+pub use rows::{TextRows, TextRowsBuilder};
 pub use secret::Secret;
 pub use value::{LogicalType, Value};
 
@@ -377,14 +379,11 @@ pub trait Connection: Send + Sync {
     /// Inserts `rows` into a table (data imports, ADR-038). Every value travels as a bound
     /// parameter or as the data of the engine's bulk path (PostgreSQL's `COPY … FROM STDIN`),
     /// never written into SQL text: only the quoted table and column names are. Values are
-    /// text, or `None` for NULL, and the server converts them to each column's type. It runs
-    /// inside whatever transaction the session has open and opens none itself. Returns the
-    /// rows inserted.
-    async fn insert_rows(
-        &self,
-        _target: &InsertTarget,
-        _rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    /// text, or `None` for NULL, and the server converts them to each column's type. They come
+    /// as columns of text ([`TextRows`]), read in place: the same rows whether the driver is
+    /// compiled in or a plugin. It runs inside whatever transaction the session has open and
+    /// opens none itself. Returns the rows inserted.
+    async fn insert_rows(&self, _target: &InsertTarget, _rows: TextRows) -> Result<u64> {
         Err(DriverError::Other(
             "this connection cannot import rows".into(),
         ))
@@ -428,14 +427,15 @@ impl InsertTarget {
     }
 
     /// Every row has one value per column.
-    pub fn check_rows(&self, rows: &[Vec<Option<String>>]) -> Result<()> {
-        match rows.iter().find(|row| row.len() != self.columns.len()) {
-            Some(row) => Err(DriverError::Other(format!(
+    pub fn check_rows(&self, rows: &TextRows) -> Result<()> {
+        if rows.width() == self.columns.len() {
+            Ok(())
+        } else {
+            Err(DriverError::Other(format!(
                 "a row has {} values for {} columns",
-                row.len(),
+                rows.width(),
                 self.columns.len()
-            ))),
-            None => Ok(()),
+            )))
         }
     }
 
@@ -444,27 +444,29 @@ impl InsertTarget {
     /// `max_bytes` of data each (its packet size), and always at least one row.
     pub fn statement_chunks(
         &self,
-        rows: Vec<Vec<Option<String>>>,
+        rows: &TextRows,
         max_values: usize,
         max_rows: usize,
         max_bytes: usize,
-    ) -> Vec<Vec<Vec<Option<String>>>> {
+    ) -> Vec<TextRows> {
         let width = self.columns.len().max(1);
         let per_statement = (max_values / width).clamp(1, max_rows.max(1));
         let mut chunks = Vec::new();
-        let mut current = Vec::new();
+        // The chunk being filled: where it starts, and its bytes so far.
+        let mut start = 0usize;
         let mut bytes = 0usize;
-        for row in rows {
-            let size: usize = row.iter().map(|v| v.as_ref().map_or(1, String::len)).sum();
-            if !current.is_empty() && (current.len() >= per_statement || bytes + size > max_bytes) {
-                chunks.push(std::mem::take(&mut current));
+        for row in 0..rows.len() {
+            let size = rows.row_bytes(row);
+            let filled = row - start;
+            if filled > 0 && (filled >= per_statement || bytes + size > max_bytes) {
+                chunks.push(rows.slice(start, filled));
+                start = row;
                 bytes = 0;
             }
             bytes += size;
-            current.push(row);
         }
-        if !current.is_empty() {
-            chunks.push(current);
+        if start < rows.len() {
+            chunks.push(rows.slice(start, rows.len() - start));
         }
         chunks
     }

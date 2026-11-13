@@ -22,7 +22,7 @@ use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
     NameFilter, Notice, ObjectInfo, PlanMode, ReferencingKey, Result, ResultSchema, SchemaColumn,
-    SchemaInfo, SchemaObject, ServerObject, TableInfo, TlsMode, TransactionState,
+    SchemaInfo, SchemaObject, ServerObject, TableInfo, TextRows, TlsMode, TransactionState,
 };
 use tiberius::{AuthMethod, Client, ColumnType, Config, EncryptionLevel, QueryItem};
 use tokio::net::TcpStream;
@@ -195,7 +195,7 @@ enum Request {
     /// `INSERT … SELECT`.
     Insert {
         target: InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
+        rows: TextRows,
         reply: oneshot::Sender<Result<u64>>,
     },
 }
@@ -386,11 +386,7 @@ async fn actor(
 /// the server convert each value to its column's type, in the order the rows came. The values
 /// are the bulk load's data: they are never SQL text. The staging table lives in the session (and
 /// in its transaction: a rollback drops it, and the next batch creates it again).
-async fn bulk_insert(
-    client: &mut SqlClient,
-    target: &InsertTarget,
-    rows: Vec<Vec<Option<String>>>,
-) -> Result<u64> {
+async fn bulk_insert(client: &mut SqlClient, target: &InsertTarget, rows: TextRows) -> Result<u64> {
     let width = target.columns.len();
     let staging = format!("#spelaion_import_{width}");
     let names: Vec<String> = (1..=width).map(|i| format!("c{i}")).collect();
@@ -409,11 +405,11 @@ async fn bulk_insert(
             .bulk_insert_columns(&staging, &columns)
             .await
             .map_err(|e| map_error(e, None))?;
-        for row in rows {
+        for row in 0..rows.len() {
             let mut token = tiberius::TokenRow::new();
-            for value in row {
+            for value in rows.row(row) {
                 token.push(tiberius::ColumnData::String(
-                    value.map(std::borrow::Cow::Owned),
+                    value.map(std::borrow::Cow::Borrowed),
                 ));
             }
             load.send(token).await.map_err(|e| map_error(e, None))?;
@@ -832,11 +828,7 @@ impl Connection for SqlServerConnection {
     }
 
     /// A TDS bulk load into a staging table, then `INSERT … SELECT` (see `bulk_insert`).
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         target.check_rows(&rows)?;
         if rows.is_empty() {
             return Ok(0);

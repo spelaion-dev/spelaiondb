@@ -1,24 +1,26 @@
 //! The loop that serves drivers to the core: frames in, frames out.
 
 use std::collections::HashMap;
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use serde_json::{Value, json};
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, EventStream, ExecEvent, ExecOptions, Secret,
+    TextRows,
 };
-use spelaion_plugin_protocol::ipc::{BatchDecoder, BatchEncoder, Decoded, batch_to_rows};
+use spelaion_plugin_protocol::ipc::{BatchDecoder, BatchEncoder, Decoded};
 use spelaion_plugin_protocol::{
     CatalogRequest, Connect, ConnectResult, CreateDatabase, ErrorData, Execute, Frame, FrameError,
     Initialize, InitializeResult, InsertRows, InsertRowsResult, Message, Program, RpcError, Run,
     SessionRequest, StreamCredit, StreamDone, StreamError, StreamId, StreamNotice, VERSION, code,
     method, read_frame, write_frame,
 };
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::sync::{Notify, Semaphore, mpsc, oneshot};
 
 use crate::Plugin;
 
@@ -29,13 +31,21 @@ const CLOSED_CHECK: Duration = Duration::from_millis(500);
 
 /// Serves `plugin` over `reader` and `writer` until `reader` ends. [`crate::run`] does this on
 /// the program's standard input and output.
-pub async fn serve<R, W>(plugin: Plugin, mut reader: R, writer: W) -> Result<(), FrameError>
+///
+/// Each pipe has a thread of its own, with plain blocking calls: a frame then costs one read
+/// of the pipe, not a trip through the runtime's pool of blocking threads for each of its
+/// parts.
+pub async fn serve<R, W>(plugin: Plugin, reader: R, writer: W) -> Result<(), FrameError>
 where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin + Send + 'static,
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
 {
     let (out, frames) = mpsc::channel(64);
-    tokio::spawn(write_loop(writer, frames));
+    let spawned = |e: std::io::Error| FrameError::Io(e);
+    std::thread::Builder::new()
+        .name("plugin out".into())
+        .spawn(move || write_loop(writer, frames))
+        .map_err(spawned)?;
     let shared = Arc::new(Shared {
         plugin,
         out,
@@ -45,12 +55,40 @@ where
     });
     let watcher = tokio::spawn(watch_closed(shared.clone()));
 
+    // The reader's thread takes each frame as far as it goes without waiting: rows are kept,
+    // what must keep its order (`connect`, `close`, credit) is done there and then, and a
+    // request is handed to the runtime. Nothing else wakes up for a frame.
+    let runtime = tokio::runtime::Handle::current();
+    let (ended, ending) = oneshot::channel();
+    let reading = shared.clone();
+    std::thread::Builder::new()
+        .name("plugin in".into())
+        .spawn(move || {
+            let _ = ended.send(read_loop(reader, &reading, &runtime));
+        })
+        .map_err(spawned)?;
+    // Without an answer the thread is gone: the conversation is over either way.
+    let result = ending.await.unwrap_or(Ok(()));
+    watcher.abort();
+    // The sessions end with the conversation.
+    shared.sessions.lock().expect("lock poisoned").clear();
+    result
+}
+
+/// What is read from or written to a pipe at once when it is there: several small frames.
+const PIPE_BUFFER: usize = 64 * 1024;
+
+/// Reads frames until the input closes (`Ok`) or is not the protocol.
+fn read_loop<R: Read>(
+    reader: R,
+    shared: &Arc<Shared>,
+    runtime: &tokio::runtime::Handle,
+) -> Result<(), FrameError> {
+    let mut reader = BufReader::with_capacity(PIPE_BUFFER, reader);
     let mut initialized = false;
-    let result = loop {
-        let frame = match read_frame(&mut reader).await {
-            Ok(Some(frame)) => frame,
-            Ok(None) => break Ok(()),
-            Err(error) => break Err(error),
+    loop {
+        let Some(frame) = read_frame(&mut reader)? else {
+            return Ok(());
         };
         match frame {
             Frame::Data {
@@ -83,10 +121,10 @@ where
                         }
                         Err(error) => Message::error(id, error),
                     };
-                    shared.send(answer).await;
+                    shared.send_now(answer);
                 } else if !initialized {
                     let error = RpcError::invalid_request("initialize comes first");
-                    shared.send(Message::error(id, error)).await;
+                    shared.send_now(Message::error(id, error));
                 } else if name == method::CLOSE {
                     // Here, in the order it arrived, and not in a task that may run before
                     // the `connect` it follows.
@@ -94,37 +132,34 @@ where
                         Ok(result) => Message::result(id, result),
                         Err(error) => Message::error(id, error),
                     };
-                    shared.send(answer).await;
+                    shared.send_now(answer);
                 } else {
                     if name == method::CONNECT
                         && let Err(error) = shared.reserve(&message)
                     {
-                        shared.send(Message::error(id, error)).await;
+                        shared.send_now(Message::error(id, error));
                         continue;
                     }
-                    tokio::spawn(guarded(shared.clone(), id, name, message));
+                    runtime.spawn(guarded(shared.clone(), id, name, message));
                 }
             }
         }
-    };
-    watcher.abort();
-    // The sessions end with the conversation.
-    shared.sessions.lock().expect("lock poisoned").clear();
-    result
+    }
 }
 
-async fn write_loop<W: AsyncWrite + Unpin>(mut writer: W, mut frames: mpsc::Receiver<Frame>) {
-    while let Some(frame) = frames.recv().await {
-        if write_frame(&mut writer, &frame).await.is_err() {
+fn write_loop<W: Write>(writer: W, mut frames: mpsc::Receiver<Frame>) {
+    let mut writer = BufWriter::with_capacity(PIPE_BUFFER, writer);
+    while let Some(frame) = frames.blocking_recv() {
+        if write_frame(&mut writer, &frame).is_err() {
             return;
         }
         // Whatever else is waiting goes out before the flush.
         while let Ok(frame) = frames.try_recv() {
-            if write_frame(&mut writer, &frame).await.is_err() {
+            if write_frame(&mut writer, &frame).is_err() {
                 return;
             }
         }
-        if writer.flush().await.is_err() {
+        if writer.flush().is_err() {
             return;
         }
     }
@@ -156,7 +191,7 @@ struct Sending {
 #[derive(Default)]
 struct Incoming {
     decoder: BatchDecoder,
-    rows: Vec<Vec<Option<String>>>,
+    rows: Vec<TextRows>,
 }
 
 struct Shared {
@@ -170,6 +205,11 @@ struct Shared {
 impl Shared {
     async fn send(&self, message: Message) {
         let _ = self.out.send(Frame::Message(message.to_bytes())).await;
+    }
+
+    /// The same from the reader's thread, which is not in the runtime.
+    fn send_now(&self, message: Message) {
+        let _ = self.out.blocking_send(Frame::Message(message.to_bytes()));
     }
 
     async fn notify(&self, method: &str, params: impl serde::Serialize) {
@@ -247,7 +287,7 @@ impl Shared {
             .map_err(|e| DriverError::Other(e.to_string()))?;
         for item in decoded {
             if let Decoded::Batch(batch) = item {
-                entry.rows.extend(batch_to_rows(&batch)?);
+                entry.rows.push(TextRows::from_batch(&batch)?);
             }
         }
         Ok(())
@@ -330,8 +370,11 @@ async fn guarded(shared: Arc<Shared>, id: u64, name: String, message: Message) {
         .and_then(|p| p.get("stream"))
         .and_then(Value::as_u64);
     let is_execute = name == method::EXECUTE;
-    let task = tokio::spawn(handle(shared.clone(), id, name, message));
-    if task.await.is_err() {
+    // In this task, not one more: a request wakes up as little as it can.
+    let served = AssertUnwindSafe(handle(shared.clone(), id, name, message))
+        .catch_unwind()
+        .await;
+    if served.is_err() {
         let error = DriverError::Other("the plugin failed while it ran the request".into());
         shared
             .send(Message::error(id, RpcError::from(&error)))
@@ -516,6 +559,9 @@ async fn on_session(
                 .remove(&request.stream)
                 .map(|incoming| incoming.rows)
                 .unwrap_or_default();
+            // One batch, as the core sends them: used as it arrived.
+            let rows =
+                TextRows::concat(request.target.columns.len(), &rows).map_err(driver_error)?;
             let rows = connection
                 .insert_rows(&request.target, rows)
                 .await

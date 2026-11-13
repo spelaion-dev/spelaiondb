@@ -21,7 +21,7 @@ use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnMeta, ColumnOrigin, ConnectParams, Connection, Dialect,
     Driver, DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LikeFilter,
     NameFilter, Notice, ObjectInfo, ReferencingKey, Result, ResultSchema, SchemaColumn, SchemaInfo,
-    SchemaObject, ServerObject, TableInfo, TransactionState,
+    SchemaObject, ServerObject, TableInfo, TextRows, TransactionState,
 };
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSql, Type};
@@ -412,11 +412,8 @@ impl Connection for PgConnection {
     }
 
     /// `COPY … FROM STDIN` in text format: the values are the copy's data, never SQL.
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
+        target.check_rows(&rows)?;
         if rows.is_empty() {
             return Ok(0);
         }
@@ -428,15 +425,8 @@ impl Connection for PgConnection {
             .map_err(map_error)?;
         let mut sink = std::pin::pin!(sink);
         let mut chunk = String::with_capacity(COPY_CHUNK + 4096);
-        for row in &rows {
-            if row.len() != target.columns.len() {
-                return Err(DriverError::Other(format!(
-                    "a row has {} values for {} columns",
-                    row.len(),
-                    target.columns.len()
-                )));
-            }
-            copy_text_row(&mut chunk, row);
+        for row in 0..rows.len() {
+            copy_text_row(&mut chunk, rows.row(row));
             if chunk.len() >= COPY_CHUNK {
                 let data = bytes::Bytes::from(std::mem::take(&mut chunk));
                 sink.send(data).await.map_err(map_error)?;
@@ -486,8 +476,8 @@ pub fn copy_sql(target: &InsertTarget, dialect: &dyn Dialect) -> String {
 
 /// One row of COPY's text format: values separated by tabs, `\N` for NULL, and backslashes,
 /// tabs, newlines and carriage returns escaped, so a value can never end its field or its row.
-fn copy_text_row(out: &mut String, row: &[Option<String>]) {
-    for (i, value) in row.iter().enumerate() {
+fn copy_text_row<'a>(out: &mut String, row: impl IntoIterator<Item = Option<&'a str>>) {
+    for (i, value) in row.into_iter().enumerate() {
         if i > 0 {
             out.push('\t');
         }
@@ -518,12 +508,7 @@ mod copy_tests {
         let mut out = String::new();
         copy_text_row(
             &mut out,
-            &[
-                Some("a\tb\nc\\d\re".into()),
-                None,
-                Some(r"\N".into()),
-                Some(String::new()),
-            ],
+            [Some("a\tb\nc\\d\re"), None, Some(r"\N"), Some("")],
         );
         assert_eq!(out, "a\\tb\\nc\\\\d\\re\t\\N\t\\\\N\t\n");
     }

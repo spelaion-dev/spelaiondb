@@ -6021,7 +6021,6 @@ dependencies = [
  "serde_json",
  "spelaion-driver-api",
  "thiserror 2.0.21",
- "tokio",
 ]
 
 [[package]]

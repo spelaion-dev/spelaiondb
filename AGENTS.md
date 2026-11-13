@@ -74,9 +74,10 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
     connection known to be closed, answers even when a driver panics and ends the program when
     its input closes. Standard output is the protocol: a plugin never prints to it.
   - `crates/spelaion-plugin-host`: the core's side. `Plugin` is one process per program,
-    started on the first connection and shared by every session of its engines, its pipes
-    served on a thread of its own (never `tokio::spawn` there: the runtime that connected first
-    may end before the others); `PluginDriver`
+    started on the first connection and shared by every session of its engines. Its pipes are
+    read and written on threads of their own with blocking calls, as the SDK's are (never
+    `tokio::spawn` or tokio's own pipes there: the runtime that connected first may end before
+    the others, and each read would be a trip through the runtime's blocking pool); `PluginDriver`
     and its connection are the `Driver` and `Connection` the core already uses. A plugin that
     stops loses its sessions (`is_closed`, ADR-028) and nothing is re-run. The password goes
     only in `connect`, and every error, notice and log line of a plugin has the secrets it was
@@ -92,6 +93,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   name a plugin.
   Until an engine's driver moves to its own repository, its crate here also builds its plugin
   program (`src/bin/spelaion-plugin-<engine>.rs`; MySQL's serves MariaDB too), and
+  `scripts/measure-plugins.sh` measures ADR-041's gate (a million-row result and a million-row
+  import, in process and through each plugin: at most 15 % longer), and
   `scripts/test-through-plugins.sh` runs any `cargo test` with every engine through those
   programs: a change to the protocol's three crates or to a driver is tested both ways. A
   database on another machine (SQLite over SSH, ADR-018) never goes through a plugin: the core
@@ -334,7 +337,8 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   arrays and Markdown tables as untrusted input (bounded records, columns and whole reads),
   `detect.rs` detects types and converts the few values servers disagree on, and `mod.rs` writes
   the DDL, checks read-only and the guard, and loads the rows in transactions through
-  `Connection::insert_rows`, which binds every value (`COPY` on PostgreSQL, prepared inserts on
+  `Connection::insert_rows`, which takes them as columns of text (`TextRows`: Arrow, read as
+  `&str`, never one `String` per cell, so they reach a plugin as they are) and binds every value (`COPY` on PostgreSQL, prepared inserts on
   MySQL, a TDS bulk load on SQL Server, the appender on DuckDB): never SQL text.
   `tests/import.rs` loads a million rows on every engine; any change there needs tests that try
   to get around it.

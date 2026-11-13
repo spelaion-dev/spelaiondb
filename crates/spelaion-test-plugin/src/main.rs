@@ -18,11 +18,10 @@ use async_trait::async_trait;
 use spelaion_driver_api::{
     CancelHandle, Capabilities, ColumnInfo, ColumnMeta, ConnectParams, Connection, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, KeepAlive, LogicalType, Notice,
-    ObjectInfo, ObjectKind, PlanMode, Result, ResultSchema, SchemaInfo, TableInfo,
+    ObjectInfo, ObjectKind, PlanMode, Result, ResultSchema, SchemaInfo, TableInfo, TextRows,
     TransactionState,
 };
 use spelaion_plugin_protocol::{Frame, Message, RpcError, code, read_frame, write_frame};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Notify;
 
 /// Batches the row generator has handed over, whoever asked for them.
@@ -47,7 +46,7 @@ async fn main() {
         return;
     }
     if name.contains("other-version") {
-        other_version(name.contains("claims")).await;
+        other_version(name.contains("claims"));
         return;
     }
     let drivers: Vec<Arc<dyn Driver>> = vec![Arc::new(Made("test")), Arc::new(Made("test2"))];
@@ -61,10 +60,11 @@ async fn main() {
 
 /// A plugin of protocol 2.x. `claims`: instead of refusing, it answers that it chose 2.0,
 /// which nobody offered.
-async fn other_version(claims: bool) {
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    while let Ok(Some(frame)) = read_frame(&mut stdin).await {
+fn other_version(claims: bool) {
+    use std::io::Write;
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    while let Ok(Some(frame)) = read_frame(&mut stdin) {
         let Frame::Message(bytes) = frame else {
             continue;
         };
@@ -93,7 +93,7 @@ async fn other_version(claims: bool) {
             )
         };
         let frame = Frame::Message(answer.to_bytes());
-        if write_frame(&mut stdout, &frame).await.is_err() || stdout.flush().await.is_err() {
+        if write_frame(&mut stdout, &frame).is_err() || stdout.flush().is_err() {
             return;
         }
     }
@@ -537,11 +537,7 @@ impl Connection for MadeConnection {
         })
     }
 
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         let count = rows.len() as u64;
         let name = format!(
             "{}.{}({})",
@@ -550,7 +546,7 @@ impl Connection for MadeConnection {
             target.columns.join(",")
         );
         let mut inserted = INSERTED.lock().expect("lock poisoned");
-        inserted.extend(rows.into_iter().map(|row| (name.clone(), row)));
+        inserted.extend(rows.to_vecs().into_iter().map(|row| (name.clone(), row)));
         Ok(count)
     }
 }

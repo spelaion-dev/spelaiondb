@@ -13,7 +13,7 @@ use arrow::array::{Array, Int64Array, StringArray};
 use futures_util::StreamExt;
 use spelaion_driver_api::{
     ConnectParams, Connection, Driver, DriverError, ExecEvent, ExecOptions, InsertTarget,
-    KeepAlive, LogicalType, NameFilter, ObjectKind, PlanMode, Result, Secret, TlsMode,
+    KeepAlive, LogicalType, NameFilter, ObjectKind, PlanMode, Result, Secret, TextRows, TlsMode,
     TransactionState,
 };
 use spelaion_plugin_host::{Plugin, REDACTED, VERSION};
@@ -355,7 +355,7 @@ async fn rows_are_loaded_as_they_were_given() {
         vec![Some(String::new()), Some("ñ\n'\";--".to_string())],
         vec![None, Some("x".repeat(100_000))],
     ];
-    let loaded = within(connection.insert_rows(&target, rows.clone()))
+    let loaded = within(connection.insert_rows(&target, TextRows::from_rows(2, &rows).unwrap()))
         .await
         .unwrap();
     assert_eq!(loaded, 3);
@@ -368,7 +368,8 @@ async fn rows_are_loaded_as_they_were_given() {
     assert_eq!(inserted, expected);
 
     // A row of another width never leaves the core.
-    let wrong = within(connection.insert_rows(&target, vec![vec![None]])).await;
+    let one_wide = TextRows::from_rows(1, &[vec![None]]).unwrap();
+    let wrong = within(connection.insert_rows(&target, one_wide)).await;
     assert!(wrong.is_err());
 }
 

@@ -473,7 +473,7 @@ async fn cancel_stops_queued_statements_and_appends() {
         table: "t".into(),
         columns: vec!["a".into()],
     };
-    let rows = vec![vec![Some("1".to_string())]];
+    let rows = spelaion_driver_api::TextRows::from_rows(1, &[vec![Some("1".to_string())]]).unwrap();
     let mut append = Box::pin(conn.insert_rows(&target, rows));
     // Polled once: the append is queued behind the statements before the cancel.
     assert!(futures_util::poll!(append.as_mut()).is_pending());

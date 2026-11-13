@@ -27,7 +27,8 @@ use std::time::{Duration, Instant};
 
 use spelaion_config::Safeguards;
 use spelaion_driver_api::{
-    CancelHandle, Dialect, DriverError, InsertTarget, ObjectKind, TableInfo, TransactionState,
+    CancelHandle, Dialect, DriverError, InsertTarget, ObjectKind, TableInfo, TextRows,
+    TransactionState,
 };
 
 pub use detect::ColumnKind;
@@ -818,11 +819,12 @@ async fn load(
                 });
             }
         };
-        let mut rows = Vec::with_capacity(batch.len());
+        // The batch as the columns of text a driver loads (in process or through a plugin).
+        let mut rows = TextRows::builder(resolved.sources.len());
         for (offset, row) in batch.into_iter().enumerate() {
             let mut values = Vec::with_capacity(resolved.sources.len());
             for (column, &source) in resolved.sources.iter().enumerate() {
-                let Some(text) = row[source].clone() else {
+                let Some(text) = row[source].as_deref() else {
                     values.push(None);
                     continue;
                 };
@@ -840,11 +842,13 @@ async fn load(
                     }
                 }
             }
-            rows.push(values);
+            rows.push(values.iter().map(|value| value.as_deref()))
+                .map_err(|e| ImportError::Source(e.to_string()))?;
         }
+        let rows = rows.finish();
         // Cut where a transaction ends, so commits fall every `commit_every` rows.
-        let mut rows = rows.into_iter().peekable();
-        while rows.peek().is_some() {
+        let mut taken = 0usize;
+        while taken < rows.len() {
             if cancel.is_cancelled() {
                 rollback(open).await;
                 return Err(ImportError::Cancelled { committed });
@@ -854,11 +858,12 @@ async fn load(
             } else {
                 request.commit_every - in_transaction
             };
-            let part: Vec<_> = rows
-                .by_ref()
-                .take(usize::try_from(room).unwrap_or(usize::MAX))
-                .collect();
-            let count = part.len() as u64;
+            let length = usize::try_from(room)
+                .unwrap_or(usize::MAX)
+                .min(rows.len() - taken);
+            let part = rows.slice(taken, length);
+            taken += length;
+            let count = length as u64;
             if !open {
                 run_one(session, begin)
                     .await

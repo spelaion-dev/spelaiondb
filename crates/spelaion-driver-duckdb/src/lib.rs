@@ -28,7 +28,7 @@ use spelaion_driver_api::{
     CancelHandle, Capabilities, ConnectParams, Connection, ContextDialect, DatabaseContext, Driver,
     DriverError, EventStream, ExecEvent, ExecOptions, InsertTarget, LikeFilter, NameFilter,
     ObjectInfo, ReferencingKey, Result, SchemaColumn, SchemaInfo, SchemaObject, TableInfo,
-    TransactionState,
+    TextRows, TransactionState,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -278,7 +278,7 @@ enum Command {
     /// Whether a transaction is open (ADR-031).
     TransactionState(Reply<TransactionState>),
     /// Rows of an import (ADR-038), through DuckDB's appender.
-    Append(u64, InsertTarget, Vec<Vec<Option<String>>>, Reply<u64>),
+    Append(u64, InsertTarget, TextRows, Reply<u64>),
 }
 
 /// Loop of the connection thread. Ends when the `DuckdbConnection` is dropped.
@@ -378,7 +378,7 @@ fn actor(
 fn append(
     conn: &duckdb::Connection,
     target: &InsertTarget,
-    rows: Vec<Vec<Option<String>>>,
+    rows: TextRows,
     work: &Work,
 ) -> Result<u64> {
     let schema = if target.schema.is_empty() {
@@ -391,12 +391,12 @@ fn append(
         .appender_with_columns_to_db(&target.table, schema, &columns)
         .map_err(exec::map_error)?;
     let count = rows.len() as u64;
-    for (i, row) in rows.into_iter().enumerate() {
-        if i % 1024 == 0 {
+    for row in 0..rows.len() {
+        if row % 1024 == 0 {
             work.check()?;
         }
         appender
-            .append_row(duckdb::appender_params_from_iter(row))
+            .append_row(duckdb::appender_params_from_iter(rows.row(row)))
             .map_err(exec::map_error)?;
     }
     appender.flush().map_err(exec::map_error)?;
@@ -507,11 +507,7 @@ impl Connection for DuckdbConnection {
     }
 
     /// DuckDB's appender: no SQL at all, the values are the appender's data.
-    async fn insert_rows(
-        &self,
-        target: &InsertTarget,
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<u64> {
+    async fn insert_rows(&self, target: &InsertTarget, rows: TextRows) -> Result<u64> {
         target.check_rows(&rows)?;
         if rows.is_empty() {
             return Ok(0);
