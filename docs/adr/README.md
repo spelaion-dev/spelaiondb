@@ -50,8 +50,8 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [038](0038-importing-data.md) | Importing data into a table: values bound, statements shown first, whole batches | Accepted |
 | [039](0039-importing-connections.md) | Importing connections from other clients: one flow, a reader per client | Accepted |
 | [040](0040-charts-from-a-result.md) | Charts from a result: points prepared in the core, drawn as plain SVG | Accepted |
-| [041](0041-engines-as-plugins.md) | Engines as plugins: every driver in its own process behind the same contract, migrated one at a time; dialects and barriers stay in the core (where ours are built and checked: superseded by ADR-042) | Accepted (not implemented) |
-| [042](0042-plugin-repositories.md) | Our plugins live in their own repositories; this one keeps the contract and pins, by hash, the builds it ships and tests | Accepted (not implemented) |
+| [041](0041-engines-as-plugins.md) | Engines as plugins: every driver in its own process behind the same contract, migrated one at a time; dialects and barriers stay in the core (where ours are built and checked: superseded by ADR-042; how ours are found, installed and updated: by ADR-055) | Accepted (not implemented) |
+| [042](0042-plugin-repositories.md) | Our plugins live in their own repositories; this one keeps the contract and pins, by hash, the builds it ships and tests | Accepted (not implemented; amended by ADR-055) |
 | [043](0043-searching-the-database.md) | Searching the database: names from the explorer's catalog, values bound in a read-only session | Accepted |
 | [044](0044-pending-edits-in-the-core.md) | Pending edits live in the core, with bulk edits of a selection and undo / redo (supersedes ADR-014's pending changes in the UI) | Accepted |
 | [045](0045-geometry-on-a-map.md) | Geometry values on a map: GeoJSON from the core, drawn as SVG, tiles only when the user names a server | Accepted |
@@ -64,3 +64,4 @@ and the old one is marked **Superseded by ADR-XXX**.
 | [052](0052-masking-follows-the-origin-column.md) | Column masking also follows the table column a result column reads, where the engine reports it, so an alias does not unmask it | Accepted |
 | [053](0053-read-only-connections-refuse-writes.md) | A read-only connection refuses writes from the editor: a check in the core before anything runs, and the engine's own read-only mode | Accepted |
 | [054](0054-keyset-query-pages.md) | Query results are paged only when each page can be fetched exactly: keyset pages over the table's primary key | Accepted |
+| [055](0055-plugins-page-and-signed-index.md) | A Plugins page fed by a signed catalogue of our own plugins, written from this repository's pins, so they install and update without an app release; other people's are added by the user from a file or an address, unsupported | Accepted (not implemented) |
