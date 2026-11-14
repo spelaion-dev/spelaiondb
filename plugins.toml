@@ -17,10 +17,23 @@
 #   min_app = "0.10.0"                                   # the lowest SpelaionDB it works with
 #
 #   [plugin.platform.x86_64-pc-windows-msvc]             # also aarch64-apple-darwin,
-#   archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-pc-windows-msvc.zip"   # x86_64-apple-darwin,
+#   archive = "spelaiondb-plugin-duckdb-0.1.0-x86_64-pc-windows-msvc.tar.gz"   # x86_64-apple-darwin,
 #   archive_sha256 = "…"                                 # x86_64-unknown-linux-gnu
 #   archive_size = 12345678
 #   program_sha256 = "…"                                 # of the program inside the archive
+#
+# Every version pinned here goes into the signed catalogue the app's Plugins page reads
+# (ADR-055), and stays there after the pin moves on. A build that must not be started any more
+# is withdrawn here, by a pull request that says why in one line the user will read. It cannot
+# be the pinned build: move the pin, or remove it.
+#
+#   [[withdrawn]]
+#   name = "spelaiondb-plugin-duckdb"
+#   version = "0.1.0"
+#   reason = "It could lose rows when an import was cancelled."
+#
+# A withdrawn build stays withdrawn in every catalogue published after it, even if its entry is
+# deleted from this file later.
 #
 # Pinned: DuckDB, SQL Server, MySQL and MariaDB (one plugin), PostgreSQL. None of their drivers
 # is compiled into the core any more: these builds, inside the installer, are what serves

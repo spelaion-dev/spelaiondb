@@ -59,10 +59,52 @@ pub struct Pins {
     schema_version: u32,
     #[serde(default, rename = "plugin")]
     plugins: Vec<PinnedPlugin>,
+    /// The builds that were withdrawn: what the catalogue is told to refuse (ADR-055).
+    #[serde(default)]
+    withdrawn: Vec<Withdrawn>,
+}
+
+/// A build that was withdrawn, by a pull request that says why: never started again once a
+/// catalogue that says so is accepted.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Withdrawn {
+    /// The plugin's name: `spelaiondb-plugin-duckdb`.
+    pub name: String,
+    pub version: String,
+    /// Why, as the user reads it: one line.
+    pub reason: String,
+}
+
+/// The longest reason a withdrawn build may carry: it is shown to the user.
+const MAX_REASON_CHARS: usize = 300;
+
+impl Withdrawn {
+    /// Its version, as numbers.
+    pub fn version(&self) -> (u32, u32, u32) {
+        version_of(&self.version).unwrap_or((0, 0, 0))
+    }
+
+    /// Whether it is written as one must be. The problem, if it is not.
+    pub(crate) fn check(&self) -> Result<(), String> {
+        if !is_program_name(&self.name) {
+            return Err("that is not a plugin's name".into());
+        }
+        if !is_version(&self.version) {
+            return Err("a version is three numbers, as in 0.1.0".into());
+        }
+        if self.reason.trim().is_empty()
+            || self.reason.chars().count() > MAX_REASON_CHARS
+            || self.reason.chars().any(char::is_control)
+        {
+            return Err("it needs a reason: one line of at most 300 characters".into());
+        }
+        Ok(())
+    }
 }
 
 /// One plugin: a release of its repository.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinnedPlugin {
     /// The program's name, without `.exe`: `spelaiondb-plugin-duckdb`.
@@ -83,7 +125,7 @@ pub struct PinnedPlugin {
 }
 
 /// One platform's build of a pinned plugin.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinnedBuild {
     /// The archive's file name in the release.
@@ -105,6 +147,12 @@ pub enum PinError {
     Version(u32),
     #[error("plugins.toml, plugin {plugin:?}: {problem}")]
     Plugin { plugin: String, problem: String },
+    #[error("plugins.toml, withdrawn {plugin} {version}: {problem}")]
+    Withdrawn {
+        plugin: String,
+        version: String,
+        problem: String,
+    },
 }
 
 impl Pins {
@@ -113,6 +161,7 @@ impl Pins {
         Self {
             schema_version: 1,
             plugins: Vec::new(),
+            withdrawn: Vec::new(),
         }
     }
 
@@ -140,6 +189,28 @@ impl Pins {
                 }
             }
         }
+        let mut withdrawn = HashSet::new();
+        for entry in &pins.withdrawn {
+            let wrong = |problem: String| PinError::Withdrawn {
+                plugin: entry.name.clone(),
+                version: entry.version.clone(),
+                problem,
+            };
+            entry.check().map_err(wrong)?;
+            if !withdrawn.insert((entry.name.as_str(), entry.version())) {
+                return Err(wrong("it is withdrawn twice".into()));
+            }
+            // A release must not carry a build we withdrew: the pin moves, or goes.
+            if pins
+                .plugins
+                .iter()
+                .any(|plugin| plugin.name == entry.name && plugin.version() == entry.version())
+            {
+                return Err(wrong(
+                    "it is the pinned build: pin another version, or none".into(),
+                ));
+            }
+        }
         Ok(pins)
     }
 
@@ -156,6 +227,12 @@ impl Pins {
 
     pub fn plugins(&self) -> &[PinnedPlugin] {
         &self.plugins
+    }
+
+    /// The builds withdrawn here: each goes into the next catalogue, and stays in every one
+    /// after it.
+    pub fn withdrawn(&self) -> &[Withdrawn] {
+        &self.withdrawn
     }
 
     /// The plugins that have a build for `platform`, each with that build.
@@ -553,6 +630,72 @@ program_sha256 = "{HASH_B}"
             ),
             "an engine pinned twice was accepted"
         );
+    }
+
+    #[test]
+    fn a_build_is_withdrawn_with_a_reason_and_is_not_the_pinned_one() {
+        let withdrawn = |version: &str, reason: &str| {
+            format!(
+                r#"
+[[withdrawn]]
+name = "spelaiondb-plugin-duckdb"
+version = "{version}"
+reason = "{reason}"
+"#
+            )
+        };
+        let good = format!(
+            "{}{}",
+            one_plugin(),
+            withdrawn("0.0.9", "It lost rows on import.")
+        );
+        let pins = Pins::parse(&good).expect("a pin and an older build withdrawn");
+        assert_eq!(pins.withdrawn().len(), 1);
+        assert_eq!(pins.withdrawn()[0].version(), (0, 0, 9));
+        assert_eq!(pins.withdrawn()[0].reason, "It lost rows on import.");
+        // Withdrawn builds with nothing pinned: the engine left the installer.
+        let only = format!("schema_version = 1{}", withdrawn("0.1.0", "Broken."));
+        Pins::parse(&only).expect("only withdrawn builds");
+
+        let cases: Vec<(&str, String)> = vec![
+            (
+                "the pinned build withdrawn",
+                format!("{}{}", one_plugin(), withdrawn("0.1.0", "Broken.")),
+            ),
+            (
+                "the pinned build withdrawn under another spelling",
+                format!("{}{}", one_plugin(), withdrawn("0.01.0", "Broken.")),
+            ),
+            ("no reason", good.replace("It lost rows on import.", "  ")),
+            (
+                "a reason with a line break",
+                good.replace("It lost rows on import.", r"It lost\nrows."),
+            ),
+            (
+                "a reason that is a page",
+                good.replace("It lost rows on import.", &"x".repeat(301)),
+            ),
+            ("a version that is not one", good.replace("0.0.9", "all")),
+            (
+                "a name that is not a plugin's",
+                format!(
+                    "{}{}",
+                    one_plugin(),
+                    withdrawn("0.0.9", "Broken.").replace("spelaiondb-plugin-duckdb", "../x")
+                ),
+            ),
+            (
+                "withdrawn twice",
+                format!("{good}{}", withdrawn("0.0.9", "Again.")),
+            ),
+            (
+                "an unknown key",
+                good.replace("reason = ", "url = \"https://x\"\nreason = "),
+            ),
+        ];
+        for (what, text) in cases {
+            assert!(Pins::parse(&text).is_err(), "{what} was accepted");
+        }
     }
 
     #[test]
