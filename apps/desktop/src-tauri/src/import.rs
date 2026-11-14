@@ -494,7 +494,7 @@ async fn open_import_session(
     };
     match open_connection(
         source_open.resolved.clone(),
-        &state.engines,
+        &state.engines(),
         options,
         state.results.clone(),
     )

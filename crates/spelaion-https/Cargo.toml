@@ -1,0 +1,25 @@
+[package]
+name = "spelaion-https"
+description = "The HTTPS transport the desktop app gives the core to fetch the plugin catalogue and plugin archives (ADR-055). It only moves bytes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+spelaion-core.workspace = true
+async-trait.workspace = true
+# The HTTP client Tauri's updater plugin already brings, with the same TLS (rustls with the
+# system's certificate store) and the same proxies (the system's and the usual variables): no
+# new client in the app. No cookie store: that feature is never enabled.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
+# The crypto provider the updater installs too.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+
+[lints]
+workspace = true

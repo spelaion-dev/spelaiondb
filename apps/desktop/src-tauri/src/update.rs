@@ -140,6 +140,9 @@ pub async fn update_check(
     if std::env::var_os(SWITCH_OFF).is_some() {
         return Ok(UpdateStatus::Unavailable);
     }
+    // The plugin catalogue is read with the app's updates (ADR-055, point 7), under the core's
+    // rule (`fetch::updates_allowed`), without holding this check up.
+    crate::plugins::refresh_in_background(app.clone());
     let endpoint = ENDPOINT.parse().map_err(|e| format!("{ENDPOINT}: {e}"))?;
     let update = app
         .updater_builder()
