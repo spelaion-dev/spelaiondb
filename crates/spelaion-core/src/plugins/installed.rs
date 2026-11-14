@@ -16,10 +16,12 @@
 //!   compiled into this build or the accepted catalogue name that plugin and version for this
 //!   platform ([`super::choice::states`]), and only while its file has the SHA-256 they give
 //!   (checked before every start, [`super::pins::check_file`]).
-//! - **An archive is installed only as a catalogue entry**: it must have that entry's size and
-//!   SHA-256 before anything in it is read, hold only plain files at its top, and the program
-//!   inside must have the entry's program SHA-256. Only the program is unpacked, to a place of
-//!   its own, and it reaches `ours/` only after the last check.
+//! - **An archive is installed only as a catalogue entry**, or, when it came inside the
+//!   installer, as a pin compiled into this build ([`PluginStore::install_bundled`], ADR-057):
+//!   it must have that entry's size and SHA-256 before anything in it is read, hold only plain
+//!   files at its top, and the program inside must have the entry's program SHA-256. Only the
+//!   program is unpacked, to a place of its own, and it reaches `ours/` only after the last
+//!   check.
 //!
 //! Nothing here downloads: whoever fetches an archive (from
 //! [`super::pins::PinnedPlugin::archive_address`]) or a catalogue hands the file over, and the
@@ -388,7 +390,14 @@ impl PluginStore {
                     continue;
                 }
                 if target == platform {
-                    return self.install_checked(catalogue, app, entry, build, archive);
+                    return self.install_checked(
+                        NamedBy::Catalogue,
+                        Some(catalogue),
+                        app,
+                        entry,
+                        build,
+                        archive,
+                    );
                 }
                 elsewhere = Some((entry, target));
             }
@@ -431,14 +440,81 @@ impl PluginStore {
                 found,
             });
         }
-        self.install_checked(catalogue, app, entry, build, archive)
+        self.install_checked(
+            NamedBy::Catalogue,
+            Some(catalogue),
+            app,
+            entry,
+            build,
+            archive,
+        )
+    }
+
+    /// Installs the archives of the pinned builds that came inside the installer, from the
+    /// installer's `folder` (ADR-057): a signed app (macOS) or an AppImage changes the programs
+    /// it carries, so an installer carries each pinned build's release archive, which nothing
+    /// changes, and it is installed here as that pin.
+    ///
+    /// **Only the pins compiled into this build are looked for**, each by its archive's file
+    /// name: no other file of `folder` is read. An archive is installed only if it has its pin's
+    /// size and SHA-256, and then through every check of [`PluginStore::install`] (only the
+    /// program unpacked, with its pinned SHA-256). A build the catalogue withdrew is not
+    /// installed. A build already installed is left alone. What could not be installed is in
+    /// the answer, and its engines then say which file is missing.
+    pub fn install_bundled(
+        &self,
+        pins: &pins::Pins,
+        catalogue: Option<&Catalogue>,
+        app: &AppBuild,
+        folder: &Path,
+    ) -> Vec<Result<InstalledBuild, InstallError>> {
+        let Some(platform) = app.platform.as_deref() else {
+            return Vec::new();
+        };
+        let mut done = Vec::new();
+        for (entry, build) in pins.for_platform(platform) {
+            let archive = folder.join(&build.archive);
+            // `symlink_metadata`: a link is not followed out of the installer.
+            if !std::fs::symlink_metadata(&archive).is_ok_and(|meta| meta.is_file()) {
+                continue;
+            }
+            let program = self.program(&entry.name, entry.version());
+            if sha256_of(&program).is_ok_and(|there| there == build.program_sha256) {
+                continue;
+            }
+            done.push(self.install_pinned(catalogue, app, entry, build, &archive));
+        }
+        done
+    }
+
+    /// `archive` as the pinned `build` of `entry`, if it is that build's archive.
+    fn install_pinned(
+        &self,
+        catalogue: Option<&Catalogue>,
+        app: &AppBuild,
+        entry: &PinnedPlugin,
+        build: &PinnedBuild,
+        archive: &Path,
+    ) -> Result<InstalledBuild, InstallError> {
+        let found = hash_of(archive)?;
+        if found != build.archive_sha256 {
+            return Err(InstallError::NotTheBuild {
+                plugin: entry.name.clone(),
+                version: entry.version.clone(),
+                expected: build.archive_sha256.clone(),
+                found,
+            });
+        }
+        self.install_checked(NamedBy::Pins, catalogue, app, entry, build, archive)
     }
 
     /// `archive` has the SHA-256 of `build`'s archive. The rest of the checks, and the
-    /// install.
+    /// install. `catalogue` is the accepted one, if any: a build it withdrew is refused even
+    /// when the pins name it.
     fn install_checked(
         &self,
-        catalogue: &Catalogue,
+        named_by: NamedBy,
+        catalogue: Option<&Catalogue>,
         app: &AppBuild,
         entry: &PinnedPlugin,
         build: &PinnedBuild,
@@ -446,12 +522,10 @@ impl PluginStore {
     ) -> Result<InstalledBuild, InstallError> {
         let plugin = entry.name.clone();
         let version = version_text(entry.version());
-        usable(entry, NamedBy::Catalogue, Some(catalogue), app).map_err(|why| {
-            InstallError::NotUsable {
-                plugin: plugin.clone(),
-                version: version.clone(),
-                why,
-            }
+        usable(entry, named_by, catalogue, app).map_err(|why| InstallError::NotUsable {
+            plugin: plugin.clone(),
+            version: version.clone(),
+            why,
         })?;
         let io = |what: String| {
             move |error: std::io::Error| InstallError::Io {

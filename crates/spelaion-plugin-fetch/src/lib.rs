@@ -38,6 +38,9 @@ pub struct Fetched {
     pub engines: Vec<String>,
     /// Its program, in the folder that was asked for.
     pub program: PathBuf,
+    /// Its release archive, checked, when it was asked to be kept: what an installer carries
+    /// (ADR-057).
+    pub archive: Option<PathBuf>,
 }
 
 impl Fetched {
@@ -97,18 +100,45 @@ pub fn fetch(
     base: &str,
     into: &Path,
 ) -> Result<Vec<Fetched>, FetchError> {
+    fetch_keeping(pins, platform, base, into, None)
+}
+
+/// [`fetch`], keeping each release archive in `archives` once it passed every check, under
+/// its release file name: what the release puts inside the installers (ADR-057).
+pub fn fetch_keeping_archives(
+    pins: &Pins,
+    platform: &str,
+    base: &str,
+    into: &Path,
+    archives: &Path,
+) -> Result<Vec<Fetched>, FetchError> {
+    fetch_keeping(pins, platform, base, into, Some(archives))
+}
+
+fn fetch_keeping(
+    pins: &Pins,
+    platform: &str,
+    base: &str,
+    into: &Path,
+    archives: Option<&Path>,
+) -> Result<Vec<Fetched>, FetchError> {
     // Whole paths: what is printed is used from other folders (a test runs in its crate's).
-    let into = &std::path::absolute(into).map_err(|error| FetchError::Io {
-        what: format!("finding {}", into.display()),
-        error,
-    })?;
-    std::fs::create_dir_all(into).map_err(|error| FetchError::Io {
-        what: format!("creating {}", into.display()),
-        error,
-    })?;
+    let whole = |folder: &Path| {
+        let folder = std::path::absolute(folder).map_err(|error| FetchError::Io {
+            what: format!("finding {}", folder.display()),
+            error,
+        })?;
+        std::fs::create_dir_all(&folder).map_err(|error| FetchError::Io {
+            what: format!("creating {}", folder.display()),
+            error,
+        })?;
+        Ok::<_, FetchError>(folder)
+    };
+    let into = &whole(into)?;
+    let archives = archives.map(whole).transpose()?;
     let mut fetched = Vec::new();
     for (plugin, build) in pins.for_platform(platform) {
-        fetched.push(fetch_one(plugin, build, base, into)?);
+        fetched.push(fetch_one(plugin, build, base, into, archives.as_deref())?);
     }
     Ok(fetched)
 }
@@ -118,6 +148,7 @@ fn fetch_one(
     build: &PinnedBuild,
     base: &str,
     into: &Path,
+    archives: Option<&Path>,
 ) -> Result<Fetched, FetchError> {
     let release = format!("{} {}", plugin.name, plugin.version);
     let url = format!(
@@ -211,11 +242,25 @@ fn fetch_one(
         what: format!("putting {} in place", program.display()),
         error,
     })?;
+    // The archive passed every check too: kept as the release has it, if it was asked for.
+    let kept = match archives {
+        Some(folder) => {
+            let kept = folder.join(&build.archive);
+            let _ = std::fs::remove_file(&kept);
+            std::fs::rename(&archive, &kept).map_err(|error| FetchError::Io {
+                what: format!("putting {} in place", kept.display()),
+                error,
+            })?;
+            Some(kept)
+        }
+        None => None,
+    };
     Ok(Fetched {
         plugin: plugin.name.clone(),
         version: plugin.version.clone(),
         engines: plugin.engines.clone(),
         program,
+        archive: kept,
     })
 }
 

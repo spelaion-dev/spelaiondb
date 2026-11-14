@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use spelaion_core::plugins::pins::{Pins, platform, program_file_name, sha256_of};
-use spelaion_plugin_fetch::{FetchError, fetch};
+use spelaion_plugin_fetch::{FetchError, fetch, fetch_keeping_archives};
 
 const NAME: &str = "spelaiondb-plugin-test";
 const VERSION: &str = "0.1.0";
@@ -326,4 +326,59 @@ fn no_pins_fetch_nothing() {
     let scratch = Scratch::new("none");
     let fetched = fetch(&Pins::none(), here(), &scratch.base(), &scratch.programs()).unwrap();
     assert!(fetched.is_empty());
+}
+
+/// The release keeps the archives for the installers (ADR-057): only one that passed every
+/// check, as the release has it.
+#[test]
+fn a_kept_archive_is_the_checked_release() {
+    let scratch = Scratch::new("kept");
+    let file = program_file_name(NAME);
+    let archive = release(&scratch, &[(&file, PROGRAM), ("LICENSE", b"Apache-2.0")]);
+    let pins = true_pins(&scratch, &archive, PROGRAM);
+    let kept_in = scratch.0.join("archives");
+
+    let fetched = fetch_keeping_archives(
+        &pins,
+        here(),
+        &scratch.base(),
+        &scratch.programs(),
+        &kept_in,
+    )
+    .unwrap();
+    let kept = fetched[0].archive.clone().expect("the archive was kept");
+    assert_eq!(kept, kept_in.join(archive.file_name().unwrap()));
+    assert_eq!(
+        std::fs::read(&kept).unwrap(),
+        std::fs::read(&archive).unwrap()
+    );
+    assert_eq!(std::fs::read(&fetched[0].program).unwrap(), PROGRAM);
+    // `fetch` keeps none.
+    let plain = fetch(&pins, here(), &scratch.base(), &scratch.programs()).unwrap();
+    assert_eq!(plain[0].archive, None);
+}
+
+/// An archive whose program is not the pinned one is not kept either.
+#[test]
+fn an_archive_that_fails_a_check_is_not_kept() {
+    let scratch = Scratch::new("not-kept");
+    let file = program_file_name(NAME);
+    let archive = release(&scratch, &[(&file, b"another program")]);
+    let pins = true_pins(&scratch, &archive, PROGRAM);
+    let kept_in = scratch.0.join("archives");
+
+    let error = fetch_keeping_archives(
+        &pins,
+        here(),
+        &scratch.base(),
+        &scratch.programs(),
+        &kept_in,
+    )
+    .unwrap_err();
+    assert!(matches!(error, FetchError::Program { .. }), "{error}");
+    nothing_arrived(&scratch);
+    let left: Vec<_> = std::fs::read_dir(&kept_in)
+        .map(|entries| entries.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "kept: {left:?}");
 }

@@ -12,16 +12,25 @@ use std::path::PathBuf;
 
 use anyhow::{Context, bail};
 use spelaion_core::plugins::pins::{PLATFORMS, Pins, platform};
-use spelaion_plugin_fetch::{GITHUB, fetch};
+use spelaion_plugin_fetch::{GITHUB, fetch, fetch_keeping_archives};
 
 fn main() -> anyhow::Result<()> {
     let mut into: Option<PathBuf> = None;
+    let mut archives: Option<PathBuf> = None;
     let mut base = GITHUB.to_string();
     let mut target: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--into" => into = Some(args.next().context("--into needs a folder")?.into()),
+            // The release keeps the checked archives: the installers carry them (ADR-057).
+            "--archives-into" => {
+                archives = Some(
+                    args.next()
+                        .context("--archives-into needs a folder")?
+                        .into(),
+                )
+            }
             // For a mirror, or the tests: something laid out like GitHub's releases.
             "--base" => base = args.next().context("--base needs an address")?,
             // The release builds an installer for a platform that may not be the runner's (an
@@ -29,8 +38,8 @@ fn main() -> anyhow::Result<()> {
             "--platform" => target = Some(args.next().context("--platform needs a target")?),
             "--help" | "-h" => {
                 eprintln!(
-                    "usage: spelaion-fetch-plugins --into <folder> [--platform <target>] \
-                     [--base <address>]"
+                    "usage: spelaion-fetch-plugins --into <folder> [--archives-into <folder>] \
+                     [--platform <target>] [--base <address>]"
                 );
                 return Ok(());
             }
@@ -50,7 +59,10 @@ fn main() -> anyhow::Result<()> {
     };
 
     let pins = Pins::shipped();
-    let fetched = fetch(pins, platform, &base, &into)?;
+    let fetched = match &archives {
+        Some(archives) => fetch_keeping_archives(pins, platform, &base, &into, archives)?,
+        None => fetch(pins, platform, &base, &into)?,
+    };
     if fetched.is_empty() {
         eprintln!("plugins.toml pins nothing for {platform}: nothing to fetch");
     }

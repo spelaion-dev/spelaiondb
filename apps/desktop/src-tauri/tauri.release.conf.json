@@ -3,11 +3,10 @@
   "bundle": {
     "createUpdaterArtifacts": true,
     "externalBin": [
-      "binaries/spelaiondb",
-      "binaries/spelaiondb-plugin-duckdb",
-      "binaries/spelaiondb-plugin-sqlserver",
-      "binaries/spelaiondb-plugin-mysql",
-      "binaries/spelaiondb-plugin-postgres"
-    ]
+      "binaries/spelaiondb"
+    ],
+    "resources": {
+      "plugins/*.tar.gz": "plugins/"
+    }
   }
 }
