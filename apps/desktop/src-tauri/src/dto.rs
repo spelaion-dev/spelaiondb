@@ -207,6 +207,8 @@ impl TryFrom<ObjectTargetItem> for spelaion_core::ObjectTarget {
                     "partitioned_table" => ObjectKind::PartitionedTable,
                     "view" => ObjectKind::View,
                     "materialized_view" => ObjectKind::MaterializedView,
+                    // Not a relation's: the core writes no object actions for the kinds of
+                    // engines whose language is not SQL (ADR-056).
                     "foreign_table" => ObjectKind::ForeignTable,
                     other => return Err(format!("unknown kind of relation: {other}")),
                 },
@@ -1978,7 +1980,8 @@ pub struct SchemaItem {
 pub struct ObjectItem {
     pub schema: String,
     pub name: String,
-    /// `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`.
+    /// `table`, `partitioned_table`, `view`, `materialized_view`, `foreign_table`, and for
+    /// engines whose language is not SQL `collection`, `node_label`, `relationship_type`.
     pub kind: String,
     pub estimated_rows: Option<f64>,
     pub comment: Option<String>,
@@ -1992,6 +1995,9 @@ impl From<ObjectInfo> for ObjectItem {
             ObjectKind::View => "view",
             ObjectKind::MaterializedView => "materialized_view",
             ObjectKind::ForeignTable => "foreign_table",
+            ObjectKind::Collection => "collection",
+            ObjectKind::NodeLabel => "node_label",
+            ObjectKind::RelationshipType => "relationship_type",
         };
         Self {
             schema: o.schema,

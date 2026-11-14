@@ -1,6 +1,6 @@
 # The plugin protocol
 
-**Version 1.0. Experimental until SpelaionDB 1.0: it may change in any 0.x release.**
+**Version 1.1. Experimental until SpelaionDB 1.0: it may change in any 0.x release.**
 
 An engine plugin is a program the core starts and talks to over the program's standard input
 and output (ADR-041). It is the wire to one or more engines: it connects, runs statements,
@@ -58,7 +58,7 @@ one or refuses:
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"initialize",
- "params":{"protocols":[{"major":1,"minor":0}],"host":{"name":"spelaiondb","version":"0.10.0"}}}
+ "params":{"protocols":[{"major":1,"minor":1}],"host":{"name":"spelaiondb","version":"0.10.0"}}}
 
 {"jsonrpc":"2.0","id":1,
  "result":{"protocol":{"major":1,"minor":0},
@@ -72,6 +72,16 @@ added). A plugin that speaks none of them answers with error `-32001` and, in
 `data.protocols`, the versions it does speak. The core refuses a plugin whose version it does not speak and says
 which it expected. `engines` are the names the configuration uses (`engine = "duckdb"`); a
 plugin may serve several (`mysql` and `mariadb`). `credit` is explained under "Results".
+
+What each minor version added:
+
+| Version | Added |
+|---|---|
+| 1.0 | Everything not listed below |
+| 1.1 | Requests for engines whose language is not SQL (`run` kind `request`), `connect`'s `options`, and the object kinds `collection`, `node_label` and `relationship_type` (ADR-056) |
+
+The core never sends what a version added to a plugin that chose an older one: a request, or
+a `connect` with `options`, is refused in the core with a message that names both versions.
 
 ## Errors
 A request that fails answers with an `error` whose `code` is `-32000` and whose `data` is the
@@ -109,6 +119,11 @@ the secrets it gave that plugin.
   to connect to (the local end of a tunnel); `host` is still the name to verify in TLS, which
   the plugin does itself. Certificate fields are paths to PEM files.
 - `tls` is `disable`, `prefer`, `require`, `verify-ca` or `verify-full` (libpq's `sslmode`).
+- `options` (1.1, left out when empty) is a map of strings: the engine's own connection
+  settings (`{"authSource": "admin", "replicaSet": "rs0"}`). The core checks every key against
+  that engine's own list before it sends them; they are never secrets, which travel only as
+  `password`. A plugin rejects a key it does not know with an error, rather than connecting as
+  the user did not ask.
 - A plugin never reads configuration files, the keychain or the local store, and gets no
   tunnel: only what `connect` says.
 
@@ -143,6 +158,23 @@ an `other` error.
 values bound to the engine's placeholders, never written into the SQL) or
 `{"kind":"plan","mode":"estimated"}` / `{"kind":"plan","mode":"analyze","query_result":true}`
 (the engine's own plan request). `stream` is chosen by the core and unique in the process.
+
+### Requests (1.1)
+An engine whose language is not SQL (ADR-056) is sent requests instead of statements. The core
+reads what the user typed and turns each statement into the engine's **canonical request**,
+which is what it checked and what must run:
+
+```json
+{"jsonrpc":"2.0","id":8,"method":"execute","params":{"session":1,"stream":5,"sql":"",
+ "batch_size":10000,"origins":false,"run":{"kind":"request","request":
+ {"database":"shop","command":{"find":"users","filter":{"age":{"$gt":30}}}}}}}
+```
+
+`sql` is empty: the plugin runs `request` exactly, and never reads or reconstructs the text it
+was typed as. The shape of a request is the engine's, written in the core's language entry for
+it (a MongoDB command document in canonical Extended JSON, a Redis argument list, an HTTP
+method, path and body). Its results and errors arrive on the stream as a statement's do. A
+plugin of an engine queried with SQL answers a request with an `other` error.
 
 The response says only that the statement started (`{}`) or why it could not. The results
 follow on the stream, in this order, exactly as `ExecEvent` (ADR-005):
@@ -221,6 +253,11 @@ name returns, as JSON with the field names of `spelaion-driver-api`.
 narrowed as `list_schemas_matching`, `list_objects_matching` and
 `list_schema_objects_matching` do. A plugin that does not support a request answers with the
 error its driver gives (`other`), never with silence.
+
+An `ObjectInfo`'s `kind` is `table`, `partitioned_table`, `view`, `materialized_view` or
+`foreign_table`, and since 1.1 also `collection` (records with no fixed columns: a MongoDB
+collection, a search index), `node_label` and `relationship_type` (a graph's). The core writes
+no SQL for the kinds 1.1 added.
 
 ## What a plugin must never do
 - Write anything but frames to standard output.

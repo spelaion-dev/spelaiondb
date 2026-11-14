@@ -18,6 +18,28 @@ pub enum ObjectKind {
     View,
     MaterializedView,
     ForeignTable,
+    /// Records with no fixed columns, read with the engine's own language: a MongoDB
+    /// collection, a search index (ADR-056). The core writes no SQL for it.
+    Collection,
+    /// The nodes that carry a label, in a graph (ADR-056).
+    NodeLabel,
+    /// The relationships of a type, in a graph (ADR-056).
+    RelationshipType,
+}
+
+impl ObjectKind {
+    /// A relation of SQL's: what the core's table data tabs, edits, structure forms and object
+    /// actions write SQL for. Kinds that are not (ADR-056) are read with the engine's language.
+    pub fn is_relation(self) -> bool {
+        match self {
+            ObjectKind::Table
+            | ObjectKind::PartitionedTable
+            | ObjectKind::View
+            | ObjectKind::MaterializedView
+            | ObjectKind::ForeignTable => true,
+            ObjectKind::Collection | ObjectKind::NodeLabel | ObjectKind::RelationshipType => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

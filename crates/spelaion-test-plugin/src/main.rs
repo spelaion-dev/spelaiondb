@@ -6,8 +6,9 @@
 //! writing to standard output, repeating the password it was given).
 //!
 //! The program's file name chooses what it is: with `other-version` in it, a plugin that
-//! speaks another major version of the protocol; with `not-a-plugin`, a program that prints
-//! text; anything else, the plugin.
+//! speaks another major version of the protocol; with `minor-zero`, a plugin that speaks only
+//! version 1.0 (before requests, ADR-056); with `not-a-plugin`, a program that prints text;
+//! anything else, the plugin.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,6 +48,10 @@ async fn main() {
     }
     if name.contains("other-version") {
         other_version(name.contains("claims"));
+        return;
+    }
+    if name.contains("minor-zero") {
+        minor_zero();
         return;
     }
     let drivers: Vec<Arc<dyn Driver>> = vec![Arc::new(Made("test")), Arc::new(Made("test2"))];
@@ -91,6 +96,66 @@ fn other_version(claims: bool) {
                     data: Some(serde_json::json!({"protocols": [{"major": 2, "minor": 0}]})),
                 },
             )
+        };
+        let frame = Frame::Message(answer.to_bytes());
+        if write_frame(&mut stdout, &frame).is_err() || stdout.flush().is_err() {
+            return;
+        }
+    }
+}
+
+/// A plugin of protocol 1.0: it starts and connects, and anything else it is asked fails. The
+/// core must refuse a request or connection settings before they reach it: a plugin of 1.0
+/// would not know what they are.
+fn minor_zero() {
+    use std::io::Write;
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    while let Ok(Some(frame)) = read_frame(&mut stdin) {
+        let Frame::Message(bytes) = frame else {
+            continue;
+        };
+        let Ok(message) = Message::from_bytes(&bytes) else {
+            continue;
+        };
+        let Some(id) = message.id else { continue };
+        let answer = match message.method.as_deref() {
+            Some("initialize") => Message::result(
+                id,
+                serde_json::json!({
+                    "protocol": {"major": 1, "minor": 0},
+                    "plugin": {"name": "minor-zero", "version": "1"},
+                    "engines": ["test"],
+                    "credit": 8,
+                }),
+            ),
+            Some("connect") => {
+                let options = message
+                    .params
+                    .as_ref()
+                    .is_some_and(|params| params.get("options").is_some());
+                if options {
+                    // It would ignore them: the core must never get here.
+                    std::process::exit(3);
+                }
+                Message::result(
+                    id,
+                    serde_json::json!({"capabilities": {"transactions": false, "cancel": false,
+                        "explain": false, "editable_results": false, "schemas": false,
+                        "insert_rows": false, "bound_params": false}}),
+                )
+            }
+            // It would read an unknown kind of run as an error, or worse: the core must never
+            // send one.
+            Some("execute") => std::process::exit(4),
+            _ => Message::error(
+                id,
+                RpcError {
+                    code: code::METHOD_NOT_FOUND,
+                    message: "not here".into(),
+                    data: None,
+                },
+            ),
         };
         let frame = Frame::Message(answer.to_bytes());
         if write_frame(&mut stdout, &frame).is_err() || stdout.flush().is_err() {
@@ -161,7 +226,8 @@ impl Driver for Made {
             engine: self.0,
             password,
             params: format!(
-                "{}:{} user={} tls={:?} addr={:?} read_only={} app={:?} timeout={:?} ca={:?}",
+                "{}:{} user={} tls={:?} addr={:?} read_only={} app={:?} timeout={:?} ca={:?} \
+                 options={:?}",
                 params.host,
                 params.port,
                 params.user,
@@ -171,6 +237,7 @@ impl Driver for Made {
                 params.application_name,
                 params.connect_timeout,
                 params.ca_certificate,
+                params.options,
             ),
             capabilities: Capabilities {
                 transactions: true,
@@ -473,6 +540,20 @@ impl Connection for MadeConnection {
         let mut rows = vec![Some(sql.to_string())];
         rows.extend(params.into_iter().map(Some));
         events(texts("bound", rows))
+    }
+
+    async fn execute_request(
+        &self,
+        request: serde_json::Value,
+        opts: &ExecOptions,
+    ) -> Result<EventStream> {
+        // The made-up engine's requests: `{"run": "<word>"}` does what that word does as a
+        // statement (so the conformance set can check requests), and anything else says what
+        // it was given.
+        if let Some(word) = request.get("run").and_then(|run| run.as_str()) {
+            return self.execute(word, opts).await;
+        }
+        events(texts("request", vec![Some(request.to_string())]))
     }
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {

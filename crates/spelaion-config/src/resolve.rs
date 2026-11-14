@@ -499,6 +499,8 @@ impl<'a> Resolver<'a> {
                 .connect_timeout
                 .filter(|s| *s > 0)
                 .map(|s| Duration::from_secs(s.into())),
+            // No engine of the configuration has settings of its own yet (ADR-056).
+            options: Default::default(),
         };
         let password = self.password(
             &entry.file_path,

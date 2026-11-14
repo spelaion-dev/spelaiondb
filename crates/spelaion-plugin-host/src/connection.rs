@@ -16,12 +16,22 @@ use spelaion_driver_api::{
 };
 use spelaion_plugin_protocol::ipc::BatchEncoder;
 use spelaion_plugin_protocol::{
-    CatalogRequest, Connect, ConnectResult, Execute, InsertRows, Run, SessionRequest, StreamId,
-    method,
+    CatalogRequest, Connect, ConnectResult, Execute, InsertRows, REQUESTS, Run, SessionRequest,
+    StreamId, method,
 };
 use tokio::sync::mpsc;
 
 use crate::process::Process;
+
+/// A plugin chose a version of the protocol older than what this needs.
+fn older_protocol(process: &Process, what: &str) -> DriverError {
+    DriverError::Other(format!(
+        "the plugin {} speaks version {} of the plugin protocol, and {what} need version \
+         {REQUESTS}: install a newer build of it",
+        process.name(),
+        process.info().protocol
+    ))
+}
 
 pub(crate) struct PluginConnection {
     process: Arc<Process>,
@@ -39,6 +49,11 @@ impl PluginConnection {
         params: &ConnectParams,
     ) -> Result<Self> {
         let shared = process.shared();
+        // A plugin of version 1.0 would ignore settings it was never told about, and connect
+        // as the user did not ask (ADR-056).
+        if !params.options.is_empty() && process.info().protocol < REQUESTS {
+            return Err(older_protocol(&process, "connection settings"));
+        }
         // Before the plugin has it: nothing it says about it is ever shown.
         if let Some(password) = &params.password {
             shared.add_secret(password.expose());
@@ -62,6 +77,7 @@ impl PluginConnection {
             connect_timeout_ms: params
                 .connect_timeout
                 .map(|t| u64::try_from(t.as_millis()).unwrap_or(u64::MAX)),
+            options: params.options.clone(),
         };
         // Whoever stops waiting for the connection (a timeout, a Stop) must not leave it open
         // in the plugin.
@@ -266,6 +282,14 @@ impl Connection for PluginConnection {
         opts: &ExecOptions,
     ) -> Result<EventStream> {
         self.run(sql, opts, Run::Bound { params }).await
+    }
+
+    async fn execute_request(&self, request: Value, opts: &ExecOptions) -> Result<EventStream> {
+        if self.process.info().protocol < REQUESTS {
+            return Err(older_protocol(&self.process, "requests"));
+        }
+        // The plugin runs the request; the text it was typed as never reaches it (ADR-056).
+        self.run("", opts, Run::Request { request }).await
     }
 
     fn cancel_handle(&self) -> Arc<dyn CancelHandle> {
