@@ -1,8 +1,8 @@
 # ADR-055: A Plugins page fed by a signed catalogue of our plugins; other people's stay unsupported
 
 - **Status:** Accepted (it changes how ADR-041's stages 3 and 4 are carried out; the core's
-  part is implemented, 2026-11-14: see "Implementation"; the page, the download and the
-  publishing workflow are not)
+  part is implemented, 2026-11-14: see "Implementation"; the publishing workflow is written
+  and waits for the key; the page and the download are not)
 - **Date:** 2026-11-13
 - **Supersedes:** in ADR-041, "No registry or marketplace" for our own plugins, and "from a
   file" as the only way to add someone else's (point 5); in ADR-042, "A plugin fix reaches
@@ -115,8 +115,11 @@ app says everywhere that it is not ours.**
 ## Implementation (2026-11-14): the core's part
 What points 4, 6, 7 and 8 ask of the core is written and tested
 (`crates/spelaion-core/src/plugins/`: `catalogue.rs`, `installed.rs`, `choice.rs`; tests in
-`crates/spelaion-test-plugin/tests/catalogue.rs`). The page, the download and the workflow that
-writes, signs and publishes the catalogue are not. What was settled while writing it:
+`crates/spelaion-test-plugin/tests/catalogue.rs`). The page and the download are not. The
+workflow that writes, signs and publishes the catalogue is `.github/workflows/plugins-catalogue.yml`;
+it checks what it would publish with the key compiled into its own build
+(`spelaion-write-catalogue --check`), so it publishes nothing until the key is created and
+`SHIPPED_KEY` set. What was settled while writing it:
 
 - **The catalogue has the shape of `plugins.toml`**: `schema_version`, `serial`, a `[[plugin]]`
   for every version ever pinned (the same keys, checked by the same code as a pin), and

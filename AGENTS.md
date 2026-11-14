@@ -123,7 +123,11 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   pinned build. `spelaion-write-catalogue` (in `crates/spelaion-plugin-fetch`, never shipped) is
   that function as a program for the publishing workflow: it must be told which catalogue is
   published (its one signed file, checked with the key compiled in) or `--first`, writes
-  nothing when nothing is new, and signs nothing.
+  nothing when nothing is new, and signs nothing. `--check` is the last step before publishing:
+  the signed file must be accepted with the key compiled in and hold the text written.
+  `.github/workflows/plugins-catalogue.yml` runs it on `dev` when `plugins.toml` changes (or by
+  hand), signs with minisign in the `plugins-catalogue` environment and publishes the release
+  `plugins-catalogue`'s one asset (never the latest release, which the updater reads).
   `plugins/fetch.rs` brings the catalogue and an archive, and the core still has no HTTP
   client: the adapter gives a `Transport` that only moves bytes. No function there takes an
   address: the catalogue's is a constant and an archive's is the one the core writes for its
