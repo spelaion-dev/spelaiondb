@@ -31,7 +31,8 @@ use super::pins::{PinnedPlugin, Pins, program_file_name, version_of};
 /// Where a build is on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
-    /// Next to the app: it came inside the installer.
+    /// The build that came inside the installer: the pinned one, next to the app or installed
+    /// into the user's store from the installer's archive (ADR-057).
     Shipped,
     /// In the user's store: installed from the Plugins page.
     Installed,
@@ -228,6 +229,13 @@ pub fn states(
                 let Some(version) = version_of(&build.version) else {
                     continue;
                 };
+                // The pinned version is the build inside the installer, wherever it was
+                // unpacked to (ADR-057).
+                let source = if pin.is_some_and(|pin| pin.version() == version) {
+                    Source::Shipped
+                } else {
+                    Source::Installed
+                };
                 // Who names this build: the catalogue, or the pins (the build inside the
                 // installer, installed again from a file).
                 let named = catalogue
@@ -241,14 +249,14 @@ pub fn states(
                     Some((entry, named_by)) => match usable(entry, named_by, catalogue, app) {
                         Ok(pinned) => Ok(Chosen {
                             version: version_text(version),
-                            source: Source::Installed,
+                            source,
                             program: build.program.clone(),
                             sha256: pinned.program_sha256.clone(),
                             engines: entry.engines.clone(),
                         }),
                         Err(why) => Err(Refused {
                             version: version_text(version),
-                            source: Source::Installed,
+                            source,
                             engines: entry.engines.clone(),
                             why,
                         }),
@@ -257,7 +265,7 @@ pub fn states(
                     // one we withdrew and stopped listing.
                     None => Err(Refused {
                         version: version_text(version),
-                        source: Source::Installed,
+                        source,
                         engines: known_engines(),
                         why: catalogue
                             .and_then(|catalogue| catalogue.why_withdrawn(name, version))
@@ -295,6 +303,14 @@ pub fn states(
                     archive_size: build.archive_size,
                     address: plugin.archive_address(build),
                 });
+
+            // The pinned build unpacked into the store from the installer's archive (ADR-057)
+            // is not missing: its program is just not next to the app.
+            let missing = missing.filter(|missing| {
+                !installed
+                    .iter()
+                    .any(|build| build.name == name && build.version == missing.version)
+            });
 
             PluginState {
                 name: name.to_string(),

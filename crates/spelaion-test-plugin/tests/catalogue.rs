@@ -1623,6 +1623,13 @@ async fn an_archive_inside_the_installer_is_installed_as_its_pin_and_serves_its_
         sha256_of(&installed.program).unwrap(),
         sha256_of(Path::new(PROGRAM)).unwrap()
     );
+    // It is the build inside the installer, and nothing is missing next to the app.
+    let state = machine.state(&pins);
+    let chosen = state.chosen.as_ref().expect("the pinned build is chosen");
+    assert_eq!(chosen.source, Source::Shipped);
+    assert_eq!(chosen.program, installed.program);
+    assert_eq!(state.missing, None);
+    assert_eq!(state.message(), None);
     // Started from the store, as the pin it is: no catalogue was needed.
     let engines = machine.engines(&pins);
     pid_through(&engines).await.unwrap();
