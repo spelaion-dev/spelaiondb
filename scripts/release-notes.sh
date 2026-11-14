@@ -20,8 +20,9 @@ else
   repo=$(git remote get-url origin | sed -E 's#^git@github.com:#https://github.com/#; s#\.git$##')
 fi
 
-# The previous tag reachable from this one; none for the first release.
-previous=$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
+# The previous release tag reachable from this one; none for the first release. Only `v…`
+# tags: `plugins-catalogue` (the catalogue's release, ADR-055) is a tag on `dev` too.
+previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$tag^" 2>/dev/null || true)
 range=${previous:+$previous..}$tag
 
 cat "$notes"

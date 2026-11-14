@@ -36,6 +36,10 @@
 /apps/desktop/src-tauri/src/update.rs           @petilolz @frglez
 /apps/desktop/src-tauri/tauri.release.conf.json @petilolz @frglez
 
+# The plugin catalogue's signing and publishing (ADR-055). Also under /.github/workflows/
+# below; named here so it stays protected if that line ever narrows.
+/.github/workflows/plugins-catalogue.yml        @petilolz @frglez
+
 # CI is the reviewer: weakening it, or this file, needs a person.
 /.github/workflows/                             @petilolz @frglez
 /.github/CODEOWNERS                             @petilolz @frglez
