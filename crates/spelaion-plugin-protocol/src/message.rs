@@ -623,6 +623,20 @@ mod tests {
     }
 
     #[test]
+    fn a_request_keeps_the_order_of_its_keys() {
+        // A MongoDB command is named by its first key: `find` must stay before `filter`, which
+        // sorts first.
+        let text = r#"{"kind":"request","request":{"command":{"find":"users","filter":{"b":1,"a":2},"limit":5},"database":"shop"}}"#;
+        let run: Run = serde_json::from_str(text).unwrap();
+        let Run::Request { request } = &run else {
+            panic!("not a request");
+        };
+        let keys: Vec<_> = request["command"].as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["find", "filter", "limit"]);
+        assert_eq!(serde_json::to_string(&run).unwrap(), text);
+    }
+
+    #[test]
     fn a_connect_carries_the_engines_own_settings_and_reads_without_them() {
         let mut json = serde_json::json!({"session": 1, "engine": "mongodb", "host": "db",
             "port": 27017, "user": "app", "database": "shop", "tls": "disable"});
