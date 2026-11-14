@@ -218,10 +218,11 @@ async fn a_program_that_is_not_pinned_is_never_started() {
         app.install(name);
     }
     let engines = engines_of(&pins, &app.0);
-    // The pinned program is not there, and the engine says so: it is not taken from another.
-    let error = pid_through(&engines).await.unwrap_err();
+    // The pinned program is not there, and the engine says so, with the file that is missing:
+    // it is not taken from another program.
+    let error = pid_through(&engines).await.unwrap_err().to_string();
     assert!(
-        error.to_string().contains("is missing"),
+        error.contains("is missing") && error.contains(&program_file_name(NAME)),
         "an engine was taken from a program that is not pinned: {error}"
     );
     for name in [

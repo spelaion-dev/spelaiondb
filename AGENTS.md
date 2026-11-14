@@ -110,7 +110,9 @@ the compiler, the tests and CI are the only reviewer. Write accordingly.
   `plugins/choice.rs`: for each plugin, the newest build on this machine (next to the app or
   installed) that the pins or the accepted catalogue name, that speaks the core's protocol, that
   this app is not too old for and that was not withdrawn; when builds are here and none may be
-  started, its engines say why and do not fall back. The app and `spelaiondb mcp` take their
+  started, its engines say why and do not fall back; when the pinned build's program is not
+  next to the app, an engine served only by its plugin says which file is missing (one whose
+  driver is compiled in is still served by it). The app and `spelaiondb mcp` take their
   engines from `Engines::builtin_with(store)`; neither downloads. Any change to the three needs
   tests that try to get around it (`crates/spelaion-test-plugin/tests/catalogue.rs`, which signs
   its own catalogues with a key of the test).

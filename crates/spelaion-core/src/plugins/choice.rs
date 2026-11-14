@@ -81,6 +81,19 @@ pub struct PluginState {
     pub refused: Vec<Refused>,
     /// What the catalogue offers, if it offers anything usable here.
     pub offered: Option<Offered>,
+    /// The build pinned into this SpelaionDB for this platform, when its program is not next
+    /// to the app: it should have come inside the installer.
+    pub missing: Option<Missing>,
+}
+
+/// A pinned build whose program is not where the installer puts it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Missing {
+    pub version: String,
+    /// The file that is not there.
+    pub program: PathBuf,
+    /// The engines it serves.
+    pub engines: Vec<String>,
 }
 
 impl PluginState {
@@ -99,11 +112,28 @@ impl PluginState {
         if self.chosen.is_some() {
             return None;
         }
-        let refused = self.refused.first()?;
-        let mut message = format!(
-            "{} {} is not started: {}.",
-            self.name, refused.version, refused.why
-        );
+        let mut message = match (self.refused.first(), &self.missing) {
+            (Some(refused), _) => format!(
+                "{} {} is not started: {}.",
+                self.name, refused.version, refused.why
+            ),
+            // Nothing of it is here, and this SpelaionDB was made to carry it.
+            (None, Some(missing)) => {
+                // What gets it back depends on who is asking.
+                let how = if super::RELEASE_BUILD {
+                    "Install SpelaionDB again to get it back."
+                } else {
+                    "This is a development build: fetch the pinned plugins (cargo run -p \
+                     spelaion-plugin-fetch -- --into <folder>) and set the variables it prints."
+                };
+                format!(
+                    "{} is not installed: {} is missing. {how}",
+                    self.name,
+                    missing.program.display()
+                )
+            }
+            (None, None) => return None,
+        };
         if let Some(offered) = &self.offered {
             message.push_str(&format!(
                 " Version {} can be installed in Settings > Plugins.",
@@ -152,9 +182,22 @@ pub fn states(
 
             // Every build on this machine, with whether it may be started.
             let mut here: Vec<Here> = Vec::new();
+            let mut missing = None;
             if let (Some(folder), Some(pin)) = (shipped, pin) {
                 let program = folder.join(program_file_name(name));
-                if program.is_file() {
+                let pinned_here = app
+                    .platform
+                    .as_deref()
+                    .is_some_and(|platform| pin.platforms.contains_key(platform));
+                if !program.is_file() {
+                    if pinned_here {
+                        missing = Some(Missing {
+                            version: version_text(pin.version()),
+                            program,
+                            engines: pin.engines.clone(),
+                        });
+                    }
+                } else {
                     match usable(pin, NamedBy::Pins, catalogue, app) {
                         Ok(build) => here.push((
                             pin.version(),
@@ -258,6 +301,7 @@ pub fn states(
                 chosen,
                 refused,
                 offered,
+                missing,
             }
         })
         .collect()

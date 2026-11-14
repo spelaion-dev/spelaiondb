@@ -73,13 +73,7 @@ impl Engines {
             catalogue.as_ref(),
             &crate::plugins::installed::AppBuild::this(),
         );
-        let engines = self.with_plugin_states(&states);
-        match &shipped {
-            Some(folder) => {
-                engines.with_missing_pins(crate::plugins::pins::Pins::shipped(), folder)
-            }
-            None => engines,
-        }
+        self.with_plugin_states(&states)
     }
 
     /// A development build can be pointed at a plugin built on this machine, engine by engine,
@@ -139,31 +133,6 @@ impl Engines {
             &crate::plugins::installed::AppBuild::this(),
         );
         self.with_plugin_states(&states)
-            .with_missing_pins(pins, folder)
-    }
-
-    /// Pinned for this platform and not in `folder`: its engines say which file is missing
-    /// when they are used, unless something else serves them (a driver compiled in, a build
-    /// installed from the Plugins page).
-    fn with_missing_pins(mut self, pins: &crate::plugins::pins::Pins, folder: &Path) -> Self {
-        let Some(platform) = crate::plugins::pins::platform() else {
-            return self;
-        };
-        for (pinned, _) in pins.for_platform(platform) {
-            let program = folder.join(crate::plugins::pins::program_file_name(&pinned.name));
-            if program.is_file() {
-                continue;
-            }
-            for engine in &pinned.engines {
-                if self.driver(engine).is_none() {
-                    self = self.with_driver(Arc::new(MissingPlugin {
-                        engine: engine.clone(),
-                        program: program.clone(),
-                    }));
-                }
-            }
-        }
-        self
     }
 
     /// These engines with what [`crate::plugins::choice::states`] decided for each plugin of
@@ -177,12 +146,26 @@ impl Engines {
                 for engine in &chosen.engines {
                     self = self.with_plugin(Arc::new(plugin.driver(engine)));
                 }
-            } else if let (Some(why), Some(refused)) = (state.message(), state.refused.first()) {
-                for engine in &refused.engines {
-                    self = self.with_plugin(Arc::new(crate::plugins::choice::RefusedPlugin {
+            } else if let Some(why) = state.message() {
+                let says_why = |engine: &String| {
+                    Arc::new(crate::plugins::choice::RefusedPlugin {
                         engine: engine.clone(),
                         why: why.clone(),
-                    }));
+                    })
+                };
+                if let Some(refused) = state.refused.first() {
+                    for engine in &refused.engines {
+                        self = self.with_plugin(says_why(engine));
+                    }
+                } else if let Some(missing) = &state.missing {
+                    // Not installed is not refused: an engine whose driver is compiled in is
+                    // still served by it. One served only by its plugin says which file is
+                    // missing, instead of "engine not available".
+                    for engine in &missing.engines {
+                        if self.driver(engine).is_none() {
+                            self = self.with_driver(says_why(engine));
+                        }
+                    }
                 }
             }
         }
@@ -221,49 +204,6 @@ impl Engines {
             )));
         };
         driver.create_database(database).await
-    }
-}
-
-/// An engine whose plugin is pinned and is not where it should be: it says so, with the file
-/// that is missing, instead of "engine not available".
-struct MissingPlugin {
-    engine: String,
-    program: std::path::PathBuf,
-}
-
-impl MissingPlugin {
-    fn error(&self) -> DriverError {
-        // What gets it back depends on who is asking.
-        let how = if crate::plugins::RELEASE_BUILD {
-            "Install SpelaionDB again to get it back.".to_string()
-        } else {
-            format!(
-                "This is a development build: fetch the pinned plugins (cargo run -p \
-                 spelaion-plugin-fetch -- --into <folder>, which prints the variables to set) \
-                 or point {} at a build of the plugin.",
-                crate::plugins::dev_plugin_variable(&self.engine)
-            )
-        };
-        DriverError::Connection(format!(
-            "{} is served by a plugin that is not installed: {} is missing. {how}",
-            self.engine,
-            self.program.display()
-        ))
-    }
-}
-
-#[async_trait::async_trait]
-impl Driver for MissingPlugin {
-    fn engine(&self) -> &str {
-        &self.engine
-    }
-
-    async fn connect(&self, _params: &ConnectParams) -> Result<Box<dyn Connection>, DriverError> {
-        Err(self.error())
-    }
-
-    async fn create_database(&self, _database: &str) -> Result<(), DriverError> {
-        Err(self.error())
     }
 }
 
